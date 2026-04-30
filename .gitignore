@@ -51,6 +51,6 @@ temp/
 multi-part-lite-adopted/
 
 # Sub-package local files (not needed in monorepo)
-.*/.gitignore
-.*/.npmrc
-.*/pnpm-lock.yaml
+*/.gitignore
+*/.npmrc
+*/pnpm-lock.yaml
