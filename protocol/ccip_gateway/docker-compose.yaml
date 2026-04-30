@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  ccip-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2002:2002"
+    environment:
+      - NODE_ENV=production
+      - PORT=2002
+      # Add your Alchemy API key here
+      - BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/REDACTED
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Uncomment to persist logs
+    # volumes:
+    #   - ./logs:/app/logs
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"

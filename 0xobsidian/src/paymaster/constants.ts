@@ -1,0 +1,1 @@
+export const ENTRYPOINT_ADDRESS = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"; // from alchemy: https://docs.alchemy.com/reference/eth-estimateuseroperationgas
