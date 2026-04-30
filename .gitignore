@@ -48,3 +48,8 @@ coverage/
 *.log
 .tmp/
 temp/
+
+# Sub-package local configs
+*/.gitignore
+*/.npmrc
+*/pnpm-lock.yaml
