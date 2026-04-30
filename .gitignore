@@ -27,13 +27,13 @@ cache-solidity-files-cache.json
 .openzeppelin/
 deployed-*.json
 deployed-resolver-*.json
-sessions/*.json
+sessions/
 
 # Local IDE/editor
 .idea/
 .vscode/
 *.swp
-*.swo
+*.swj
 *~
 
 # OS files
@@ -48,8 +48,4 @@ coverage/
 *.log
 .tmp/
 temp/
-
-# Sub-package local configs
-*/.gitignore
-*/.npmrc
-*/pnpm-lock.yaml
+multi-part-lite-adopted/
