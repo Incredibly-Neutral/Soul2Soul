@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnpm/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Hardhat & TypeChain
+cache/
+typechain-types/
+*.dbg.json
+cache-solidity-files-cache.json
+
+# Environment files
+.env
+.env.local
+.env*.local
+.env.test.example
+
+# Package manager configs (use root .npmrc only)
+.npmrc
+
+# Deployment configs (local network data)
+.openzeppelin/
+deployed-*.json
+deployed-resolver-*.json
+sessions/*.json
+
+# Local IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temp files
+*.log
+.tmp/
+temp/

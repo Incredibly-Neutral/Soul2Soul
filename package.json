@@ -1,0 +1,8 @@
+{
+    "name": "@s2s/monorepo",                                                                                                                                                                                                                                                                                                                                                                                                              
+    "private": true,                                                                                                                                                                                                                                                                                                                                                                                                                      
+    "packageManager": "pnpm@10.11.1",
+    "scripts" : {
+        
+    }
+}
