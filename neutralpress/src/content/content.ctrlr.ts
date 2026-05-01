@@ -5,7 +5,8 @@ import slugify from "slugify";
 import { marked } from "marked";
 import { distributeImages } from "./images";
 import * as crypto from "crypto";
-import * as ethers from 'ethers' 
+import { getAddress } from "viem";
+
 
 export interface IContentController {
 
@@ -24,8 +25,8 @@ export class ContentController implements IContentController {
 
         const unifiedControlConditions = canRead(
             contentId,
-            ethers.getAddress(oxoCtrlr.user.safe),
-            ethers.getAddress(publicationModule),
+            getAddress(oxoCtrlr.user.safe),
+            getAddress(publicationModule),
         );
 
         return JSON.stringify(
@@ -111,7 +112,7 @@ export class ContentController implements IContentController {
                 }
             }
             
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error in storeNote:", error);
             console.error("Error details:", {
                 message: error.message,

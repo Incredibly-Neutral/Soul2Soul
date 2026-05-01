@@ -14,7 +14,7 @@ import { JsonRpcProvider } from "ethers";
 const ENTRYPOINT_ADDRESS_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
 interface InternalTransaction {
-  contractAddress: string;
+  contractAddress: `0x${string}`;
   from: string;
   to: string;
   value: string;
@@ -34,15 +34,15 @@ export interface IPermissionlessSafeService {
   smartAccount: any;
   smartAccountClient: any;
   provider: any;
-  address: string;
+  address: `0x${string}`;
 
   updateSigner: (pk: string) => Promise<string>;
   connectToFreshSafe: (salt: string) => Promise<string>
-  connectToExistingSafe: (safe_address: string) => Promise<string>
-  genericRead: (address: string, abi: string, method: string, args: string[]) => Promise<any>;
-  genericTx: (address: string, abi: string, method: string, args: string[], deploy: boolean, wait?: boolean) => Promise<string>;
-  batchGenericTx: (calls: Array<{ address: string; abi: string; method: string; args: any[]; }>) => Promise<string[]>;
-  valueTx: (to: string, amount: string) => Promise<string>;
+  connectToExistingSafe: (safe_address: `0x${string}`) => Promise<string>
+  genericRead: (address: `0x${string}`, abi: string, method: string, args: string[]) => Promise<any>;
+  genericTx: (address: `0x${string}`, abi: string, method: string, args: string[], deploy: boolean, wait?: boolean) => Promise<string>;
+  batchGenericTx: (calls: Array<{ address: `0x${string}`; abi: string; method: string; args: any[]; }>) => Promise<string[]>;
+  valueTx: (to: `0x${string}`, amount: string) => Promise<string>;
   getSafeAddress: (salt: string) => Promise<string>;
   isDeployed: () => Promise<boolean>;
 }
@@ -54,7 +54,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
   smartAccount: any;
   smartAccountClient: any;
   provider: any;
-  address!: string;
+  address!: `0x${string}`;
 
   private txMutex: Promise<void> = Promise.resolve();
   private publicClient: any;
@@ -133,7 +133,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     return await this.setSafe(smartAccount);
   }
 
-  async connectToExistingSafe(safe_address: string) {
+  async connectToExistingSafe(safe_address: `0x${string}`) {
 
     const smartAccount = await toSafeSmartAccount({
       client: this.publicClient,
@@ -149,7 +149,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
   }
 
-  async setSafe(smartAccount: any): Promise<string> {
+  async setSafe(smartAccount: any): Promise<`0x${string}`> {
 
     this.smartAccount = smartAccount
   
@@ -165,7 +165,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     return this.address;
   }
 
-  async getSafeAddress(salt: string): Promise<string> {
+  async getSafeAddress(salt: string): Promise<`0x${string}`> {
 
     const tempAccount = await toSafeSmartAccount({
       client: this.publicClient,
@@ -179,7 +179,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
   }
 
 
-  async genericRead(address: string, abi: string, method: string, args: string[]): Promise<any> {
+  async genericRead(address: `0x${string}`, abi: string, method: string, args: string[]): Promise<any> {
     let retries = 1;
     while (retries > 0) {
         try {
@@ -204,7 +204,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     }
   }
 
-  async genericTx(address: string, abi: string, method: string, args: string[], deploy: boolean, wait = false ): Promise<string> {
+  async genericTx(address: `0x${string}`, abi: string, method: string, args: string[], deploy: boolean, wait = false ): Promise<string> {
 
 
     console.log("🔧 genericTx called:", { address, method, args: JSON.stringify(args) });
@@ -251,7 +251,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     return await this.extractDeployedAddress(txHash);
   }
 
-  async valueTx(to: string, amount: string): Promise<string> {
+  async valueTx(to: `0x${string}`, amount: string): Promise<string> {
 
     const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
 
@@ -267,7 +267,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
 
   async batchGenericTx(calls: Array<{
-      address: string;
+      address: `0x${string}`;
       abi: string;
       method: string;
       args: any[];
@@ -311,7 +311,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 // ALSO WORKS WHEN SAFE DEPLOYMENT IS PART OF TX AS ITS THR SAFES FIRST 
  private async extractFromInternalTransactions(
       txHash: string, 
-      safeAddress?: string
+      safeAddress?: `0x${string}`
   ): Promise<string> {
       // console.log("🔄 Querying internal transactions...");
       // console.log("🔍 Safe address to filter:", safeAddress);  // ✅ ADD THIS

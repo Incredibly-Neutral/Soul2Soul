@@ -20,22 +20,18 @@
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "devDependencies": {
-  },
   "dependencies": {
+    "@lens-chain/storage-client": "^1.0.6",
     "@lens-protocol/client": "0.0.0-canary-20250430134539",
     "@lens-protocol/metadata": "^2.1.0",
-    "@lens-chain/storage-client": "^1.0.6",
     "@lit-protocol/auth": "^8.2.3",
     "@lit-protocol/auth-helpers": "^8.2.1",
     "@lit-protocol/constants": "^8.0.8",
     "@lit-protocol/encryption": "^7.4.0",
     "@lit-protocol/lit-client": "^8.3.1",
     "@lit-protocol/networks": "8.4.1",
-    "@types/glob": "^9.0.0",
-    "ethers": "^6.15.0",
-    "ethers5": "npm:ethers@^5.8.0",
     "minimatch": "^10.1.1",
+    "viem": "^2.48.0",
     "zod": "^4.3.6"
   },
   "pnpm": {

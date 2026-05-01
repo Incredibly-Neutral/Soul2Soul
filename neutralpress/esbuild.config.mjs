@@ -39,7 +39,8 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "dist/main.js",
+	minifyIdentifiers: true,
+	outfile: "/home/node/vaults/s2s/.obsidian/plugins/neutralpress/main.js",
 });
 
 if (prod) {

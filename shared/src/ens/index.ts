@@ -1,37 +1,35 @@
-import { ensRegistryABI, resolverABI } from "./abi";
-import * as ethers from "ethers";
-import { Provider } from 'ethers';
+import { ensRegistryABI, resolverABI } from './abi';
+import { PublicClient, getContract } from 'viem';
+import { namehash as viemNamehash } from 'viem/ens';
 
-const ENSREGISTRY = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
+const ENSREGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e' as `0x${string}`;
 
-export const getContractAddressFromEnsName = async (ensName: string, ethersV6Provider: Provider) => {
+export const getContractAddressFromEnsName = async (
+  ensName: string,
+  viemProvider: PublicClient
+) => {
   try {
-    const node = ethers.namehash(ensName);
+    const node = viemNamehash(ensName);
 
-    // const ensProvider = new ethers.JsonRpcProvider(
-    //   `https://eth-sepolia.g.alchemy.com/v2/${alchemy_key}`,
-    //   { chainId: 11155111, name: "sepolia" },
-    // );
+    const registry = getContract({
+      address: ENSREGISTRY,
+      abi: ensRegistryABI,
+      client: viemProvider,
+    });
 
-    const registry = new ethers.Contract(
-      ENSREGISTRY,
-      ensRegistryABI,
-      ethersV6Provider,
-    );
+    const resolverAddress = (await registry.read.resolver([
+      node,
+    ])) as `0x${string}`;
 
-    const resolverAddress = await registry.resolver(node);
+    const resolver = getContract({
+      address: resolverAddress,
+      abi: resolverABI,
+      client: viemProvider,
+    });
 
-    const resolver = new ethers.Contract(
-      resolverAddress,
-      resolverABI,
-      ethersV6Provider,
-    );
-
-    return await resolver.text(node, "contract.address");
+    return (await resolver.read.text([node, 'contract.address'])) as string;
   } catch (error) {
-    console.error("Error getting contract address:", error);
-    return "false";
+    console.error('Error getting contract address:', error);
+    return 'false';
   }
 };
-
-

@@ -1,16 +1,21 @@
-import * as ethers from 'ethers';
+import { createPublicClient, http } from 'viem';
+import { mainnet, base } from 'viem/chains';
 
 export const getProviders = async (alchemy_key: string) => {
 
     const rpc = `https://eth-mainnet.g.alchemy.com/v2/${alchemy_key}`;
-    const network = { name: "ethereum", chainId: 1 }; 
-
-    const l1Provider = new ethers.JsonRpcProvider(rpc, network)
+    
+    const l1Provider = createPublicClient({
+        chain: mainnet,
+        transport: http(rpc)
+    });
 
     const rpc2 = `https://base-mainnet.g.alchemy.com/v2/${alchemy_key}`;
-    const network2 = { name: "base", chainId: 8453 }; 
+    
+    const l2Provider = createPublicClient({
+        chain: base,
+        transport: http(rpc2)
+    });
 
-    const l2Provider = new ethers.JsonRpcProvider(rpc2, network2)
-
-    return { l1Provider, l2Provider }
+    return { l1Provider, l2Provider };
 }
