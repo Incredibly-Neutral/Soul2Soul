@@ -1,0 +1,10 @@
+node_modules
+
+.env
+.vscode/
+dist/
+import_map.json
+lit_storage.db/
+.lit-storage/
+artifacts/
+pnpm-workspace.yaml

@@ -20,6 +20,8 @@ export default class OxO extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    this.authorsTab = new OxOAuthorsTab(this.app, this);
+    this.addSettingTab(this.authorsTab);
     this.ctrlr = new MainController(this);
     await this.ctrlr.init()
   }
@@ -28,9 +30,6 @@ export default class OxO extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-
-    this.authorsTab = new OxOAuthorsTab(this.app, this);
-    this.addSettingTab(this.authorsTab);
   }
 
   async clearSettings() {

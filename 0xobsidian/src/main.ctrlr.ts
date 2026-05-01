@@ -51,9 +51,11 @@ export class MainController implements IMainController {
 
   async init() {
 
+
+
     this.account = {};
     this.pinata = new PinataService(this);
-    this.lit = new LitService(this);
+    this.lit = new LitService({ "environment": "prod"});
     this.lens = new LensService(this);
   
     const activeUser = this.plugin.settings.authors.find((a: any) => a.active);
@@ -105,7 +107,7 @@ export class MainController implements IMainController {
       //   const deploy = await this.account[chain].valueTx(safe_address, "1");
       // }
 
-      await this.account[chain].connectToExistingSafe(safe_address);
+      await this.account[chain].connectToExistingSafe(safe_address as `0x{string}`);
       
   }
 
