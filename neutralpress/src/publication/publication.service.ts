@@ -2,7 +2,8 @@ import { IMainController } from "../main.ctrlr";
 import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
-import { S2SPublication, publicationModuleAbi, recordsModuleAbi, recordsModuleFactoryAbi, safeAbi } from "@s2s/soul2soul-shared";
+import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
+import { S2SRecordsModuleFactory, S2SPublicationModuleFactory, S2SPublicationModule, S2SRecordsModule} from "../../../protocol/generated/abis" 
 
 const L1 = "ETH_MAINNET";
 const L2 = "BASE";
@@ -32,8 +33,8 @@ export interface IPublicationSrv {
 export class PublicationService implements IPublicationSrv{
 	main: IMainController;
 	subdomain: string;
-	multisig: string;
-	configModule: string;
+	multisig!: string;
+	configModule!: string;
 	publicationModule: string;
 	L1: any;
 	L2: any;
@@ -70,54 +71,54 @@ export class PublicationService implements IPublicationSrv{
 		newPublicationSafe(main, publication)
 	}
 
-	async grantLicense(stream_id: string) {
+	async grantLicense(contentId: string) {
 	
 		return await this.main.oxo.ctrlr.account[L2].genericTx(
 			this.publicationModule,
-			JSON.stringify(publicationModuleAbi),
+			JSON.stringify(S2SPublicationModule),
 			"grantLicense",
-			[this.publicationModule,stream_id],
+			[this.publicationModule,contentId],
 			false,
 		);
 	}
 
-	async revokeLicense(stream_id: string) {
+	async revokeLicense(contentId: string) {
 		return await this.main.oxo.ctrlr.account[L2].genericTx(
 			this.publicationModule,
-			JSON.stringify(publicationModuleAbi),
+			JSON.stringify(S2SPublicationModule),
 			"revokeLicense",
-			[stream_id],
+			[contentId],
 			false,
 		);
 	}
 
 
-	async isLicensed(stream_id: string) {
+	async isLicensed(contentId: string) {
 
 		return await this.main.oxo.ctrlr.account[L2].genericRead(
 			this.publicationModule,
-			JSON.stringify(publicationModuleAbi),
+			JSON.stringify(S2SPublicationModule),
 			"isLicensed",
-			[stream_id],
+			[contentId],
 			false,
 		);
 	}
 
 	async isLicensedBatch(
-		stream_ids: string[],
+		contentIds: string[],
 	): Promise<Record<string, boolean>> {
 		const results = await this.main.oxo.ctrlr.account[L2].genericRead(
 			this.publicationModule,
-			JSON.stringify(publicationModuleAbi),
+			JSON.stringify(S2SPublicationModule),
 			"isLicensedBatch",
-			[stream_ids],
+			[contentIds],
 			false,
 		);
 
 		// Convert the array of booleans to a Record<string, boolean>
 		const dealRecord: Record<string, boolean> = {};
-		for (let i = 0; i < stream_ids.length; i++) {
-			dealRecord[stream_ids[i]] = results[i];
+		for (let i = 0; i < contentIds.length; i++) {
+			dealRecord[contentIds[i]] = results[i];
 		}
 
 		return dealRecord;
@@ -157,8 +158,6 @@ export class PublicationService implements IPublicationSrv{
 
 		for (let moduleAddress of modules[0]) {
 			try {
-				
-
 				let moduleName;
 				try {
 					moduleName = await this.L2.genericRead(
@@ -189,7 +188,7 @@ export class PublicationService implements IPublicationSrv{
 
 		return  await this.L2.genericRead(
 			this.configModule,
-			JSON.stringify(recordsModuleAbi),
+			JSON.stringify(S2SRecordsModule),
 			"getRecord",
 			["feed"]  
 		);

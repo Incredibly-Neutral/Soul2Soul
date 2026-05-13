@@ -1,8 +1,8 @@
 /// <reference path="../action_globals.ts" />
 
-import { S2SJob, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
+import { S2SBody, S2SJob, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
 import { getDomainOwnerAndModules } from "../libs/ens.factory";
-import { fetchByQuery } from "../libs/lens.factory";
+import { fetchById, fetchByQuery } from "../libs/lens.factory";
 import { getProtocolInfo } from "../libs/protocol.factory";
 import { getBody } from "../single/body";
 import { getConfig, getTaskConfig } from "../single/config.ctrl";
@@ -15,7 +15,7 @@ const main = async () => {
 
     let protocolInfo;
     try {
-        protocolInfo = await getProtocolInfo(authorSafeAddress, false);
+        protocolInfo = await getProtocolInfo(false);
     } catch (error) {
         console.error("Failed to fetch protocol info:", error);
         throw error;
@@ -28,8 +28,8 @@ const main = async () => {
 
     for (let contentId of contentIds) {
 
-        let body = await getBody(contentId,"prep");    
-        if (body.id == undefined) throw "Post content not found"
+        let body: S2SBody | undefined | null  = await fetchById(contentId)    
+        if (body == undefined || body == null || body.id == undefined) throw "Post content not found"
 
         const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
 
@@ -44,13 +44,7 @@ const main = async () => {
             
             for (const rippleConfig of rippleConfigs) {
 
-                let ripples = JSON.parse(await LitActions.runOnce({
-                    waitForResponse: true,
-                    name: `ripples_${rippleConfig.reference}`
-                }, async () => {
-                    const ripples = await fetchByQuery(rippleConfig.query.method, rippleConfig.query.args)
-                    return JSON.stringify((ripples == undefined) ? [] : ripples)
-                }));
+                let ripples = await fetchByQuery(rippleConfig.query.method, rippleConfig.query.args)
             
                 let rippleTemplateConfig: S2STemplateConfig =
                 config.mapping.templateConfig.find(
@@ -59,12 +53,15 @@ const main = async () => {
 
                 for (const ripple of ripples) {
 
-                    jobs.push({
-                        id: ripple.id,
-                        templateConfig: rippleTemplateConfig,
-                        templateData: undefined,
-                        html: ""
-                    });
+                    if (ripple != null) {
+
+                        jobs.push({
+                            id: ripple.id,
+                            templateConfig: rippleTemplateConfig,
+                            templateData: undefined,
+                            html: ""
+                        });
+                    }
                 }
             }
         }
@@ -80,11 +77,11 @@ const main = async () => {
         }
     }
 
-    LitActions.setResponse({
-        response: JSON.stringify({
+    return {
             success: true,
             jobs: uniqueJobs
-        })
-    });
+        }
+    
 };
+
 main();

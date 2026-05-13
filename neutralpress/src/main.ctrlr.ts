@@ -22,7 +22,7 @@ export interface IMainController {
 	previewNote: (_file: TAbstractFile) => Promise<void>;
 	grantLicense: (_file: TAbstractFile) => Promise<void>;
 	revokeLicense: (tagName: string, _file: TAbstractFile) => Promise<void>;
-	renderCalls: (publication: string, streamIds: string[]) => Promise<void>;
+	renderCalls: (publication: string, streamIds: string[], lit_usage_key: string) => Promise<void>;
 	bulkrender: (
 		post_type: string,
 		ensName: string,
@@ -31,14 +31,14 @@ export interface IMainController {
 }
 
 export class MainController implements IMainController {
-	basePath: string;
+	basePath!: string;
 	oxo: any;
 	plugin: DSG;
 	preview: PreviewCtrlr;
 	content: ContentController;
 	publications: any;
-	protocolInfo: S2SProtocolInfo;
-	notice: Notice;
+	protocolInfo!: S2SProtocolInfo;
+	notice!: Notice;
 
 	constructor(plugin: DSG) {
 		this.plugin = plugin;
@@ -109,8 +109,8 @@ export class MainController implements IMainController {
 			if (success) {
 				this.protocolInfo = await getProtocolInfo(
 					this.plugin.settings.dev, 
-					this.oxo.ctrlr.account["ETH_MAINNET"].provider, 
-					this.oxo.ctrlr.account["BASE"].provider
+					this.oxo.ctrlr.account["ETH_MAINNET"].publicClient, 
+					this.oxo.ctrlr.account["BASE"].publicClient
 				);
 
 				console.log("protocolInfo", this.protocolInfo);
@@ -265,12 +265,15 @@ export class MainController implements IMainController {
 		let license;
 		const subdomain = publication.split(".")[0];
 		const service = await this.getInitializedService(subdomain);
+		// const lit_usage_key = this.oxo.settings.litUsageKey;
 
 		this.notice = new Notice('1/5 storing item ...', 0);
 		
-		await this.content.storeNoteOnLens(file, contentId, publicContent, toEncrypt, subdomain)
+		await this.content.storeNoteOnLens(file, this.protocolInfo, contentId, publicContent, toEncrypt, subdomain)
 
 		this.notice.setMessage(`2/5 registering permission to publish on ${subdomain} ... `);
+
+		console.log("b4 license check", contentId, subdomain, service)
 
 		const isLicensed = await service.isLicensed(contentId);
 		console.log(service);
@@ -283,7 +286,7 @@ export class MainController implements IMainController {
 		this.notice.setMessage('3/5 Authorizing ...')
 		
 		if (isLicensed || license != undefined) {
-			await this.renderCalls(publication, [contentId]);
+			await this.renderCalls(publication, [contentId], this.oxo.settings.litUsageKey);
 		}
 
 	}
@@ -303,19 +306,15 @@ export class MainController implements IMainController {
 		
 	}
 
-	async renderCalls(publication: string, streamIds: string[]) {
+	async renderCalls(publication: string, streamIds: string[], lit_usage_key: string) {
 
 		console.log(`Starting render process for publication ${publication} with ${streamIds.length} stream IDs`);
 
 		try {
 
-			const authContext = this.oxo.ctrlr.lit.authContext; 
-
-			console.log(authContext)
-
 			this.notice.setMessage('4/5 Rendering ... (~ 30 sec)');
 
-			const res: any = await renderwithLitActions(this.oxo.ctrlr.lit.client, authContext, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, false, false)
+			const res: any = await renderwithLitActions(this.oxo.ctrlr, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, false, false)
 
 			this.notice.setMessage('5/5 Pinning ...');
 
@@ -351,7 +350,7 @@ export class MainController implements IMainController {
 			console.log('ipfs://' + res.cid);
 			console.log('https://' + publication + '.link' + res.path)
 
-		} catch (error) {
+		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);
 			throw new Error(`Render process failed: ${error.message}`);
 		}

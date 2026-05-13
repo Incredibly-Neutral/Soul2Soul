@@ -1,3 +1,4 @@
+import { S2SBody } from "@s2s/soul2soul-shared";
 
 
 const APP_ADDRESS = "0x984eB47F0A6E66bb81aC31c34157d1BAa4B10ae5";
@@ -218,7 +219,7 @@ export const fetchByQuery = async (
   }
 };
 
-const formatSingle = (post: any) => {
+const formatSingle = (post: any) : S2SBody | null => {
   if (!post) return null;
   
   const attributes = post.metadata.attributes || [];
@@ -230,9 +231,10 @@ const formatSingle = (post: any) => {
 
   return {
 
+
+    // welke interface is dit? /resumewhy cant you access 
     id: post.id,
     author: post.author.address,
-  
     content: post.metadata.content,
     locale: post.metadata.locale,
     parent: getAttr('parent'),

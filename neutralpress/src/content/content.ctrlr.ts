@@ -1,6 +1,6 @@
 import { App, TFile } from "obsidian";
 import { IMainController } from "../main.ctrlr";
-import { postToLens, S2SPublicContent, S2SToEncrypt, updateToLens, S2SContentItem, canRead } from "@s2s/soul2soul-shared";
+import { postToLens, S2SPublicContent, S2SToEncrypt, updateToLens, S2SContentItem } from "@s2s/soul2soul-shared";
 import slugify from "slugify";
 import { marked } from "marked";
 import { distributeImages } from "./images";
@@ -11,7 +11,7 @@ import { getAddress } from "viem";
 export interface IContentController {
 
     main: IMainController
-    storeNoteOnLens : (file: TFile, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) => Promise<void>
+    storeNoteOnLens : (file: TFile, protocolInfo: any, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) => Promise<void>
 }
 
 export class ContentController implements IContentController {
@@ -21,23 +21,19 @@ export class ContentController implements IContentController {
         this.main = main
     }
 
-    async encryptContent ( oxoCtrlr: any,  contentId: string, publicationModule: string, toEncrypt: any ): Promise<string>  {
+    async encryptContent ( oxoCtrlr: any,  protocolInfo: any, toEncrypt: any ): Promise<string>  {
 
-        const unifiedControlConditions = canRead(
-            contentId,
-            getAddress(oxoCtrlr.user.safe),
-            getAddress(publicationModule),
-        );
+        const key = this.main.oxo.settings.litUsageKey;  // hardcoded? 
+        const pkpId = protocolInfo.pkp.ethAddress; // create pkp and usage_key first 
 
         return JSON.stringify(
-            await oxoCtrlr.lit.encryptWithUcc(
-                JSON.stringify(toEncrypt),
-                unifiedControlConditions,
-            ),
+            await oxoCtrlr.lit.encrypt(
+                key, pkpId, JSON.stringify(toEncrypt)
+            )    
         );
     };
 
-    async storeNoteOnLens(file: TFile, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) {
+    async storeNoteOnLens(file: TFile, protocolInfo: any, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) {
 
         const service = await this.main.getInitializedService(subdomain);
         const feed = await service.getPublicationFeedAddress();
@@ -79,8 +75,7 @@ export class ContentController implements IContentController {
                 
                 const encrypted = await this.encryptContent(
                     this.main.oxo.ctrlr,
-                    contentId,
-                    publicationModule,
+                    protocolInfo,
                     toEncrypt,
                 );
 
@@ -225,8 +220,8 @@ export class ContentController implements IContentController {
 
             if (frontmatter != null) {
                 const contentId =
-                    frontmatter.stream_id != undefined
-                        ? frontmatter.stream_id
+                    frontmatter.content_id != undefined
+                        ? frontmatter.content_id
                         : null;
 
                 // possibly check if content was modified ???

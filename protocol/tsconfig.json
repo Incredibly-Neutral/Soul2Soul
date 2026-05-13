@@ -1,15 +1,18 @@
 {
   "compilerOptions": {
-    "target": "es2020",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
+    "lib": ["es2023"],
+    "module": "node16",
+    "target": "es2022",
+    "moduleResolution": "node16",
     "strict": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "useDefineForClassFields": true
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "types": ["node"]
   },
-  "include": ["hardhat.config.ts", "./scripts", "./test", "./types"],
-  "files": ["hardhat.config.ts"]
+  "include": ["deploy", "generated", "hardhat.config.ts", "rocketh"]
 }

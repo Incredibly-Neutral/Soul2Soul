@@ -1,0 +1,24 @@
+{
+  "groups": [
+    {
+      "name": "s2s",
+      "id": 7,
+      "actions": [
+        {
+          "name": "encrypt",
+          "cid": "QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh",
+          "hashedCid": "0xf2925f24662e3bd9ab6c3087a0ab7f8384eb96bacd46729a8eaeaba828ce97e1"
+        },
+        {
+          "name": "prep",
+          "cid": "Qmcc9ZTWgHE8CsDfvPtXqZs2uM7XQecqxcu9hJaeQGRkXd",
+          "hashedCid": "0xf9bdbdef9db07a0e20ec6a4d7a0ae66597ad173ca168e1b58f50580e9f859ef7"
+        }
+      ],
+      "pkps": [
+        "0xd36d4054ca3b943cd2687706ffdcc313a1414b4a"
+      ],
+      "usage_key": "+AkQshH6/9QZm6lJOwW2AxS+dNOCktdMA7pI8d0nqPc="
+    }
+  ]
+}

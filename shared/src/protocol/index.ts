@@ -13,7 +13,9 @@ export const getProtocolInfo = async (
   l1Provider: ViemProvider,
   l2Provider: ViemProvider
 ): Promise<S2SProtocolInfo> => {
-  try {
+  // try {
+
+
     const { multisig, configModule } = await getProtocolControllerAndModules(
       dev,
       l1Provider,
@@ -50,6 +52,7 @@ export const getProtocolInfo = async (
       l2Provider
     );
 
+
     return {
       addr: multisig || '',
       recordsModule: configModule!,
@@ -67,11 +70,11 @@ export const getProtocolInfo = async (
       litActionSingle: lit_action_single,
       litActionRootUpdate: lit_action_root_update,
     };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.log('Protocol info error:', errorMsg);
-    throw error;
-  }
+  // } catch (error) {
+  //   const errorMsg = error instanceof Error ? error.message : String(error);
+  //   console.log('Protocol info error:', errorMsg);
+  //   throw error;
+  // }
 };
 
 export const tokenIDFromBytes = (bytes: string): string => {
@@ -138,7 +141,7 @@ export const getProtocolControllerAndModules = async (
   l1Provider: ViemProvider,
   l2Provider: ViemProvider
 ) => {
-  try {
+  // try {
     const ensName = dev ? 'dev.soul2soul.eth' : 'soul2soul.eth';
 
     const nameWrapper = getContract({
@@ -147,9 +150,9 @@ export const getProtocolControllerAndModules = async (
         {
           inputs: [
             {
-              internalType: 'bytes32',
+              internalType: 'uint256',
               name: 'id',
-              type: 'bytes32',
+              type: 'uint256',
             },
           ],
           name: 'ownerOf',
@@ -167,7 +170,8 @@ export const getProtocolControllerAndModules = async (
       client: l1Provider,
     });
 
-    const subdomainNode = viemNamehash(ensName);
+    const subdomainNode = BigInt(viemNamehash(ensName));
+
     const customRegistryContract = (await nameWrapper.read.ownerOf([
       subdomainNode,
     ])) as `0x${string}`;
@@ -279,12 +283,12 @@ export const getProtocolControllerAndModules = async (
       configModule,
       publicationModule,
     };
-  } catch (error) {
-    console.error('Error getting publication addresses:', error);
-    return {
-      multisig: null,
-      configModule: null,
-      publicationModule: null,
-    };
-  }
+  // } catch (error) {
+  //   console.error('Error getting publication addresses:', error);
+  //   return {
+  //     multisig: null,
+  //     configModule: null,
+  //     publicationModule: null,
+  //   };
+  // }
 };
