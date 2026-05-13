@@ -20,7 +20,7 @@ export interface IOxOSettings {
   pinata_api_key: string;
   pinata_secret_key: string;
   pinata_jwt: string;
-  lit_capacity_token: string;
+  litUsageKey: string;
 }
 
 export const DEFAULT_SETTINGS: IOxOSettings = {
@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS: IOxOSettings = {
   pinata_api_key: "",
   pinata_jwt: "",
   pinata_secret_key: "",
-  lit_capacity_token: "328084",
+  litUsageKey: ""
 };
 
 export class OxOAuthorsTab extends PluginSettingTab {
@@ -238,6 +238,18 @@ export class OxOAuthorsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.pinata_jwt)
           .onChange(async (value) => {
             this.plugin.settings.pinata_jwt = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("LIT USAGE KEY")
+      .setDesc("Key to run serverless functions")
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.litUsageKey)
+          .onChange(async (value) => {
+            this.plugin.settings.litUsageKey = value;
             await this.plugin.saveSettings();
           }),
       );

@@ -1,15 +1,22 @@
 import { S2SProtocolInfo } from '../protocol';
 export * from './types';
 
-export const renderwithLitActions =  async (litNodeClient: any, authContext: any, protocolInfo: S2SProtocolInfo, notice: any, authorSafeAddress: string, publication: string, contentIds: string[], update: boolean, dev: boolean, debug: boolean, configCid?: string | undefined ) : Promise<any> => {
+export const renderwithLitActions =  async (oxoCtrlr: any, lit_usage_key: string, protocolInfo: S2SProtocolInfo, notice: any, authorSafeAddress: string, publication: string, contentIds: string[], update: boolean, dev: boolean, debug: boolean, configCid?: string | undefined ) : Promise<any> => {
 
   if (notice) { notice.setMessage("prepping render ... ") } else  { console.log('prepping render')}
 
-  console.log("authContext", authContext)
 
-  let prep: any = await litNodeClient.executeJs({
-      authContext,
-      ipfsId: protocolInfo.litActionPrep,
+  const response = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionPrep}`);
+
+  const code = await response.text();
+
+  console.log(protocolInfo.litActionPrep)
+  console.log(code);
+  console.log("key", lit_usage_key)
+
+  let prep: any = await oxoCtrlr.lit.executeAction({
+   
+      code,
       jsParams: {
           authorSafeAddress,
           publication,
@@ -17,40 +24,41 @@ export const renderwithLitActions =  async (litNodeClient: any, authContext: any
           contentIds: contentIds,
           dev 
       },
+      key: lit_usage_key
   });
 
   console.log(prep);
 
-  const responseStr = typeof prep.response === 'string' 
-  ? prep.response 
-  : JSON.stringify(prep.response);
+  // const responseStr = typeof prep.response === 'string' 
+  // ? prep.response 
+  // : JSON.stringify(prep.response);
 
-  let jobs = JSON.parse(responseStr).jobs;   
+  // let jobs = JSON.parse(responseStr).jobs;   
 
-  console.log(jobs)
+  // console.log(jobs)
 
-  if (notice) notice.setMessage("rendering ...")
+  // if (notice) notice.setMessage("rendering ...")
 
-  const results = await Promise.all(
-    jobs.map( async (job: any, index: number) =>  {
-        const jsParams = { authorSafeAddress, config_cid: configCid, publication, job, debug, dev }
-        return await singleRender(litNodeClient, authContext, protocolInfo, jsParams, index, 40000)
-    })
-  );
+  // const results = await Promise.all(
+  //   jobs.map( async (job: any, index: number) =>  {
+  //       const jsParams = { authorSafeAddress, config_cid: configCid, publication, job, debug, dev }
+  //       return await singleRender(lit, authContext, protocolInfo, jsParams, index, 40000)
+  //   })
+  // );
 
-  console.log(results)
+  // console.log(results)
 
-  const successful = results.filter(r => r.success);
-  const failed = results.filter(r => !r.success);
-  console.log(`Completed: ${successful.length}/${jobs.length}`);
-  failed.forEach(f => console.error(`Job ${f.index} failed:`, f.error.message, f.error))
+  // const successful = results.filter(r => r.success);
+  // const failed = results.filter(r => !r.success);
+  // console.log(`Completed: ${successful.length}/${jobs.length}`);
+  // failed.forEach(f => console.error(`Job ${f.index} failed:`, f.error.message, f.error))
 
-  const renderedJobs = successful.map( r => 
-      JSON.parse(r.result.response).job
-  ).filter( j => j.path != undefined)
+  // const renderedJobs = successful.map( r => 
+  //     JSON.parse(r.result.response).job
+  // ).filter( j => j.path != undefined)
 
-  // html here has the collections
-  console.log("renderedJobs", renderedJobs);
+  // // html here has the collections
+  // console.log("renderedJobs", renderedJobs);
 
   // if (notice) notice.setMessage("creating new website tree...")
 

@@ -2,7 +2,7 @@ import OxO from "./main.js";
 import { IOXOUser, OXOUser } from "./user/user.js";
 import { IpfsCtrlr, ipfsController } from "./ipfs/ipfs.ctrlr.js";;
 import { PinataService } from "./ipfs/pinata.ctrlr.js";
-import { LitService } from "./lit/lit.service.js";
+import { LitService } from "@s2s/soul2soul-shared";
 import { LensService } from "./lens/lens.ctrlr.js";
 import { IPermissionlessSafeService, PermissionlessSafeService } from "./eth/permissionless.safe.service.js";
 import { Notice } from "obsidian";
@@ -51,8 +51,6 @@ export class MainController implements IMainController {
 
   async init() {
 
-
-
     this.account = {};
     this.pinata = new PinataService(this);
     this.lit = new LitService({ "environment": "prod"});
@@ -61,9 +59,7 @@ export class MainController implements IMainController {
     const activeUser = this.plugin.settings.authors.find((a: any) => a.active);
 
     if (activeUser == undefined) {
-
       new Notice("no active 0xObsidian user", 3000)
-
     } else {
       const { name, active, private_key, eoa, safe } = activeUser;
       this.user = new OXOUser(name, active, private_key, eoa, safe);
@@ -76,12 +72,10 @@ export class MainController implements IMainController {
   }
 
   hasActiveUser() {
-  
     return this.user && this.user.private_key ? true : false;
   }
 
   hasAccounts() {
-
     return Object.keys(this.account)
   }
 
@@ -107,7 +101,7 @@ export class MainController implements IMainController {
       //   const deploy = await this.account[chain].valueTx(safe_address, "1");
       // }
 
-      await this.account[chain].connectToExistingSafe(safe_address as `0x{string}`);
+      // await this.account[chain].connectToExistingSafe(safe_address as `0x{string}`);
       
   }
 
@@ -188,7 +182,6 @@ export class MainController implements IMainController {
   }
 
   safeInstance (chain: string) {
-  
     return new PermissionlessSafeService(this, chain);
   }
 }

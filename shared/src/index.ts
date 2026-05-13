@@ -1,3 +1,5 @@
+export * from './helpers';
+
 export * from './protocol';
 export * from './contracts';
 export * from './ipfs';

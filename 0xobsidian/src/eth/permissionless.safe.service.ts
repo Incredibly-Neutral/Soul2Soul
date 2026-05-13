@@ -54,10 +54,11 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
   smartAccount: any;
   smartAccountClient: any;
   provider: any;
+  publicClient: any;
   address!: `0x${string}`;
 
   private txMutex: Promise<void> = Promise.resolve();
-  private publicClient: any;
+  
   private pimlicoClient: any;
 
   constructor(main: IMainController, chain: string) {
@@ -66,9 +67,8 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     this.chainId = getChainId(chain);
     // console.log("CHAIN", chain, this.chainId)
     const rpc = getRPCUrl(this.chainId, main.plugin.settings.alchemy_key);
-    const network = getNetwork(this.chainId);
-
-    this.provider = new JsonRpcProvider(rpc, network)
+    // const network = getNetwork(this.chainId);
+    // this.provider = new JsonRpcProvider(rpc, network)
     
     this.publicClient = createPublicClient({
       chain: getViemChainByName(chain),

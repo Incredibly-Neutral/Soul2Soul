@@ -1,5 +1,6 @@
 import { uploadConfig } from "./config";
-import { S2SPublication, publicationModuleFactoryAbi, recordsModuleFactoryAbi, recordsModuleAbi, safeAbi, ensSubdomainRegistryAbi } from "@s2s/soul2soul-shared";
+import { S2SPublication, safeAbi, ensSubdomainRegistryAbi } from "@s2s/soul2soul-shared";
+import { S2SRecordsModuleFactory, S2SPublicationModuleFactory, S2SRecordsModule } from "../../../protocol/generated/abis" 
 
 const isEthAddress = (address: string) => /^0x[a-fA-F0-9]{40}$/.test(address);
 
@@ -10,8 +11,6 @@ export const newPublicationSafe = async (
 	main: any,
 	publication: S2SPublication
 ) => {
-
-	console.log("1")
 
 	const salt = "publication_safe_" + publication.name;
 	const subdomain : string = publication.name.split(".")[0] || "";
@@ -41,14 +40,14 @@ export const newPublicationSafe = async (
 		main.publications[subdomain].L2.batchGenericTx([
 			{
 				address: main.plugin.settings.safe_records_factory,
-				abi: JSON.stringify(recordsModuleFactoryAbi),
+				abi: JSON.stringify(S2SRecordsModuleFactory),
 				method: "createModule",
 				args: [publicationAddress2],
 				deploy: true
 			},
 			{
 				address: main.plugin.settings.safe_publication_factory,
-				abi: JSON.stringify(publicationModuleFactoryAbi),
+				abi: JSON.stringify(S2SPublicationModuleFactory),
 				method: "createModule",
 				args: [publicationAddress2, publication.authors, []],
 				deploy: true
@@ -164,7 +163,7 @@ async function setRecordsWithRetry(pubInstance: any, recordsModule: string, publ
 			
 			const setRecords = await pubInstance.genericTx(
 				recordsModule,
-				JSON.stringify(recordsModuleAbi),
+				JSON.stringify(S2SRecordsModule),
 				"setRecords",
 				[
 					['name','config','repo','branch','feed'],

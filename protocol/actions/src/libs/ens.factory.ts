@@ -46,10 +46,10 @@ export const getProtocolControllerAndModules = async () => {
 
 export const getDomainOwnerAndModules = async (publication: string) => {
 
-    return JSON.parse(await LitActions.runOnce({
-        waitForResponse: true,
-        name: `protocol-${publication}`
-    }, async () => { 
+    // return JSON.parse(await LitActions.runOnce({
+    //     waitForResponse: true,
+    //     name: `protocol-${publication}`
+    // }, async () => { 
 
         const nameWrapperAddress = await evmRead("ETHEREUM", ENS_REGISTRY_ADDRESS, ["function nameWrapper() view returns (address)"], "nameWrapper", []);
         const subdomainNode = await ensNameToNode(publication, ENS_REGISTRY_ADDRESS)
@@ -77,12 +77,12 @@ export const getDomainOwnerAndModules = async (publication: string) => {
             }
         }
 
-        return JSON.stringify({
+        return {
             multisig,
             configModule,
             publicationModule
-        });
-    }))
+        };
+    // }))
 }
 
 const ensNameToNode = async (ensName: string, en_registry_address: string) => {

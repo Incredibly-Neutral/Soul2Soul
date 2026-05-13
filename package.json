@@ -1,8 +1,22 @@
 {
-    "name": "@s2s/monorepo",                                                                                                                                                                                                                                                                                                                                                                                                              
-    "private": true,                                                                                                                                                                                                                                                                                                                                                                                                                      
+    "name": "@s2s/monorepo",
+    "private": true,
     "packageManager": "pnpm@10.11.1",
-    "scripts" : {
-        
+    "scripts": {
+        "deploy-group": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/deploy-group.ts",
+        "inspect-group": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/inspect-group.ts",
+        "build-actions": "node protocol/scripts/lit/build-actions.cjs",
+        "add-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/add-action.ts",
+        "update-protocol": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts",
+        "build-shared": "cd shared && tsc && cd .."
+    },
+    "devDependencies": {
+        "ts-morph": "^28.0.0",
+        "ts-node": "^10.9.2"
+    },
+    "pnpm": {
+        "overrides": {
+            "@ensdomains/buffer": "npm:buffer@^6.0.3"
+        }
     }
 }

@@ -10,5 +10,5 @@ export * from './contracts';
 // PURE 
 export { validateProtocol, validateConfig } from './publication'; 
 
-export { canRead, canPublish } from './lit/acc'
+
  

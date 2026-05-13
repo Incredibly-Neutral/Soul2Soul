@@ -124,9 +124,9 @@ export default class DSG extends Plugin {
 							const subdomain = ensName.split(".")[0]
 							const onSubmit = async () => {
 								const { contentId, publicContent, toEncrypt } = await this.ctrlr.content.parseNote(file)
-								await this.ctrlr.content.storeNoteOnLens(file, contentId, publicContent, toEncrypt, subdomain);
+								await this.ctrlr.content.storeNoteOnLens(file, this.ctrlr.protocolInfo, contentId, publicContent, toEncrypt, subdomain);
 								await this.ctrlr.revokeLicense(subdomain, file);
-								await this.ctrlr.renderCalls(ensName, [contentId])
+								await this.ctrlr.renderCalls(ensName, [contentId], this.ctrlr.oxo.settings.litUsageKey)
 							}
 							return new RevokeModal(this.app, this.ctrlr, ensName, onSubmit).open();
 							
