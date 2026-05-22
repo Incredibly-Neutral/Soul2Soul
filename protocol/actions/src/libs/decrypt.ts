@@ -1,32 +1,29 @@
-import { canRead } from "@s2s/soul2soul-shared/lit-actions";
-
+import { canRead } from "./gates";
 
 export const decrypt = async (
+  pkpId: string,
   body: any,
   authorSafeAddress: string,
   publicationModule: string,
+  signerAddress: string
 ): Promise<any> => {
   
-  const { ciphertext, dataToEncryptHash } = JSON.parse(body.content);
-  const ucc = canRead(body.id, authorSafeAddress, publicationModule);
-  const decryptionParams = {
-      accessControlConditions: ucc,
-      ciphertext: ciphertext,
-      dataToEncryptHash: dataToEncryptHash,
-      authSig: null,
-      chain: "base",
-  };
-  let decrypted; 
+  const ciphertext = JSON.parse(body.content);
 
-  try {
-    decrypted = JSON.parse(await Lit.Actions.decryptAndCombine(decryptionParams));
+  if (await canRead(body.id, authorSafeAddress, publicationModule, signerAddress)) {
 
-    console.log(decrypted)
+    let decrypted; 
 
-  } catch (error) {
-    console.log("failed to decrypt", body.id)
-    decrypted = undefined;
+    try {
+
+      decrypted = await Lit.Actions.Decrypt({ pkpId, ciphertext });
+
+    } catch (error) {
+      console.log("failed to decrypt", body.id)
+      decrypted = false;
+    }
+
+    return decrypted
+
   }
-
-  return decrypted
 };

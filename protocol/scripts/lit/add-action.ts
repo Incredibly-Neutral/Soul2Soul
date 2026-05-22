@@ -18,8 +18,8 @@ console.log(configPath)
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const action_name = 'prep';
-const actionPath = '/home/joera/code/s2s/protocol/actions/dist/prep/main.js';
+const action_name = 'updateEvm';
+const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
 const code = fs.readFileSync(actionPath,'utf-8')
 
 const ipfs = new S2SIPFSMethods(process.env.IPFS_URL!, process.env.PINATA_JWT!, process.env.PINATA_GATEWAY!)
@@ -49,7 +49,9 @@ async function main(action_name: string, code: string) {
         lit.registerAction(cid, action_name),
     ]);
 
-    await lit.addActionToGroup(config.groups[groupIndex].id, result.hashedCid);
+    const r = await lit.addActionToGroup(config.groups[groupIndex].id, cid);
+
+    console.log("registered", r)
 
     config.groups[groupIndex].actions.push({
         name: action_name,

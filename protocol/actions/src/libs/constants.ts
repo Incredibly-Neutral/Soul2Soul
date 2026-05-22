@@ -11,3 +11,4 @@ export const IPFS_URL = "https://ipfs.transport-union.dev";
 export const ALCHEMY_KEY = "DAfzjixY82ICdLCssh_dTQpoN0I2mthW";
 export const PINATA_API_KEY = "47e196d2683c33a1bf45";
 export const PINATA_SECRET_API_KEY = "8214464a0299f2a58e83705b85f153c145376af78757fc9b9537b0c5abdd25f4";
+export const DRPC_API_KEY = "AouQTyDbwExLrOsOS2mMBR_2kteqUQMR8az6tiKh6MJI"

@@ -1,25 +1,21 @@
-/// <reference path="../action_globals.ts" />
-
 import { S2SBody, S2SJob, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
 import { getDomainOwnerAndModules } from "../libs/ens.factory";
 import { fetchById, fetchByQuery } from "../libs/lens.factory";
 import { getProtocolInfo } from "../libs/protocol.factory";
-import { getBody } from "../single/body";
 import { getConfig, getTaskConfig } from "../single/config.ctrl";
 
-const main = async () => {
 
-    const { authorSafeAddress, publication, configCid,  contentIds, dev } = jsParams;
+async function main({ protocolInfo, authorSafeAddress, publication, configCid, contentIds, dev } : any) { 
   
     let jobs: S2SJob[] = [];
 
-    let protocolInfo;
-    try {
-        protocolInfo = await getProtocolInfo(false);
-    } catch (error) {
-        console.error("Failed to fetch protocol info:", error);
-        throw error;
-    }
+    // let protocolInfo;
+    // try {
+    //     protocolInfo = await getProtocolInfo(false);
+    // } catch (error) {
+    //     console.error("Failed to fetch protocol info:", error);
+    //     throw error;
+    // }
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(publication);
     if(multisig == null || configModule == null || publicationModule == null ) return;
@@ -81,7 +77,4 @@ const main = async () => {
             success: true,
             jobs: uniqueJobs
         }
-    
 };
-
-main();

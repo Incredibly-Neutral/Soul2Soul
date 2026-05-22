@@ -11,7 +11,8 @@ export const addAndSignMetadata = async (
   protocolInfo: S2SProtocolInfo,
   contentInfo?: S2SContentInfo
 ) => {
-  console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
+  
+  // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
   try {
     // 1. Extract HTML content between <html> and </html> tags
@@ -28,11 +29,7 @@ export const addAndSignMetadata = async (
     const htmlBytes = ethers.utils.toUtf8Bytes(contentToHash);
     const sha256Hash = ethers.utils.sha256(htmlBytes).replace("0x", "");
 
-    // 3. Derive PKP address for DID
-    const pkpPublicKey = protocolInfo.pkp.publicKey.startsWith("0x")
-      ? protocolInfo.pkp.publicKey
-      : "0x" + protocolInfo.pkp.publicKey;
-    const pkpAddress = ethers.utils.computeAddress(pkpPublicKey);
+    const pkpAddress = protocolInfo.pkp.ethAddress
 
     const timestamp = new Date().toISOString();
     const currentUrl = contentInfo?.publisher?.url || "";
@@ -139,7 +136,7 @@ export const addAndSignMetadata = async (
       "type": "DataIntegrityProof",
       "cryptosuite": "ecdsa-secp256k1-2019",
       "created": timestamp,
-      "verificationMethod": `did:pkh:eip155:175177:${pkpAddress}`,
+      "verificationMethod": `did:pkh:eip155:8453:${pkpAddress}`,
       "proofPurpose": "assertionMethod"
     };
 
@@ -156,11 +153,18 @@ export const addAndSignMetadata = async (
     // 7. Sign with Lit PKP
     const sigName = `sign-${id.slice(0, 4)}`;
     
-    const signature = await LitActions.signAndCombineEcdsa({
-      toSign: ethers.utils.arrayify(toSignHash),
-      publicKey: protocolInfo.pkp.publicKey.replace("0x", ""),
-      sigName
-    });
+    // const signature = await LitActions.signAndCombineEcdsa({
+    //   toSign: ethers.utils.arrayify(toSignHash),
+    //   publicKey: protocolInfo.pkp.publicKey.replace("0x", ""),
+    //   sigName
+    // });
+
+    const signingKey = new ethers.utils.SigningKey(
+        await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp.ethAddress })
+    );
+    const signature = ethers.utils.joinSignature(
+        signingKey.signDigest(ethers.utils.arrayify(toSignHash))
+    );
 
     // 8. Add complete proof to schema
     schema.proof = {

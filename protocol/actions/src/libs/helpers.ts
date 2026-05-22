@@ -1,54 +1,3 @@
-
-import { AuthSig } from "@lit-protocol/auth-helpers";
-
-// Helper function to safely parse authSig
-export const parseAuthSig = (authSig: any): AuthSig | null => {
-    if (typeof authSig === 'string') {
-        try {
-            const cleaned = authSig.replace(/\\\\n/g, '\\n');
-            return JSON.parse(cleaned) as AuthSig;
-        } catch (e) {
-            console.error('Error parsing authSig:', e);
-            return null;
-        }
-    } else if (typeof authSig === 'object' && authSig !== null) {
-        return authSig as AuthSig;
-    }
-    return null;
-};
-
-// Helper function to extract Ethereum address from authSig
-export const getEthAddressFromCapability = (authSig: any): string => {
-    try {
-        if (typeof authSig === 'string') {
-            authSig = JSON.parse(authSig);
-        }
-        
-        // Parse signedMessage if it's a string
-        if (authSig.signedMessage && typeof authSig.signedMessage === 'string') {
-            const signedMessageObj = JSON.parse(authSig.signedMessage);
-            
-            interface Capability {
-                sig: string;
-                address: string;
-                derivedVia: string;
-                signedMessage: string;
-            }
-            
-            // Get the first capability that has an Ethereum address
-            if (signedMessageObj.capabilities && Array.isArray(signedMessageObj.capabilities)) {
-                const capability = signedMessageObj.capabilities.find((cap: Capability) => cap.address?.startsWith('0x'));
-                if (capability) {
-                    return capability.address;
-                }
-            }
-        }
-    } catch (e) {
-        console.error('Error extracting Ethereum address:', e);
-    }
-    return '';
-};
-
 export const addressToUserId = (address: string): Uint8Array => {
     // Remove 0x prefix if present
     const cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
@@ -60,3 +9,15 @@ export const addressToUserId = (address: string): Uint8Array => {
     }
     return bytes;
 };
+
+export const fetchWithTimeout = async (url: string, options = {}, timeoutMs = 5000) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+

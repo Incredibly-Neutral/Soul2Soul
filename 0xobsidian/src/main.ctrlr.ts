@@ -95,11 +95,13 @@ export class MainController implements IMainController {
       
       const signerAddress = await this.account[chain].updateSigner(this.user.private_key)
       const safe_address = await this.account[chain].connectToFreshSafe(salt);
-      // const deployed = await this.account[chain].isDeployed();
-      // if (!deployed) {
-      //   new Notice("deploying safe to " + chain);
-      //   const deploy = await this.account[chain].valueTx(safe_address, "1");
-      // }
+      const deployed = await this.account[chain].isDeployed();
+
+      console.log("Deployed", deployed)
+      if (!deployed) {
+        new Notice("deploying safe to " + chain);
+        const deploy = await this.account[chain].valueTx(safe_address as `0x${string}`, "0");
+      }
 
       // await this.account[chain].connectToExistingSafe(safe_address as `0x{string}`);
       

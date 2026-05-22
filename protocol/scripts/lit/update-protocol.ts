@@ -44,24 +44,24 @@ const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
 export const updateProtocol = async (account: any, pkpInfo: any, prepActionCid: any, singleActionCid: any, cborActionCid: any, rootUpdateActionCid: any) => {
 
     const transactions = [
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["pkp_tokenId", pkpInfo.tokenId],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["pkp_publicKey", pkpInfo.pubkey],
-        }),
-        value: "0",
-    },
+    // {
+    //     to: RECORDS_MODULE_ADDRESS,
+    //     data: encodeFunctionData({
+    //     abi: recordsModuleAbi,
+    //     functionName: "setRecord",
+    //     args: ["pkp_tokenId", pkpInfo.tokenId],
+    //     }),
+    //     value: "0",
+    // },
+    // {
+    //     to: RECORDS_MODULE_ADDRESS,
+    //     data: encodeFunctionData({
+    //     abi: recordsModuleAbi,
+    //     functionName: "setRecord",
+    //     args: ["pkp_publicKey", pkpInfo.pubkey],
+    //     }),
+    //     value: "0",
+    // },
     {
         to: RECORDS_MODULE_ADDRESS,
         data: encodeFunctionData({
@@ -245,10 +245,13 @@ const main = async () => {
 
     const account = await privateKeyToAccount('0x' + process.env.PRIVATE_KEY! as `0x${string}`)
     const prep = group.actions.find( (a: any) => a.name == 'prep');
+    const single = group.actions.find( (a: any) => a.name == 'single');
+    const cbor = group.actions.find( (a: any) => a.name == 'cbor');
+    const updateEvm = group.actions.find( (a: any) => a.name == 'updateEvm');
 
-    console.log(prep);
+    console.log([prep,single, cbor, updateEvm]);
 
-    const r = await updateProtocol(account, pkpInfo, prep.cid,"","","")
+    const r = await updateProtocol(account, pkpInfo, prep.cid, single.cid, cbor.cid, updateEvm.cid)
 }
 
 
