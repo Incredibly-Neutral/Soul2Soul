@@ -7,6 +7,8 @@
         "inspect-group": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/inspect-group.ts",
         "build-actions": "node protocol/scripts/lit/build-actions.cjs",
         "add-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/add-action.ts",
+        "swap-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts",
+        "refresh-key": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/refresh-key.ts",
         "update-protocol": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts",
         "build-shared": "cd shared && tsc && cd .."
     },

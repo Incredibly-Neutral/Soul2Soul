@@ -1,77 +1,80 @@
-/// <reference path="../action_globals.ts" />
-
-import { S2SContentInfo } from "@s2s/soul2soul-shared/lit-actions";
+import { S2SBody, S2SContentInfo } from "@s2s/soul2soul-shared/lit-actions";
 import { decrypt } from "../libs/decrypt";
 import { getDomainOwnerAndModules } from "../libs/ens.factory";
 import { uploadFile } from "../libs/ipfs.factory";
 import { getProtocolInfo } from "../libs/protocol.factory";
-import { getBody } from "./body";
 
 import { getConfig } from "./config.ctrl";
 import { initTemplateData, fetchCollections, mergeDecrypted, pathsForCollections } from "./data.ctrlr";
 import { addAndSignMetadata } from "./metadata";
+import { renderHTML} from "../renderer/html.ctrlr";
+import { fetchById } from "../libs/lens.factory";
+import { extractSignerAddress } from "../libs/gates";
 
-const main = async () => {
+async function main({ job, signature, authorSafeAddress, configCid, publication, debug, dev } : any) { 
 
-    let { job  } = jsParams;
-    const { authorSafeAddress, config_cid: configCid, publication, debug, dev } = jsParams;
+    const signerAddress = extractSignerAddress(ethers.utils.hashMessage("lit actions auth"), signature);
+
+    console.log("SIGNER",signerAddress);
 
     let html: string | undefined = undefined;
     let t0 = Date.now(); 
+    let logz: any[] = [];
     let errors: string[] = []; // Track all errors
     
-    const protocolInfo = await getProtocolInfo(authorSafeAddress, false);
-    if (!protocolInfo) throw "Failed to fetch protocol info"
+    const protocolInfo = await getProtocolInfo(false);
+    if (!protocolInfo) throw "Failed to fetch protocol info";
+    // console.log(protocolInfo)
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(publication);
+
+    console.log(publication, multisig, configModule, publicationModule)
     if(multisig == null || configModule == null || publicationModule == null ) return;
 
-    const body = await getBody(job.id, "single")
-    if (body.id == undefined) throw "Post content not found"
+    let body: S2SBody | undefined | null = await fetchById(job.id)
+    if (body == undefined || body == null || body.id == undefined) throw "Post content not found"
+    // console.log("body",body)
+    logz.push(body)
 
     let config = await getConfig(authorSafeAddress, configCid, configModule, dev);
+    // console.log("config",config)
+    logz.push(config)
 
     let t1 = Date.now();
-    console.log("got body & config: ", ((t1 - t0) / 1000).toFixed(3), "seconds");
+    logz.push(`got body & config: ${((t1 - t0) / 1000).toFixed(3)} seconds`);
 
     let templateData : any = await initTemplateData(
         protocolInfo,
         authorSafeAddress,
+        signerAddress,
         job.templateConfig,
         body,
         publicationModule,  
     ) 
+
+    logz.push(templateData)
+
 
     if (!templateData.revoked) {
 
         job.revoked = false;
 
         let t2 = Date.now();
-        console.log("decrypted body: ", ((t2 - t0) / 1000).toFixed(3), "seconds");
+        logz.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
-        let collections = JSON.parse(await LitActions.runOnce({
-            waitForResponse: true,
-            name: `prepTD-${job.id.slice(0,4)}`
-        }, async () => {    
-            return JSON.stringify(await fetchCollections(
-                job.templateConfig
-            ));
-        }));
-
+        let collections = await fetchCollections(job.templateConfig);
+  
         let t3 = Date.now();
-        console.log("fetched collections: ", ((t3 - t0) / 1000).toFixed(3), "seconds");
+        logz.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
 
         const decryptedCollections: Record<string, any[]> = {};
 
         for (const key of Object.keys(collections)) {
-            const encrypted = collections[key].filter((item: any) => 
-                item.content?.includes?.('ciphertext')
-            );
-            
+
             const decrypted = await Promise.all(
-                encrypted.map(async (item: any) => {
+                collections[key].map(async (item: any) => {
                     try {
-                        const d = await decrypt(item, authorSafeAddress, publicationModule);
+                        const d = await decrypt(protocolInfo.pkp.ethAddress, item, authorSafeAddress, publicationModule, signerAddress);
                         if (!d) {
                             const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
                             console.log(errorMsg);
@@ -94,21 +97,15 @@ const main = async () => {
         }
         
         let t4 = Date.now();
-        console.log("decrypted collections: ", ((t4 - t0) / 1000).toFixed(3), "seconds");
+        logz.push(`decrypted collections:  ${((t4 - t0) / 1000).toFixed(3)} seconds`);
 
         templateData.collections = decryptedCollections;
 
-        let res: any = JSON.parse(await LitActions.call({
-            ipfsId: config.render_action,
-            params: {
-                config,
-                templateConfig: job.templateConfig,
-                templateData,
-            },
-        }));
+        // render method was per publication .. no longer possible ... 
+        html = await renderHTML(config, job.templateConfig,  templateData) 
 
         let t5 = Date.now();
-        console.log("rendered: ", ((t5 - t0) / 1000).toFixed(3), "seconds");
+        logz.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
         const metadata: S2SContentInfo = {
             author: {
@@ -130,23 +127,15 @@ const main = async () => {
             }
         }
  
-        html = await addAndSignMetadata(job.id, res.html, protocolInfo, metadata);
+        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
 
         let t6 = Date.now();
-        console.log("signed: ", ((t6 - t0) / 1000).toFixed(3), "seconds");
+        logz.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
 
-        job.path = templateData.path;
-
-        job = JSON.parse(await LitActions.runOnce({
-            waitForResponse: true,
-            name: `uploadHTML-${job.id.slice(0,4)}`
-        },
-        async () => {    
-            job.html = await uploadFile(html!)
-            return JSON.stringify(job);
-        }));
+        job.html = await uploadFile(html!)
 
     } else {
+
         const revokedMsg = "Content was revoked or failed to decrypt";
         console.log(revokedMsg);
         errors.push(revokedMsg);
@@ -154,16 +143,14 @@ const main = async () => {
         job.revoked = true
         job.path = "";
         job.html = ""
-    }
+    } 
 
-    LitActions.setResponse({
-        response: JSON.stringify({
-            success: errors.length === 0,
-            timestamp: new Date(),
-            job,
-            html,
-            ...(errors.length > 0 && { errors }), // Only include if there are errors
-        })
-    })
+    return {
+        success: errors.length === 0,
+        timestamp: new Date(),
+        job,
+        html,
+        logz,
+        ...(errors.length > 0 && { errors }), // Only include if there are errors
+    }
 }
-main();

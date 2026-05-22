@@ -1,9 +1,5 @@
 import { IPFS_URL } from "./constants";
-// import { UnixFS } from 'ipfs-unixfs';
-// import * as Block from 'multiformats/block';
-// import { sha256 } from 'multiformats/hashes/sha2';
-// import * as dagPB from '@ipld/dag-pb';
-import { CID } from "multiformats";
+import { fetchWithTimeout } from "./helpers";
 
 interface StandardLink {
   Hash: { "/": string };
@@ -11,7 +7,7 @@ interface StandardLink {
   Tsize: number;
 }
 
-interface DagNode {
+export interface DagNode {
   Links?: StandardLink[];
   metadata?: {
     [id: string]: {
@@ -220,7 +216,7 @@ export const createMetadata = (dag: DagNode, idMap: Record<string, string>): Dag
 };
 
 const normalizePath = (p: string): string => {
-  const cleaned = p.replace(/^\/+|\/+$/g, '');
+  const cleaned = p.replace(new RegExp('^/+|/+$', 'g'), '');
   return cleaned === '' ? 'index.html' : cleaned;
 };
 
@@ -237,7 +233,7 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
   
   const mfsPath = `/temp-${Date.now()}`;
   
-  await fetch(`${gateway}/api/v0/files/mkdir?arg=${encodeURIComponent(mfsPath)}&parents=true`, {
+  await fetchWithTimeout(`${gateway}/api/v0/files/mkdir?arg=${encodeURIComponent(mfsPath)}&parents=true`, {
     method: 'POST'
   });
   
@@ -250,7 +246,7 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
       `arg=${encodeURIComponent(destPath)}&` +
       `parents=true`;
     
-    const res = await fetch(url, { method: 'POST' });
+    const res = await fetchWithTimeout(url, { method: 'POST' });
     
     if (!res.ok) {
       const errorText = await res.text();
@@ -259,7 +255,7 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
     }
   }
   
-  const statRes = await fetch(`${gateway}/api/v0/files/stat?arg=${encodeURIComponent(mfsPath)}`, {
+  const statRes = await fetchWithTimeout(`${gateway}/api/v0/files/stat?arg=${encodeURIComponent(mfsPath)}`, {
     method: 'POST'
   });
   
@@ -267,12 +263,12 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
   const dirCid = stat.Hash;
 
   // Pin before 
-  await fetch(`${gateway}/api/v0/pin/add?arg=${dirCid}`, {
+  await fetchWithTimeout(`${gateway}/api/v0/pin/add?arg=${dirCid}`, {
     method: 'POST'
   });
 
   
-  await fetch(`${gateway}/api/v0/files/rm?arg=${encodeURIComponent(mfsPath)}&recursive=true`, {
+  await fetchWithTimeout(`${gateway}/api/v0/files/rm?arg=${encodeURIComponent(mfsPath)}&recursive=true`, {
     method: 'POST'
   });
   
@@ -281,24 +277,36 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
 
 
 export const contenthashToIPFS = (hexString: string): string => {
-  // Remove 0x prefix
-  const hex = hexString.startsWith('0x') ? hexString.slice(2) : hexString;
-  
-  // Convert hex to bytes
-  const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
-  
-  // Check format
-  if (bytes[0] !== 0xe3) {
-    throw new Error('Not an IPFS contenthash (expected 0xe3)');
-  }
-  
-  // Skip the 0xe3 (ipfs-ns) and 0x01 (version) prefix
-  const cidBytes = bytes.slice(2);
-  
-  // Parse as CID
-  const cid = CID.decode(cidBytes);
-  
-  // Return as string
-  return cid.toString();
-}
 
+    const hex = hexString.startsWith('0x') ? hexString.slice(2) : hexString;
+    const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+    
+    if (bytes[0] !== 0xe3) {
+        throw new Error('Not an IPFS contenthash (expected 0xe3)');
+    }
+    
+    // Skip 0xe3 (ipfs-ns) and 0x01 (version)
+    const cidBytes = bytes.slice(2);
+    
+    // Base58 encode
+    const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    
+    let num = BigInt(0);
+    for (const byte of cidBytes) {
+        num = num * 256n + BigInt(byte);
+    }
+    
+    let result = "";
+    while (num > 0n) {
+        result = BASE58_ALPHABET[Number(num % 58n)] + result;
+        num = num / 58n;
+    }
+    
+    // Handle leading zero bytes
+    for (const byte of cidBytes) {
+        if (byte !== 0) break;
+        result = "1" + result;
+    }
+    
+    return result;
+}

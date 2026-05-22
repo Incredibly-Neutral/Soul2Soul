@@ -11,3 +11,4 @@ export const IPFS_URL = "https://ipfs.transport-union.dev";
 export const ALCHEMY_KEY = "REDACTED";
 export const PINATA_API_KEY = "REDACTED";
 export const PINATA_SECRET_API_KEY = "REDACTED";
+export const DRPC_API_KEY = "REDACTED"

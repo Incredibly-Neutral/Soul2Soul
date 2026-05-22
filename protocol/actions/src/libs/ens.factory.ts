@@ -7,11 +7,17 @@ export const getProtocolControllerAndModules = async () => {
      try {
   
         const subdomainNode = ethers.utils.namehash("soul2soul.eth");
+        // const subdomainNode = await ensNameToNode("soul2soul.eth", ENS_REGISTRY_ADDRESS);
+        // console.log(subdomainNode)
         const nameWrapperAddress = await evmRead("ETHEREUM", ENS_REGISTRY_ADDRESS, ["function nameWrapper() view returns (address)"], "nameWrapper", []);
+        // console.log("namewrapperAddress",nameWrapperAddress)
         const customRegistry = await evmRead("ETHEREUM", nameWrapperAddress, ["function ownerOf(uint256 id) view returns (address)"], "ownerOf", [subdomainNode])
+        // console.log("customRegistry",customRegistry)
         const controller = await evmRead("ETHEREUM", customRegistry, ["function parentDomainController() view returns (address)"], "parentDomainController", [])
+        // console.log('controller', controller)
         const modules = await evmRead("BASE", controller, ["function getModulesPaginated(address start, uint256 pageSize) view returns (address[] memory array, address next)"], "getModulesPaginated", [ "0x0000000000000000000000000000000000000001", 10])
-        
+        // console.log("MODS", modules);
+
         let configModule = null;
 
         for (const moduleAddress of modules[0]) {
@@ -24,10 +30,12 @@ export const getProtocolControllerAndModules = async () => {
                 } 
 
             } catch (error) {
-                // Module doesn't have NAME function, skip
-                // console.log(`Module ${moduleAddress} has no NAME function`);
+               // Module doesn't have NAME function, skip
+                console.log(`Module ${moduleAddress} has no NAME function`);
             }
         }
+
+        // console.log("CM",configModule)
 
         return {
             multisig : controller,
@@ -45,11 +53,6 @@ export const getProtocolControllerAndModules = async () => {
 }
 
 export const getDomainOwnerAndModules = async (publication: string) => {
-
-    // return JSON.parse(await LitActions.runOnce({
-    //     waitForResponse: true,
-    //     name: `protocol-${publication}`
-    // }, async () => { 
 
         const nameWrapperAddress = await evmRead("ETHEREUM", ENS_REGISTRY_ADDRESS, ["function nameWrapper() view returns (address)"], "nameWrapper", []);
         const subdomainNode = await ensNameToNode(publication, ENS_REGISTRY_ADDRESS)

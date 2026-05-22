@@ -342,13 +342,13 @@ export class MainController implements IMainController {
 				return fragment
 			};
 
-			new Notice(_link(`${res.cid}`, `https://neutralpress.mypinata.cloud/ipfs/${res.cid}`), 0);
-			new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);
+			// new Notice(_link(`${res.cid}`, `https://neutralpress.mypinata.cloud/ipfs/${res.cid}`), 0);
+			// new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);
 
-			console.log(res.jobs);
-			console.log('cbor', res.cbor)
-			console.log('ipfs://' + res.cid);
-			console.log('https://' + publication + '.link' + res.path)
+			// console.log(res.jobs);
+			// console.log('cbor', res.cbor)
+			// console.log('ipfs://' + res.cid);
+			// console.log('https://' + publication + '.link' + res.path)
 
 		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);

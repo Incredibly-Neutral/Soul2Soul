@@ -48,6 +48,7 @@ export const pathsForCollections = (item: any, config: any) => {
 export const initTemplateData = async (
   protocolInfo: any,
   authorSafeAddress: string,
+  signerAddress: string,
   templateConfig: S2STemplateConfig,
   body: S2SBody,
   publicationModule: string,
@@ -56,8 +57,7 @@ export const initTemplateData = async (
   let revoked = false;
   let path : string | undefined = undefined;
 
-
-  let decrypted = await decrypt(body, authorSafeAddress, publicationModule);
+  let decrypted = await decrypt(protocolInfo.pkp.ethAddress, body, authorSafeAddress, publicationModule, signerAddress);
   if (!decrypted) {
       revoked = true
   } else {

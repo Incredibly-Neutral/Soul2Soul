@@ -34,10 +34,11 @@ export class LitService {
         method?: 'GET' | 'POST';
         body?: Record<string, unknown>;
         key?: string | null;
+        retries?: number;
       } = {},
       signal?: AbortSignal
   ): Promise<T> {
-      const { method = 'GET', body, key } = options;
+      const { method = 'GET', body, key, retries = 3 } = options;
       const apiKey = key === null ? undefined : (key ?? this.accountKey);
 
       const headers: Record<string, string> = {
@@ -74,10 +75,7 @@ export class LitService {
               return data;
           },
           {
-              retries: 3,
-              timeoutMs: 25_000,
-              onRetry: (attempt, error) =>
-                  console.log(`[Lit API] ${endpoint} retry ${attempt}/3: ${error.message}`),
+              retries,
           }
       );
   }
@@ -175,8 +173,18 @@ export class LitService {
         method: 'GET'
     });
 
+    const pkps = await this.call<{ success: boolean }>(`/list_wallets_in_group?group_id=${id}&page_number=0&page_size=20`, {
+        method: 'GET'
+    });
+
+    // const keys = await this.call<{ success: boolean }>(`/list_wallets_in_group?group_id=${id}&page_number=0&page_size=20`, {
+    //     method: 'GET'
+    // });
+
     return {
-      actions
+      actions,
+      pkps,
+      // keys
     }
 
   }
@@ -204,10 +212,10 @@ export class LitService {
     });
   }
 
-  async removeActionFromGroup(groupId: number, actionCid: string) {
+  async removeActionFromGroup(groupId: number, actionCidHashed: string) {
     return this.call<{ success: boolean }>('/remove_action_from_group', {
       method: 'POST',
-      body: { group_id: groupId, action_ipfs_cid: actionCid },
+      body: { group_id: groupId, hashed_cid: actionCidHashed },
     });
   }
 
@@ -252,12 +260,14 @@ export class LitService {
     key: string | undefined = undefined
   ) {
 
+
     return this.call<{ response: unknown; logs: string[]; has_error: boolean }>(
       '/lit_action',
       {
         method: 'POST',
         body: { code, js_params: jsParams },
         key,
+        retries: 0,
       }
     );
   }

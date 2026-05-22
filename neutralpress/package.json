@@ -43,6 +43,7 @@
 		"axios": "^1.13.4",
 		"date-and-time": "^4.2.0",
 		"dotenv": "^16.6.1",
+		"ethers": "^5.8.0",
 		"ethers5": "npm:ethers@^5.8.0",
 		"etherscan-api": "^10.3.0",
 		"express": "^4.22.1",

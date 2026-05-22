@@ -1,174 +1,161 @@
 import { S2SProtocolInfo } from '../protocol';
 export * from './types';
+import * as ethers from 'ethers';
+(global as any).ethers = ethers;
 
-export const renderwithLitActions =  async (oxoCtrlr: any, lit_usage_key: string, protocolInfo: S2SProtocolInfo, notice: any, authorSafeAddress: string, publication: string, contentIds: string[], update: boolean, dev: boolean, debug: boolean, configCid?: string | undefined ) : Promise<any> => {
+import { NumberAttributeSchema } from '@lens-protocol/metadata';
 
-  if (notice) { notice.setMessage("prepping render ... ") } else  { console.log('prepping render')}
+const gateway = 'https://ipfs.transport-union.dev';
 
+export const renderwithLitActions =
+  async (
+    oxoCtrlr: any,
+    litUsageKey: string,
+    protocolInfo: S2SProtocolInfo,
+    notice: any,
+    authorSafeAddress: string,
+    publication: string,
+    contentIds: string[],
+    update: boolean,
+    dev: boolean,
+    debug: boolean,
+    configCid?: string,
+  ) => {
+    const signature = await oxoCtrlr.account['BASE'].signMessage(
+      'lit actions auth',
+    );
 
-  const response = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionPrep}`);
+    // ====================== Prep (local, no Lit cost) ======================
+    if (notice) notice.setMessage('prepping render ...');
+    else console.log('prepping render');
 
-  const code = await response.text();
+    // Fetch compiled prep from IPFS and eval at global scope.
+    // In Obsidian (ESM), eval() is module-scoped, so var won't leak.
+    // setTimeout forces call stack unwinding so eval runs at top-level scope.
+    const prepResp = await fetch(
+      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionPrep}`,
+    );
+    const prepCode = await prepResp.text();
 
-  console.log(protocolInfo.litActionPrep)
-  console.log(code);
-  console.log("key", lit_usage_key)
-
-  let prep: any = await oxoCtrlr.lit.executeAction({
-   
-      code,
-      jsParams: {
-          authorSafeAddress,
-          publication,
-          configCid: configCid || undefined,
-          contentIds: contentIds,
-          dev 
-      },
-      key: lit_usage_key
-  });
-
-  console.log(prep);
-
-  // const responseStr = typeof prep.response === 'string' 
-  // ? prep.response 
-  // : JSON.stringify(prep.response);
-
-  // let jobs = JSON.parse(responseStr).jobs;   
-
-  // console.log(jobs)
-
-  // if (notice) notice.setMessage("rendering ...")
-
-  // const results = await Promise.all(
-  //   jobs.map( async (job: any, index: number) =>  {
-  //       const jsParams = { authorSafeAddress, config_cid: configCid, publication, job, debug, dev }
-  //       return await singleRender(lit, authContext, protocolInfo, jsParams, index, 40000)
-  //   })
-  // );
-
-  // console.log(results)
-
-  // const successful = results.filter(r => r.success);
-  // const failed = results.filter(r => !r.success);
-  // console.log(`Completed: ${successful.length}/${jobs.length}`);
-  // failed.forEach(f => console.error(`Job ${f.index} failed:`, f.error.message, f.error))
-
-  // const renderedJobs = successful.map( r => 
-  //     JSON.parse(r.result.response).job
-  // ).filter( j => j.path != undefined)
-
-  // // html here has the collections
-  // console.log("renderedJobs", renderedJobs);
-
-  // if (notice) notice.setMessage("creating new website tree...")
-
-//   const cbor: ExecuteJsResponse = await litNodeClient.executeJs({
-//       sessionSigs: sessionSignatures,
-//       ipfsId: protocolInfo.litActionCbor,
-//       jsParams: {
-//           authorSafeAddress,
-//           publication,
-//           jobs: renderedJobs,
-//           dev 
-//       }
-//   });
-
-//   console.log(cbor.logs)
-//   console.log("cbor", cbor.response)
-
-//   let cid;
-
-//   if (update) {
-
-//     if (notice) notice.setMessage("updating domain name")
-
-//     const jsp = {
-//         authorSafeAddress,
-//         publication,
-//         dev
-//     }
-
-//     const root = await rootUpdate(litNodeClient, sessionSignatures, protocolInfo, jsp, 3);
-//     console.log(root)
-//     cid = JSON.parse(root.response).cid;
-//   }
-
-//   return {
-//     cbor: cbor.response,
-//     cid: cid,
-//     path : renderedJobs[0].path,
-//     jobs: renderedJobs
-//   };
-}
-
-const singleRender = async (litNodeClient: any, authContext: any, protocolInfo: S2SProtocolInfo, jsParams: any, index: number, timeoutMs = 30000) => {
-
-    await new Promise(resolve => setTimeout(resolve, index * 1000));
-
-    let capturedLogs: string[] = [];
-        
-    try {
-        const result = await litNodeClient.executeJs({
-              authContext,
-              ipfsId: protocolInfo.litActionSingle,
-              jsParams,
-        });
-        
-        return { success: true, index, result };
-        
-      } catch (error) {
-
-        console.log(error)
-        // Try to extract any logs from the error object
-        const logs = (error as any)?.logs || 
-                    (error as any)?.response?.logs || 
-                    (error as any)?.details?.logs || 
-                    capturedLogs;
-        
-        return { 
-            success: false, 
-            index, 
-            error,
-            logs // Preserve whatever logs we got
-        };
-    }
-};
-
-const rootUpdate = async (litNodeClient: any, authContext: any, protocolInfo: S2SProtocolInfo, jsParams: any, maxAttempts = 3) => {
-
-    let lastError: any;
-    
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        console.log(`Attempting root update (attempt ${attempt}/${maxAttempts})...`);
-        
-        const rootUpdate: any = await litNodeClient.executeJs({
-          authContext,
-          ipfsId: protocolInfo.litActionRootUpdate,
-          jsParams
-        });
-        
-        console.log(`Root update succeeded on attempt ${attempt}`);
-        return rootUpdate;
-        
-      } catch (error: any) {
-        lastError = error;
-        console.error(`Root update failed on attempt ${attempt}:`, {
-          message: error.message,
-          code: error.code,
-          logs: error.logs || error.response?.logs || []
-        });
-        
-        // Don't retry if it's the last attempt
-        if (attempt < maxAttempts) {
-          const delayMs = 2000 * attempt; // Exponential backoff: 2s, 4s, 6s
-          console.log(`Retrying in ${delayMs}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+    const prepResult: any  = await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        try {
+          (0, eval)(prepCode);
+          const prepMain = (globalThis as any).main;
+          if (typeof prepMain !== 'function')
+            throw new TypeError('prep action did not expose main()');
+          resolve(prepMain({
+            protocolInfo,
+            authorSafeAddress,
+            publication,
+            configCid: configCid || undefined,
+            contentIds,
+            dev,
+          }));
+        } catch (err) {
+          reject(err);
         }
-      }
-    }
-  
-    // All attempts failed
-    throw new Error(`Root update failed after ${maxAttempts} attempts. Last error: ${lastError.message}`);
-  };
+      }, 0);
+    });
 
+    let jobs = prepResult.jobs;
+    console.log(jobs);
+
+    // ====================== Single actions (Lit) ======================
+    if (notice) notice.setMessage('rendering ...');
+
+
+    const singleResp = await fetch(
+      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionSingle}`,
+    );
+    const singleCode = await singleResp.text();
+
+    const results = await Promise.all(
+      jobs.map(async (job: any, index: number) => {
+        // Stagger to avoid rate limits
+        await new Promise(r => setTimeout(r, index * 1000));
+
+        let capturedLogs: string[] = [];
+        try {
+          const result = await oxoCtrlr.lit.executeAction(
+            singleCode,
+            {
+              signature,
+              authorSafeAddress,
+              configCid,
+              publication,
+              job,
+              debug,
+              dev,
+            },
+            litUsageKey,
+          );
+          return { success: true, index, result };
+        } catch (error: any) {
+          return {
+            success: false,
+            index,
+            error,
+            logs:
+              error?.logs ||
+              error?.response?.logs ||
+              error?.details?.logs ||
+              capturedLogs,
+          };
+        }
+      }),
+    );
+
+    const successful = results.filter((r: any) => r.result?.response?.success);
+    const failed = results.filter((r: any) => !r.result?.response?.success);
+    console.log(`Rendered: ${successful.length}/${jobs.length}`);
+    failed.forEach(
+      (f: any) =>
+        console.error(
+          `Job ${f.index} failed:`,
+          f.result?.response?.errors,
+          f.error,
+        ),
+    );
+
+    const renderedJobs = successful
+      .map((r: any) => r.result.response.job)
+      .filter((j: any) => j.path);
+    console.log('renderedJobs:', renderedJobs);
+
+    // ====================== Merged action (Lit) ======================
+    // Replaces cbor + root-update: builds UnixFS root, pins to Pinata,
+    // writes contenthash_wrapped on-chain (all in one PKP-signed action).
+    if (notice) notice.setMessage('merging ...');
+
+    const updateCode = await fetch(
+      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionRootUpdate}`,
+    ).then(r => r.text());
+
+    const updateResult = await oxoCtrlr.lit.executeAction(
+      updateCode,
+      {
+        signature,
+        authorSafeAddress,
+        publication,
+        jobs: renderedJobs,
+        dev,
+      },
+      litUsageKey,
+    );
+
+    if (!updateResult?.response?.success) {
+      throw new Error(
+        `Merged action failed: ${JSON.stringify(updateResult?.response)}`,
+      );
+    }
+
+    if (notice) notice.setMessage('publishing ...');
+
+    return {
+      success: true,
+      cid: updateResult.response.cid,
+      path: renderedJobs[0].path,
+      jobs: renderedJobs,
+    };
+  };

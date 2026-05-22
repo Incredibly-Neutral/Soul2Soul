@@ -1,17 +1,12 @@
-/// <reference path="../action_globals.ts" />
+
 
 import { catFile } from "../libs/ipfs.factory";
 import { evmRead } from "../libs/evm";
 
-import { S2SBody, S2SPublicationConfig, S2SRipple, S2STemplateConfig, validateConfig } from "@s2s/soul2soul-shared/lit-actions";
+import { S2SBody, S2SPublicationConfig, S2SRipple, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
 import { Abi_S2SRecordsModule } from '../../../generated/abis/S2SRecordsModule.ts'
 
 export const getConfig = async (authorSafeAddress: string, configCid: string | undefined, configModule: string, dev: boolean) => {
-
-    return JSON.parse(await LitActions.runOnce({
-        waitForResponse: true,
-        name: `config-${authorSafeAddress}`
-    }, async () => { 
 
       const _configCid = dev &&  typeof configCid !== "undefined" 
         ? configCid 
@@ -20,9 +15,8 @@ export const getConfig = async (authorSafeAddress: string, configCid: string | u
       console.log(_configCid)
       let config = await catFile(_configCid);
       console.log(config)
-      validateConfig(JSON.parse(config));
-      return config; 
-    }));
+      return JSON.parse(config); 
+
 };
 
 

@@ -37,8 +37,9 @@ export interface IPermissionlessSafeService {
   address: `0x${string}`;
 
   updateSigner: (pk: string) => Promise<string>;
-  connectToFreshSafe: (salt: string) => Promise<string>
-  connectToExistingSafe: (safe_address: `0x${string}`) => Promise<string>
+  signMessage: (message: string) => Promise<string>;
+  connectToFreshSafe: (salt: string) => Promise<string>;
+  connectToExistingSafe: (safe_address: `0x${string}`) => Promise<string>;
   genericRead: (address: `0x${string}`, abi: string, method: string, args: string[]) => Promise<any>;
   genericTx: (address: `0x${string}`, abi: string, method: string, args: string[], deploy: boolean, wait?: boolean) => Promise<string>;
   batchGenericTx: (calls: Array<{ address: `0x${string}`; abi: string; method: string; args: any[]; }>) => Promise<string[]>;
@@ -87,6 +88,10 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
   async updateSigner(pk: string) {
     this.signer = await privateKeyToAccount(pk as `0x${string}`);
     return this.signer.address;
+  }
+
+  async signMessage(message: string): Promise<string> {
+      return await this.signer.signMessage({ message });
   }
   
   async isDeployed(address?: string): Promise<boolean> {

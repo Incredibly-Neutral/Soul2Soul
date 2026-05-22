@@ -12,17 +12,16 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: '../.env'});
 
 const configPath = path.join(__dirname, 'config.json');     
-
-console.log(configPath)
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const action_name = '';
-const code = fs.readFileSync('','utf-8')
+const action_name = 'updateEvm';
+const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
+const code = fs.readFileSync(actionPath,'utf-8')
 
 const ipfs = new S2SIPFSMethods(process.env.IPFS_URL!, process.env.PINATA_JWT!, process.env.PINATA_GATEWAY!)
 
-async function main(action_name: string, code: string) {
+async function main() {
 
     const lit = new LitService({ 
         "environment": "prod",
@@ -43,26 +42,45 @@ async function main(action_name: string, code: string) {
     let check = cid == pinnedCid;
     if(!check) console.log(cid, pinnedCid)
 
+    console.log("CID", cid)
+
     const [result] = await Promise.all([
         lit.registerAction(cid, action_name),
     ]);
 
-    const oldAction = config.groups[groupIndex].actions.find( (a: any) => a.name)
+    const oldAction = config.groups[groupIndex].actions.find((a: any) => a.name === action_name);
 
-    await lit.removeActionFromGroup(config.groups[groupIndex].id, oldAction.hashedCid);
+    try {
+        await lit.removeActionFromGroup(config.groups[groupIndex].id, oldAction.hashedCid);
+    } catch (error) {
+        console.log("no prev action found")
+    }
+    await lit.addActionToGroup(config.groups[groupIndex].id, cid);
 
-    await lit.addActionToGroup(config.groups[groupIndex].id, result.hashedCid);
+    console.log("new", cid)
 
-    config.groups[groupIndex].cids.push({
-        name: result.hashedCid
-    })
+    // Update the action entry in config
+    const actionIndex = config.groups[groupIndex].actions.findIndex((a: any) => a.name === action_name);
+    if (actionIndex !== -1) {
+        config.groups[groupIndex].actions[actionIndex] = {
+            ...config.groups[groupIndex].actions[actionIndex],
+            cid,
+            hashedCid: result.hashedCid,
+        };
+    } else {
+        config.groups[groupIndex].actions.push({
+            name: action_name,
+            cid,
+            hashedCid: result.hashedCid,
+        });
+    }
 
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2)); 
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     console.log("FINISHED")
 }
 
-main(action_name, code)
+main()
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;
