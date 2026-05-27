@@ -1,0 +1,42 @@
+{
+  "templateConfig": [
+        {
+        "reference": "home",
+        "file": "home.handlebars",
+        "path": "/",
+        "collections": [
+          {
+            "slug": "posts",
+            "source": "lens",
+            "key": "posts",
+            "value": "post",
+            "query": { "method" : "queryByFeed", "args": { "feedAddress": "0x5a5Cc3f032A5c4dE76aE07b8ED188376f109f638"}},
+            "filters": [{"postType": "post"}]
+          }
+        ]
+        },
+        {
+        "reference": "post",
+        "file": "post.handlebars",
+        "path": "/posts/{slug}/",
+        "collections": [],
+        "filters": []
+        },
+        {
+        "reference": "page",
+        "file": "page.handlebars",
+        "path": "/{slug}/",
+        "collections": [],
+        "filters": []
+        }
+    ],
+    "ripples": [
+      {
+        "origins": ["post"],
+        "destination": "home",
+        "reference": "home",
+        "query": { "method" : "queryById", "args": { "postId": "64617781492805189701009480879149674604176067592032061274064038052630522871262"}},
+        "filters": []
+      }
+    ]
+}

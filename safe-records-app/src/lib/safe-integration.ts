@@ -1,0 +1,450 @@
+// src/lib/safe-integration.ts
+
+import { ensRecordsAbi, publicationModuleAbi } from '@s2s/soul2soul-shared'
+ 
+import type { SafeInfo, EthersContract } from '@/types';
+import SafeAppsSDK from '@safe-global/safe-apps-sdk';
+
+export class SafeIntegration {
+  private safeSdk: SafeAppsSDK | null = null;
+  private recordsModule: EthersContract | null = null;
+  private publicationModule: any | null = null;
+  private safeInfo: SafeInfo = { 
+    safeAddress: '', 
+    s2sRecords: '', 
+    s2sPublication: '', 
+    chainId: 1, 
+    network: '', 
+    owners: [], 
+    threshold: 1, 
+    modules: [] 
+  };
+
+  async initialize(): Promise<SafeInfo> {
+    try {
+      if (typeof SafeAppsSDK === 'undefined') {
+        throw new Error('SafeAppsSDK not available');
+      }
+
+      const opts = {
+        allowedDomains: [/app\.safe\.global$/],
+        debug: false
+      };
+
+      this.safeSdk = new SafeAppsSDK(opts);
+      const safeData: any = await this.safeSdk!.safe.getInfo();
+      
+      this.safeInfo = {
+        safeAddress: safeData.safeAddress,
+        s2sRecords: '',
+        s2sPublication: '',
+        chainId: safeData.chainId,
+        network: safeData.network,
+        modules: safeData.modules,
+        owners: safeData.owners,
+        threshold: safeData.threshold
+      };
+
+      const rpcUrl = this.getRpcUrl(this.safeInfo!.chainId);
+      const provider = new window.ethers.JsonRpcProvider(rpcUrl);
+
+      // Find both modules
+      const NAME_ABI = [
+        "function NAME() view returns (string)"
+      ];
+
+      for (const moduleAddress of this.safeInfo.modules) {
+        try {
+          // Check for NAME function with minimal ABI
+          const moduleChecker = new window.ethers.Contract(
+            moduleAddress,
+            NAME_ABI,
+            provider
+          );
+          
+          const name = await moduleChecker.NAME();
+          console.log(`Module ${moduleAddress} has NAME:`, name);
+          
+          if (name === "S2S Records Module") {
+            // Create full contract instance with complete ABI
+            this.recordsModule = new window.ethers.Contract(
+              moduleAddress,
+              ensRecordsAbi,
+              provider
+            );
+            this.safeInfo.s2sRecords = moduleAddress;
+            console.log("Found Records Module:", moduleAddress);
+            
+          } else if (name === "S2S Publication Module") {
+            // Create full contract instance with complete ABI
+            this.publicationModule = new window.ethers.Contract(
+              moduleAddress,
+              publicationModuleAbi,
+              provider
+            );
+            this.safeInfo.s2sPublication = moduleAddress;
+            console.log("Found Publication Module:", moduleAddress);
+          }
+          
+        } catch (error) {
+          // Module doesn't have NAME() function, skip it
+          console.log(`Module ${moduleAddress} doesn't have NAME(), skipping`);
+        }
+      }
+
+      return this.safeInfo;
+    } catch (error) {
+      console.error('Failed to initialize Safe SDK:', error);
+      return this.safeInfo;
+    }
+  }
+
+  // ===== RECORDS MODULE METHODS =====
+  
+  async getAllRecords(): Promise<[string[], string[]]> {
+    if (this.recordsModule) {
+      return await this.recordsModule.getAllRecords();
+    }
+    throw new Error('Records module not initialized');
+  }
+
+  async getRecord(key: string): Promise<string> {
+    if (!this.recordsModule) {
+      throw new Error('Records module not initialized');
+    }
+    
+    try {
+      return await this.recordsModule.getRecord(key);
+    } catch (error) {
+      console.error(`Error getting record for key "${key}":`, error);
+      throw error;
+    }
+  }
+
+  async setRecord(key: string, value: string): Promise<string> {
+    if (!this.safeSdk || !this.recordsModule) {
+      throw new Error('Safe SDK or records module not initialized');
+    }
+
+    const txData = this.recordsModule.interface.encodeFunctionData('setRecord', [key, value]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sRecords!,
+        value: '0',
+        data: txData
+      }]
+    });
+
+    const safeUrl = `https://app.safe.global/transactions/queue?safe=${this.safeInfo.chainId}:${this.safeInfo.safeAddress}`;
+    
+    console.log('Transaction proposed. Execute at:', safeUrl);
+    
+    return safeUrl;
+  }
+
+  async deleteRecord(key: string): Promise<void> {
+    if (!this.safeSdk || !this.recordsModule) {
+      throw new Error('Safe SDK or records module not initialized');
+    }
+
+    const txData = this.recordsModule.interface.encodeFunctionData('deleteRecord', [key]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sRecords!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  // ===== PUBLICATION MODULE - LICENSES =====
+  
+  async grantLicense(publication: string, contentId: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('grantLicense', [publication, contentId]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication || "",
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async acceptLicense(contentId: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('acceptLicense', [contentId]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async revokeLicense(contentId: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('revokeLicense', [contentId]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async isLicensed(contentId: string): Promise<boolean> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.isLicensed(contentId);
+  }
+
+  async getLicenseAuthor(contentId: string): Promise<string> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.getLicenseAuthor(contentId);
+  }
+  
+  async getAllLicenses(): Promise<{
+      activeLicenses: Array<{ contentId: string; author: string; status: "active" | "pending" }>;
+      pendingLicenses: Array<{ contentId: string; author: string; status: "active" | "pending" }>;
+    }> {
+      if (!this.publicationModule) {
+        throw new Error('Publication module not initialized');
+      }
+
+      try {
+        const contentIdsProxy = await this.publicationModule.getAllContentIds();
+        const contentIds = Array.from(contentIdsProxy);
+
+        console.log("contentIds", contentIds);
+        
+        const [licenseStatuses, pendingStatuses] = await Promise.all([
+          this.publicationModule.isLicensedBulk(contentIds),
+          Promise.all(contentIdsProxy.map((id: string) => this.publicationModule.hasPendingLicense(id)))
+        ]);
+
+        console.log("statuses", licenseStatuses, pendingStatuses);
+        
+        // Get active licenses with authors
+        const activeContentIds = contentIdsProxy.filter((_: string, i: number) => licenseStatuses[i]);
+        const activeAuthors = await Promise.all(
+          activeContentIds.map((id: string) => this.publicationModule.getLicenseAuthor(id))
+        );
+        
+        const activeLicenses = activeContentIds.map((contentId: string, i: number) => ({ 
+          contentId, 
+          author: activeAuthors[i] || 'Unknown',
+          status: 'active' as const 
+        }));
+        
+        // Get pending licenses with authors
+        const pendingContentIds = contentIdsProxy.filter((_: string, i: number) => pendingStatuses[i]);
+        const pendingLicenseInfos = await Promise.all(
+          pendingContentIds.map((id: string) => this.publicationModule.getPendingLicense(id))
+        );
+        
+        const pendingLicenses = pendingContentIds.map((contentId: string, i: number) => ({ 
+          contentId,
+          author: pendingLicenseInfos[i].author || 'Unknown',
+          status: 'pending' as const 
+        }));
+          
+        return { activeLicenses, pendingLicenses };
+        
+      } catch (error) {
+        console.error('Error getting all licenses:', error);
+        return { activeLicenses: [], pendingLicenses: [] };
+      }
+    }
+
+  async getPendingLicenses(): Promise<Array<{ contentId: string; author: string; status: "active" | "pending" }>> {
+    const { pendingLicenses } = await this.getAllLicenses();
+    return pendingLicenses;
+  }
+
+  async getActiveLicenses(): Promise<Array<{ contentId: string; author: string; status: "active" | "pending" }>> {
+    const { activeLicenses } = await this.getAllLicenses();
+    return activeLicenses;
+  }
+
+  // ===== PUBLICATION MODULE - WHITELISTS =====
+  
+  async whitelistAuthor(author: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('whitelistAuthor', [author]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async removeWhitelistedAuthor(author: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('removeWhitelistedAuthor', [author]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async whitelistDev(dev: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('whitelistDev', [dev]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async removeWhitelistedDev(dev: string): Promise<void> {
+    if (!this.safeSdk || !this.publicationModule) {
+      throw new Error('Safe SDK or publication module not initialized');
+    }
+
+    const txData = this.publicationModule.interface.encodeFunctionData('removeWhitelistedDev', [dev]);
+    
+    await this.safeSdk.txs.send({
+      txs: [{
+        to: this.safeInfo.s2sPublication!,
+        value: '0',
+        data: txData
+      }]
+    });
+  }
+
+  async getWhitelistedAuthors(): Promise<string[]> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.getWhitelistedAuthors();
+  }
+
+  async getWhitelistedDevs(): Promise<string[]> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.getWhitelistedDevs();
+  }
+
+  async canPublish(address: string): Promise<boolean> {
+    if (!this.publicationModule) {
+      throw new Error('Publication module not initialized');
+    }
+    return await this.publicationModule.canPublish(address);
+  }
+
+  // ===== UTILITY =====
+
+  getSafeInfo(): SafeInfo {
+    return this.safeInfo;
+  }
+
+  isConnected(): boolean {
+    return this.safeSdk !== null;
+  }
+
+  hasRecordsModule(): boolean {
+    return this.recordsModule !== null;
+  }
+
+  hasPublicationModule(): boolean {
+    return this.publicationModule !== null;
+  }
+
+  getRpcUrl(chainId: number): string {
+    let rpc = '';
+    const alchemy_key = "REDACTED";
+
+    switch (chainId) {
+      case 1:
+        rpc = `https://eth-mainnet.g.alchemy.com/v2/${alchemy_key}`;
+        break;
+      case 11155111:
+        rpc = "https://sepolia.infura.io/v3/REDACTED";
+        break;
+      case 8453:
+        rpc = `https://base-mainnet.g.alchemy.com/v2/${alchemy_key}`;
+        break;
+      case 84532:
+        rpc = `https://base-sepolia.g.alchemy.com/v2/${alchemy_key}`;
+        break;
+      case 175188:
+        rpc = "https://yellowstone-rpc.litprotocol.com/";
+        break;
+    }
+
+    return rpc;
+  }
+
+  evmSetup(contractAddress: string, abi: any, chainId: number) {
+    let provider;
+    const url = this.getRpcUrl(chainId);
+
+    switch(chainId) {
+      case 1:
+        provider = new window.ethers.JsonRpcProvider(url);
+        break;
+
+      case 8453:
+        provider = new window.ethers.JsonRpcProvider(url);
+        break; 
+
+      case 84532:
+        provider = new window.ethers.JsonRpcProvider(url);
+        break; 
+    }
+
+    const contract = new window.ethers.Contract(
+      contractAddress,
+      abi,
+      provider
+    );
+
+    return { provider, contract };
+  }
+
+  async evmRead(chainId: number, l2records: string, abi: any, method: string, args: any[]) { 
+    const { provider, contract } = this.evmSetup(l2records, abi, chainId);
+    return await contract[method](...args);
+  }
+}

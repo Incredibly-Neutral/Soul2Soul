@@ -1,0 +1,50 @@
+{
+  "name": "website",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "ts-node scripts/build.cjs",
+    "sass": "sass scss/styles.scss css/styles.css",
+    "deploy": "scp css/styles.css joera:/srv/neutral_hosting/public/joeramulders/css/styles.css",
+    "serve": "http-server html -p 3008 --cors -c-1",
+    "render": "curl -X POST 'http://127.0.0.1:7654/'",
+    "bulkrender": "cd node-renderer && cross-env POST_TYPE=$npm_config_type npm run dev && cd ..",
+    "upload": "ts-node scripts/upload.ts"
+
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "sass": "^1.83.0",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "@lit-protocol/auth-helpers": "^7.1.1",
+    "@lit-protocol/constants": "^7.1.1",
+    "@lit-protocol/contracts-sdk": "^7.1.1",
+    "@lit-protocol/lit-node-client": "^7.1.1",
+    "@safe-global/api-kit": "^3.0.1",
+    "@safe-global/protocol-kit": "^6.0.4",
+    "@safe-global/safe-core-sdk-types": "^5.1.0",
+    "auth-helpers": "link:@lit-protocol/@lit-protocol/auth-helpers",
+    "axios": "^1.9.0",
+    "blockstore-core": "^5.0.2",
+    "constants": "link:@lit-protocol/@lit-protocol/constants",
+    "contracts-sdk": "link:@lit-protocol/@lit-protocol/contracts-sdk",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "esbuild": "^0.25.12",
+    "ethers": "^6.15.0",
+    "ethers5": "npm:ethers@^5.8.0",
+    "express": "^5.1.0",
+    "form-data": "^4.0.2",
+    "fs": "^0.0.1-security",
+    "helmet": "^8.1.0",
+    "html-entities": "^2.6.0",
+    "ipfs-unixfs-importer": "^15.3.1",
+    "multiformats": "^13.4.2",
+    "node-fetch": "^2.7.0",
+    "path": "^0.12.7",
+    "pinata-web3": "^0.5.4",
+    "tar": "^7.4.3",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,27 @@
+@use "../styleguide/breakpoints";
+
+.container  {
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    // text-align: center;
+}
+
+.small_container, .small-container {
+    width: calc(100% - 2rem);
+    max-width: 600px;
+}
+
+.medium_container, .medium-container, .container.images {
+
+    width: calc(100% - 2rem);
+    max-width: 1120px;
+
+    @media screen and (min-width: breakpoints.$breakpoint-large) {
+        width: calc(100% - 10rem);
+    }
+
+    
+}

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="{{language}}">
+{{> head }}
+<body>
+    {{> header}}
+    <main>
+
+        <section class="container medium_container flex_row ">
+
+            {{#each collections.posts}}
+                <article id="{{this.id}}" class="block" author="{{author}}">
+                {{> background }}
+                <div>
+                <a href=".{{this.path}}">
+                    <span class="date">{{formatDate this.creationDate}}</span>
+                    <h3>{{this.title}}</h3>
+                    <div class="author">{{authorFromAddress this.author}}</div>
+                </a>
+                </div>
+                </article>
+            {{/each}}
+
+        </section>
+      
+    </main>
+</body>
+</html>

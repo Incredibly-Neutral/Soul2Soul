@@ -1,0 +1,6 @@
+node_modules
+output
+ipfs-upload.js
+.env
+pnpm-lock.yaml
+html
