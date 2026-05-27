@@ -28,6 +28,8 @@ export const isAvailableEnsName = async (
 
 export const getPublicationMultiSig = async (main: IMainController, subdomain: string) => {
 
+  console.log('debug', subdomain)
+
     const nameWrapper = await main.oxo.ctrlr.account["ETH_MAINNET"].genericRead(
       main.plugin.settings.ens_registry,
       JSON.stringify([{
@@ -57,6 +59,9 @@ export const getPublicationMultiSig = async (main: IMainController, subdomain: s
     // Calculate subdomain token ID (same as node hash for NameWrapper)
 
     const subdomainLabel = keccak256(toBytes(subdomain));
+    console.log(
+      "DEBUG", parentNode,subdomainLabel
+    )
     const subdomainNode = keccak256(`0x${parentNode.slice(2)}${subdomainLabel.slice(2)}`);
 
     // Get wrapped token owner

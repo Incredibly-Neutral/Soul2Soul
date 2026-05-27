@@ -26,7 +26,7 @@ export const newPublicationSafe = async (
 	console.log("SAFE", publication.contract)
 	console.log("FACTORY",main.plugin.settings.safe_publication_factory)
 	
-	const [registration, [recordsModule, publicationModule]] = await Promise.all([
+	const [registration, [recordsModule]] = await Promise.all([
 		// L1: ENS registration
 		 main.publications[subdomain].L1.genericTx(
 			main.plugin.settings.ens_registry,
@@ -37,25 +37,29 @@ export const newPublicationSafe = async (
 		),
 		
 		// L2: Create both modules in ONE batched transaction
-		main.publications[subdomain].L2.batchGenericTx([
-			{
-				address: main.plugin.settings.safe_records_factory,
-				abi: JSON.stringify(S2SRecordsModuleFactory),
-				method: "createModule",
-				args: [publicationAddress2],
-				deploy: true
-			},
-			{
-				address: main.plugin.settings.safe_publication_factory,
-				abi: JSON.stringify(S2SPublicationModuleFactory),
-				method: "createModule",
-				args: [publicationAddress2, publication.authors, []],
-				deploy: true
-			}
-		])
+		main.publications[subdomain].L2.genericTx(
+			main.plugin.settings.safe_records_factory,
+			JSON.stringify(S2SRecordsModuleFactory),
+			"createModule",
+			[publicationAddress2],
+			true
+		)
 	]);
 
 	console.log("ENS registered:", registration);
+
+	// Safe on L2 is now deployed — reconnect before sending FROM it
+	await main.publications[subdomain].L1.connectToExistingSafe(publicationAddress1);
+	await main.publications[subdomain].L2.connectToExistingSafe(publicationAddress2);
+
+	const publicationModule = await main.publications[subdomain].L2.genericTx(
+		main.plugin.settings.safe_publication_factory,
+		JSON.stringify(S2SPublicationModuleFactory),
+		"createModule",
+		[publicationAddress2, publication.authors, []],
+		true
+	);
+
 	console.log("Created modules:", recordsModule, publicationModule);
 
 	await main.publications[subdomain].L2.batchGenericTx([
@@ -174,7 +178,7 @@ async function setRecordsWithRetry(pubInstance: any, recordsModule: string, publ
 			
 			console.log("✅ setRecords succeeded:", setRecords);
 			success = true;
-		} catch (error) {
+		} catch (error: any) {
 			console.log(`❌ Attempt ${attempts} failed:`, error.message);
 			if (attempts < 3) {
 				await new Promise(resolve => setTimeout(resolve, 3000));

@@ -15,7 +15,7 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const action_name = 'updateEvm';
+const action_name = 'single';
 const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
 const code = fs.readFileSync(actionPath,'utf-8')
 
@@ -42,8 +42,6 @@ async function main() {
     let check = cid == pinnedCid;
     if(!check) console.log(cid, pinnedCid)
 
-    console.log("CID", cid)
-
     const [result] = await Promise.all([
         lit.registerAction(cid, action_name),
     ]);
@@ -57,7 +55,6 @@ async function main() {
     }
     await lit.addActionToGroup(config.groups[groupIndex].id, cid);
 
-    console.log("new", cid)
 
     // Update the action entry in config
     const actionIndex = config.groups[groupIndex].actions.findIndex((a: any) => a.name === action_name);

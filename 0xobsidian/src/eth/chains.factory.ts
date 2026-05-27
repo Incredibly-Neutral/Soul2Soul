@@ -1,7 +1,7 @@
 import { mainnet, sepolia, base, baseSepolia, gnosis } from "viem/chains";
 
 export const getViemChainByName = (chainName: string)  => {
-    
+
     switch (chainName) {
       case "ETH_MAINNET":
         return mainnet;
@@ -19,7 +19,7 @@ export const getViemChainByName = (chainName: string)  => {
   }
 
 export const getViemChainById = (id: number)  => {
-    
+
     switch (id) {
       case 1:
         return mainnet;
@@ -114,5 +114,9 @@ export const getRPCUrl = (chainId: number, alchemy_key: string): string => {
 
 export const getScanApi = (chainId: number): string => {
 
-      return `https://api.etherscan.io/v2/api?chainid=` + chainId;
+    if (chainId === 8453) {
+      return `https://basescan.org/api`;  // Basescan V2-compatible (no chainid param needed)
+    }  
+
+    return `https://api.etherscan.io/v2/api?chainid=` + chainId;
 }

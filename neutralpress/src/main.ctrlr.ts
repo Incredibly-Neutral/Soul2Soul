@@ -18,11 +18,11 @@ export interface IMainController {
 
 	getInitializedService: (subdomain: string) => Promise<IPublicationSrv>
 	newPublication: (ensName: string, file: TFile) => Promise<void>;
-	proposeContent: (_file: TAbstractFile) => Promise<void>;
-	previewNote: (_file: TAbstractFile) => Promise<void>;
+	proposeContent: (_file: TAbstractFile, publish: boolean) => Promise<void>;
+	// previewNote: (_file: TAbstractFile) => Promise<void>;
 	grantLicense: (_file: TAbstractFile) => Promise<void>;
 	revokeLicense: (tagName: string, _file: TAbstractFile) => Promise<void>;
-	renderCalls: (publication: string, streamIds: string[], lit_usage_key: string) => Promise<void>;
+	renderCalls: (publication: string, streamIds: string[], lit_usage_key: string, publish: boolean) => Promise<void>;
 	bulkrender: (
 		post_type: string,
 		ensName: string,
@@ -170,22 +170,9 @@ export class MainController implements IMainController {
 		}
 	}
 
-	async previewNote(_file: TAbstractFile) {
-		// preview should call renderer directly
-		// it should replace relative urls with absolute ones
-		// find solution for typography
-
-		const file = this.plugin.app.vault.getFileByPath(_file.path);
-		if (file != null) {
-	
-			const { contentId, publicContent, toEncrypt } = await this.content.parseNote(file);
-			const html = await this.preview.renderHTML(
-				contentId,
-				publicContent.publications[0],
-			);
-			await this.preview.display(html);
-		}
-	}
+	// async previewNote(_file: TAbstractFile) {
+		
+	// }
 
 	async grantLicense(_file: TAbstractFile) {
 		const file = this.plugin.app.vault.getFileByPath(_file.path);
@@ -260,7 +247,7 @@ export class MainController implements IMainController {
 			return this.publications[subdomain];
 	}
 
-	async publishToPublication(file: TFile, contentId: string, publicContent: any, toEncrypt: any, publication: string) {
+	async publishToPublication(file: TFile, contentId: string, publicContent: any, toEncrypt: any, publication: string, publish: boolean) {
 
 		let license;
 		const subdomain = publication.split(".")[0];
@@ -286,27 +273,35 @@ export class MainController implements IMainController {
 		this.notice.setMessage('3/5 Authorizing ...')
 		
 		if (isLicensed || license != undefined) {
-			await this.renderCalls(publication, [contentId], this.oxo.settings.litUsageKey);
+			await this.renderCalls(publication, [contentId], this.oxo.settings.litUsageKey, publish);
 		}
 
 	}
 
-	async proposeContent(_file: TAbstractFile) {
+	async proposeContent(_file: TAbstractFile, publish: boolean) {
 		
 		const file = this.plugin.app.vault.getFileByPath(_file.path);
 
 		if (!this.isValidForPublishing(file)) return;
 
-		const { contentId, publicContent, toEncrypt } = await this.content.parseNote(file);
+		let { contentId, publicContent, toEncrypt } = await this.content.parseNote(file);
+
+		if (!publicContent.encryption) {
+
+			publicContent = {
+				...publicContent,
+				...toEncrypt
+			}
+		}
 
 		for (const publication of publicContent.publications) {
 
-			this.publishToPublication(file, contentId, publicContent, toEncrypt, publication)	
+			this.publishToPublication(file, contentId, publicContent, toEncrypt, publication, publish)	
 		}
 		
 	}
 
-	async renderCalls(publication: string, streamIds: string[], lit_usage_key: string) {
+	async renderCalls(publication: string, streamIds: string[], lit_usage_key: string, publish: boolean) {
 
 		console.log(`Starting render process for publication ${publication} with ${streamIds.length} stream IDs`);
 
@@ -314,7 +309,7 @@ export class MainController implements IMainController {
 
 			this.notice.setMessage('4/5 Rendering ... (~ 30 sec)');
 
-			const res: any = await renderwithLitActions(this.oxo.ctrlr, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, false, false)
+			const res: any = await renderwithLitActions(this.oxo.ctrlr, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, !publish, false)
 
 			this.notice.setMessage('5/5 Pinning ...');
 
@@ -342,13 +337,13 @@ export class MainController implements IMainController {
 				return fragment
 			};
 
-			// new Notice(_link(`${res.cid}`, `https://neutralpress.mypinata.cloud/ipfs/${res.cid}`), 0);
-			// new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);
-
-			// console.log(res.jobs);
-			// console.log('cbor', res.cbor)
-			// console.log('ipfs://' + res.cid);
-			// console.log('https://' + publication + '.link' + res.path)
+			new Notice(_link(`${res.cid}`, `https://neutralpress.mypinata.cloud/ipfs/${res.cid}/${res.path}`), 0);
+			console.log(res.jobs);
+			console.log('https://neutralpress.mypinata.cloud/ipfs/' + res.cid);
+			if (publish) {
+				console.log('https://' + publication + '.link' + res.path);
+				new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);
+			}
 
 		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);

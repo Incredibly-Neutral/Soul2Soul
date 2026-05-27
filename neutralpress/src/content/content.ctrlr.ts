@@ -51,7 +51,7 @@ export class ContentController implements IContentController {
                 );
                 const mockedItem = {
                     ...publicContent,
-                    encrypted: "{}",
+                    encrypted: "-",
                 };
 
                 const postId = await postToLens(
@@ -72,20 +72,34 @@ export class ContentController implements IContentController {
             }
 
             if (publicContent != null) {
-                
-                const encrypted = await this.encryptContent(
-                    this.main.oxo.ctrlr,
-                    protocolInfo,
-                    toEncrypt,
-                );
 
-                const contentItem: S2SContentItem = {
-                    ...publicContent,
-                    encrypted: encrypted,
-                };
+                let contentItem: S2SContentItem;
+
+                if (publicContent.encryption) {
+                
+                    const encrypted = await this.encryptContent(
+                        this.main.oxo.ctrlr,
+                        protocolInfo,
+                        toEncrypt,
+                    );
+
+                   contentItem = {
+                        ...publicContent,
+                        encrypted: encrypted,
+                    };
+
+                } else {
+
+                    contentItem = {
+                        ...publicContent,
+                        "encrypted": "{}"
+                    }
+                }
+
+                console.log("CI", contentItem)
 
                 if (contentId) {
-                    // console.log("updating");
+                    console.log("updating");
                     const res = await updateToLens(
                         this.main.oxo.ctrlr.user,
                         this.main.oxo.ctrlr.lens,
@@ -143,6 +157,7 @@ export class ContentController implements IContentController {
         let { contentId, publicContent, toEncrypt } = await this.parseContentFrontmatter(file, this.main.plugin.app);
 
         if (file.name != undefined) toEncrypt.title = file.name.replace(/\.[^/.]+$/, "");
+
         let [content, title, baseFileName] = this.extractTitleAndBase(rawFile, toEncrypt.title);
         toEncrypt.slug = this.slug(title || toEncrypt.title);
         publicContent.plainTextHash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
@@ -218,6 +233,8 @@ export class ContentController implements IContentController {
             const cache = app.metadataCache.getFileCache(file);
             const frontmatter = cache?.frontmatter;
 
+            const encryption = frontmatter!.encryption || false;
+
             if (frontmatter != null) {
                 const contentId =
                     frontmatter.content_id != undefined
@@ -251,7 +268,7 @@ export class ContentController implements IContentController {
                     .filter((tag: string) => tag.endsWith("--s2s"))
                     .map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
 
-                const publicContent: S2SPublicContent = {
+                let publicContent: S2SPublicContent = {
                     creationDate: Math.floor(
                         new Date(frontmatter.creation_date).getTime() / 1000,
                     ),
@@ -273,7 +290,8 @@ export class ContentController implements IContentController {
                     postType: frontmatter.post_type,
                     publications,
                     tags,
-                    plainTextHash: ""
+                    plainTextHash: "",
+                    encryption
                 };
 
                 const toEncrypt: S2SToEncrypt = {

@@ -12,18 +12,20 @@ export const decrypt = async (
 
   if (await canRead(body.id, authorSafeAddress, publicationModule, signerAddress)) {
 
-    let decrypted; 
+    let res; 
 
     try {
 
-      decrypted = await Lit.Actions.Decrypt({ pkpId, ciphertext });
+      res = await Lit.Actions.Decrypt({ pkpId, ciphertext });
 
     } catch (error) {
       console.log("failed to decrypt", body.id)
-      decrypted = false;
+      res = false;
     }
 
-    return decrypted
+    return typeof res === 'string'                                        
+     ? JSON.parse(res)                                                   
+     : JSON.parse(res?.decrypted || JSON.stringify(res))  
 
   }
 };

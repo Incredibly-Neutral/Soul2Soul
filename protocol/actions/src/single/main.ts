@@ -28,16 +28,14 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(publication);
 
-    console.log(publication, multisig, configModule, publicationModule)
+    // console.log(publication, multisig, configModule, publicationModule)
     if(multisig == null || configModule == null || publicationModule == null ) return;
 
-    let body: S2SBody | undefined | null = await fetchById(job.id)
+    let body: any | undefined | null = await fetchById(job.id)
     if (body == undefined || body == null || body.id == undefined) throw "Post content not found"
-    // console.log("body",body)
     logz.push(body)
 
     let config = await getConfig(authorSafeAddress, configCid, configModule, dev);
-    // console.log("config",config)
     logz.push(config)
 
     let t1 = Date.now();
@@ -63,9 +61,14 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
         logz.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
         let collections = await fetchCollections(job.templateConfig);
+
+        try {
+            console.log("collections", collections['posts'].map( (item: any) => item.tags))
+        }
+        catch (e) {}
   
         let t3 = Date.now();
-        logz.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
+        logz.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`)
 
         const decryptedCollections: Record<string, any[]> = {};
 
@@ -73,22 +76,32 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
 
             const decrypted = await Promise.all(
                 collections[key].map(async (item: any) => {
-                    try {
-                        const d = await decrypt(protocolInfo.pkp.ethAddress, item, authorSafeAddress, publicationModule, signerAddress);
-                        if (!d) {
-                            const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
+
+                    // console.log("collection item tags", item.tags)
+
+                    if (item.encryption) {
+                        console.log("encryption")
+                        try {
+                            const d = await decrypt(protocolInfo.pkp.ethAddress, item, authorSafeAddress, publicationModule, signerAddress);
+                            if (!d) {
+                                const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
+                                console.log(errorMsg);
+                                errors.push(errorMsg);
+                                return null;
+                            }
+                            const obj = mergeDecrypted(item, d);
+                            obj.C
+                            return obj;
+                        } catch (error) {
+                            const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
                             console.log(errorMsg);
                             errors.push(errorMsg);
                             return null;
                         }
-                        const obj = mergeDecrypted(item, d);
-                        obj.path = pathsForCollections(obj, config);
-                        return obj;
-                    } catch (error) {
-                        const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
-                        console.log(errorMsg);
-                        errors.push(errorMsg);
-                        return null;
+                    } else {
+
+                        item.path = pathsForCollections(item, config);
+                        return item;
                     }
                 })
             );
@@ -101,38 +114,53 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
 
         templateData.collections = decryptedCollections;
 
+        // Set the interpolated path on the job so updateEvm uses the real slug
+        job.path = templateData.path;
+
         // render method was per publication .. no longer possible ... 
-        html = await renderHTML(config, job.templateConfig,  templateData) 
+        html = await renderHTML(config, job.templateConfig,  templateData);
+
+        console.log("HTML1", html.slice(0,200))
 
         let t5 = Date.now();
         logz.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
-        const metadata: S2SContentInfo = {
-            author: {
-                lens: "joera.lens",
-                address: "0xAuthorAddress...",
-                createdAt: ""
-            },
-            publisher: {
-                ens: "mypub.eth",
-                safe: "gno:0xSafeAddress...",
-                url: "https://mypub.eth.limo/articles/my-article"
-            },
-            contentCid: "bafybei...",
-            licenseContract: "gno:0xDealsModuleAddress...",
-            isBasedOn: {
-                lensPublicationId: "",
-                contentHash: "",
-                timestamp: ""
+        if (!dev) {
+
+            const metadata: S2SContentInfo = {
+                author: {
+                    lens: "joera.lens",
+                    address: "0xAuthorAddress...",
+                    createdAt: ""
+                },
+                publisher: {
+                    ens: "mypub.eth",
+                    safe: "gno:0xSafeAddress...",
+                    url: "https://mypub.eth.limo/articles/my-article"
+                },
+                contentCid: "bafybei...",
+                licenseContract: "gno:0xDealsModuleAddress...",
+                isBasedOn: {
+                    lensPublicationId: "",
+                    contentHash: "",
+                    timestamp: ""
+                }
             }
+
+        
+            html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
         }
- 
-        html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
+
+        console.log("HTML2", html.slice(0,200))
 
         let t6 = Date.now();
         logz.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
 
-        job.html = await uploadFile(html!)
+     
+       const htmlCid  = await uploadFile(html!);
+       console.log("HTMLCID",htmlCid)
+       job.html = htmlCid
+
 
     } else {
 

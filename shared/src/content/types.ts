@@ -9,6 +9,13 @@ export interface S2SPublicContent {
     publications: string[],
     tags: string[],
     plainTextHash: string
+    encryption: boolean,
+    encrypted?: string
+    content?: string,
+    custom?: string,
+    title?: string,
+    slug?: string
+
 }
 
 export interface S2SToEncrypt {
@@ -20,5 +27,5 @@ export interface S2SToEncrypt {
 }
 
 export interface S2SContentItem extends S2SPublicContent {
-    encrypted: string
+    
 }

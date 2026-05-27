@@ -15,6 +15,7 @@ export interface S2SBody {
   publication?: string
   tags: string[];
   attributes?: any;
+  encryption: boolean;
 }
 
 export interface S2STemplateData {
