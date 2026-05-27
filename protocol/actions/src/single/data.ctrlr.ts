@@ -1,4 +1,4 @@
-import { StringifyOptions } from "node:querystring";
+
 import { decrypt } from "../libs/decrypt";
 import { fetchByQuery } from "../libs/lens.factory";
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared';
@@ -57,18 +57,19 @@ export const initTemplateData = async (
   let revoked = false;
   let path : string | undefined = undefined;
 
-  let decrypted = await decrypt(protocolInfo.pkp.ethAddress, body, authorSafeAddress, publicationModule, signerAddress);
-  if (!decrypted) {
-      revoked = true
-  } else {
-    body = mergeDecrypted(body, decrypted);
-    path = createPath(body, templateConfig);
+  if (body.encryption) {
+    let decrypted = await decrypt(protocolInfo.pkp.ethAddress, body, authorSafeAddress, publicationModule, signerAddress);
+    if (!decrypted) {
+        revoked = true
+    } else {
+      body = mergeDecrypted(body, decrypted);
+    }
   }
 
   return {
     ...body,
     assets_gateway: protocolInfo.assets_gateway,
-    path,
+    path: createPath(body, templateConfig),
     custom: body.custom || {},
     content: (body.content || "")
       .replace(/\\n/g, "\n")

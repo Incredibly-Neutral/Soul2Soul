@@ -41,27 +41,29 @@ import { requestUrl } from "obsidian";
     
 // }
 
-  export const getGitHubFiles = async (owner: string, repo: string, branch: string, path: string = ""): Promise<any[]> => {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    return Array.isArray(data) ? data : [];
+export const getGitHubFiles = async (owner: string, repo: string, branch: string, path: string = ""): Promise<any[]> => {
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+  
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`GitHub API error: ${response.statusText}`);
   }
+  
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
+}
 
-export const getAllFilesRecursive = async (owner: string, repo: string, branch: string, path: string = ""): Promise<any[]>  => {
+export const getAllFilesRecursive = async (owner: string, repo: string, branch: string, path: string = ""): Promise<any[]> => {
   const files = await getGitHubFiles(owner, repo, branch, path);
   let allFiles: any[] = [];
   
   for (const file of files) {
     if (file.type === 'file') {
-      allFiles.push(file);
+      allFiles.push({
+        ...file,
+        url: file.download_url  // <-- use raw content URL, not API URL
+      });
     } else if (file.type === 'dir') {
-      // Recursively fetch files from subdirectories
       const subFiles = await getAllFilesRecursive(owner, repo, branch, file.path);
       allFiles = allFiles.concat(subFiles);
     }

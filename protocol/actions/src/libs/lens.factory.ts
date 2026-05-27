@@ -57,6 +57,11 @@ interface S2SAttributes {
   postType: string | null;
   creationDate: string | null;
   modifiedDate: string | null;
+  encryption: boolean;
+  slug: string | null;
+  title: string | null;
+  content: string | null;
+  custom: string | null;
 }
 
 interface S2SContent {
@@ -158,7 +163,10 @@ export const fetchById = async (
       })
     });
 
+
     const result = await response.json();
+
+
   
     if (result.errors) {
         console.error('GraphQL errors:', result.errors);
@@ -178,6 +186,9 @@ export const fetchByQuery = async (
   method: string,
   args: any
 ) => {
+
+console.log(args)
+
   try {
 
     const query = QUERIES[method as keyof typeof QUERIES];
@@ -193,11 +204,8 @@ export const fetchByQuery = async (
       })
     });
 
-    // console.log("RRR", response)
-
     const result = await response.json();
 
-  
     if (result.errors) {
         console.error('GraphQL errors:', result.errors);
         return [];
@@ -219,7 +227,7 @@ export const fetchByQuery = async (
   }
 };
 
-const formatSingle = (post: any) : S2SBody | null => {
+const formatSingle = (post: any) : any | null => {
   if (!post) return null;
   
   const attributes = post.metadata.attributes || [];
@@ -229,21 +237,43 @@ const formatSingle = (post: any) : S2SBody | null => {
     return attr ? attr.value : null;
   };
 
-  return {
+  const encryption = getAttr('encryption') == 'true' ? true : false;
 
+  if(encryption) {
 
-    // welke interface is dit? /resumewhy cant you access 
-    id: post.id,
-    author: post.author.address,
-    content: post.metadata.content,
-    locale: post.metadata.locale,
-    parent: getAttr('parent'),
-    position: getAttr('position'),
-    postType: getAttr('postType'),
-    creationDate: getAttr('creationDate'),
-    modifiedDate: getAttr('modifiedDate'),
-    tags: post.metadata.tags
-  };
+    return {
+      id: post.id,
+      author: post.author.address,
+      content: post.metadata.content,
+      locale: post.metadata.locale,
+      parent: getAttr('parent'),
+      position: getAttr('position'),
+      postType: getAttr('postType'),
+      creationDate: getAttr('creationDate'),
+      modifiedDate: getAttr('modifiedDate'),
+      tags: post.metadata.tags,
+      encryption: true
+    };
+
+  } else {
+
+    return {
+      id: post.id,
+      author: post.author.address,
+      content: getAttr('content'),
+      locale: post.metadata.locale,
+      parent: getAttr('parent'),
+      position: getAttr('position'),
+      postType: getAttr('postType'),
+      creationDate: getAttr('creationDate'),
+      modifiedDate: getAttr('modifiedDate'),
+      tags: post.metadata.tags,
+      encryption: false,
+      slug: getAttr('slug'),
+      title: getAttr('title'),
+      custom: getAttr('custom')
+    };
+  }
 
 };
 

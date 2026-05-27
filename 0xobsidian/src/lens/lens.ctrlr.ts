@@ -159,7 +159,7 @@ export class LensService {
 
     async registerProfile(user: any)  {
 
-        new Notice("registering Lens account",2500)
+        new Notice("registering Lens account", 2500)
 
         const name = this.lensUsername();
 

@@ -31,8 +31,10 @@ declare module "@lens-protocol/client" {
     export type S2SContent = FragmentOf<typeof S2SContentFragment>;
 }
 
-
+// differ between encrypted and public?
 const createPostMetadata = (user: any, item: any) => {
+
+  console.log("B4", item)
 
   return textOnly({
     content: item.encrypted, // Required readable content
@@ -68,6 +70,31 @@ const createPostMetadata = (user: any, item: any) => {
         key: "plainTextHash", 
         value: item.plainTextHash || "" 
       },
+      { 
+        type: MetadataAttributeType.STRING,
+        key: "encryption", 
+        value: String(item.encryption || false) 
+      },
+      { 
+        type: MetadataAttributeType.STRING,
+        key: "title", 
+        value: item.title || "" 
+      },
+      { 
+        type: MetadataAttributeType.STRING,
+        key: "slug", 
+        value: item.slug || "" 
+      },
+      { 
+        type: MetadataAttributeType.STRING,
+        key: "content", 
+        value: item.content || "" 
+      },
+      { 
+        type: MetadataAttributeType.STRING,
+        key: "custom", 
+        value: item.custom || "{}" 
+      }
     ],
     tags: item.tags || ["unamore--web"]
   });

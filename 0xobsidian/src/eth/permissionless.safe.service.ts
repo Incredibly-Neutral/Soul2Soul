@@ -306,9 +306,52 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
       return results;
   }
 
+  // Extracts ModuleCreated(address indexed safe, address indexed module) from topic[2]
+  private async extractDeployedAddressFromLogs(txHash: string): Promise<string> {
+      console.log("📦 Getting receipt via RPC for tx:", txHash);
+
+      let attempts = 0;
+      const maxAttempts = 12;
+
+      while (attempts < maxAttempts) {
+          try {
+              const chain = getViemChainById(this.chainId);
+              if (!chain) throw new Error("No chain config for id: " + this.chainId);
+
+              const provider = this.publicClient;
+              const receipt = await provider!.getTransactionReceipt({ hash: txHash as `0x${string}` });
+
+              // ModuleCreated emits: keccak(ModuleCreated,safe,module) as log.topics[0]
+              // module/proposal address is topic[2]
+              const moduleCreatedSelector = keccak256(toBytes("ModuleCreated(address,address)"));
+              const deploymentModuleSelector = keccak256(toBytes("ModuleCreated(address,address,address)"));
+
+              for (const log of receipt.logs) {
+                  if (log.topics && log.topics.length >= 3) {
+                      const selector = log.topics[0];
+                      if (selector === moduleCreatedSelector || selector === deploymentModuleSelector) {
+                          const module = "0x" + log.topics[2].slice(26);
+                          console.log("✅ Found ModuleCreated event:", module);
+                          return module;
+                      }
+                  }
+              }
+
+              console.log("⏳ ModuleCreated not yet indexed, retrying...");
+              await new Promise((resolve) => setTimeout(resolve, 3000));
+          } catch (err: any) {
+              console.log("⚠️ Receipt error (attempt " + (attempts + 1) + "/" + maxAttempts + "):", err.message);
+              await new Promise((resolve) => setTimeout(resolve, 3000));
+          }
+          attempts++;
+      }
+
+      throw new Error("Failed to get deployed address from logs for tx: " + txHash);
+  }
+
   private async extractDeployedAddress(txHash: string): Promise<string> {
       console.log("🔍 [START] Extracting deployed address from tx:", txHash);
-      const result = await this.extractFromInternalTransactions(txHash, this.address);
+      const result = await this.extractDeployedAddressFromLogs(txHash);
       console.log("✅ [END] Extracted address:", result, "for tx:", txHash);
       return result;
   }
@@ -318,9 +361,9 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
       txHash: string, 
       safeAddress?: `0x${string}`
   ): Promise<string> {
-      // console.log("🔄 Querying internal transactions...");
-      // console.log("🔍 Safe address to filter:", safeAddress);  // ✅ ADD THIS
-      // console.log("🔍 this.address:", this.address);           // ✅ ADD THIS
+      console.log("🔄 Querying internal transactions...");
+      console.log("🔍 Safe address to filter:", safeAddress);  // ✅ ADD THIS
+      console.log("🔍 this.address:", this.address);           // ✅ ADD THIS
       
       let attempts = 0;
       const maxAttempts = 16;
@@ -332,6 +375,8 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
               this.main.plugin.settings.etherscan_key
           );
           
+console.log(response);
+
           const txs = Array.isArray(response) ? response : response?.result || [];
           
           if (Array.isArray(txs) && txs.length > 0) {
@@ -342,12 +387,12 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
               console.log("📋 Deployed contracts:", deployedContracts.length);
               deployedContracts.forEach(tx => {
                   const isSafe = tx.contractAddress.toLowerCase() === safeAddress?.toLowerCase();
-                  // console.log("  -", tx.contractAddress, isSafe ? "← SAFE (filter)" : "← candidate");
+                  console.log("  -", tx.contractAddress, isSafe ? "← SAFE (filter)" : "← candidate");
               });
               
               // ✅ If only ONE deployment, return it (even if it's the Safe)
               if (deployedContracts.length === 1) {
-                  // console.log("✅ Single deployment:", deployedContracts[0].contractAddress);
+                  console.log("✅ Single deployment:", deployedContracts[0].contractAddress);
                   return deployedContracts[0].contractAddress;
               }
               
@@ -355,12 +400,12 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
               if (deployedContracts.length > 1) {
                   const nonSafeDeployment = deployedContracts.find(tx => {
                       const matches = tx.contractAddress.toLowerCase() === safeAddress?.toLowerCase();
-                      // console.log(`  🔍 Checking ${tx.contractAddress}: matches safe? ${matches}`);  // ✅ ADD THIS
+                      console.log(`  🔍 Checking ${tx.contractAddress}: matches safe? ${matches}`);  // ✅ ADD THIS
                       return !matches;  // Return ones that DON'T match
                   });
                   
                   if (nonSafeDeployment) {
-                      // console.log("✅ Found non-Safe deployment:", nonSafeDeployment.contractAddress);
+                      console.log("✅ Found non-Safe deployment:", nonSafeDeployment.contractAddress);
                       return nonSafeDeployment.contractAddress;
                   }
               }
@@ -383,7 +428,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
       
       const url = `${baseUrl}&module=account&action=txlistinternal&txhash=${txHash}&apikey=${apiKey}`;
 
-      // console.log(url)
+      console.log(url)
       
       try {
           const response = await fetch(url);

@@ -1,0 +1,15 @@
+{
+  "name": "@s2s/protocol-serverless",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch server.ts",
+    "start": "bun run server.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "*",
+    "ethers": "^5",
+    "hono": "*",
+    "node-fetch": "^3.*"
+  }
+}

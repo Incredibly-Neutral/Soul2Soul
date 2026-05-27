@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  server:
+    build: .
+    ports:
+      - "4269:4269"
+    environment:
+      - PORT=4269
+      - IPFS_GATEWAY=${IPFS_GATEWAY:-https://neutralpress.mypinata.cloud}
+      - ACTION_TIMEOUT_MS=${ACTION_TIMEOUT_MS:-30000}
+    volumes:
+      - ./public:/app/public
+    networks:
+      - s2s
+
+networks:
+  s2s:
+    driver: bridge

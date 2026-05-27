@@ -20,8 +20,9 @@ const TIMEOUTS = {
   cpRoot: 10_000,
   cpFile: 10_000,
   stat: 5_000,
-  pin: 10_000,
-  rm: 5_000
+  rm: 5_000,
+  pinAdd: 10_000,
+  pinLs: 5_000
 };
 
 export const mergedMain = async (
@@ -98,18 +99,48 @@ export const mergedMain = async (
           ? "index.html"
           : `${job.path}/index.html`;
       const destPath = `${mfsPath}/${filePath}`;
-      // job.html holds the IPFS CID returned by uploadFile (post-render)
-      const sourcePath = `/ipfs/${job.html}`;
+      const sourceCid = job.html;
+
+      console.log("SOURCE CID", sourceCid)
+
+      // Check if dest entry already exists (from previous run's root copy)
+      // Kubo files/cp does NOT overwrite — must rm first
+      let prevHash: string = "";
+      try {
+        const statRes = await fetchWithTimeout(
+          `${IPFS_URL}/api/v0/files/stat?arg=${encodeURIComponent(destPath)}`,
+          { method: "POST" },
+          TIMEOUTS.stat,
+        );
+        try { prevHash = (await statRes.json()).Hash || ""; } catch {}
+      } catch {}
+
+      // Fast path: skip if dest already matches source
+      if (prevHash && prevHash === sourceCid) {
+        logz.push(`skip (unchanged): ${filePath}`);
+        return;
+      }
+
+      // Remove existing entry so cp can overwrite
+      if (prevHash) {
+        await fetchWithTimeout(
+          `${IPFS_URL}/api/v0/files/rm?arg=${encodeURIComponent(destPath)}`,
+          { method: "POST" },
+          TIMEOUTS.rm,
+        ).catch(e => logz.push(`warn: rm failed ${filePath}: ${e instanceof Error ? e.message : e}`));
+      }
+
+      // Now cp works cleanly
       const url = `${IPFS_URL}/api/v0/files/cp?` +
-        `arg=${encodeURIComponent(sourcePath)}` +
+        `arg=/ipfs/${encodeURIComponent(sourceCid)}` +
         `&arg=${encodeURIComponent(destPath)}` +
-        `&parents=true&flush=false`; // flush=false batches writes; Kubo creates final version on files/stat
+        `&parents=true&flush=false`;
       const res = await fetchWithTimeout(url, { method: "POST" }, TIMEOUTS.cpFile);
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`Failed to copy ${job.path}: ${text}`);
+        throw new Error(`Failed to cp ${job.path}: ${text}`);
       }
-      logz.push(`✓ ${job.path}`);
+      logz.push(`✓ ${filePath} (${sourceCid.slice(0, 9)})`);
     }),
   );
 
@@ -128,25 +159,28 @@ export const mergedMain = async (
 
     // Pin on kubo
     // await fetchWithTimeout(
-    //   `${IPFS_URL}/api/v0/pin/add?arg=${newRootCid}`,
+    //   `${IPFS_URL}/api/v0/pin/add?arg=${encodeURIComponent(newRootCid)}`,
     //   { method: "POST" },
-    //   TIMEOUTS.pin,
+    //   TIMEOUTS.pinAdd,
     // );
     // logz.push(`pinned`);
 
     // Write on-chain
-    const encoded = toHexString(newRootCid);
-    logz.push(`writing ${encoded}`);
-    const result = await evmWrite(
-      "BASE",
-      protocolInfo.pkp,
-      protocolInfo.ensRecords,
-      RECORDS_CONTRACT_ABI,
-      "setText",
-      [node, "contenthash_wrapped", encoded],
-      true,
-    );
-    logz.push(JSON.stringify(result));
+
+    if (!dev) {
+      const encoded = toHexString(newRootCid);
+      logz.push(`writing ${encoded}`);
+      const result = await evmWrite(
+        "BASE",
+        protocolInfo.pkp,
+        protocolInfo.ensRecords,
+        RECORDS_CONTRACT_ABI,
+        "setText",
+        [node, "contenthash_wrapped", encoded],
+        true,
+      );
+      logz.push(JSON.stringify(result));
+    }
 
     return { success: true, cid: newRootCid, logz };
   } finally {

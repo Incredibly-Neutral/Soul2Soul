@@ -29,68 +29,87 @@ export const renderwithLitActions =
     if (notice) notice.setMessage('prepping render ...');
     else console.log('prepping render');
 
-    // Fetch compiled prep from IPFS and eval at global scope.
-    // In Obsidian (ESM), eval() is module-scoped, so var won't leak.
-    // setTimeout forces call stack unwinding so eval runs at top-level scope.
-    const prepResp = await fetch(
-      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionPrep}`,
-    );
-    const prepCode = await prepResp.text();
-
-    const prepResult: any  = await new Promise((resolve, reject) => {
-      setTimeout(() => {
-        try {
-          (0, eval)(prepCode);
-          const prepMain = (globalThis as any).main;
-          if (typeof prepMain !== 'function')
-            throw new TypeError('prep action did not expose main()');
-          resolve(prepMain({
+    const prepResult: any = await fetch(
+      `https://run.transport-union.dev/run`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cid: protocolInfo.litActionPrep,
+          inputs: {
             protocolInfo,
             authorSafeAddress,
             publication,
             configCid: configCid || undefined,
             contentIds,
             dev,
-          }));
-        } catch (err) {
-          reject(err);
-        }
-      }, 0);
-    });
+          },
+        }),
+      },
+    ).then(r => r.json());
 
-    let jobs = prepResult.jobs;
+    if (!prepResult.success) {
+      throw new Error(`Prep action failed: ${prepResult.error}`);
+    }
+
+    let jobs = prepResult.response?.jobs;
     console.log(jobs);
 
     // ====================== Single actions (Lit) ======================
     if (notice) notice.setMessage('rendering ...');
 
-
-    const singleResp = await fetch(
-      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionSingle}`,
-    );
-    const singleCode = await singleResp.text();
-
-    const results = await Promise.all(
+    let results = await Promise.all(
       jobs.map(async (job: any, index: number) => {
         // Stagger to avoid rate limits
-        await new Promise(r => setTimeout(r, index * 1000));
+        // await new Promise(r => setTimeout(r, index * 1000));
 
         let capturedLogs: string[] = [];
+        const inputs = {
+          signature,
+          authorSafeAddress,
+          configCid,
+          publication,
+          job,
+          debug,
+          dev,
+        };
+
         try {
-          const result = await oxoCtrlr.lit.executeAction(
-            singleCode,
-            {
-              signature,
-              authorSafeAddress,
-              configCid,
-              publication,
-              job,
-              debug,
-              dev,
-            },
-            litUsageKey,
-          );
-          return { success: true, index, result };
+          let result: any;
+
+          if (dev) {
+            // Preview: run via serverless container
+            const resp = await fetch(
+              `https://run.transport-union.dev/run`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cid: protocolInfo.litActionSingle,
+                  inputs,
+                }),
+              },
+            ).then(r => r.json());
+
+            result = resp;
+
+          } else {
+            // Production: Lit actions on-chain
+            const singleResp = await fetch(
+              `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionSingle}`,
+            );
+            const singleCode = await singleResp.text();
+
+            result = await oxoCtrlr.lit.executeAction(
+              singleCode,
+              inputs,
+              litUsageKey,
+            );
+          }
+
+          console.log(result)
+
+          return { success: true, index, response: result.response, logs: capturedLogs };
         } catch (error: any) {
           return {
             success: false,
@@ -106,21 +125,23 @@ export const renderwithLitActions =
       }),
     );
 
-    const successful = results.filter((r: any) => r.result?.response?.success);
-    const failed = results.filter((r: any) => !r.result?.response?.success);
+    console.log(results);
+
+    const successful = results.filter((r: any) => r.response?.success);
+    const failed = results.filter((r: any) => !r.response?.success);
     console.log(`Rendered: ${successful.length}/${jobs.length}`);
     failed.forEach(
       (f: any) =>
         console.error(
           `Job ${f.index} failed:`,
-          f.result?.response?.errors,
+          f.response?.errors,
           f.error,
         ),
     );
 
     const renderedJobs = successful
-      .map((r: any) => r.result.response.job)
-      .filter((j: any) => j.path);
+      .map((r: any) => r.response?.job)
+      .filter((j: any) => j?.path);
     console.log('renderedJobs:', renderedJobs);
 
     // ====================== Merged action (Lit) ======================
@@ -128,34 +149,65 @@ export const renderwithLitActions =
     // writes contenthash_wrapped on-chain (all in one PKP-signed action).
     if (notice) notice.setMessage('merging ...');
 
-    const updateCode = await fetch(
-      `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionRootUpdate}`,
-    ).then(r => r.text());
+    console.log("JS", renderedJobs.map ( (j:any) => j.html))
 
-    const updateResult = await oxoCtrlr.lit.executeAction(
-      updateCode,
-      {
-        signature,
-        authorSafeAddress,
-        publication,
-        jobs: renderedJobs,
-        dev,
-      },
-      litUsageKey,
-    );
+    const updateInputs = {
+      signature,
+      authorSafeAddress,
+      publication,
+      jobs: renderedJobs,
+      dev,
+    };
 
-    if (!updateResult?.response?.success) {
-      throw new Error(
-        `Merged action failed: ${JSON.stringify(updateResult?.response)}`,
+    let updateResult: any;
+
+    if (dev) {
+      // Preview: run via serverless container
+      const updateResp = await fetch(
+        `https://run.transport-union.dev/run`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cid: protocolInfo.litActionRootUpdate,
+            inputs: updateInputs,
+          }),
+        },
+      ).then(r => r.json());
+
+      // Normalize raw action response to production return shape
+      updateResult = { response: { ...updateResp.response, success: updateResp.success } };
+    } else {
+      // Production: Lit actions on-chain
+
+      if (notice) notice.setMessage('publishing ...');
+
+
+      const updateCode = await fetch(
+        `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionRootUpdate}`,
+      ).then(r => r.text());
+
+      const raw = await oxoCtrlr.lit.executeAction(
+        updateCode,
+        updateInputs,
+        litUsageKey,
       );
+      updateResult = { response: { ...raw.response, success: raw.success } };
     }
 
-    if (notice) notice.setMessage('publishing ...');
+    console.log('UR', updateResult);
+
+    if (!updateResult?.response?.success) {
+      console.log("fail")
+     // throw new Error(`Merged action failed: ${JSON.stringify(updateResult?.response)}`);
+    }
+
+
 
     return {
       success: true,
       cid: updateResult.response.cid,
-      path: renderedJobs[0].path,
+      path: renderedJobs[0] ? renderedJobs[0].path || "" : "",
       jobs: renderedJobs,
     };
   };

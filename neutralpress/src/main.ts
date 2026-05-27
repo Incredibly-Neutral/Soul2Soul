@@ -68,7 +68,7 @@ export default class DSG extends Plugin {
 				menu.addItem((item) => {
 					item.setTitle("Preview")
 						.setIcon("document")
-						.onClick(() => this.ctrlr.previewNote(activeFile));
+						.onClick(() => this.ctrlr.proposeContent(activeFile, false));
 				});
 			}),
 		);
@@ -78,7 +78,7 @@ export default class DSG extends Plugin {
 				menu.addItem((item) => {
 					item.setTitle("Propose to print")
 						.setIcon("document")
-						.onClick(() => this.ctrlr.proposeContent(file));
+						.onClick(() => this.ctrlr.proposeContent(file, true));
 				});
 			}),
 		);
@@ -126,7 +126,7 @@ export default class DSG extends Plugin {
 								const { contentId, publicContent, toEncrypt } = await this.ctrlr.content.parseNote(file)
 								await this.ctrlr.content.storeNoteOnLens(file, this.ctrlr.protocolInfo, contentId, publicContent, toEncrypt, subdomain);
 								await this.ctrlr.revokeLicense(subdomain, file);
-								await this.ctrlr.renderCalls(ensName, [contentId], this.ctrlr.oxo.settings.litUsageKey)
+								await this.ctrlr.renderCalls(ensName, [contentId], this.ctrlr.oxo.settings.litUsageKey, true)
 							}
 							return new RevokeModal(this.app, this.ctrlr, ensName, onSubmit).open();
 							
@@ -141,7 +141,7 @@ export default class DSG extends Plugin {
 			name: "publish",
 			callback: () => {
 				const activeFile = this.app.workspace.getActiveFile() as TFile;
-				return this.ctrlr.proposeContent(activeFile);
+				return this.ctrlr.proposeContent(activeFile, true);
 			},
 		});
 	}
