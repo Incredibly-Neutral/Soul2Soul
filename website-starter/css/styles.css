@@ -1,0 +1,242 @@
+:root {
+  --black: #444;
+  --grey: #444;
+  --greybackground:rgba(184, 184, 185, 1);
+}
+
+body {
+  font-size: 1.25rem;
+  line-height: 1.55;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--black);
+  color: white;
+  font-size: 1.125rem;
+  font-family: "Ringside Regular Office A", "Ringside Regular Office B";
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+h2 {
+  font-size: 2.8rem;
+  line-height: 0.9;
+  font-family: "Knockout 70 A", "Knockout 70 B";
+  font-style: normal;
+  font-weight: 400;
+  margin: 0 0 0.5rem 0;
+}
+
+h3 {
+  font-family: "Knockout 50 A", "Knockout 50 B";
+  font-style: normal;
+  font-weight: 400;
+  font-size: 1.9rem;
+  line-height: 1.1;
+  margin: 0;
+}
+
+a {
+  color: var(--black);
+  text-decoration: none;
+  border-bottom: 1px solid var(--black);
+}
+
+p {
+  margin-top: 0;
+  margin-bottom: 1.55rem;
+}
+
+em {
+  font-style: italic;
+}
+
+.date {
+  display: block;
+  margin-bottom: 1.5rem;
+  font-size: 1rem;
+}
+
+.author {
+  font-size: 1rem;
+  color: white;
+  margin-top: 0.5rem;
+}
+
+html {
+  position: relative;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+}
+@media (min-width: 576px) {
+  html {
+    font-size: 12px;
+  }
+}
+@media (min-width: 768px) {
+  html {
+    font-size: 12px;
+  }
+}
+@media (min-width: 992px) {
+  html {
+    font-size: 14px;
+  }
+}
+@media (min-width: 1200px) {
+  html {
+    font-size: 16px;
+  }
+}
+
+body {
+  position: relative;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  min-height: 100vh;
+}
+
+main {
+  position: relative;
+}
+
+.container {
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.small_container, .small-container {
+  width: calc(100% - 2rem);
+  max-width: 600px;
+}
+
+.medium_container, .medium-container, .container.images {
+  width: calc(100% - 2rem);
+  max-width: 1120px;
+}
+@media screen and (min-width: 992px) {
+  .medium_container, .medium-container, .container.images {
+    width: calc(100% - 10rem);
+  }
+}
+
+.images_container {
+  margin: 3rem auto 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3rem;
+}
+@media screen and (min-width: 768px) {
+  .images_container {
+    flex-direction: row;
+  }
+}
+.images_container > img {
+  max-width: 280px;
+  height: auto;
+  border-radius: 52%;
+}
+.images_container > img:first-of-type {
+  display: none;
+}
+@media screen and (min-width: 768px) {
+  .images_container > img:first-of-type {
+    display: block;
+  }
+}
+
+.container.images {
+  margin: 1.5rem auto 3rem auto;
+}
+.container.images img {
+  width: 100%;
+  height: auto;
+}
+
+.flex_row {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  flex-direction: column;
+  flex-wrap: wrap;
+}
+@media screen and (min-width: 768px) {
+  .flex_row {
+    flex-direction: row;
+  }
+}
+
+header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+header a {
+  text-decoration: none;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+header svg {
+  max-width: 240px;
+  height: auto;
+  margin-bottom: -90px;
+  margin-top: -30px;
+}
+header h1 {
+  text-transform: none;
+  color: #0081b0;
+  font-family: "Ringside Narrow A", "Ringside Narrow B";
+  font-style: normal;
+  font-weight: 700;
+  font-size: 2.2rem;
+}
+
+svg.background {
+  position: absolute;
+}
+
+#blog_container {
+  padding: 24rem 0 28rem 0;
+  position: relative;
+}
+
+article.block {
+  position: relative;
+  width: calc(33.3% - 3rem);
+  margin-right: 1.5rem;
+}
+article.block:last-of-type {
+  margin-right: 0;
+}
+article.block svg.background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1; /* or 0, with content having z-index: 1 */
+}
+article.block > div {
+  padding: 4rem;
+}
+article.block > div h3 {
+  color: white;
+}
+article.block > div .date {
+  color: white;
+  margin-bottom: 0.25rem;
+}
+
+/*# sourceMappingURL=styles.css.map */

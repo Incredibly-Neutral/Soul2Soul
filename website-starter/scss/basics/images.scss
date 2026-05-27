@@ -1,0 +1,38 @@
+@use '../styleguide/breakpoints';
+
+.images_container {
+    margin: 3rem auto 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    gap: 3rem;
+
+    @media screen and (min-width: breakpoints.$breakpoint-medium) {
+        flex-direction: row;
+    }
+
+    > img {
+        max-width: 280px;           
+        height: auto;
+        border-radius: 52%;
+
+        &:first-of-type {
+            display: none;
+            @media screen and (min-width: breakpoints.$breakpoint-medium) {
+                display: block;
+            }
+        }
+    }
+}
+
+.container.images {
+
+    margin: 1.5rem auto 3rem auto;
+
+    img {
+        width: 100%;
+        height: auto;
+      
+    }
+}

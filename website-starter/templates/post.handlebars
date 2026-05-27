@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="{{language}}">
+{{> head }}
+
+<body id="blog">
+    {{> header}}
+    <main>
+        {{> background }}
+
+        <section id="blog_container" class="container small_container">
+          
+            <article class="blog" id="{{this.id}}" author="{{author}}">  
+                
+                <h2>{{title}}</h2> 
+                <div class="author">{{author}}</div> 
+                <span class='date'>{{formatDate creationDate}}</span>
+                
+               
+                {{{extract_images content}}}          
+            </article>
+        
+        </section>
+    </main>
+</body>
+</html>

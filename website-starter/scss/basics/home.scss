@@ -1,0 +1,36 @@
+
+
+article.block {
+
+    position: relative;
+    width: calc(33.3% - 3rem);
+    margin-right: 1.5rem;
+
+
+    &:last-of-type {
+        margin-right: 0;
+    }
+
+
+    svg.background {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -1;  /* or 0, with content having z-index: 1 */
+    }
+
+    > div {
+        padding: 4rem;
+        
+        h3 {
+            color: white;
+        }
+
+        .date {
+            color: white;
+            margin-bottom: .25rem;
+        }
+    }
+}

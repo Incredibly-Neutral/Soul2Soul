@@ -1,0 +1,38 @@
+{
+  "name": "s2s-records-safe-app",
+  "version": "1.0.0",
+  "description": "Safe app for managing S2S Records Module",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "serve": "vite preview --port 3000",
+    "type-check": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "deploy": "npm run build && scp -r dist/* joera:/srv/safe-records/"
+  },
+  "devDependencies": {
+    "@types/node": "^20.6.0",
+    "rimraf": "^5.0.1",
+    "typescript": "^5.2.2",
+    "vite": "^4.5.14"
+  },
+  "keywords": [
+    "safe",
+    "ethereum",
+    "web3",
+    "typescript",
+    "vite"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@s2s/soul2soul-shared": "file:/home/joera/Documents/soul2soul/s2s-shared",
+    "@safe-global/safe-apps-sdk": "^9.1.0",
+    "dotenv": "^17.2.2",
+    "ethers": "^6.15.0",
+    "multiformats": "^13.4.1",
+    "path": "^0.12.7",
+    "terser": "^5.44.0"
+  }
+}
