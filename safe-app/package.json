@@ -27,7 +27,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@s2s/soul2soul-shared": "file:/home/joera/Documents/soul2soul/s2s-shared",
+    "@s2s/soul2soul-shared": "workspace:*",
     "@safe-global/safe-apps-sdk": "^9.1.0",
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",

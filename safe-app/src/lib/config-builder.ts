@@ -1,32 +1,9 @@
 // config-builder.ts
 
+import { S2SPublicationConfig } from "@s2s/soul2soul-shared";
 import { add, dagPut, fetchFromIPFS } from "./ipfs.factory";
 
-interface PublicationConfig {
-  assets: Array<{ path: string; cid: string }>;
-  assets_gateway: string;
-  contract: string;
-  data_gateway: string;
-  domains: Array<{
-    url: string;
-    dns: {
-      custodian: string;
-      item_id: string;
-      auth_key: string;
-    };
-  }>;
-  render_action: string;
-  mapping: any;
-  name: string;
-  rpc: string;
-  stylesheets: Array<{ path: string; cid: string }>;
-  table: {
-    id: string;
-    gateway: string;
-  };
-  template_cid: string;
-  templates: Array<{ path: string; cid: string; body: string }>;
-}
+
 
 interface GitHubFile {
   path: string;
@@ -186,11 +163,7 @@ export class ConfigBuilder {
     publicationName: string,
     contractAddress: string,
     existingConfigCid?: string
-  ): Promise<{ config: PublicationConfig; cid: string }> {
-
-
-
-
+  ): Promise<{ config: S2SPublicationConfig; cid: string }> {
     // Load existing config or create new one
     let config: any = {};
     if (existingConfigCid) {
@@ -213,23 +186,25 @@ export class ConfigBuilder {
     // Process assets
     console.log("Processing assets...");
     const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
-    const existingAssetCids = config.assets.map((a: any) => a.cid);
+    // const existingAssetCids = config.assets.map((a: any) => a.cid);
+
+    // stat the assets folder on the ipfs tree 
 
     for (const asset of assetFiles) {
-      if (asset.type !== 'file') continue;
+      // if (asset.type !== 'file') continue;
 
-      const cid = await this.uploadFromUrl(asset.download_url);
+      // const cid = await this.uploadFromUrl(asset.download_url);
       
-      if (!existingAssetCids.includes(cid)) {
-        const existingIndex = config.assets.findIndex((a: any) => a.path === asset.path);
+      // if (!existingAssetCids.includes(cid)) {
+      //   const existingIndex = config.assets.findIndex((a: any) => a.path === asset.path);
         
-        if (existingIndex !== -1) {
-          config.assets[existingIndex].cid = cid;
-        } else {
-          config.assets.push({ path: asset.path, cid });
-        }
-        console.log(`✅ Asset uploaded: ${asset.path} -> ${cid}`);
-      }
+      //   if (existingIndex !== -1) {
+      //     config.assets[existingIndex].cid = cid;
+      //   } else {
+      //     config.assets.push({ path: asset.path, cid });
+      //   }
+      //   console.log(`✅ Asset uploaded: ${asset.path} -> ${cid}`);
+      // }
     }
 
     // Process stylesheets
@@ -301,30 +276,16 @@ export class ConfigBuilder {
     const renderActionCid = await this.uploadFromUrl(renderActionUrl);
 
     // Create final config
-    const finalConfig: PublicationConfig = {
+    const finalConfig: S2SPublicationConfig = {
       assets: config.assets,
-      assets_gateway: this.pinataGateway,
+      assetsGateway: this.pinataGateway,
       contract: contractAddress,
-      data_gateway: this.ipfsGateway,
-      domains: [{
-        url: `${publicationName}.example.com`,
-        dns: {
-          custodian: "digitalocean",
-          item_id: "",
-          auth_key: ""
-        }
-      }],
-      render_action: renderActionCid,
+      dataGateway: this.ipfsGateway,
+      renderAction: renderActionCid,
       mapping,
       name: publicationName,
-      rpc: "", // Set based on chain
       stylesheets: config.stylesheets,
-      table: {
-        id: "", // Set based on protocol
-        gateway: this.pinataGateway
-      },
-      template_cid: templatesCid,
-      templates: config.templates
+      templateCid: templatesCid,
     };
 
     console.log("config", finalConfig)

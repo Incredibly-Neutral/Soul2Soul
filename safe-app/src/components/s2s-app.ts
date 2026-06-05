@@ -4,9 +4,12 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-licences-tab.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
+import { ProtocolIntegration } from '@/lib/protocol-integration.js';
+import { S2SProtocolInfo } from '@s2s/soul2soul-shared';
 
 export class S2SApp extends HTMLElement {
   private safeIntegration: SafeIntegration;
+  private protocolIntegration: ProtocolIntegration;
   private safeInfo: SafeInfo = { 
     safeAddress: '', 
     s2sRecords: '', 
@@ -17,14 +20,15 @@ export class S2SApp extends HTMLElement {
     threshold: 1, 
     modules: [] 
   };
+  private protocolInfo!: S2SProtocolInfo | undefined;
   private loading = true;
   private currentTab: 'licenses' | 'whitelist' | 'records' = 'licenses';
 
   constructor() {
-    console.log("constructore")
     super();
     this.attachShadow({ mode: 'open' });
     this.safeIntegration = new SafeIntegration();
+    this.protocolIntegration = new ProtocolIntegration();
     console.log("after safe integration")
   }
 
@@ -33,6 +37,8 @@ export class S2SApp extends HTMLElement {
     try {
       this.safeInfo = await this.safeIntegration.initialize();
       console.log('Safe Info:', this.safeInfo);
+      this.protocolInfo = await this.protocolIntegration.initialize();
+      console.log('ProtocolInfo Info:', this.safeInfo);
       this.loading = false;
     } catch (error) {
       console.error('Failed to initialize app:', error);

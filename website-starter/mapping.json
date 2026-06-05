@@ -10,7 +10,7 @@
             "source": "lens",
             "key": "posts",
             "value": "post",
-            "query": { "method" : "queryByFeed", "args": { "feedAddress": "0x5a5Cc3f032A5c4dE76aE07b8ED188376f109f638"}},
+            "query": { "method" : "queryByFeed", "args": { "feedAddress": "0xeC9aa5F2D067dF0550A8561650C45abb91eDd6ae"}},
             "filters": [{"postType": "post"}]
           }
         ]

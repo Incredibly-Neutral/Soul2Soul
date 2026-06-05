@@ -16,18 +16,9 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html')
       },
       output: {
-        // Don't hash filenames for easier Safe App integration
         entryFileNames: '[name].js',
         chunkFileNames: '[name].js',
         assetFileNames: '[name].[ext]'
-      },
-      // Add this - preserve module structure for linked packages
-      preserveEntrySignatures: 'strict',
-      // Add this - don't tree-shake the shared package
-      treeshake: {
-        moduleSideEffects: (id) => {
-          return id.includes('@s2s/soul2soul-shared')
-        }
       }
     },
     copyPublicDir: true,
@@ -40,12 +31,6 @@ export default defineConfig({
     
     // Target modern browsers
     target: 'es2020',
-    
-    // Add this - CommonJS options for linked packages
-    commonjsOptions: {
-      include: [/@s2s\/soul2soul-shared/, /node_modules/],
-      transformMixedEsModules: true  // Add this
-    }
   },
   publicDir: 'public',
 
@@ -105,9 +90,8 @@ export default defineConfig({
     devSourcemap: true
   },
 
-  // Optimize deps - ADD THESE
+  // Optimize deps
   optimizeDeps: {
-    include: ['ethers', '@s2s/soul2soul-shared'],
-    force: true  // Force re-optimization on every build
-  }
+    include: ['ethers'],
+  },
 })

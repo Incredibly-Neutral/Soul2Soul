@@ -61,11 +61,6 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
         logz.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
         let collections = await fetchCollections(job.templateConfig);
-
-        try {
-            console.log("collections", collections['posts'].map( (item: any) => item.tags))
-        }
-        catch (e) {}
   
         let t3 = Date.now();
         logz.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`)
@@ -80,7 +75,7 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
                     // console.log("collection item tags", item.tags)
 
                     if (item.encryption) {
-                        console.log("encryption")
+                        // console.log("encryption")
                         try {
                             const d = await decrypt(protocolInfo.pkp.ethAddress, item, authorSafeAddress, publicationModule, signerAddress);
                             if (!d) {
@@ -158,7 +153,7 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
 
      
        const htmlCid  = await uploadFile(html!);
-       console.log("HTMLCID",htmlCid)
+    //    console.log("HTMLCID",htmlCid)
        job.html = htmlCid
 
 

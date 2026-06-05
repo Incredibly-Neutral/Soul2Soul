@@ -1,6 +1,6 @@
 // src/lib/safe-integration.ts
-
-import { ensRecordsAbi, publicationModuleAbi } from '@s2s/soul2soul-shared'
+import { Abi_S2SPublicationModule } from '../../../protocol/generated/abis/S2SPublicationModule'
+import { Abi_S2SRecordsModule } from '../../../protocol/generated/abis/S2SRecordsModule'
  
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -69,7 +69,7 @@ export class SafeIntegration {
             // Create full contract instance with complete ABI
             this.recordsModule = new window.ethers.Contract(
               moduleAddress,
-              ensRecordsAbi,
+              Abi_S2SRecordsModule,
               provider
             );
             this.safeInfo.s2sRecords = moduleAddress;
@@ -79,7 +79,7 @@ export class SafeIntegration {
             // Create full contract instance with complete ABI
             this.publicationModule = new window.ethers.Contract(
               moduleAddress,
-              publicationModuleAbi,
+              Abi_S2SPublicationModule,
               provider
             );
             this.safeInfo.s2sPublication = moduleAddress;
@@ -393,23 +393,13 @@ export class SafeIntegration {
 
   getRpcUrl(chainId: number): string {
     let rpc = '';
-    const alchemy_key = "DAfzjixY82ICdLCssh_dTQpoN0I2mthW";
 
     switch (chainId) {
       case 1:
-        rpc = `https://eth-mainnet.g.alchemy.com/v2/${alchemy_key}`;
-        break;
-      case 11155111:
-        rpc = "https://sepolia.infura.io/v3/5588b2f2645b47bf9d9df736ab328181";
+        rpc = `https://rpc.ankr.com/eth`;
         break;
       case 8453:
-        rpc = `https://base-mainnet.g.alchemy.com/v2/${alchemy_key}`;
-        break;
-      case 84532:
-        rpc = `https://base-sepolia.g.alchemy.com/v2/${alchemy_key}`;
-        break;
-      case 175188:
-        rpc = "https://yellowstone-rpc.litprotocol.com/";
+        rpc = 'https://mainnet.base.org';
         break;
     }
 
