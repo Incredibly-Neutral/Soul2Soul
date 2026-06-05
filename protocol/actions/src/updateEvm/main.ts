@@ -157,15 +157,12 @@ export const mergedMain = async (
     newRootCid = (await statRes.json()).Hash;
     logz.push(`root: ${newRootCid}`);
 
-    // Pin on kubo
-    // await fetchWithTimeout(
-    //   `${IPFS_URL}/api/v0/pin/add?arg=${encodeURIComponent(newRootCid)}`,
-    //   { method: "POST" },
-    //   TIMEOUTS.pinAdd,
-    // );
-    // logz.push(`pinned`);
+    await fetchWithTimeout(
+      `${IPFS_URL}/api/v0/pin/add?arg=${newRootCid}`,
+      { method: "POST" },
+      TIMEOUTS.pinAdd,
+    );
 
-    // Write on-chain
 
     if (!dev) {
       const encoded = toHexString(newRootCid);
@@ -185,6 +182,7 @@ export const mergedMain = async (
     return { success: true, cid: newRootCid, logz };
   } finally {
     // Always clean up temp MFS path
+
     await fetchWithTimeout(
       `${IPFS_URL}/api/v0/files/rm?arg=${encodeURIComponent(mfsPath)}&recursive=true`,
       { method: "POST" },

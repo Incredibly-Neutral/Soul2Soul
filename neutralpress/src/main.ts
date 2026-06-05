@@ -13,14 +13,14 @@ import { RevokeModal } from "./ui/revoke.modal"
 
 
 export default class DSG extends Plugin {
-	settings: Settings;
-	ctrlr: IMainController;
+	settings!: Settings;
+	ctrlr!: IMainController;
 
 	colourTags() {
 		setTimeout(() => {
 			document
 				.querySelectorAll(".multi-select-pill")
-				.forEach((el: HTMLElement) => {
+				.forEach((el: any) => {
 					const text = el.querySelector(
 						".multi-select-pill-content span",
 					)?.textContent;

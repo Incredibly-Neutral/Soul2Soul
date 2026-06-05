@@ -122,8 +122,6 @@ export class MainController implements IMainController {
 			console.warn("Error initializing chains:", error);
 		}
 
-		// const { addr } = await getPublicationMultiSig(this,'test12345');
-		// console.log(addr)
 	}
 
 	async newPublication(tagName: string, file: TFile)  {
@@ -169,10 +167,6 @@ export class MainController implements IMainController {
 			).open();
 		}
 	}
-
-	// async previewNote(_file: TAbstractFile) {
-		
-	// }
 
 	async grantLicense(_file: TAbstractFile) {
 		const file = this.plugin.app.vault.getFileByPath(_file.path);
@@ -307,13 +301,14 @@ export class MainController implements IMainController {
 
 		try {
 
-			this.notice.setMessage('4/5 Rendering ... (~ 30 sec)');
+			this.notice.setMessage('4/5 Rendering ...');
 
 			const res: any = await renderwithLitActions(this.oxo.ctrlr, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, !publish, false)
 
 			this.notice.setMessage('5/5 Pinning ...');
 
 			if(res.cid) {
+
 				await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", this.oxo.settings.pinata_jwt)
 				console.log("pinned on pinata")
 			}
@@ -337,9 +332,9 @@ export class MainController implements IMainController {
 				return fragment
 			};
 
-			new Notice(_link(`${res.cid}`, `https://neutralpress.mypinata.cloud/ipfs/${res.cid}/${res.path}`), 0);
+			new Notice(_link(`${res.cid}`, `https://ipfs.transport-union.dev/ipfs/${res.cid}/${res.path}`), 0);
 			console.log(res.jobs);
-			console.log('https://neutralpress.mypinata.cloud/ipfs/' + res.cid);
+			console.log('https://ipfs.transport-union.dev/ipfs' + res.cid);
 			if (publish) {
 				console.log('https://' + publication + '.link' + res.path);
 				new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);

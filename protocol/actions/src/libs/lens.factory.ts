@@ -166,7 +166,7 @@ export const fetchById = async (
 
     const result = await response.json();
 
-
+    console.log(JSON.stringify(result));
   
     if (result.errors) {
         console.error('GraphQL errors:', result.errors);
@@ -187,7 +187,7 @@ export const fetchByQuery = async (
   args: any
 ) => {
 
-console.log(args)
+
 
   try {
 

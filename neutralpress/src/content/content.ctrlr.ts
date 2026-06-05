@@ -76,6 +76,8 @@ export class ContentController implements IContentController {
                 let contentItem: S2SContentItem;
 
                 if (publicContent.encryption) {
+
+                    console.log("ENCRYPTING")
                 
                     const encrypted = await this.encryptContent(
                         this.main.oxo.ctrlr,
@@ -107,7 +109,8 @@ export class ContentController implements IContentController {
                         contentId
                     );
                         
-                    // console.log(res);
+                    console.log(res);
+                    
                 } else {
 
                     // console.log("inserting");

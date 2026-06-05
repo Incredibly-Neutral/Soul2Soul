@@ -12,9 +12,9 @@ export const getConfig = async (authorSafeAddress: string, configCid: string | u
         ? configCid 
         : await evmRead("BASE", configModule, Abi_S2SRecordsModule, "getRecord", ["config"]);
       
-      console.log(_configCid)
+      // console.log(_configCid)
       let config = await catFile(_configCid);
-      console.log(config)
+      // console.log(config)
       return JSON.parse(config); 
 
 };

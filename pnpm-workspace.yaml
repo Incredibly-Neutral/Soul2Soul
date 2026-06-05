@@ -3,3 +3,5 @@ packages:
   - 'neutralpress'
   - 'protocol'
   - 'shared'
+  - 'safe-app'
+  - 'website-starter'
