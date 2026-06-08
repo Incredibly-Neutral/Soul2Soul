@@ -38,7 +38,7 @@ export class S2SApp extends HTMLElement {
       this.safeInfo = await this.safeIntegration.initialize();
       console.log('Safe Info:', this.safeInfo);
       this.protocolInfo = await this.protocolIntegration.initialize();
-      console.log('ProtocolInfo Info:', this.safeInfo);
+      console.log('ProtocolInfo Info:', this.protocolInfo);
       this.loading = false;
     } catch (error) {
       console.error('Failed to initialize app:', error);

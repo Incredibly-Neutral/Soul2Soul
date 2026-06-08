@@ -2,6 +2,7 @@
 
 import type { EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
+import { createPublicClient, http } from 'viem';
 import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
 
 export class ProtocolIntegration {
@@ -23,8 +24,14 @@ export class ProtocolIntegration {
 
         const safeData: any = await this.safeSdk!.safe.getInfo();
         
-        const providerL1 = new window.ethers.JsonRpcProvider(this.getRpcUrl(1));
-        const providerL2 = new window.ethers.JsonRpcProvider(this.getRpcUrl(8453));
+        const providerL1 = createPublicClient({
+          chain: undefined,
+          transport: http(this.getRpcUrl(1)),
+        });
+        const providerL2 = createPublicClient({
+          chain: undefined,
+          transport: http(this.getRpcUrl(8453)),
+        });
 
         this.protocolInfo  = await getProtocolInfo(false, providerL1, providerL2);
 
@@ -47,10 +54,10 @@ export class ProtocolIntegration {
 
     switch (chainId) {
       case 1:
-        rpc = `https://rpc.ankr.com/eth`;
+        rpc = `https://lb.drpc.live/ethereum/${import.meta.env.VITE_DRPC_API_KEY}`;
         break;
       case 8453:
-        rpc = 'https://mainnet.base.org';
+        rpc = `https://lb.drpc.live/base/${import.meta.env.VITE_DRPC_API_KEY}`;
         break;
     }
 

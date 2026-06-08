@@ -13,12 +13,12 @@ const evmSetup = (contractAddress: string, abi: any, chainId: number) => {
   switch(chainId) {
 
     case 1:
-      provider = new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`);
+      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/ethereum/${import.meta.env.VITE_DRPC_API_KEY}`);
 
     break;
 
     case 8453:
-      provider = new ethers.JsonRpcProvider(`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`);
+      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/base/${import.meta.env.DRPC_API_KEY}`);
 
     break; 
 
