@@ -10,7 +10,7 @@
     "serve": "vite preview --port 3000",
     "type-check": "tsc --noEmit",
     "clean": "rimraf dist",
-    "deploy": "npm run build && scp -r dist/* joera:/srv/safe-records/"
+    "deploy": "npm run build && scp -r dist/* joera:/srv/publication-module/"
   },
   "devDependencies": {
     "@types/node": "^20.6.0",

@@ -2,7 +2,7 @@
 
 import type { EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
-import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
 
 export class ProtocolIntegration {
   private safeSdk: SafeAppsSDK | null = null;

@@ -1,6 +1,6 @@
 // config-builder.ts
 
-import { S2SPublicationConfig } from "@s2s/soul2soul-shared";
+import { S2SPublicationConfig } from "@s2s/soul2soul-shared/safe-app";
 import { add, dagPut, fetchFromIPFS } from "./ipfs.factory";
 
 

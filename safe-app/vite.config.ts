@@ -2,15 +2,11 @@ import { defineConfig } from 'vite'
 import { resolve } from 'path'
 
 export default defineConfig({
-  // Base path for deployment
   base: './',
-  
-  // Build configuration
+
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    
-    // Rollup options
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html')
@@ -22,25 +18,16 @@ export default defineConfig({
       }
     },
     copyPublicDir: true,
-    
-    // Generate source maps for debugging
     sourcemap: true,
-    
-    // Don't minify for easier debugging (optional)
     minify: 'terser',
-    
-    // Target modern browsers
     target: 'es2020',
   },
   publicDir: 'public',
 
-  // Development server
   server: {
     port: 3000,
     open: true,
     cors: true,
-    
-    // Headers for Safe App development
     headers: {
       'X-Frame-Options': 'ALLOWALL',
       'Access-Control-Allow-Origin': '*',
@@ -48,14 +35,9 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'cross-origin',
       'Cross-Origin-Opener-Policy': 'same-origin'
     },
-    
-    // Add this - Allow reading linked packages
-    fs: {
-      strict: false
-    }
+    fs: { strict: false }
   },
 
-  // Preview server (for testing built app)
   preview: {
     port: 3000,
     open: true,
@@ -69,29 +51,27 @@ export default defineConfig({
     }
   },
 
-  // Path resolution
   resolve: {
+    // Point TS source directly — avoids CJS dist entirely
     alias: {
       '@': resolve(__dirname, 'src'),
       '@/components': resolve(__dirname, 'src/components'),
       '@/types': resolve(__dirname, 'src/types'),
-      '@/utils': resolve(__dirname, 'src/utils')
+      '@/utils': resolve(__dirname, 'src/utils'),
+      '@s2s/soul2soul-shared': resolve(__dirname, '../shared/src'),
+      '@s2s/soul2soul-shared/protocol': resolve(__dirname, '../shared/src/protocol'),
+      '@s2s/soul2soul-shared/publication': resolve(__dirname, '../shared/src/publication'),
+      '@s2s/soul2soul-shared/lit': resolve(__dirname, '../shared/src/lit'),
+      '@s2s/soul2soul-shared/lit-actions': resolve(__dirname, '../shared/src/lit-actions'),
     }
   },
 
-  // Define global constants
-  define: {
-    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.0'),
-    __BUILD_DATE__: JSON.stringify(new Date().toISOString())
+  esbuild: {
+    target: 'es2020',
   },
 
-  // CSS configuration
-  css: {
-    devSourcemap: true
-  },
-
-  // Optimize deps
   optimizeDeps: {
     include: ['ethers'],
+    exclude: ['@s2s/soul2soul-shared'],
   },
 })
