@@ -1,5 +1,4 @@
 import { CID } from "multiformats";
-import { ALCHEMY_KEY } from "./constants";
 import { ethers } from "ethers";
 declare global {
   const Lit: any;
