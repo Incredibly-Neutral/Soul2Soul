@@ -9,16 +9,17 @@ const evmSetup = (contractAddress: string, abi: any, chainId: number) => {
 
 
   let provider;
+  const apiKey = import.meta.env.VITE_DRPC_API_KEY || 'default';
 
   switch(chainId) {
 
     case 1:
-      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/ethereum/${import.meta.env.VITE_DRPC_API_KEY}`);
+      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/ethereum/${apiKey}`);
 
     break;
 
     case 8453:
-      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/base/${import.meta.env.DRPC_API_KEY}`);
+      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/base/${apiKey}`);
 
     break; 
 

@@ -52,12 +52,14 @@ export class ProtocolIntegration {
   getRpcUrl(chainId: number): string {
     let rpc = '';
 
+    const apiKey = import.meta.env.VITE_DRPC_API_KEY || "default";
+
     switch (chainId) {
       case 1:
-        rpc = `https://lb.drpc.live/ethereum/${import.meta.env.VITE_DRPC_API_KEY}`;
+        rpc = `https://lb.drpc.live/ethereum/${apiKey}`;
         break;
       case 8453:
-        rpc = `https://lb.drpc.live/base/${import.meta.env.VITE_DRPC_API_KEY}`;
+        rpc = `https://lb.drpc.live/base/${apiKey}`;
         break;
     }
 
