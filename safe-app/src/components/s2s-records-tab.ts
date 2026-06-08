@@ -2,10 +2,12 @@
 import { ConfigBuilder } from '@/lib/config-builder.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { S2SRecord } from '../types/index.js';
+import { ProtocolIntegration } from '../lib/protocol-integration.js';
 
 
 export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
+  public protocolIntegration!: ProtocolIntegration;
   private records: S2SRecord[] = [];
   private filteredRecords: S2SRecord[] = [];
   private loading = true;
@@ -143,16 +145,19 @@ export class S2SRecordsTab extends HTMLElement {
     // const service = new ProtocolInfoService(this.safeIntegration, "https://ipfs.transport-union.dev");
     // const protocolInfo = await service.getProtocolInfo();
 
-    // console.log(protocolInfo);
+
 
     const existingCid = await this.safeIntegration.getRecord('config');
     const repo = await this.safeIntegration.getRecord('repo');
-    // const commit = await this.safeIntegration.getRecord('commit');
+    const publicationUrl = await this.safeIntegration.getRecord('name');
+    const pInfo = await this.protocolIntegration.getInfo();
+  
 
     const builder = new ConfigBuilder(
+          pInfo.ensRecords,
           'REDACTED',
           'https://neutralpress.mypinata.cloud',
-          'https://ipfs.transport-union.dev'
+          'https://ipfs.transport-union.dev',
         );
 
     const { cid } = await builder.buildConfig(
@@ -160,7 +165,7 @@ export class S2SRecordsTab extends HTMLElement {
       repo.split("/")[4],
       "main",
       // commit,
-      "block001",
+      publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || "",
       existingCid
     );
@@ -170,9 +175,8 @@ export class S2SRecordsTab extends HTMLElement {
     // Update config record in Safe
     // await this.safeIntegration.setRecord('config', cid);
 
-    const executionUrl = await this.safeIntegration.setRecord('config', cid);
-
-    window.open(executionUrl, '_blank')
+    // const executionUrl = await this.safeIntegration.setRecord('config', cid);
+    // window.open(executionUrl, '_blank')
     
     
     // Show a modal or notification with the link

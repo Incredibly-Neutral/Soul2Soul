@@ -2,6 +2,11 @@
 
 import { S2SPublicationConfig } from "@s2s/soul2soul-shared/safe-app";
 import { add, dagPut, fetchFromIPFS } from "./ipfs.factory";
+import { evmRead } from "./evm";
+import { ethers } from "ethers";
+import { prepareTempMfs, kuboMfsList, kuboMfsPost, MFS_TIMEOUTS, IPFS_URL, kuboMfsStat } from "./ipfs-fs.factory";
+
+// Kubo IPFS URL for MFS operations
 
 
 
@@ -13,15 +18,18 @@ interface GitHubFile {
 }
 
 export class ConfigBuilder {
+  private ensAddress: string;
   private pinataJWT: string;
   private pinataGateway: string;
   private ipfsGateway: string;
 
   constructor(
+    ensRecords: string,
     pinataJWT: string,
     pinataGateway: string = "https://neutralpress.mypinata.cloud",
     ipfsGateway: string = "https://ipfs.transport-union.dev"
   ) {
+    this.ensAddress = ensRecords;
     this.pinataJWT = pinataJWT;
     this.pinataGateway = pinataGateway;
     this.ipfsGateway = ipfsGateway;
@@ -29,8 +37,7 @@ export class ConfigBuilder {
 
   // Parse GitHub URL to get owner, repo, branch
   parseGitHubUrl(githubUrl: string): { owner: string; repo: string; branch: string } {
-    // Supports: https://github.com/owner/repo or https://github.com/owner/repo/tree/branch
-    const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+))?/);
+    const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+))?/)
     if (!match) {
       throw new Error("Invalid GitHub URL");
     }
@@ -62,7 +69,6 @@ export class ConfigBuilder {
       if (file.type === 'file') {
         allFiles.push(file);
       } else if (file.type === 'dir') {
-        // Recursively fetch files from subdirectories
         const subFiles = await this.getAllFilesRecursive(owner, repo, branch, file.path);
         allFiles = allFiles.concat(subFiles);
       }
@@ -70,7 +76,6 @@ export class ConfigBuilder {
     
     return allFiles;
   }
-
 
   // Fetch file content from GitHub
   async fetchGitHubFile(downloadUrl: string): Promise<string> {
@@ -159,7 +164,6 @@ export class ConfigBuilder {
     github_account: string,
     repo: string,
     branch: string,
-    // commit: string,
     publicationName: string,
     contractAddress: string,
     existingConfigCid?: string
@@ -167,8 +171,7 @@ export class ConfigBuilder {
     // Load existing config or create new one
     let config: any = {};
     if (existingConfigCid) {
-
-        console.log("existing", existingConfigCid)
+      console.log("existing", existingConfigCid)
       try {
         config = await fetchFromIPFS(this.ipfsGateway, existingConfigCid);
       } catch (error) {
@@ -176,55 +179,14 @@ export class ConfigBuilder {
       }
     }
 
-    console.log("existing config", config)
+    console.log("existing config", config);
 
     // Initialize config sections
     config.assets = config.assets || [];
     config.stylesheets = config.stylesheets || [];
     config.templates = config.templates || [];
 
-    // Process assets
-    console.log("Processing assets...");
-    const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
-    // const existingAssetCids = config.assets.map((a: any) => a.cid);
-
-    // stat the assets folder on the ipfs tree 
-
-    for (const asset of assetFiles) {
-      // if (asset.type !== 'file') continue;
-
-      // const cid = await this.uploadFromUrl(asset.download_url);
-      
-      // if (!existingAssetCids.includes(cid)) {
-      //   const existingIndex = config.assets.findIndex((a: any) => a.path === asset.path);
-        
-      //   if (existingIndex !== -1) {
-      //     config.assets[existingIndex].cid = cid;
-      //   } else {
-      //     config.assets.push({ path: asset.path, cid });
-      //   }
-      //   console.log(`✅ Asset uploaded: ${asset.path} -> ${cid}`);
-      // }
-    }
-
-    // Process stylesheets
-    console.log("Processing stylesheets...");
-    const cssFiles = (await this.getAllFilesRecursive(github_account, repo, branch, 'css'))
-      .filter(file => file.path.endsWith('.css'));
-
-    for (const cssFile of cssFiles) {
-      const cid = await this.uploadFromUrl(cssFile.download_url);
-      const existingIndex = config.stylesheets.findIndex((s: any) => s.path === cssFile.path);
-      
-      if (existingIndex !== -1) {
-        config.stylesheets[existingIndex].cid = cid;
-      } else {
-        config.stylesheets.push({ path: cssFile.path, cid });
-      }
-      console.log(`✅ Stylesheet uploaded: ${cssFile.path} -> ${cid}`);
-    }
-
-    // Process templates
+    // --- Process templates (from templates/ directory in GitHub) ---
     console.log("Processing templates...");
     const templateFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'templates');
 
@@ -256,26 +218,23 @@ export class ConfigBuilder {
       console.log(`✅ Template uploaded: ${template.path} -> ${cid}`);
     }
 
-    // Upload templates DAG
+    // --- Upload templates DAG ---
     const templatesCid = await dagPut(
       JSON.stringify(config.templates),
       'templates.json',
       'https://ipfs.transport-union.dev'
     );
 
-    // Get commit SHA
+    // --- Fetch mapping.json + renderer/action ---
     const commitSHA = await this.getLatestCommitSHA(github_account, repo, branch);
-
-    // Fetch mapping.json
     const mappingUrl = `https://raw.githubusercontent.com/${github_account}/${repo}/${commitSHA}/mapping.json`;
     const mappingContent = await this.fetchGitHubFile(mappingUrl);
     const mapping = JSON.parse(mappingContent);
 
-    // Upload render action
     const renderActionUrl = `https://raw.githubusercontent.com/${github_account}/${repo}/${commitSHA}/renderer/dist/main.js`;
     const renderActionCid = await this.uploadFromUrl(renderActionUrl);
 
-    // Create final config
+    // --- Build final config ---
     const finalConfig: S2SPublicationConfig = {
       assets: config.assets,
       assetsGateway: this.pinataGateway,
@@ -288,19 +247,16 @@ export class ConfigBuilder {
       templateCid: templatesCid,
     };
 
-    console.log("config", finalConfig)
-
-    // Upload final config
+    // --- Upload final config to both Pinata + IPFS ---
     const configCid = await this.uploadToPinata(
       JSON.stringify(finalConfig),
       'config.json'
     );
-
-    const configCid2 = await add( JSON.stringify(finalConfig),'config.json','https://ipfs.transport-union.dev')
+    const configCid2 = await add(JSON.stringify(finalConfig), 'config.json', 'https://ipfs.transport-union.dev');
 
     console.log(`✅ Config uploaded: ${configCid} ${configCid2}`);
-
+    */
+    const configCid2 = "";
     return { config: finalConfig, cid: configCid2 };
   }
 }
-

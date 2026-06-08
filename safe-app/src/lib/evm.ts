@@ -4,26 +4,27 @@ declare global {
   const Lit: any;
 }
 
-const evmSetup = (contractAddress: string, abi: any, chainId: number) => {
+export const getRpcUrl = (chainId: number): string  => {
+    let rpc = '';
 
+    const apiKey = import.meta.env.VITE_DRPC_API_KEY || "default";
 
-  let provider;
-  const apiKey = import.meta.env.VITE_DRPC_API_KEY || 'default';
+    switch (chainId) {
+      case 1:
+        rpc = `https://lb.drpc.live/ethereum/${apiKey}`;
+        break;
+      case 8453:
+        rpc = `https://lb.drpc.live/base/${apiKey}`;
+        break;
+    }
 
-  switch(chainId) {
-
-    case 1:
-      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/ethereum/${apiKey}`);
-
-    break;
-
-    case 8453:
-      provider = new ethers.JsonRpcProvider(`https://lb.drpc.live/base/${apiKey}`);
-
-    break; 
-
+    return rpc;
   }
 
+const evmSetup = (contractAddress: string, abi: any, chainId: number) => {
+
+  const rpc = getRpcUrl(chainId)
+  const provider = new ethers.JsonRpcProvider(rpc);
 
   const contract = new ethers.Contract(
     contractAddress,
