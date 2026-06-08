@@ -1,5 +1,13 @@
 import { defineConfig } from 'vite'
 import { resolve } from 'path'
+import { config } from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+config({ path: path.resolve(__dirname, '../.env') });
+config(); 
 
 export default defineConfig({
   base: './',
