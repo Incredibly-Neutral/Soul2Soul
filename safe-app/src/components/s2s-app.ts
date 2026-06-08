@@ -5,7 +5,7 @@ import './s2s-licences-tab.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
-import { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import { S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
 
 export class S2SApp extends HTMLElement {
   private safeIntegration: SafeIntegration;

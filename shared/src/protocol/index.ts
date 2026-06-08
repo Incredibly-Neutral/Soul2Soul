@@ -1,9 +1,9 @@
 import { namehash as viemNamehash } from 'viem/ens';
 import { PublicClient, getContract, decodeFunctionResult } from 'viem';
-import { S2SProtocolInfo, PKP } from './types';
+import type { S2SProtocolInfo, PKP } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
 
-export { S2SProtocolInfo, PKP };
+export type { S2SProtocolInfo, PKP };
 
 // Viem public client type (equivalent to ethers Provider)
 export type ViemProvider = PublicClient;
