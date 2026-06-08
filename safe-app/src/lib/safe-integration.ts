@@ -4,6 +4,7 @@ import { Abi_S2SRecordsModule } from '../../../protocol/generated/abis/S2SRecord
  
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
+import { getRpcUrl } from './evm';
 
 export class SafeIntegration {
   private safeSdk: SafeAppsSDK | null = null;
@@ -45,7 +46,7 @@ export class SafeIntegration {
         threshold: safeData.threshold
       };
 
-      const rpcUrl = this.getRpcUrl(this.safeInfo!.chainId);
+      const rpcUrl = getRpcUrl(this.safeInfo!.chainId);
       const provider = new window.ethers.JsonRpcProvider(rpcUrl);
 
       // Find both modules
@@ -391,24 +392,10 @@ export class SafeIntegration {
     return this.publicationModule !== null;
   }
 
-  getRpcUrl(chainId: number): string {
-    let rpc = '';
-
-    switch (chainId) {
-      case 1:
-        rpc = `https://rpc.ankr.com/eth`;
-        break;
-      case 8453:
-        rpc = 'https://mainnet.base.org';
-        break;
-    }
-
-    return rpc;
-  }
 
   evmSetup(contractAddress: string, abi: any, chainId: number) {
     let provider;
-    const url = this.getRpcUrl(chainId);
+    const url = getRpcUrl(chainId);
 
     switch(chainId) {
       case 1:

@@ -4,10 +4,11 @@ import type { EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
 import { createPublicClient, http } from 'viem';
 import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
+import { getRpcUrl } from './evm';
 
 export class ProtocolIntegration {
   private safeSdk: SafeAppsSDK | null = null;
-  private protocolInfo!: S2SProtocolInfo;
+  public protocolInfo!: S2SProtocolInfo;
 
   async initialize(): Promise<S2SProtocolInfo | undefined> {
     try {
@@ -26,11 +27,11 @@ export class ProtocolIntegration {
         
         const providerL1 = createPublicClient({
           chain: undefined,
-          transport: http(this.getRpcUrl(1)),
+          transport: http(getRpcUrl(1)),
         });
         const providerL2 = createPublicClient({
           chain: undefined,
-          transport: http(this.getRpcUrl(8453)),
+          transport: http(getRpcUrl(8453)),
         });
 
         this.protocolInfo  = await getProtocolInfo(false, providerL1, providerL2);
@@ -43,26 +44,13 @@ export class ProtocolIntegration {
     }
   }
 
+  getInfo(): S2SProtocolInfo {
 
-  isConnected(): boolean {
-    return this.safeSdk !== null;
+      return this.protocolInfo; 
   }
 
 
-  getRpcUrl(chainId: number): string {
-    let rpc = '';
-
-    const apiKey = import.meta.env.VITE_DRPC_API_KEY || "default";
-
-    switch (chainId) {
-      case 1:
-        rpc = `https://lb.drpc.live/ethereum/${apiKey}`;
-        break;
-      case 8453:
-        rpc = `https://lb.drpc.live/base/${apiKey}`;
-        break;
-    }
-
-    return rpc;
+  isConnected(): boolean {
+    return this.safeSdk !== null;
   }
 }

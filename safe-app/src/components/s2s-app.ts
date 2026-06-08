@@ -316,6 +316,7 @@ export class S2SApp extends HTMLElement {
         if (this.safeIntegration.hasRecordsModule()) {
           const recordsTab = document.createElement('s2s-records-tab');
           (recordsTab as any).safeIntegration = this.safeIntegration;
+           (recordsTab as any).protocolIntegration = this.protocolIntegration;
           tabContent.appendChild(recordsTab);
         }
         break;

@@ -97,3 +97,4 @@ const fixEndpoint = (endpoint: string) => {
     .replace(/^(https?:\/\/)/, "") // Remove protocol if present
     .replace(/\/+$/, ""); // Remove trailing slashes
 };
+
