@@ -6,17 +6,14 @@ import { evmRead } from "../libs/evm";
 import { S2SBody, S2SPublicationConfig, S2SRipple, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
 import { Abi_S2SRecordsModule } from '../../../generated/abis/S2SRecordsModule.ts'
 
-export const getConfig = async (authorSafeAddress: string, configCid: string | undefined, configModule: string, dev: boolean) => {
+export const getConfig = async (configCid: string | undefined, configModule: string) => {
 
-      const _configCid = dev &&  typeof configCid !== "undefined" 
+      const _configCid = typeof configCid !== "undefined" 
         ? configCid 
         : await evmRead("BASE", configModule, Abi_S2SRecordsModule, "getRecord", ["config"]);
       
-      // console.log(_configCid)
       let config = await catFile(_configCid);
-      // console.log(config)
       return JSON.parse(config); 
-
 };
 
 

@@ -15,7 +15,7 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const action_name = 'single';
+const action_name = 'prep' // 'updateEvm'; // 'single'; //  ; // 
 const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
 const code = fs.readFileSync(actionPath,'utf-8')
 

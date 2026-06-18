@@ -11,7 +11,7 @@ import { renderHTML} from "../renderer/html.ctrlr";
 import { fetchById } from "../libs/lens.factory";
 import { extractSignerAddress } from "../libs/gates";
 
-async function main({ job, signature, authorSafeAddress, configCid, publication, debug, dev } : any) { 
+async function main({ job, signature, authorSafeAddress, configCid, publication} : any) { 
 
     const signerAddress = extractSignerAddress(ethers.utils.hashMessage("lit actions auth"), signature);
 
@@ -35,7 +35,7 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
     if (body == undefined || body == null || body.id == undefined) throw "Post content not found"
     logz.push(body)
 
-    let config = await getConfig(authorSafeAddress, configCid, configModule, dev);
+    let config = await getConfig(authorSafeAddress, configCid, configModule);
     logz.push(config)
 
     let t1 = Date.now();
@@ -120,7 +120,7 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
         let t5 = Date.now();
         logz.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
-        if (!dev) {
+
 
             const metadata: S2SContentInfo = {
                 author: {
@@ -144,7 +144,7 @@ async function main({ job, signature, authorSafeAddress, configCid, publication,
 
         
             html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
-        }
+ 
 
         console.log("HTML2", html.slice(0,200))
 

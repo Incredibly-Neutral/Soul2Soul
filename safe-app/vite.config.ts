@@ -22,7 +22,7 @@ export default defineConfig({
       output: {
         entryFileNames: '[name].js',
         chunkFileNames: '[name].js',
-        assetFileNames: '[name].[ext]'
+        assetFileNames: '[name][extname]'
       }
     },
     copyPublicDir: true,
@@ -76,7 +76,9 @@ export default defineConfig({
 
   esbuild: {
     target: 'es2020',
+    define: { global: 'globalThis' },
   },
+
 
   optimizeDeps: {
     include: ['ethers'],

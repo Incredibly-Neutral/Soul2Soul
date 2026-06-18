@@ -49,35 +49,34 @@ export class LitService {
           headers['X-Api-Key'] = apiKey;
       }
 
-      return withRetry<T>(
-          async (retrySignal) => {
-              const response = await fetch(`${this.baseUrl}${endpoint}`, {
-                  method,
-                  headers,
-                  body: body ? JSON.stringify(body) : undefined,
-                  signal: signal ?? retrySignal,
-              });
+      // return withRetry<T>(
+      //     async (retrySignal) => {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+      });
 
-              const text = await response.text();
-              let data: any;
+      const text = await response.text();
+      let data: any;
 
-              try {
-                  data = JSON.parse(text);
-              } catch {
-                  throw new Error(`Lit API returned non-JSON: ${response.status} ${text.slice(0, 200)}`);
-              }
+      try {
+          data = JSON.parse(text);
+      } catch {
+          throw new Error(`Lit API returned non-JSON: ${response.status} ${text.slice(0, 200)}`);
+      }
 
-              if (!response.ok) {
-                  console.log('[Lit API] Error response:', response.status, text);
-                  throw new Error(data.error ?? data.message ?? data.detail ?? `HTTP ${response.status}: ${text.slice(0, 500)}`);
-              }
+      if (!response.ok) {
+          console.log('[Lit API] Error response:', response.status, text);
+          throw new Error(data.error ?? data.message ?? data.detail ?? `HTTP ${response.status}: ${text.slice(0, 500)}`);
+      }
 
-              return data;
-          },
-          {
-              retries,
-          }
-      );
+      return data;
+          // },
+          // {
+          //     retries,
+          // }
+      //);
   }
 
   // ============================================================

@@ -39,6 +39,7 @@ export class ContentController implements IContentController {
         const feed = await service.getPublicationFeedAddress();
         const pubAddress = await service.getMultiSig();
 
+        console.log("FEED", feed)
         console.log("PUBLICATION", pubAddress)
         
         try {
@@ -97,8 +98,6 @@ export class ContentController implements IContentController {
                         "encrypted": "{}"
                     }
                 }
-
-                console.log("CI", contentItem)
 
                 if (contentId) {
                     console.log("updating");

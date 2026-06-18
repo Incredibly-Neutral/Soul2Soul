@@ -156,48 +156,48 @@ export class S2SConfigBuilder {
     console.log("existing config", config)
 
     // Initialize config sections
-    config.assets = config.assets || [];
-    config.stylesheets = config.stylesheets || [];
+    // config.assets = config.assets || [];
+    // config.stylesheets = config.stylesheets || [];
     config.templates = config.templates || [];
 
     // Process assets
-    console.log("Processing assets...");
-    const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
-    const existingAssetCids = config.assets.map((a: any) => a.cid);
+    // console.log("Processing assets...");
+    // const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
+    // const existingAssetCids = config.assets.map((a: any) => a.cid);
 
-    for (const asset of assetFiles) {
-      if (asset.type !== 'file') continue;
+    // for (const asset of assetFiles) {
+    //   if (asset.type !== 'file') continue;
 
-      const cid = await this.uploadFromUrl(asset.download_url);
+    //   const cid = await this.uploadFromUrl(asset.download_url);
       
-      if (!existingAssetCids.includes(cid)) {
-        const existingIndex = config.assets.findIndex((a: any) => a.path === asset.path);
+    //   if (!existingAssetCids.includes(cid)) {
+    //     const existingIndex = config.assets.findIndex((a: any) => a.path === asset.path);
         
-        if (existingIndex !== -1) {
-          config.assets[existingIndex].cid = cid;
-        } else {
-          config.assets.push({ path: asset.path, cid });
-        }
-        console.log(`✅ Asset uploaded: ${asset.path} -> ${cid}`);
-      }
-    }
+    //     if (existingIndex !== -1) {
+    //       config.assets[existingIndex].cid = cid;
+    //     } else {
+    //       config.assets.push({ path: asset.path, cid });
+    //     }
+    //     console.log(`✅ Asset uploaded: ${asset.path} -> ${cid}`);
+    //   }
+    // }
 
     // Process stylesheets
-    console.log("Processing stylesheets...");
-    const cssFiles = (await this.getAllFilesRecursive(github_account, repo, branch, 'css'))
-      .filter(file => file.path.endsWith('.css'));
+    // console.log("Processing stylesheets...");
+    // const cssFiles = (await this.getAllFilesRecursive(github_account, repo, branch, 'css'))
+    //   .filter(file => file.path.endsWith('.css'));
 
-    for (const cssFile of cssFiles) {
-      const cid = await this.uploadFromUrl(cssFile.download_url);
-      const existingIndex = config.stylesheets.findIndex((s: any) => s.path === cssFile.path);
+    // for (const cssFile of cssFiles) {
+    //   const cid = await this.uploadFromUrl(cssFile.download_url);
+    //   const existingIndex = config.stylesheets.findIndex((s: any) => s.path === cssFile.path);
       
-      if (existingIndex !== -1) {
-        config.stylesheets[existingIndex].cid = cid;
-      } else {
-        config.stylesheets.push({ path: cssFile.path, cid });
-      }
-      console.log(`✅ Stylesheet uploaded: ${cssFile.path} -> ${cid}`);
-    }
+    //   if (existingIndex !== -1) {
+    //     config.stylesheets[existingIndex].cid = cid;
+    //   } else {
+    //     config.stylesheets.push({ path: cssFile.path, cid });
+    //   }
+    //   console.log(`✅ Stylesheet uploaded: ${cssFile.path} -> ${cid}`);
+    // }
 
     // Process templates
     console.log("Processing templates...");
@@ -211,12 +211,12 @@ export class S2SConfigBuilder {
       content = content.replace(/\\([^\\])/g, '$1');
 
       // Insert stylesheet link for head.handlebars
-      if (template.path.includes('head.handlebars') && config.stylesheets.length > 0) {
-        content = this.insertStylesheetLink(content, config.stylesheets[0].cid);
-      }
+      // if (template.path.includes('head.handlebars') && config.stylesheets.length > 0) {
+      //   content = this.insertStylesheetLink(content, config.stylesheets[0].cid);
+      // }
 
       // Insert asset image CIDs
-      content = this.insertAssetImageCids(content, config.assets);
+      // content = this.insertAssetImageCids(content, config.assets);
 
       const cid = await this.ipfs.addToKubo(content, template.path.split('/').pop() || 'template');
       
@@ -251,14 +251,11 @@ export class S2SConfigBuilder {
 
     // Create final config
     const finalConfig: S2SPublicationConfig = {
-      assets: config.assets,
-      assetsGateway: this.pinataGateway,
+      assetsCid: "",
       contract: contractAddress,
       dataGateway: this.ipfsGateway,
-      renderAction: renderActionCid,
       mapping,
       name: publicationName,
-      stylesheets: config.stylesheets,
       templateCid: templatesCid,
     };
 

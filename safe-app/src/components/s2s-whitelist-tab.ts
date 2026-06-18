@@ -1,5 +1,9 @@
 // s2s-whitelist-tab.ts
+import { tableStyles } from '@/styles/table-styles.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
+import { buttonStyles } from '@/styles/button-styles.js';
+import { sectionStyles } from '@/styles/section-styles.js';
+import { typograhyStyles } from '@/styles/typography-styles.js';
 
 export class S2SWhitelistTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -11,6 +15,7 @@ export class S2SWhitelistTab extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles, sectionStyles];
   }
 
   async connectedCallback() {
@@ -195,354 +200,172 @@ export class S2SWhitelistTab extends HTMLElement {
   }
 
   private render() {
-    if (!this.shadowRoot) return;
+  if (!this.shadowRoot) return;
 
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          padding: 2rem 0;
-        }
+  this.shadowRoot.innerHTML = `
+    <style>
+      :host {
+        display: block;
+        padding: 2rem 0;
+        background: var(--gray-900);
+      }
 
-        .section {
-          margin-bottom: 3rem;
-        }
+      .section {
+        margin-bottom: 3rem;
+      }
 
-        .section-title {
-          font-size: 1.5rem;
-          font-weight: 600;
-          color: #000;
-          margin: 0 0 1rem 0;
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
+      .add-form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
 
-        .section-description {
-          color: #000;
-          margin-bottom: 1.5rem;
-        }
+      @media (max-width: 768px) {
+        .add-form { grid-template-columns: 1fr; }
+      }
 
-        .subsection-tabs {
-          display: flex;
-          gap: 0.5rem;
-          margin-bottom: 2rem;
-          border-bottom: 1px solid #000;
-        }
+      .input {
+        padding: 0.75rem 1rem;
+        border: 1px solid var(--gray-200);
+        background: var(--gray-50);
+        border-radius: 0.5rem;
+        font-size: 1rem;
+        font-family: 'Monaco', 'Menlo', monospace;
+      }
 
-        .subsection-tab {
-          padding: 0.75rem 1.5rem;
-          border: none;
-          background: transparent;
-          color: #000;
-          font-size: 1rem;
-          font-weight: 500;
-          cursor: pointer;
-          border-bottom: 2px solid transparent;
-          margin-bottom: -2px;
-          transition: all 0.2s;
-        }
+      .input:focus {
+        outline: none;
+        border-color: var(--color-yellow);
+      }
 
-        .subsection-tab:hover {
-          color: #111827;
-        }
+      .button.thin {
+        padding: 0.25rem .5rem;
+      }
 
-        .subsection-tab.active {
-          color: #5bba9d;
-          border-bottom-color: #5bba9d;
-        }
+      .table {
+        grid-template-columns: 1fr auto;
+      }
 
-        .add-form,
-        .check-form {
-          display: grid;
-          gap: 1rem;
-          background: #f9fafb;
-          padding: 1.5rem;
-          border-radius: 0.5rem;
-          border: 1px solid #e5e7eb;
-          margin-bottom: 2rem;
-        }
+      .check-form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
 
-        .add-form {
-          grid-template-columns: 1fr auto;
-        }
+      @media (max-width: 768px) {
+        .check-form { grid-template-columns: 1fr; }
+      }
 
-        .check-form {
-          grid-template-columns: 1fr auto;
-        }
+      .info-box {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 2rem;
+        color: #1e40af;
+        font-size: 0.875rem;
+      }
 
-        @media (max-width: 768px) {
-          .add-form,
-          .check-form {
-            grid-template-columns: 1fr;
-          }
-        }
+      .empty-state {
+        text-align: center;
+        padding: 3rem;
+        color: #6b7280;
+      }
 
-        .input {
-          padding: 0.75rem 1rem;
-          border: 1px solid #d1d5db;
-          border-radius: 0.5rem;
-          font-size: 1rem;
-          font-family: 'Monaco', 'Menlo', monospace;
-          transition: border-color 0.2s, box-shadow 0.2s;
-        }
+    </style>
 
-        .input:focus {
-          outline: none;
-          border-color: #5bba9d;
-          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
+    ${this.loading ? `
+      <div class="loading"><p>Loading whitelists...</p></div>
+    ` : `
 
-        .button {
-          background: #5bba9d;
-          color: white;
-          border: none;
-          padding: 0.75rem 1.5rem;
-          border-radius: 0.5rem;
-          cursor: pointer;
-          font-size: 1rem;
-          font-weight: 500;
-          transition: background-color 0.2s, transform 0.1s;
-          white-space: nowrap;
-        }
+      <!-- Check Permission -->
+      <div class="section">
+      
+     
 
-        .button:hover {
-          background: #5bba9d;
-          transform: translateY(-1px);
-        }
-
-        .button:active {
-          transform: translateY(0);
-        }
-
-        .button-danger {
-          background: #ef4444;
-        }
-
-        .button-danger:hover {
-          background: #dc2626;
-        }
-
-        .whitelist {
-          display: grid;
-          gap: 1rem;
-        }
-
-        .whitelist-item {
-          background: #f9fafb;
-          border: 1px solid #e5e7eb;
-          border-radius: 0.5rem;
-          padding: 1rem 1.5rem;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .address {
-          font-family: 'Monaco', 'Menlo', monospace;
-          font-size: 0.875rem;
-          color: #111827;
-          word-break: break-all;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 1rem;
-          margin-bottom: 2rem;
-        }
-
-        .stat-card {
-          background: #f9fafb;
-          border: 1px solid #e5e7eb;
-          border-radius: 0.5rem;
-          padding: 1.5rem;
-        }
-
-        .stat-label {
-          font-size: 0.875rem;
-          color: #6b7280;
-          margin-bottom: 0.5rem;
-        }
-
-        .stat-value {
-          font-size: 2rem;
-          font-weight: 700;
-          color: #111827;
-        }
-
-        .empty-state {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .empty-icon {
-          font-size: 3rem;
-          margin-bottom: 1rem;
-        }
-
-        .loading {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .info-box {
-          background: #eff6ff;
-          border: 1px solid #bfdbfe;
-          border-radius: 0.5rem;
-          padding: 1rem;
-          margin-bottom: 2rem;
-          color: #1e40af;
-          font-size: 0.875rem;
-        }
-      </style>
-
-      ${this.loading ? `
-        <div class="loading">
-          <p>Loading whitelists...</p>
-        </div>
-      ` : `
-        <!-- Check Permission -->
-        <div class="section">
-          <h2 class="section-title">🔍 Check Publishing Permission</h2>
-          <p class="section-description">Check if an address has permission to publish</p>
-          
-          <div class="check-form">
-            <input 
-              type="text" 
-              class="input" 
-              placeholder="Address (0x...)"
-              id="check-address"
-            />
-            <button class="button" id="check-btn">
-              Check Permission
-            </button>
-          </div>
+      <!-- Authors -->
+      <div class="section">
+        <div class="list_header">
+          <h2 class="section-title">Authors (${this.authors.length})</h2>
         </div>
 
-        <!-- Stats -->
-        <div class="stats">
-          <div class="stat-card">
-            <div class="stat-label">Whitelisted Authors</div>
-            <div class="stat-value">${this.authors.length}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Whitelisted Devs</div>
-            <div class="stat-value">${this.devs.length}</div>
-          </div>
-        </div>
-
-        <!-- Info -->
-        <div class="info-box">
-          ℹ️ <strong>Authors</strong> can offer deals and publish content. <strong>Devs</strong> can update the entire publication (including staging environments).
-        </div>
-
-        <!-- Tabs -->
-        <div class="subsection-tabs">
-          <button 
-            class="subsection-tab ${this.activeSection === 'authors' ? 'active' : ''}"
-            id="authors-tab"
-          >
-            ✍️ Authors (${this.authors.length})
-          </button>
-          <button 
-            class="subsection-tab ${this.activeSection === 'devs' ? 'active' : ''}"
-            id="devs-tab"
-          >
-            👨‍💻 Developers (${this.devs.length})
-          </button>
-        </div>
-
-        <!-- Authors Section -->
-        ${this.activeSection === 'authors' ? `
-          <div class="section">
-            <h3 class="section-title">➕ Add Author</h3>
-            <div class="add-form">
-              <input 
-                type="text" 
-                class="input" 
-                placeholder="Author Address (0x...)"
-                id="add-author-input"
-              />
-              <button class="button" id="add-author-btn">
-                Add Author
-              </button>
-            </div>
-
-            <h3 class="section-title">Whitelisted Authors</h3>
-            ${this.authors.length > 0 ? `
-              <div class="whitelist">
-                ${this.authors.map(author => `
-                  <div class="whitelist-item">
-                    <div class="address">${author}</div>
-                    <button 
-                      class="button button-danger" 
-                      data-action="remove-author"
-                      data-address="${author}"
-                    >
-                      ✗ Remove
-                    </button>
-                  </div>
-                `).join('')}
+        ${this.authors.length > 0 ? `
+          <div class="table">
+            <div class="table-header">Address</div>
+            <div class="table-header"></div>
+            ${this.authors.map(author => `
+              <div class="table-row">
+                <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                  ${author}
+                </div>
+                <div class="table-cell">
+                  <button class="button button-danger thin" data-action="remove-author" data-address="${author}">
+                    ✗ Remove
+                  </button>
+                </div>
               </div>
-            ` : `
-              <div class="empty-state">
-                <div class="empty-icon">✍️</div>
-                <p>No authors whitelisted yet</p>
-              </div>
-            `}
+            `).join('')}
           </div>
-        ` : ''}
-
-        <!-- Devs Section -->
-        ${this.activeSection === 'devs' ? `
-          <div class="section">
-            <h3 class="section-title">➕ Add Developer</h3>
-            <div class="add-form">
-              <input 
-                type="text" 
-                class="input" 
-                placeholder="Developer Address (0x...)"
-                id="add-dev-input"
-              />
-              <button class="button" id="add-dev-btn">
-                Add Developer
-              </button>
-            </div>
-
-            <h3 class="section-title">Whitelisted Developers</h3>
-            ${this.devs.length > 0 ? `
-              <div class="whitelist">
-                ${this.devs.map(dev => `
-                  <div class="whitelist-item">
-                    <div class="address">${dev}</div>
-                    <button 
-                      class="button button-danger" 
-                      data-action="remove-dev"
-                      data-address="${dev}"
-                    >
-                      ✗ Remove
-                    </button>
-                  </div>
-                `).join('')}
-              </div>
-            ` : `
-              <div class="empty-state">
-                <div class="empty-icon">👨‍💻</div>
-                <p>No developers whitelisted yet</p>
-              </div>
-            `}
+        ` : `
+          <div class="empty-state">
+            <div>✍️</div>
+            <p>No authors whitelisted yet</p>
           </div>
-        ` : ''}
-      `}
-    `;
+        `}
+        <div class="add-form">
+          <input type="text" class="input" placeholder="Author Address (0x...)" id="add-author-input" />
+          <button class="button" id="add-author-btn">Add Author</button>
+        </div>
+      </div>
 
-    if (!this.loading) {
-      this.attachEventListeners();
-    }
+      <!-- Devs -->
+      <div class="section">
+        <div class="list_header">
+          <h2 class="section-title">Developers (${this.devs.length})</h2>
+        </div>
+        ${this.devs.length > 0 ? `
+          <div class="table">
+            <div class="table-header">Address</div>
+            <div class="table-header"></div>
+            ${this.devs.map(dev => `
+              <div class="table-row">
+                <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                  ${dev}
+                </div>
+                <div class="table-cell">
+                  <button class="button button-danger thin" data-action="remove-dev" data-address="${dev}">
+                    ✗ Remove
+                  </button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <div class="empty-state">
+            <div>👨‍💻</div>
+            <p>No developers whitelisted yet</p>
+          </div>
+        `}
+
+         <div class="add-form">
+          <input type="text" class="input" placeholder="Developer Address (0x...)" id="add-dev-input" />
+          <button class="button" id="add-dev-btn">Add Developer</button>
+        </div>
+        <p class="section-description">Check if an address has permission to publish</p>
+        <div class="check-form">
+          <input type="text" class="input" placeholder="Address (0x...)" id="check-address" />
+          <button class="button" id="check-btn">Check</button>
+        </div>
+      </div>
+    `}
+  `;
+
+  if (!this.loading) {
+    this.attachEventListeners();
   }
+}
 
   private attachEventListeners() {
     // Tab switching

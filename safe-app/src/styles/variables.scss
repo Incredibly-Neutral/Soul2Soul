@@ -1,5 +1,24 @@
 :root {
   /* Colors */
+
+  --color-yellow: #eeb51d;
+  --color-green:  #5ba82f;
+  --color-blue:   #2d8fc4;
+  --color-purple: #8e54b8;
+  --color-red:    #db4233;
+
+  /* Warm grayscale (light → dark) */
+  --gray-50:  #f7f4ed;
+  --gray-100: #ece7db;
+  --gray-200: #d8d0c0;
+  --gray-300: #bdb3a0;
+  --gray-400: #9c9080;
+  --gray-500: #7c7163;
+  --gray-600: #5f564b;
+  --gray-700: #463f37;
+  --gray-800: #2e2925;
+  --gray-900: #1a1714;
+
   --primary-color: #3b82f6;
   --primary-hover: #2563eb;
   --primary-shadow: rgba(59, 130, 246, 0.1);
@@ -57,6 +76,8 @@
   /* Typography */
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --font-mono: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+
+  --color-too-dark: #777;
 }
 
 /* Dark mode */

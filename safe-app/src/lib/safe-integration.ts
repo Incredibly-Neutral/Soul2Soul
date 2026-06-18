@@ -4,12 +4,13 @@ import { Abi_S2SRecordsModule } from '../../../protocol/generated/abis/S2SRecord
  
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
+import { SafeAppProvider } from '@safe-global/safe-apps-provider';
 import { getRpcUrl } from './evm';
 
 export class SafeIntegration {
   private safeSdk: SafeAppsSDK | null = null;
-  private recordsModule: EthersContract | null = null;
-  private publicationModule: any | null = null;
+  public recordsModule: EthersContract | null = null;
+  public publicationModule: any | null = null;
   private safeInfo: SafeInfo = { 
     safeAddress: '', 
     s2sRecords: '', 
@@ -235,16 +236,12 @@ export class SafeIntegration {
       try {
         const contentIdsProxy = await this.publicationModule.getAllContentIds();
         const contentIds = Array.from(contentIdsProxy);
-
-        console.log("contentIds", contentIds);
-        
+      
         const [licenseStatuses, pendingStatuses] = await Promise.all([
           this.publicationModule.isLicensedBulk(contentIds),
           Promise.all(contentIdsProxy.map((id: string) => this.publicationModule.hasPendingLicense(id)))
         ]);
 
-        console.log("statuses", licenseStatuses, pendingStatuses);
-        
         // Get active licenses with authors
         const activeContentIds = contentIdsProxy.filter((_: string, i: number) => licenseStatuses[i]);
         const activeAuthors = await Promise.all(
@@ -270,6 +267,8 @@ export class SafeIntegration {
         }));
           
         return { activeLicenses, pendingLicenses };
+        
+        console.log(activeLicenses)
         
       } catch (error) {
         console.error('Error getting all licenses:', error);
@@ -423,5 +422,12 @@ export class SafeIntegration {
   async evmRead(chainId: number, l2records: string, abi: any, method: string, args: any[]) { 
     const { provider, contract } = this.evmSetup(l2records, abi, chainId);
     return await contract[method](...args);
+  }
+
+  async signWithSigner (message: string): Promise<string>{
+    const provider = new window.ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    console.log("signer address", await signer.getAddress());
+    return await signer.signMessage(message);
   }
 }

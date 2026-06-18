@@ -299,7 +299,7 @@ export class LensService {
 
         let { session, client, wallet } = await this.auth("builder");
 
-         const result = await createFeed(client, {
+        const result = await createFeed(client, {
             admins: [evmAddress(safeAddress)],
             metadataUri: uri(metadataUri),
         })
