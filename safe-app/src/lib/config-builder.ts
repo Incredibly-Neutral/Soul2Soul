@@ -6,10 +6,6 @@ import { evmRead } from "./evm";
 import { ethers } from "ethers";
 import { prepareTempMfs, kuboMfsList, kuboMfsPost, MFS_TIMEOUTS, IPFS_URL, kuboMfsStat } from "./ipfs-fs.factory";
 
-// Kubo IPFS URL for MFS operations
-
-
-
 interface GitHubFile {
   path: string;
   url: string;
@@ -18,18 +14,15 @@ interface GitHubFile {
 }
 
 export class ConfigBuilder {
-  private ensAddress: string;
   private pinataJWT: string;
   private pinataGateway: string;
   private ipfsGateway: string;
 
   constructor(
-    ensRecords: string,
     pinataJWT: string,
     pinataGateway: string = "https://neutralpress.mypinata.cloud",
     ipfsGateway: string = "https://ipfs.transport-union.dev"
   ) {
-    this.ensAddress = ensRecords;
     this.pinataJWT = pinataJWT;
     this.pinataGateway = pinataGateway;
     this.ipfsGateway = ipfsGateway;
@@ -50,16 +43,21 @@ export class ConfigBuilder {
 
   // Fetch files from GitHub directory
   async getGitHubFiles(owner: string, repo: string, branch: string, path: string = ""): Promise<GitHubFile[]> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.statusText}`);
+      const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github.v3+json',
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub API error: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
     }
-    
-    const data = await response.json();
-    return Array.isArray(data) ? data : [];
-  }
 
   async getAllFilesRecursive(owner: string, repo: string, branch: string, path: string = ""): Promise<GitHubFile[]> {
     const files = await this.getGitHubFiles(owner, repo, branch, path);
@@ -116,7 +114,7 @@ export class ConfigBuilder {
     });
 
     if (!response.ok) {
-      throw new Error(`Pinata upload failed: ${response.statusText}`);
+      throw new Error(`Pinata upload failed: ${filename} ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -166,7 +164,9 @@ export class ConfigBuilder {
     branch: string,
     publicationName: string,
     contractAddress: string,
+    assetsCid: string,
     existingConfigCid?: string
+    
   ): Promise<{ config: S2SPublicationConfig; cid: string }> {
     // Load existing config or create new one
     let config: any = {};
@@ -179,11 +179,7 @@ export class ConfigBuilder {
       }
     }
 
-    console.log("existing config", config);
-
     // Initialize config sections
-    config.assets = config.assets || [];
-    config.stylesheets = config.stylesheets || [];
     config.templates = config.templates || [];
 
     // --- Process templates (from templates/ directory in GitHub) ---
@@ -198,12 +194,12 @@ export class ConfigBuilder {
       content = content.replace(/\\([^\\])/g, '$1');
 
       // Insert stylesheet link for head.handlebars
-      if (template.path.includes('head.handlebars') && config.stylesheets.length > 0) {
-        content = this.insertStylesheetLink(content, config.stylesheets[0].cid);
-      }
+      // if (template.path.includes('head.handlebars') && config.stylesheets.length > 0) {
+      //   content = this.insertStylesheetLink(content, config.stylesheets[0].cid);
+      // }
 
       // Insert asset image CIDs
-      content = this.insertAssetImageCids(content, config.assets);
+      // content = this.insertAssetImageCids(content, config.assets);
 
       const cid = await add(content, template.path.split('/').pop() || 'template', 'https://ipfs.transport-union.dev');
       
@@ -231,19 +227,13 @@ export class ConfigBuilder {
     const mappingContent = await this.fetchGitHubFile(mappingUrl);
     const mapping = JSON.parse(mappingContent);
 
-    const renderActionUrl = `https://raw.githubusercontent.com/${github_account}/${repo}/${commitSHA}/renderer/dist/main.js`;
-    const renderActionCid = await this.uploadFromUrl(renderActionUrl);
-
     // --- Build final config ---
     const finalConfig: S2SPublicationConfig = {
-      assets: config.assets,
-      assetsGateway: this.pinataGateway,
+      assetsCid, 
       contract: contractAddress,
       dataGateway: this.ipfsGateway,
-      renderAction: renderActionCid,
       mapping,
       name: publicationName,
-      stylesheets: config.stylesheets,
       templateCid: templatesCid,
     };
 
@@ -255,8 +245,7 @@ export class ConfigBuilder {
     const configCid2 = await add(JSON.stringify(finalConfig), 'config.json', 'https://ipfs.transport-union.dev');
 
     console.log(`✅ Config uploaded: ${configCid} ${configCid2}`);
-    */
-    const configCid2 = "";
+
     return { config: finalConfig, cid: configCid2 };
   }
 }

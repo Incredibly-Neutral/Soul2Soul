@@ -25,7 +25,11 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@lens-chain/storage-client": "^1.0.6",
+    "@lens-protocol/client": "0.0.0-canary-20250430134539",
+    "@lens-protocol/metadata": "^2.1.0",
     "ethers": "^5.8.0",
-    "viem": "^2.48.0"
+    "viem": "^2.48.0",
+    "zod": "^3.24.0"
   }
 }

@@ -1,5 +1,5 @@
-@import './variables.css';
-@import './components.css';
+@use './variables'; // Vite resolves without extension
+@use './components';
 
 /* Global styles */
 * {
@@ -10,9 +10,9 @@ body {
   margin: 0;
   padding: 0;
   font-family: var(--font-family);
-  background-color: var(--bg-secondary);
+  background-color: var(--gray-900);
   line-height: 1.6;
-  color: var(--text-primary);
+  color: var(--gray-50);
 }
 
 html {
@@ -39,8 +39,8 @@ html {
 .spinner {
   width: 3rem;
   height: 3rem;
-  border: 3px solid var(--border-color);
-  border-top: 3px solid var(--primary-color);
+  border: 3px solid var(--color-yellow);
+  border-top: 3px solid var(--color-yellow);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }

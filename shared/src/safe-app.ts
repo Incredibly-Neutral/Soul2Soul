@@ -5,3 +5,5 @@ export type { S2SProtocolInfo, PKP } from './protocol/types';
 export { getProtocolInfo } from './protocol/index';
 export { ENS_NAMEWRAPPER } from './protocol/constants';
 export type { S2SPublicationConfig } from './publication';
+export { fetchById } from './lens';
+export { LitService } from './lit';

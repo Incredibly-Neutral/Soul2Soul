@@ -207,15 +207,21 @@ export class MainController implements IMainController {
 
 		if (file != null) {
 			try {
-				let { streamId }: any = await this.content.parseNote(file);
+				console.log(0)
+				let { contentId }: any = await this.content.parseNote(file);
 			
 				if (this.publications[subdomain].dealsModule == undefined) {
 					await this.publications[subdomain].init();
 				}
 
-				const dealExists = await this.publications[subdomain].isLicensed(streamId); 
+				console.log("S", contentId)
+				const dealExists = await this.publications[subdomain].isLicensed(contentId); 
+				console.log("DE", dealExists)
+
 				if (dealExists) {
-					this.publications[subdomain].revokeLicense(streamId);
+					console.log(1)
+					const revokeResult = await this.publications[subdomain].revokeLicense(contentId);
+					console.log("RR", revokeResult)
 				}
 
 			} catch (error) {
@@ -246,7 +252,6 @@ export class MainController implements IMainController {
 		let license;
 		const subdomain = publication.split(".")[0];
 		const service = await this.getInitializedService(subdomain);
-		// const lit_usage_key = this.oxo.settings.litUsageKey;
 
 		this.notice = new Notice('1/5 storing item ...', 0);
 		
@@ -301,11 +306,13 @@ export class MainController implements IMainController {
 
 		try {
 
-			this.notice.setMessage('4/5 Rendering ...');
+			if (this.notice) this.notice.setMessage('4/5 Rendering ...');
 
-			const res: any = await renderwithLitActions(this.oxo.ctrlr, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, true, !publish, false)
+			    // move outside
+			const signature = await this.oxo.ctrlr.account['BASE'].signMessage('lit actions auth');
+			const res: any = await renderwithLitActions(false, this.oxo.ctrlr.lit, signature, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, undefined)
 
-			this.notice.setMessage('5/5 Pinning ...');
+			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
 
 			if(res.cid) {
 
@@ -316,7 +323,7 @@ export class MainController implements IMainController {
 
 			// do i want to unpin deprecated html ? 
 
-			this.notice.hide();
+			if (this.notice) this.notice.hide();
 
 			const _link = (text: string, url: string) => {
 

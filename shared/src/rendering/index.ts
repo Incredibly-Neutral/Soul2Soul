@@ -4,30 +4,38 @@ import * as ethers from 'ethers';
 (global as any).ethers = ethers;
 
 import { NumberAttributeSchema } from '@lens-protocol/metadata';
+import { LitService } from '../lit';
+import { validatePrepInput, validatePrepOutput } from './action-io';
 
 const gateway = 'https://ipfs.transport-union.dev';
 
 export const renderwithLitActions =
   async (
-    oxoCtrlr: any,
+    dev: boolean,
+    lit: LitService,
+    signature: string, // move outside
     litUsageKey: string,
     protocolInfo: S2SProtocolInfo,
     notice: any,
     authorSafeAddress: string,
     publication: string,
     contentIds: string[],
-    update: boolean,
-    dev: boolean,
-    debug: boolean,
     configCid?: string,
+    
   ) => {
-    const signature = await oxoCtrlr.account['BASE'].signMessage(
-      'lit actions auth',
-    );
+
 
     // ====================== Prep (local, no Lit cost) ======================
     if (notice) notice.setMessage('prepping render ...');
-    else console.log('prepping render');
+    else console.log('prepping render, Dev is ', dev);
+
+    // Build inputs once, validate before any network call
+    const prepInputs = {
+      publication:'kip',
+      configCid: configCid ?? undefined,
+      contentIds,
+    };
+    validatePrepInput(prepInputs);
 
     const prepResult: any = await fetch(
       `https://run.transport-union.dev/run`,
@@ -36,23 +44,28 @@ export const renderwithLitActions =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cid: protocolInfo.litActionPrep,
-          inputs: {
-            protocolInfo,
-            authorSafeAddress,
-            publication,
-            configCid: configCid || undefined,
-            contentIds,
-            dev,
-          },
+          inputs: prepInputs,
         }),
       },
-    ).then(r => r.json());
+    ).then(async r => {
+      
+      const text = await r.text();
+      console.log(text)
+      try {
 
-    if (!prepResult.success) {
-      throw new Error(`Prep action failed: ${prepResult.error}`);
-    }
+        return JSON.parse(text);
+      } catch {
+        return { ok: false, action: 'prep', error: `Server returned ${r.status}: ${text.slice(0,200)}` };
+      }
+    });
 
-    let jobs = prepResult.response?.jobs;
+    if (!prepResult.success) throw new Error(`runner: ${prepResult.error ?? 'transport failure'}`);
+    if (!prepResult.response.ok) throw new Error(`[${prepResult.response.action}] ${prepResult.response.error}`);
+
+    // Validate prep output shape before consuming jobs
+    const validated = validatePrepOutput(prepResult.response);
+    if (!validated.ok) throw new Error(`[${validated.action}] ${validated.error}`);
+    let jobs = validated.data.jobs;
     console.log(jobs);
 
     // ====================== Single actions (Lit) ======================
@@ -69,9 +82,7 @@ export const renderwithLitActions =
           authorSafeAddress,
           configCid,
           publication,
-          job,
-          debug,
-          dev,
+          job
         };
 
         try {
@@ -100,7 +111,7 @@ export const renderwithLitActions =
             );
             const singleCode = await singleResp.text();
 
-            result = await oxoCtrlr.lit.executeAction(
+            result = await lit.executeAction(
               singleCode,
               inputs,
               litUsageKey,
@@ -124,8 +135,6 @@ export const renderwithLitActions =
         }
       }),
     );
-
-    console.log(results);
 
     const successful = results.filter((r: any) => r.response?.success);
     const failed = results.filter((r: any) => !r.response?.success);
@@ -156,7 +165,7 @@ export const renderwithLitActions =
       authorSafeAddress,
       publication,
       jobs: renderedJobs,
-      dev,
+      dev
     };
 
     let updateResult: any;
@@ -181,13 +190,12 @@ export const renderwithLitActions =
       // Production: Lit actions on-chain
 
       if (notice) notice.setMessage('publishing ...');
-
-
+      
       const updateCode = await fetch(
         `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionRootUpdate}`,
       ).then(r => r.text());
 
-      const raw = await oxoCtrlr.lit.executeAction(
+      const raw: any = await lit.executeAction(
         updateCode,
         updateInputs,
         litUsageKey,
@@ -196,13 +204,6 @@ export const renderwithLitActions =
     }
 
     console.log('UR', updateResult);
-
-    if (!updateResult?.response?.success) {
-      console.log("fail")
-     // throw new Error(`Merged action failed: ${JSON.stringify(updateResult?.response)}`);
-    }
-
-
 
     return {
       success: true,

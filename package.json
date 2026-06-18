@@ -20,5 +20,8 @@
         "overrides": {
             "@ensdomains/buffer": "npm:buffer@^6.0.3"
         }
+    },
+    "dependencies": {
+        "repomix": "^1.14.1"
     }
 }

@@ -6,6 +6,7 @@ import { getDomainOwnerAndModules } from "../libs/ens.factory";
 import { contenthashToIPFS } from "../libs/ipfs.factory";
 import { fetchWithTimeout } from "../libs/helpers";
 import { canPublish, extractSignerAddress } from "../libs/gates";
+import { getConfig } from "../single/config.ctrl";
 
 
 const IPFS_URL = "https://ipfs.transport-union.dev";
@@ -54,6 +55,8 @@ export const mergedMain = async (
   if (!protocolInfo?.pkp) {
     return { success: false, response: "Failed to fetch protocol info", logz };
   }
+
+  const config = await getConfig(undefined, configModule);
 
   const node = ethers.utils.namehash(publication);
   logz.push(`node: ${node}`);
@@ -144,6 +147,36 @@ export const mergedMain = async (
     }),
   );
 
+   // Copy assets into /assets
+  if (config.assetsCid) {
+    const assetsDestPath = `${mfsPath}/assets`;
+    logz.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
+
+    // Remove existing /assets if present
+    try {
+      await fetchWithTimeout(
+        `${IPFS_URL}/api/v0/files/stat?arg=${encodeURIComponent(assetsDestPath)}`,
+        { method: "POST" },
+        TIMEOUTS.stat,
+      );
+      await fetchWithTimeout(
+        `${IPFS_URL}/api/v0/files/rm?arg=${encodeURIComponent(assetsDestPath)}&recursive=true`,
+        { method: "POST" },
+        TIMEOUTS.rm,
+      ).catch(e => logz.push(`warn: rm assets failed: ${e instanceof Error ? e.message : e}`));
+    } catch {}
+    const assetsUrl = `${IPFS_URL}/api/v0/files/cp?` +
+    `arg=/ipfs/${encodeURIComponent(config.assetsCid)}` +  // no /assets suffix needed
+    `&arg=${encodeURIComponent(assetsDestPath)}` +
+    `&parents=true&flush=false`;
+    const assetsRes = await fetchWithTimeout(assetsUrl, { method: "POST" }, TIMEOUTS.cpFile);
+    if (!assetsRes.ok) {
+      const text = await assetsRes.text();
+      throw new Error(`Failed to cp assets: ${text}`);
+    }
+    logz.push(`✓ assets (${config.assetsCid.slice(0, 9)})`);
+  }
+
   // Wrap in try/finally so temp always cleans up (even on evmWrite failure)
   newRootCid = "";
 
@@ -163,8 +196,8 @@ export const mergedMain = async (
       TIMEOUTS.pinAdd,
     );
 
-
     if (!dev) {
+
       const encoded = toHexString(newRootCid);
       logz.push(`writing ${encoded}`);
       const result = await evmWrite(
@@ -177,9 +210,11 @@ export const mergedMain = async (
         true,
       );
       logz.push(JSON.stringify(result));
+
     }
 
     return { success: true, cid: newRootCid, logz };
+    
   } finally {
     // Always clean up temp MFS path
 

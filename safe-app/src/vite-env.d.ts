@@ -5,6 +5,9 @@ declare const __BUILD_DATE__: string;
 
 interface ImportMetaEnv {
   readonly VITE_DRPC_API_KEY: string
+  readonly VITE_LIT_USAGE_KEY: string
+  readonly VITE_GITHUB_TOKEN: string
+  readonly VITE_PINATA_JWT: string
 }
 
 interface ImportMeta {

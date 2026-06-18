@@ -55,3 +55,17 @@ export interface SaveRecordEvent extends CustomEvent {
 export interface CancelEditEvent extends CustomEvent {
   detail: {};
 }
+
+export interface License {
+  contentId: string, 
+  author: string, 
+  status: 'active' | 'pending',
+  creationDate?: Date,
+  modifiedDate?: Date,
+  postType?: string,
+  encryption?: boolean,
+  title?: string,
+  position?: number,
+  tags?: string[]
+}
+

@@ -243,7 +243,7 @@ contract S2SPublicationModule is Initializable, UUPSUpgradeable {
     // ===== PERMISSION CHECKS =====
 
     function canPublish(address _address) external view returns (bool) {
-        if (_address == safe) return true;
+        if (_address == safe) return true; // could be safe owners ??? 
         if (_inArray(whitelisted_devs, _address)) return true;
         if (_inArray(whitelisted_authors, _address)) return true;
         return false;

@@ -1,44 +1,80 @@
 // s2s-licenses-tab.ts
+import { fetchById, LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
+import { tableStyles } from '../styles/table-styles.js';
+import { buttonStyles } from '@/styles/button-styles.js';
+import { store } from '../state/index.js'
+import { License } from '../types/index.js'
+import { ProtocolIntegration } from '@/lib/protocol-integration.js';
+import { typograhyStyles } from '@/styles/typography-styles.js';
+import { sectionStyles } from '@/styles/section-styles.js';
+import './toggle-button.js'
 
 export class S2SLicensesTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
+  public protocolIntegration!: ProtocolIntegration;
+  private lit!: LitService;
   private loading = true;
-  private licenses: Array<{contentId: string, author: string, status: 'active' | 'pending'}> = [];
-  private pendingLicenses: Array<{contentId: string, author: string, status: 'active' | 'pending'}> = [];
+  private licenses: Array<License> = [];
+  private pendingLicenses: Array<License> = [];
+  private unsubscriber!: () => void;
+  private fetching: boolean = false;
+  private devMode: boolean = false;
 
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles]
+
   }
 
   async connectedCallback() {
-    console.log('Licenses tab connected');
-    await this.loadLicenses();
+
+    this.unsubscriber = store.subscribeToLicenses(() => this.render());
     this.render();
+
+    await this.loadLicenses();
+  }
+
+  disconnectedCallback() {
+    this.unsubscriber?.();
   }
 
   private async loadLicenses() {
-    this.loading = true;
+    this.fetching = true;
     this.render();
-
     try {
-      const safeIntegration = new SafeIntegration();
-      await safeIntegration.initialize();
-
-      const { activeLicenses, pendingLicenses } = await safeIntegration.getAllLicenses();
+      const { activeLicenses, pendingLicenses } = await this.safeIntegration.getAllLicenses();
       
       this.licenses = activeLicenses;
       this.pendingLicenses = pendingLicenses;
 
-      console.log('Active licenses:', this.licenses);
-      console.log('Pending licenses:', this.pendingLicenses);
-      
+      // console.log('Active licenses:', this.licenses);
+      // console.log('Pending licenses:', this.pendingLicenses);
+
+      this.licenses = this.licenses.filter(l => l.contentId && l.contentId.length == 77)
+
+      // augment with public info from lens 
+      for (let l of this.licenses) {
+          const content = await fetchById(l.contentId);
+          // console.log(content)
+          const creationDate = parseInt(content.creationDate, 10); // always parse explicitly
+          l.creationDate = new Date(creationDate * 1_000);
+          const modifiedDate = parseInt(content.modifiedDate, 10); // always parse explicitly
+          l.modifiedDate = new Date(modifiedDate * 1_000);
+          l.postType = content.postType;
+          l.encryption = content.encryption;
+          l.title = l.encryption ? "-" : content.title;
+          l.position = parseInt(content.position);
+          l.tags = content.tags;
+      }
+
+      store.setLicenses(this.licenses);
+      //store.setPendingLicenses(pendingLicenses); // needs adding to store
     } catch (error) {
       console.error('Error loading licenses:', error);
     }
-
-    this.loading = false;
+    this.fetching = false;
     this.render();
   }
 
@@ -84,9 +120,9 @@ export class S2SLicensesTab extends HTMLElement {
   }
 
   private async revokeLicense(contentId: string) {
-    if (!confirm(`Are you sure you want to revoke the license for ${contentId}?`)) {
-      return;
-    }
+    // if (!confirm(`Are you sure you want to revoke the license for ${contentId}?`)) {
+    //   return;
+    // }
 
     try {
       await this.safeIntegration.revokeLicense(contentId);
@@ -136,68 +172,67 @@ export class S2SLicensesTab extends HTMLElement {
     }, 5000);
   }
 
+  private async bulkRender(dev: boolean) {
+
+    console.log("bulkrender")
+
+    const configCid  = store.getRecord("config");
+    if (configCid == null) return; 
+
+    const publication  = store.getRecord("name");
+    if (publication == null) return; 
+    // possibly add a visual list with filters & checkboxes // make that a separate component 
+
+    const protocolInfo = store.protocolInfo;
+    if (protocolInfo == undefined) return;
+     const safeInfo = store.safeInfo;
+    if (safeInfo == undefined) return;
+
+    const signature = await this.safeIntegration.signWithSigner("lit actions auth");
+    console.log(signature);
+
+    const res = await renderwithLitActions( 
+        dev,
+        this.lit, 
+        signature, 
+        import.meta.env.VITE_LIT_USAGE_KEY, 
+        protocolInfo, 
+        undefined,
+        store.safeInfo?.safeAddress || "",
+        publication,
+        store.licenses.map( l => l.contentId),
+        configCid 
+    )
+
+    console.log("success:", res.success);
+
+    if(res.cid) {
+
+				await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
+				console.log("pinned on pinata")
+			}
+
+  }
+
+  private shortenAddress(s: string) {
+
+    return `${s.slice(0,4)}...${s.slice(-4)}`;
+  }
+
   private render() {
     if (!this.shadowRoot) return;
+
+    const licenses = store.licenses;
+    const pending = store.pending; 
 
     this.shadowRoot.innerHTML = `
       <style>
         :host {
           display: block;
           padding: 2rem 0;
+          background: var(--gray-900);
         }
-
-        .section {
-          margin-bottom: 3rem;
-        }
-
-        .section-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1rem;
-        }
-
-        .section-title {
-          font-size: 1.5rem;
-          font-weight: 600;
-          color: #000;
-          margin: 0;
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
-
-        .section-description {
-          color: #000;
-          margin-bottom: 1.5rem;
-        }
-
-        .refresh-button {
-          background: #000;
-          color: white;
-          border: none;
-          padding: 0.5rem 1rem;
-          border-radius: 0.5rem;
-          cursor: pointer;
-          font-size: 1rem;
-          font-weight: 500;
-          transition: background-color 0.2s, transform 0.1s;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .refresh-button:hover:not(:disabled) {
-          background: #4a9a85;
-          transform: translateY(-1px);
-        }
-
-        .refresh-button:disabled {
-          background: #9ca3af;
-          cursor: not-allowed;
-          transform: none;
-        }
-
+       
         .check-license-form {
           display: grid;
           gap: 1rem;
@@ -219,234 +254,157 @@ export class S2SLicensesTab extends HTMLElement {
 
         .input {
           padding: 0.75rem 1rem;
-          border: 1px solid #d1d5db;
+          border: 1px solid var(--gray-200);
+          background: var(--gray-50);
           border-radius: 0.5rem;
           font-size: 1rem;
         }
 
         .input:focus {
           outline: none;
-          border-color: #3b82f6;
+          border-color: var(--color-yellow);
         }
-
-        .button {
-          background: #5bba9d;
-          color: white;
-          border: none;
-          padding: 0.75rem 1.5rem;
-          border-radius: 0.5rem;
-          cursor: pointer;
-          font-size: 1rem;
-          font-weight: 500;
-          transition: background-color 0.2s, transform 0.1s;
-          white-space: nowrap;
-        }
-
-        .button:hover {
-          background: #2563eb;
-          transform: translateY(-1px);
-        }
-
-        .button:active {
-          transform: translateY(0);
-        }
-
-        .button-secondary {
-          background: #6b7280;
-        }
-
-        .button-secondary:hover {
-          background: #4b5563;
-        }
-
-        .button-danger {
-          background: #ef4444;
-        }
-
-        .button-danger:hover {
-          background: #dc2626;
-        }
-
-        .licenses-list {
-          display: grid;
-          gap: 1rem;
-        }
-
-        .license-card {
-          border-bottom: 1px solid #000;
-          padding: 1.5rem 0;
-          margin-bottom: .75rem;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .license-info {
-          flex: 1;
-        }
-
-        .license-content-id {
-          font-size: 1rem;
-          color: #000;
-          font-weight: 600;
-          margin-bottom: 0.5rem;
-        }
-
-        .license-author {
-          font-size: 1rem;
-          color: #000;
-        }
-
-        .license-status {
-          display: inline-block;
-          padding: 0.25rem 0.75rem;
-          border-radius: 9999px;
-          font-size: 0.75rem;
-          font-weight: 500;
-          margin-top: 0.5rem;
-        }
-
-        .status-active {
-          background: #dcfce7;
-          color: #166534;
-        }
-
-        .status-pending {
-          background: #fef3c7;
-          color: #92400e;
-        }
-
-        .license-actions {
-          display: flex;
-          gap: 0.5rem;
-        }
-
-        .empty-state {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .empty-icon {
-          font-size: 3rem;
-          margin-bottom: 1rem;
-        }
-
-        .loading {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .list_header {
+        .toolbar {
           display: flex;
           flex-direction: row;
-          justify-content: space-between;
           align-items: center;
-          border-bottom: 3px solid #000;
-          padding-bottom: .75rem;
+          gap: 1.5rem;
+          margin-bottom: 1.5rem;
         }
+
+        .refresh-icon {
+          width: 2.4rem;
+          height: 2.4rem;
+          vertical-align: middle;
+          filter: brightness(0) invert(1);
+        }
+
+        .revoke-icon {
+          width: 2rem;
+          height: 2rem;
+          vertical-align: middle;
+          filter: brightness(0) invert(1);
+        }
+
+        .table {
+          grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr auto;
+        }
+        
       </style>
 
-      ${this.loading ? `
-        <div class="loading">
-          <p>Loading licenses...</p>
-        </div>
-      ` : `
-        <!-- Check License -->
-        <div class="section">
-          <div class="section-header">
-            <h2 class="section-title">Check License Status</h2>
-          </div>
-          <p class="section-description">Check if a license exists for a specific content ID</p>
-          
-          <div class="check-license-form">
-            <input 
-              type="text" 
-              class="input" 
-              placeholder="Content ID"
-              id="check-content-id"
-            />
-            <button class="button" id="check-license-btn">
-              Check License
-            </button>
-          </div>
-        </div>
+      ${this.fetching && licenses.length === 0 ? `
+      <div class="loading">
+        <p>Loading licenses...</p>
+      </div>
+    ` : `
 
-        <!-- Pending Licenses -->
-        ${this.pendingLicenses.length > 0 ? `
-          <div class="section">
-            <h2 class="section-title">Pending Licenses (${this.pendingLicenses.length})</h2>
-            <button class="refresh-button" id="refresh-btn" ${this.loading ? 'disabled' : ''}>
-              <span>${this.loading ? 'Loading...' : 'Refresh'}</span>
-            </button>
-            <div class="licenses-list">
-              ${this.pendingLicenses.map(license => `
-                <div class="license-card">
-                  <div class="license-info">
-                    <div class="license-content-id">${license.contentId}</div>
-                    <div class="license-author">Author: ${license.author}</div>
-                    <span class="license-status status-pending">Pending</span>
-                  </div>
-                  <div class="license-actions">
-                    <button 
-                      class="button button-secondary" 
-                      data-action="accept"
-                      data-content-id="${license.contentId}"
-                    >
-                      ✓ Accept
-                    </button>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        ` : ''}
+      <div class="toolbar">
+        <button data-action="bulkrender">Bulk Render</button>
+         <toggle-button bool="${this.devMode}" label="preview"></toggle-button>
+      </div>
 
-        <!-- Active Licenses -->
+     
+
+      ${pending.length > 0 ? `
         <div class="section">
           <div class="list_header">
-            <h2 class="section-title">Active Licenses (${this.licenses.length})</h2>
-            <button class="refresh-button" id="refresh-btn" ${this.loading ? 'disabled' : ''}>
-              <span>${this.loading ? 'Loading...' : 'Refresh'}</span>
+            <h2 class="section-title">Pending Licenses (${pending.length})</h2>
+            <button class="button has-icon refresh-button" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
+              <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
             </button>
           </div>
-          ${this.licenses.length > 0 ? `
-            <div class="licenses-list">
-              ${this.licenses.map(license => `
-                <div class="license-card">
-                  <div class="license-info">
-                    <div class="license-content-id">${license.contentId}</div>
-                    <div class="license-author">Author: ${license.author}</div>
-                  </div>
-                  <div class="license-actions">
-                    <button 
-                      class="button button-danger" 
-                      data-action="revoke"
-                      data-content-id="${license.contentId}"
-                    >
-                      Revoke
-                    </button>
-                  </div>
+          <div class="licenses-list">
+            ${pending.map(license => `
+              <div class="license-card">
+                <div class="license-info">
+                  <div class="license-content-id">${license.contentId}</div>
+                  <div class="license-author">Author: ${license.author}</div>
+                  <span class="license-status status-pending">Pending</span>
                 </div>
-              `).join('')}
-            </div>
-          ` : `
-            <div class="empty-state">
-              <div class="empty-icon">📄</div>
-              <p>No active licenses yet</p>
-            </div>
-          `}
+                <div class="license-actions">
+                  <button
+                    class="button button-secondary thin"
+                    data-action="accept"
+                    data-content-id="${license.contentId}"
+                  >Accept</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
         </div>
+      ` : ''}
+
+      <div class="section">
+        <div class="list_header">
+          <h2 class="section-title">Active Licenses (${licenses.length})</h2>
+        </div>
+
+        ${licenses.length > 0 ? `
+          <div class="table">
+            <div class="table-header">ID / Title</div>
+            <div class="table-header">Author (safe)</div>
+            <div class="table-header hide-sm">Post type</div>
+            <div class="table-header hide-sm">Creation Date</div>
+            <div class="table-header hide-sm">Modified Date</div>
+            <div class="table-header hide-sm">Tags</div>
+            <div class="table-header hide-sm">
+              <button class="button has-icon" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
+                <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
+              </button>
+            </div>
+
+            ${licenses.map(license => `
+              <div class="license-card table-row" data-lic-id="${license.contentId}">
+                <div class="table-cell">${license.encryption ? this.shortenAddress(license.contentId) : license.title}</div>
+                <div class="table-cell">${this.shortenAddress(license.author)}</div>
+                <div class="table-cell">${license.postType ?? ''}</div>
+                <div class="table-cell">${license.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                <div class="table-cell">${license.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                <div class="table-cell">${license.tags?.join(', ') ?? ''}</div>
+                <div class="table-cell license-actions">
+                  <button
+                    class="button button-danger thin has-icon"
+                    data-action="revoke"
+                    data-content-id="${license.contentId}"
+                  >
+                    <img src="/icons/noun-revoke-3391394.svg" class="revoke-icon" alt="Revoke" />
+                    </button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <div class="empty-state">
+            <div class="empty-icon">📄</div>
+            <p>No active licenses yet</p>
+          </div>
+        `}
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Check License Status</h2>
+        </div>
+        <p class="section-description">Check if a license exists for a specific content ID</p>
+        <div class="check-license-form">
+          <input type="text" class="input" placeholder="Content ID" id="check-content-id" />
+          <button class="button" id="check-license-btn">Check License</button>
+        </div>
+      </div>
       `}
     `;
 
-    if (!this.loading) {
+    if (!this.fetching || licenses.length > 0) {
       this.attachEventListeners();
     }
   }
 
   private attachEventListeners() {
+    // Dev toggle
+    this.shadowRoot?.querySelector('toggle-button')?.addEventListener('toggle', ((e: CustomEvent) => {
+      this.devMode = e.detail.checked;
+    }) as EventListener);
+
     // Refresh button
     const refreshBtn = this.shadowRoot?.querySelector('#refresh-btn');
     refreshBtn?.addEventListener('click', () => {
@@ -456,7 +414,7 @@ export class S2SLicensesTab extends HTMLElement {
     // Check license
     const checkBtn = this.shadowRoot?.querySelector('#check-license-btn');
     const checkInput = this.shadowRoot?.querySelector('#check-content-id') as HTMLInputElement;
-    
+
     checkBtn?.addEventListener('click', () => {
       const contentId = checkInput?.value.trim();
       if (contentId) {
@@ -471,12 +429,13 @@ export class S2SLicensesTab extends HTMLElement {
         const action = target.dataset.action;
         const contentId = target.dataset.contentId;
         
-        if (!contentId) return;
-        
-        if (action === 'accept') {
-          this.acceptLicense(contentId);
+        // if (!contentId) return;
+                if (action === 'accept') {
+          this.acceptLicense(contentId!);
         } else if (action === 'revoke') {
-          this.revokeLicense(contentId);
+          this.revokeLicense(contentId!);
+        } else if (action === 'bulkrender') {
+          this.bulkRender(this.devMode);
         }
       });
     });

@@ -21,3 +21,8 @@ export const fetchWithTimeout = async (url: string, options = {}, timeoutMs = 50
     }
 };
 
+export function requireFields<T extends object>(obj: T, fields: (keyof T)[]): void {
+  const missing = fields.filter(f => obj[f] === undefined || obj[f] === null || obj[f] === "");
+  if (missing.length) throw `missing required field(s): ${missing.join(", ")}`;
+}
+

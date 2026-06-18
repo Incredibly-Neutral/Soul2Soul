@@ -28,22 +28,19 @@ type S2SMapping = {
 }
 
 export type S2SPublicationConfig = {
-    assets: S2SAsset[],
-    assetsGateway: string,
+    assetsCid: string, 
     contract: string,
     dataGateway: string,
     mapping: S2SMapping,  // ✅ Single object
     name: string,
-    renderAction?: string,
-    stylesheets?: S2SAsset[],
-  //  templates: S2STemplate[],  // ← Is this duplicate of mapping.templateConfig?
     templateCid: string
 }
 
-export type S2SAsset = {
-    path: string,
-    cid: string
-}
+// // to deprecate
+// export type S2SAsset = {
+//     path: string,
+//     cid: string
+// }
 
 
 export type S2SPublication = {

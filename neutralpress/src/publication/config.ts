@@ -78,95 +78,95 @@ export const uploadConfig = async (
 		const profile = arr[arr.length - 2];
 		const repo = arr[arr.length - 1];
 
-		const assets_files: any[] = await getAllFilesRecursive(
-			profile,
-			repo,
-			publication.branch || "",
-			"assets",
-		);
-		const assets_cids = JSON.parse(
-			JSON.stringify(config.assets.map((a: any) => a.cid)),
-		);
+		// const assets_files: any[] = await getAllFilesRecursive(
+		// 	profile,
+		// 	repo,
+		// 	publication.branch || "",
+		// 	"assets",
+		// );
+		// const assets_cids = JSON.parse(
+		// 	JSON.stringify(config.assets.map((a: any) => a.cid)),
+		// );
 
-		for (let asset of assets_files) {
-			// console.log("asset", asset);
-			const assetCid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
-				asset.url,
-				true,
-			);
-			// console.log("precalculated asset cid", assetCid, path.basename(asset.url));
-			if (!assets_cids.includes(assetCid)) {
-				//          console.log("new asset", assets_cids, assets_cids.includes(assetCid));
-				await main.oxo.ctrlr.pinata.uploadFileFromUrl(asset.url, false);
+		// for (let asset of assets_files) {
+		// 	// console.log("asset", asset);
+		// 	const assetCid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
+		// 		asset.url,
+		// 		true,
+		// 	);
+		// 	// console.log("precalculated asset cid", assetCid, path.basename(asset.url));
+		// 	if (!assets_cids.includes(assetCid)) {
+		// 		//          console.log("new asset", assets_cids, assets_cids.includes(assetCid));
+		// 		await main.oxo.ctrlr.pinata.uploadFileFromUrl(asset.url, false);
 
-				const existingAssetIndex = config.assets.findIndex(
-					(a: any) => a.path === asset.path,
-				);
+		// 		const existingAssetIndex = config.assets.findIndex(
+		// 			(a: any) => a.path === asset.path,
+		// 		);
 
-				if (existingAssetIndex !== -1) {
-					// Replace CID for existing asset with same path
-					config.assets[existingAssetIndex].cid = assetCid;
-					// console.log(
-					// 	`updated image CID for ${asset.path}: ${assetCid}`,
-					// );
-				} else {
-					// Upload new asset and add to config
-					config.assets.push({ path: asset.path, cid: assetCid });
-					// console.log(`new image uploaded to pinata: ${assetCid}`);
-				}
-			}
-		}
+		// 		if (existingAssetIndex !== -1) {
+		// 			// Replace CID for existing asset with same path
+		// 			config.assets[existingAssetIndex].cid = assetCid;
+		// 			// console.log(
+		// 			// 	`updated image CID for ${asset.path}: ${assetCid}`,
+		// 			// );
+		// 		} else {
+		// 			// Upload new asset and add to config
+		// 			config.assets.push({ path: asset.path, cid: assetCid });
+		// 			// console.log(`new image uploaded to pinata: ${assetCid}`);
+		// 		}
+		// 	}
+		// }
 
 		// console.log("config assets", config.assets);
 
-		let stylesheet_files: any[] = await getAllFilesRecursive(
-			profile,
-			repo,
-			publication.branch || "",
-			"css",
-		);
+		// let stylesheet_files: any[] = await getAllFilesRecursive(
+		// 	profile,
+		// 	repo,
+		// 	publication.branch || "",
+		// 	"css",
+		// );
 
-		stylesheet_files = stylesheet_files.filter((file: any) => {
-			return path.extname(file.path) === ".css";
-		});
+		// stylesheet_files = stylesheet_files.filter((file: any) => {
+		// 	return path.extname(file.path) === ".css";
+		// });
 
 		// console.log("stylesheet_files", stylesheet_files);
 
-		for (let stylesheet of stylesheet_files) {
-			const cid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
-				stylesheet.url,
-				true,
-			);
+		// for (let stylesheet of stylesheet_files) {
+		// 	const cid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
+		// 		stylesheet.url,
+		// 		true,
+		// 	);
 
-			// console.log("precalculated cid", cid);
+		// 	// console.log("precalculated cid", cid);
 
-			if (!config.stylesheets.map((a: any) => a.cid).includes(cid)) {
-				// console.log("new stylesheet");
-				await main.oxo.ctrlr.pinata.uploadFileFromUrl(
-					stylesheet.url,
-					false,
-				);
+		// 	if (!config.stylesheets.map((a: any) => a.cid).includes(cid)) {
+		// 		// console.log("new stylesheet");
+		// 		await main.oxo.ctrlr.pinata.uploadFileFromUrl(
+		// 			stylesheet.url,
+		// 			false,
+		// 		);
 
-				const existingAssetIndex = config.stylesheets.findIndex(
-					(a: any) => a.path === stylesheet.path,
-				);
+		// 		const existingAssetIndex = config.stylesheets.findIndex(
+		// 			(a: any) => a.path === stylesheet.path,
+		// 		);
 
-				if (existingAssetIndex !== -1) {
-					// Replace CID for existing asset with same path
-					config.stylesheets[existingAssetIndex].cid = cid;
-					// console.log(
-					// 	`updated stylesheet CID for ${stylesheet.path}: ${cid}`,
-					// );
-				} else {
-					// needs to be push or replace !!!!
-					config.stylesheets.push({
-						path: stylesheet.path,
-						cid: cid,
-					});
-					// console.log(`new stylesheet uploaded to pinata: ${cid}`);
-				}
-			}
-		}
+		// 		if (existingAssetIndex !== -1) {
+		// 			// Replace CID for existing asset with same path
+		// 			config.stylesheets[existingAssetIndex].cid = cid;
+		// 			// console.log(
+		// 			// 	`updated stylesheet CID for ${stylesheet.path}: ${cid}`,
+		// 			// );
+		// 		} else {
+		// 			// needs to be push or replace !!!!
+		// 			config.stylesheets.push({
+		// 				path: stylesheet.path,
+		// 				cid: cid,
+		// 			});
+		// 			// console.log(`new stylesheet uploaded to pinata: ${cid}`);
+		// 		}
+		// 	}
+		// }
 
 		// console.log("config stylesheets", config.stylesheets);
 
@@ -242,11 +242,11 @@ export const uploadConfig = async (
 		);
 		//  console.log("mapping", mapping);
 		//
-		const renderActionCid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
-			`https://raw.githubusercontent.com/${profile}/${repo}/${commit_sha}/renderer/dist/main.js`,
-			false,
-			0,
-		);
+		// const renderActionCid = await main.oxo.ctrlr.pinata.uploadFileFromUrl(
+		// 	`https://raw.githubusercontent.com/${profile}/${repo}/${commit_sha}/renderer/dist/main.js`,
+		// 	false,
+		// 	0,
+		// );
 		// console.log("renderActionCid", renderActionCid);
 
 		const publication_config = createConfig(
@@ -255,7 +255,7 @@ export const uploadConfig = async (
 			config,
 			templatesCid,
 			mapping,
-			renderActionCid,
+			// renderActionCid,
 		);
 		//  console.log("config", publication_config);
 		config_cid = await main.oxo.ctrlr.ipfs.add(
@@ -274,7 +274,6 @@ export const createConfig = (
 	config: any,
 	templatesCid: string,
 	mapping: string,
-	renderActionCid: string,
 ): S2SPublicationConfig => {
 
 	return {
@@ -282,7 +281,7 @@ export const createConfig = (
 		assetsGateway: protocolInfo.assetsGateway || "",
 		contract: publication.contract || "",
 		dataGateway: protocolInfo.dataGateway || "",
-		renderAction: renderActionCid,
+		// renderAction: renderActionCid,
 		mapping: JSON.parse(mapping),
 		name: publication.name,
 		stylesheets: config.stylesheets,

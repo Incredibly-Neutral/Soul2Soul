@@ -1,14 +1,7 @@
 // config-builder.ts
 
-import { S2SPublicationConfig } from "@s2s/soul2soul-shared/safe-app";
-import { add, dagPut, fetchFromIPFS } from "./ipfs.factory";
-import { evmRead } from "./evm";
-import { ethers } from "ethers";
+import { fetchFromIPFS } from "./ipfs.factory";
 import { prepareTempMfs, kuboMfsList, kuboMfsPost, MFS_TIMEOUTS, IPFS_URL, kuboMfsStat } from "./ipfs-fs.factory";
-
-// Kubo IPFS URL for MFS operations
-
-
 
 interface GitHubFile {
   path: string;
@@ -16,6 +9,11 @@ interface GitHubFile {
   download_url: string;
   type: string;
 }
+
+// Top-level entries that must be reconciled file-by-file (additions + removals detected)
+const SYNC_BY_FILENAME = new Set(['fonts', 'img', 'svg']);
+// Top-level entries whose files are always re-fetched from GitHub (overwrite)
+const ALWAYS_SYNC_FROM_GITHUB = new Set(['js', 'css']);
 
 export class AssetsBuilder {
   private ensAddress: string;
@@ -35,7 +33,6 @@ export class AssetsBuilder {
     this.ipfsGateway = ipfsGateway;
   }
 
-  // Parse GitHub URL to get owner, repo, branch
   parseGitHubUrl(githubUrl: string): { owner: string; repo: string; branch: string } {
     const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+))?/)
     if (!match) {
@@ -48,15 +45,20 @@ export class AssetsBuilder {
     };
   }
 
-  // Fetch files from GitHub directory
   async getGitHubFiles(owner: string, repo: string, branch: string, path: string = ""): Promise<GitHubFile[]> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-    
-    const response = await fetch(url);
+
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${import.meta.env.VITE_GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+      }
+    });
     if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.statusText}`);
+      const data = await response.json().catch(() => ({}));
+      throw new Error(`GitHub API error: ${response.status} - ${(data as any).message || response.statusText}`);
     }
-    
+
     const data = await response.json();
     return Array.isArray(data) ? data : [];
   }
@@ -64,7 +66,7 @@ export class AssetsBuilder {
   async getAllFilesRecursive(owner: string, repo: string, branch: string, path: string = ""): Promise<GitHubFile[]> {
     const files = await this.getGitHubFiles(owner, repo, branch, path);
     let allFiles: GitHubFile[] = [];
-    
+
     for (const file of files) {
       if (file.type === 'file') {
         allFiles.push(file);
@@ -73,11 +75,9 @@ export class AssetsBuilder {
         allFiles = allFiles.concat(subFiles);
       }
     }
-    
     return allFiles;
   }
 
-  // Fetch file content from GitHub
   async fetchGitHubFile(downloadUrl: string): Promise<string> {
     const response = await fetch(downloadUrl);
     if (!response.ok) {
@@ -86,7 +86,14 @@ export class AssetsBuilder {
     return await response.text();
   }
 
-  // Get latest commit SHA
+  async fetchGitHubBlob(downloadUrl: string): Promise<Blob> {
+    const response = await fetch(downloadUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file: ${response.statusText}`);
+    }
+    return await response.blob();
+  }
+
   async getLatestCommitSHA(owner: string, repo: string, branch: string): Promise<string> {
     const url = `https://api.github.com/repos/${owner}/${repo}/commits/${branch}`;
     const response = await fetch(url);
@@ -97,10 +104,9 @@ export class AssetsBuilder {
     return data.sha;
   }
 
-  // Upload file to Pinata
   async uploadToPinata(content: string | Blob, filename: string): Promise<string> {
     const formData = new FormData();
-    
+
     if (typeof content === 'string') {
       formData.append('file', new Blob([content]), filename);
     } else {
@@ -123,7 +129,6 @@ export class AssetsBuilder {
     return data.IpfsHash;
   }
 
-  // Upload from URL to Pinata
   async uploadFromUrl(url: string): Promise<string> {
     const response = await fetch(url);
     const blob = await response.blob();
@@ -131,7 +136,6 @@ export class AssetsBuilder {
     return await this.uploadToPinata(blob, filename);
   }
 
-  // Insert stylesheet link into template
   insertStylesheetLink(templateContent: string, cid: string): string {
     return templateContent.replace(
       'insert_stylesheet.css',
@@ -139,97 +143,161 @@ export class AssetsBuilder {
     );
   }
 
-  // Insert asset image CIDs into template
-  insertAssetImageCids(
-    templateContent: string,
-    assets: Array<{ path: string; cid: string }>
-  ): string {
-    for (const asset of assets) {
-      const filename = asset.path.split('/').pop()?.split('.')[0];
-      if (!filename) continue;
-
-      const imgRegex = new RegExp(`<img[^>]+id=["']${filename}["'][^>]*>`, 'gi');
-      templateContent = templateContent.replace(imgRegex, (match) => {
-        return match.replace(
-          /src=["'][^"']*["']/,
-          `src="${this.pinataGateway}/ipfs/${asset.cid}"`
-        );
-      });
+  // Get name -> cid map for the immediate children of a directory CID
+  private async getDirChildren(dirCid: string): Promise<Map<string, string>> {
+    const m = new Map<string, string>();
+    try {
+      const res = await fetch(`${IPFS_URL}/api/v0/dag/get?arg=${dirCid}`, { method: "POST" });
+      const dag = await res.json();
+      for (const link of dag.Links || []) {
+        m.set(link.Name, link.Hash["/"]);
+      }
+    } catch (e) {
+      console.warn(`Could not read children of ${dirCid}`);
     }
-    return templateContent;
+    return m;
   }
 
-  // Build configuration from GitHub repository
   async buildAssets(
     github_account: string,
     repo: string,
     branch: string,
     publicationName: string,
     contractAddress: string,
-    existingConfigCid?: string
-  ): Promise<{  cid: string }> {
-    // Load existing config or create new one
+    configCid: string
+  ): Promise<{ cid: string }> {
 
-
-    // Process assets
     console.log("Processing assets...");
-    const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
-    const node = ethers.namehash(publicationName);
-    const currentRoot = await evmRead(8453, this.ensAddress, ["function getText(bytes32 node, string key) view returns (string)"], "getText", [node, "contenthash_wrapped"])
 
-    const tempDirName = `safe-app-${Date.now()}`;
-    const tmpPath = await prepareTempMfs(currentRoot || "", tempDirName);
-    console.log(`Created temp MFS dir: ${tmpPath}`);
+    const config = await fetchFromIPFS("https://ipfs.transport-union.dev", configCid);
+    const existingAssetsCid: string | undefined = config?.assetsCid;
+    console.log(`Existing assetsCid from config: ${existingAssetsCid ?? 'none'}`);
 
-    // STEP 2: Read what files are in the assets folder
-    const existingAssetsPath = `${tmpPath}/assets`;
-    let existingAssetNames: string[] = [];
-    let assetsPathExists = false;
-
-    try {
-      const assetsLinks = await kuboMfsList(existingAssetsPath);
-      assetsPathExists = true;
-      existingAssetNames = assetsLinks.map((link: any) => link.name.toLowerCase());
-      console.log(`Existing assets in Kubo MFS: ${existingAssetNames.join(", ") || "(none)"}`);
-    } catch (error) {
-      assetsPathExists = false;
-      console.log(`No assets folder in temp MFS, will create it`);
-    }
-
-    // STEP 3: If no assets folder, create it
-    if (!assetsPathExists) {
-      const mkdirRes = await kuboMfsPost(
-        `/api/v0/files/mkdir?arg=${encodeURIComponent(existingAssetsPath)}&parents=true`,
-        MFS_TIMEOUTS.mkdir,
-      );
-      if (!mkdirRes.ok) {
-        const text = await mkdirRes.text();
-        console.warn(`Failed to create assets folder: ${text}`);
-      } else {
-        assetsPathExists = true;
-        existingAssetNames = [];
-        console.log(`Created new assets folder: ${existingAssetsPath}`);
+    // Top-level name -> CID from existing assets DAG
+    const existingCids: Map<string, string> = new Map();
+    if (existingAssetsCid) {
+      try {
+        const dagRes = await fetch(`${IPFS_URL}/api/v0/dag/get?arg=${existingAssetsCid}`, { method: "POST" });
+        const dag = await dagRes.json();
+        for (const link of dag.Links || []) {
+          existingCids.set(link.Name, link.Hash["/"]);
+        }
+        console.log(`Existing top-level entries: ${[...existingCids.keys()].join(", ")}`);
+      } catch (e) {
+        console.warn("Could not fetch existing DAG, will sync all from GitHub");
       }
     }
 
-    // STEP 4: For each asset, check if it exists in Kubo, add if missing
-    for (const asset of assetFiles) {
-      const assetName = asset.path?.split('/').pop() || '';
-      const assetNameLower = assetName.toLowerCase();
+    const assetFiles = await this.getAllFilesRecursive(github_account, repo, branch, 'assets');
+    console.log(`Found ${assetFiles.length} files in GitHub assets`);
 
-      // Check if this asset already exists in the Kubo node's assets folder
-      if (existingAssetNames.includes(assetNameLower)) {
-        console.log(`✓ Asset already exists, skipping: ${assetName}`);
+    const githubTopLevel = new Set(
+      assetFiles.map(f => f.path.replace(/^assets\//, '').split('/')[0])
+    );
+    console.log(`GitHub top-level entries: ${[...githubTopLevel].join(", ")}`);
+
+    const tempDirName = `safe-app-${Date.now()}`;
+    const tmpPath = await prepareTempMfs("", tempDirName);
+    console.log(`Created temp MFS dir: ${tmpPath}`);
+
+    const mkdirRes = await kuboMfsPost(
+      `/api/v0/files/mkdir?arg=${encodeURIComponent(tmpPath)}&parents=true`,
+      MFS_TIMEOUTS.mkdir,
+    );
+    if (!mkdirRes.ok) {
+      const text = await mkdirRes.text();
+      if (!text.includes("already exists")) {
+        console.warn(`mkdir warning: ${text}`);
+      }
+    }
+
+    // For per-file dirs, preload the existing children CIDs so we can restore unchanged files by name
+    const childMaps: Map<string, Map<string, string>> = new Map();
+    for (const [name, cid] of existingCids) {
+      if (SYNC_BY_FILENAME.has(name) && githubTopLevel.has(name)) {
+        childMaps.set(name, await this.getDirChildren(cid));
+        console.log(`Preloaded ${childMaps.get(name)!.size} existing files for: ${name}`);
+      }
+    }
+
+    // Restore loop — only whole-dir restore for entries NOT handled per-file and NOT force-synced
+    const restoredWhole: Set<string> = new Set();
+    for (const [name, cid] of existingCids) {
+      if (!githubTopLevel.has(name)) {
+        console.log(`✗ removed (not in GitHub): ${name}`);
+        continue;
+      }
+      if (SYNC_BY_FILENAME.has(name) || ALWAYS_SYNC_FROM_GITHUB.has(name)) {
+        continue; // handled in the file loop
+      }
+      const destPath = `${tmpPath}/${name}`;
+      const cpRes = await kuboMfsPost(
+        `/api/v0/files/cp?arg=/ipfs/${encodeURIComponent(cid)}&arg=${encodeURIComponent(destPath)}&parents=true&flush=false`,
+        MFS_TIMEOUTS.cp,
+      );
+      if (cpRes.ok) {
+        console.log(`✓ restored whole dir from IPFS: ${name}`);
+        restoredWhole.add(name);
+      } else {
+        const text = await cpRes.text();
+        if (!text.includes("already has entry")) {
+          console.error(`Failed cp from IPFS: ${name}`, text);
+        }
+      }
+    }
+
+    // File loop
+    for (const asset of assetFiles) {
+      const relativePath = asset.path.replace(/^assets\//, '');
+      const parts = relativePath.split('/');
+      const topLevelName = parts[0];
+      const assetName = parts[parts.length - 1];
+      const ext = assetName.split('.').pop()?.toLowerCase() ?? '';
+      const cpPath = `${tmpPath}/${relativePath}`;
+
+      // Skip files whose whole dir was already restored from IPFS
+      if (restoredWhole.has(topLevelName)) {
         continue;
       }
 
-      // Fetch the asset content from GitHub
-      console.log(`Fetching asset: ${assetName} from GitHub`);
-      const assetContent = await this.fetchGitHubFile(asset.download_url);
+      // Ensure parent dir exists
+      if (parts.length > 1) {
+        const parentDir = `${tmpPath}/${parts.slice(0, -1).join('/')}`;
+        await kuboMfsPost(
+          `/api/v0/files/mkdir?arg=${encodeURIComponent(parentDir)}&parents=true`,
+          MFS_TIMEOUTS.mkdir,
+        ).catch(() => {});
+      }
 
-      // Step 1: Create the file in IPFS locally via api/v0/add
+      // Per-filename dirs: if the file already exists in the old child map, restore from IPFS by name
+      if (SYNC_BY_FILENAME.has(topLevelName) && !ALWAYS_SYNC_FROM_GITHUB.has(ext)) {
+        const childMap = childMaps.get(topLevelName);
+        const existingFileCid = childMap?.get(assetName);
+        if (existingFileCid) {
+          const cpRes = await kuboMfsPost(
+            `/api/v0/files/cp?arg=/ipfs/${encodeURIComponent(existingFileCid)}&arg=${encodeURIComponent(cpPath)}&parents=true&flush=false`,
+            MFS_TIMEOUTS.cp,
+          );
+          if (cpRes.ok) {
+            console.log(`✓ restored file from IPFS: ${relativePath}`);
+            continue;
+          }
+          const text = await cpRes.text();
+          if (!text.includes("already has entry")) {
+            console.error(`Failed cp file from IPFS: ${relativePath}`, text);
+          } else {
+            continue;
+          }
+          // fall through to GitHub if cp failed unexpectedly
+        }
+      }
+
+      // Otherwise fetch from GitHub
+      console.log(`Fetching from GitHub: ${relativePath}`);
+      const assetBlob = await this.fetchGitHubBlob(asset.download_url);
+
       const formData = new FormData();
-      formData.append('file', new Blob([assetContent]), assetName);
+      formData.append('file', assetBlob, assetName);   // raw bytes, no corruption
 
       const addRes = await fetch(`${IPFS_URL}/api/v0/add`, {
         method: "POST",
@@ -239,37 +307,36 @@ export class AssetsBuilder {
 
       if (!addRes.ok) {
         const text = await addRes.text();
-        console.error(`Failed to add asset to IPFS: ${assetName}`, text);
-        continue;
-      }
-      const addResult = await addRes.json();
-      const fileCid = addResult.Hash || addResult.Cid?.['/'] || addResult.Cid;
-      if (!fileCid) {
-        console.error(`Failed to get CID for asset: ${assetName}`);
+        console.error(`Failed to add to IPFS: ${relativePath}`, text);
         continue;
       }
 
-      // Step 2: Copy the IPFS object into MFS at the target path
-      const cpPath = `${existingAssetsPath}/${assetName}`;
+      const addResult = await addRes.json();
+      const fileCid = addResult.Hash || addResult.Cid?.['/'] || addResult.Cid;
+      if (!fileCid) {
+        console.error(`No CID returned for: ${relativePath}`);
+        continue;
+      }
+
       const cpRes = await kuboMfsPost(
         `/api/v0/files/cp?arg=/ipfs/${encodeURIComponent(fileCid)}&arg=${encodeURIComponent(cpPath)}&parents=true&flush=false`,
         MFS_TIMEOUTS.cp,
       );
+
       if (!cpRes.ok) {
         const text = await cpRes.text();
-        console.error(`Failed to copy asset to MFS: ${assetName}`, text);
-        continue;
+        if (text.includes("already has entry")) {
+          console.log(`✓ skip (exists): ${relativePath}`);
+        } else {
+          console.error(`Failed cp: ${relativePath}`, text);
+        }
+      } else {
+        console.log(`✓ synced from GitHub: ${relativePath}`);
       }
-
-      console.log(`✓ Synced asset to MFS: ${assetName} → /ipfs/${fileCid}`);
-
-      // Track it
-      existingAssetNames.push(assetNameLower);
     }
 
-    console.log(`Assets sync complete. Existing+new assets: ${existingAssetNames.join(", ")}`);
+    console.log(`Assets sync complete.`);
 
-    // FLUSH the temp directory to get the updated root CID that includes all added assets
     const flushRes = await kuboMfsPost(
       `/api/v0/files/flush?arg=${encodeURIComponent(tmpPath)}`,
       MFS_TIMEOUTS.pinAdd,
@@ -279,33 +346,11 @@ export class AssetsBuilder {
       console.error(`Flush failed: ${text}`);
     }
     const flushedData = await flushRes.json();
-    const newRootCid = typeof flushedData === 'string' ? flushedData : (flushedData['/'] || flushedData.Hash || flushedData.Cid?.['/'] || flushedData.Cid);
-    console.log(`Flushed root CID (includes assets): ${JSON.stringify(newRootCid)}`);
+    const newRootCid = typeof flushedData === 'string'
+      ? flushedData
+      : (flushedData['/'] || flushedData.Hash || flushedData.Cid?.['/'] || flushedData.Cid);
+    console.log(`Flushed assets CID: ${JSON.stringify(newRootCid)}`);
 
-    // Verify: list the flushed directory
-    const verifyLinks = await kuboMfsList(tmpPath);
-    console.log(`Flushed directory contains: ${verifyLinks.map(l => l.name).join(", ")}`);
-
-
-
-    // --- Process stylesheets (from css/ directory in GitHub) ---
-    console.log("Processing stylesheets...");
-    const cssFiles = (await this.getAllFilesRecursive(github_account, repo, branch, 'css'))
-      .filter(file => file.path.endsWith('.css'));
-
-    for (const cssFile of cssFiles) {
-    //   const cid = await this.uploadFromUrl(cssFile.download_url);
-    //   const existingIndex = config.stylesheets.findIndex((s: any) => s.path === cssFile.path);
-    //   if (existingIndex !== -1) {
-    //     config.stylesheets[existingIndex].cid = cid;
-    //   } else {
-    //     config.stylesheets.push({ path: cssFile.path, cid });
-    //   }
-    //   console.log(`✅ Stylesheet uploaded: ${cssFile.path} -> ${cid}`);
-    }
-
-
-    const configCid2 = "";
-    return { cid: configCid2 };
+    return { cid: newRootCid };
   }
 }

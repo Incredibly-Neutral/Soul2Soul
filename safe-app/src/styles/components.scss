@@ -1,7 +1,7 @@
 /* src/styles/components.css */
 /* Header styles */
 .header {
-  background: var(--bg-primary);
+  background: var(--gray-900);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   padding: var(--spacing-xl);
@@ -19,7 +19,7 @@
 .title {
   font-size: 2rem;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--gray-50);
   margin: 0 0 var(--spacing-sm) 0;
   display: flex;
   align-items: center;
