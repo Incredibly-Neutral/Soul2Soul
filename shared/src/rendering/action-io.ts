@@ -77,7 +77,6 @@ export const SingleActionOutputSchema = ActionResultSchema(
     job: jobSchema,
     html: z.string().optional(),
     timestamp: z.string(),
-    trace: z.array(z.any()),
   })
 );
 

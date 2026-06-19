@@ -134,6 +134,6 @@ export interface S2SJob {
   templateConfig: S2STemplateConfig;
   path?: string;
   templateData?: S2STemplateData;
-  html?: string;
+  html: string;
   revoked?: boolean;
 }

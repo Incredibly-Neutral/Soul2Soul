@@ -37,7 +37,7 @@ export const querySchema = z.object({
 export const collectionSchema = z.object({
   source: z.string(),
   query: querySchema,
-  filters: z.array(z.any()),
+  filters: z.array(z.any()).optional(),
   key: z.string(),
   value: z.string(),
   slug: z.string(),
@@ -70,6 +70,6 @@ export const jobSchema = z.object({
   templateConfig: templateConfigSchema,
   path: z.string().optional(),
   templateData: z.any(),
-  html: z.string().optional(),
+  html: z.string(),
   revoked: z.boolean().optional(),
 });

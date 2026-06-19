@@ -9,6 +9,7 @@ import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import './toggle-button.js'
+import './copy-content-id.js'
 
 export class S2SLicensesTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -318,7 +319,7 @@ export class S2SLicensesTab extends HTMLElement {
             ${pending.map(license => `
               <div class="license-card">
                 <div class="license-info">
-                  <div class="license-content-id">${license.contentId}</div>
+                  <copy-content-id value='${license.contentId}' display='${this.shortenAddress(license.contentId)}'></copy-content-id>
                   <div class="license-author">Author: ${license.author}</div>
                   <span class="license-status status-pending">Pending</span>
                 </div>
@@ -356,7 +357,7 @@ export class S2SLicensesTab extends HTMLElement {
 
             ${licenses.map(license => `
               <div class="license-card table-row" data-lic-id="${license.contentId}">
-                <div class="table-cell">${license.encryption ? this.shortenAddress(license.contentId) : license.title}</div>
+                <div class="table-cell"><copy-content-id value='${license.contentId}' display='${license.encryption ? this.shortenAddress(license.contentId) : license.title}'></copy-content-id></div>
                 <div class="table-cell">${this.shortenAddress(license.author)}</div>
                 <div class="table-cell">${license.postType ?? ''}</div>
                 <div class="table-cell">${license.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
