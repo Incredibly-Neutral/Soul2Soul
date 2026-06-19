@@ -20,7 +20,6 @@ const ACTION_DEFS = [
     { name: 'encrypt', source: null as string | null },  // handled separately via encryptAction
     { name: 'prep',    source: '/home/joera/code/s2s/protocol/actions/dist/prep/main.js' },
     { name: 'single',  source: '/home/joera/code/s2s/protocol/actions/dist/single/main.js' },
-    { name: 'cbor',    source: '/home/joera/code/s2s/protocol/actions/dist/cbor/main.js' },
     { name: 'updateEvm',    source: '/home/joera/code/s2s/protocol/actions/dist/updateEvm/main.js' }
 ];
 

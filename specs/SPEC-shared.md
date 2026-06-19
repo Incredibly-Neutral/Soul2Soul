@@ -18,8 +18,8 @@ Owns: the shared **types**, **ABIs**, and **client-side services** (Lit V3 REST,
 
 `shared` exists so nothing is defined twice. **Any code/type/constant that would otherwise be
 duplicated across packages must live here** — including resolving the incongruences this spec notes
-(consolidate them *into* shared, don't mirror). `shared` itself has **no standalone test target**;
-it is exercised only through the consumers that build it in (see Test seams).
+(consolidate them *into* shared, don't mirror). The zod validators and orchestrator in
+`shared/src/rendering/` **do** have a standalone test target (`vitest` in shared/); the bundled-into-consumers *types* are validated only through consumers.
 
 **Shared is part of each consumer's code, not a service.** Its functions are *bundled* into each
 consumer's build via that consumer's entry point. So the authoritative "what of shared matters here"

@@ -42,12 +42,14 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       signature,
     );
     trace.push(`signer: ${signerAddress}`);
-
+    trace.push(`pub: ${publication}`);
     const { multisig, configModule, publicationModule } =
       await getDomainOwnerAndModules(publication);
     if (!multisig || !configModule || !publicationModule) {
       throw "missing config modules";
     }
+
+    trace.push(`owner: ${multisig}, configModule ${configModule}, publicationModule ${publicationModule}`);
 
     if (!(await canPublish(authorSafeAddress, publicationModule, signerAddress))) {
       throw "cannot publish";
@@ -57,8 +59,10 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     if (!protocolInfo?.pkp) {
       throw "Failed to fetch protocol info";
     }
+    trace.push(`pinfo: ${protocolInfo}`);
 
     const config = await getConfig(undefined, configModule);
+    trace.push(`config: ${config}`);
 
     const node = ethers.utils.namehash(publication);
     trace.push(`node: ${node}`);

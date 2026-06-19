@@ -18,7 +18,8 @@ export async function runAction(
   litUsageKey?: string,
 ): Promise<unknown> {
   if (preview) {
-    const r = await fetch('https://run.transport-union.dev/run', {
+    const runnerUrl = process.env.S2S_RUNNER_URL || 'https://run.transport-union.dev/run';
+    const r = await fetch(runnerUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cid, inputs }),

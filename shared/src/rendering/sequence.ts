@@ -40,6 +40,7 @@ export const renderwithLitActions = async (
   
   if (notice) notice.setMessage('prepping render ...'); else console.log('preview:', preview);
 
+  console.log("pub1", publication)
   const prepInputs = validatePrepInput({ publication, configCid, contentIds });
   const prepAction = await runAction( true, lit, protocolInfo.litActionPrep, prepInputs, litUsageKey );
   const validatedPrep = validatePrepOutput(prepAction);
@@ -79,6 +80,7 @@ export const renderwithLitActions = async (
   
   if (notice) notice.setMessage('merging EVM update ...'); else console.log('preparing evm update...');
 
+  console.log("pub2", publication)
   const evmInputs = validateEvmUpdateInput({ signature, authorSafeAddress, publication, jobs: renderedJobs, preview });
 
   const evmAction = await runAction( preview, lit, protocolInfo.litActionRootUpdate, evmInputs, litUsageKey);
