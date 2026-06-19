@@ -16,8 +16,8 @@
         },
         {
           "name": "single",
-          "cid": "QmQfUFHbdQRFJmNrUJDcRAJqMb1PTJyH9aE2SvZCN8gZGj",
-          "hashedCid": "0x63ffb2a5c2b0e94d1ca400f6db3a878ddef4051da9e35c7fe13116e313aba2f5"
+          "cid": "QmUEYqeRDv5nDbnVtSZBtqrZ2vsB9C4AtkzHBpEByKD1ma",
+          "hashedCid": "0xd794b2ff338c3ec74764831aa65b1686c8bb523a0ef83d6ed1a10357dc75a4ba"
         },
         {
           "name": "cbor",
@@ -26,8 +26,8 @@
         },
         {
           "name": "updateEvm",
-          "cid": "QmVG9y6KuZMwnX5hcSuSGsJPK7JPRv9XCKfamTg1HBmtKK",
-          "hashedCid": "0x7e5693de91b4897e6e691fbd82afb436f0dd3fb53b2813a8c8a21a9bfdbfba24"
+          "cid": "QmSprUa8q6T3K34RdVdHJ5PmBjLKeX62KBEARMCbA4EoW4",
+          "hashedCid": "0xc674119ef4d94ecd3c0b797c05f0ff568e28d09ef6e5ac29c10702cfb56941c9"
         }
       ],
       "pkps": [

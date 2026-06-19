@@ -10,6 +10,7 @@
         "swap-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts",
         "refresh-key": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/refresh-key.ts",
         "update-protocol": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts",
+        "deploy-action": "bash -c 'pnpm build-actions && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
         "build-shared": "cd shared && tsc && cd .."
     },
     "devDependencies": {

@@ -5,32 +5,45 @@ import {
   protocolSchema,
 } from '../protocol/schemas';
 import { S2SPublicationConfig } from './types';
-import { S2STemplateConfig, S2SRipple } from '../rendering';
+import { S2STemplateConfig, S2SRipple } from '../protocol/types';
 
 
 
 // ============================================================================
-// Body Schema
+// Body Schema — discriminated union on encryption
 // ============================================================================
-const bodySchema = z.object({
-    // Lens fields
-    id: z.string(), // Lens post ID (big number as string)
-    author: z.string(), // Ethereum address
-    content: z.string(), // JSON string containing encrypted data
-    locale: z.string(), // language code
-    
-    // S2S attributes (nested object)
-    attributes: z.object({
-        parent: z.string(), // stored as string in Lens
-        position: z.string(), // stored as string in Lens
-        postType: z.string(),
-        creationDate: z.string(), // Unix timestamp as string
-        modifiedDate: z.string() // Unix timestamp as string
+
+// Shared base fields for both encrypted and plaintext bodies
+const bodyBase = {
+    id: z.string(),
+    author: z.string(),
+    locale: z.string(),
+    parent: z.string(),
+    position: z.string(),
+    postType: z.string(),
+    creationDate: z.string(),
+    modifiedDate: z.string(),
+    tags: z.array(z.string()),
+    attributes: z.any().optional(),
+    publication: z.string().optional(),
+    base: z.string().optional(),
+};
+
+const bodySchema = z.discriminatedUnion('encryption', [
+    z.object({
+        ...bodyBase,
+        encryption: z.literal(false),
+        content: z.string(),
+        title: z.string(),
+        slug: z.string(),
+        custom: z.any().optional(),
     }),
-    
-    // Tags
-    tags: z.array(z.string())
-});
+    z.object({
+        ...bodyBase,
+        encryption: z.literal(true),
+        // title, slug, content live inside the ciphertext — not present here
+    }),
+]);
 
 // ============================================================================
 // Mapping Schemas

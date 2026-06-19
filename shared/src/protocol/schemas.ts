@@ -70,6 +70,6 @@ export const jobSchema = z.object({
   templateConfig: templateConfigSchema,
   path: z.string().optional(),
   templateData: z.any(),
-  html: z.string(),
+  html: z.string().optional(),
   revoked: z.boolean().optional(),
 });

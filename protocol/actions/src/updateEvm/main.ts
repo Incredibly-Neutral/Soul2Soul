@@ -35,7 +35,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     requireFields(input, ["publication", "jobs", "signature", "authorSafeAddress"]);
     if (!Array.isArray(input.jobs) || input.jobs.length === 0)
       throw "jobs must be a non-empty array";
-    const { publication, jobs, signature, authorSafeAddress, dev } = input;
+    const { publication, jobs, signature, authorSafeAddress, preview } = input;
 
     const signerAddress = extractSignerAddress(
       ethers.utils.hashMessage("lit actions auth"),
@@ -196,7 +196,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         TIMEOUTS.pinAdd,
       );
 
-      if (!dev) {
+      if (!preview) {
         const encoded = toHexString(newRootCid);
         trace.push(`writing ${encoded}`);
         const result = await evmWrite(

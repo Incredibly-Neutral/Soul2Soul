@@ -15,8 +15,16 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const action_name = 'updateEvm' // 'updateEvm'; // 'single'; //  ; // 
-const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
+const validActions = ['prep', 'single', 'updateEvm', 'encrypt', 'cbor'];
+
+const action_name = process.argv[2];
+if (!action_name || !validActions.includes(action_name)) {
+  console.error(`Usage: pnpm swap-action <action_name>`);
+  console.error(`Valid actions: ${validActions.join(', ')}`);
+  process.exit(1);
+}
+
+const actionPath = `./protocol/actions/dist/${action_name}/main.js`;
 const code = fs.readFileSync(actionPath,'utf-8')
 
 const ipfs = new S2SIPFSMethods(process.env.IPFS_URL!, process.env.PINATA_JWT!, process.env.PINATA_GATEWAY!)

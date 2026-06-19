@@ -1,4 +1,4 @@
-import { S2SJob } from "../../rendering";
+import { S2SJob } from "../../protocol/types";
 
 export type ActionResult<T> =
   | { ok: true;  action: string; data: T, trace: any[]}
@@ -13,6 +13,7 @@ export interface SingleInput {
   authorSafeAddress: string;
   publication: string;
   configCid?: string;
+  preview?: boolean;
 }
 export interface SingleData {
   job: S2SJob;
@@ -28,7 +29,7 @@ export interface EvmUpdateInput {
   jobs: S2SJob[];
   signature: string;
   authorSafeAddress: string;
-  dev?: boolean;
+  preview?: boolean;
 }
 
 export interface EvmUpdateData {

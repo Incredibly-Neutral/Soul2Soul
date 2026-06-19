@@ -19,7 +19,7 @@ export class S2SLicensesTab extends HTMLElement {
   private pendingLicenses: Array<License> = [];
   private unsubscriber!: () => void;
   private fetching: boolean = false;
-  private devMode: boolean = false;
+  private previewMode: boolean = false;
 
   constructor() {
     super();
@@ -172,7 +172,7 @@ export class S2SLicensesTab extends HTMLElement {
     }, 5000);
   }
 
-  private async bulkRender(dev: boolean) {
+  private async bulkRender(preview: boolean) {
 
     console.log("bulkrender")
 
@@ -191,8 +191,10 @@ export class S2SLicensesTab extends HTMLElement {
     const signature = await this.safeIntegration.signWithSigner("lit actions auth");
     // console.log(signature);
 
+    const contentIds = preview ? store.licenses.filter( l => l.encryption == false).map( l => l.contentId) : store.licenses.map( l => l.contentId)
+
     const res = await renderwithLitActions( 
-        dev,
+        preview,
         this.lit, 
         signature, 
         import.meta.env.VITE_LIT_USAGE_KEY, 
@@ -200,7 +202,7 @@ export class S2SLicensesTab extends HTMLElement {
         undefined,
         store.safeInfo?.safeAddress || "",
         publication,
-        store.licenses.filter( l => l.encryption == false).map( l => l.contentId),
+        contentIds,
         configCid 
     )
 
@@ -299,7 +301,7 @@ export class S2SLicensesTab extends HTMLElement {
 
       <div class="toolbar">
         <button data-action="bulkrender">Bulk Render</button>
-         <toggle-button bool="${this.devMode}" label="preview"></toggle-button>
+         <toggle-button bool="${this.previewMode}" label="preview"></toggle-button>
       </div>
 
      
@@ -399,9 +401,9 @@ export class S2SLicensesTab extends HTMLElement {
   }
 
   private attachEventListeners() {
-    // Dev toggle
+    // Preview toggle
     this.shadowRoot?.querySelector('toggle-button')?.addEventListener('toggle', ((e: CustomEvent) => {
-      this.devMode = e.detail.checked;
+      this.previewMode = e.detail.checked;
     }) as EventListener);
 
     // Refresh button
@@ -434,7 +436,7 @@ export class S2SLicensesTab extends HTMLElement {
         } else if (action === 'revoke') {
           this.revokeLicense(contentId!);
         } else if (action === 'bulkrender') {
-          this.bulkRender(this.devMode);
+          this.bulkRender(this.previewMode);
         }
       });
     });

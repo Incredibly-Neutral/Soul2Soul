@@ -129,33 +129,6 @@ export class ConfigBuilder {
     return await this.uploadToPinata(blob, filename);
   }
 
-  // Insert stylesheet link into template
-  insertStylesheetLink(templateContent: string, cid: string): string {
-    return templateContent.replace(
-      'insert_stylesheet.css',
-      `${this.pinataGateway}/ipfs/${cid}?filename=styles.css`
-    );
-  }
-
-  // Insert asset image CIDs into template
-  insertAssetImageCids(
-    templateContent: string,
-    assets: Array<{ path: string; cid: string }>
-  ): string {
-    for (const asset of assets) {
-      const filename = asset.path.split('/').pop()?.split('.')[0];
-      if (!filename) continue;
-
-      const imgRegex = new RegExp(`<img[^>]+id=["']${filename}["'][^>]*>`, 'gi');
-      templateContent = templateContent.replace(imgRegex, (match) => {
-        return match.replace(
-          /src=["'][^"']*["']/,
-          `src="${this.pinataGateway}/ipfs/${asset.cid}"`
-        );
-      });
-    }
-    return templateContent;
-  }
 
   // Build configuration from GitHub repository
   async buildConfig(

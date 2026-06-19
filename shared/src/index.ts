@@ -4,7 +4,7 @@ export * from './protocol';
 export * from './contracts';
 export * from './ipfs';
 export * from './publication';
-export * from './rendering';
+export * from './rendering/sequence';
 export * from './metadata';
 export * from './lit';
 export * from './pin';
