@@ -51,33 +51,29 @@ get a runtime-free subset). Each entry tailors the surface to one build context:
 | `@s2s/soul2soul-shared/lit-actions` (`lit-actions.ts`) | **types + ABIs only**, no runtime | `protocol/actions` (**action bundler**) | **INV-7:** never add runtime/Node deps; zod validators intentionally commented out (bundle size) |
 | `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | minimal: `getProtocolInfo`, `fetchById`, `LitService`, types | safe-app (**Vite**) | keep lean — "no Lit/Lens/CCIP baggage" |
 
-## Canonical type catalog (single source of truth — fixtures reference these)
+## Canonical type catalog (single source of truth)
 
 | type | file | shape (abbrev) |
 |---|---|---|
-| `S2SBody` | `rendering/types.ts` | **flat**: `id, author, content?, locale, parent, position, postType, creation/modifiedDate, title?, slug?, base?, custom?, publication?, tags[], attributes?, encryption` |
-| `S2STemplateData` | `rendering/types.ts` | render-time view: `id, controller, tags, language, position, encrypted, postType, publications[], collections?, path, base?, custom, content, dates` |
-| `S2SCollection` | `rendering/types.ts` | `source, query, filters?, key, value, slug` |
-| `S2SRipple` | `rendering/types.ts` | `origins[], destination, reference, query` |
-| `S2STemplateConfig` | `rendering/types.ts` | `reference, file, path, collections?` |
-| `S2SJob` | `rendering/types.ts` | `id, templateConfig, path?, templateData?, html?, revoked?` |
+| `S2SBody` | `protocol/types.ts` | **discriminated union**: `S2SBodyBase` + `S2SBodyPlain` (`encryption: false`, `content`, `title`, `slug`, `custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields) |
+| `S2STemplateData` | `protocol/types.ts` | render-time view: `id, controller, tags, language, position, encrypted, postType, publications[], collections?, path, base?, custom, content, dates` |
+| `S2SCollection` | `protocol/types.ts` | `source, query, filters?, key, value, slug` |
+| `S2SRipple` | `protocol/types.ts` | `origins[], destination, reference, query` |
+| `S2STemplateConfig` | `protocol/types.ts` | `reference, file, path, collections?, filters?` |
+| `S2SJob` | `protocol/types.ts` | `id, templateConfig, path?, templateData?, html?, revoked?` |
 | `PKP` | `protocol/types.ts` | `tokenId, publicKey, ethAddress` — **tokenId/publicKey vestigial (GAP-11)** |
 | `S2SProtocolInfo` | `protocol/types.ts` | `addr?, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords, pkp, litAction{Prep,Cbor,Single,RootUpdate}` |
 | `S2SPublicationConfig` | `publication/types.ts` | `assetsCid, contract, dataGateway, mapping, name, templateCid` |
 | `S2SPublication` | `publication/types.ts` | `name, owners[], authors[], contract?, configCid?, feed?, devRepository, branch` (← GitHub repo+branch for templates/assets) |
 | `S2SContentInfo` | `metadata/types.ts` | provenance fields signed into the page (INV-5) |
 | `S2SPublicContent` / `S2SToEncrypt` | `content/types.ts` | author-side content + the encrypted subset |
-
-⚠ **Duplicate type definitions (drift hazard):** `S2STemplateConfig` and `S2SCollection` are defined
-**twice** — in `rendering/types.ts` *and* inline in `publication/types.ts` (the latter adds
-`filters?`). Pick one home or they will diverge silently.
-
+|
 ## Module map (services)
 
 | module | role | notes |
 |---|---|---|
 | `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial) |
-| `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + types | drives the pipeline; selects Bun (dev) vs Lit (prod) |
+| `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers | drives the pipeline; selects Bun (preview) vs Lit (prod). Types re-exported from `protocol/types.ts` |
 | `lit/` | `LitService` (Chipotle REST client), `actions/encrypt`, `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side) |
 | `lens/` | Lens GraphQL client (`fetchById`, queries) | mirrors in-action `lens.factory`; Lens testnet (GAP-10) |
@@ -95,13 +91,10 @@ get a runtime-free subset). Each entry tailors the surface to one build context:
 `pkpSchema`, + `validateMapping`/`validateConfig`/`validateProtocol`. These are the boundary
 validators the earlier testing discussion called for — **but client-side only**; `lit-actions.ts`
 comments them out so they never enter the action bundle (INV-7 / the "zod is overkill in actions"
-decision). So the plan splits cleanly: **reuse these zod schemas for client/app + sequence tests;
+decision). The zod schemas now mirror the type shapes precisely (discriminated union for `bodySchema`,
+`jobSchema.html` optional, single-source `S2STemplateConfig`/`S2SCollection`). The split is clean:
+**reuse these zod schemas for client/app + sequence tests;
 mirror them as tiny dependency-free asserts at the action boundaries.**
-
-⚠ **Schema↔type mismatch to confirm:** `bodySchema` expects a **nested** `attributes: {parent,
-position, postType, …}`, but `S2SBody` (and `formatSingle` in `lens.factory`) is **flat**. Either
-`bodySchema` validates the *raw Lens* shape (pre-format) or it's stale relative to `S2SBody`.
-Resolve before relying on it — it's the exact shape-drift class the tests target.
 
 ## Invariants this component preserves
 
@@ -113,8 +106,6 @@ INV-6/8/11 etc. in the consumers.
 
 - **Two `getProtocolInfo`** (here viem; action ethers) — same key set, different field order;
   must co-evolve (INV-2). The `dev` branch here is vestigial (GAP-8).
-- **Duplicate `S2STemplateConfig`/`S2SCollection`** (rendering vs publication types).
-- **`bodySchema` nested-attributes vs flat `S2SBody`** mismatch (above).
 - **PKP `tokenId`/`publicKey` vestigial** (GAP-11) — prune from `PKP`, `S2SProtocolInfo` pkp, and the
   record-key set.
 - zod exists client-side but not in actions — *by design*, not a gap.
@@ -132,7 +123,7 @@ INV-6/8/11 etc. in the consumers.
   test coverage. The right place to assert shared's contracts is at the consumer boundaries.
 - The zod schemas **are** the boundary fixtures — assert real `getProtocolInfo`/`getConfig`/
   `fetchById` outputs parse against them at the consumer that calls them; the first failure names the field.
-- Consolidate the duplicate types and resolve the `bodySchema` shape **into shared** first, so every
+- Consolidate the duplicate types and resolve the `bodySchema` shape → **done** (SEE CURRENT: discriminated union at `protocol/types.ts`, matching `z.discriminatedUnion` at `publication/validation.ts`)
   consumer's fixtures encode one truth.
 - `renderwithLitActions` is the integration entry: drive it with fixtures through the Bun runner
   (same path as preview) for the prep→single→merged sequence test (SPEC-protocol-actions seams).

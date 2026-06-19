@@ -67,6 +67,7 @@ export const SingleActionInputSchema = z.object({
   authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
   publication: z.string().min(1, 'publication ENS name is required'),
   configCid: z.string().optional(),
+  preview: z.boolean().optional(),
 });
 
 export type SingleActionInput = z.infer<typeof SingleActionInputSchema>;
@@ -123,7 +124,7 @@ export const EvmUpdateActionInputSchema = z.object({
   jobs: z.array(jobSchema).min(1, 'jobs must have at least one item'),
   signature: z.string().min(1, 'signature is required'),
   authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
-  dev: z.boolean().optional(),
+  preview: z.boolean().optional(),
 });
 
 export type EvmUpdateActionInput = z.infer<typeof EvmUpdateActionInputSchema>;

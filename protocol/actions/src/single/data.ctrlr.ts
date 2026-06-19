@@ -10,7 +10,7 @@ const createPath = (body: S2SBody, templateConfig: S2STemplateConfig) : string =
       ? templateConfig.path
       : `/en${templateConfig.path}`;
     
-  if (body.slug && path.includes('{slug}')) {
+  if (!body.encryption && body.slug && path.includes('{slug}')) {
     path = path.replace("{slug}", body.slug);
   }
 
@@ -18,13 +18,24 @@ const createPath = (body: S2SBody, templateConfig: S2STemplateConfig) : string =
 };
 
 export const mergeDecrypted = (
-  body: any,
+  body: S2SBodyEncrypted,
   decrypted: any,
-) => {
+): S2SBodyPlain => {
 
   return {
-    ...body,
+    id: body.id,
+    author: body.author,
+    locale: body.locale,
+    parent: body.parent,
+    position: body.position,
+    postType: body.postType,
+    creationDate: body.creationDate,
+    modifiedDate: body.modifiedDate,
+    tags: body.tags,
+    attributes: body.attributes,
+    publication: body.publication,
     base: decrypted.base || undefined,
+    encryption: false as const,
     content: decrypted.content,
     title: decrypted.title,
     slug: decrypted.slug,
@@ -54,28 +65,30 @@ export const initTemplateData = async (
   publicationModule: string,
 ) => {
 
-  let revoked = false;
-  let path : string | undefined = undefined;
-
   if (body.encryption) {
-    let decrypted = await decrypt(protocolInfo.pkp.ethAddress, body, authorSafeAddress, publicationModule, signerAddress);
-    if (!decrypted) {
-        revoked = true
-    } else {
-      body = mergeDecrypted(body, decrypted);
-    }
+    const decrypted = await decrypt(protocolInfo.pkp.ethAddress, body, authorSafeAddress, publicationModule, signerAddress);
+    if (!decrypted) return {
+      ...body,
+      path: createPath(body, templateConfig),
+      custom: {},
+      content: "",
+      revoked: true,
+    };
+    body = mergeDecrypted(body, decrypted);
   }
+
+  const path = createPath(body, templateConfig);
 
   return {
     ...body,
     assets_gateway: protocolInfo.assets_gateway,
-    path: createPath(body, templateConfig),
+    path,
     custom: body.custom || {},
     content: (body.content || "")
       .replace(/\\n/g, "\n")
       .replace(/\\"/g, '"')
       .replace(/\\\\/g, "\\"),
-    revoked
+    revoked: false,
   };
 
 }

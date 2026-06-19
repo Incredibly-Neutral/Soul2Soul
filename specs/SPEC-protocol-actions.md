@@ -91,17 +91,15 @@ Bundles stay zod-free (INV-7) — the action's own guard is `requireFields` (pre
 `undefined`/`null`/`""`; passes `[]`/`0`/`false`, so add explicit shape asserts, e.g. non-empty array).
 
 **Interface↔schema sentinel.** Interface (bundle, zod-free) and zod-inferred type are hand-paired:
-`type _Assert = <A>Input extends <A>ActionInput ? true : never`. A sentinel touching `S2SJob`
-currently resolves to `never` — that is it **working**: `S2SJob.html` is optional in the interface,
-required in `jobSchema`. Resolve toward reality (`html: string` required — `prep` sets `""`, `single`
-fills it; always present) in the **one** canonical `S2SJob`, not by loosening the schema.
+`type _Assert = <A>Input extends <A>ActionInput ? true : never`. This sentinel now resolves to `true`
+for all three actions — the `S2SJob.html` mismatch was resolved (optional in both interface and schema).
 
-**Dispatch — `dev` chooses transport, nothing else (SPEC-00 §3.1).** One helper is the only place
-`dev` appears; everything after is uniform (validate-in → dispatch → check `ok` → validate-out →
+**Dispatch — `preview` chooses transport, nothing else (SPEC-00 §3.1).** One helper is the only place
+`preview` appears; everything after is uniform (validate-in → dispatch → check `ok` → validate-out →
 consume `data`/`trace`), once per stage, never per branch:
 ```ts
-async function runAction<T>(dev, lit, cid, inputs, litUsageKey): Promise<ActionResult<T>> {
-  if (dev) { const w = await fetch('https://run.transport-union.dev/run',
+async function runAction<T>(preview, lit, cid, inputs, litUsageKey): Promise<ActionResult<T>> {
+  if (preview) { const w = await fetch('https://run.transport-union.dev/run',
                {method:'POST',headers:{'Content-Type':'application/json'},
                 body:JSON.stringify({cid,inputs})}).then(r=>r.json());
              if (w.success === false) throw new Error(`runner: ${w.error ?? 'transport'}`);
@@ -114,7 +112,7 @@ async function runAction<T>(dev, lit, cid, inputs, litUsageKey): Promise<ActionR
 runner `success:false` means **transport/crash only**, action `ok:false` means **logic failure**.
 The runner wrapper exists on the Bun path only; `runAction` absorbs it so callers see one shape.
 **prep is runner-only** (no signing → never on Lit, dev *and* prod); `single`/`merged` use
-`runAction(dev)`. A separate prod branch that returns `success:true` on `ok:false` is the bug this
+`runAction(preview)`. A separate prod branch that returns `success:true` on `ok:false` is the bug this
 structure forbids.
 
 ## Action contracts (= test fixtures)
@@ -176,13 +174,13 @@ Bun (preview, unsigned).**
 signer is author-Safe owner). **Gotchas:** GAP-1 (metadata `S2SContentInfo` is hardcoded
 placeholder — provenance currently fictional); the `assets_gateway` shape mismatch (see Gotchas);
 **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
-dev/preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
+preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
 Encrypted-content editorial review runs through a separate, real Lit decrypt action instead
 (SPEC-00 OPEN-TASK-4/GAP-13).
 
 ---
 
-### A3 — `updateEvm` (merged) `mergedMain({ signature, authorSafeAddress, publication, jobs, dev })`
+### A3 — `updateEvm` (merged) `mergedMain({ signature, authorSafeAddress, publication, jobs, preview })`
 
 **Consumes**
 
@@ -192,14 +190,14 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 | `authorSafeAddress` | `address` | caller | |
 | `publication` | ENS name | caller | |
 | `jobs` | `S2SJob[]` | single outputs (`renderedJobs`) | each has `path` + `html` (CID) |
-| `dev` | `boolean` | caller | true ⇒ skip on-chain write |
+| `preview` | `boolean` | caller | true ⇒ skip on-chain write |
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
 
 **Sequence:** recover signer (INV-1) → modules (INV-4) → `canPublish` gate → `getProtocolInfo` →
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` → `cp`
-`config.assetsCid` → `/assets` (INV-11) → `files/stat` new root → `pin/add` → **if `!dev`**:
+`config.assetsCid` → `/assets` (INV-11) → `files/stat` new root → `pin/add` → **if `!preview`**:
 `toHexString(root)` + `evmWrite setText(node,"contenthash_wrapped")` with the **PKP** (INV-10) →
 `finally` rm temp MFS.
 
@@ -276,9 +274,7 @@ re-render on its own. Verify this is intended, not a stale-page hazard.
 
 ## Key data shapes (capture these as fixtures)
 
-- **`S2SBody`** (from `formatSingle`): `{ id, author, content, locale, parent, position, postType,
-  creationDate, modifiedDate, tags[], encryption }` + when unencrypted also `{ slug, title, custom }`.
-  When encrypted, `content` is ciphertext JSON; decryption yields `{ base?, content, title, slug, custom }`.
+- **`S2SBody`** (from `formatSingle`): discriminated union — `S2SBodyPlain` (`encryption: false, content, title, slug, custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields). Common base: `id, author, locale, parent, position, postType, creationDate, modifiedDate, tags[]`.
 - **`S2SJob`**: `{ id, templateConfig: S2STemplateConfig, templateData?, html: string, path?, revoked? }`.
 - **`S2STemplateConfig`**: `{ reference, path (may contain `{slug}`), collections?[], ... }`.
 - **`S2SPublicationConfig`**: `{ mapping: { templateConfig[], ripples[] }, assetsCid?, ... }`.

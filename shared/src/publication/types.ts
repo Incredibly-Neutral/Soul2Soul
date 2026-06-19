@@ -1,25 +1,12 @@
-import { S2SRipple } from '../rendering';
+import { S2SRipple, type S2STemplateConfig } from '../protocol/types';
 
-type S2SQuery = {
+// Import the canonical types from protocol/types.ts.
+// Adding the S2SQuery shape here as a convenience re-export.
+export type { S2STemplateConfig };
+
+export type S2SQuery = {
     method: string,
     args?: any
-}
-
-type S2SCollection = {
-    slug: string,
-    source: string,
-    key: string,
-    value: string,
-    query: S2SQuery,
-    filters?: any[]
-}
-
-type S2STemplateConfig = {
-    reference: string,
-    file: string,
-    path: string,
-    collections?: S2SCollection[],
-    filters?: any[]  // ✅ ADD THIS
 }
 
 type S2SMapping = {

@@ -32,7 +32,7 @@ runner (one renderer, run on Lit/Bun, SPEC-00 §3.1). Does not own publishing, c
 | path | role | state |
 |---|---|---|
 | `renderer/` (`html.ctrlr`, `handlebars.factory`, `main.ts`) | Handlebars render engine; reaches into `protocol/actions/src/libs/ipfs.factory` | **second renderer copy** — retire in favor of the action renderer via Bun |
-| `dev-assistant/` (`main.ctrlr`, `local-config-builder`, ipfs/ens/pinata/fs) | local render loop: `getProtocolInfo` → `renderwithLitActions(dev=true)` | **pre-Chipotle** (Datil + `CHRONICLE_YELLOWSTONE` + `mintCapacityToken` + session sigs) → replace with Bun |
+| `dev-assistant/` (`main.ctrlr`, `local-config-builder`, ipfs/ens/pinata/fs) | local render loop: `getProtocolInfo` → `renderwithLitActions(preview=true)` | **pre-Chipotle** (Datil + `CHRONICLE_YELLOWSTONE` + `mintCapacityToken` + session sigs) → replace with Bun |
 | `scripts/` (`build`, `render`, `upload`, `protocol`, `ens`, `ipfs`, `pinata`, `local-config-builder`) | dev/deploy scripts | partly legacy |
 
 ## The template-authoring contract (what an author must honor)

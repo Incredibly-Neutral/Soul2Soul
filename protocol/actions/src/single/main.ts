@@ -21,7 +21,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
   try {
     requireFields(input, ["job", "signature", "authorSafeAddress", "publication"]);
-    const { job, signature, authorSafeAddress, configCid, publication } = input;
+    const { job, signature, authorSafeAddress, configCid, publication, preview } = input;
 
     const signerAddress = extractSignerAddress(ethers.utils.hashMessage("lit actions auth"), signature);
 
@@ -130,13 +130,12 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
       html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
 
-      console.log("HTML2", html.slice(0, 200));
-
       let t6 = Date.now();
       trace.push(`signed: ${((t6 - t0) / 1000).toFixed(3)} seconds`);
 
       const htmlCid = await uploadFile(html!);
       job.html = htmlCid;
+     
 
     } else {
       const revokedMsg = "Content was revoked or failed to decrypt";

@@ -129,7 +129,7 @@ client (neutralpress) ── signature over "lit actions auth"
 ```
 
 Orchestrated client-side by `shared/src/rendering/index.ts :: renderwithLitActions`.
-In `dev=true` every stage runs through the **Bun serverless runner** at `run.transport-union.dev`,
+In `preview=true` every stage runs through the **Bun serverless runner** at `run.transport-union.dev`,
 which replicates the Lit Actions **without signing** (the shim's `Lit.Actions.getPrivateKey`
 has no signing capability). In production SINGLE and MERGED run on Lit nodes.
 
@@ -293,7 +293,7 @@ One sentence: what this component owns, and what it explicitly does NOT own.
   breaks. Origin-per-CID is the only way previews render like the published site (ENS·`.limo`
   is likewise origin-per-name). **IPNS is explicitly rejected** — propagation is too slow for a
   per-render preview. The MERGED action already produces and pins the root CID to the Kubo node
-  in preview (`dev=true`) without an on-chain write, so this gateway is the natural way to view it.
+  in preview (`preview=true`) without an on-chain write, so this gateway is the natural way to view it.
   **Implementation constraints (IPFS subdomain-gateway spec):**
   - The subdomain label **must be a CIDv1 in Base32** — the pipeline currently emits CIDv0
     (`Qm…`, Base58), which is case-sensitive and invalid as a DNS/Origin label. Either emit the
@@ -329,9 +329,8 @@ One sentence: what this component owns, and what it explicitly does NOT own.
   *before* paying the Lit render cost — and validates the output on return. Keep a tiny
   dependency-free in-action `requireFields` assert as a backstop (the bundle stays zod-free, INV-7).
   Notes: this is **developer-ergonomics/shape-correctness, not a trust boundary** (security stays the
-  on-chain gates + TEE); the input schemas **double as the per-action test fixtures**; depends on
-  resolving the duplicate/ mismatched shapes first (SPEC-shared: `bodySchema`↔`S2SBody`, dup
-  `S2STemplateConfig`).
+  on-chain gates + TEE). Resolved: `bodySchema`↔`S2SBody` now a discriminated union (`protocol/types.ts` + `publication/validation.ts`),
+  `S2STemplateConfig`/`S2SCollection` single-sourced in `protocol/types.ts`.
 
 ## 10. Working environment for an isolated agent (Hermes-harness / sandboxed container)
 

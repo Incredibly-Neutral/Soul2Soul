@@ -2,7 +2,7 @@ import { EnablePostActionResultFragment } from '@lens-protocol/client';
 import { prepareEncodeFunctionData } from 'viem';
 
 // TYPES
-export type { S2SJob, S2STemplateConfig, S2SBody, S2SRipple} from './rendering';
+export type { S2SJob, S2STemplateConfig, S2SBody, S2SRipple} from './protocol/types';
 export type { S2SPublicationConfig } from './publication';
 export type { S2SProtocolInfo, PKP } from './protocol';
 export type { S2SContentInfo } from './metadata';
