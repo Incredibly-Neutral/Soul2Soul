@@ -71,4 +71,5 @@ export const jobSchema = z.object({
   path: z.string().optional(),
   templateData: z.any(),
   html: z.string(),
+  revoked: z.boolean().optional(),
 });

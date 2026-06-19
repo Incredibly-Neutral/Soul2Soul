@@ -59,6 +59,64 @@ These compile into each bundled action — they are this package's code, not an 
 **Constraint:** nothing imported here may pull in a runtime/Node dep (would break the bundle). The
 zod validators in shared are deliberately *not* exported through this entry.
 
+## I/O contract (generic — the per-action contracts in §A are instances of this)
+
+The **definition** of conformant action I/O. The `lit-actions-io` skill is the *procedure* to
+produce it; **if skill and spec disagree, this section wins.** The Consumes/Produces tables in
+§A1–A3 are the per-action instances.
+
+**Envelope — every action returns one shape.** `ActionResult<T>` (`shared/src/lit/actions/types.ts`):
+```ts
+type ActionResult<T> =
+  | { ok: true;  action: string; data: T;       trace: any[] }
+  | { ok: false; action: string; error: string; trace: any[] };
+```
+Discriminated on `ok`; `action` is the producer (`"prep"|"single"|"evm-update"`). `trace` is on
+**both** branches → survives a throw. Per-action `<A>Input`/`<A>Data` interfaces also live in
+`types.ts`; `Data` is the `T`. Types re-export through `@s2s/soul2soul-shared/lit-actions`
+(zod-free, INV-7).
+
+**Fatal vs non-fatal — the rule that decides throw vs record.** Fatal (can't produce a result) →
+`throw` a **string** naming the offending value → caught → `{ ok:false, error }`. Non-fatal (result
+still produced, e.g. one collection item failed to decrypt but the page rendered) → push to `trace`,
+stay `ok:true`. Never join non-fatal problems into `error`. `trace` is declared **before** the
+`try` so the `catch` returns it too. Throw strings, not `Error` (Bun/Deno serialize `Error.message`
+inconsistently).
+
+**Validation — client-side only, both ends.** zod schemas live in `shared/src/rendering/action-io.ts`,
+reusing the canonical base schemas in **`shared/src/publication/validation.ts`** (never a second
+schemas file; SPEC-00 §0). `validate<A>Input` runs **before dispatch** (fail with the field name
+before paying Lit cost); `validate<A>Output` validates the returned `ActionResult` **before consume**.
+Bundles stay zod-free (INV-7) — the action's own guard is `requireFields` (presence-only:
+`undefined`/`null`/`""`; passes `[]`/`0`/`false`, so add explicit shape asserts, e.g. non-empty array).
+
+**Interface↔schema sentinel.** Interface (bundle, zod-free) and zod-inferred type are hand-paired:
+`type _Assert = <A>Input extends <A>ActionInput ? true : never`. A sentinel touching `S2SJob`
+currently resolves to `never` — that is it **working**: `S2SJob.html` is optional in the interface,
+required in `jobSchema`. Resolve toward reality (`html: string` required — `prep` sets `""`, `single`
+fills it; always present) in the **one** canonical `S2SJob`, not by loosening the schema.
+
+**Dispatch — `dev` chooses transport, nothing else (SPEC-00 §3.1).** One helper is the only place
+`dev` appears; everything after is uniform (validate-in → dispatch → check `ok` → validate-out →
+consume `data`/`trace`), once per stage, never per branch:
+```ts
+async function runAction<T>(dev, lit, cid, inputs, litUsageKey): Promise<ActionResult<T>> {
+  if (dev) { const w = await fetch('https://run.transport-union.dev/run',
+               {method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({cid,inputs})}).then(r=>r.json());
+             if (w.success === false) throw new Error(`runner: ${w.error ?? 'transport'}`);
+             return w.response; }                              // Bun wraps {success,response}
+  const code = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`).then(r=>r.text());
+  return (await lit.executeAction(code, inputs, litUsageKey)).response;   // Lit: response IS the ActionResult
+}
+```
+**Two error levels, verified:** a thrown action error returns `success:true, response:{ok:false}`, so
+runner `success:false` means **transport/crash only**, action `ok:false` means **logic failure**.
+The runner wrapper exists on the Bun path only; `runAction` absorbs it so callers see one shape.
+**prep is runner-only** (no signing → never on Lit, dev *and* prod); `single`/`merged` use
+`runAction(dev)`. A separate prod branch that returns `success:true` on `ok:false` is the bug this
+structure forbids.
+
 ## Action contracts (= test fixtures)
 
 ### A1 — `prep` `main({ protocolInfo, authorSafeAddress, publication, configCid, contentIds })`
@@ -116,7 +174,11 @@ Bun (preview, unsigned).**
 
 **Invariants:** INV-1, 5, 7, 9, and the gates (`canRead` = author whitelisted/licensed **AND**
 signer is author-Safe owner). **Gotchas:** GAP-1 (metadata `S2SContentInfo` is hardcoded
-placeholder — provenance currently fictional); the `assets_gateway` shape mismatch (see Gotchas).
+placeholder — provenance currently fictional); the `assets_gateway` shape mismatch (see Gotchas);
+**GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
+dev/preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
+Encrypted-content editorial review runs through a separate, real Lit decrypt action instead
+(SPEC-00 OPEN-TASK-4/GAP-13).
 
 ---
 

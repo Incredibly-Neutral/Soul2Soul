@@ -3,212 +3,124 @@ export * from './types';
 import * as ethers from 'ethers';
 (global as any).ethers = ethers;
 
-import { NumberAttributeSchema } from '@lens-protocol/metadata';
 import { LitService } from '../lit';
-import { validatePrepInput, validatePrepOutput } from './action-io';
+import {
+  validateEvmUpdateInput,
+  validateEvmUpdateOutput,
+  validatePrepInput,
+  validatePrepOutput,
+  validateSingleInput,
+  validateSingleOutput,
+} from './action-io';
+import { S2SJob } from './types';
 
-const gateway = 'https://ipfs.transport-union.dev';
+// ===========================================================================
+// runAction — single source of truth for dev/prod transport
+// ===========================================================================
 
-export const renderwithLitActions =
-  async (
-    dev: boolean,
-    lit: LitService,
-    signature: string, // move outside
-    litUsageKey: string,
-    protocolInfo: S2SProtocolInfo,
-    notice: any,
-    authorSafeAddress: string,
-    publication: string,
-    contentIds: string[],
-    configCid?: string,
-    
-  ) => {
-
-
-    // ====================== Prep (local, no Lit cost) ======================
-    if (notice) notice.setMessage('prepping render ...');
-    else console.log('prepping render, Dev is ', dev);
-
-    // Build inputs once, validate before any network call
-    const prepInputs = {
-      publication:'kip',
-      configCid: configCid ?? undefined,
-      contentIds,
-    };
-    validatePrepInput(prepInputs);
-
-    const prepResult: any = await fetch(
-      `https://run.transport-union.dev/run`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cid: protocolInfo.litActionPrep,
-          inputs: prepInputs,
-        }),
-      },
-    ).then(async r => {
-      
-      const text = await r.text();
-      console.log(text)
-      try {
-
-        return JSON.parse(text);
-      } catch {
-        return { ok: false, action: 'prep', error: `Server returned ${r.status}: ${text.slice(0,200)}` };
-      }
+/**
+ * Executes a Lit Action on either the Bun runner (preview) or Lit nodes
+ * (production). Returns ActionBarResult<T> uniformally.
+ */
+async function runAction(
+  dev: boolean,
+  lit: LitService,
+  cid: string,
+  inputs: Record<string, unknown>,
+  litUsageKey?: string,
+): Promise<unknown> {
+  if (dev) {
+    const r = await fetch('https://run.transport-union.dev/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cid, inputs }),
     });
+    console.log(r)
+    const wrapped = await r.json();
+    if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
+    return wrapped.response; // ActiedonBarResult<T>
+  } else {
+    const code = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`).then(r => r.text());
+    const raw = await lit.executeAction(code, inputs as any, litUsageKey!);
+    // failure is logged in lit service
+    return raw.response;      // ActionBarResult<T> — same shape
+  }
+}
 
-    if (!prepResult.success) throw new Error(`runner: ${prepResult.error ?? 'transport failure'}`);
-    if (!prepResult.response.ok) throw new Error(`[${prepResult.response.action}] ${prepResult.response.error}`);
+// ===========================================================================
+// renderWithLitActions
+// ===========================================================================
 
-    // Validate prep output shape before consuming jobs
-    const validated = validatePrepOutput(prepResult.response);
-    if (!validated.ok) throw new Error(`[${validated.action}] ${validated.error}`);
-    let jobs = validated.data.jobs;
-    console.log(jobs);
+export const renderwithLitActions = async (
+  dev: boolean,
+  lit: LitService,
+  signature: string,
+  litUsageKey: string,
+  protocolInfo: S2SProtocolInfo,
+  notice: any, 
+  authorSafeAddress: string,
+  publication: string,
+  contentIds: string[],
+  configCid?: string,
+) => {
 
-    // ====================== Single actions (Lit) ======================
-    if (notice) notice.setMessage('rendering ...');
+  let jobs: S2SJob[] = [];
+  let cid; null;
 
-    let results = await Promise.all(
-      jobs.map(async (job: any, index: number) => {
-        // Stagger to avoid rate limits
-        // await new Promise(r => setTimeout(r, index * 1000));
+  // ---------------- Preperation Stage ------------------------------------
+  
+  if (notice) notice.setMessage('prepping render ...'); else console.log('dev:', dev);
 
-        let capturedLogs: string[] = [];
-        const inputs = {
-          signature,
-          authorSafeAddress,
-          configCid,
-          publication,
-          job
-        };
+  const prepInputs = validatePrepInput({ publication, configCid, contentIds });
+  const prepAction = await runAction( true, lit, protocolInfo.litActionPrep, prepInputs, litUsageKey );
+  const validatedPrep = validatePrepOutput(prepAction);
+  if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2)); 
+  if (validatedPrep.ok) {
+    jobs = validatedPrep.data?.jobs;
+    console.log('Jobs dispatched:', jobs.length);
+  }
 
-        try {
-          let result: any;
+  // ---------------- Single Actions Stage ----------------------------------
+  
+  if (notice) notice.setMessage('rendering single actions ...'); else console.log('dispatching single actions...');
 
-          if (dev) {
-            // Preview: run via serverless container
-            const resp = await fetch(
-              `https://run.transport-union.dev/run`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  cid: protocolInfo.litActionSingle,
-                  inputs,
-                }),
-              },
-            ).then(r => r.json());
+  const allResults = await Promise.all(
+    jobs.map(async (job: any, index: number) => {
+      try {
+        const singleInputs = validateSingleInput({ signature, authorSafeAddress, configCid, publication, job });
+        const actionResult = await runAction(dev, lit, protocolInfo.litActionSingle, singleInputs, litUsageKey);
+        return { success: true, index, data: actionResult };
+      } catch (err: any) {
+        return { success: false, index, error: err?.message ?? String(err) };
+      }
+    }),
+  );
 
-            result = resp;
+  // log every job that didn't cleanly succeed — both failure kinds, full object
+  for (const r of allResults) {
+    const failed = !r.success || !(r.data as any)?.ok;
+    if (failed) console.error(`[single ${r.index}]`, JSON.stringify(r.data ?? { error: r.error }, null, 2));
+  }
 
-          } else {
-            // Production: Lit actions on-chain
-            const singleResp = await fetch(
-              `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionSingle}`,
-            );
-            const singleCode = await singleResp.text();
+  const successful = allResults.filter((r: any) => r.success && r.data?.ok);
+  // Map the rendered job data out for the merged update
+  const renderedJobs = successful.map((r: any) => r.data.data.job).filter((j: any) => j?.path);
 
-            result = await lit.executeAction(
-              singleCode,
-              inputs,
-              litUsageKey,
-            );
-          }
+  // ---------------- EVM Root Update Stage ---------------------------------
+  
+  if (notice) notice.setMessage('merging EVM update ...'); else console.log('preparing evm update...');
 
-          console.log(result)
+  const evmInputs = validateEvmUpdateInput({ signature, authorSafeAddress, publication, jobs: renderedJobs, dev });
 
-          return { success: true, index, response: result.response, logs: capturedLogs };
-        } catch (error: any) {
-          return {
-            success: false,
-            index,
-            error,
-            logs:
-              error?.logs ||
-              error?.response?.logs ||
-              error?.details?.logs ||
-              capturedLogs,
-          };
-        }
-      }),
-    );
+  const evmAction = await runAction( dev, lit, protocolInfo.litActionRootUpdate, evmInputs, litUsageKey);
+  console.log(evmAction)
+  const validated = validateEvmUpdateOutput(evmAction);
+  if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
+  if (validated.ok) cid = validated.data.cid
 
-    const successful = results.filter((r: any) => r.response?.success);
-    const failed = results.filter((r: any) => !r.response?.success);
-    console.log(`Rendered: ${successful.length}/${jobs.length}`);
-    failed.forEach(
-      (f: any) =>
-        console.error(
-          `Job ${f.index} failed:`,
-          f.response?.errors,
-          f.error,
-        ),
-    );
-
-    const renderedJobs = successful
-      .map((r: any) => r.response?.job)
-      .filter((j: any) => j?.path);
-    console.log('renderedJobs:', renderedJobs);
-
-    // ====================== Merged action (Lit) ======================
-    // Replaces cbor + root-update: builds UnixFS root, pins to Pinata,
-    // writes contenthash_wrapped on-chain (all in one PKP-signed action).
-    if (notice) notice.setMessage('merging ...');
-
-    console.log("JS", renderedJobs.map ( (j:any) => j.html))
-
-    const updateInputs = {
-      signature,
-      authorSafeAddress,
-      publication,
-      jobs: renderedJobs,
-      dev
-    };
-
-    let updateResult: any;
-
-    if (dev) {
-      // Preview: run via serverless container
-      const updateResp = await fetch(
-        `https://run.transport-union.dev/run`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cid: protocolInfo.litActionRootUpdate,
-            inputs: updateInputs,
-          }),
-        },
-      ).then(r => r.json());
-
-      // Normalize raw action response to production return shape
-      updateResult = { response: { ...updateResp.response, success: updateResp.success } };
-    } else {
-      // Production: Lit actions on-chain
-
-      if (notice) notice.setMessage('publishing ...');
-      
-      const updateCode = await fetch(
-        `https://neutralpress.mypinata.cloud/ipfs/${protocolInfo.litActionRootUpdate}`,
-      ).then(r => r.text());
-
-      const raw: any = await lit.executeAction(
-        updateCode,
-        updateInputs,
-        litUsageKey,
-      );
-      updateResult = { response: { ...raw.response, success: raw.success } };
-    }
-
-    console.log('UR', updateResult);
-
-    return {
-      success: true,
-      cid: updateResult.response.cid,
-      path: renderedJobs[0] ? renderedJobs[0].path || "" : "",
-      jobs: renderedJobs,
-    };
+  return {
+    success: validated.ok ? true : false,
+    cid,
+    path: ''
   };
+};
