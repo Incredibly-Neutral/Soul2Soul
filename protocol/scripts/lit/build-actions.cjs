@@ -5,7 +5,6 @@ const fs = require("fs");
 const entries = [
   { in: "./protocol/actions/src/prep/main.ts", out: "./protocol/actions/dist/prep/main.js" },
   { in: "./protocol/actions/src/single/main.ts", out: "./protocol/actions/dist/single/main.js" },
-  // { in: "./protocol/actions/src/cbor/main.ts", out: "./protocol/actions/dist/cbor/main.js" },
   { in: "./protocol/actions/src/updateEvm/main.ts", out: "./protocol/actions/dist/updateEvm/main.js" },
 ];
 

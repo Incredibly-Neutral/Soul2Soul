@@ -189,7 +189,7 @@ export class S2SLicensesTab extends HTMLElement {
     if (safeInfo == undefined) return;
 
     const signature = await this.safeIntegration.signWithSigner("lit actions auth");
-    console.log(signature);
+    // console.log(signature);
 
     const res = await renderwithLitActions( 
         dev,
@@ -200,17 +200,16 @@ export class S2SLicensesTab extends HTMLElement {
         undefined,
         store.safeInfo?.safeAddress || "",
         publication,
-        store.licenses.map( l => l.contentId),
+        store.licenses.filter( l => l.encryption == false).map( l => l.contentId),
         configCid 
     )
 
     console.log("success:", res.success);
 
     if(res.cid) {
-
-				await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
-				console.log("pinned on pinata")
-			}
+      await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
+      console.log("pinned on pinata")
+    }
 
   }
 

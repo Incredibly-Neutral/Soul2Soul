@@ -7,6 +7,9 @@ import { requireFields } from "../libs/helpers";
 const ACTION = "prep";
 
 async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
+
+  let trace: any[] = [];
+
   try {
     requireFields(input, ["publication", "contentIds"]);          // configCid is optional
     const { publication, configCid, contentIds } = input;
@@ -55,9 +58,9 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
       uniqueJobs.push(job);
     }
 
-    return { ok: true, action: ACTION, data: { jobs: uniqueJobs } };
+    return { ok: true, action: ACTION, data: { jobs: uniqueJobs }, trace };
   } catch (e) {
     return { ok: false, action: ACTION,
-             error: typeof e === "string" ? e : (e as Error)?.message ?? String(e) };
+             error: typeof e === "string" ? e : (e as Error)?.message ?? String(e), trace };
   }
 }
