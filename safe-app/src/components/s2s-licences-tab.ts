@@ -1,5 +1,6 @@
 // s2s-licenses-tab.ts
 import { fetchById, LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
+import { CID } from 'multiformats';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -212,6 +213,10 @@ export class S2SLicensesTab extends HTMLElement {
     if(res.cid) {
       await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
       console.log("pinned on pinata")
+
+      // Push the new root CID to the store — same transformation as fetchFreshData
+      const rootCid = CID.parse(res.cid).toV1().toString();
+      store.setRoot(rootCid);
     }
 
   }

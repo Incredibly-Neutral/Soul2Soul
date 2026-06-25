@@ -1,2 +1,2 @@
 export { renderwithLitActions } from './sequence';
-export * from './action-io'
+export * from './action-io';

@@ -4,9 +4,14 @@ import { IpfsCtrlr, ipfsController } from "./ipfs/ipfs.ctrlr.js";;
 import { PinataService } from "./ipfs/pinata.ctrlr.js";
 import { LitService } from "@s2s/soul2soul-shared";
 import { LensService } from "./lens/lens.ctrlr.js";
-import { IPermissionlessSafeService, PermissionlessSafeService } from "./eth/permissionless.safe.service.js";
+import { IPermissionlessSimpleService, PermissionlessSimpleService } from "./eth/permissionless.simple.service.js";
+import { FilecoinController, FilecoinSessionKeyData } from "./filecoin/filecoin.ctrlr.js";
 import { Notice } from "obsidian";
 import { IWaapService, WaapService } from "./eth/waap.service.js";
+import { readFileSync, existsSync } from "fs";
+import { resolve } from "path";
+import { ViemService } from "./eth/viem.service.js";
+import { base } from "viem/chains";
 
 // @ts-ignore
 const basePath = (app.vault.adapter as any).basePath;
@@ -15,7 +20,9 @@ export interface IMainController {
   user: IOXOUser;
   basePath: string;
   env: { [key: string]: string | undefined };
-  account: { [key: string]: IPermissionlessSafeService }; 
+  /** 4337 smart account per chain (PermissionlessSimpleService). */
+  account: { [key: string]: IPermissionlessSimpleService };
+  storage?: FilecoinController;
   safeInstance: any;
   ipfs: IpfsCtrlr;
   lit: any;
@@ -27,7 +34,7 @@ export interface IMainController {
   initChain: (chain: string) => Promise<void>;
   hasActiveUser: () => boolean;
   hasAccounts: () => string[];
-  newAuthor: (name: string, type: string) => Promise<void>;
+  newAuthor: (name: string, type: string, privateKey?: string) => Promise<void>;
   toggleAuthor: (user: IOXOUser) => Promise<void>;
 }
 
@@ -35,7 +42,9 @@ export class MainController implements IMainController {
   user!: IOXOUser;
   basePath: string;
   env!: { [key: string]: string | undefined };
-  account!: { [key: string]: IPermissionlessSafeService };
+  viem!: ViemService;
+  account!: { [key: string]: IPermissionlessSimpleService };
+  storage?: FilecoinController;
   ipfs!: IpfsCtrlr;
   lit!: any;
   lens: any;
@@ -54,6 +63,7 @@ export class MainController implements IMainController {
     this.account = {};
     this.pinata = new PinataService(this);
     this.lit = new LitService({ "environment": "prod"});
+    this.viem = new ViemService(base, this.plugin.settings.rpc_key)
     this.lens = new LensService(this);
   
     const activeUser = this.plugin.settings.authors.find((a: any) => a.active);
@@ -64,10 +74,46 @@ export class MainController implements IMainController {
       const { name, active, private_key, eoa, safe } = activeUser;
       this.user = new OXOUser(name, active, private_key, eoa, safe);
 
-      if (!await this.user.checkLensProfile(this)) {
-        console.log("hoi, nieuwe lens account")
-        this.user.addLensAccount(this)
-      }
+      // if (!await this.user.checkLensProfile(this)) {
+      //   console.log("hoi, nieuwe lens account")
+      //   this.user.addLensAccount(this)
+      // }
+    }
+
+    // ── Filecoin storage init ─────────────────────────────────────
+    await this.initFilecoin();
+  }
+
+  /**
+   * Load the session key from the plugin folder and initialise the
+   * FilecoinController with it.
+   */
+  private async initFilecoin(): Promise<void> {
+    // Plugin folimport { getPackedSettings } from "http2";der: {vault}/.obsidian/plugins/0xobsidian/
+    const pluginDir = resolve(this.basePath, ".obsidian", "plugins", "0xobsidian");
+    const skPath = resolve(pluginDir, "session-key.json");
+
+    if (!existsSync(skPath)) {
+      console.log("[filecoin] No session-key.json found — skipping Filecoin init");
+      return;
+    }
+
+    try {
+      const raw = readFileSync(skPath, "utf-8");
+      const skData: FilecoinSessionKeyData = JSON.parse(raw);
+
+      // Build the RPC URL from the DRPC key in settings
+      const rpcKey = this.plugin.settings.rpc_key;
+      const rpcUrl = rpcKey
+        ? `https://lb.drpc.live/filecoin/${rpcKey}`
+        : "https://api.node.glif.io/rpc/v1";
+
+      this.storage = new FilecoinController(this);
+      await this.storage.initWithSessionKey(skData, rpcUrl);
+
+      new Notice(`📦 Filecoin storage ready — payer: ${skData.rootAddress}`, 4000);
+    } catch (err: any) {
+      console.error("[filecoin] Failed to init Filecoin storage:", err);
     }
   }
 
@@ -90,29 +136,21 @@ export class MainController implements IMainController {
 
   async initChain(chain: string) {
 
-      const salt = "default_safe";
-      this.account[chain] = new PermissionlessSafeService(this, chain);
+      this.account[chain] = new PermissionlessSimpleService(this, chain);
       
-      const signerAddress = await this.account[chain].updateSigner(this.user.private_key)
-      const safe_address = await this.account[chain].connectToFreshSafe(salt);
-      const deployed = await this.account[chain].isDeployed();
-
-      console.log("Deployed", deployed)
-      if (!deployed) {
-        new Notice("deploying safe to " + chain);
-        const deploy = await this.account[chain].valueTx(safe_address as `0x${string}`, "0");
-      }
-
-      // await this.account[chain].connectToExistingSafe(safe_address as `0x{string}`);
+      await this.account[chain].updateSigner(this.user.private_key)
       
+      console.log("Simple account address:", this.account[chain].address)
+
+      // Simple smart accounts deploy on first userOp — no separate deploy step needed
   }
 
-  async newAuthor(name: string, type: string) {
+  async newAuthor(name: string, type: string, privateKey?: string) {
 
     this.user = new OXOUser(
       name,
       true,
-      undefined,
+      privateKey,       // use imported key if given, undefined = generate random
       undefined,
       undefined,
     );
@@ -136,7 +174,7 @@ export class MainController implements IMainController {
         this.user = new OXOUser(
           name,
           true,
-          undefined,
+          privateKey,   // use imported key if given, undefined = generate random
           undefined,
           undefined,
         );
@@ -151,12 +189,13 @@ export class MainController implements IMainController {
           }
         }
 
-        this.user.safe = await this.account["ETH_MAINNET"].connectToFreshSafe("default_safe");
+        // Store the simple account address in the user's safe field
+        this.user.safe = this.account["ETH_MAINNET"]?.address;
       
         break;
     }
 
-    this.user.lens = await this.user.addLensAccount(this)
+   // this.user.lens = await this.user.addLensAccount(this)
 
     this.plugin.settings.authors.push(this.user);
     this.plugin.authorsTab.display();
@@ -172,18 +211,14 @@ export class MainController implements IMainController {
       _user.safe,
     );
 
-    // not checked
     for (const chain of Object.keys(this.account)) {
-      if ('connectToFreshSafe' in this.account[chain]) {
-        this.account[chain].updateSigner(this.user.private_key);
-        this.account[chain].connectToFreshSafe("default_safe");
-      }
+      this.account[chain].updateSigner(this.user.private_key);
     }
 
     this.lit.init();
   }
 
   safeInstance (chain: string) {
-    return new PermissionlessSafeService(this, chain);
+    return new PermissionlessSimpleService(this, chain);
   }
 }

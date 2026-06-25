@@ -5,9 +5,8 @@
 > describes what *is*; this describes what we *propose*. When an item here is built, fold the settled
 > parts into `SPEC-0xobsidian` and strike it here.
 >
-> **Status:** scoping only. Nothing here is committed. Two independent tracks (A and B) — kept
-> separate on purpose; do not bundle them.
->
+> **Status: Track A — DONE (see `src/keystore/` and `SPEC-0xobsidian`). Only Track B (DID identity)
+> remains open.**
 > **Context:** today identity *is* the keypair. `OXOUser` runs `ethers.Wallet.createRandom()` →
 > EOA → `private_key` stored **in plaintext in `data.json`**, with the Lens account and Safe derived
 > off that EOA afterward. Provenance signs `did:pkh:eip155:8453:<addr>` derived from this key. The
@@ -17,7 +16,7 @@
 
 ---
 
-## Track A — Encryption-at-rest for the private key (low-hanging, do first)
+## Track A — Encryption-at-rest for the private key ✅ DONE
 
 **Goal:** the `private_key` stops living as plaintext in `data.json`. Independent of Track B —
 protects whatever key exists, regardless of how identity is later rooted.
@@ -134,9 +133,8 @@ projects with different blast radii. Do not start B without naming which.
 
 ## Sequencing (recommended)
 
-1. **Track A now-ish** — independently valuable, lower risk, doesn't need the DID decision. Gating
-   step is the `safeStorage` reachability spike. Directly answers "elaborate provenance, plaintext
-   key in a textfile."
+1. ~~**Track A now-ish** — ✅ DONE. Implemented in `src/keystore/` (SafeStorageKeystore,
+   PlaintextKeystore fallback, migration for existing keys).~~
 2. **Track B scoped, not rushed** — right long-term architecture, but interacts with the auth
    boundary (if B2-ii) and needs the method decision up front. Capture; revisit deliberately.
 

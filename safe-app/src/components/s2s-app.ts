@@ -9,6 +9,7 @@ import { LitService } from '@s2s/soul2soul-shared';
 import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
 import { evmRead } from '@/lib/evm.js';
+import { CID } from 'multiformats';
 import './copy-link.js';
 import './copy-hash.js';
 import './copy-module.js';
@@ -84,13 +85,19 @@ export class S2SApp extends HTMLElement {
 
       if (publication && protocolInfo) {
         const node = window.ethers.namehash(publication);
-        const rootCid = await evmRead(
+        const onchainHash = await evmRead(
           8453,
           protocolInfo.ensRecords,
           RECORDS_CONTRACT_ABI,
           'getText',
           [node, 'contenthash_wrapped']
         );
+
+        const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
+        const bytes = window.ethers.getBytes('0x' + hex);
+        const rootCid = CID.decode(bytes).toV1().toString();
+
+        console.log("RRRR", rootCid)
         store.setRoot(rootCid);
       }
     } catch (error) {

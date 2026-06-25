@@ -780,3 +780,73 @@ const _genericCall = async (
     request.end();
   });
 };
+
+/**
+ * Upload a JSON object to a Kubo node using pretty-printed serialisation
+ * so bytes match Filecoin Pin's CAR builder → same Root CID.
+ *
+ * @param data    - The data object (stringified with 2-space indent internally)
+ * @param kuboUrl - Kubo RPC endpoint hostname (e.g. "ipfs.transport-union.dev")
+ * @returns The IPFS CID returned by Kubo (should match filecoin-pin rootCid)
+ */
+export const addJson = async (
+  data: unknown,
+  kuboUrl: string,
+  timeoutMs = 30_000,
+): Promise<string> => {
+  const json = JSON.stringify(data, null, 2);
+  const buf = Buffer.from(json, "utf-8");
+
+  const hostname = kuboUrl
+    .replace(/^(https?:\/\/)/, "")
+    .replace(/\/+$/, "");
+
+  const { formData, boundary } = await singleFileFormData("payload.json", buf);
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+
+    const done = (err?: any, cid?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(cid!);
+    };
+
+    const timer = setTimeout(() => {
+      done(new Error(`[remotekubo] addJson timed out after ${timeoutMs}ms connecting to ${hostname}`));
+    }, timeoutMs);
+
+    const request = https.request({
+      method: "POST",
+      protocol: "https:",
+      hostname,
+      port: 443,
+      path: "/api/v0/add",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+    });
+    request.on("response", (response) => {
+      response.on("data", (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.on("end", () => {
+        const full = Buffer.concat(chunks).toString("utf-8");
+        const lines = full.trim().split("\n");
+        try {
+          const parsed = JSON.parse(lines[lines.length - 1]);
+          done(null, parsed["Hash"]);
+        } catch (e) {
+          done(new Error(`[remotekubo] addJson bad response: ${full.slice(0, 500)}`));
+        }
+      });
+      response.on("error", (error) => done(error));
+    });
+    request.on("error", (error) => done(error));
+    request.write(formData);
+    request.end();
+  });
+};

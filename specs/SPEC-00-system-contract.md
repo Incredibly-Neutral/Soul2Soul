@@ -164,6 +164,7 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 | ID | Invariant | Enforced across | Symptom if broken |
 |---|---|---|---|
 | **INV-1** | The auth message string is **exactly** `"lit actions auth"` everywhere it is signed or recovered. | client signer ↔ `libs/gates.ts` (`canRead`,`canPublish`) ↔ `single/main.ts` ↔ `updateEvm/main.ts` | signer recovers to wrong address → every gate fails → "cannot publish" |
+| **INV-append** | The append-log contract MUST gate every `append` to the genesis author (or permitted publication owners), verified against the `did:ethr` identity recorded in the genesis entry. This is the existing author/publication gate **extended to guard appends**, not only the initial publish. | append-log contract ↔ `resolveLatest`/`getHistory` (identity module) ↔ author EOA `buildSignedContentItem` | forgeable version history — anyone could append a new version to someone else's document |
 | **INV-2** | Config record **keys** match between writer and reader. Readers expect: `assets_gateway, data_gateway, ens_records, lens_app, lit_action_prep, lit_action_single, lit_action_cbor, lit_action_root_update, pkp_tokenId, pkp_publicKey, pkp_ethAddress`. | `shared/src/protocol/index.ts :: getRecords` ↔ whatever sets records (safe-app / scripts) | `getProtocolInfo` returns undefined fields → null PKP / missing action CIDs |
 | **INV-3** | `S2SPublicationModule` storage layout is append-only. Never reorder/insert existing slots. | the UUPS proxy + every future implementation | upgrade corrupts licenses/whitelist storage |
 | **INV-4** | Module discovery keys: `NAME()` must return exactly `"S2S Records Module"` / `"S2S Publication Module"`. | `getProtocolControllerAndModules`, neutralpress `getModuleAdresses` | modules not found → publication "missing config modules" |
@@ -182,7 +183,7 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 
 | ID | Where | Intended | Actual (as read) | Impact |
 |---|---|---|---|---|
-| **GAP-1** | `single/main.ts` | derive `S2SContentInfo` (author Lens id, publisher ENS/Safe, content CID, license, `isBasedOn`) from real body/config | object is **hardcoded placeholders** (`"joera.lens"`, `"mypub.eth"`, `0xAuthorAddress…`) | provenance is currently fictional; biggest design↔code gap |
+| **GAP-1** 🔶 | `single/main.ts` / content model | derive provenance + identity from real signed content | **SUPERSEDED** by `HANDOFF-content-item`. The new flat `S2SContentItem` (EIP-712 signed, `did:ethr` author, `objectId` = EIP-712 digest, append-log contract) replaces the old Lens-driven content model entirely. The old GAP-1 (hardcoded `S2SContentInfo`) is a legacy symptom of the old model — the fix is to migrate to the new content-item pipeline, not to patch the placeholder. Migration not yet started in action code. | See `shared/src/rendering/types.ts` and `shared/src/identity/` |
 | **GAP-2** | `single/metadata.ts` `canonicalize` | deterministic canonical JSON | `JSON.stringify(obj, keys.sort())` sorts **top-level keys only**; nested objects not canonicalized | non-deterministic signing for nested schema → verification fragility |
 | **GAP-3** ✅ | `single/metadata.ts` | choose one signing primitive | **RESOLVED (see §2.1).** Lit V3/Chipotle is TEE-based, not threshold. `getPrivateKey` (active) is correct; `signAndCombineEcdsa` (commented) is the removed Datil/Naga threshold primitive — delete the dead block. | trust root is TEE attestation + on-chain Base permissions, not honest-majority nodes |
 | **GAP-4** | `protocol/actions/src` | one renderer, one gates impl | `__renderer` **and** `renderer` both present; gates duplicated in `libs/gates.ts` **and** `shared/src/lit/gates/` | divergence risk; agent may edit the dead copy |
@@ -201,6 +202,7 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 
 - `neutralpress` → `0xobsidian` at runtime (waits for Obsidian plugin `"oxo-core"`; uses its active user, chains, Lens, Safe).
 - everyone → `shared`. Note `shared` exposes **three entry points**: `index` (apps), `lit-actions` (action bundles), `safe-app`. Importing the wrong entry pulls the wrong build target.
+- `shared/src/identity/` — new module consumed by authoring surfaces (0xobsidian/neutralpress) at build time, not by action bundles. Exports: `buildSignedContentItem`, `verifyAuthorship`, `jcs`.
 - `protocol/actions/*` → `@s2s/soul2soul-shared/lit-actions` only (must stay bundleable into a single Lit Action file; no Node built-ins beyond the shim).
 - `safe-app` → `shared/safe-app` + Safe SDK; runs inside the Safe{Wallet} iframe.
 

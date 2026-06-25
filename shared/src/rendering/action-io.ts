@@ -3,6 +3,65 @@ import { jobSchema } from '../protocol/schemas';
 import type { EvmUpdateInput, SingleInput } from '../lit/actions/types';
 
 // ============================================================================
+// Did:ethr schema
+// ============================================================================
+
+export const didEthrSchema = z.string().regex(/^did:ethr:0x[0-9a-fA-F]{40}$/, 'Author must be a did:ethr')
+
+// ============================================================================
+// S2SPublicContent (signed public metadata)
+// ============================================================================
+
+export const s2sPublicContentSchema = z.object({
+  specVersion: z.string().min(1, 'specVersion is required'),
+  author: didEthrSchema,
+  postType: z.string().min(1, 'postType is required'),
+  mediaType: z.string().min(1, 'mediaType is required'),
+  parent: z.string(),
+  position: z.string(),
+  publication: z.string().min(1, 'publication is required'),
+  locale: z.string().min(1, 'locale is required'),
+  createdAt: z.number().int('createdAt must be a unix timestamp (integer)'),
+  base: z.string().optional(),
+  tags: z.array(z.string()),
+  attributes: z.record(z.unknown()).optional(),
+  plaintextHash: z.string().min(1, 'plaintextHash is required'),
+});
+
+// ============================================================================
+// S2SProof (EIP-712 author signature)
+// ============================================================================
+
+export const s2sProofSchema = z.object({
+  type: z.literal('eip712'),
+  signer: z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'signer must be a 0x address'),
+  signature: z.string().min(1, 'signature is required'),
+});
+
+// ============================================================================
+// S2SContentItem (flat — no discriminated union)
+// ============================================================================
+
+export const s2sContentItemSchema = z.object({
+  public: s2sPublicContentSchema,
+  objectId: z.string().min(1, 'objectId is required'),
+  proof: s2sProofSchema,
+  encryption: z.boolean(),
+  body: z.string(),
+});
+
+// ============================================================================
+// S2SContentBody (what goes into .body)
+// ============================================================================
+
+export const s2sContentBodySchema = z.object({
+  title: z.string().min(1, 'title is required'),
+  slug: z.string().min(1, 'slug is required'),
+  content: z.string().min(1, 'content is required'),
+  custom: z.record(z.unknown()).optional(),
+});
+
+// ============================================================================
 // Shared ActionResult shape — used by every Lit action
 // ============================================================================
 const ActionResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>

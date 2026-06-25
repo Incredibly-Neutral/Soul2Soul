@@ -68,6 +68,7 @@ export class MainController implements IMainController {
 					const oxoPlugin = this.plugin.app.plugins.plugins["oxo-core"];
 					
 					if (oxoPlugin && oxoPlugin.ctrlr) {
+						
 						this.oxo = oxoPlugin;
 						return true; // Plugin and controller loaded successfully
 					}
@@ -173,26 +174,30 @@ export class MainController implements IMainController {
 		if (file != null) {
 
 
-			const { contentId, publicContent } = await this.content.parseNote(file);
+			const { tags, contentId } = await this.content.parseNote(file);
 			const lensProfileId = "";
 
-			for (const pub of publicContent.publications) {
+			const publications = tags
+				.filter((tag: string) => tag.endsWith("--s2s"))
+				.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
+
+			for (const pub of publications) {
 	
 				const subdomain = pub.split(".")[0];
-				// console.log("subdomain", subdomain);
 			
 				if(this.publications[subdomain] == undefined) {
 					this.publications[subdomain] = new PublicationService(this, subdomain)
 					await this.publications[subdomain].init();
 				}
 
-				const isLicensed = await this.publications[subdomain].isLicensed(contentId);
- 
+				const licensedId = contentId ?? pub;
+				const isLicensed = await this.publications[subdomain].isLicensed(licensedId);
+
 				console.log("isLicensed:", isLicensed)
 
 				if (!isLicensed) {
 					console.log("L1")
-					await this.publications[subdomain].grantLicense(contentId, lensProfileId);
+					await this.publications[subdomain].grantLicense(licensedId, lensProfileId);
 					console.log("L2")
 				}
 			}
@@ -247,33 +252,55 @@ export class MainController implements IMainController {
 			return this.publications[subdomain];
 	}
 
-	async publishToPublication(file: TFile, contentId: string, publicContent: any, toEncrypt: any, publication: string, publish: boolean) {
+	async publishToPublication(file: TFile, publication: string, publish: boolean) {
 
 		let license;
 		const subdomain = publication.split(".")[0];
 		const service = await this.getInitializedService(subdomain);
 
-		this.notice = new Notice('1/5 storing item ...', 0);
-		
-		await this.content.storeNoteOnLens(file, this.protocolInfo, contentId, publicContent, toEncrypt, subdomain)
+		this.notice = new Notice('1/5 signing content ...', 0);
 
-		this.notice.setMessage(`2/5 registering permission to publish on ${subdomain} ... `);
+		// Build and sign the content item — this replaces the old Lens-based storeNoteOnLens
+		const signedItem = await this.content.publishContent(file, subdomain);
 
-		console.log("b4 license check", contentId, subdomain, service)
-
-		const isLicensed = await service.isLicensed(contentId);
-		console.log(service);
-		console.log(isLicensed)
-		if (!isLicensed) {
-			license = await service.grantLicense(contentId);
-			console.log(license)
+		if (!signedItem) {
+			console.error("publishToPublication: signing failed, aborting");
+			this.notice.hide();
+			return;
 		}
 
-		this.notice.setMessage('3/5 Authorizing ...')
-		
-		if (isLicensed || license != undefined) {
-			await this.renderCalls(publication, [contentId], this.oxo.settings.litUsageKey, publish);
+		this.notice.setMessage(`2/5 storing content item on Filecoin ... `);
+
+		// 1. Upload to Kubo → get IPFS CID
+		const kuboUrl = this.oxo.settings.kubo_url || "ipfs.transport-union.dev";
+		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
+		console.log("[kubo] uploaded:", kuboCid);
+
+		// 2. Upload to Filecoin → get Root CID + Piece CID
+		const storageresult = await this.oxo.ctrlr.storage.uploadJson(signedItem);
+		console.log("[filecoin]", storageresult);
+
+		// 3. Verify CIDs match — same bytes → same Root CID
+		if (kuboCid !== storageresult.rootCid) {
+			console.error("[cid-mismatch] Kubo:", kuboCid, "≠ Filecoin:", storageresult.rootCid);
+			new Notice(`⚠️ CID mismatch: Kubo ${kuboCid.slice(0,12)}… ≠ Filecoin ${storageresult.rootCid.slice(0,12)}…`);
+		} else {
+			console.log("[cid-ok] both paths agree on root CID:", kuboCid);
 		}
+
+		this.notice.setMessage(`3/5 registering permission to publish on ${subdomain} ... `);
+
+		// const isLicensed = await service.isLicensed(signedItem.objectId);
+		// if (!isLicensed) {
+		// 	license = await service.grantLicense(signedItem.objectId);
+		// 	console.log(license)
+		// }
+
+		this.notice.setMessage('4/5 Authorizing ...')
+		
+		// if (isLicensed || license != undefined) {
+		// 	await this.renderCalls(publication, [signedItem.objectId], this.oxo.settings.litUsageKey, publish);
+		// }
 
 	}
 
@@ -283,19 +310,15 @@ export class MainController implements IMainController {
 
 		if (!this.isValidForPublishing(file)) return;
 
-		let { contentId, publicContent, toEncrypt } = await this.content.parseNote(file);
+		const { tags } = await this.content.parseNote(file);
+		const publications = tags
+			? tags
+				.filter((tag: string) => tag.endsWith("--s2s"))
+				.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"))
+			: [];
 
-		if (!publicContent.encryption) {
-
-			publicContent = {
-				...publicContent,
-				...toEncrypt
-			}
-		}
-
-		for (const publication of publicContent.publications) {
-
-			this.publishToPublication(file, contentId, publicContent, toEncrypt, publication, publish)	
+		for (const publication of publications) {
+			this.publishToPublication(file, publication, publish)	
 		}
 		
 	}

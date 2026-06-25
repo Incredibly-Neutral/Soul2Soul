@@ -3,7 +3,7 @@ import { App, Setting } from "obsidian";
 import OxO from "./main.js";
 import { IOXOUser } from "./user/user.js";
 import { IInvite, IUpdate } from "./types/oxo.js";
-import { safeField } from "./settings.factory.js";
+import { accountField } from "./settings.factory.js";
 import { AuthorModal } from "./user/author.modal.js";
 
 export interface IOxOSettings {
@@ -12,15 +12,16 @@ export interface IOxOSettings {
   invites: IInvite[];
   updatesIncludeMyOwn: boolean;
   listening: boolean;
-  alchemy_key: string;
+  pimlico_key: string;
+  rpc_key: string;
   arbiscan_key: string;
   basescan_key: string;
   etherscan_key: string;
-  pimlico_key: string;
   pinata_api_key: string;
   pinata_secret_key: string;
   pinata_jwt: string;
   litUsageKey: string;
+  kubo_url: string;
 }
 
 export const DEFAULT_SETTINGS: IOxOSettings = {
@@ -29,7 +30,7 @@ export const DEFAULT_SETTINGS: IOxOSettings = {
   invites: [],
   updatesIncludeMyOwn: false,
   listening: false,
-  alchemy_key: "",
+  rpc_key: "",
   basescan_key: "",
   arbiscan_key: "",
   etherscan_key: "REDACTED",
@@ -37,12 +38,15 @@ export const DEFAULT_SETTINGS: IOxOSettings = {
   pinata_api_key: "",
   pinata_jwt: "",
   pinata_secret_key: "",
-  litUsageKey: ""
+  litUsageKey: "",
+  kubo_url: "ipfs.transport-union.dev",
 };
 
 export class OxOAuthorsTab extends PluginSettingTab {
   plugin: OxO;
   name: string;
+  /** Track which authors have their private key revealed in the UI. */
+  private privateKeyRevealed: Set<string> = new Set();
 
   constructor(app: App, plugin: OxO) {
     super(app, plugin);
@@ -129,7 +133,17 @@ export class OxOAuthorsTab extends PluginSettingTab {
           }),
         );
 
-      new Setting(authorEl) // This makes it appear as a header
+      const didValue = `did:ethr:${author.eoa}`;
+      new Setting(authorEl)
+        .setName("DID")
+        .setDesc(didValue)
+        .addButton((button) =>
+          button.setButtonText("Copy").onClick(() => {
+            navigator.clipboard.writeText(didValue);
+          }),
+        );
+
+      new Setting(authorEl)
         .setName("Signer:")
         .setDesc(author.eoa)
         .addButton((button) =>
@@ -138,19 +152,44 @@ export class OxOAuthorsTab extends PluginSettingTab {
           }),
         );
 
-      // moeten we niet meteen alles inladen ? [user][chain]? 
-      for (let chain of Object.keys(this.plugin.ctrlr.account)) {
-        safeField(chain, author, authorEl);
-      }
+      const pkRevealed = this.privateKeyRevealed.has(author.name);
 
-      new Setting(authorEl) // This makes it appear as a header
-        .setName("Lens profile:")
-        .setDesc(author.lens || "")
+      new Setting(authorEl)
+        .setName("Private Key:")
+        .setDesc(pkRevealed ? author.private_key : "••••••••••••••••")
+        .addButton((button) =>
+          button
+            .setButtonText(pkRevealed ? "Hide" : "Reveal")
+            .onClick(() => {
+              if (pkRevealed) {
+                this.privateKeyRevealed.delete(author.name);
+              } else {
+                this.privateKeyRevealed.add(author.name);
+              }
+              this.display();
+            }),
+        )
         .addButton((button) =>
           button.setButtonText("Copy").onClick(() => {
-            navigator.clipboard.writeText(author.lens || "");
+            if (author.private_key) {
+              navigator.clipboard.writeText(author.private_key);
+            }
           }),
         );
+
+      // moeten we niet meteen alles inladen ? [user][chain]? 
+      for (let chain of Object.keys(this.plugin.ctrlr.account)) {
+        accountField(chain, author, authorEl);
+      }
+
+      // new Setting(authorEl) // This makes it appear as a header
+      //   .setName("Lens profile:")
+      //   .setDesc(author.lens || "")
+      //   .addButton((button) =>
+      //     button.setButtonText("Copy").onClick(() => {
+      //       navigator.clipboard.writeText(author.lens || "");
+      //     }),
+      //   );
     }
 
     new Setting(containerEl)
@@ -159,8 +198,8 @@ export class OxOAuthorsTab extends PluginSettingTab {
       .addButton((button) =>
         button.setButtonText("New Author").onClick(async () => {
 
-          const onSubmit = async (name: string, type: string) => {
-            await this.plugin.ctrlr.newAuthor(name, type);
+          const onSubmit = async (name: string, type: string, privateKey?: string) => {
+            await this.plugin.ctrlr.newAuthor(name, type, privateKey);
           }
           return new AuthorModal(this.app, this.plugin.ctrlr, onSubmit).open();
         }),
@@ -170,11 +209,11 @@ export class OxOAuthorsTab extends PluginSettingTab {
       .setHeading() // This makes it appear as a header
       .setName("Settings:");
 
-    new Setting(containerEl).setName("ALCHEMY KEY").addText((text) =>
+    new Setting(containerEl).setName("RPC KEY").addText((text) =>
       text
-        .setValue(this.plugin.settings.alchemy_key)
+        .setValue(this.plugin.settings.rpc_key)
         .onChange(async (value) => {
-          this.plugin.settings.alchemy_key = value;
+          this.plugin.settings.rpc_key = value;
           await this.plugin.saveSettings();
         }),
     );

@@ -40,7 +40,7 @@ const config: HardhatUserConfig = {
 					type: 'edr-simulated',
 					chainType: 'l1',
 					accounts: {
-						mnemonic: process.env.MNEMONIC || undefined,
+						mnemonic: process.env.PROTOCOL_KEY || undefined,
 					},
 				},
 			}),

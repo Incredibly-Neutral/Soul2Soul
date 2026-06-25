@@ -1,17 +1,20 @@
 import { App, TFile } from "obsidian";
 import { IMainController } from "../main.ctrlr";
-import { postToLens, S2SPublicContent, S2SToEncrypt, updateToLens, S2SContentItem } from "@s2s/soul2soul-shared";
 import slugify from "slugify";
 import { marked } from "marked";
 import { distributeImages } from "./images";
 import * as crypto from "crypto";
 import { getAddress } from "viem";
-
+import {
+  buildSignedContentItem,
+  type S2SContentItem,
+  noOpEncrypt,
+} from "@s2s/soul2soul-shared";
 
 export interface IContentController {
-
     main: IMainController
-    storeNoteOnLens : (file: TFile, protocolInfo: any, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) => Promise<void>
+    /** Build and sign a content item from an Obsidian note, then update frontmatter */
+    publishContent: (file: TFile, subdomain: string) => Promise<S2SContentItem | null>;
 }
 
 export class ContentController implements IContentController {
@@ -21,347 +24,187 @@ export class ContentController implements IContentController {
         this.main = main
     }
 
-    async encryptContent ( oxoCtrlr: any,  protocolInfo: any, toEncrypt: any ): Promise<string>  {
-
-        const key = this.main.oxo.settings.litUsageKey;  // hardcoded? 
-        const pkpId = protocolInfo.pkp.ethAddress; // create pkp and usage_key first 
-
-        return JSON.stringify(
-            await oxoCtrlr.lit.encrypt(
-                key, pkpId, JSON.stringify(toEncrypt)
-            )    
-        );
-    };
-
-    async storeNoteOnLens(file: TFile, protocolInfo: any, contentId: string, publicContent: S2SPublicContent, toEncrypt: S2SToEncrypt, subdomain: string) {
-
-        const service = await this.main.getInitializedService(subdomain);
-        const feed = await service.getPublicationFeedAddress();
-        const pubAddress = await service.getMultiSig();
-
-        console.log("FEED", feed)
-        console.log("PUBLICATION", pubAddress)
-        
-        try {
-             
-            const publicationModule = service.publicationModule;
-        
-            if (contentId == null) {
-                console.log(
-                    "No stream ID found, mocking the insert to get a contentId",
-                );
-                const mockedItem = {
-                    ...publicContent,
-                    encrypted: "-",
-                };
-
-                const postId = await postToLens(
-                    this.main.oxo.ctrlr.user,
-                    this.main.oxo.ctrlr.lens,
-                    mockedItem,
-                    feed
-                );
-                
-                contentId = postId;
-
-                await this.updateFrontMatter(
-                    this.main.plugin.app,
-                    file,
-                    "content_id",
-                    contentId,
-                );
-            }
-
-            if (publicContent != null) {
-
-                let contentItem: S2SContentItem;
-
-                if (publicContent.encryption) {
-
-                    console.log("ENCRYPTING")
-                
-                    const encrypted = await this.encryptContent(
-                        this.main.oxo.ctrlr,
-                        protocolInfo,
-                        toEncrypt,
-                    );
-
-                   contentItem = {
-                        ...publicContent,
-                        encrypted: encrypted,
-                    };
-
-                } else {
-
-                    contentItem = {
-                        ...publicContent,
-                        "encrypted": "{}"
-                    }
-                }
-
-                if (contentId) {
-                    console.log("updating");
-                    const res = await updateToLens(
-                        this.main.oxo.ctrlr.user,
-                        this.main.oxo.ctrlr.lens,
-                        contentItem,
-                        contentId
-                    );
-                        
-                    console.log(res);
-                    
-                } else {
-
-                    // console.log("inserting");
-                    const res = await postToLens(
-                        this.main.oxo.ctrlr.lens,
-                        this.main.oxo.ctrlr.user,
-                        contentItem,
-                        feed
-                    );
-                    // console.log(res);
-                }
-            }
-            
-        } catch (error: any) {
-            console.error("Error in storeNote:", error);
-            console.error("Error details:", {
-                message: error.message,
-                stack: error.stack,
-                oxoState: this.main.oxo?.ctrlr ? "Initialized" : "Not initialized",
-            });
-            throw error;
-        }
-    }
-
-    updateFrontMatter = async(app:App, file: TFile, key: string, value: string | string[]) => {
-
-        if (file != null) {
-            await app.fileManager.processFrontMatter( file, (frontmatter) => {
-                frontmatter[key] = value;
-            })
-        }
-    }
-
-    getFrontMatter = async (app: App, file: TFile) : Promise<any> => {
-
-        return new Promise( async (resolve,reject) => {
-            await app.fileManager.processFrontMatter( file, (frontmatter) => {
-                resolve(frontmatter);
-            })
-        })
-    }
-
-    parseNote = async ( file: TFile): Promise<{ contentId: string; publicContent: S2SPublicContent; toEncrypt: S2SToEncrypt }> => {
-
+    /**
+     * Parse an Obsidian note and produce the raw pieces needed for signing.
+     * Returns structured data without any Lens-era type baggage.
+     */
+    parseNote = async (file: TFile): Promise<{
+        contentId: string | null;
+        postType: string;
+        locale: string;
+        tags: string[];
+        parent: number;
+        position: number;
+        encryption: boolean;
+        title: string;
+        slug: string;
+        content: string;
+        custom: Record<string, unknown>;
+    }> => {
         const rawFile = await this.main.plugin.app.vault.read(file);
 
-        let { contentId, publicContent, toEncrypt } = await this.parseContentFrontmatter(file, this.main.plugin.app);
+        const frontmatter = await this.parseContentFrontmatter(file, this.main.plugin.app);
+        const title = file.name.replace(/\.[^/.]+$/, "") || frontmatter.title || "";
 
-        if (file.name != undefined) toEncrypt.title = file.name.replace(/\.[^/.]+$/, "");
+        let [body, extractedTitle, _baseFileName] = this.extractTitleAndBase(rawFile, title);
+        const resolvedTitle = extractedTitle || title;
+        const slug = this.slug(resolvedTitle);
 
-        let [content, title, baseFileName] = this.extractTitleAndBase(rawFile, toEncrypt.title);
-        toEncrypt.slug = this.slug(title || toEncrypt.title);
-        publicContent.plainTextHash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
+        const tags = frontmatter.tags ? JSON.parse(JSON.stringify(frontmatter.tags)) : [];
+        const publications = tags
+            .filter((tag: string) => tag.endsWith("--s2s"))
+            .map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
 
-        // if (baseFileName != undefined) {
-        // 	const baseFile = main.plugin.app.vault
-        // 		.getFiles()
-        // 		.find(
-        // 			(file) =>
-        // 				file.basename === baseFileName ||
-        // 				file.name === baseFileName,
-        // 		);
-
-
-        // 	if (baseFile) {
-        // 		toEncrypt.bases = await parseBase(
-        // 			main,
-        // 			baseFile,
-        // 			publicationAddress,
-        // 		);
-        // 	}
-        // }
-
-        toEncrypt.content = await marked(content);
-        toEncrypt.content = await distributeImages(
+        let mdContent = await marked(body);
+        mdContent = await distributeImages(
             this.main,
             this.main.plugin.app,
             file,
-            toEncrypt.content,
+            mdContent,
             this.main.protocolInfo.assetsGateway,
         );
 
-        if (title != undefined && title != "") toEncrypt.title = title;
-
-        return { contentId, publicContent, toEncrypt };
+        return {
+            contentId: frontmatter.content_id || null,
+            postType: frontmatter.post_type || "post",
+            locale: frontmatter.language || "en",
+            tags,
+            parent: frontmatter.parent ? parseInt(frontmatter.parent) : 0,
+            position: frontmatter.position ? parseInt(frontmatter.position) : 0,
+            encryption: frontmatter.encryption || false,
+            title: resolvedTitle,
+            slug,
+            content: mdContent,
+            custom: frontmatter.custom || {},
+        };
     };
 
-    extractTitleAndBase ( raw: string, title: string ): [string, string | undefined, string | undefined] {
-        
-        let baseFileName: string | undefined = undefined;
-        let content = raw.split("---")[2].trim();
+    /**
+     * Build a signed S2SContentItem from an Obsidian note and publish it.
+     * Replaces the old Lens-based storeNoteOnLens.
+     *
+     * Signing happens via the 0xobsidian BASE account's EOA (asTypedDataSigner).
+     * The signed object is stored in frontmatter for later use by the render pipeline.
+     */
+    async publishContent(file: TFile, subdomain: string): Promise<S2SContentItem | null> {
+        const parsed = await this.parseNote(file);
+        const baseAccount = this.main.oxo.ctrlr.account["BASE"];
+
+        if (!baseAccount?.signTypedData) {
+            console.warn("No BASE account available for signing; content not signed");
+            return null;
+        }
+
+        const signer = baseAccount.asTypedDataSigner();
+        const now = Math.floor(Date.now() / 1000);
+
+        try {
+            const signedItem = await buildSignedContentItem(
+                {
+                    specVersion: "1",
+                    postType: parsed.postType,
+                    mediaType: "text/markdown",
+                    parent: String(parsed.parent),
+                    position: String(parsed.position),
+                    publication: subdomain,
+                    locale: parsed.locale,
+                    createdAt: now,
+                    tags: parsed.tags,
+                    attributes: undefined,
+                },
+                {
+                    title: parsed.title,
+                    slug: parsed.slug,
+                    content: parsed.content,
+                    custom: parsed.custom,
+                },
+                signer,
+                // encryptFn — pass-through for now; Lit encryption will integrate here
+                noOpEncrypt,
+            );
+
+            console.log("zublishing:", signedItem);
+
+            // Store the objectId and author DID in frontmatter
+            await this.updateFrontMatter(this.main.plugin.app, file, "signed_id", signedItem.objectId);
+            await this.updateFrontMatter(this.main.plugin.app, file, "signed_author", signedItem.public.author);
+            await this.updateFrontMatter(this.main.plugin.app, file, "signed_at", String(now));
+
+            return signedItem;
+
+        } catch (err) {
+            console.error("publishContent: signing failed:", err);
+            return null;
+        }
+    }
+
+    /** Parse frontmatter from Obsidian metadata cache — returns raw fields */
+    parseContentFrontmatter = async (file: TFile, app: App): Promise<Record<string, any>> => {
+        return new Promise((resolve, reject) => {
+            const cache = app.metadataCache.getFileCache(file);
+            const frontmatter = cache?.frontmatter || {};
+
+            // Update modified date
+            const now = new Date().toJSON().split(".")[0];
+            frontmatter.modified_date = now;
+            this.updateFrontMatter(app, file, "modified_date", now);
+
+            if (frontmatter.creation_date == undefined) {
+                frontmatter.creation_date = now;
+                this.updateFrontMatter(app, file, "creation_date", now);
+            }
+
+            resolve(frontmatter);
+        });
+    };
+
+    extractTitleAndBase(raw: string, fallbackTitle: string): [string, string | undefined, string | undefined] {
+        let baseFileName: string | undefined;
+        let content = raw.split("---")[2]?.trim() || "";
 
         // Check if content contains any .base references
         const baseRegex = /!\[\[(.*?)\.base(\.md)?\]\]/g;
         const baseMatches = content.match(baseRegex);
-
         if (baseMatches) {
             baseFileName = baseMatches[0].replace(/!\[\[(.*?)\]\]/g, "$1");
-            // Remove the base reference from the content
             content = content.replace(baseRegex, "");
         }
 
-        // content = removeMarkdownImages(content);
-        // content = removeCodeBlocks(content);
-
         content = content.replace(/^\n+/, "");
 
-        if (content.slice(0, 2) == "# ") {
+        let title: string | undefined = fallbackTitle;
+        if (content.slice(0, 2) === "# ") {
             const parts = content.split("\n");
             title = parts[0].replace("# ", "").trim();
             parts.shift();
             content = parts.join("\n").trim();
-        } else {
-            title = title.split(".")[0].trim();
         }
 
         return [content, title, baseFileName];
-    };
-
-    parseContentFrontmatter = async ( file: TFile, app: App ): Promise<{ contentId: string; publicContent: S2SPublicContent; toEncrypt: S2SToEncrypt }> => {
-        
-        return new Promise(async (resolve: any, reject: any) => {
-            const cache = app.metadataCache.getFileCache(file);
-            const frontmatter = cache?.frontmatter;
-
-            const encryption = frontmatter!.encryption || false;
-
-            if (frontmatter != null) {
-                const contentId =
-                    frontmatter.content_id != undefined
-                        ? frontmatter.content_id
-                        : null;
-
-                // possibly check if content was modified ???
-                const now = new Date().toJSON().split(".")[0];
-                frontmatter.modified_date = now;
-                this.updateFrontMatter(app, file, "modified_date", now)
-
-
-                if (frontmatter.creation_date == undefined) {
-                    frontmatter.creation_date = now;
-                    this.updateFrontMatter(app, file, "creation_date", now)
-                }
-
-                if (frontmatter.position == undefined) {
-                    frontmatter.position = "0";
-                    this.updateFrontMatter(app, file, "position", frontmatter.position)
-                }
-
-                let tags = frontmatter.tags
-                    ? JSON.parse(JSON.stringify(frontmatter.tags))
-                    : [];
-
-                const nonWebTags = tags.filter(
-                    (tag: string) => !tag.endsWith("--s2s"),
-                );
-                const publications = tags
-                    .filter((tag: string) => tag.endsWith("--s2s"))
-                    .map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
-
-                let publicContent: S2SPublicContent = {
-                    creationDate: Math.floor(
-                        new Date(frontmatter.creation_date).getTime() / 1000,
-                    ),
-                    modifiedDate: Math.floor(
-                        new Date(frontmatter.modified_date).getTime() / 1000,
-                    ),
-                    language:
-                        frontmatter.language != undefined
-                            ? frontmatter.language
-                            : "nl",
-                    parent:
-                        frontmatter.parent != undefined
-                            ? parseInt(frontmatter.parent)
-                            : 0,
-                    position:
-                        frontmatter.position != undefined
-                            ? parseInt(frontmatter.position)
-                            : 0,
-                    postType: frontmatter.post_type,
-                    publications,
-                    tags,
-                    plainTextHash: "",
-                    encryption
-                };
-
-                const toEncrypt: S2SToEncrypt = {
-                    content: "",
-                    title: "",
-                    custom: JSON.stringify(
-                        this.skipDefault(JSON.parse(JSON.stringify(frontmatter))),
-                    ),
-                    slug: "",
-                };
-
-                resolve({ contentId, publicContent, toEncrypt });
-            }
-        });
-    };
-
-    slug(title: string): string {
-        
-        const options = {
-            lower: true, // Convert to lowercase
-            remove: /['"?!.,:;()\[\]{}@#$%^&*+=<>~`|\\]/g, // Remove special characters that are unsafe for URLs
-            strict: true, // Replace spaces with dashes
-        };
-
-	    return slugify(title, options);
     }
 
-    removeCodeBlocks(text: string) {
-        return text.replace(/```[\s\S]*?```/g, "");
+    slug(title: string): string {
+        const options = {
+            lower: true,
+            remove: /['"?!.,:;()\[\]{}@#$%^&*+=<>~`|\\]/g,
+            strict: true,
+        };
+        return slugify(title, options);
+    }
+
+    updateFrontMatter = async (app: App, file: TFile, key: string, value: string | string[]) => {
+        if (file != null) {
+            await app.fileManager.processFrontMatter(file, (frontmatter) => {
+                frontmatter[key] = value;
+            });
+        }
     };
 
-    removeMarkdownImages(text: string) {
-        return text.replace(/!\[.*?\]\(.*?\)/g, "");
-    };
-
-    skipDefault(fmcopy: Record<string, any>): Record<string, any> {
-
-        const keysToDelete = [
-            "args",
-            "categories",
-            "cid",
-            "contract",
-            "creation_date",
-            "language",
-            "modified_date",
-            "position",
-            "parent",
-            "post_type",
-            "publication",
-            "sgId",
-            "stream_id",
-            "tags",
-            "url",
-        ];
-
-        keysToDelete.forEach((key) => {
-            if (key in fmcopy) {
-                delete fmcopy[key];
-            }
+    getFrontMatter = async (app: App, file: TFile): Promise<any> => {
+        return new Promise(async (resolve, reject) => {
+            await app.fileManager.processFrontMatter(file, (frontmatter) => {
+                resolve(frontmatter);
+            });
         });
-
-        Object.entries(fmcopy).forEach(([k, v]: [string, any]) => {
-            if (v == null && k in fmcopy) {
-                delete fmcopy[k];
-            }
-        });
-
-        return fmcopy;
     };
-
 }

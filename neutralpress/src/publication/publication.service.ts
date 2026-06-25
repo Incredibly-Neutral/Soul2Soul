@@ -30,33 +30,37 @@ export interface IPublicationSrv {
 	publicationModule: string
 }
 
+/**
+ * Read from a BASE contract via the ViemService (which wraps a viem publicClient).
+ * Replaces the old L2.genericRead() calls. The ViemService takes parsed ABI (not string).
+ */
+const readL2 = async (main: IMainController, address: string, abi: any[], functionName: string, args: any[] = []): Promise<any> => {
+	return main.oxo.ctrlr.viem.read(address as `0x${string}`, abi, functionName, args);
+};
+
 export class PublicationService implements IPublicationSrv{
 	main: IMainController;
 	subdomain: string;
 	multisig!: string;
 	configModule!: string;
-	publicationModule: string;
-	L1: any;
+	publicationModule!: string;
 	L2: any;
 
 	constructor(main: IMainController, subdomain: string) {
 		this.main = main;
 		this.subdomain = subdomain;
-	    this.L1 = this.main.oxo.ctrlr.safeInstance(L1);
 		this.L2 = this.main.oxo.ctrlr.safeInstance(L2);
 	}
 
 	async init() {
-
 		const { addr, chainId } = await getPublicationMultiSig(this.main, this.subdomain);
-  		this.multisig = addr;
+ 		this.multisig = addr;
 		const { configModule, publicationModule } = await this.getModuleAdresses();
 		this.configModule = configModule;
 		this.publicationModule = publicationModule
 	}
 
 	async new(main: IMainController, ensName: string, owners: string[], authors: string[], devRepository: string, branch: string) {
-
 		let publication: S2SPublication = {
 			name: ensName,
 			owners,
@@ -67,12 +71,10 @@ export class PublicationService implements IPublicationSrv{
 			devRepository,
 			branch,
 		};
-
 		newPublicationSafe(main, publication)
 	}
 
 	async grantLicense(contentId: string) {
-	
 		return await this.main.oxo.ctrlr.account[L2].genericTx(
 			this.publicationModule,
 			JSON.stringify(S2SPublicationModule),
@@ -92,27 +94,25 @@ export class PublicationService implements IPublicationSrv{
 		);
 	}
 
-
 	async isLicensed(contentId: string) {
-
-		return await this.main.oxo.ctrlr.account[L2].genericRead(
+		return await readL2(
+			this.main,
 			this.publicationModule,
-			JSON.stringify(S2SPublicationModule),
+			S2SPublicationModule,
 			"isLicensed",
 			[contentId],
-			false,
 		);
 	}
 
 	async isLicensedBatch(
 		contentIds: string[],
 	): Promise<Record<string, boolean>> {
-		const results = await this.main.oxo.ctrlr.account[L2].genericRead(
+		const results = await readL2(
+			this.main,
 			this.publicationModule,
-			JSON.stringify(S2SPublicationModule),
+			S2SPublicationModule,
 			"isLicensedBatch",
 			[contentIds],
-			false,
 		);
 
 		// Convert the array of booleans to a Record<string, boolean>
@@ -120,16 +120,13 @@ export class PublicationService implements IPublicationSrv{
 		for (let i = 0; i < contentIds.length; i++) {
 			dealRecord[contentIds[i]] = results[i];
 		}
-
 		return dealRecord;
 	}
 
 	async getMultiSig() {
-
 		return this.multisig;
 	}
 
-	
 	async getPublicationMultiSigAddresses(tags: string[]) {
 		for (const tag of tags) {
 			if (tag.contains("--s2s")) {
@@ -145,24 +142,24 @@ export class PublicationService implements IPublicationSrv{
 	}
 
 	async getModuleAdresses() {
-
 		let configModule, publicationModule; 
 
-		const modules = await this.L2.genericRead(
+		const modules = await readL2(
+			this.main,
 			this.multisig,
-			JSON.stringify(safeAbi),
+			safeAbi,
 			"getModulesPaginated",
 			["0x0000000000000000000000000000000000000001", "10"]
-		)
-
+		);
 
 		for (let moduleAddress of modules[0]) {
 			try {
 				let moduleName;
 				try {
-					moduleName = await this.L2.genericRead(
+					moduleName = await readL2(
+						this.main,
 						moduleAddress,
-						'[{ "inputs": [], "name": "NAME", "outputs": [ { "internalType": "string", "name": "", "type": "string" } ], "stateMutability": "view", "type": "function" }]', 
+						[{ "inputs": [], "name": "NAME", "outputs": [ { "internalType": "string", "name": "", "type": "string" } ], "stateMutability": "view", "type": "function" }],
 						"NAME",
 						[]
 					);
@@ -185,10 +182,10 @@ export class PublicationService implements IPublicationSrv{
 	}
 
 	async getPublicationFeedAddress() {
-
-		return  await this.L2.genericRead(
+		return await readL2(
+			this.main,
 			this.configModule,
-			JSON.stringify(S2SRecordsModule),
+			S2SRecordsModule,
 			"getRecord",
 			["feed"]  
 		);
