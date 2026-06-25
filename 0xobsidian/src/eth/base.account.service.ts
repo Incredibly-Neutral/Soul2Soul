@@ -23,7 +23,7 @@ export class BaseAccountService implements IBaseAccountService {
 
         this.main = main;
         this.chainId = getChainId(chain);
-        const rpc = getRPCUrl(this.chainId, main.plugin.settings.alchemy_key);
+        const rpc = getRPCUrl(this.chainId, main.plugin.settings.rpc_key);
         const network = getNetwork(this.chainId);
         this.provider = new JsonRpcProvider(rpc, network)
             

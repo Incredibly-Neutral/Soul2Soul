@@ -62,7 +62,9 @@ the plugin bundle — part of this package's code.
 | `lens/lens.ctrlr.ts` | `LensService` — profile check/register, posting (local) | live |
 | `ipfs/` (pinata.ctrlr, remotekubo.service, ipld.factory, pin.factory) | pinning + IPFS (local) | live; **overlaps shared** |
 | `lit/_lit.service.ts` | old Lit SDK service (Naga/Chronicle Yellowstone, PKP minting) | **DEAD** — pre-Chipotle, superseded by shared `LitService` |
-| `settings.ts`, `settings.factory.ts` | persisted `authors[]` (incl. `private_key`) | live |
+| `settings.ts`, `settings.factory.ts` | persisted `authors[]` (incl. encrypted `key_blob`) | live; **plaintext never written** |
+| `keystore/keystore.ts` | `IKeystore`, `SafeStorageKeystore`, `PlaintextKeystore` fallback | **NEW** — Track A |
+| `keystore/spike.ts` | safeStorage reachability check (A0) | **NEW** — Track A |
 
 ## Key flows (from FLOW.md)
 
@@ -94,10 +96,16 @@ the plugin bundle — part of this package's code.
 - **`IPKPInfo` local type** (`name, tokenId, publicKey`) carries the vestigial pre-Chipotle PKP
   fields (cf. GAP-11).
 - **`lit`/`lens` typed `any`** on MainController — weak boundary; tighten to shared types.
-- **Private key at rest (known, accepted for now):** the author `private_key` is stored in plaintext
-  in Obsidian plugin settings (vault data). **Low stakes currently** — it lives on the author's local
-  machine, it is only an authoring identity, and **no funds are involved**. A better solution (OS
-  keychain / encryption) is acknowledged future work, not a present blocker.
+- **Private key at rest:** the author `private_key` is encrypted via Electron's
+  `safeStorage` (delegates to macOS Keychain / Windows DPAPI / Linux Secret Service)
+  before being written to disk. The in-memory `OXOUser.private_key` remains
+  plaintext for signing; the on-disk `key_blob` (base64) is encrypted. See
+  `src/keystore/keystore.ts` for the implementation, `src/keystore/spike.ts` for
+  the runtime check that verified `safeStorage` is reachable.
+- **Linux degraded mode:** on headless/minimal Linux where `isEncryptionAvailable()`
+  is false, the `PlaintextKeystore` is used with an explicit logged warning on every
+  use (no silent fallback). Install `gnome-keyring` or `keepassxc` and restart
+  Obsidian to enable encryption.
 
 ## Safe-to-change vs do-not-touch
 

@@ -29,7 +29,11 @@
     "lens-app-fetch": "tsx ./scripts/lens.fetch-app.ts",
     "lens-feed-create": "tsx ./scripts/lens.create-feed.ts",
     "lens-feed-fetch": "tsx ./scripts/lens.fetch-feed.ts",
-    "lens-query-posts": "tsx ./scripts/lens.query-posts.ts"
+    "lens-query-posts": "tsx ./scripts/lens.query-posts.ts",
+    "filecoin:setup-key": "tsx ./scripts/filecoin/setup-session-key.ts",
+    "filecoin:setup-payment": "tsx ./scripts/filecoin/setup-payment.ts",
+    "filecoin:check-status": "tsx ./scripts/filecoin/check-status.ts",
+    "filecoin:fund-account": "tsx ./scripts/filecoin/fund-account.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
@@ -67,6 +71,8 @@
     "wait-on": "^9.0.4"
   },
   "dependencies": {
+    "@filoz/synapse-core": "^0.7.0",
+    "@filoz/synapse-sdk": "^1.0.1",
     "@ensdomains/content-hash": "^3.0.0",
     "@ensdomains/ens-contracts": "^1.6.2",
     "@ensdomains/eth-ens-namehash": "^2.0.15",

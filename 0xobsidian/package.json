@@ -6,9 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon --watch src --ext ts,tsx --exec 'npm run build'",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build": "pnpm test && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
-    "test": "NODE_OPTIONS='--loader ts-node/esm --no-warnings' npx mocha --require ts-node/register test/integration/*.test.ts"
+    "test": "vitest run --reporter=verbose"
   },
   "keywords": [],
   "author": "",
@@ -36,9 +36,13 @@
     "stream-browserify": "^3.0.0",
     "ts-node": "^10.9.2",
     "tslib": "2.4.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
   },
   "dependencies": {
+    "@filoz/synapse-core": "^0.7.0",
+    "@filoz/synapse-sdk": "^1.0.1",
+    "filecoin-pin": "^1.0.1",
     "@human.tech/waap-sdk": "^1.0.3",
     "@ipld/dag-pb": "^4.1.5",
     "@lens-chain/sdk": "^1.0.3",

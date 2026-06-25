@@ -13,6 +13,9 @@ export interface IOXOUser {
     active: boolean,
     eoa: string,
     private_key: string,
+    /** Encrypted blob (base64) for on-disk storage. Only populated during
+     * serialization; replaced with plaintext `private_key` after loading. */
+    key_blob?: string,
     lens: string | undefined,
     safe: string | undefined,
     setSafeAddress: (address: string) => void,

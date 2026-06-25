@@ -4,6 +4,8 @@ import type { S2SProtocolInfo, PKP } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
 
 export type { S2SProtocolInfo, PKP };
+export type { DidEthr, S2SPublicContent, S2SProof, S2SContentItem, S2SContentBody, S2SBody, S2SBodyBase, S2SBodyPlain, S2SBodyEncrypted, S2STemplateData, S2SCollection, S2SRipple, S2STemplateConfig, IMapping, S2SJob } from './types';
+export { S2S_DOMAIN, S2S_TYPES, toDidEthr, eoaOf } from './types';
 
 // Viem public client type (equivalent to ethers Provider)
 export type ViemProvider = PublicClient;

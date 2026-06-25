@@ -1,0 +1,298 @@
+# HANDOFF — Replace `S2SContentItem` with the did:ethr-signed object
+
+> Scope: redefine the stored content object around `did:ethr` identity and add the author-signing
+> and verification methods. Read **SPEC-00** first (invariants, single-source rule). Types live in
+> **SPEC-shared**. This handoff is the identity/provenance half of the Lens-replacement RFC; the
+> Filecoin-storage and indexing-contract halves are tracked separately but the **append log** here
+> is the contract-side contract those depend on.
+>
+> Status of field lists below: authored from the `S2SBody` shape (the authoritative shape on hand).
+> **Confirm `S2SContentItem`'s actual field list against `shared/src/rendering/types.ts` before
+> editing** — they share the identity fields but may differ elsewhere.
+
+---
+
+## 0. Prerequisite (do first — blocks everything)
+
+Reconcile the existing **`S2SBody` / `bodySchema` drift** before adding anything: the duplicate
+`S2SBody` definitions and the nested-vs-flat `bodySchema` mismatch (SPEC-shared flag, SPEC-00 §0
+single-source rule). Editing a type that exists in two versions edits nothing reliably. Land the
+canonical single definition first, *then* apply the changes below to it.
+
+---
+
+## 1. What's changing and why
+
+Lens is removed. Its three jobs split: identity → `did:ethr`, storage → Filecoin (CID), feed/index
+→ a contract append log. This handoff covers identity + provenance only.
+
+Decisions already settled in discussion (carry as given):
+
+1. **`did:ethr` is the prime identity.** One identity now — the author EOA. No parallel "Lens owner."
+2. **Include the DID *and* sign over it.** A DID in a field is an unverified claim; the signature by
+   that DID's key is what makes it provenance.
+3. **Two signatures, two roles, two homes** (do not conflate):
+   - **Author EOA signature** — provenance — lives **in the stored content item**.
+   - **PKP signature** — render attestation — stays **in the rendered HTML certificate** (unchanged).
+4. **Sign over the plaintext hash** (computed before encryption). This makes the author signature
+   verifiable only by decryptors (author / publication owners / renderer) — that is intended; see §5
+   verification audience.
+5. **Object ID = digest of the canonical signed payload**, NOT the CID (CID only exists post-upload),
+   NOT the bare plaintext hash (doesn't commit the author; collapses identity with version).
+6. **Genesis digest = persistent document identity. Append log = version history.** Versions are
+   immutable, content-addressed; the document is a stable handle (its first/genesis digest).
+7. **Per-post CIDs are fine** now that the contract is the index — this **supersedes the
+   single-growing-DAG** idea. Confirm that intent before deleting any DAG-assembly code.
+
+---
+
+## 2. The new object
+
+The secret subset is carried as **one string** — ciphertext when encrypted, stringified JSON when
+not — so there are no branch-specific field *types*, which means **no discriminated union**: the
+object is one flat interface. Two principles still hold: **every public field is signed** (no
+unsigned public field — it would be tamperable), and **`secret` is stored but not signed** (so
+re-encryption keeps the signature valid).
+
+```ts
+// shared/src/rendering/types.ts  (canonical, single source)
+
+type DidEthr = `did:ethr:0x${string}`;   // canonical author form, e.g. "did:ethr:0x1234…"
+
+// the PUBLIC, queryable, SIGNED metadata (all of it is signed)
+interface S2SPublicContent {
+  specVersion: string;        // envelope/format version, e.g. "1" — pins canonicalization + algos (§2a)
+  author: DidEthr;            // was: bare 0x address
+  postType: string;           // S2S kind (post/page); NOT how to parse the body
+  mediaType: string;          // how to parse the body, e.g. "text/markdown" | "text/html"
+  parent: string;
+  position: string;
+  publication: string;
+  locale: string;
+  createdAt: number;          // unix seconds; this version's timestamp (last-modified = latest version's, from the log)
+  base?: string;
+  tags: string[];                       // public + queryable → MUST be signed
+  attributes?: Record<string, unknown>; // public + queryable → MUST be signed (no `any` in a signed object)
+  plaintextHash: string;      // keccak256 of the secret JSON string (computed before encryption)
+}
+
+interface S2SProof {
+  type: "eip712";
+  signer: `0x${string}`;      // recovered address; MUST equal the EOA in public.author
+  signature: `0x${string}`;   // author EOA signature over the EIP-712 digest of S2SPublicContent
+}
+
+// the stored object — one flat shape, no union
+interface S2SContentItem {
+  public: S2SPublicContent;   // signed
+  objectId: string;           // = EIP-712 digest of `public` (available pre-upload, pre-CID)
+  proof: S2SProof;
+  encryption: boolean;        // true → `secret` is ciphertext; false → `secret` is stringified JSON
+  secret: string;             // ciphertext OR JSON.stringify({ title, slug, content, custom })
+}
+```
+
+- **The secret subset** `{ title, slug, content, custom }` is serialized to one JSON string (`custom`
+  typed `Record<string, unknown>`, not `any`). Plain post: that string is `secret`. Encrypted post:
+  Lit-encrypt that string → `secret` is the ciphertext. `encryption` says which.
+- **No discriminated union, no `S2SEncryptedBlob`.** Both readings of `secret` are `string`; the old
+  `dataToEncryptHash` was a previous-Lit-version artifact and is gone. This retires the literal-union /
+  zod-`discriminatedUnion` machinery we'd planned — a flat interface is enough now.
+- **`secret` is not signed.** `plaintextHash` commits the plaintext instead, so re-encrypting (new
+  key/provider) yields different `secret` bytes but the same signature still verifies.
+- **`tags` / `attributes`** live in the signed `public` part. **`title`, `slug`, `content`, `custom`**
+  live in the secret JSON — so a gated post's URL doesn't leak its title. Public addressing is the
+  `objectId` / genesis handle; the renderer (a decryptor) reads `slug` at render time to place output.
+- **`isBasedOn` removed.** Edit history is the contract append log (§4). Cross-document derivation is a
+  separate, not-yet-built feature; reintroduce a derivation field deliberately when that lands.
+- `id: string // Lens post ID` **removed** → `objectId` (this version) + genesis handle (the document,
+  in the log §4). `modifiedDate` **dropped** — derived from the log.
+- **Canonical JSON:** serialize with **JCS (RFC 8785)** wherever you hash (the secret JSON; the
+  `tags`/`attributes` digest inputs), or `plaintextHash`/`objectId` won't reproduce on verify. Pinned
+  by `specVersion` — see §2a.
+
+### EIP-712 types (what gets signed)
+
+```ts
+const S2S_DOMAIN = { name: "S2S Content", version: "1", chainId: /* Base */ 8453 };
+
+// signs the whole S2SPublicContent. Scalars inline; arrays/objects committed by keccak hash.
+const S2S_TYPES = {
+  S2SContent: [
+    { name: "specVersion",   type: "string"  },  // "1"
+    { name: "author",        type: "string"  },  // did:ethr:0x…
+    { name: "plaintextHash", type: "bytes32" },   // = keccak of canonical secret JSON
+    { name: "postType",      type: "string"  },
+    { name: "mediaType",     type: "string"  },
+    { name: "parent",        type: "string"  },
+    { name: "position",      type: "string"  },
+    { name: "publication",   type: "string"  },
+    { name: "locale",        type: "string"  },
+    { name: "createdAt",     type: "uint256" },   // unix seconds (matches the interface `number`)
+    { name: "base",          type: "string"  },   // "" if absent
+    { name: "tagsHash",      type: "bytes32" },   // keccak256 of canonical(tags)
+    { name: "attributesHash",type: "bytes32" },   // keccak256 of canonical(attributes), 0x00… if none
+  ],
+};
+```
+
+Array/object public fields (`tags`, `attributes`) are committed by hash so the typed struct stays
+flat — but they ARE signed, so they can't be tampered with after issuance.
+
+EIP-712 is chosen over a raw sig so the same digest is verifiable on-chain (EIP-1271 / Safe path) if
+ever needed, and `recover` gives the signer directly.
+
+### 2a. What `specVersion` pins (write these in the spec, not as object fields)
+
+`specVersion: "1"` fixes the rules a verifier must apply, so they can evolve without ambiguity:
+
+- **Canonicalization:** **JCS (RFC 8785)** for every JSON that gets hashed — the secret JSON, and the
+  `tags`/`attributes` inputs to their keccak digests. This is the top footgun: if signer and verifier
+  serialize keys/whitespace differently, every signature fails. "Deterministic stringify" is not
+  enough; name JCS.
+- **Hash:** keccak256. **Signature:** EIP-712 typed data, domain above.
+- A future `"2"` may change any of these; the version field is what lets a verifier pick the right set.
+
+---
+
+## 3. The signing method (new)
+
+```ts
+// shared — new module, e.g. shared/src/identity/sign-content.ts
+
+async function buildSignedContentItem(
+  pub: Omit<S2SPublicContent, "author" | "plaintextHash">,
+  body: { title: string; slug: string; content: string; custom?: Record<string, unknown> },
+  signer,                       // author EOA
+  encryption: boolean,
+): Promise<S2SContentItem> {
+  const json          = jcs(body);                     // RFC 8785 canonical JSON (specVersion "1")
+  const plaintextHash = keccak256(json);               // computed BEFORE encryption
+
+  const publicPart: S2SPublicContent = { ...pub, author: toDidEthr(signer.address), plaintextHash };
+
+  const objectId  = eip712Digest(S2S_DOMAIN, S2S_TYPES, publicPart);   // persistent version id, pre-CID
+  const signature = await signer.signTypedData(S2S_DOMAIN, S2S_TYPES, publicPart);
+  const proof: S2SProof = { type: "eip712", signer: signer.address, signature };
+
+  const secret = encryption ? await lit.encrypt(json) : json;   // one string either way
+
+  return { public: publicPart, objectId, proof, encryption, secret };
+}
+```
+
+`plaintextHash` is over the exact `json` string; encryption (if any) wraps that same string. `secret`
+holds the result; it is never part of the signed payload.
+
+Order is load-bearing: **hash → digest(=objectId) → sign → encrypt → upload(→CID) → contract append.**
+The objectId exists at sign time; the CID does not, which is exactly why the CID can't be the id.
+
+---
+
+## 4. Contract — append log
+
+The contract stores, per document, an **append-only** ordered list of versions.
+
+```
+append(genesis, objectId, cid, author, proof)   // genesis == objectId for the first entry
+```
+
+- **Genesis entry** establishes the document's persistent identity and its authorizing
+  `did:ethr` author.
+- **Every later append re-points the document** to a new (objectId, CID) — a new signed version.
+- **Latest** = last non-tombstone entry.
+- **Retraction** = append a tombstone version (append-only; never delete).
+
+### NEW INVARIANT (must be enforced or the log is forgeable)
+
+> **INV-append:** the contract MUST gate every `append` to the genesis author (or permitted
+> publication owners), verified against the same `did:ethr` identity recorded in the genesis entry.
+> This is the existing author/publication gate, extended to guard appends, not only the initial
+> publish.
+
+Each version is independently self-verifying (it carries its own author EOA signature over its own
+payload). The contract adds ordering, "which is latest," and a **public, decryption-free** answer to
+"current version of document X, authored by whom."
+
+---
+
+## 5. Verification — who checks what, where
+
+| Layer | Verifier | Needs decrypt? | Proves |
+|---|---|---|---|
+| On-chain record (append log) | anyone, incl. readers | **no** | who published which objectId/CID, gated to which author |
+| Author EOA sig over plaintext hash | decryptors: author / publication owners / **renderer** | yes | who authored the content |
+| PKP sig over rendered HTML | anyone | no | the protocol rendered this, gated; carries authorship transitively |
+
+Two methods to add:
+
+```ts
+// renderer-side (a permitted decryptor): run before rendering
+async function verifyAuthorship(item: S2SContentItem): Promise<boolean> {
+  const json = item.encryption ? await lit.decrypt(item.secret) : item.secret;   // canonical JSON string
+  if (keccak256(json) !== item.public.plaintextHash) return false;
+
+  const recovered = recoverTypedData(S2S_DOMAIN, S2S_TYPES, item.public, item.proof.signature);
+  return recovered === eoaOf(item.public.author) && recovered === item.proof.signer;
+}
+
+// public-side: no decryption — read the log
+function resolveLatest(genesis): { objectId, cid, author } { /* read append log */ }
+```
+
+Do **not** also sign the ciphertext to chase public verifiability — redundant with the record and
+binds the signature to one specific encryption. The record is the public layer.
+
+---
+
+## 6. Open decisions (flag, don't guess)
+
+1. **DAG-assembly removal:** confirm the append-log-as-index supersedes the single-growing-DAG, then
+   the per-publication DAG re-upload code can be retired.
+2. **Cross-document derivation (deferred):** the dropped `isBasedOn` was the only thing covering
+   "based on *another author's* work" (the log only covers your own versions). Reintroduce a
+   derivation field when that feature is actually built — not now.
+**Resolved (license):** **not in the object.** The permission model is the access gate — `encryption`
+on/off plus the on-chain decrypt conditions — which already answers "who may use this." A declarative
+legal license would be unenforced text sitting beside an enforced mechanism (and could contradict it,
+e.g. "CC-BY" on a gated post). Access control (who can *obtain*) and usage rights (what they may *do*
+after) are different axes; only the former is mechanism here. The January "permitted license" pillar
+is effectively already implemented *by* the access gate. If a declarative reuse-license is ever wanted
+for public content, add it as an explicitly-non-enforced, publication-level annotation — not a signed
+per-item field. Bilateral deal/revenue terms remain on-chain (grant/accept + license txs) regardless.
+
+**Resolved:** `slug` lives in the secret JSON (with `title`/`content`/`custom`), not the public part —
+so a gated post's URL can't leak its title; public addressing is `objectId` / genesis handle, and the
+renderer reads `slug` after decryption to place output.
+
+---
+
+## 7. Files to touch
+
+- `shared/src/rendering/types.ts` — **reconcile duplicates first** (§0), then the new flat
+  `S2SContentItem` (§2). No discriminated union needed.
+- `shared/src/identity/sign-content.ts` — **new**, the signing method (§3).
+- `shared/src/identity/verify-content.ts` — **new**, `verifyAuthorship` (§5).
+- `shared/src/rendering/action-io.ts` — zod schema for `S2SContentItem` (flat: `encryption: z.boolean()`,
+  `secret: z.string()`) + the new `public` / `proof` / `objectId` / `did:ethr` `author`.
+- `shared/src/lit/actions/types.ts` — wherever action Input/Data carries the old `S2SBody`/`id`,
+  swap to `objectId` + `did:ethr` author; the renderer action calls `verifyAuthorship` (§5).
+- `protocol/actions/src/libs/helpers.ts` — `requireFields` guards for the new required fields
+  (`author` as `did:ethr`, `plaintextHash`, `proof`, `objectId`).
+- Publication/records contract — the append log + **INV-append** gate (§4).
+
+## 8. Definition of done
+
+- [ ] §0 drift reconciled; one canonical `S2SContentItem`.
+- [ ] `author` is `did:ethr`; `id`(Lens post id) removed; `objectId` + `proof` present.
+- [ ] One flat `S2SContentItem`: `public` + `objectId` + `proof` + `encryption: boolean` + `secret: string`. No union, no `S2SEncryptedBlob`.
+- [ ] All public metadata (incl. `tags`, `attributes`) is inside the signed `public` part; **no unsigned public field**.
+- [ ] `secret` is one string (ciphertext or stringified JSON); it is **not** in the signed payload.
+- [ ] `buildSignedContentItem` signs the EIP-712 digest of `public`; `objectId === that digest`.
+- [ ] `public` includes `specVersion`, `mediaType`; `createdAt` is unix-seconds `number` in both the interface and EIP-712 (no string/uint256 mismatch).
+- [ ] `attributes` and `custom` typed `Record<string, unknown>`, not `any`.
+- [ ] All hashing uses **JCS (RFC 8785)** canonical JSON; `specVersion "1"` pins JCS + keccak256 + EIP-712 (§2a).
+- [ ] `plaintextHash` computed over the canonical secret JSON before encryption; signature recovers to the `author` EOA.
+- [ ] Contract gates appends to the genesis author (**INV-append**); retraction = tombstone append.
+- [ ] Renderer calls `verifyAuthorship` before rendering; public path reads the log without decrypt.
+- [ ] No `license` field on the object (access gate is the permission model — §6); §6 open items recorded in SPEC-shared.

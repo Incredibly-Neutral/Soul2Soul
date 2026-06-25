@@ -8,7 +8,7 @@ import {
 } from "./github";
 
 
-import { S2SProtocolInfo, S2SAsset, S2SPublication, S2SPublicationConfig } from "@s2s/soul2soul-shared";
+import { S2SProtocolInfo, S2SPublication, S2SPublicationConfig } from "@s2s/soul2soul-shared";
 
 // export const fetchOnChainPublicationConfig = async (
 // 	main: IMainController,
@@ -61,9 +61,6 @@ export const uploadConfig = async (
 		config = {};
 	}
 
-	if (config.assets === undefined) {
-		config.assets = [];
-	}
 	if (config.stylesheets === undefined) {
 		config.stylesheets = [];
 	}
@@ -181,22 +178,6 @@ export const uploadConfig = async (
 			let templateContent = await fetchFileFromGithub(template.url);
 			templateContent = templateContent.replace(/\n/g, "");
 			templateContent = templateContent.replace(/\\([^\\])/g, "$1"); // Remove single backslashes except double backslashes
-
-			if (path.basename(template.url) == "head.handlebars") {
-				templateContent = insertStylesheetLink(
-					publication,
-					templateContent,
-					config.stylesheets[0].cid,
-				);
-				// console.log(templateContent);
-			}
-
-			templateContent = insertAssetImageCidsIntoTemplate(
-				templateContent,
-				config.assets,
-				main.protocolInfo.assetsGateway || "",
-			);
-
 			
 			const cid = await main.oxo.ctrlr.ipfs.add(
 				templateContent,
@@ -277,63 +258,11 @@ export const createConfig = (
 ): S2SPublicationConfig => {
 
 	return {
-		assets: config.assets,
-		assetsGateway: protocolInfo.assetsGateway || "",
+		assetsCid: "",
 		contract: publication.contract || "",
 		dataGateway: protocolInfo.dataGateway || "",
-		// renderAction: renderActionCid,
 		mapping: JSON.parse(mapping),
 		name: publication.name,
-		stylesheets: config.stylesheets,
 		templateCid: templatesCid,
-		// templates: config.templates,
 	};
-};
-
-const insertStylesheetLink = (
-	publication: any,
-	templateContent: string,
-	cid: string,
-): string => {
-	// console.log("inserting stylesheet link");
-
-	// Add CSP meta tag right after <head>
-	// const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.mypinata.cloud; font-src 'self' https://fonts.gstatic.com; img-src 'self' https://*.mypinata.cloud data:;">`;
-	// templateContent = templateContent.replace(/<head>/, `<head>\n    ${cspMeta}`);
-
-	// Replace stylesheet link
-	// const styleRegex = /<link[^>]*rel="stylesheet"[^>]*>/;
-	// const newStyleLink = `<link rel="stylesheet" href="${fm.assets_gateway}/ipfs/${cid}?filename=styles.css">`;
-	// return templateContent.replace(styleRegex, newStyleLink);
-
-	// console.log("gateway", publication.assets_gateway);
-
-	return templateContent.replace(
-		"insert_stylesheet.css",
-		`${publication.assets_gateway}/ipfs/${cid}?filename=styles.css`,
-	);
-};
-
-const insertAssetImageCidsIntoTemplate = (
-	templateContent: string,
-	assets: S2SAsset[],
-	assets_gateway: string,
-): string => {
-	for (const asset of assets) {
-		const filename = path.basename(asset.path).split(".")[0];
-		// Match img tags where id equals the filename (without extension)
-		const imgRegex = new RegExp(
-			`<img[^>]+id=["']${filename}["'][^>]*>`,
-			"gi",
-		);
-		templateContent = templateContent.replace(imgRegex, (match) => {
-			// console.log("inserting image cids");
-			return match.replace(
-				/src=["'][^"']*["']/,
-				`src="${assets_gateway}/ipfs/${asset.cid}"`,
-			);
-		});
-	}
-
-	return templateContent;
 };

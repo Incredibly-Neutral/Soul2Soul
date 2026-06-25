@@ -27,15 +27,20 @@ export class S2SRecordsTab extends HTMLElement {
   }
 
   async connectedCallback() {
-    // Guard against double-registration on re-connection
+     console.count('connect'); 
     this.unsubscribers.forEach(fn => fn());
-    
     this.unsubscribers = [
       store.subscribeToRecords(() => this.render()),
     ];
 
     this.render();
-    await this.loadRecords();
+
+    // Only hit the chain if we have nothing cached.
+    // On a remount the store is still populated, so we skip the
+    // setAllRecords() that was re-triggering everything.
+    if (!store.getAllRecords()) {
+      await this.loadRecords();
+    }
   }
 
   disconnectedCallback() {
@@ -195,6 +200,7 @@ export class S2SRecordsTab extends HTMLElement {
 
   private render() {
     if (!this.shadowRoot) return;
+    console.count('render');
 
     const records = this.filteredRecords; // ← already an array, null-safe
     const hasCache = records.length > 0;  // ← was store.getAllRecords().length which threw on null

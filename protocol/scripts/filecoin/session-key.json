@@ -1,0 +1,11 @@
+{
+  "sessionPrivateKey": "0x17d22a20412bb3cdf40f211725c9d90224f81b6fba2faf1e6873c36c003027cc",
+  "sessionAddress": "0x3aD34Cb3fBb59E6253a9ecD235679fc989Fe569B",
+  "rootAddress": "0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387",
+  "expiresAt": "1813689203",
+  "expiresAtISO": "2027-06-22T18:33:23.000Z",
+  "permissions": [
+    "CreateDataSet",
+    "AddPieces"
+  ]
+}

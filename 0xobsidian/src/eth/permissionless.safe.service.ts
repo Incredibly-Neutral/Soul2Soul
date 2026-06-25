@@ -67,7 +67,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     this.main = main;
     this.chainId = getChainId(chain);
     // console.log("CHAIN", chain, this.chainId)
-    const rpc = getRPCUrl(this.chainId, main.plugin.settings.alchemy_key);
+    const rpc = getRPCUrl(this.chainId, main.plugin.settings.rpc_key);
     // const network = getNetwork(this.chainId);
     // this.provider = new JsonRpcProvider(rpc, network)
     

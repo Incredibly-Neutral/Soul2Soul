@@ -82,25 +82,24 @@ export const getNetwork = (chainId: number)  => {
   return network;
 }
 
-export const getRPCUrl = (chainId: number, alchemy_key: string): string => {
+export const getRPCUrl = (chainId: number, api_key: string): string => {
   let rpc;
 
   switch (chainId) {
     case 1:
-      rpc = `https://eth-mainnet.g.alchemy.com/v2/${alchemy_key}`;
+      rpc = `https://lb.drpc.live/ethereum/${api_key}`;
       break;
 
     case 11155111:
-      // rpc = `https://eth-sepolia.g.alchemy.com/v2/${alchemy_key}`;
-      rpc = "https://sepolia.infura.io/v3/5588b2f2645b47bf9d9df736ab328181";
+      rpc = `https://lb.drpc.live/sepolia/${api_key}`;
       break;
 
     case 8453:
-      rpc =  `https://base-mainnet.g.alchemy.com/v2/${alchemy_key}`;
+      rpc = `https://lb.drpc.live/base/${api_key}`;
       break;
 
     case 84532:
-      rpc = `https://base-sepolia.g.alchemy.com/v2/${alchemy_key}`;
+      rpc = `https://lb.drpc.live/base-sepolia/${api_key}`;
       break;
 
     case 175188:
