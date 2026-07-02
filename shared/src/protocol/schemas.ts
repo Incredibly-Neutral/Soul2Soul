@@ -1,29 +1,20 @@
 import { z } from 'zod';
 
 // ============================================================================
-// PKP
-// ============================================================================
-export const pkpSchema = z.object({
-  ethAddress: z.string(),
-  publicKey: z.string(),
-  tokenId: z.string(),
-});
-
-// ============================================================================
 // Protocol Info
 // ============================================================================
 export const protocolSchema = z.object({
-  addr: z.string(),
-  recordsModule: z.string(),
-  dataGateway: z.string(),
-  assetsGateway: z.string(),
-  lensApp: z.string(),
+  gateway: z.string(),
+  ensRegistry: z.string(),
   ensRecords: z.string(),
-  pkp: pkpSchema,
-  litActionPrep: z.string(),
-  litActionSingle: z.string(),
-  litActionCbor: z.string(),
-  litActionRootUpdate: z.string(),
+  publicationFactory: z.string(),
+  recordsFactory: z.string(),
+  pkp: z.string(),
+  litActions: z.object({
+    prep: z.string(),
+    render: z.string(),
+    update: z.string(),
+  }),
 });
 
 // ============================================================================

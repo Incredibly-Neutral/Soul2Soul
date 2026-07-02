@@ -61,7 +61,7 @@ export class ContentController implements IContentController {
             this.main.plugin.app,
             file,
             mdContent,
-            this.main.protocolInfo.assetsGateway,
+            this.main.protocolInfo.gateway,
         );
 
         return {

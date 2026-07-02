@@ -15,17 +15,12 @@
           "hashedCid": "0x153c4bda948ab85c2eb4228ccfdb431c86c958b4f89eb3729d930e3b04f95f12"
         },
         {
-          "name": "single",
+          "name": "render",
           "cid": "QmUEYqeRDv5nDbnVtSZBtqrZ2vsB9C4AtkzHBpEByKD1ma",
           "hashedCid": "0xd794b2ff338c3ec74764831aa65b1686c8bb523a0ef83d6ed1a10357dc75a4ba"
         },
         {
-          "name": "cbor",
-          "cid": "QmbYCjAd9yJu4asE5fvGUhjMt5saejS5EeZhy25FVUANma",
-          "hashedCid": "0xf6f4748985ac41e44fcb7d49636264953811f830cdcf90ed0bdeae6db5481b3b"
-        },
-        {
-          "name": "updateEvm",
+          "name": "update",
           "cid": "QmaSsaM9AiPhzM3ZTwLpQsqt6cKemEa3Cxrf3tCrSzHnM5",
           "hashedCid": "0xd232e1b068d3615ca4b52f5b60aba01e1a5f8a05e2f953bd4d43a0c8b37ba210"
         }

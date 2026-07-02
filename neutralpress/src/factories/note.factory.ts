@@ -63,7 +63,7 @@ export const parseNote = async (
 		main.plugin.app,
 		file,
 		toEncrypt.content,
-		main.protocolInfo.assetsGateway,
+		main.protocolInfo.gateway,
 	);
 
 	if (title != undefined && title != "") toEncrypt.title = title;

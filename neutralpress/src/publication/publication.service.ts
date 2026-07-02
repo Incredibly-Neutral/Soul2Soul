@@ -3,7 +3,7 @@ import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
 import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
-import { S2SRecordsModuleFactory, S2SPublicationModuleFactory, S2SPublicationModule, S2SRecordsModule} from "../../../protocol/generated/abis" 
+import { S2SRecordsModuleFactory, S2SPublicationModuleFactory, S2SPublicationModule, S2SRecordsModule} from "../../../protocol/contracts/generated/abis" 
 
 const L1 = "ETH_MAINNET";
 const L2 = "BASE";
@@ -44,11 +44,13 @@ export class PublicationService implements IPublicationSrv{
 	multisig!: string;
 	configModule!: string;
 	publicationModule!: string;
+	L1: any;
 	L2: any;
 
 	constructor(main: IMainController, subdomain: string) {
 		this.main = main;
 		this.subdomain = subdomain;
+		this.L1 = this.main.oxo.ctrlr.safeInstance(L1);
 		this.L2 = this.main.oxo.ctrlr.safeInstance(L2);
 	}
 
@@ -80,6 +82,23 @@ export class PublicationService implements IPublicationSrv{
 			JSON.stringify(S2SPublicationModule),
 			"grantLicense",
 			[this.publicationModule,contentId],
+			false,
+		);
+	}
+
+	/**
+	 * Append a version to a genesis document on the V2 publication module.
+	 * genesis and objectId are both content-derived hashes (bytes32).
+	 * cid is the root CID from the Filecoin/Kubo storage pipeline.
+	 */
+	async append(genesis: string, objectId: string, cid: string) {
+		// Use the V2 ABI — same function signature as grantLicense for now
+		// TODO: import V2 ABI once compiled
+		return await this.main.oxo.ctrlr.account[L2].genericTx(
+			this.publicationModule,
+			JSON.stringify(S2SPublicationModule),
+			"append",
+			[genesis, objectId, cid],
 			false,
 		);
 	}

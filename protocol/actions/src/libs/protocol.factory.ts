@@ -17,29 +17,25 @@ export const getProtocolInfo = async (dev: boolean) => {
         throw new Error("Failed to get multisig or configModule from ENS");
     }
 
-    const [assetsGateway, dataGateway, ensRecords, lensApp, pkpTokenId, pkpPublicKey, pkpEthAddress, litActionPrep, litActionSingle, litActionCbor, litActionRootUpdate ] = await evmRead("BASE", configModule, Abi_S2SRecordsModule, "getRecords", [["assets_gateway","data_gateway","ens_records","lens_app","pkp_tokenId","pkp_publicKey","pkp_ethAddress", "lit_action_prep", "lit_action_single", "lit_action_cbor","lit_action_root_update"]]);
+    const [dataGateway, ensRecords, ensRegistry, publicationFactory, recordsFactory, pkpEthAddress, litActionPrep, litActionRender, litActionUpdate ] = await evmRead("BASE", configModule, Abi_S2SRecordsModule, "getRecords", [["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress", "lit_action_prep", "lit_action_render", "lit_action_update"]]);
 
     return {
-      addr: multisig,
-      recordsModule: configModule,
-      dataGateway,
-      assetsGateway,
-      lensApp,
+      gateway: dataGateway,
+      ensRegistry: ensRegistry,
       ensRecords,
-      pkp: {
-        ethAddress: pkpEthAddress,
-        publicKey: pkpPublicKey,
-        tokenId: pkpTokenId
+      publicationFactory,
+      recordsFactory,
+      pkp: pkpEthAddress,
+      litActions: {
+        prep: litActionPrep,
+        render: litActionRender,
+        update: litActionUpdate,
       },
-      litActionPrep,
-      litActionSingle,
-      litActionCbor,
-      litActionRootUpdate
     };
 
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.log("Protocol info fetch error:", errorMsg);
-    throw error; // Re-throw instead of returning empty object
+    throw error;
   }
 };

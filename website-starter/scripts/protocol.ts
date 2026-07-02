@@ -1,14 +1,7 @@
 import { namehash } from "ethers";
 
-
 import { getContractAddress } from "./ens";
 import * as ethers from "ethers";
-
-interface PKP {
-  tokenId: string;
-  publicKey: string;
-  ethAddress: string;
-}
 
 const ALCHEMY_KEY = process.env.ALCHEMY_KEY;
 const IPFS_URL = process.env.IPFS_URL;
@@ -22,22 +15,20 @@ export const getProtocolInfo = async (dev = false) => {
 
     const { multisig, configModule } = await getProtocolControllerAndModules();
 
-    const [ assets_gateway, data_gateway, ens_records, lens_app, lit_action_main, lit_action_root_update, pkp_tokenId, pkp_publicKey, pkp_ethAddress ] = await getRecords(configModule, ["assets_gateway","data_gateway","ens_records","lens_app","lit_action_main","lit_action_root_update","pkp_tokenId","pkp_publicKey","pkp_ethAddress"]);
+    const [ data_gateway, ens_records, ens_registry, publication_factory, records_factory, pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update ] = await getRecords(configModule, ["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress","lit_action_prep","lit_action_render","lit_action_update"]);
 
     return {
-      addr: multisig,
-      recordsModule: configModule,
-      data_gateway: data_gateway,
-      assets_gateway: assets_gateway,
-      lens_app: lens_app,
-      ens_records: ens_records,
-      pkp: {
-        ethAddress: pkp_ethAddress,
-        publicKey: pkp_publicKey,
-        tokenId: pkp_tokenId
+      gateway: data_gateway,
+      ensRegistry: ens_registry,
+      ensRecords: ens_records,
+      publicationFactory: publication_factory,
+      recordsFactory: records_factory,
+      pkp: pkp_ethAddress,
+      litActions: {
+        prep: lit_action_prep,
+        render: lit_action_render,
+        update: lit_action_update,
       },
-      lit_action_main: lit_action_main,
-      lit_action_root_update: lit_action_root_update
     };
 
   } catch (error) {
@@ -49,7 +40,6 @@ export const getProtocolInfo = async (dev = false) => {
 };
 
 export const tokenIDFromBytes = (bytes: string): string => {
-  // I Doubt this can actualy be done .. and probably we wont need it anyway
   return "";
 };
 
@@ -72,8 +62,6 @@ export const addressFromBytes = (
 };
 
 export const getRecords = async (moduleAddress: string, keys: string[]) => {
-
-
       const l2Provider = new ethers.JsonRpcProvider(
           `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
           { chainId: 8453, name: "base" }
@@ -139,7 +127,6 @@ export const getProtocolControllerAndModules = async () => {
 
         const controller = await registry.parentDomainController();
 
-
         console.log("Publication Safe (multisig):", controller.target);
 
         // 5. Get modules from the Safe
@@ -179,7 +166,6 @@ export const getProtocolControllerAndModules = async () => {
                     publicationModule = moduleAddress;
                 }
             } catch (error) {
-                // Module doesn't have NAME function, skip
                 console.log(`Module ${moduleAddress} has no NAME function`);
             }
         }

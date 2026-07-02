@@ -4,7 +4,7 @@ import { IpfsCtrlr, ipfsController } from "./ipfs/ipfs.ctrlr.js";;
 import { PinataService } from "./ipfs/pinata.ctrlr.js";
 import { LitService } from "@s2s/soul2soul-shared";
 import { LensService } from "./lens/lens.ctrlr.js";
-import { IPermissionlessSimpleService, PermissionlessSimpleService } from "./eth/permissionless.simple.service.js";
+import { IPermissionlessSafeService, PermissionlessSafeService } from "./eth/permissionless.safe.service.js";
 import { FilecoinController, FilecoinSessionKeyData } from "./filecoin/filecoin.ctrlr.js";
 import { Notice } from "obsidian";
 import { IWaapService, WaapService } from "./eth/waap.service.js";
@@ -20,8 +20,8 @@ export interface IMainController {
   user: IOXOUser;
   basePath: string;
   env: { [key: string]: string | undefined };
-  /** 4337 smart account per chain (PermissionlessSimpleService). */
-  account: { [key: string]: IPermissionlessSimpleService };
+  /** 4337 smart account per chain (PermissionlessSafeService). */
+  account: { [key: string]: IPermissionlessSafeService };
   storage?: FilecoinController;
   safeInstance: any;
   ipfs: IpfsCtrlr;
@@ -43,7 +43,7 @@ export class MainController implements IMainController {
   basePath: string;
   env!: { [key: string]: string | undefined };
   viem!: ViemService;
-  account!: { [key: string]: IPermissionlessSimpleService };
+  account!: { [key: string]: IPermissionlessSafeService };
   storage?: FilecoinController;
   ipfs!: IpfsCtrlr;
   lit!: any;
@@ -136,13 +136,22 @@ export class MainController implements IMainController {
 
   async initChain(chain: string) {
 
-      this.account[chain] = new PermissionlessSimpleService(this, chain);
-      
-      await this.account[chain].updateSigner(this.user.private_key)
-      
-      console.log("Simple account address:", this.account[chain].address)
+      const chainName = chain; // preserve original name for lookup
 
-      // Simple smart accounts deploy on first userOp — no separate deploy step needed
+      if (this.account[chain] == undefined) {
+        this.account[chain] = new PermissionlessSafeService(this, chainName);
+        await this.account[chain].updateSigner(this.user.private_key);
+
+        // Connect to existing Safe if an address is stored, otherwise deploy fresh
+        if (this.user.safe) {
+          await this.account[chain].connectToExistingSafe(this.user.safe as `0x${string}`);
+        } else {
+          const salt = `s2s_${chainName}_${this.user.name}`;
+          await this.account[chain].connectToFreshSafe(salt);
+        }
+
+        console.log("Safe address:", this.account[chain].address)
+      }
   }
 
   async newAuthor(name: string, type: string, privateKey?: string) {
@@ -155,44 +164,18 @@ export class MainController implements IMainController {
       undefined,
     );
 
-    // you may need to switch to other account type !! 
-    if (this.hasAccounts().length < 1) {
-      await this.initChains(['ETH_MAINNET','BASE'])
-    } else {
+    if (type === "safe") {
 
-      for (const chain of Object.keys(this.account)) {
-        await this.account[chain].updateSigner(this.user.private_key);
-      }
-    }
-
-    // console.log("type", type)
-
-    switch (type) {
-
-      case "safe": 
-
-        this.user = new OXOUser(
-          name,
-          true,
-          privateKey,   // use imported key if given, undefined = generate random
-          undefined,
-          undefined,
-        );
-
-        // you may need to switch to other account type !! 
-        if (this.hasAccounts().length < 1) {
-          await this.initChains(['ETH_MAINNET','BASE'])
-        } else {
-
-          for (const chain of Object.keys(this.account)) {
-              await this.account[chain].updateSigner(this.user.private_key);
-          }
+      if (this.hasAccounts().length < 1) {
+        await this.initChains(['ETH_MAINNET','BASE'])
+      } else {
+        for (const chain of Object.keys(this.account)) {
+          await this.account[chain].updateSigner(this.user.private_key);
         }
+      }
 
-        // Store the simple account address in the user's safe field
-        this.user.safe = this.account["ETH_MAINNET"]?.address;
-      
-        break;
+      // Store the Safe address in the user's safe field
+      this.user.safe = this.account["ETH_MAINNET"]?.address;
     }
 
    // this.user.lens = await this.user.addLensAccount(this)
@@ -219,6 +202,6 @@ export class MainController implements IMainController {
   }
 
   safeInstance (chain: string) {
-    return new PermissionlessSimpleService(this, chain);
+    return new PermissionlessSafeService(this, chain);
   }
 }

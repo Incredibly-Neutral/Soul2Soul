@@ -164,7 +164,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
     prepResult = validatePrepOutput(raw);
 
     expect(prepResult.ok).toBe(true);
@@ -195,7 +195,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       };
       if (CONFIG_CID) singleInput.configCid = CONFIG_CID;
 
-      const raw = await callAction(protocolInfo.litActionSingle, singleInput);
+      const raw = await callAction(protocolInfo.litActions.render, singleInput);
       const result = validateSingleOutput(raw);
 
       if (!result.ok) {
@@ -230,7 +230,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       preview: true,
     };
 
-    const raw = await callAction(protocolInfo.litActionRootUpdate, evmInput);
+    const raw = await callAction(protocolInfo.litActions.update, evmInput);
     const result = validateEvmUpdateOutput(raw);
 
     if (!result.ok) {
@@ -269,7 +269,7 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
     const prepResult = validatePrepOutput(raw) as any;
     expect(prepResult.ok).toBe(true);
 
@@ -314,7 +314,7 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
     const badPublication = 'nonexistent-' + Date.now() + '.soul2soul.eth';
     const input = { publication: badPublication, contentIds: ['lens-post-1'] };
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
 
     expect(raw).toBeDefined();
     assertOkShape(raw, 'prep');
