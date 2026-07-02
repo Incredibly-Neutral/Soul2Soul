@@ -61,11 +61,14 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
   **L2** deploy `S2SRecordsModule` + `S2SPublicationModule(authors)` → `enableModule`×2 → verify
   (poll ≤20×) → `uploadConfig` → `lens.createFeed` → set records (name/config/repo/branch/feed) →
   add owners + **remove temp creation signer**. Long async background job.
-- **Publish** (`proposeContent` → `publishToPublication`): `parseNote` → `{contentId, publicContent,
+|- **Publish** (`proposeContent` → `publishToPublication`): `parseNote` → `{contentId, publicContent,
   toEncrypt}` → if `encryption`, `encryptContent` (shared `lit.encrypt(litUsageKey, pkp.ethAddress,
   toEncrypt)`) → `storeNoteOnLens` (posts to the publication **feed**; if no `contentId`, a mock post
-  yields the Lens id, written back to note frontmatter as `content_id`) → check/`grantLicense` →
-  `renderCalls` → **`renderwithLitActions(... litUsageKey, signature ...)`** → `pinCidFromRemote`.
+  yields the Lens id, written back to note frontmatter as `content_id`) → **dual storage**:
+  **Kubo** `uploadToKubo(signedItem, kuboUrl)` (instant gateway availability) → **Filecoin**
+  `uploadJson(signedItem)` (CAR builder → SPs, durable) → **CID verify** (`kuboCid === rootCid?`
+  → `[cid-ok]` or Notice warning) → check/`grantLicense` → `renderCalls` →
+  **`renderwithLitActions(... litUsageKey, signature ...)`** → `pinCidFromRemote`.
 - **License:** `grantLicense`/`revokeLicense` → L2 Safe call on the publication module.
 
 ## Invariants this component preserves

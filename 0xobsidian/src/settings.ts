@@ -133,22 +133,13 @@ export class OxOAuthorsTab extends PluginSettingTab {
           }),
         );
 
-      const didValue = `did:ethr:${author.eoa}`;
+      const didValue = `did:ethr:${author.safe}`;
       new Setting(authorEl)
         .setName("DID")
         .setDesc(didValue)
         .addButton((button) =>
           button.setButtonText("Copy").onClick(() => {
             navigator.clipboard.writeText(didValue);
-          }),
-        );
-
-      new Setting(authorEl)
-        .setName("Signer:")
-        .setDesc(author.eoa)
-        .addButton((button) =>
-          button.setButtonText("Copy").onClick(() => {
-            navigator.clipboard.writeText(author.eoa);
           }),
         );
 

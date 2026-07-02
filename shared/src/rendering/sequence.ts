@@ -42,7 +42,7 @@ export const renderwithLitActions = async (
 
   console.log("pub1", publication)
   const prepInputs = validatePrepInput({ publication, configCid, contentIds });
-  const prepAction = await runAction( true, lit, protocolInfo.litActionPrep, prepInputs, litUsageKey );
+  const prepAction = await runAction( true, lit, protocolInfo.litActions.prep, prepInputs, litUsageKey );
   const validatedPrep = validatePrepOutput(prepAction);
   if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2)); 
   if (validatedPrep.ok) {
@@ -58,7 +58,7 @@ export const renderwithLitActions = async (
     jobs.map(async (job: any, index: number) => {
       try {
         const singleInputs = validateSingleInput({ signature, authorSafeAddress, configCid, publication, job, preview });
-        const actionResult = await runAction(preview, lit, protocolInfo.litActionSingle, singleInputs, litUsageKey);
+        const actionResult = await runAction(preview, lit, protocolInfo.litActions.render, singleInputs, litUsageKey);
         return { success: true, index, data: actionResult };
       } catch (err: any) {
         return { success: false, index, error: err?.message ?? String(err) };
@@ -83,7 +83,7 @@ export const renderwithLitActions = async (
   console.log("pub2", publication)
   const evmInputs = validateEvmUpdateInput({ signature, authorSafeAddress, publication, jobs: renderedJobs, preview });
 
-  const evmAction = await runAction( preview, lit, protocolInfo.litActionRootUpdate, evmInputs, litUsageKey);
+  const evmAction = await runAction( preview, lit, protocolInfo.litActions.update, evmInputs, litUsageKey);
   console.log(evmAction)
   const validated = validateEvmUpdateOutput(evmAction);
   if (!validated.ok) console.log(JSON.stringify(validated, null, 2));

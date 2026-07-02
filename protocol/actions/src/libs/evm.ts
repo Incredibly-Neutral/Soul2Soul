@@ -1,5 +1,4 @@
 import { ALCHEMY_KEY, DRPC_API_KEY } from "./constants";
-import { PKP } from "@s2s/soul2soul-shared/lit-actions";
 
 const RPC_URLS: Record<string, string[]> = {
     ETHEREUM: [
@@ -34,7 +33,7 @@ const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: str
 
 export const evmWrite = async (
     chain: string,
-    pkp: PKP,
+    pkp: string,
     contractAddress: string,
     abi: any,
     method: string,
@@ -43,13 +42,13 @@ export const evmWrite = async (
 ) => {
     const { provider, contract } = evmSetup(contractAddress, abi, chain);
 
-    const pendingNonce = await provider.getTransactionCount(pkp.ethAddress, "pending");
+    const pendingNonce = await provider.getTransactionCount(pkp, "pending");
     const txData = contract.interface.encodeFunctionData(method, args);
 
     const estimatedGas = await provider.estimateGas({
         to: contractAddress,
         data: txData,
-        from: pkp.ethAddress,
+        from: pkp,
     }).catch((err: any) => {
         console.log("Gas estimation failed:", err.message);
         return ethers.BigNumber.from(60000);
@@ -72,7 +71,7 @@ export const evmWrite = async (
         type: 2,
     };
 
-    const wallet = new ethers.Wallet(await Lit.Actions.getPrivateKey({ pkpId: pkp.ethAddress }));
+    const wallet = new ethers.Wallet(await Lit.Actions.getPrivateKey({ pkpId: pkp }));
     const signedTx = await wallet.signTransaction(tx);
 
     try {

@@ -46,6 +46,10 @@ export interface IPermissionlessSafeService {
   valueTx: (to: `0x${string}`, amount: string) => Promise<string>;
   getSafeAddress: (salt: string) => Promise<string>;
   isDeployed: () => Promise<boolean>;
+
+  // Typed data signing — EOA delegate, needed by neutralpress content signing
+  signTypedData: (domain: any, types: any, message: any) => Promise<`0x${string}`>;
+  asTypedDataSigner: () => any;
 }
 
 export class PermissionlessSafeService implements IPermissionlessSafeService {
@@ -481,6 +485,43 @@ console.log(response);
   //   // Your existing RPC logic
   //   return "";
   // }
+
+    // ── Typed data signing (delegates to EOA, needed by neutralpress) ──
+
+  signTypedData(
+    domain: any,
+    types: any,
+    message: any,
+  ): Promise<`0x${string}`> {
+    // Signer is an EOA — signTypedData is available
+    return this.signer.signTypedData({
+      domain,
+      types,
+      message,
+      primaryType: Object.keys(types)[0] || "",
+    });
+  }
+
+  asTypedDataSigner() {
+    const self = this;
+    return {
+      signTypedData(
+        domain: Record<string, unknown>,
+        types: Record<string, { name: string; type: string }[]>,
+        value: Record<string, unknown>,
+      ) {
+        return self.signer.signTypedData({
+          domain,
+          types,
+          message: value,
+          primaryType: Object.keys(types)[0] || "",
+        });
+      },
+      getAddress() {
+        return self.signer.address;
+      },
+    };
+  }
 
     // Helper function to ensure proper 0x prefixed hex string format
   private ensureHex(value: string): `0x${string}` {

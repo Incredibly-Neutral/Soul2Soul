@@ -5,258 +5,214 @@ import { encodeFunctionData, getAddress } from "viem";
 import { OperationType } from "@safe-global/types-kit";
 
 import * as dotenv from 'dotenv';
-import fs from 'fs';                                                                                              
-import { fileURLToPath } from 'url';                                                                              
-import path from 'path';                                                                                          
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { privateKeyToAccount } from "viem/accounts";
-                                                                                                                    
-// Emulate __dirname in ES modules                                                                                
-const __filename = fileURLToPath(import.meta.url);                                                                
-const __dirname = path.dirname(__filename);       
- 
-dotenv.config({ path: '../.env'});
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: '../.env' });
+
+// ── ABIs ────────────────────────────────────────────────────────────────────
 
 const recordsModuleAbi = [
-{
+  {
     name: "setRecord",
     type: "function",
     inputs: [
-    { name: "key", type: "string" },
-    { name: "value", type: "string" },
+      { name: "key", type: "string" },
+      { name: "value", type: "string" },
     ],
-},
+  },
+  {
+    name: "deleteRecord",
+    type: "function",
+    inputs: [{ name: "key", type: "string" }],
+  },
 ] as const;
 
 const ensRecordsAbi = [
-{
+  {
     name: "authorizeCaller",
     type: "function",
     inputs: [
-    { name: "caller", type: "address" },
-    { name: "authorized", type: "bool" },
+      { name: "caller", type: "address" },
+      { name: "authorized", type: "bool" },
     ],
-},
+  },
 ] as const;
+
+// ── Addresses ───────────────────────────────────────────────────────────────
 
 const RECORDS_MODULE_ADDRESS = "0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29";
 const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
 
-export const updateProtocol = async (account: any, pkpInfo: any, prepActionCid: any, singleActionCid: any, cborActionCid: any, rootUpdateActionCid: any) => {
+// Keys that were written under old names and must be removed from on-chain storage.
+// Leaving them means any reader still asking for these keys gets stale data.
+// deleteRecord removes them cleanly (emits RecordDeleted, frees the slot).
+const STALE_KEYS = [
+  "lit_action_single",       // renamed → lit_action_render
+  "lit_action_cbor",         // merged into lit_action_update; action no longer exists
+  "lit_action_root_update",  // renamed → lit_action_update
+  "pkp_tokenId",             // vestigial pre-Chipotle (GAP-11)
+  "pkp_publicKey",           // vestigial pre-Chipotle (GAP-11)
+];
 
-    const transactions = [
-    // {
-    //     to: RECORDS_MODULE_ADDRESS,
-    //     data: encodeFunctionData({
-    //     abi: recordsModuleAbi,
-    //     functionName: "setRecord",
-    //     args: ["pkp_tokenId", pkpInfo.tokenId],
-    //     }),
-    //     value: "0",
-    // },
-    // {
-    //     to: RECORDS_MODULE_ADDRESS,
-    //     data: encodeFunctionData({
-    //     abi: recordsModuleAbi,
-    //     functionName: "setRecord",
-    //     args: ["pkp_publicKey", pkpInfo.pubkey],
-    //     }),
-    //     value: "0",
-    // },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["pkp_ethAddress", pkpInfo.ethAddress],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_prep", prepActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_single", singleActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_cbor", cborActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_root_update", rootUpdateActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: ENS_RECORDS_ADDRESS,
-        data: encodeFunctionData({
-        abi: ensRecordsAbi,
-        functionName: "authorizeCaller",
-        args: [getAddress(pkpInfo.ethAddress), true],
-        }),
-        value: "0",
-    },
-    ];
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-    // Safe SDK (still uses ethers internally, but isolated)
-    const protocolKit = await Safe.init({
+const setRecord = (key: string, value: string) => ({
+  to: RECORDS_MODULE_ADDRESS,
+  data: encodeFunctionData({
+    abi: recordsModuleAbi,
+    functionName: "setRecord",
+    args: [key, value],
+  }),
+  value: "0",
+  operation: OperationType.Call,
+});
+
+const deleteRecord = (key: string) => ({
+  to: RECORDS_MODULE_ADDRESS,
+  data: encodeFunctionData({
+    abi: recordsModuleAbi,
+    functionName: "deleteRecord",
+    args: [key],
+  }),
+  value: "0",
+  operation: OperationType.Call,
+});
+
+const proposeToSafe = async (account: any, transactions: any[]) => {
+  const protocolKit = await Safe.init({
     provider: process.env.BASE_RPC_URL!,
     signer: process.env.PRIVATE_KEY!,
     safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
-    });
+  });
 
-    const apiKit = new SafeApiKit({
-    chainId: 8453n,
-    });
+  const apiKit = new SafeApiKit({ chainId: 8453n });
 
-    // Create + sign + propose
-    const safeTransaction = await protocolKit.createTransaction({
-    transactions: transactions.map((tx) => ({
-        ...tx,
-        operation: OperationType.Call,
-    })),
-    });
+  const safeTransaction = await protocolKit.createTransaction({ transactions });
+  const safeTxHash = await protocolKit.getTransactionHash(safeTransaction);
+  const senderSignature = await protocolKit.signHash(safeTxHash);
 
-    const safeTxHash = await protocolKit.getTransactionHash(safeTransaction);
-    const senderSignature = await protocolKit.signHash(safeTxHash);
+  await apiKit.proposeTransaction({
+    safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
+    safeTransactionData: safeTransaction.data,
+    safeTxHash,
+    senderAddress: account.address,
+    senderSignature: senderSignature.data,
+  });
 
-    await apiKit.proposeTransaction({
-        safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
-        safeTransactionData: safeTransaction.data,
-        safeTxHash,
-        senderAddress: account.address, // from viem account
-        senderSignature: senderSignature.data,
-    });
+  console.log("✅ Transaction proposed to Safe");
+  console.log("Safe Tx Hash:", safeTxHash);
+  return safeTxHash;
+};
 
-    console.log("✅ Transaction proposed to Safe");
-    console.log("Safe Tx Hash:", safeTxHash);
+// ── Exports ──────────────────────────────────────────────────────────────────
 
-}
+/**
+ * Full protocol update: write new keys + delete stale ones + re-authorize PKP.
+ * All in one Safe batch so it's atomic — owners confirm once for the whole set.
+ *
+ * Lit action naming (post-rename):
+ *   prep         — was lit_action_prep      (unchanged)
+ *   render       — was lit_action_single    (renamed; key: lit_action_render)
+ *   update       — was lit_action_root_update + cbor merged in (key: lit_action_update)
+ */
+export const updateProtocol = async (
+  account: any,
+  pkpInfo: { ethAddress: string },
+  prepActionCid: string,
+  renderActionCid: string,
+  updateActionCid: string,
+) => {
+  const transactions = [
+    // Write current values
+    setRecord("pkp_ethAddress", pkpInfo.ethAddress),
+    setRecord("lit_action_prep", prepActionCid),
+    setRecord("lit_action_render", renderActionCid),
+    setRecord("lit_action_update", updateActionCid),
 
-export const updateActions = async (account: any, prepActionCid: any, singleActionCid: any, cborActionCid: any, rootUpdateActionCid: any) => {
+    // Delete stale keys from previous naming scheme
+    ...STALE_KEYS.map(deleteRecord),
 
-    const transactions = [
+    // Re-authorize the PKP on the ENS records contract (INV-12)
     {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_prep", prepActionCid],
-        }),
-        value: "0",
+      to: ENS_RECORDS_ADDRESS,
+      data: encodeFunctionData({
+        abi: ensRecordsAbi,
+        functionName: "authorizeCaller",
+        args: [getAddress(pkpInfo.ethAddress), true],
+      }),
+      value: "0",
+      operation: OperationType.Call,
     },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_single", singleActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_cbor", cborActionCid],
-        }),
-        value: "0",
-    },
-    {
-        to: RECORDS_MODULE_ADDRESS,
-        data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: "setRecord",
-        args: ["lit_action_root_update", rootUpdateActionCid],
-        }),
-        value: "0",
-    }
-    ];
+  ];
 
-    // Safe SDK (still uses ethers internally, but isolated)
-    const protocolKit = await Safe.init({
-        provider: process.env.BASE_RPC_URL!,
-        signer: process.env.PRIVATE_KEY!,
-        safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
-    });
+  return proposeToSafe(account, transactions);
+};
 
-    const apiKit = new SafeApiKit({
-    chainId: 8453n,
-    });
+/**
+ * Actions-only update: rotate CIDs without touching the PKP or ENS auth.
+ * Use when re-deploying Lit actions between protocol key rotations.
+ */
+export const updateActions = async (
+  account: any,
+  prepActionCid: string,
+  renderActionCid: string,
+  updateActionCid: string,
+) => {
+  const transactions = [
+    setRecord("lit_action_prep", prepActionCid),
+    setRecord("lit_action_render", renderActionCid),
+    setRecord("lit_action_update", updateActionCid),
+  ];
 
-    // Create + sign + propose
-    const safeTransaction = await protocolKit.createTransaction({
-    transactions: transactions.map((tx) => ({
-        ...tx,
-        operation: OperationType.Call,
-    })),
-    });
+  return proposeToSafe(account, transactions);
+};
 
-    const safeTxHash = await protocolKit.getTransactionHash(safeTransaction);
-    const senderSignature = await protocolKit.signHash(safeTxHash);
+/**
+ * One-time cleanup: delete stale keys left over from the old naming scheme.
+ * Run once after the first updateProtocol with the new keys is executed on-chain.
+ * Safe to run again — deleteRecord on a non-existent key reverts with KeyNotFound,
+ * so batch it only with keys you know exist (check recordExists first if unsure).
+ */
+export const cleanupStaleKeys = async (account: any) => {
+  console.log("Deleting stale keys:", STALE_KEYS);
+  const transactions = STALE_KEYS.map(deleteRecord);
+  return proposeToSafe(account, transactions);
+};
 
-    await apiKit.proposeTransaction({
-        safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
-        safeTransactionData: safeTransaction.data,
-        safeTxHash,
-        senderAddress: account.address, // from viem account
-        senderSignature: senderSignature.data,
-    });
-
-    console.log("✅ Transaction proposed to Safe");
-    console.log("Safe Tx Hash:", safeTxHash);
-
-}
+// ── Entry point ──────────────────────────────────────────────────────────────
 
 const main = async () => {
+  const config = fs.readFileSync('./protocol/scripts/lit/config.json', 'utf-8');
+  const group = JSON.parse(config).groups.find((g: any) => g.name === 's2s');
 
-    const config = fs.readFileSync('./protocol/scripts/lit/config.json','utf-8');
+  if (!group) throw new Error("Group 's2s' not found in config.json");
 
-    const group = JSON.parse(config).groups.find( (g:any) => g.name = 's2s' )
+  const pkpInfo = { ethAddress: group.pkps[0] };
+  console.log("PKP:", pkpInfo);
 
-    const pkpInfo = {
-        tokenId: "",
-        pubKey: "",
-        ethAddress: group.pkps[0]
-    }
+  const account = privateKeyToAccount(`0x${process.env.PRIVATE_KEY!}` as `0x${string}`);
 
-    console.log(pkpInfo);
+  const prep   = group.actions.find((a: any) => a.name === 'prep');
+  const render = group.actions.find((a: any) => a.name === 'render');
+  const update = group.actions.find((a: any) => a.name === 'update');
 
-    const account = await privateKeyToAccount('0x' + process.env.PRIVATE_KEY! as `0x${string}`)
-    const prep = group.actions.find( (a: any) => a.name == 'prep');
-    const single = group.actions.find( (a: any) => a.name == 'single');
-    const cbor = group.actions.find( (a: any) => a.name == 'cbor');
-    const updateEvm = group.actions.find( (a: any) => a.name == 'updateEvm');
+  if (!prep || !render || !update) {
+    throw new Error(`Missing action CIDs. Found: ${JSON.stringify(group.actions.map((a: any) => a.name))}`);
+  }
 
-    console.log([prep,single, cbor, updateEvm]);
+  console.log("Action CIDs:", { prep: prep.cid, render: render.cid, update: update.cid });
 
-    const r = await updateProtocol(account, pkpInfo, prep.cid, single.cid, cbor.cid, updateEvm.cid)
-}
-
+  await updateProtocol(account, pkpInfo, prep.cid, render.cid, update.cid);
+};
 
 main()
-  .catch((error: any ) => {
+  .catch((error: any) => {
     console.error(error);
     process.exitCode = 1;
   })

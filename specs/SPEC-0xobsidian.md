@@ -37,7 +37,8 @@ Pinata + remote Kubo; shared `LitService` + types.
 
 **Produces (to neutralpress, via the loaded `oxo-core` plugin instance):** the active **`IOXOUser`**
 (`{name, active, eoa, private_key, lens?, safe?}`), the per-chain **`account`** map
-(`{[chain]: PermissionlessSafeService}`), and handles `lit`, `lens`, `pinata`, `ipfs`, `waap`.
+(`{[chain]: PermissionlessSafeService}`), handles `lit`, `lens`, `pinata`, `ipfs`, `waap`, and
+**`storage`** (`FilecoinController` — CAR builder + dual-path upload to Kubo/Filecoin SPs).
 neutralpress reads these off `app.plugins.plugins["oxo-core"].ctrlr`.
 
 ## Shared surface consumed (bundled into the esbuild output)
@@ -60,9 +61,10 @@ the plugin bundle — part of this package's code.
 | `eth/` (safe.contracts, *.abi, tx.factory, provider.factory, chains.factory, waap.service) | Safe contracts/ABIs, tx building, chains | live; **ABIs overlap shared** |
 | `paymaster/` (userop.factory, paymaster.factory) | 4337 user-op + paymaster sponsorship | live |
 | `lens/lens.ctrlr.ts` | `LensService` — profile check/register, posting (local) | live |
-| `ipfs/` (pinata.ctrlr, remotekubo.service, ipld.factory, pin.factory) | pinning + IPFS (local) | live; **overlaps shared** |
+| `ipfs/` (pinata.ctrlr, remotekubo.service, ipld.factory, pin.factory) | pinning + IPFS (local); **`addJson()`** for dual-path upload | live |
 | `lit/_lit.service.ts` | old Lit SDK service (Naga/Chronicle Yellowstone, PKP minting) | **DEAD** — pre-Chipotle, superseded by shared `LitService` |
-| `settings.ts`, `settings.factory.ts` | persisted `authors[]` (incl. encrypted `key_blob`) | live; **plaintext never written** |
+| `filecoin/filecoin.ctrlr.ts` | `FilecoinController` — CAR builder (filecoin-pin, unixfs-v1-2025), `uploadJson` (Filecoin SPs), `uploadToKubo` (delegates `addJson`), `retrieveJson` | **NEW** |
+| `settings.ts`, `settings.factory.ts` | persisted `authors[]` (incl. encrypted `key_blob`); `kubo_url` defaulting to `ipfs.transport-union.dev` | live; **plaintext never written** |
 | `keystore/keystore.ts` | `IKeystore`, `SafeStorageKeystore`, `PlaintextKeystore` fallback | **NEW** — Track A |
 | `keystore/spike.ts` | safeStorage reachability check (A0) | **NEW** — Track A |
 
