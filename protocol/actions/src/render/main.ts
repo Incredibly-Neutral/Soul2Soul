@@ -3,19 +3,22 @@ import { decrypt } from "../libs/decrypt";
 import { getDomainOwnerAndModules } from "../libs/ens.factory";
 import { uploadFile } from "../libs/ipfs.factory";
 import { getProtocolInfo } from "../libs/protocol.factory";
+import { fetchById } from "../libs/module.factory";
 
 import { getConfig } from "./config.ctrl";
 import { initTemplateData, fetchCollections, mergeDecrypted, pathsForCollections } from "./data.ctrlr";
 import { addAndSignMetadata } from "./metadata";
 import { renderHTML} from "../renderer/html.ctrlr";
-import { fetchById } from "../libs/lens.factory";
+
 import { extractSignerAddress } from "../libs/gates";
 import { requireFields } from "../libs/helpers";
+import { toBytes32Id } from "@s2s/soul2soul-shared/lit-actions";
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
   let html: string | undefined = undefined;
   let t0 = Date.now();
+  console.log(`new render @ ${new Date()}`);
   let trace: any[] = [];
   let errors: string[] = [];
 
@@ -25,8 +28,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
     const signerAddress = extractSignerAddress(ethers.utils.hashMessage("lit actions auth"), signature);
 
-    console.log("SIGNER", signerAddress);
-
     const protocolInfo = await getProtocolInfo(false);
     if (!protocolInfo) throw "Failed to fetch protocol info";
 
@@ -35,7 +36,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     if (multisig == null || configModule == null || publicationModule == null)
       throw "Failed to resolve publication modules";
 
-    let body: any | undefined | null = await fetchById(job.id);
+    let body: any | undefined | null = await fetchById(job.id, publicationModule);
     if (body == undefined || body == null || body.id == undefined) throw "Post content not found";
     trace.push(body);
 
@@ -61,7 +62,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       let t2 = Date.now();
       trace.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
-      let collections = await fetchCollections(job.templateConfig);
+      let collections = await fetchCollections(job.templateConfig, publicationModule);
 
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
@@ -103,29 +104,28 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       job.path = templateData.path;
       html = await renderHTML(config, job.templateConfig, templateData);
 
-      console.log("HTML1", html.slice(0, 200));
+      console.log("HTML", html.slice(0, 400));
 
       let t5 = Date.now();
       trace.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
+      // Build content info from actual data
       const metadata: S2SContentInfo = {
         author: {
-          lens: "joera.lens",
-          address: "0xAuthorAddress...",
-          createdAt: ""
+          did: body.author || "",
+          createdAt: body.creationDate || "",
         },
         publisher: {
-          ens: "mypub.eth",
-          safe: "gno:0xSafeAddress...",
-          url: "https://mypub.eth.limo/articles/my-article"
+          did: signerAddress ? `did:ethr:0x${signerAddress.replace('0x', '')}` : "",
+          url: body.publication || "",
         },
-        contentCid: "bafybei...",
-        licenseContract: "gno:0xDealsModuleAddress...",
-        isBasedOn: {
-          lensPublicationId: "",
+        contentCid: body.cid || body.id || "",
+        licenseContract: publicationModule,
+        isBasedOn: body.parent ? {
+          genesis: toBytes32Id(body.parent),
           contentHash: "",
-          timestamp: ""
-        }
+          timestamp: body.creationDate || "",
+        } : undefined,
       };
 
       html = await addAndSignMetadata(job.id, html, protocolInfo, metadata);
@@ -135,8 +135,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
       const htmlCid = await uploadFile(html!);
       job.html = htmlCid;
-     
-
+ 
     } else {
       const revokedMsg = "Content was revoked or failed to decrypt";
       console.log(revokedMsg);

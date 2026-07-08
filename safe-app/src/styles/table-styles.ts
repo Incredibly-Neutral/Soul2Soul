@@ -14,7 +14,7 @@ export const tableStylesString = `
         border-bottom: 1px solid var(--gray-600);
         text-transform: uppercase;
         display: flex;
-        justify-content: center;
+        justify-content: flex-start;
         align-items: center;
     }
 

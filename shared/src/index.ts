@@ -27,8 +27,6 @@ export type {
   S2SContentItem as S2SLegacyContentItem,
 } from './content';
 
-// lens
-export { fetchById, postToLens, updateToLens } from './lens';
 
 // identity — new EIP-712 signing and verification
 export * from './identity';

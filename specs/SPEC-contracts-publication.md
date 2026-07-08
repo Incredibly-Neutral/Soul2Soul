@@ -4,6 +4,24 @@
 > **SPEC-contracts-ens** (the protocol-wide naming/resolution layer). Pairs with
 > **SPEC-protocol-actions** (the actions gate against these modules). Follows SPEC-00 §7.
 >
+> C1 is `S2SPublicationModuleV2` (replaces V1 `S2SPublicationModule`). See §V2 migration below.
+
+## V2 migration (from V1 `S2SPublicationModule`)
+
+| V1 (deprecated) | V2 (current) | Notes |
+|---|---|---|
+| `grantLicense(pub, content_id)` | `makeOffer(genesis, cid)` | single author write; whitelist → deal, else → offer |
+| `acceptLicense(content_id)` | `acceptOffer(genesis)` | onlySafe |
+| `revokeLicense(content_id)` | `retract(genesis)` | asymmetric: author = full withdraw; safe = demote deal→offer or reject offer |
+| `isLicensed(string)` | `hasDeal(bytes32)` | the Lit gate read |
+| `isLicensedBulk(string[])` | — | replaced by `getDeals(offset, limit)` enumeration |
+| `getAllContentIds()` | `getDeals(offset, limit)` | returns `Entry[]` structs, not id arrays |
+| `getLicenseAuthor(string)` | `authorOf(bytes32)` / `Entry.author` | author in every Entry |
+| `hasPendingLicense(string)` | `hasOffer(bytes32)` | |
+| `getPendingLicense(string)` | `getOffers(offset, limit)` | returns `Entry[]` structs |
+| `append(genesis, objectId, cid)` | `makeOffer(genesis, cid)` | objectId dropped; whitelisted → appends immediately as deal |
+| `NAME() == "S2S Publication Module"` | `NAME() == "S2S Publication Module V2"` | module discovery string changed |
+>
 > Invariants carried: INV-3 (storage layout), INV-4 (module discovery), INV-10 (write auth),
 > and INV-2 (record-key set, via the records module).
 
@@ -24,11 +42,9 @@ pointer, or resolution — that is SPEC-contracts-ens.
 
 ---
 
-### C1 — `S2SPublicationModule` (UUPS upgradeable proxy)
+### C1 — `S2SPublicationModuleV2` (UUPS upgradeable proxy)
 
-**State (INV-3 — append-only, DO NOT REORDER):** `licenses`, `licenseAuthors`,
-`whitelisted_authors[]`, `whitelisted_devs[]`, `pendingLicenses` (original layout); then
-`allContentIds[]`, `contentIdExists`, `contentIdIndex` (added at end). Caps: 100 authors, 20 devs.
+**State (INV-3 — append-only, DO NOT REORDER):** `whitelisted_authors[]`, `whitelisted_devs[]` (caps: 100 authors, 20 devs). Single append log `entries[]` of `Entry { genesis: bytes32, author: address, cid: string, timestamp: uint256 }`. Caps: 100 authors, 20 devs.
 
 **Write API + access control (precise — refines INV-10):**
 
@@ -36,18 +52,18 @@ pointer, or resolution — that is SPEC-contracts-ens.
 |---|---|---|
 | `whitelistAuthor/removeWhitelistedAuthor` | `onlySafe` | manage author whitelist |
 | `whitelistDev/removeWhitelistedDev` | `onlySafe` | manage dev whitelist |
-| `grantLicense(pub, content_id)` | **anyone** | caller ∈ authors ∨ == safe → granted; else **pending offer** (returns false) |
-| `acceptLicense(content_id)` | `onlySafe` | promote pending offer → license |
-| `revokeLicense(content_id)` | **safe ∨ licenseAuthor** | revoke + remove content id |
+| `makeOffer(genesis, cid)` | **anyone** | whitelisted/safe → appends immediately as **deal**; else → appends as **pending offer** |
+| `acceptOffer(genesis)` | `onlySafe` | demotes an offer → deal |
+| `retract(genesis)` | **safe ∨ dealAuthor** | asymmetric: author withdraws fully; safe demotes deal→offer or rejects offer |
 | `_authorizeUpgrade` | `onlySafe` | UUPS upgrade |
 
-**Read API (the gate the actions depend on):** `canPublish(addr)` → safe ∨ whitelisted dev ∨
-whitelisted author; `isLicensed(content_id)` / `isLicensedBulk`; `isWhitelistedAuthor/Dev`;
-`getLicenseAuthor`; content-id enumeration. These back `canPublish`/`canRead` in `libs/gates.ts`.
+**Read API (the gate the actions depend on):** `canPublish(addr)` → safe ∨ whitelisted dev ∨ whitelisted author; `hasDeal(genesis)` → bool; `hasOffer(genesis)` → bool; `getDeals(offset, limit)` → `Entry[]`; `getOffers(offset, limit)` → `Entry[]`; `authorOf(genesis)` → address. These back `canPublish`/`canRead` in `libs/gates.ts`.
 
-**Gotchas:** `canPublish` has `// could be safe owners ???` — it checks the Safe *address*, so a
-Safe *owner* EOA does **not** pass; unresolved design Q. Whitelist removal ⇏ license revocation.
-Factory deploys an `ERC1967Proxy` per Safe; `deployNewImplementation` retains version history.
+**Key contract:** content identifiers are `bytes32` on-chain. Off-chain code (neutralpress, safe-app, Lit actions) passes string CIDs/genesis refs and converts via `toBytes32Id(ref)` — keccak256 of anything not already a `0x`+64-hex string, passthrough otherwise.
+
+**NAME():** `"S2S Publication Module V2"` (was `"S2S Publication Module"` in V1 — both accepted for backwards-compatible discovery).
+
+**Gotchas:** `canPublish` has `// could be safe owners ???` — it checks the Safe *address*, so a Safe *owner* EOA does **not** pass; unresolved design Q. Whitelist removal ⇏ offer/retract. Factory deploys an `ERC1967Proxy` per Safe; `deployNewImplementation` retains version history. The old V1 license-state storage is gone — replaced by a single linear `entries[]` log indexed by `(offset, limit)`.
 
 ### C2 — `S2SRecordsModule` (immutable; `NAME="S2S Records Module"`, `VERSION="1.1.0"`)
 
@@ -74,9 +90,9 @@ against.
 
 | target | onlySafe | also allowed |
 |---|---|---|
-| whitelist mgmt / acceptLicense / upgrade | ✓ | — |
-| `grantLicense` | (immediate) | **anyone** (creates pending offer) |
-| `revokeLicense` | ✓ | the content's `licenseAuthor` |
+| whitelist mgmt / acceptOffer / upgrade | ✓ | — |
+| `makeOffer` | — | **anyone** (creates pending offer unless whitelisted) |
+| `retract` | ✓ | the content's `dealAuthor` |
 | records (config) writes | ✓ | — |
 
 ## Safe-to-change vs do-not-touch
@@ -88,8 +104,6 @@ against.
 
 ## Test seams (Foundry/Hardhat)
 
-- C1 license state machine: `grantLicense` whitelisted vs pending → `acceptLicense` → `isLicensed`;
-  `revokeLicense` by safe vs author vs stranger; whitelist caps; `canPublish` truth table.
+- C1 offer/deal state machine: `makeOffer` whitelisted → immediate deal; unwhitelisted → pending offer; `acceptOffer` promotes; `retract` by author removes fully; `retract` by safe demotes deal→offer or rejects offer; whitelist caps; `canPublish` truth table.
 - C2: `onlySafe` enforcement; enumeration; record round-trip.
-- **The gate is the actions' boundary:** unit-test `canPublish`/`isLicensed`/`canRead` return values
-  directly — they are the fixtures `libs/gates.ts` consumes. (`Protocol.test.ts` is the seed.)
+- **The gate is the actions' boundary:** unit-test `canPublish`/`hasDeal`/`canRead` return values directly — they are the fixtures `libs/gates.ts` consumes. (`Protocol.test.ts` is the seed.)

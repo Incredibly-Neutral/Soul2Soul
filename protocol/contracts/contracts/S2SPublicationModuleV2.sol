@@ -3,19 +3,29 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
  * @title S2SPublicationModuleV2
- * @notice Append-only version log per document, keyed by genesis objectId.
+ * @notice One append-only version log per document (keyed by genesis), with a
+ *         deal/offer layer over the SAME log — publishing and licensing are one
+ *         concern.
  *
- * Each document starts with a genesis objectId (content-derived hash). Every
- * edit appends a new version under the same genesis key. The contract is an
- * ordered, authorized index — actual content bytes live on Filecoin/Kubo.
+ * Model:
+ *   - `makeOffer` is the single write authors use. It appends a version to the
+ *     log, then: whitelisted author (or safe) → the document becomes a DEAL
+ *     immediately; anyone else → it becomes a pending OFFER. An author can keep
+ *     calling `makeOffer` to edit while it is still an offer (each call appends
+ *     a version) before the publication agrees.
+ *   - `acceptOffer` (onlySafe) promotes an offer to a deal.
+ *   - `retract` is asymmetric: the author withdraws entirely (removed from
+ *     deals/offers); the publication (safe) demotes a deal back to an offer, or
+ *     rejects an offer.
+ *   - `hasDeal(genesis)` is the gate the Lit actions read. Identity is bytes32
+ *     everywhere; the string→bytes32 conversion is owned by `shared` and used
+ *     identically at write time and at the gate, so no on-chain cid map exists.
  *
- * Access control: `onlySafe` (the publication Safe, a DID identity proxy
- * supporting key rotation). `canPublish` also allows whitelisted authors/devs.
- * See did:ethr:safe model — the Safe address is the stable identity.
+ * Deals and offers are enumerable sets of genesis pointing into the one log;
+ * `getDeals`/`getOffers` read each entry's latest version via a cached pointer.
  */
 contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
 
@@ -26,51 +36,50 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
     uint256 public constant MAX_WHITELISTED_AUTHORS = 100;
     uint256 public constant MAX_WHITELISTED_DEVS = 20;
 
-    // ── Storage: append log ────────────────────────────────────────
+    // ── The one append log ─────────────────────────────────────────
 
     struct Version {
-        bytes32 objectId;   // content-derived hash
-        string cid;         // root CID from Filecoin (IPFS-compatible)
+        string cid;         // IPFS CID of this version's (encrypted) content
         uint256 timestamp;
-        bool tombstone;     // true = this version is retracted
+        bool tombstone;
     }
 
-    struct Latest {
-        uint256 index;      // position in versions[]
-        bytes32 objectId;
+    /// A resolved entry (genesis + its latest version), for enumeration reads.
+    struct Entry {
+        bytes32 genesis;
+        address author;
         string cid;
+        uint256 timestamp;
     }
 
-    /// Ordered version log per genesis document
     mapping(bytes32 genesis => Version[]) private versions;
-
-    /// Author (Safe address) that created each genesis
     mapping(bytes32 genesis => address) private genesisAuthor;
+    mapping(bytes32 genesis => uint256) private latestIndex;
 
-    /// Fast lookup: does a given objectId exist under a genesis?
-    /// Useful for the renderer to check without fetching all versions.
-    mapping(bytes32 genesis => mapping(bytes32 objectId => bool)) private versionExists;
-
-    // ── Whitelist storage (same layout as V1) ─────────────────────
+    // ── Whitelist ──────────────────────────────────────────────────
 
     address[] private whitelisted_authors;
     address[] private whitelisted_devs;
 
+    // ── Deals & offers over the log ────────────────────────────────
+
+    mapping(bytes32 genesis => bool) private _isDeal;
+    bytes32[] private dealList;
+    mapping(bytes32 genesis => uint256) private dealPos;
+    mapping(bytes32 genesis => uint256) private dealAt;
+
+    mapping(bytes32 genesis => bool) private _isOffer;
+    bytes32[] private offerList;
+    mapping(bytes32 genesis => uint256) private offerPos;
+    mapping(bytes32 genesis => uint256) private offerAt;
+
     // ── Events ─────────────────────────────────────────────────────
 
-    event Appended(
-        bytes32 indexed genesis,
-        bytes32 indexed objectId,
-        string cid,
-        uint256 versionIndex,
-        address indexed author
-    );
-
-    event Retracted(
-        bytes32 indexed genesis,
-        uint256 versionIndex,
-        address indexed author
-    );
+    event Appended(bytes32 indexed genesis, string cid, uint256 versionIndex, address indexed author);
+    event OfferMade(bytes32 indexed genesis, address indexed author);
+    event OfferAccepted(bytes32 indexed genesis, address indexed author);
+    event DealStruck(bytes32 indexed genesis, address indexed author);
+    event Retracted(bytes32 indexed genesis, address indexed by, bool keptAsOffer);
 
     event AuthorWhitelisted(address indexed author);
     event AuthorRemovedFromWhitelist(address indexed author);
@@ -81,6 +90,7 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
     // ── Errors ─────────────────────────────────────────────────────
 
     error OnlySafe();
+    error NotAuthorized();
     error MaxAuthorsReached();
     error MaxDevsReached();
     error InvalidAuthorAddress();
@@ -88,21 +98,15 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
     error EmptyCid();
     error ZeroHash();
 
-    // ── Modifiers ──────────────────────────────────────────────────
-
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
         _;
     }
 
-    // ── Constructor ────────────────────────────────────────────────
-
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
-
-    // ── Initializer ────────────────────────────────────────────────
 
     function initialize(
         address _safe,
@@ -110,31 +114,19 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         address[] memory _devs
     ) public initializer {
         __UUPSUpgradeable_init();
-
         safe = _safe;
 
         for (uint i = 0; i < _authors.length; i++) {
             if (_authors[i] == address(0)) revert InvalidAuthorAddress();
-            if (!_inArray(whitelisted_authors, _authors[i])) {
-                whitelisted_authors.push(_authors[i]);
-            }
+            if (!_inArray(whitelisted_authors, _authors[i])) whitelisted_authors.push(_authors[i]);
         }
-
         for (uint i = 0; i < _devs.length; i++) {
             if (_devs[i] == address(0)) revert InvalidDevAddress();
-            if (!_inArray(whitelisted_devs, _devs[i])) {
-                whitelisted_devs.push(_devs[i]);
-            }
+            if (!_inArray(whitelisted_devs, _devs[i])) whitelisted_devs.push(_devs[i]);
         }
     }
 
-    // ── UUPS ───────────────────────────────────────────────────────
-
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        onlySafe
-        override
-    {
+    function _authorizeUpgrade(address newImplementation) internal onlySafe override {
         emit ContractUpgraded(newImplementation);
     }
 
@@ -142,141 +134,148 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         return "S2S Publication Module V2";
     }
 
-    // ── Core: append / retract ─────────────────────────────────────
+    // ── Single write: makeOffer (append + place in deals or offers) ─
 
     /**
-     * @dev Append a new version under a genesis document.
-     *
-     * The genesis MUST be a non-zero bytes32 value. If this is the first
-     * version for this genesis, the caller becomes the genesis author.
-     *
-     * Access: msg.sender must pass `canPublish` (safe or whitelisted).
-     *
-     * @param genesis  Content-derived key that roots the version log.
-     * @param objectId Content-derived hash for this specific version.
-     * @param cid      Root CID from the storage pipeline (Filecoin + Kubo).
+     * @dev Append a version and place the document. Whitelisted author or safe
+     *      → deal; anyone else → offer. Editing an existing offer just appends
+     *      another version (stays an offer). Editing content that is already a
+     *      deal appends a version and leaves the deal intact.
      */
-    function append(
+    function makeOffer(
         bytes32 genesis,
-        bytes32 objectId,
         string calldata cid
-    ) external {
-        if (genesis == bytes32(0)) revert ZeroHash();
-        if (bytes(cid).length == 0) revert EmptyCid();
+    ) external returns (bool dealt) {
+        _append(genesis, cid, msg.sender);
 
-        if (genesisAuthor[genesis] == address(0)) {
-            // creating a new document → whitelist may create
-            if (!canPublish(msg.sender)) revert OnlySafe();
-            genesisAuthor[genesis] = msg.sender;
-        } else {
-            // editing an existing document → only its author (or safe)
-            if (msg.sender != genesisAuthor[genesis] && msg.sender != safe) revert OnlySafe();
+        if (msg.sender == safe || _inArray(whitelisted_authors, msg.sender)) {
+            if (_isOffer[genesis]) _removeOffer(genesis);
+            if (!_isDeal[genesis]) {
+                _addDeal(genesis);
+                emit DealStruck(genesis, genesisAuthor[genesis]);
+            }
+            return true;
         }
 
-        versions[genesis].push(Version({
-            objectId: objectId,
-            cid: cid,
-            timestamp: block.timestamp,
-            tombstone: false
-        }));
-        versionExists[genesis][objectId] = true;
+        // Non-whitelisted author. Leave an existing deal untouched (don't yank a
+        // live deal on edit); otherwise ensure it sits as a pending offer.
+        if (!_isDeal[genesis] && !_isOffer[genesis]) {
+            _addOffer(genesis);
+            emit OfferMade(genesis, genesisAuthor[genesis]);
+        }
+        return _isDeal[genesis];
+    }
 
-        emit Appended(genesis, objectId, cid, versions[genesis].length - 1, msg.sender);
+    /// @dev Publication accepts a pending offer → deal.
+    function acceptOffer(bytes32 genesis) external onlySafe {
+        require(_isOffer[genesis], "no offer");
+        _removeOffer(genesis);
+        if (!_isDeal[genesis]) _addDeal(genesis);
+        emit OfferAccepted(genesis, genesisAuthor[genesis]);
     }
 
     /**
-     * @dev Retract (tombstone) the latest non-tombstone version.
-     *
-     * Does not delete — appends a tombstone entry. The version history
-     * is preserved; callers should interpret the latest non-tombstone
-     * entry as the current active version.
-     *
-     * Access: genesis author or safe only.
+     * @dev Retract, asymmetric by caller:
+     *      - author  → removed from deals and/or offers (full withdrawal)
+     *      - safe     → a deal is demoted back to an offer; an offer is rejected
      */
     function retract(bytes32 genesis) external {
-        require(genesisAuthor[genesis] != address(0), "genesis not found");
-        require(
-            msg.sender == genesisAuthor[genesis] || msg.sender == safe,
-            "not genesis author or safe"
-        );
+        require(_isDeal[genesis] || _isOffer[genesis], "not a deal or offer");
 
-        Version[] storage log = versions[genesis];
-
-        // Tombstone at the end of the log
-        log.push(Version({
-            objectId: bytes32(0),
-            cid: "",
-            timestamp: block.timestamp,
-            tombstone: true
-        }));
-
-        emit Retracted(genesis, log.length - 1, msg.sender);
+        if (msg.sender == genesisAuthor[genesis]) {
+            if (_isDeal[genesis]) _removeDeal(genesis);
+            if (_isOffer[genesis]) _removeOffer(genesis);
+            emit Retracted(genesis, msg.sender, false);
+        } else if (msg.sender == safe) {
+            if (_isDeal[genesis]) {
+                _removeDeal(genesis);
+                if (!_isOffer[genesis]) _addOffer(genesis);
+                emit Retracted(genesis, msg.sender, true);
+            } else {
+                _removeOffer(genesis);
+                emit Retracted(genesis, msg.sender, false);
+            }
+        } else {
+            revert NotAuthorized();
+        }
     }
 
-    // ── Read APIs ──────────────────────────────────────────────────
+    // ── The gate the Lit actions read ──────────────────────────────
 
-    /**
-     * @dev Total number of versions (including tombstones) for a genesis.
-     */
-    function getVersionCount(bytes32 genesis) external view returns (uint256) {
-        return versions[genesis].length;
+    /// @dev True iff `genesis` is currently under a deal. Callers convert their
+    ///      content reference → genesis via the shared helper before calling.
+    function hasDeal(bytes32 genesis) external view returns (bool) {
+        return _isDeal[genesis];
     }
 
-    /**
-     * @dev Get a specific version by index.
-     */
-    function getVersion(
-        bytes32 genesis,
-        uint256 index
-    ) external view returns (Version memory) {
+    function hasOffer(bytes32 genesis) external view returns (bool) {
+        return _isOffer[genesis];
+    }
+
+    // ── Enumeration (deals / offers with their latest version) ─────
+
+    function getDeals(uint256 offset, uint256 limit) external view returns (Entry[] memory) {
+        return _page(dealList, offset, limit);
+    }
+
+    function getOffers(uint256 offset, uint256 limit) external view returns (Entry[] memory) {
+        return _page(offerList, offset, limit);
+    }
+
+    function getDealCount() external view returns (uint256) { return dealList.length; }
+    function getOfferCount() external view returns (uint256) { return offerList.length; }
+
+    function _page(bytes32[] storage list, uint256 offset, uint256 limit) private view returns (Entry[] memory) {
+        uint256 n = list.length;
+        if (offset >= n) return new Entry[](0);
+        uint256 end = offset + limit;
+        if (end > n) end = n;
+
+        Entry[] memory out = new Entry[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            bytes32 g = list[i];
+            Version storage v = versions[g][latestIndex[g]];
+            out[i - offset] = Entry({
+                genesis: g,
+                author: genesisAuthor[g],
+                cid: v.cid,
+                timestamp: v.timestamp
+            });
+        }
+        return out;
+    }
+
+    // ── Log reads ──────────────────────────────────────────────────
+
+    function getLatest(bytes32 genesis) external view returns (Entry memory) {
+        require(versions[genesis].length > 0, "no versions");
+        Version storage v = versions[genesis][latestIndex[genesis]];
+        return Entry({
+            genesis: genesis,
+            author: genesisAuthor[genesis],
+            cid: v.cid,
+            timestamp: v.timestamp
+        });
+    }
+
+    function getVersion(bytes32 genesis, uint256 index) external view returns (Version memory) {
         require(index < versions[genesis].length, "index out of bounds");
         return versions[genesis][index];
     }
 
-    /**
-     * @dev Get the latest non-tombstone version for a genesis.
-     * Reverts if no non-tombstone version exists.
-     */
-    function getLatest(bytes32 genesis) external view returns (Latest memory) {
-        Version[] storage log = versions[genesis];
-        require(log.length > 0, "no versions");
-
-        for (uint256 i = log.length; i > 0; i--) {
-            Version storage v = log[i - 1];
-            if (!v.tombstone) {
-                return Latest({
-                    index: i - 1,
-                    objectId: v.objectId,
-                    cid: v.cid
-                });
-            }
-        }
-
-        revert("no active version");
+    function getVersionCount(bytes32 genesis) external view returns (uint256) {
+        return versions[genesis].length;
     }
 
-    /**
-     * @dev Check if a genesis has at least one entry.
-     */
     function isGenesis(bytes32 genesis) external view returns (bool) {
         return genesisAuthor[genesis] != address(0);
     }
 
-    /**
-     * @dev Check if a specific objectId exists under a genesis.
-     */
-    function versionExistsForGenesis(bytes32 genesis, bytes32 objectId) external view returns (bool) {
-        return versionExists[genesis][objectId];
-    }
-
-    /**
-     * @dev Get the author who created a genesis.
-     */
     function authorOf(bytes32 genesis) external view returns (address) {
         return genesisAuthor[genesis];
     }
 
-    // ── Permission checks (same as V1) ─────────────────────────────
+    // ── Permission checks ──────────────────────────────────────────
 
     function canPublish(address _address) public view returns (bool) {
         if (_address == safe) return true;
@@ -293,7 +292,7 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         return _inArray(whitelisted_devs, _address);
     }
 
-    // ── Whitelist management (same as V1) ──────────────────────────
+    // ── Whitelist management ───────────────────────────────────────
 
     function whitelistAuthor(address _author) external onlySafe {
         if (_author == address(0)) revert InvalidAuthorAddress();
@@ -335,8 +334,6 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         }
     }
 
-    // ── Getters (same as V1) ───────────────────────────────────────
-
     function getWhitelistedAuthors() external view returns (address[] memory) {
         return whitelisted_authors;
     }
@@ -345,82 +342,78 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         return whitelisted_devs;
     }
 
-    // ── Internal ───────────────────────────────────────────────────
+    // ── Internal: append mechanism ─────────────────────────────────
+
+    function _append(bytes32 genesis, string calldata cid, address author) private {
+        if (genesis == bytes32(0)) revert ZeroHash();
+        if (bytes(cid).length == 0) revert EmptyCid();
+
+        if (genesisAuthor[genesis] == address(0)) {
+            if (!canPublish(author)) revert OnlySafe();
+            genesisAuthor[genesis] = author;
+        } else {
+            if (author != genesisAuthor[genesis] && author != safe) revert OnlySafe();
+        }
+
+        uint256 idx = versions[genesis].length;
+        versions[genesis].push(Version({
+            cid: cid,
+            timestamp: block.timestamp,
+            tombstone: false
+        }));
+        latestIndex[genesis] = idx;
+
+        emit Appended(genesis, cid, idx, author);
+    }
+
+    // ── Internal: set membership (swap-pop) ────────────────────────
+
+    function _addDeal(bytes32 g) private {
+        dealPos[g] = dealList.length;
+        dealList.push(g);
+        _isDeal[g] = true;
+        dealAt[g] = block.timestamp;
+    }
+
+    function _removeDeal(bytes32 g) private {
+        uint256 idx = dealPos[g];
+        uint256 last = dealList.length - 1;
+        if (idx != last) {
+            bytes32 lg = dealList[last];
+            dealList[idx] = lg;
+            dealPos[lg] = idx;
+        }
+        dealList.pop();
+        delete dealPos[g];
+        delete _isDeal[g];
+        delete dealAt[g];
+    }
+
+    function _addOffer(bytes32 g) private {
+        offerPos[g] = offerList.length;
+        offerList.push(g);
+        _isOffer[g] = true;
+        offerAt[g] = block.timestamp;
+    }
+
+    function _removeOffer(bytes32 g) private {
+        uint256 idx = offerPos[g];
+        uint256 last = offerList.length - 1;
+        if (idx != last) {
+            bytes32 lg = offerList[last];
+            offerList[idx] = lg;
+            offerPos[lg] = idx;
+        }
+        offerList.pop();
+        delete offerPos[g];
+        delete _isOffer[g];
+        delete offerAt[g];
+    }
 
     function _inArray(address[] memory _array, address _address) private pure returns (bool) {
         for (uint i = 0; i < _array.length; i++) {
             if (_array[i] == _address) return true;
         }
         return false;
-    }
-}
-
-// ===== Factory =====
-
-/**
- * @title S2SPublicationModuleV2Factory
- * @notice Deploys ERC1967 proxies pointing to S2SPublicationModuleV2.
- *
- * Same interface as the V1 factory. Deploy this fresh for new publications.
- * Existing V1 publications keep their old implementation — this factory
- * only affects new proxy deployments.
- */
-contract S2SPublicationModuleV2Factory {
-
-    address public latestImplementation;
-    address[] public implementationHistory;
-    mapping(address => address[]) public safeModules;
-
-    event ImplementationDeployed(address indexed implementation, uint256 version);
-    event ModuleCreated(address indexed safe, address indexed moduleProxy, address implementation);
-
-    constructor() {
-        latestImplementation = address(new S2SPublicationModuleV2());
-        implementationHistory.push(latestImplementation);
-        emit ImplementationDeployed(latestImplementation, implementationHistory.length);
-    }
-
-    function createModule(
-        address safe,
-        address[] memory _authors,
-        address[] memory _devs
-    ) public returns (address moduleProxy) {
-        bytes memory initializer = abi.encodeWithSignature(
-            "initialize(address,address[],address[])",
-            safe,
-            _authors,
-            _devs
-        );
-
-        moduleProxy = address(new ERC1967Proxy(latestImplementation, initializer));
-        safeModules[safe].push(moduleProxy);
-        emit ModuleCreated(safe, moduleProxy, latestImplementation);
-        return moduleProxy;
-    }
-
-    function createModuleEmpty(address safe) external returns (address moduleProxy) {
-        address[] memory empty = new address[](0);
-        return createModule(safe, empty, empty);
-    }
-
-    function deployNewImplementation() external returns (address) {
-        address impl = address(new S2SPublicationModuleV2());
-        latestImplementation = impl;
-        implementationHistory.push(impl);
-        emit ImplementationDeployed(impl, implementationHistory.length);
-        return impl;
-    }
-
-    function getModulesForSafe(address safe) external view returns (address[] memory) {
-        return safeModules[safe];
-    }
-
-    function implementationCount() external view returns (uint256) {
-        return implementationHistory.length;
-    }
-
-    function getImplementationByVersion(uint256 version) external view returns (address) {
-        require(version > 0 && version <= implementationHistory.length, "Invalid version");
-        return implementationHistory[version - 1];
     }
 }

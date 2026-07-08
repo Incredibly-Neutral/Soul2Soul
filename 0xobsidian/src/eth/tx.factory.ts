@@ -25,7 +25,7 @@ export const sendTx = async (
     });
 
     const identifier = ethers.keccak256(
-      ethers.toUtf8Bytes(main.user.name + main.user.eoa),
+      ethers.toUtf8Bytes(main.user!.name + main.user!.eoa),
     );
 
     // Direct access to callData (no .data)

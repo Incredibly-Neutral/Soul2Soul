@@ -170,10 +170,7 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 IPFS add/cat, **PKP** for `Lit.Actions.Decrypt` and the metadata signature. **Runs on Lit (prod) /
 Bun (preview, unsigned).**
 
-**Invariants:** INV-1, 5, 7, 9, and the gates (`canRead` = author whitelisted/licensed **AND**
-signer is author-Safe owner). **Gotchas:** GAP-1 (metadata `S2SContentInfo` is hardcoded
-placeholder — provenance currently fictional); the `assets_gateway` shape mismatch (see Gotchas);
-**GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
+**Invariants:** INV-1, 5, 7, 9, and the gates (`canRead` = author whitelisted/licensed **AND** signer is author-Safe owner). `canRead` now calls `hasDeal(bytes32)` with `genesis = toBytes32Id(contentId)` — `toBytes32Id` lives in `@s2s/soul2soul-shared` and is imported at the top of `gates.ts`. **Gotchas:** GAP-1 (metadata `S2SContentInfo` is hardcoded placeholder — provenance currently fictional); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
 preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
 Encrypted-content editorial review runs through a separate, real Lit decrypt action instead
 (SPEC-00 OPEN-TASK-4/GAP-13).
@@ -264,7 +261,7 @@ re-render on its own. Verify this is intended, not a stale-page hazard.
 | `renderHTML(config, templateConfig, templateData)` | — | `string` (HTML) |
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)` | — | `string` (HTML + signed JSON-LD) |
 | `canPublish(authorSafe, pubModule, signer)` | — | `boolean` (canPublish ∧ isOwner) |
-| `canRead(contentId, safe, pubModule, signer)` | — | `boolean` (canPublish ∧ isOwner ∧ isLicensed) |
+| `canRead(contentId, safe, pubModule, signer)` | — | `boolean` (canPublish ∧ isOwner ∧ hasDeal(toBytes32Id(contentId))) |
 | `decrypt(pkpId, body, authorSafe, pubModule, signer)` | — | decrypted obj \| false (gated by `canRead`) |
 | `evmRead(chain, addr, abi, method, args)` | — | call result (tries RPC fallbacks) |
 | `evmWrite(chain, pkp, addr, abi, method, args, confirm?)` | — | `{ success, hash, ... }` (PKP-signed) |

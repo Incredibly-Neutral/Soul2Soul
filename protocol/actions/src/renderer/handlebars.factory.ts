@@ -554,7 +554,7 @@ const processHelpers = (text: string, context: TemplateData): string => {
 
     try {
       // Split args and resolve context values
-      const resolvedArgs = args.split(" ").map((arg) => {
+      const resolvedArgs: any = args.split(" ").map((arg) => {
         const trimmed = arg.trim();
         if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
           return trimmed.slice(1, -1);

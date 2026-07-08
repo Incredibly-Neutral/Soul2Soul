@@ -2,8 +2,8 @@
 
 This spec has been split (per design decision) into two cohesive sub-system specs:
 
-- **SPEC-contracts-publication** — per-publication Safe modules (`S2SPublicationModule`,
-  `S2SRecordsModule`). Deployed per publication; L2 only; licensing/whitelist/config.
+- **SPEC-contracts-publication** — per-publication Safe modules (`S2SPublicationModuleV2`,
+  `S2SRecordsModule`). Deployed per publication; L2 only; offer/deal/config.
 - **SPEC-contracts-ens** — protocol-wide naming/resolution/site-root layer
   (`ENSSubdomainRecordsContract`, `ENSOpenSubdomainRegistry`, `ENSResolverWthCCIP`, `ccip_gateway`).
   Deployed once; L1 + L2.

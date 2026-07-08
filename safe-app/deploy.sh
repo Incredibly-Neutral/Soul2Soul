@@ -1,2 +1,2 @@
 pnpm build
-scp -r dist/* joera:/srv/publication-module/
+rsync -avz --delete dist/ joera:/srv/publication-module/

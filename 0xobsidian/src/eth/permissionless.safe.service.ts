@@ -4,7 +4,7 @@ import {
 } from "permissionless/accounts";
 import { createSmartAccountClient } from "permissionless";
 import { createPimlicoClient } from "permissionless/clients/pimlico";
-import { createPublicClient, encodeFunctionData, http, keccak256, parseEther, toBytes } from "viem";
+import { createPublicClient, encodeFunctionData, http, keccak256, parseEther, toBytes, zeroAddress } from "viem";
 import { privateKeyToAccount  } from "viem/accounts";
 import { IMainController } from "../main.ctrlr.js";
 import { getChainId, getNetwork, getRPCUrl, getScanApi, getViemChainById, getViemChainByName } from "./chains.factory.js";
@@ -46,6 +46,7 @@ export interface IPermissionlessSafeService {
   valueTx: (to: `0x${string}`, amount: string) => Promise<string>;
   getSafeAddress: (salt: string) => Promise<string>;
   isDeployed: () => Promise<boolean>;
+  deploySafe: () => Promise<void>;
 
   // Typed data signing — EOA delegate, needed by neutralpress content signing
   signTypedData: (domain: any, types: any, message: any) => Promise<`0x${string}`>;
@@ -127,6 +128,30 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     }
   }
 
+  async deploySafe () {
+
+    await this.valueTx(zeroAddress,"0")
+
+    // console.log(`🚀 Deploying fresh Safe at ${this.address}...`);
+    // const deployGasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    
+    // const deployTx = await this.smartAccountClient.sendTransaction({
+    //   to: this.address as `0x${string}`,
+    //   data: "0x",
+    //   value: 0n,
+    //   maxFeePerGas: deployGasPrice.fast.maxFeePerGas,
+    //   maxPriorityFeePerGas: deployGasPrice.fast.maxPriorityFeePerGas,
+    // });
+    
+    // console.log(`✅ Deployment tx sent: ${deployTx}`);
+    
+    // await this.pimlicoClient.waitForUserOperationReceipt({
+    //   hash: deployTx as `0x${string}`,
+    // });
+    // console.log(`✅ Safe deployed and confirmed at ${this.address}`);
+
+  }
+
   async connectToFreshSafe(salt: string) {
 
       const smartAccount = await toSafeSmartAccount({
@@ -140,6 +165,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
       });
 
     return await this.setSafe(smartAccount);
+    
   }
 
   async connectToExistingSafe(safe_address: `0x${string}`) {
@@ -379,7 +405,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
               this.main.plugin.settings.etherscan_key
           );
           
-console.log(response);
+
 
           const txs = Array.isArray(response) ? response : response?.result || [];
           

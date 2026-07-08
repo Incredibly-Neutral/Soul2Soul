@@ -8,8 +8,8 @@ export interface RecordMap {
   [key: string]: any;
 }
 
-export interface LicenseMap {
-  [contentId: string]: any;
+export interface DealMap {
+  [genesis: string]: any;
 }
 
 export interface AppState {

@@ -23,7 +23,7 @@ export default class OxO extends Plugin {
   keystoreProbe!: KeystoreProbe;
 
   async onload() {
-    console.log('hi')
+
 
     // Probe the runtime for OS keystore availability (A0)
     this.keystoreProbe = probeKeystore();
@@ -158,7 +158,7 @@ function encryptAuthorKey(
   const serializable: Record<string, any> = { ...rest };
 
   if (private_key) {
-    console.log('HAS PK', 0)
+
     try {
       serializable.key_blob = probe.keystore.encrypt(private_key);
     } catch (err: any) {
@@ -173,6 +173,5 @@ function encryptAuthorKey(
     }
   }
 
-      console.log('HAS PK', 1, serializable)
   return serializable;
 }

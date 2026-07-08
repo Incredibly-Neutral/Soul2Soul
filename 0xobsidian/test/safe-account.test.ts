@@ -10,8 +10,15 @@
  *   TEST_PRIVATE_KEY     A hex private key for test EOA derivation
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
+
+// Mock createSmartAccountClient so the deploy flow doesn't hit Pimlico.
+vi.mock('permissionless', () => ({
+  createSmartAccountClient: () => ({
+    sendTransaction: () => Promise.resolve('0xmock_tx_hash' as `0x${string}`),
+  }),
+}));
 
 import { PermissionlessSafeService } from '../src/eth/permissionless.safe.service.js';
 
@@ -48,24 +55,36 @@ describe('PermissionlessSafeService', () => {
     eoa = privateKeyToAccount(testPk as `0x${string}`).address;
   });
 
+  // Helper: build service with Pimlico gas-price stub.
+  // (createSmartAccountClient is already vi.mocked at module level.)
+  function makeSvc(): { svc: PermissionlessSafeService; mock: MockMain } {
+    const mock: MockMain = {
+      plugin: {
+        settings: {
+          rpc_key: rpcKey!,
+          pimlico_key: 'dummy',
+        },
+      },
+    };
+    const svc = new PermissionlessSafeService(mock as any, chainName);
+    (svc as any).pimlicoClient = {
+      getUserOperationGasPrice: () => Promise.resolve({
+        fast: { maxFeePerGas: 1000000000n, maxPriorityFeePerGas: 100000000n },
+      }),
+      waitForUserOperationReceipt: () => Promise.resolve({}),
+    };
+    return { svc, mock };
+  }
+
   describe('address derivation', () => {
     it('should derive the same address given the same owner key and salt', async () => {
       if (!ready) return;
 
-      const mock: MockMain = {
-        plugin: {
-          settings: {
-            rpc_key: rpcKey!,
-            pimlico_key: 'dummy',
-          },
-        },
-      };
-
-      const svc1 = new PermissionlessSafeService(mock as any, chainName);
+      const { svc: svc1 } = makeSvc();
       await svc1.updateSigner(testPk!);
       const addr1 = await svc1.connectToFreshSafe(testSalt);
 
-      const svc2 = new PermissionlessSafeService(mock as any, chainName);
+      const { svc: svc2 } = makeSvc();
       await svc2.updateSigner(testPk!);
       const addr2 = await svc2.connectToFreshSafe(testSalt);
 
@@ -76,16 +95,7 @@ describe('PermissionlessSafeService', () => {
     it('should derive different addresses for different salts', async () => {
       if (!ready) return;
 
-      const mock: MockMain = {
-        plugin: {
-          settings: {
-            rpc_key: rpcKey!,
-            pimlico_key: 'dummy',
-          },
-        },
-      };
-
-      const svc = new PermissionlessSafeService(mock as any, chainName);
+      const { svc } = makeSvc();
       await svc.updateSigner(testPk!);
       const addr1 = await svc.connectToFreshSafe('salt_a');
       const addr2 = await svc.connectToFreshSafe('salt_b');
@@ -98,16 +108,7 @@ describe('PermissionlessSafeService', () => {
     it('should return the correct EOA from updateSigner', async () => {
       if (!ready) return;
 
-      const mock: MockMain = {
-        plugin: {
-          settings: {
-            rpc_key: rpcKey!,
-            pimlico_key: 'dummy',
-          },
-        },
-      };
-
-      const svc = new PermissionlessSafeService(mock as any, chainName);
+      const { svc } = makeSvc();
       const signerAddress = await svc.updateSigner(testPk!);
 
       expect(signerAddress.toLowerCase()).toBe(eoa.toLowerCase());
@@ -118,20 +119,11 @@ describe('PermissionlessSafeService', () => {
     it('should return false from isDeployed() for a counterfactual address', async () => {
       if (!ready) return;
 
-      const mock: MockMain = {
-        plugin: {
-          settings: {
-            rpc_key: rpcKey!,
-            pimlico_key: 'dummy',
-          },
-        },
-      };
-
-      const svc = new PermissionlessSafeService(mock as any, chainName);
+      const { svc } = makeSvc();
       await svc.updateSigner(testPk!);
       await svc.connectToFreshSafe(testSalt);
 
-      // Counterfactual address — not deployed until first userOp
+      // Counterfactual address — not deployed on-chain (mock tx doesn't deploy).
       const deployed = await svc.isDeployed();
       expect(deployed).toBe(false);
     });

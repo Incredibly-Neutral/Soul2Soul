@@ -2,8 +2,8 @@
 import { Listener } from './observable.js';
 import { OnChainRecord } from './types.js';
 import { RecordStore } from './record.store.js'
-import { LicenseStore } from './license.store.js'
-import { License, SafeInfo } from "../types/index.js"
+import { DealStore } from './deal.store.js'
+import { Deal, SafeInfo } from "../types/index.js"
 import { S2SProtocolInfo } from '@s2s/soul2soul-shared';
 import { ProtocolStore } from './protocol.store.js';
 import { SafeStore } from './safe.store.js';
@@ -13,14 +13,14 @@ import { WebStore } from './web.store.js';
 class Store {
     private webStore: WebStore;
     private recordStore: RecordStore;
-    private licenseStore: LicenseStore;
+    private dealStore: DealStore;
     private protocolStore: ProtocolStore;
     private safeStore: SafeStore;
 
   constructor() {
     this.webStore = new WebStore();
     this.recordStore = new RecordStore();
-    this.licenseStore = new LicenseStore();
+    this.dealStore = new DealStore();
     this.protocolStore = new ProtocolStore();
     this.safeStore = new SafeStore();
   }
@@ -28,7 +28,7 @@ class Store {
   get observables() {
     return {
       records: this.recordStore,
-      licenses: this.licenseStore,
+      deals: this.dealStore,
       protocolInfo: this.protocolStore,
       safeInfo: this.safeStore,
     } as const;
@@ -75,46 +75,46 @@ class Store {
     return this.recordStore.subscribe(listener);
   }
 
-  // ============ Licenses ============
-  get licenses(): License[] {
-    return this.licenseStore.all;
+  // ============ Deals ============
+  get deals(): Deal[] {
+    return this.dealStore.all;
   }
 
-  setLicenses(licenses: License[]): void {
-    this.licenseStore.set(licenses);
+  setDeals(deals: Deal[]): void {
+    this.dealStore.set(deals);
   }
 
-  addLicense(license: License): void {
-    this.licenseStore.add(license);
+  addDeal(deal: Deal): void {
+    this.dealStore.add(deal);
   }
 
-  forgetLicense(id: string): void {
-    this.licenseStore.remove(id);
+  forgetDeal(id: string): void {
+    this.dealStore.remove(id);
   }
 
-   subscribeToLicenses(listener: Listener<License[]>): () => void {
-    return this.licenseStore.subscribe(listener);
+   subscribeToDeals(listener: Listener<Deal[]>): () => void {
+    return this.dealStore.subscribe(listener);
   }
 
-  // ============ pending licenses ============
-  get pending(): License[] {
-    return this.licenseStore.allPending;
+  // ============ Offers ============
+  get offers(): Deal[] {
+    return this.dealStore.allPending;
   }
 
-  setPending(licenses: License[]): void {
-    this.licenseStore.setPending(licenses);
+  setOffers(deals: Deal[]): void {
+    this.dealStore.setPending(deals);
   }
 
-  addPending(license: License): void {
-    this.licenseStore.addPending(license);
+  addOffer(deal: Deal): void {
+    this.dealStore.addPending(deal);
   }
 
-  forgetPending(id: string): void {
-    this.licenseStore.removePending(id);
+  forgetOffer(id: string): void {
+    this.dealStore.removePending(id);
   }
 
-  subscribeToPending(listener: Listener<License[]>): () => void {
-    return this.licenseStore.subscribeToPending(listener);
+  subscribeToOffers(listener: Listener<Deal[]>): () => void {
+    return this.dealStore.subscribeToPending(listener);
   }
 
       // ============ protocolInfo ============
@@ -138,7 +138,7 @@ class Store {
   // ============ Global ============
   clear(): void {
     this.recordStore.clear();
-    this.licenseStore.clear();
+    this.dealStore.clear();
   }
 
   // Legacy subscribe method for backwards compatibility

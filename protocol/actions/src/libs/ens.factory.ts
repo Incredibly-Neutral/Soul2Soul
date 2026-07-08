@@ -1,5 +1,7 @@
 import { evmRead } from './evm';
 
+declare const ethers: any;
+
 const ENS_REGISTRY_ADDRESS = "0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5";
 
 export const getProtocolControllerAndModules = async () => {
@@ -74,7 +76,10 @@ export const getDomainOwnerAndModules = async (publication: string) => {
             if (result.status === 'fulfilled') {
                 if (result.value === "S2S Records Module") {
                     configModule = modules[i];
-                } else if (result.value === "S2S Publication Module") {
+                } else if (
+                    result.value === "S2S Publication Module V2" ||
+                    result.value === "S2S Publication Module"   // backwards compat
+                ) {
                     publicationModule = modules[i];
                 }
             }
@@ -93,12 +98,12 @@ const ensNameToNode = async (ensName: string, en_registry_address: string) => {
     const parts = ensName.split('.');
     const subdomain = parts[0]; // e.g., "fly61" from "fly61.soul2soul.eth"
 
-    const parentNode = await evmRead("ETHEREUM", en_registry_address, ["function parentNode() view returns (bytes32)"], "parentNode", []);
+    const parentNodeNode = await evmRead("ETHEREUM", en_registry_address, ["function parentNode(bytes32 namehash) view returns (bytes32)"], "parentNode", [ethers.utils.namehash(ensName.split('.').slice(1).join('.'))]);
     
     const subdomainLabel = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(subdomain));
     return ethers.utils.keccak256(
         ethers.utils.concat([
-            ethers.utils.arrayify(parentNode),
+            ethers.utils.arrayify(parentNodeNode),
             ethers.utils.arrayify(subdomainLabel)
         ])
     );
