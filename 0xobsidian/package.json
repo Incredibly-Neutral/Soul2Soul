@@ -40,8 +40,9 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "@filoz/synapse-core": "^0.7.0",
+    "@s2s/soul2soul-shared": "workspace:*",
     "@filoz/synapse-sdk": "^1.0.1",
+    "@filoz/synapse-core": "^0.7.0",
     "filecoin-pin": "^1.0.1",
     "@human.tech/waap-sdk": "^1.0.3",
     "@ipld/dag-pb": "^4.1.5",
@@ -56,7 +57,6 @@
     "@lit-protocol/lit-client": "^8.3.1",
     "@lit-protocol/networks": "8.4.1",
     "@obsidize/tar-browserify": "^4.0.0",
-    "@s2s/soul2soul-shared": "workspace:*",
     "@safe-global/api-kit": "^2.5.11",
     "@safe-global/protocol-kit": "^5.2.24",
     "@safe-global/relay-kit": "^4.1.1",

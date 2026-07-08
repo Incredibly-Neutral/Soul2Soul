@@ -6,3 +6,8 @@ export { getProtocolInfo } from './protocol/index';
 export { ENS_NAMEWRAPPER } from './protocol/constants';
 export type { S2SPublicationConfig } from './publication';
 export { LitService } from './lit';
+
+// Publication builders (used by safe-app/src/components/s2s-records-tab.ts)
+export { ConfigBuilder, parseGitHubUrl } from './publication/config-builder';
+export { AssetsBuilder } from './publication/assets-builder';
+export { S2SIPFSMethods } from './ipfs';
