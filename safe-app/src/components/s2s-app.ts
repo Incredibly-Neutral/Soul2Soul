@@ -1,6 +1,6 @@
 // s2s-app.ts
 import { SafeIntegration } from '../lib/safe-integration.js';
-import './s2s-licences-tab.js';
+import './s2s-deals-tab.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
@@ -25,7 +25,7 @@ export class S2SApp extends HTMLElement {
   private safeIntegration: SafeIntegration;
   private protocolIntegration: ProtocolIntegration;
   private lit: LitService;
-  private currentTab: 'licenses' | 'whitelist' | 'records' = 'licenses';
+  private currentTab: 'deals' | 'whitelist' | 'records' = 'deals';
   private fetching = false;
   private unsubscribers: Array<() => void> = [];
 
@@ -96,8 +96,6 @@ export class S2SApp extends HTMLElement {
         const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
         const bytes = window.ethers.getBytes('0x' + hex);
         const rootCid = CID.decode(bytes).toV1().toString();
-
-        console.log("RRRR", rootCid)
         store.setRoot(rootCid);
       }
     } catch (error) {
@@ -108,7 +106,7 @@ export class S2SApp extends HTMLElement {
     this.render();
   }
 
-  private switchTab(tab: 'licenses' | 'whitelist' | 'records') {
+  private switchTab(tab: 'deals' | 'whitelist' | 'records') {
     this.currentTab = tab;
     this.render();
   }
@@ -172,10 +170,10 @@ export class S2SApp extends HTMLElement {
 
           <div class="tabs">
             <button
-              class="tab ${this.currentTab === 'licenses' ? 'active' : ''}"
-              id="licenses-tab"
+              class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
+              id="deals-tab"
               ${!this.safeIntegration.hasPublicationModule() ? 'disabled' : ''}
-            >Licenses</button>
+            >Deals</button>
             <button
               class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
               id="whitelist-tab"
@@ -201,8 +199,8 @@ export class S2SApp extends HTMLElement {
   }
 
   private attachEventListeners() {
-    this.shadowRoot?.querySelector('#licenses-tab')
-      ?.addEventListener('click', () => this.switchTab('licenses'));
+    this.shadowRoot?.querySelector('#deals-tab')
+      ?.addEventListener('click', () => this.switchTab('deals'));
     this.shadowRoot?.querySelector('#whitelist-tab')
       ?.addEventListener('click', () => this.switchTab('whitelist'));
     this.shadowRoot?.querySelector('#records-tab')
@@ -215,9 +213,9 @@ export class S2SApp extends HTMLElement {
     tabContent.innerHTML = '';
 
     switch (this.currentTab) {
-      case 'licenses':
+      case 'deals':
         if (this.safeIntegration.hasPublicationModule()) {
-          const el = document.createElement('s2s-licenses-tab');
+          const el = document.createElement('s2s-deals-tab');
           (el as any).safeIntegration = this.safeIntegration;
           (el as any).protocolIntegration = this.protocolIntegration;
           (el as any).lit = this.lit;

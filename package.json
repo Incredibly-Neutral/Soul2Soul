@@ -5,9 +5,9 @@
     "scripts": {
         "deploy-group": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/deploy-group.ts",
         "inspect-group": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/inspect-group.ts",
-        "build-actions": "node protocol/scripts/lit/build-actions.cjs",
-        "add-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/add-action.ts",
-        "swap-action": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts",
+        "actions:build": "node protocol/scripts/lit/build-actions.cjs",
+        "actions:add": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/add-action.ts",
+        "actions:swap": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts",
         "refresh-key": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/refresh-key.ts",
         "update-protocol": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts",
         "deploy-action": "bash -c 'pnpm build-actions && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",

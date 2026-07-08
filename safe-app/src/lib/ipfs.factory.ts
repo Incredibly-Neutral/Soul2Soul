@@ -1,7 +1,5 @@
 export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<any> => {
         const url = `${ipfsGateway}/api/v0/cat?arg=${cid}`;
-
-        console.log(url)
         
         const response = await fetch(url, {
             method: 'POST',
@@ -12,6 +10,7 @@ export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<a
             }
         });
 
+
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -21,7 +20,6 @@ export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<a
         
         const text = await response.text();
 
-        console.log(text)
         
         try {
             return JSON.parse(text);

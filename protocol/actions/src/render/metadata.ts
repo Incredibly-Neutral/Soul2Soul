@@ -49,12 +49,12 @@ export const addAndSignMetadata = async (
         "@type": "Person",
         "identifier": {
           "@type": "PropertyValue",
-          "propertyID": "lens",
-          "value": contentInfo.author.lens
+          "propertyID": "did:ethr",
+          "value": contentInfo.author.did
         }
       };
       
-      // Add Lens profile creation timestamp if available
+      // Add profile creation timestamp if available
       if (contentInfo.author.createdAt) {
         schema.author.dateCreated = contentInfo.author.createdAt;
       }
@@ -67,14 +67,14 @@ export const addAndSignMetadata = async (
         "identifier": [
           {
             "@type": "PropertyValue",
-            "propertyID": "ens",
-            "value": contentInfo.publisher.ens
+            "propertyID": "did:ethr",
+            "value": contentInfo.publisher.did
           },
-          {
+          ...(contentInfo.publisher.safe ? [{
             "@type": "PropertyValue",
-            "propertyID": "safe",
+            "propertyID": "did:ethr:safe",
             "value": contentInfo.publisher.safe
-          }
+          }] : [])
         ]
       };
     }
@@ -83,7 +83,7 @@ export const addAndSignMetadata = async (
     if (contentInfo?.isBasedOn) {
       schema.isBasedOn = {
         "@type": "CreativeWork",
-        "identifier": contentInfo.isBasedOn.lensPublicationId,
+        "identifier": contentInfo.isBasedOn.genesis,
         "sha256": contentInfo.isBasedOn.contentHash,
         "dateModified": contentInfo.isBasedOn.timestamp
       };
@@ -127,7 +127,7 @@ export const addAndSignMetadata = async (
       "identifier": {
         "@type": "PropertyValue",
         "propertyID": "litAction",
-        "value": protocolInfo.litActionSingle
+        "value": protocolInfo.litActions.render
       }
     };
 

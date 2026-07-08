@@ -7,7 +7,7 @@ import { getDomainOwnerAndModules } from "../libs/ens.factory";
 import { contenthashToIPFS } from "../libs/ipfs.factory";
 import { fetchWithTimeout, requireFields } from "../libs/helpers";
 import { canPublish, extractSignerAddress } from "../libs/gates";
-import { getConfig } from "../single/config.ctrl";
+import { getConfig } from "../render/config.ctrl";
 
 const ACTION = "evm-update";
 

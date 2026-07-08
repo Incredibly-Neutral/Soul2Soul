@@ -250,7 +250,10 @@ export const getProtocolControllerAndModules = async (
 
       if (name === 'S2S Records Module') {
         configModule = moduleAddress;
-      } else if (name === 'S2S Publication Module') {
+      } else if (
+        name === 'S2S Publication Module V2' ||
+        name === 'S2S Publication Module'   // backwards compat
+      ) {
         publicationModule = moduleAddress;
       }
     } catch (error) {

@@ -30,7 +30,7 @@ function logObjectWithPosts(label: string, data: any) {
 export const helpers = [
   {
     name: "unique_years",
-    helper: function (posts) {
+    helper: function (posts: any[]) {
       if (!posts || !Array.isArray(posts)) {
         return [];
       }
@@ -82,7 +82,7 @@ export const helpers = [
   },
   {
     name: "filter_by_year",
-    helper: function (year, posts) {
+    helper: function (year: any, posts: any[]) {
       if (!posts || !Array.isArray(posts) || !year) {
         return [];
       }
@@ -249,7 +249,7 @@ export const helpers = [
   },
   {
     name: "ifCond",
-    helper: function (v1, operator, v2, options) {
+    helper: function (v1: any, operator: any, v2: any, options: any) {
       // Make sure we have valid options
       if (!options || typeof options !== 'object') {
         return '';

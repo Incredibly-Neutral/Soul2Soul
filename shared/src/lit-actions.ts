@@ -1,6 +1,3 @@
-import { EnablePostActionResultFragment } from '@lens-protocol/client';
-import { prepareEncodeFunctionData } from 'viem';
-
 // TYPES
 export type { S2SJob, S2STemplateConfig, S2SBody, S2SRipple} from './protocol/types';
 export type { S2SPublicationConfig } from './publication';
@@ -11,7 +8,8 @@ export type { ActionResult, EvmUpdateData, EvmUpdateInput, PrepData, PrepInput, 
 
 // ABIS
 export * from './contracts';
-
+export { toBytes32Id } from './identity/contract-id'
+ 
 // PURE 
 // export { validateProtocol, validateConfig } from './publication'; 
 

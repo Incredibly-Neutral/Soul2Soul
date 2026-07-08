@@ -4,7 +4,7 @@ import { catFile } from "../libs/ipfs.factory";
 import { evmRead } from "../libs/evm";
 
 import { S2SBody, S2SPublicationConfig, S2SRipple, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
-import { Abi_S2SRecordsModule } from '../../../generated/abis/S2SRecordsModule.ts'
+import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts'
 
 export const getConfig = async (configCid: string | undefined, configModule: string) => {
 

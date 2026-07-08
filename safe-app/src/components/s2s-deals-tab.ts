@@ -1,24 +1,25 @@
-// s2s-licenses-tab.ts
-import { fetchById, LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
+// s2s-deals-tab.ts
+import { LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { CID } from 'multiformats';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { store } from '../state/index.js'
-import { License } from '../types/index.js'
+import { Deal } from '../types/index.js'
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import './toggle-button.js'
 import './copy-content-id.js'
+import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
 
-export class S2SLicensesTab extends HTMLElement {
+export class S2SDealsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
   public protocolIntegration!: ProtocolIntegration;
   private lit!: LitService;
   private loading = true;
-  private licenses: Array<License> = [];
-  private pendingLicenses: Array<License> = [];
+  private deals: Array<Deal> = [];
+  private offers: Array<Deal> = [];
   private unsubscriber!: () => void;
   private fetching: boolean = false;
   private previewMode: boolean = false;
@@ -32,49 +33,60 @@ export class S2SLicensesTab extends HTMLElement {
 
   async connectedCallback() {
 
-    this.unsubscriber = store.subscribeToLicenses(() => this.render());
+    this.unsubscriber = store.subscribeToDeals(() => this.render());
     this.render();
 
-    await this.loadLicenses();
+    await this.loadDeals();
   }
 
   disconnectedCallback() {
     this.unsubscriber?.();
   }
 
-  private async loadLicenses() {
+  private async loadDeals() {
     this.fetching = true;
     this.render();
     try {
-      const { activeLicenses, pendingLicenses } = await this.safeIntegration.getAllLicenses();
-      
-      this.licenses = activeLicenses;
-      this.pendingLicenses = pendingLicenses;
+      const { deals, offers } = await this.safeIntegration.getAllDealsAndOffers();
 
-      // console.log('Active licenses:', this.licenses);
-      // console.log('Pending licenses:', this.pendingLicenses);
+      // Map deals → this.deals; offers → this.offers.
+      // genesis replaces contentId; cid is the storage pointer.
+      this.deals = deals.map(d => ({
+        genesis: d.genesis,
+        author: d.author,
+        cid: d.cid,
+        status: 'deal' as const,
+      }));
+      this.offers = offers.map(o => ({
+        genesis: o.genesis,
+        author: o.author,
+        cid: o.cid,
+        status: 'offer' as const,
+      }));
 
-      this.licenses = this.licenses.filter(l => l.contentId && l.contentId.length == 77)
+      // Augment with public info fetched by CID.
+      for (let l of this.deals) {
+        try {
 
-      // augment with public info from lens 
-      for (let l of this.licenses) {
-          const content = await fetchById(l.contentId);
-          // console.log(content)
-          const creationDate = parseInt(content.creationDate, 10); // always parse explicitly
+          const content = await fetchFromIPFS("https://ipfs.transport-union.dev", l.cid);
+
+          const creationDate = parseInt(content.public.createdAt, 10);
           l.creationDate = new Date(creationDate * 1_000);
-          const modifiedDate = parseInt(content.modifiedDate, 10); // always parse explicitly
-          l.modifiedDate = new Date(modifiedDate * 1_000);
-          l.postType = content.postType;
+          l.author = content.public.author;
+          l.postType = content.public.postType;
           l.encryption = content.encryption;
-          l.title = l.encryption ? "-" : content.title;
-          l.position = parseInt(content.position);
-          l.tags = content.tags;
+          l.title = l.encryption ? "-" : JSON.parse(content.body).title;
+          l.position = parseInt(content.public.position);
+          l.tags = content.public.tags;
+        } catch (e) {
+          console.warn('Could not augment deal', l.genesis, e);
+        }
       }
 
-      store.setLicenses(this.licenses);
-      //store.setPendingLicenses(pendingLicenses); // needs adding to store
+      store.setDeals(this.deals);
+      store.setOffers(this.offers);
     } catch (error) {
-      console.error('Error loading licenses:', error);
+      console.error('Error loading deals:', error);
     }
     this.fetching = false;
     this.render();
@@ -82,60 +94,56 @@ export class S2SLicensesTab extends HTMLElement {
 
   // Add refresh handler
   private async handleRefresh() {
-    await this.loadLicenses();
+    await this.loadDeals();
   }
 
-  private async checkLicense(contentId: string) {
+  private async checkDeal(genesis: string) {
     try {
-      const isLicensed = await this.safeIntegration.isLicensed(contentId);
-      const author = isLicensed ? await this.safeIntegration.getLicenseAuthor(contentId) : '';
-      
+      const isDeal = await this.safeIntegration.hasDeal(genesis);
       this.showNotification(
-        isLicensed 
-          ? `✅ License exists for ${contentId} (Author: ${author})`
-          : `❌ No license found for ${contentId}`,
-        isLicensed ? 'success' : 'error'
+        isDeal
+          ? `✅ Active deal for ${genesis}`
+          : `❌ No active deal for ${genesis}`,
+        isDeal ? 'success' : 'error'
       );
     } catch (error) {
-      console.error('Error checking license:', error);
-      this.showNotification('Failed to check license', 'error');
+      console.error('Error checking deal:', error);
+      this.showNotification('Failed to check deal', 'error');
     }
   }
 
-  private async acceptLicense(contentId: string) {
+  private async acceptOffer(genesis: string) {
     try {
-      await this.safeIntegration.acceptLicense(contentId);
-      this.showNotification('License accepted! Transaction pending approval.', 'success');
-      
-      // Move from pending to active
-      const licenseIndex = this.pendingLicenses.findIndex(l => l.contentId === contentId);
-      if (licenseIndex !== -1) {
-        const license = this.pendingLicenses[licenseIndex];
-        this.licenses.push({ contentId: license.contentId, author: license.author, status: 'active' });
-        this.pendingLicenses.splice(licenseIndex, 1);
+      await this.safeIntegration.acceptOffer(genesis);
+      this.showNotification('Offer accepted! Transaction pending approval.', 'success');
+      await this.loadDeals();
+      // Update internal state
+      const idx = this.offers.findIndex(o => o.genesis === genesis);
+      if (idx !== -1) {
+        const offer = this.offers.splice(idx, 1)[0];
+        offer.status = 'deal';
+        this.deals.push(offer);
+        this.render();
+      }
+    } catch (error: any) {
+      this.showNotification(`Error accepting offer: ${error.message}`, 'error');
+    }
+  }
+
+  private async retract(genesis: string) {
+    try {
+      await this.safeIntegration.retract(genesis);
+      this.showNotification('Deal retracted! Transaction pending approval.', 'success');
+      await this.loadDeals();
+      // Update internal state
+      const idx = this.deals.findIndex(d => d.genesis === genesis);
+      if (idx !== -1) {
+        this.deals.splice(idx, 1);
         this.render();
       }
     } catch (error) {
-      console.error('Error accepting license:', error);
-      this.showNotification('Failed to accept license. Please try again.', 'error');
-    }
-  }
-
-  private async revokeLicense(contentId: string) {
-    // if (!confirm(`Are you sure you want to revoke the license for ${contentId}?`)) {
-    //   return;
-    // }
-
-    try {
-      await this.safeIntegration.revokeLicense(contentId);
-      this.showNotification('License revoked! Transaction pending approval.', 'success');
-      
-      // Remove from licenses list
-      this.licenses = this.licenses.filter(l => l.contentId !== contentId);
-      this.render();
-    } catch (error) {
-      console.error('Error revoking license:', error);
-      this.showNotification('Failed to revoke license. Please try again.', 'error');
+      console.error('Error retracting deal:', error);
+      this.showNotification('Failed to retract deal. Please try again.', 'error');
     }
   }
 
@@ -176,8 +184,6 @@ export class S2SLicensesTab extends HTMLElement {
 
   private async bulkRender(preview: boolean) {
 
-    console.log("bulkrender")
-
     const configCid  = store.getRecord("config");
     if (configCid == null) return; 
 
@@ -193,7 +199,7 @@ export class S2SLicensesTab extends HTMLElement {
     const signature = await this.safeIntegration.signWithSigner("lit actions auth");
     // console.log(signature);
 
-    const contentIds = preview ? store.licenses.filter( l => l.encryption == false).map( l => l.contentId) : store.licenses.map( l => l.contentId)
+    const genesisIds = preview ? store.deals.filter( d => d.encryption == false).map( d => d.genesis) : store.deals.map( d => d.genesis)
 
     const res = await renderwithLitActions( 
         preview,
@@ -204,20 +210,22 @@ export class S2SLicensesTab extends HTMLElement {
         undefined,
         store.safeInfo?.safeAddress || "",
         publication,
-        contentIds,
+        genesisIds,
         configCid 
     )
 
-    console.log("success:", res.success);
+    console.log(res)
 
-    if(res.cid) {
-      await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
-      console.log("pinned on pinata")
+    // console.log("success:", res.success);
 
-      // Push the new root CID to the store — same transformation as fetchFreshData
-      const rootCid = CID.parse(res.cid).toV1().toString();
-      store.setRoot(rootCid);
-    }
+    // if(res.cid) {
+    //   await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
+    //   console.log("pinned on pinata")
+
+    //   // Push the new root CID to the store — same transformation as fetchFreshData
+    //   const rootCid = CID.parse(res.cid).toV1().toString();
+    //   store.setRoot(rootCid);
+    // }
 
   }
 
@@ -229,8 +237,8 @@ export class S2SLicensesTab extends HTMLElement {
   private render() {
     if (!this.shadowRoot) return;
 
-    const licenses = store.licenses;
-    const pending = store.pending; 
+    const deals = store.deals;
+    const offers = store.offers;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -239,8 +247,8 @@ export class S2SLicensesTab extends HTMLElement {
           padding: 2rem 0;
           background: var(--gray-900);
         }
-       
-        .check-license-form {
+      
+        .check-deal-form {
           display: grid;
           gap: 1rem;
           padding: 1.5rem 0;
@@ -248,7 +256,7 @@ export class S2SLicensesTab extends HTMLElement {
         }
 
         @media (max-width: 768px) {
-          .check-license-form {
+          .check-deal-form {
             grid-template-columns: 1fr;
           }
           
@@ -299,9 +307,9 @@ export class S2SLicensesTab extends HTMLElement {
         
       </style>
 
-      ${this.fetching && licenses.length === 0 ? `
+      ${this.fetching && deals.length === 0 ? `
       <div class="loading">
-        <p>Loading licenses...</p>
+        <p>Loading deals...</p>
       </div>
     ` : `
 
@@ -312,27 +320,27 @@ export class S2SLicensesTab extends HTMLElement {
 
      
 
-      ${pending.length > 0 ? `
+      ${offers.length > 0 ? `
         <div class="section">
           <div class="list_header">
-            <h2 class="section-title">Pending Licenses (${pending.length})</h2>
+            <h2 class="section-title">Pending Offers (${offers.length})</h2>
             <button class="button has-icon refresh-button" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
               <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
             </button>
           </div>
-          <div class="licenses-list">
-            ${pending.map(license => `
-              <div class="license-card">
-                <div class="license-info">
-                  <copy-content-id value='${license.contentId}' display='${this.shortenAddress(license.contentId)}'></copy-content-id>
-                  <div class="license-author">Author: ${license.author}</div>
-                  <span class="license-status status-pending">Pending</span>
+          <div class="offers-list">
+            ${offers.map(offer => `
+              <div class="offer-card">
+                <div class="offer-info">
+                  <copy-content-id value='${offer.genesis}' display='${this.shortenAddress(offer.genesis)}'></copy-content-id>
+                  <div class="offer-author">Author: ${offer.author}</div>
+                  <span class="offer-status status-pending">Pending</span>
                 </div>
-                <div class="license-actions">
+                <div class="offer-actions">
                   <button
                     class="button button-secondary thin"
                     data-action="accept"
-                    data-content-id="${license.contentId}"
+                    data-genesis="${offer.genesis}"
                   >Accept</button>
                 </div>
               </div>
@@ -343,10 +351,10 @@ export class S2SLicensesTab extends HTMLElement {
 
       <div class="section">
         <div class="list_header">
-          <h2 class="section-title">Active Licenses (${licenses.length})</h2>
+          <h2 class="section-title">Active Deals (${deals.length})</h2>
         </div>
 
-        ${licenses.length > 0 ? `
+        ${deals.length > 0 ? `
           <div class="table">
             <div class="table-header">ID / Title</div>
             <div class="table-header">Author (safe)</div>
@@ -360,19 +368,19 @@ export class S2SLicensesTab extends HTMLElement {
               </button>
             </div>
 
-            ${licenses.map(license => `
-              <div class="license-card table-row" data-lic-id="${license.contentId}">
-                <div class="table-cell"><copy-content-id value='${license.contentId}' display='${license.encryption ? this.shortenAddress(license.contentId) : license.title}'></copy-content-id></div>
-                <div class="table-cell">${this.shortenAddress(license.author)}</div>
-                <div class="table-cell">${license.postType ?? ''}</div>
-                <div class="table-cell">${license.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                <div class="table-cell">${license.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                <div class="table-cell">${license.tags?.join(', ') ?? ''}</div>
-                <div class="table-cell license-actions">
+            ${deals.map(deal => `
+              <div class="deal-card table-row" data-genesis="${deal.genesis}">
+                <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
+                <div class="table-cell">${this.shortenAddress(deal.author)}</div>
+                <div class="table-cell">${deal.postType ?? ''}</div>
+                <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
+                <div class="table-cell deal-actions">
                   <button
                     class="button button-danger thin has-icon"
-                    data-action="revoke"
-                    data-content-id="${license.contentId}"
+                    data-action="retract"
+                    data-genesis="${deal.genesis}"
                   >
                     <img src="/icons/noun-revoke-3391394.svg" class="revoke-icon" alt="Revoke" />
                     </button>
@@ -383,25 +391,25 @@ export class S2SLicensesTab extends HTMLElement {
         ` : `
           <div class="empty-state">
             <div class="empty-icon">📄</div>
-            <p>No active licenses yet</p>
+            <p>No active deals yet</p>
           </div>
         `}
       </div>
 
       <div class="section">
         <div class="section-header">
-          <h2 class="section-title">Check License Status</h2>
+          <h2 class="section-title">Check Deal Status</h2>
         </div>
-        <p class="section-description">Check if a license exists for a specific content ID</p>
-        <div class="check-license-form">
-          <input type="text" class="input" placeholder="Content ID" id="check-content-id" />
-          <button class="button" id="check-license-btn">Check License</button>
+        <p class="section-description">Check if a deal exists for a genesis</p>
+        <div class="check-deal-form">
+          <input type="text" class="input" placeholder="Genesis (0x...)" id="check-genesis" />
+          <button class="button" id="check-deal-btn">Check Deal</button>
         </div>
       </div>
       `}
     `;
 
-    if (!this.fetching || licenses.length > 0) {
+    if (!this.fetching || deals.length > 0) {
       this.attachEventListeners();
     }
   }
@@ -418,29 +426,28 @@ export class S2SLicensesTab extends HTMLElement {
       this.handleRefresh();
     });
 
-    // Check license
-    const checkBtn = this.shadowRoot?.querySelector('#check-license-btn');
-    const checkInput = this.shadowRoot?.querySelector('#check-content-id') as HTMLInputElement;
+    // Check deal
+    const checkBtn = this.shadowRoot?.querySelector('#check-deal-btn');
+    const checkInput = this.shadowRoot?.querySelector('#check-genesis') as HTMLInputElement;
 
     checkBtn?.addEventListener('click', () => {
-      const contentId = checkInput?.value.trim();
-      if (contentId) {
-        this.checkLicense(contentId);
+      const genesis = checkInput?.value.trim();
+      if (genesis) {
+        this.checkDeal(genesis);
       }
     });
 
-    // License actions (accept/revoke)
+    // Deal actions (accept/retract)
     this.shadowRoot?.querySelectorAll('[data-action]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLButtonElement;
         const action = target.dataset.action;
-        const contentId = target.dataset.contentId;
+        const genesis = target.dataset.genesis;
         
-        // if (!contentId) return;
-                if (action === 'accept') {
-          this.acceptLicense(contentId!);
-        } else if (action === 'revoke') {
-          this.revokeLicense(contentId!);
+        if (action === 'accept') {
+          this.acceptOffer(genesis!);
+        } else if (action === 'retract') {
+          this.retract(genesis!);
         } else if (action === 'bulkrender') {
           this.bulkRender(this.previewMode);
         }
@@ -449,4 +456,4 @@ export class S2SLicensesTab extends HTMLElement {
   }
 }
 
-customElements.define('s2s-licenses-tab', S2SLicensesTab);
+customElements.define('s2s-deals-tab', S2SDealsTab);

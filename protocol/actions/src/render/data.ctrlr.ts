@@ -1,7 +1,7 @@
 
 import { decrypt } from "../libs/decrypt";
-import { fetchByQuery } from "../libs/lens.factory";
-import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared';
+import { fetchByPublication } from "../libs/module.factory";
+import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 
 const createPath = (body: S2SBody, templateConfig: S2STemplateConfig) : string => {
   
@@ -81,7 +81,7 @@ export const initTemplateData = async (
 
   return {
     ...body,
-    assets_gateway: protocolInfo.assets_gateway,
+    gateway: protocolInfo.gateway,
     path,
     custom: body.custom || {},
     content: (body.content || "")
@@ -94,30 +94,26 @@ export const initTemplateData = async (
 }
 
 export const fetchCollections = async (
-  templateConfig: S2STemplateConfig
+  templateConfig: S2STemplateConfig,
+  publicationModule: string,
 ) => {
-
     const collections: any = {};
     
     for (const collection of templateConfig.collections || []) {
+      let results = await fetchByPublication(publicationModule);
 
-      if (collection.source == 'lens') {
+      results = results.filter(item => item != null);
+      results = results.filter((item: any) => item.tags && item.tags.length > 0);
 
-        let results = await fetchByQuery(collection.query.method,collection.query.args);
-
-        results = results.filter(item => item != null);
-        results = results.filter((item: any) => item.tags && item.tags.length > 0);
-
-        if(collection.filters !== undefined) {
-          results = results.filter( (item: any) => 
-            collection.filters!.every( (filter: any) => 
-              Object.entries(filter).every(([key, value]) => item[key] === value)
-            )
-          );
-        }
-
-        collections[collection.slug] = results;
+      if(collection.filters !== undefined) {
+        results = results.filter( (item: any) => 
+          collection.filters!.every( (filter: any) => 
+            Object.entries(filter).every(([key, value]) => item[key] === value)
+          )
+        );
       }
+
+      collections[collection.slug] = results;
     }
 
     return collections;

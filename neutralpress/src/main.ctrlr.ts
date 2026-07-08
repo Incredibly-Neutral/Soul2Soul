@@ -309,18 +309,17 @@ export class MainController implements IMainController {
 		// Record the version on-chain via the publication module
 		// genesis = signedItem.objectId (first version IS the genesis for a new note)
 		const rootCid = storageresult?.rootCid ?? noteFrontmatter?.root_cid;
-		const appendResult = await service.append(
-			signedItem.objectId,
-			signedItem.objectId,
-			rootCid,
-		);
+				const appendResult = await service.makeOffer(
+					signedItem.objectId,
+					rootCid,
+				);
 		console.log("[append] tx:", appendResult);
 
 		this.notice.setMessage('4/5 Authorizing ...')
 		
 		// if (isLicensed || license != undefined) {
-		// 	await this.renderCalls(publication, [signedItem.objectId], this.oxo.settings.litUsageKey, publish);
-		// }
+			await this.renderCalls(publication, [signedItem.objectId], this.oxo.settings.litUsageKey, publish);
+		//  }
 
 	}
 

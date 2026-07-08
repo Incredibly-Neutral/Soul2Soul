@@ -1,6 +1,6 @@
 import Safe from "@safe-global/protocol-kit";
 import SafeApiKit from "@safe-global/api-kit";
-import { encodeFunctionData, getAddress } from "viem";
+import { encodeFunctionData, getAddress, recoverMessageAddress } from "viem";
 // @ts-ignore
 import { OperationType } from "@safe-global/types-kit";
 
@@ -52,13 +52,10 @@ const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
 // Keys that were written under old names and must be removed from on-chain storage.
 // Leaving them means any reader still asking for these keys gets stale data.
 // deleteRecord removes them cleanly (emits RecordDeleted, frees the slot).
-const STALE_KEYS = [
-  "lit_action_single",       // renamed → lit_action_render
-  "lit_action_cbor",         // merged into lit_action_update; action no longer exists
-  "lit_action_root_update",  // renamed → lit_action_update
-  "pkp_tokenId",             // vestigial pre-Chipotle (GAP-11)
-  "pkp_publicKey",           // vestigial pre-Chipotle (GAP-11)
-];
+const STALE_KEYS : string[] = [
+]
+
+
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -84,10 +81,11 @@ const deleteRecord = (key: string) => ({
   operation: OperationType.Call,
 });
 
+
 const proposeToSafe = async (account: any, transactions: any[]) => {
   const protocolKit = await Safe.init({
-    provider: process.env.BASE_RPC_URL!,
-    signer: process.env.PRIVATE_KEY!,
+    provider: `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`,
+    signer: process.env.PROTOCOL_PRIVATE_KEY!,
     safeAddress: process.env.PROTOCOL_SAFE_ADDRESS!,
   });
 
@@ -127,6 +125,7 @@ export const updateProtocol = async (
   prepActionCid: string,
   renderActionCid: string,
   updateActionCid: string,
+  encryptActionCid: string
 ) => {
   const transactions = [
     // Write current values
@@ -134,6 +133,14 @@ export const updateProtocol = async (
     setRecord("lit_action_prep", prepActionCid),
     setRecord("lit_action_render", renderActionCid),
     setRecord("lit_action_update", updateActionCid),
+    setRecord('lit_action_encrypt', encryptActionCid),
+    setRecord("ens_records", ENS_RECORDS_ADDRESS),
+    setRecord("data_gateway", process.env.IPFS_URL || ""),
+    setRecord("ens_registry", process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || ""),
+    setRecord("publication_factory", process.env.PUBLICATION_FACTORY_V2_ADDRESS || ""),
+    setRecord("records_factory", process.env.RECORDS_FACTORY_ADDRESS || ""),
+  
+
 
     // Delete stale keys from previous naming scheme
     ...STALE_KEYS.map(deleteRecord),
@@ -168,11 +175,12 @@ export const updateActions = async (
     setRecord("lit_action_prep", prepActionCid),
     setRecord("lit_action_render", renderActionCid),
     setRecord("lit_action_update", updateActionCid),
+
   ];
 
   return proposeToSafe(account, transactions);
 };
-
+1
 /**
  * One-time cleanup: delete stale keys left over from the old naming scheme.
  * Run once after the first updateProtocol with the new keys is executed on-chain.
@@ -196,11 +204,12 @@ const main = async () => {
   const pkpInfo = { ethAddress: group.pkps[0] };
   console.log("PKP:", pkpInfo);
 
-  const account = privateKeyToAccount(`0x${process.env.PRIVATE_KEY!}` as `0x${string}`);
+  const account = privateKeyToAccount(`0x${process.env.PROTOCOL_PRIVATE_KEY!}` as `0x${string}`);
 
-  const prep   = group.actions.find((a: any) => a.name === 'prep');
-  const render = group.actions.find((a: any) => a.name === 'render');
-  const update = group.actions.find((a: any) => a.name === 'update');
+  const encrypt = group.actions.find((a: any) => a.name === 'encrypt');
+  const prep    = group.actions.find((a: any) => a.name === 'prep');
+  const render  = group.actions.find((a: any) => a.name === 'render');
+  const update  = group.actions.find((a: any) => a.name === 'update');
 
   if (!prep || !render || !update) {
     throw new Error(`Missing action CIDs. Found: ${JSON.stringify(group.actions.map((a: any) => a.name))}`);
@@ -208,7 +217,7 @@ const main = async () => {
 
   console.log("Action CIDs:", { prep: prep.cid, render: render.cid, update: update.cid });
 
-  await updateProtocol(account, pkpInfo, prep.cid, render.cid, update.cid);
+  await updateProtocol(account, pkpInfo, prep.cid, render.cid, update.cid, encrypt.cid);
 };
 
 main()

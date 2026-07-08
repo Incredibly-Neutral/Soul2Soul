@@ -47,18 +47,18 @@ export const renderwithLitActions = async (
   if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2)); 
   if (validatedPrep.ok) {
     jobs = validatedPrep.data?.jobs;
-    console.log('Jobs dispatched:', jobs.length);
+    console.log('Jobs dispatched:', jobs.length, jobs);
   }
 
   // ---------------- Single Actions Stage ----------------------------------
   
-  if (notice) notice.setMessage('rendering single actions ...'); else console.log('dispatching single actions...');
+  if (notice) notice.setMessage('ispatching render actions ...'); else console.log('dispatching render actions...');
 
   const allResults = await Promise.all(
     jobs.map(async (job: any, index: number) => {
       try {
         const singleInputs = validateSingleInput({ signature, authorSafeAddress, configCid, publication, job, preview });
-        const actionResult = await runAction(preview, lit, protocolInfo.litActions.render, singleInputs, litUsageKey);
+        const actionResult =  await runAction(preview, lit, protocolInfo.litActions.render, singleInputs, litUsageKey);
         return { success: true, index, data: actionResult };
       } catch (err: any) {
         return { success: false, index, error: err?.message ?? String(err) };

@@ -56,10 +56,11 @@ export interface CancelEditEvent extends CustomEvent {
   detail: {};
 }
 
-export interface License {
-  contentId: string, 
-  author: string, 
-  status: 'active' | 'pending',
+export interface Deal {
+  genesis: string,          // bytes32 hex — the document's permanent on-chain identity
+  cid: string,              // latest IPFS CID for this genesis
+  author: string,
+  status: 'deal' | 'offer',
   creationDate?: Date,
   modifiedDate?: Date,
   postType?: string,

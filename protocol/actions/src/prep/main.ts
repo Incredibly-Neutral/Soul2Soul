@@ -1,7 +1,7 @@
 import { ActionResult, PrepData, PrepInput, S2SBody, S2SJob, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
 import { getDomainOwnerAndModules } from "../libs/ens.factory";
-import { fetchById, fetchByQuery } from "../libs/lens.factory";
-import { getConfig, getTaskConfig } from "../single/config.ctrl";
+import { getLatestEntry, fetchById, fetchByPublication } from "../libs/module.factory";
+import { getConfig, getTaskConfig } from "../render/config.ctrl";
 import { requireFields } from "../libs/helpers";
 
 const ACTION = "prep";
@@ -9,6 +9,8 @@ const ACTION = "prep";
 async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
 
   let trace: any[] = [];
+
+  console.log(`prep action @ ${new Date()}`)
 
   try {
     requireFields(input, ["publication", "contentIds"]);          // configCid is optional
@@ -25,7 +27,9 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     const jobs: S2SJob[] = [];
 
     for (const contentId of contentIds) {
-      const body: S2SBody | null | undefined = await fetchById(contentId);
+      // const entry = await getLatestEntry(contentId, publicationModule);
+      // if (!entry.cid) throw `content not found: '${contentId}'`;
+      const body = await fetchById(contentId, publicationModule);
       if (!body?.id) throw `content not found: '${contentId}'`;
 
       const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
@@ -40,7 +44,7 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
           if (!rippleTemplateConfig)
             throw `ripple destination '${rippleConfig.destination}' not in mapping.templateConfig`;
 
-          const ripples = await fetchByQuery(rippleConfig.query.method, rippleConfig.query.args);
+          const ripples = await fetchByPublication(publicationModule);
           for (const ripple of ripples)
             if (ripple?.id)
               jobs.push({ id: ripple.id, templateConfig: rippleTemplateConfig,

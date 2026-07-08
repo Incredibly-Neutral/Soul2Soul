@@ -24,8 +24,8 @@ interface ContractToVerify {
 }
 
 const CONTRACTS: ContractToVerify[] = [
-  { name: 'S2SPublicationModule', address: '0xbae8877eaeec61f4c443bff04e42bd04fc9b6a73' },
-  { name: 'S2SPublicationModuleFactory', address: '0xe948735151c43183accd8e85b992952b2711d554' },
+  { name: 'S2SPublicationModuleV2', address: '0x4d05a336700644De60F09aF8104DC96047023C1f' },
+  // { name: 'S2SPublicationModuleFactory', address: '0xe948735151c43183accd8e85b992952b2711d554' },
 ];
 
 function readBuildInfo(id: string): any {

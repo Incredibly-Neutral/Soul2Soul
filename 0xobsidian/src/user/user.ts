@@ -16,11 +16,8 @@ export interface IOXOUser {
     /** Encrypted blob (base64) for on-disk storage. Only populated during
      * serialization; replaced with plaintext `private_key` after loading. */
     key_blob?: string,
-    lens: string | undefined,
     safe: string | undefined,
     setSafeAddress: (address: string) => void,
-    addLensAccount: (main: IMainController) => Promise<string>
-    checkLensProfile: (main: IMainController) => Promise<boolean>
 }
 
 export class OXOUser implements IOXOUser {
@@ -28,7 +25,6 @@ export class OXOUser implements IOXOUser {
     active: boolean
     eoa: string
     private_key: string
-    lens: string |undefined
     safe: string | undefined
 
 
@@ -45,10 +41,8 @@ export class OXOUser implements IOXOUser {
         this.name = name;
         this.active = active;
         this.eoa = eoa || "";
-        // this.lens = undefined;
         this.private_key = private_key || "";
         this.safe = safe != undefined ? ethers.getAddress(safe) : undefined;   
-        this.lens = undefined; 
     }
 
     _generatePK() {
@@ -63,23 +57,5 @@ export class OXOUser implements IOXOUser {
 
     setSafeAddress(safe: string) {
         this.safe = ethers.getAddress(safe);
-    }
-
-    async checkLensProfile(main: IMainController) {
-
-        let res = await main.lens.checkProfile(this);
-
-        if(res.isErr() || res.value == null){
-            return false;
-        } else {
-            this.lens = res.value.address;
-            console.log(this)
-            return true;
-        }
-    }
-
-    async addLensAccount(main: IMainController) {
-
-        return await main.lens.registerProfile(this);
     }
 }
