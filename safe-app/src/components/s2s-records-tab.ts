@@ -1,8 +1,7 @@
 // s2s-records-tab.ts
-import { ConfigBuilder } from '@/lib/config-builder.js';
+import { ConfigBuilder, AssetsBuilder, S2SIPFSMethods } from '@s2s/soul2soul-shared/safe-app';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { ProtocolIntegration } from '../lib/protocol-integration.js';
-import { AssetsBuilder } from '@/lib/assets-builder.js';
 import { store, OnChainRecord } from '../state/index.js';
 import { tableStyles } from '@/styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -149,11 +148,15 @@ export class S2SRecordsTab extends HTMLElement {
     const publicationUrl = await this.safeIntegration.getRecord('name');
     const pInfo          = await this.protocolIntegration.getInfo();
 
-    const assets = new AssetsBuilder(
-      pInfo.ensRecords,
+    const ipfs = new S2SIPFSMethods(
+      'https://ipfs.transport-union.dev',
       import.meta.env.VITE_PINATA_JWT,
       'https://neutralpress.mypinata.cloud',
-      'https://ipfs.transport-union.dev',
+    );
+
+    const assets = new AssetsBuilder(
+      ipfs,
+      import.meta.env.VITE_GITHUB_TOKEN,
     );
 
     const [owner, repoName] = repo.split('/').slice(3);
@@ -162,13 +165,11 @@ export class S2SRecordsTab extends HTMLElement {
       owner, repoName, 'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
-      existingCid
     );
 
     const config = new ConfigBuilder(
-      import.meta.env.VITE_PINATA_JWT,
-      'https://neutralpress.mypinata.cloud',
-      'https://ipfs.transport-union.dev',
+      ipfs,
+      import.meta.env.VITE_GITHUB_TOKEN,
     );
 
     const { cid: configCid } = await config.buildConfig(
@@ -176,7 +177,6 @@ export class S2SRecordsTab extends HTMLElement {
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
-      existingCid,
     );
 
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);

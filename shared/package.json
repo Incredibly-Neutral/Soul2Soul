@@ -15,6 +15,10 @@
     "./safe-app": {
       "types": "./dist/safe-app.d.ts",
       "default": "./dist/safe-app.js"
+    },
+    "./filecoin": {
+      "types": "./dist/filecoin/index.d.ts",
+      "default": "./dist/filecoin/index.js"
     }
   },
   "files": [
@@ -26,6 +30,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@filoz/synapse-core": "^0.7.0",
+    "@filoz/synapse-sdk": "^1.0.1",
+    "filecoin-pin": "^1.0.1",
     "@lens-chain/storage-client": "^1.0.6",
     "@lens-protocol/client": "0.0.0-canary-20250430134539",
     "@lens-protocol/metadata": "^2.1.0",
@@ -34,6 +41,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/node": "^18.19.0",
     "vitest": "^4.1.9"
   }
 }
