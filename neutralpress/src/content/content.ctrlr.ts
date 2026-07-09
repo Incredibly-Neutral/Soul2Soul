@@ -123,7 +123,7 @@ export class ContentController implements IContentController {
                 noOpEncrypt,
             );
 
-            console.log("zublishing:", signedItem);
+            console.log("publishing:", signedItem);
 
             // Store the objectId and author DID in frontmatter
             await this.updateFrontMatter(this.main.plugin.app, file, "signed_id", signedItem.objectId);

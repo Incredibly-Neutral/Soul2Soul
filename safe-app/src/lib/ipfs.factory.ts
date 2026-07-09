@@ -90,6 +90,31 @@ export const dagPut = async (
   return result.Cid['/'] || result.Cid || result.Hash;
 };
 
+/**
+ * Export a DAG from Kubo as CAR bytes via /api/v0/dag/export.
+ */
+export const dagExport = async (
+  cid: string,
+  ipfs_endpoint: string,
+): Promise<Uint8Array> => {
+  const url = `https://${fixEndpoint(ipfs_endpoint)}/api/v0/dag/export?arg=${cid}`;
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`DAG export failed: ${response.status} ${response.statusText}\n${errorText}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
+};
+
 const fixEndpoint = (endpoint: string) => {
   return endpoint
     .replace(/^(https?:\/\/)/, "") // Remove protocol if present
