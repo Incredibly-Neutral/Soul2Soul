@@ -13,6 +13,7 @@
  */
 
 import { FilecoinStorage, FilecoinUser, FilecoinUploadResult, type FilecoinSessionKeyData } from "@s2s/soul2soul-shared/filecoin";
+import { nodeFilecoinBuilder } from "./car-builder.js";
 import { addJson } from "../ipfs/remotekubo.service.js";
 
 /** Minimal shape we need from the main controller for FilecoinStorage. */
@@ -24,7 +25,7 @@ export class FilecoinController {
   private storage: FilecoinStorage;
 
   constructor(main: FilecoinMain) {
-    this.storage = new FilecoinStorage(main as FilecoinUser);
+    this.storage = new FilecoinStorage(main as FilecoinUser, nodeFilecoinBuilder);
   }
 
   // ── FilecoinStorage passthroughs ─────────────────────────────────

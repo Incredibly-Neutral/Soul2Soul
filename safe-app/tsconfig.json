@@ -21,9 +21,8 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Module Resolution */
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
 
     /* Output */
