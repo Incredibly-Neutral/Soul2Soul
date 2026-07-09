@@ -34,6 +34,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
+import { CarReader } from "@ipld/car";
+import { CID } from "multiformats/cid";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -193,6 +195,52 @@ export class FilecoinStorage {
     this.initialized = true;
     this.usingSessionKey = true;
     console.log("[filecoin] Initialised with session key → root:", skData.rootAddress);
+  }
+
+  /**
+   * Upload pre-built CAR bytes to Filecoin.
+   * The CAR bytes should be from Kubo (dag/export) or built with
+   * the same unixfs-v1-2025 profile for CID match.
+   */
+  async uploadTree(carBytes: Uint8Array): Promise<FilecoinUploadResult> {
+    this.ensureInit();
+    if (!this.builder) throw new Error("FilecoinStorage: no CAR builder configured");
+
+    // Extract root CID from the CAR bytes
+    const rootCid = await this.extractRootCidFromCar(carBytes);
+
+    // Upload the CAR to Filecoin SPs via filecoin-pin's uploader
+    const result = await uploadToSynapse(
+      this.synapse,
+      carBytes,
+      rootCid as any,
+      noopLogger as any,
+      { excludeProviderIds: [7n, 5n] },
+    );
+    return {
+      rootCid,
+      pieceCid: result.pieceCid.toString(),
+      size: result.size,
+      complete: result.complete,
+      copyCount: result.copies?.length ?? 0,
+      failedCount: result.failedAttempts?.length ?? 0,
+      copies:
+        result.copies?.map((c: any) => ({
+          provider: c.providerId?.toString() ?? "unknown",
+          dealId: c.dataSetId?.toString(),
+        })) ?? [],
+    };
+  }
+
+  /**
+   * Extract root CID from CAR bytes.
+   * Uses @ipld/car CarReader to parse the CAR header.
+   */
+  private async extractRootCidFromCar(carBytes: Uint8Array): Promise<string> {
+    const reader = await CarReader.fromBytes(new Uint8Array(carBytes.buffer, carBytes.byteOffset, carBytes.byteLength));
+    const roots = await reader.getRoots();
+    if (!roots || roots.length === 0) throw new Error("uploadTree: unable to extract root CID from CAR bytes");
+    return roots[0].toString();
   }
 
   // ── Upload / download ──────────────────────────────────────────

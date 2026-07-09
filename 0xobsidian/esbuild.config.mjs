@@ -31,6 +31,8 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
+		"@filoz/synapse-sdk",
+		"@ipld/car",
 		...builtins.filter(pkg => !['crypto', 'buffer', 'util'].includes(pkg))
 	],
 	format: "cjs",

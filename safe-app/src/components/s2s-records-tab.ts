@@ -193,6 +193,15 @@ export class S2SRecordsTab extends HTMLElement {
       console.warn('[filecoin] fetchFromKubo failed (non-fatal):', err);
     }
 
+    // ── Filecoin uploadTree (full assets tree) ────────────────────────
+    // Export the full DAG from assetsCid (the actual tree of fonts, images, CSS, templates)
+    // as CAR and upload to Filecoin.
+    try {
+      this.tryFilecoinTreeUpload(assetsCid);
+    } catch (err) {
+      console.warn('[filecoin] uploadTree failed (non-fatal):', err);
+    }
+
     // ── existing ───────────────────────────────────────────────────────
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
     window.open(executionUrl, '_blank');
@@ -225,6 +234,39 @@ export class S2SRecordsTab extends HTMLElement {
     } catch (err) {
       // Log but never throw — Pinata path must not be affected
       console.warn('[filecoin] upload failed (non-fatal):', err);
+    }
+  }
+
+  /**
+   * Upload the full assets tree (config + templates + assets) to Filecoin.
+   * Exports the DAG from Kubo as CAR, then uploads to Filecoin.
+   * Fire-and-forget — never throws, never blocks the Safe tx flow.
+   */
+  private async tryFilecoinTreeUpload(rootCid: string): Promise<void> {
+    try {
+      // Fetch session key at runtime
+      const skRes = await fetch('/session-key.json');
+      const skData = await skRes.json();
+
+      const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED';
+      const kuboUrl = 'https://ipfs.transport-union.dev';
+
+      const fc = new FilecoinStorage({}, browserFilecoinBuilder);
+      await fc.initWithSessionKey(skData, rpcUrl);
+
+      // Import dagExport dynamically to avoid bundling issues
+      const { dagExport } = await import('../lib/ipfs.factory.js');
+
+      // Export the full DAG from Kubo as CAR bytes
+      console.log('[filecoin] exporting tree from Kubo:', rootCid);
+      const carBytes = await dagExport(rootCid, kuboUrl);
+      console.log('[filecoin] exported tree from Kubo:', rootCid, `(${carBytes.length} bytes)`);
+
+      // Upload the CAR to Filecoin
+      const result = await fc.uploadTree(carBytes);
+      console.log('[filecoin] tree uploaded to Filecoin:', result.rootCid, result.pieceCid);
+    } catch (err) {
+      console.warn('[filecoin] uploadTree failed (non-fatal):', err);
     }
   }
 
