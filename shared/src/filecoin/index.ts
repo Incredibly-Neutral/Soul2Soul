@@ -215,7 +215,7 @@ export class FilecoinStorage {
       carBytes,
       rootCid as any,
       noopLogger as any,
-      { excludeProviderIds: [7n, 5n] },
+      { excludeProviderIds: [7n, 5n] },  // infrafolio-mainnet-pdp: only accepts HTTP/1.1, ALPN handshake fails
     );
     return {
       rootCid,
