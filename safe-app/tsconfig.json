@@ -22,7 +22,8 @@
 
     /* Module Resolution */
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "filecoin-pin/core/unixfs": ["./node_modules/filecoin-pin/dist/core/unixfs/browser.d.ts"]
     },
 
     /* Output */
