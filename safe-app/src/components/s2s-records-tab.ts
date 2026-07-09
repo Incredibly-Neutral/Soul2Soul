@@ -9,6 +9,8 @@ import { LitService } from '@s2s/soul2soul-shared/safe-app';
 import { pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
+import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
+import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 
 export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -179,8 +181,51 @@ export class S2SRecordsTab extends HTMLElement {
       assetsCid,
     );
 
+    console.log("cid from kubo", configCid)
+
+    // ── Filecoin (additive, non-blocking) ──────────────────────────────
+    // Fetch the built config object from Kubo so we upload the same data
+    // that Pinata just pinned, then fire-and-forget.
+    try {
+      const configData = await ipfs.fetchFromKubo(configCid);
+      this.tryFilecoinUpload(configData);
+    } catch (err) {
+      console.warn('[filecoin] fetchFromKubo failed (non-fatal):', err);
+    }
+
+    // ── existing ───────────────────────────────────────────────────────
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
     window.open(executionUrl, '_blank');
+  }
+
+  /**
+   * Upload config data to Filecoin Storage (on-chain).
+   * Fire-and-forget — never throws, never blocks the Safe tx flow.
+   */
+  private async tryFilecoinUpload(data: unknown): Promise<void> {
+    try {
+      // Fetch session key at runtime — don't bundle it
+      const skRes  = await fetch('/session-key.json');
+      const skData = await skRes.json();
+
+      console.log(skData)
+
+      const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED';
+
+      console.log(rpcUrl)
+
+      const fc = new FilecoinStorage({}, browserFilecoinBuilder);   // no main.user needed for session-key path
+      await fc.initWithSessionKey(
+        skData,
+        rpcUrl // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
+      );
+
+      const result = await fc.uploadJson(data);
+      console.log('[filecoin] config uploaded:', result.rootCid, result.pieceCid);
+    } catch (err) {
+      // Log but never throw — Pinata path must not be affected
+      console.warn('[filecoin] upload failed (non-fatal):', err);
+    }
   }
 
   private showNotification(message: string, type: 'success' | 'error') {

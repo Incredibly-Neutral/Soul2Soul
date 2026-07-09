@@ -3,14 +3,18 @@
  * Onchain Cloud, using filecoin-pin's CAR builder for deterministic
  * IPFS Root CID ↔ Filecoin PieceCID matching.
  *
- * This module is Node-only. It is exposed on the `./filecoin` subpath
- * so the browser (safe-app) bundle never pulls in `fs`, `filecoin-pin`,
- * or Synapse.
+ * This class is shared (Node + browser). The actual CAR builder
+ * is environment-specific:
+ *   - Node (0xobsidian): 0xobsidian/src/filecoin/car-builder.ts
+ *   - Browser (safe-app): safe-app/src/filecoin/car-builder.ts
  *
- * ## Pipeline
+ * The shared class accepts a `buildCarFromBytes` implementation via
+ * init() or constructor injection. See the respective modules.
  *
- *   jsonBytes ──→ filecoin-pin CAR builder ──→ rootCid (IPFS, matches Kubo)
- *                                             └─→ carBytes ──→ Synapse upload ──→ pieceCid
+ * ## Pipeline (Node)
+ *
+ *   jsonBytes ──→ CAR builder ──→ rootCid (IPFS, matches Kubo)
+ *                                   └─→ carBytes ──→ Synapse upload ──→ pieceCid
  *
  * The rootCid uses the unixfs-v1-2025 profile (1 MiB chunks, raw leaves,
  * CIDv1, balanced layout) — the same spec Kubo applies with:
@@ -29,13 +33,10 @@ import * as SessionKey from "@filoz/synapse-core/session-key";
 import { privateKeyToAccount } from "viem/accounts";
 import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
-import { createCarFromPath } from "filecoin-pin/core/unixfs";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
-import { mkdtempSync, writeFileSync, readFileSync, unlinkSync, rmSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
 
 // ── Types ───────────────────────────────────────────────────────────
+
 
 export interface FilecoinBalance {
   raw: bigint;
@@ -100,27 +101,16 @@ const noopLogger = {
 };
 
 /**
- * Build a CAR file from raw bytes using filecoin-pin's UnixFS importer
- * (unixfs-v1-2025 profile). Returns the Root CID and the CAR bytes.
+ * Shared upload logic for Filecoin. The actual CAR builder is
+ * environment-specific — see 0xobsidian/src/filecoin/car-builder.ts
+ * (Node) and safe-app/src/filecoin/car-builder.ts (browser).
  */
-async function buildCarFromBytes(bytes: Uint8Array): Promise<{
-  rootCid: string;
-  carBytes: Uint8Array;
-}> {
-  const tmpDir = mkdtempSync(join(tmpdir(), "s2s-fc-"));
-  const jsonPath = join(tmpDir, "payload.json");
-  writeFileSync(jsonPath, bytes);
 
-  try {
-    const { rootCid, carPath } = await createCarFromPath(jsonPath, {
-      logger: noopLogger as any,
-    });
-    const carBytes = readFileSync(carPath);
-    unlinkSync(carPath);
-    return { rootCid: rootCid.toString(), carBytes };
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
+export interface FilecoinCarBuilder {
+  buildCarFromBytes(bytes: Uint8Array): Promise<{
+    rootCid: string;
+    carBytes: Uint8Array;
+  }>;
 }
 
 // ── Controller ──────────────────────────────────────────────────────
@@ -128,11 +118,13 @@ async function buildCarFromBytes(bytes: Uint8Array): Promise<{
 export class FilecoinStorage {
   private main: FilecoinUser;
   private synapse: any;
+  private builder: FilecoinCarBuilder | null = null;
   private initialized = false;
   private usingSessionKey = false;
 
-  constructor(main: FilecoinUser) {
+  constructor(main: FilecoinUser, builder?: FilecoinCarBuilder) {
     this.main = main;
+    this.builder = builder ?? null;
   }
 
   async init(chain: "mainnet" | "calibration" = "mainnet"): Promise<void> {
@@ -212,12 +204,13 @@ export class FilecoinStorage {
    */
   async uploadJson(data: unknown): Promise<FilecoinUploadResult> {
     this.ensureInit();
+    if (!this.builder) throw new Error("FilecoinStorage: no CAR builder configured");
 
     const json = JSON.stringify(data, null, 2);
     const bytes = new TextEncoder().encode(json);
 
     // 1. Build CAR → get Root CID
-    const { rootCid, carBytes } = await buildCarFromBytes(bytes);
+    const { rootCid, carBytes } = await this.builder.buildCarFromBytes(bytes);
 
     // 2. Upload the CAR to Filecoin SPs via filecoin-pin's uploader
     //    (which calls Synapse internally and attaches rootCid as piece metadata)
@@ -226,6 +219,7 @@ export class FilecoinStorage {
       carBytes,
       rootCid as any,   // uploadToSynapse expects CID type from multiformats
       noopLogger as any,
+      { excludeProviderIds: [7n, 5n] },  // infrafolio-mainnet-pdp: only accepts HTTP/1.1, ALPN handshake fails
     );
     return {
       rootCid,
