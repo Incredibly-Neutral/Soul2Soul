@@ -7,7 +7,7 @@
  * in the safe-app browser context.
  */
 
-import { createCarFromFile } from "filecoin-pin/core/unixfs/browser";
+import { createCarFromFile } from "filecoin-pin/dist/core/unixfs/browser.js";
 import type { FilecoinCarBuilder } from "@s2s/soul2soul-shared/filecoin";
 
 export const browserFilecoinBuilder: FilecoinCarBuilder = {

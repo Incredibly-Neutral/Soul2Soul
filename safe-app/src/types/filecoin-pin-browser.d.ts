@@ -1,4 +1,4 @@
-declare module "filecoin-pin/core/unixfs/browser" {
+declare module "filecoin-pin/dist/core/unixfs/browser.js" {
   import { CID } from "multiformats/cid";
 
   export interface CreateCarOptions {
