@@ -1,11 +1,13 @@
 {
   "sessionPrivateKey": "0xREDACTED",
-  "sessionAddress": "0x3aD34Cb3fBb59E6253a9ecD235679fc989Fe569B",
+  "sessionAddress": "0x88B9312AA021288611881E07d392E5e2a861310C",
   "rootAddress": "0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387",
-  "expiresAt": "1813689203",
-  "expiresAtISO": "2027-06-22T18:33:23.000Z",
+  "expiresAt": "1815306596",
+  "expiresAtISO": "2027-07-11T11:49:56.000Z",
   "permissions": [
     "CreateDataSet",
-    "AddPieces"
+    "AddPieces",
+    "TerminateService",
+    "SchedulePieceRemovals"
   ]
 }

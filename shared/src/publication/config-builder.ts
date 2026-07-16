@@ -160,7 +160,7 @@ export class ConfigBuilder {
     // Load existing config or create new one
     let config: any = {};
     if (existingConfigCid) {
-      console.log("existing", existingConfigCid);
+      // console.log("existing", existingConfigCid);
       try {
         config = await this.ipfs.fetchFromKubo(existingConfigCid);
       } catch (error) {
@@ -172,7 +172,7 @@ export class ConfigBuilder {
     config.templates = config.templates || [];
 
     // --- Process templates (from templates/ directory in GitHub) ---
-    console.log("Processing templates...");
+    // console.log("Processing templates...");
     const templateFiles = await this.getAllFilesRecursive(
       github_account,
       repo,
@@ -202,7 +202,7 @@ export class ConfigBuilder {
       } else {
         config.templates.push({ path: template.path, cid, body: content });
       }
-      console.log(`✅ Template uploaded: ${template.path} -> ${cid}`);
+      // console.log(`✅ Template uploaded: ${template.path} -> ${cid}`);
     }
 
     // --- Upload templates DAG ---
@@ -210,6 +210,7 @@ export class ConfigBuilder {
       JSON.stringify(config.templates),
       "templates.json",
     );
+    console.log("[config-builder] templates dagPut CID:", templatesCid);
 
     // --- Fetch mapping.json at the pinned commit SHA ---
     const commitSHA = await this.getLatestCommitSHA(

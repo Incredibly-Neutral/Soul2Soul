@@ -44,8 +44,12 @@ export class FilecoinController {
     return this.storage.initWithSessionKey(sessionKeyData, rpcUrl, chain);
   }
 
-  async uploadJson(data: unknown): Promise<FilecoinUploadResult> {
-    return this.storage.uploadJson(data);
+  async uploadJson(data: unknown, owners?: string[], kind?: string): Promise<FilecoinUploadResult> {
+    return this.storage.uploadJson(data, owners, kind);
+  }
+
+  async listStorageFor(identity: string): Promise<any[]> {
+    return this.storage.listStorageFor(identity);
   }
 
   async retrieveJson(pieceCid: string): Promise<unknown> {

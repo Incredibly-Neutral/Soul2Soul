@@ -271,44 +271,38 @@ export class MainController implements IMainController {
 
 		this.notice.setMessage(`2/5 storing content item on Filecoin ... `);
 
-		// Check if note already has a root CID in frontmatter
-		const noteFrontmatter = await this.content.getFrontMatter(this.plugin.app, file);
+		// Always re-upload — the content may have changed since the last publish.
+		// The frontmatter root_cid is a fallback (handled below) if this upload fails.
 		let storageresult: any;
 
-		if (noteFrontmatter?.root_cid) {
-			console.log("[skip] content already uploaded — root_cid in frontmatter, skipping upload");
-			this.notice.setMessage(`2/5 already uploaded — using cached CIDs ... `);
+		// 1. Upload to Kubo → get IPFS CID
+		const kuboUrl = this.oxo.settings.kubo_url || "ipfs.transport-union.dev";
+		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
+		console.log("[kubo] uploaded:", kuboCid);
+
+		// 2. Upload to Filecoin → get Root CID + Piece CID
+		const pubAddress = await service.getMultiSig();
+		const authorEoa = this.oxo.ctrlr.user?.eoa;
+		storageresult = await this.oxo.ctrlr.storage.uploadJson(
+			signedItem,
+			[pubAddress, authorEoa].filter(Boolean),
+			'article',
+		);
+		console.log("[filecoin]", storageresult);
+
+		// 3. Verify CIDs match — same bytes → same Root CID
+		if (kuboCid !== storageresult.rootCid) {
+			console.error("[cid-mismatch] Kubo:", kuboCid, "≠ Filecoin:", storageresult.rootCid);
+			new Notice(`⚠️ CID mismatch: Kubo ${kuboCid.slice(0,12)}… ≠ Filecoin ${storageresult.rootCid.slice(0,12)}…`);
 		} else {
-			// 1. Upload to Kubo → get IPFS CID
-			const kuboUrl = this.oxo.settings.kubo_url || "ipfs.transport-union.dev";
-			const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
-			console.log("[kubo] uploaded:", kuboCid);
-
-			// 2. Upload to Filecoin → get Root CID + Piece CID
-			storageresult = await this.oxo.ctrlr.storage.uploadJson(signedItem);
-			console.log("[filecoin]", storageresult);
-
-			// 3. Verify CIDs match — same bytes → same Root CID
-			if (kuboCid !== storageresult.rootCid) {
-				console.error("[cid-mismatch] Kubo:", kuboCid, "≠ Filecoin:", storageresult.rootCid);
-				new Notice(`⚠️ CID mismatch: Kubo ${kuboCid.slice(0,12)}… ≠ Filecoin ${storageresult.rootCid.slice(0,12)}…`);
-			} else {
-				console.log("[cid-ok] both paths agree on root CID:", kuboCid);
-			}
-
-			// Write CIDs to note frontmatter for persistence and display
-			await this.content.updateFrontMatter(this.plugin.app, file, "root_cid", storageresult.rootCid);
-			await this.content.updateFrontMatter(this.plugin.app, file, "piece_cid", storageresult.pieceCid);
-			await this.content.updateFrontMatter(this.plugin.app, file, "published_at", new Date().toJSON().split(".")[0]);
-
-			console.log("[frontmatter] CIDs written to note frontmatter");
+			console.log("[cid-ok] both paths agree on root CID:", kuboCid);
 		}
 
 		this.notice.setMessage('3/5 appending version to publication contract ...');
 
 		// Record the version on-chain via the publication module
 		// genesis = signedItem.objectId (first version IS the genesis for a new note)
-		const rootCid = storageresult?.rootCid ?? noteFrontmatter?.root_cid;
+		const rootCid = storageresult?.rootCid;
 				const appendResult = await service.makeOffer(
 					signedItem.objectId,
 					rootCid,

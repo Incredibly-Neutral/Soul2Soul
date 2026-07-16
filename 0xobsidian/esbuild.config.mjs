@@ -31,8 +31,6 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		"@filoz/synapse-sdk",
-		"@ipld/car",
 		...builtins.filter(pkg => !['crypto', 'buffer', 'util'].includes(pkg))
 	],
 	format: "cjs",
@@ -42,6 +40,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "/home/joera/vaults/s2s/.obsidian/plugins/0xobsidian/main.js",
 	platform: "node",
+	conditions: ['import'],
 	mainFields: ["module", "main"],
 	define: {
 		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),

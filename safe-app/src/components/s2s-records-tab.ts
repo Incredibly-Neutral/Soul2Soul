@@ -16,9 +16,18 @@ export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
   public protocolIntegration!: ProtocolIntegration;
   private lit!: LitService;
+  private storage!: FilecoinStorage;
   private fetching = false;
   private searchTerm = '';
   private editingKey: string | null = null;
+  private storageItems: Array<{
+    pieceCid: string;
+    rootCid: string | null;
+    dataSetId: string;
+    provider: string;
+    attributed: boolean;
+  }> = [];
+  private loadingStorage = false;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -174,12 +183,15 @@ export class S2SRecordsTab extends HTMLElement {
       import.meta.env.VITE_GITHUB_TOKEN,
     );
 
-    const { cid: configCid } = await config.buildConfig(
+    const { cid: configCid, config: publicationConfig } = await config.buildConfig(
       owner, repoName, 'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
     );
+
+    console.log("[config] templateCid from builder:", publicationConfig.templateCid);
+    console.log("[config] configCid from builder:", configCid);
 
     console.log("cid from kubo", configCid)
 
@@ -188,7 +200,7 @@ export class S2SRecordsTab extends HTMLElement {
     // that Pinata just pinned, then fire-and-forget.
     try {
       const configData = await ipfs.fetchFromKubo(configCid);
-      this.tryFilecoinUpload(configData);
+      this.tryFilecoinUpload(configData, 'config');
     } catch (err) {
       console.warn('[filecoin] fetchFromKubo failed (non-fatal):', err);
     }
@@ -197,9 +209,22 @@ export class S2SRecordsTab extends HTMLElement {
     // Export the full DAG from assetsCid (the actual tree of fonts, images, CSS, templates)
     // as CAR and upload to Filecoin.
     try {
-      this.tryFilecoinTreeUpload(assetsCid);
+      this.tryFilecoinTreeUpload(assetsCid, 'assets');
     } catch (err) {
       console.warn('[filecoin] uploadTree failed (non-fatal):', err);
+    }
+
+    // ── Filecoin uploadTree (templates DAG) ──────────────────────────
+    // The templateCid was created by dagPut of the templates array (a single JSON
+    // node stored as DAG).  Export it from Kubo as CAR and upload to Filecoin
+    // the same way as the assets tree.
+    const templateCid = publicationConfig?.templateCid;
+    if (templateCid) {
+      try {
+        this.tryFilecoinTreeUpload(templateCid, 'templates');
+      } catch (err) {
+        console.warn('[filecoin] template uploadTree failed (non-fatal):', err);
+      }
     }
 
     // ── existing ───────────────────────────────────────────────────────
@@ -211,28 +236,12 @@ export class S2SRecordsTab extends HTMLElement {
    * Upload config data to Filecoin Storage (on-chain).
    * Fire-and-forget — never throws, never blocks the Safe tx flow.
    */
-  private async tryFilecoinUpload(data: unknown): Promise<void> {
+  private async tryFilecoinUpload(data: unknown, kind: string = ''): Promise<void> {
     try {
-      // Fetch session key at runtime — don't bundle it
-      const skRes  = await fetch('/session-key.json');
-      const skData = await skRes.json();
-
-      console.log(skData)
-
-      const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED';
-
-      console.log(rpcUrl)
-
-      const fc = new FilecoinStorage({}, browserFilecoinBuilder);   // no main.user needed for session-key path
-      await fc.initWithSessionKey(
-        skData,
-        rpcUrl // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
-      );
-
-      const result = await fc.uploadJson(data);
-      console.log('[filecoin] config uploaded:', result.rootCid, result.pieceCid);
+      const publicationAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
+      const result = await this.storage.uploadJson(data, [publicationAddress], kind);
+      console.log('[filecoin] config uploaded:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
     } catch (err) {
-      // Log but never throw — Pinata path must not be affected
       console.warn('[filecoin] upload failed (non-fatal):', err);
     }
   }
@@ -242,17 +251,10 @@ export class S2SRecordsTab extends HTMLElement {
    * Exports the DAG from Kubo as CAR, then uploads to Filecoin.
    * Fire-and-forget — never throws, never blocks the Safe tx flow.
    */
-  private async tryFilecoinTreeUpload(rootCid: string): Promise<void> {
+  private async tryFilecoinTreeUpload(rootCid: string, kind: string = ''): Promise<void> {
     try {
-      // Fetch session key at runtime
-      const skRes = await fetch('/session-key.json');
-      const skData = await skRes.json();
-
-      const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED';
+      const publicationAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
       const kuboUrl = 'https://ipfs.transport-union.dev';
-
-      const fc = new FilecoinStorage({}, browserFilecoinBuilder);
-      await fc.initWithSessionKey(skData, rpcUrl);
 
       // Import dagExport dynamically to avoid bundling issues
       const { dagExport } = await import('../lib/ipfs.factory.js');
@@ -263,11 +265,40 @@ export class S2SRecordsTab extends HTMLElement {
       console.log('[filecoin] exported tree from Kubo:', rootCid, `(${carBytes.length} bytes)`);
 
       // Upload the CAR to Filecoin
-      const result = await fc.uploadTree(carBytes);
-      console.log('[filecoin] tree uploaded to Filecoin:', result.rootCid, result.pieceCid);
+      const result = await this.storage.uploadTree(carBytes, [publicationAddress].filter(Boolean), kind);
+      console.log('[filecoin] tree uploaded to Filecoin:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
     } catch (err) {
       console.warn('[filecoin] uploadTree failed (non-fatal):', err);
     }
+  }
+
+  private async loadStorage() {
+    this.loadingStorage = true;
+    this.render();
+
+    const safeAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
+    if (!safeAddress) {
+      console.warn('[filecoin] no publication address — skipping storage listing');
+      this.loadingStorage = false;
+      this.render();
+      return;
+    }
+
+    try {
+      this.storageItems = await this.storage.listPublicationStorage(safeAddress);
+      console.log('[filecoin] storage items:', this.storageItems.length);
+    } catch (err) {
+      console.warn('[filecoin] loadStorage failed:', err);
+      this.storageItems = [];
+    }
+
+    this.loadingStorage = false;
+    this.render();
+  }
+
+  private renderStorageLink(url: string | null, label: string, icon: string): string {
+    if (!url) return `<span class="storage-link-unattributed">—</span>`;
+    return `<a class="storage-link" href="${url}" target="_blank" rel="noopener" title="${label}">${icon} ${label}</a>`;
   }
 
   private showNotification(message: string, type: 'success' | 'error') {
@@ -322,6 +353,17 @@ export class S2SRecordsTab extends HTMLElement {
           text-align: center;
           padding: 3rem;
           color: #6b7280;
+        }
+
+        .storage-link {
+          color: var(--blue-400);
+          text-decoration: none;
+          font-size: 0.75rem;
+          &:hover { text-decoration: underline; }
+        }
+        .storage-link-unattributed {
+          color: var(--gray-600);
+          font-size: 0.75rem;
         }
       </style>
 
@@ -386,6 +428,40 @@ export class S2SRecordsTab extends HTMLElement {
 
           <button class="button" data-action="update">Update Config</button>
         </div>
+
+        <div class="section">
+          <div class="list_header">
+            <h2 class="section-title">Filecoin Storage</h2>
+            ${this.loadingStorage ? `<span class="refreshing-badge">Loading…</span>` : ''}
+          </div>
+
+          <div class="table">
+            <div class="table-header">CIDs</div>
+            <div class="table-header">Provider</div>
+            <div class="table-header">Status</div>
+
+            ${this.storageItems.length === 0 ? `\n                <div class="empty-state" style="grid-column: 1/-1">
+                  <p>Click "Load Storage" to list your Filecoin pieces</p>
+                </div>\n              ` : this.storageItems.map(item => `
+                <div class="table-row">
+                  <div class="table-cell" style="font-size: 0.75rem; font-family: monospace; color: var(--gray-500);">
+                    ${item.rootCid ? `<a class="storage-link" href="https://ipfs.transport-union.dev/ipfs/${item.rootCid}" target="_blank" rel="noopener">🌐 ${item.rootCid.slice(0, 12)}…</a>` : '—'}
+                    <br>
+                    <span style="color: var(--gray-600);">${item.pieceCid ? item.pieceCid.slice(0, 12) + '…' : '—'}</span>
+                  </div>
+                  <div class="table-cell" style="font-size: 0.8rem;">
+                    ${item.provider}<br>
+                    <span style="font-size: 0.7rem; color: var(--gray-600);">${item.attributed ? '✓ attributed' : '○ unattributed'}</span>
+                  </div>
+                  <div class="table-cell" style="font-size: 0.75rem;">
+                    <a class="storage-link" href="https://filfox.info/en/message/${item.dataSetId}" target="_blank" rel="noopener">🔗 Filfox</a>
+                  </div>
+                </div>
+              `).join('')}
+          </div>
+
+          <button class="button button-secondary" data-action="load-storage">${this.loadingStorage ? 'Loading…' : 'Load Storage'}</button>
+        </div>
       `}
     `;
 
@@ -412,6 +488,8 @@ export class S2SRecordsTab extends HTMLElement {
           this.cancelEdit();
         } else if (action === 'update') {
           this.updateConfig();
+        } else if (action === 'load-storage') {
+          this.loadStorage();
         }
       });
     });
