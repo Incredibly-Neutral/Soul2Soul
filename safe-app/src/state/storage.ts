@@ -4,6 +4,7 @@ const RECORDS_STORAGE_KEY = 'records';
 const DEALS_STORAGE_KEY = 'deals';
 const ROOT_STORAGE_KEY = 'root';
 const OFFERS_STORAGE_KEY = 'offers';
+const PIECES_STORAGE_KEY = 'pieces';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -91,5 +92,31 @@ export function saveOffersToStorage(deals: DealMap | null): void {
     }
   } catch (e) {
     console.warn('Failed to save offers to localStorage:', e);
+  }
+}
+
+export function loadPiecesFromStorage<T>(): T[] | null {
+  try {
+    const stored = localStorage.getItem(PIECES_STORAGE_KEY);
+    if (stored) return JSON.parse(stored, (_k, v) =>
+      typeof v === 'string' && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v
+    );
+  } catch (e) {
+    console.warn('Failed to load pieces from localStorage:', e);
+  }
+  return null;
+}
+
+export function savePiecesToStorage<T>(pieces: T[] | null): void {
+  try {
+    if (pieces === null) {
+      localStorage.removeItem(PIECES_STORAGE_KEY);
+    } else {
+      localStorage.setItem(PIECES_STORAGE_KEY, JSON.stringify(pieces, (_k, v) =>
+        typeof v === 'bigint' ? v.toString() + 'n' : v
+      ));
+    }
+  } catch (e) {
+    console.warn('Failed to save pieces to localStorage:', e);
   }
 }

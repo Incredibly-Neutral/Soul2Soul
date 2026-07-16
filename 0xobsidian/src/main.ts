@@ -1,8 +1,9 @@
-import { Plugin, SettingTab, Notice } from "obsidian";
+import { Plugin, SettingTab, Notice, ItemView, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS, IOxOSettings, OxOAuthorsTab } from "./settings.js";
 import { IMainController, MainController } from "./main.ctrlr.js";
 import { IOXOUser } from "./user/user.js";
 import { probeKeystore, KeystoreProbe } from "./keystore/keystore.js";
+import { FilecoinStorageView, FILECOIN_VIEW_TYPE } from "./filecoin/filecoin.view.js";
 
 // Use Node.js require to access native modules
 const { Buffer } = require("buffer");
@@ -41,6 +42,22 @@ export default class OxO extends Plugin {
     this.addSettingTab(this.authorsTab);
     this.ctrlr = new MainController(this);
     await this.ctrlr.init()
+
+    // ── Filecoin storage view ─────────────────────────────────
+    this.registerView(
+      FILECOIN_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => new FilecoinStorageView(leaf, this.ctrlr),
+    );
+
+    this.addRibbonIcon("hard-drive", "Filecoin Storage", async () => {
+      const { workspace } = this.app;
+      let leaf = workspace.getLeavesOfType(FILECOIN_VIEW_TYPE).first();
+      if (!leaf) {
+        leaf = workspace.getRightLeaf(false) ?? undefined;
+        if (leaf) await leaf.setViewState({ type: FILECOIN_VIEW_TYPE, active: true });
+      }
+      workspace.revealLeaf(leaf!);
+    });
   }
 
   onunload() {}

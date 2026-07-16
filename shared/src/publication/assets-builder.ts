@@ -143,7 +143,7 @@ export class AssetsBuilder {
     contractAddress: string,
     configCid?: string,
   ): Promise<{ cid: string }> {
-    console.log("Processing assets...");
+    // console.log("Processing assets...");
 
     // Fetch existing config to get the old assetsCid
     let existingAssetsCid: string | undefined;
@@ -196,7 +196,7 @@ export class AssetsBuilder {
 
     const tempDirName = `safe-app-${Date.now()}`;
     const tmpPath = await this.ipfs.prepareTempMfs("", tempDirName);
-    console.log(`Created temp MFS dir: ${tmpPath}`);
+    // console.log(`Created temp MFS dir: ${tmpPath}`);
 
     const mkdirRes = await this.ipfs.kuboPost(
       `/api/v0/files/mkdir?arg=${encodeURIComponent(tmpPath)}&parents=true`,
@@ -214,9 +214,9 @@ export class AssetsBuilder {
     for (const [name, cid] of existingCids) {
       if (SYNC_BY_FILENAME.has(name) && githubTopLevel.has(name)) {
         childMaps.set(name, await this.getDirChildren(cid));
-        console.log(
-          `Preloaded ${childMaps.get(name)!.size} existing files for: ${name}`,
-        );
+        // console.log(
+        //   `Preloaded ${childMaps.get(name)!.size} existing files for: ${name}`,
+        // );
       }
     }
 
@@ -224,7 +224,7 @@ export class AssetsBuilder {
     const restoredWhole: Set<string> = new Set();
     for (const [name, cid] of existingCids) {
       if (!githubTopLevel.has(name)) {
-        console.log(`✗ removed (not in GitHub): ${name}`);
+        // console.log(`✗ removed (not in GitHub): ${name}`);
         continue;
       }
       if (SYNC_BY_FILENAME.has(name) || ALWAYS_SYNC_FROM_GITHUB.has(name)) {
@@ -233,7 +233,7 @@ export class AssetsBuilder {
       const destPath = `${tmpPath}/${name}`;
       const ok = await this.ipfs.mfsCp(cid, destPath);
       if (ok) {
-        console.log(`✓ restored whole dir from IPFS: ${name}`);
+        // console.log(`✓ restored whole dir from IPFS: ${name}`);
         restoredWhole.add(name);
       } else {
         console.error(`Failed cp from IPFS: ${name}`);
@@ -274,7 +274,7 @@ export class AssetsBuilder {
         if (existingFileCid) {
           const ok = await this.ipfs.mfsCp(existingFileCid, cpPath);
           if (ok) {
-            console.log(`✓ restored file from IPFS: ${relativePath}`);
+            // console.log(`✓ restored file from IPFS: ${relativePath}`);
             continue;
           }
           const fallback = await this.ipfs
@@ -291,7 +291,7 @@ export class AssetsBuilder {
       }
 
       // Otherwise fetch from GitHub
-      console.log(`Fetching from GitHub: ${relativePath}`);
+      // console.log(`Fetching from GitHub: ${relativePath}`);
       const assetBlob = await this.fetchGitHubBlob(asset.download_url);
 
       const cid = await this.ipfs.addToKubo(assetBlob, assetName);
@@ -304,12 +304,12 @@ export class AssetsBuilder {
       if (!cpRes.ok) {
         const text = await cpRes.text();
         if (text.includes("already has entry")) {
-          console.log(`✓ skip (exists): ${relativePath}`);
+          // console.log(`✓ skip (exists): ${relativePath}`);
         } else {
           console.error(`Failed cp: ${relativePath}`, text);
         }
       } else {
-        console.log(`✓ synced from GitHub: ${relativePath}`);
+        // console.log(`✓ synced from GitHub: ${relativePath}`);
       }
     }
 

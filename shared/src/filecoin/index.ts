@@ -28,11 +28,17 @@
  *   uploadJson(data) returns { rootCid, pieceCid, size, complete, copies }
  */
 
-import { Synapse, mainnet, calibration, TOKENS } from "@filoz/synapse-sdk";
+import { Synapse, mainnet, calibration } from "@filoz/synapse-sdk";
+import type { EnhancedDataSetInfo, StorageInfo } from "@filoz/synapse-sdk";
+import { WarmStorageService } from "@filoz/synapse-sdk/warm-storage";
+import { METADATA_KEYS } from "@filoz/synapse-sdk";
+import { StorageContext } from "@filoz/synapse-sdk/storage";
 import * as SessionKey from "@filoz/synapse-core/session-key";
+import * as Piece from "@filoz/synapse-core/piece";
 import { privateKeyToAccount } from "viem/accounts";
 import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
+import { findPieceIdsByCid } from "@filoz/synapse-core/pdp-verifier";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
 import { CarReader } from "@ipld/car";
 import { CID } from "multiformats/cid";
@@ -117,12 +123,19 @@ export interface FilecoinCarBuilder {
 
 // ── Controller ──────────────────────────────────────────────────────
 
+/** Providers verified to support HTTP/2 + CORS (browser-usable).
+ *  Re-run protocol/scripts/filecoin/probe-providers.ts to refresh. */
+const BROWSER_USABLE_PROVIDERS = [1n, 13n, 15n, 16n, 29n, 30n, 32n];
+
 export class FilecoinStorage {
   private main: FilecoinUser;
   private synapse: any;
+  private warm: WarmStorageService | null = null;
   private builder: FilecoinCarBuilder | null = null;
   private initialized = false;
   private usingSessionKey = false;
+  walletAddress!: string;
+  sessionAddress!: string;
 
   constructor(main: FilecoinUser, builder?: FilecoinCarBuilder) {
     this.main = main;
@@ -134,11 +147,13 @@ export class FilecoinStorage {
     const pk = this.main.user?.private_key;
     if (!pk) throw new Error("FilecoinStorage.init: no active user with a private key");
     const chainConfig = chain === "mainnet" ? mainnet : calibration;
+    const account = privateKeyToAccount(pk as Hex);
     this.synapse = Synapse.create({
-      account: privateKeyToAccount(pk as Hex),
+      account,
       source: "oxo-core",
       chain: chainConfig,
     });
+    this.warm = (this.synapse as any)._warmStorageService;
     this.initialized = true;
   }
 
@@ -189,9 +204,12 @@ export class FilecoinStorage {
 
     this.synapse = new Synapse({
       client,
-      sessionClient: sessionKey.client,
+      sessionClient: sessionKey.client as any,
       source: "oxo-core",
     });
+    this.walletAddress = skData.rootAddress;        // ← the payer/client address
+    this.sessionAddress = skData.sessionAddress; 
+    this.warm = (this.synapse as any)._warmStorageService;
     this.initialized = true;
     this.usingSessionKey = true;
     console.log("[filecoin] Initialised with session key → root:", skData.rootAddress);
@@ -202,7 +220,7 @@ export class FilecoinStorage {
    * The CAR bytes should be from Kubo (dag/export) or built with
    * the same unixfs-v1-2025 profile for CID match.
    */
-  async uploadTree(carBytes: Uint8Array): Promise<FilecoinUploadResult> {
+  async uploadTree(carBytes: Uint8Array, owners: string[] = [], kind: string = ''): Promise<FilecoinUploadResult> {
     this.ensureInit();
     if (!this.builder) throw new Error("FilecoinStorage: no CAR builder configured");
 
@@ -215,7 +233,13 @@ export class FilecoinStorage {
       carBytes,
       rootCid as any,
       noopLogger as any,
-      { excludeProviderIds: [1n, 7n, 5n] },  // infrafolio-mainnet-pdp: only accepts HTTP/1.1, ALPN handshake fails
+      {
+        providerIds: BROWSER_USABLE_PROVIDERS,
+        pieceMetadata: {
+          attributedTo: JSON.stringify(owners.filter(Boolean)),
+          ...(kind ? { kind } : {}),
+        },
+      },
     );
     return {
       rootCid,
@@ -230,6 +254,49 @@ export class FilecoinStorage {
           dealId: c.dataSetId?.toString(),
         })) ?? [],
     };
+  }
+
+  /**
+   * Upload CAR bytes to Filecoin, skipping if the PieceCID already exists
+   * in the given dataset. Computes the PieceCID locally (no RPC needed)
+   * and checks the PDP verifier contract before uploading.
+   *
+   * @returns Normal upload result on first upload, or skipped=true if already stored.
+   */
+  async uploadIfNew(
+    carBytes: Uint8Array,
+    dataSetId: bigint,
+    attributedTo: string,
+  ): Promise<FilecoinUploadResult & { skipped: boolean; pieceId?: bigint }> {
+    this.ensureInit();
+    const parsedCid = await Piece.calculate(carBytes);
+
+    // Check PDP verifier — does this PieceCID already exist in the dataset?
+    const existing = await findPieceIdsByCid(this.synapse.client, {
+      dataSetId,
+      pieceCid: parsedCid,
+      startPieceId: 0n,
+      limit: 1n,
+    });
+
+    if (existing && existing.length > 0) {
+      console.log(`[filecoin] piece already stored (pieceId ${existing[0]}), skipping upload`);
+      return {
+        pieceCid: parsedCid.toString(),
+        rootCid: "",
+        size: parsedCid.size,
+        complete: true,
+        copyCount: 0,
+        failedCount: 0,
+        copies: [],
+        skipped: true,
+        pieceId: existing[0],
+      };
+    }
+
+    // Not there — upload as normal
+    const result = await this.uploadTree(carBytes, attributedTo ? [attributedTo] : []);
+    return { ...result, skipped: false };
   }
 
   /**
@@ -249,8 +316,11 @@ export class FilecoinStorage {
    * Upload JSON to Filecoin. Builds a CAR (unixfs-v1-2025 profile),
    * gets the Root CID (IPFS-compatible), uploads to Filecoin SPs,
    * and returns both the Root CID and PieceCID.
+   * 
+   * @param data - The JSON data to upload
+   * @param attributedTo - Identifier for attribution (e.g. publication address, uploader identity)
    */
-  async uploadJson(data: unknown): Promise<FilecoinUploadResult> {
+  async uploadJson(data: unknown, owners: string[] = [], kind: string = ''): Promise<FilecoinUploadResult> {
     this.ensureInit();
     if (!this.builder) throw new Error("FilecoinStorage: no CAR builder configured");
 
@@ -267,7 +337,13 @@ export class FilecoinStorage {
       carBytes,
       rootCid as any,   // uploadToSynapse expects CID type from multiformats
       noopLogger as any,
-      { excludeProviderIds: [7n, 5n] },  // infrafolio-mainnet-pdp: only accepts HTTP/1.1, ALPN handshake fails
+      {
+        providerIds: BROWSER_USABLE_PROVIDERS,
+        pieceMetadata: {
+          attributedTo: JSON.stringify(owners.filter(Boolean)),
+          ...(kind ? { kind } : {}),
+        },
+      },
     );
     return {
       rootCid,
@@ -303,7 +379,354 @@ export class FilecoinStorage {
     }
   }
 
-  // ── Internals ───────────────────────────────────────────────────
+  /**
+   * List all Filecoin pieces across all datasets that belong to `root`
+   * and are attributed to `attributedTo` (publication address).
+   *
+   * The 5 pre-existing datasets were created by the author/plugin with
+   * `metadata: { source: "oxo-core" }` only — they are shared and
+   * attributed at the *piece* level via `pieceMetadata`.
+   *
+   * Pieces uploaded before this change are returned unattributed.
+   */
+  async listPublicationStorage(attributedTo: string): Promise<Array<{
+    pieceCid: string;
+    pieceId: string;
+    rootCid: string | null;
+    dataSetId: string;
+    provider: string;
+    attributed: boolean;
+    size: number;
+    metadata: Record<string, string>;
+    pdpEndEpoch: bigint | null;
+    isLive: boolean;
+    dataSetMetadata: Record<string, string>;
+    scheduledForRemoval: boolean;
+  }>> {
+    this.ensureInit();
+    if (!this.warm) throw new Error("FilecoinStorage: warm storage service not initialised");
+
+    const storage = this.synapse.storage as any;
+    const dataSets = await this.findDataSets("root");
+    const items: Array<{
+      pieceCid: string;
+      pieceId: string;
+      rootCid: string | null;
+      dataSetId: string;
+      provider: string;
+      attributed: boolean;
+      size: number;
+      metadata: Record<string, string>;
+      pdpEndEpoch: bigint | null;
+      isLive: boolean;
+      dataSetMetadata: Record<string, string>;
+      scheduledForRemoval: boolean;
+    }> = [];
+
+    for (const ds of dataSets) {
+      const dataSetId = ds.dataSetId ?? (ds as any).id;
+      if (!dataSetId) continue;
+
+      let ctx;
+      try {
+        ctx = await storage.createContext({ dataSetId });
+      } catch (e) {
+        console.warn(`[storage] skip dataset ${dataSetId}: context resolve failed`, e);
+        continue;
+      }
+
+      const provider = ds.providerId?.toString() ?? "unknown";
+      const pdpEndEpoch = ds.pdpEndEpoch ?? null;
+      const isLive = ds.isLive ?? false;
+      const dataSetMetadata = ds.metadata ?? {};
+
+      // Fetch scheduled removals once per dataset — pieces whose deletion
+      // has been initiated but not yet executed.
+      let scheduledRemovals: readonly bigint[] = [];
+      try {
+        scheduledRemovals = await ctx.getScheduledRemovals();
+      } catch (e) {
+        // Non-fatal — some contexts may not support it
+      }
+      for await (const piece of ctx.getPieces()) {
+        try {
+          // Full metadata object
+          const metadata = await this.warm.getPieceMetadata({
+            dataSetId,
+            pieceId: piece.pieceId,
+          });
+
+          // Size from PieceCID parsing (no RPC call)
+          let size = 0;
+          try {
+            const parsed = Piece.from(piece.pieceCid);
+            size = parsed.size;
+          } catch {
+            // CID might not be parseable as PieceCID
+          }
+
+          const pieceCid = piece.pieceCid?.toString() ?? "";
+          const attributed = metadata?.attributedTo ?? null;
+
+          items.push({
+            pieceCid,
+            pieceId: piece.pieceId.toString(),
+            rootCid: metadata?.[METADATA_KEYS.IPFS_ROOT_CID] ?? null,
+            dataSetId: dataSetId.toString(),
+            provider,
+            attributed: Boolean(attributed),
+            size,
+            metadata: metadata ?? {},
+            pdpEndEpoch,
+            isLive,
+            dataSetMetadata,
+            scheduledForRemoval: scheduledRemovals.includes(piece.pieceId),
+          });
+        } catch (e) {
+          console.warn(`[storage] skip piece ${piece.pieceId} in dataset ${dataSetId}:`, e);
+          continue;
+        }
+      }
+    }
+
+    console.log("[storage] pieces:", items.length);
+    return items;
+  }
+
+  /**
+   * List pieces attributed to a given identity (publication address or author DID).
+   * Checks the `attributedTo` metadata field (a JSON stringified array) and
+   * returns only pieces whose owners includes `identity`.
+   */
+  async listStorageFor(identity: string): Promise<Array<{
+    pieceCid: string | undefined;
+    pieceId: bigint;
+    rootCid: string | null;
+    kind: string | null;
+    owners: string[];
+    dataSetId: string;
+    provider: string | undefined;
+  }>> {
+    this.ensureInit();
+    if (!this.warm) throw new Error("FilecoinStorage: warm storage service not initialised");
+    const storage = this.synapse.storage as any;
+    const dataSets = await this.findDataSets("root");
+    const items: Array<{
+      pieceCid: string | undefined;
+      pieceId: bigint;
+      rootCid: string | null;
+      kind: string | null;
+      owners: string[];
+      dataSetId: string;
+      provider: string | undefined;
+    }> = [];
+
+    for (const ds of dataSets) {
+      const dataSetId = ds.dataSetId ?? (ds as any).id;
+      if (!dataSetId) continue;
+
+      let ctx;
+      try {
+        ctx = await storage.createContext({ dataSetId });
+      } catch (e) {
+        console.warn(`[storage] skip dataset ${dataSetId}: context resolve failed`, e);
+        continue;
+      }
+
+      for await (const piece of ctx.getPieces()) {
+        try {
+          // Read attributedTo — JSON stringified array of owner addresses/DIDs
+          const rawAttributed = await this.warm.getPieceMetadataByKey({
+            dataSetId,
+            pieceId: piece.pieceId,
+            key: "attributedTo",
+          });
+          const owners: string[] = rawAttributed ? JSON.parse(rawAttributed) : [];
+          if (!owners.includes(identity)) continue;
+
+          // Optional — read kind and rootCid for the row display
+          const kind = await this.warm.getPieceMetadataByKey({
+            dataSetId,
+            pieceId: piece.pieceId,
+            key: "kind",
+          });
+          const rootCid = await this.warm.getPieceMetadataByKey({
+            dataSetId,
+            pieceId: piece.pieceId,
+            key: METADATA_KEYS.IPFS_ROOT_CID,
+          });
+
+          items.push({
+            pieceCid: piece.pieceCid?.toString(),
+            pieceId: piece.pieceId,
+            rootCid,
+            kind,
+            owners,
+            dataSetId: dataSetId.toString(),
+            provider: ds.providerId?.toString(),
+          });
+        } catch (e) {
+          console.warn(`[storage] skip piece ${piece.pieceId} in ${dataSetId}:`, e);
+          continue;
+        }
+      }
+    }
+
+    return items;
+  }
+
+  /**
+   * Delete a piece from a dataset permanently.
+   * Cannot be undone.
+   */
+  async deletePiece(dataSetId: bigint, pieceId: bigint): Promise<`0x${string}`> {
+    this.ensureInit();
+    const storage = this.synapse.storage as any;
+    const ctx = await storage.createContext({ dataSetId });
+    return await ctx.deletePiece({ piece: pieceId });
+  }
+
+  /**
+   * Query Filecoin for all datasets attached to the account
+   * @returns Array of dataset info objects
+   */
+   async findDataSets(which: "root" | "session" = "root"): Promise<any[]> {
+    this.ensureInit();
+    const address = which === "session" ? this.sessionAddress : this.walletAddress;
+    if (!address) throw new Error(`findDataSets: no ${which} address available`);
+    const storage = this.synapse.storage as any;
+    return await storage.findDataSets({ address });
+  }
+
+  /**
+   * Get storage pricing info — cost per TiB/month, providers, etc.
+   */
+  async getStorageInfo(): Promise<StorageInfo> {
+    this.ensureInit();
+    return await (this.synapse.storage as any).getStorageInfo();
+  }
+
+  /**
+   * List all datasets for the current wallet with piece counts and metadata.
+   */
+  async getPublicationDataSets(): Promise<Array<{
+    dataSetId: string;
+    provider: string;
+    pieceCount: number;
+    pdpEndEpoch: bigint | null;
+    isLive: boolean;
+    metadata: Record<string, string>;
+  }>> {
+    this.ensureInit();
+    const storage = this.synapse.storage as any;
+    const dataSets = await this.findDataSets("root");
+    const result: Array<{
+      dataSetId: string;
+      provider: string;
+      pieceCount: number;
+      pdpEndEpoch: bigint | null;
+      isLive: boolean;
+      metadata: Record<string, string>;
+    }> = [];
+
+    for (const ds of dataSets) {
+      const dataSetId = ds.dataSetId ?? (ds as any).id;
+      if (!dataSetId) continue;
+
+      let ctx;
+      try {
+        ctx = await storage.createContext({ dataSetId });
+      } catch (e) {
+        console.warn(`[storage] skip dataset ${dataSetId}: context resolve failed`, e);
+        continue;
+      }
+
+      // Count pieces in this dataset
+      let pieceCount = 0;
+      try {
+        for await (const _ of ctx.getPieces()) {
+          pieceCount++;
+        }
+      } catch (e) {
+        console.warn(`[storage] failed to count pieces in dataset ${dataSetId}:`, e);
+      }
+
+      result.push({
+        dataSetId: dataSetId.toString(),
+        provider: ds.providerId?.toString() ?? "unknown",
+        pieceCount,
+        pdpEndEpoch: ds.pdpEndEpoch ?? null,
+        isLive: ds.isLive ?? false,
+        metadata: ds.metadata ?? {},
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Terminate a dataset's service. After termination the provider stops
+   * proving for this dataset and pdpEndEpoch becomes non-zero.
+   *
+   * @param dataSetId - The dataset to terminate
+   * @param onSubmitted - Optional callback fired when the tx is submitted
+   * @returns The termination result including serviceTerminationEpoch
+   */
+  async terminateDataSet(
+    dataSetId: bigint,
+    onSubmitted?: (txHash: `0x${string}`) => void,
+  ): Promise<{ serviceTerminationEpoch: bigint | null; txHash: `0x${string}` }> {
+    this.ensureInit();
+    const storage = this.synapse.storage as any;
+    const result = await storage.terminateService({
+      dataSetId,
+      onSubmitted: onSubmitted
+        ? (tx: any) => onSubmitted(tx.hash ?? tx.transactionHash ?? tx)
+        : undefined,
+    });
+    return {
+      serviceTerminationEpoch: result.serviceTerminationEpoch ?? null,
+      txHash: result.txHash ?? result.hash ?? "0x",
+    };
+  }
+
+  /**
+   * Estimate monthly recurring cost across one or more datasets, based on
+   * the published Filecoin Onchain Cloud pricing.
+   *
+   * Storage cost:   $2.50 / TiB / month  (charged per copy per piece)
+   * Proving fee:    $0.024 / dataset / month
+   *
+   * Pass an empty or nullish array for a single-dataset estimate from raw bytes.
+   */
+  static estimateMonthlyCost(bytes: bigint | number, datasetCount: number): { storage: number; proving: number; total: number } {
+    const TIB = 1024 ** 4; // 1,099,511,627,776
+    const STORAGE_PRICE_PER_TIB = 2.5;
+    const PROVING_FEE = 0.024;
+
+    const tiB = Number(bytes) / TIB;
+    const storage = tiB * STORAGE_PRICE_PER_TIB;
+    const proving = datasetCount * PROVING_FEE;
+
+    return {
+      storage: Math.round(storage * 10000) / 10000,
+      proving: Math.round(proving * 10000) / 10000,
+      total: Math.round((storage + proving) * 10000) / 10000,
+    };
+  }
+
+  /**
+   * Same as estimateMonthlyCost but reads total bytes from the pieces data.
+   * Pass the list of pieces returned by listPublicationStorage.
+   */
+  static estimateMonthlyCostFromPieces(
+    pieces: Array<{ size: number; dataSetId: string }>,
+  ): { storage: number; proving: number; total: number; totalBytes: number; datasetCount: number } {
+    const totalBytes = pieces.reduce((s, p) => s + p.size, 0);
+    const datasetCount = new Set(pieces.map(p => p.dataSetId)).size;
+    const cost = FilecoinStorage.estimateMonthlyCost(totalBytes, datasetCount);
+    return { ...cost, totalBytes, datasetCount };
+  }
 
   private ensureInit(): void {
     if (!this.initialized) throw new Error("FilecoinStorage not initialised — call .init() or .initWithSessionKey() first");

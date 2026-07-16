@@ -14,6 +14,8 @@
     "filecoin:setup-payment": "tsx ./scripts/filecoin/setup-payment.ts",
     "filecoin:check-status": "tsx ./scripts/filecoin/check-status.ts",
     "filecoin:fund-account": "tsx ./scripts/filecoin/fund-account.ts",
+    "filecoin:terminate-datasets": "tsx ./scripts/filecoin/terminate-datasets.ts",
+    "filecoin:storage-info": "tsx ./scripts/filecoin/storage-info.ts",
     "protocol:update": "tsx ./scripts/lit/update-protocol.ts"
   },
   "devDependencies": {
