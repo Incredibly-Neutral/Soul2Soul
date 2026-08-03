@@ -81,7 +81,6 @@ export class SafeIntegration {
             
           } else if ( name === "S2S Publication Module V2" ) {
 
-            console.log("gots it");
             // Create full contract instance with complete ABI
             this.publicationModule = new window.ethers.Contract(
               moduleAddress,
@@ -223,8 +222,8 @@ export class SafeIntegration {
   }
 
   async getAllDealsAndOffers(): Promise<{
-    deals: Array<{ genesis: string; author: string; cid: string; status: 'deal' }>;
-    offers: Array<{ genesis: string; author: string; cid: string; status: 'offer' }>;
+    deals: Array<{ genesis: string; author: string; cid: string; timestamp: bigint; status: 'deal' }>;
+    offers: Array<{ genesis: string; author: string; cid: string; timestamp: bigint; status: 'offer' }>;
   }> {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
     try {
@@ -233,10 +232,10 @@ export class SafeIntegration {
         this.publicationModule.getOffers(0, 200),
       ]);
       const deals = rawDeals.map((e: any) => ({
-        genesis: e.genesis, author: e.author, cid: e.cid, status: 'deal' as const,
+        genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp, status: 'deal' as const,
       }));
       const offers = rawOffers.map((e: any) => ({
-        genesis: e.genesis, author: e.author, cid: e.cid, status: 'offer' as const,
+        genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp, status: 'offer' as const,
       }));
       return { deals, offers };
     } catch (error) {

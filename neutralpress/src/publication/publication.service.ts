@@ -88,10 +88,6 @@ export class PublicationService implements IPublicationSrv{
 	
 
 	async makeOffer(genesis: string, cid: string) {
-
-		console.log("PM", this.publicationModule)
-
-
 	  return await this.main.oxo.ctrlr.account[L2].genericTx(
 	    this.publicationModule,
 	    JSON.stringify(S2SPublicationModuleV2),

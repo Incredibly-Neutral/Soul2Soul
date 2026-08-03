@@ -1,5 +1,7 @@
 # SPEC-contracts-publication
 
+> **Audited against live code:** 2026-08-03.
+>
 > Per-publication on-chain layer: the two Safe modules. Read **SPEC-00** first. Sibling:
 > **SPEC-contracts-ens** (the protocol-wide naming/resolution layer). Pairs with
 > **SPEC-protocol-actions** (the actions gate against these modules). Follows SPEC-00 §7.
@@ -44,7 +46,7 @@ pointer, or resolution — that is SPEC-contracts-ens.
 
 ### C1 — `S2SPublicationModuleV2` (UUPS upgradeable proxy)
 
-**State (INV-3 — append-only, DO NOT REORDER):** `whitelisted_authors[]`, `whitelisted_devs[]` (caps: 100 authors, 20 devs). Single append log `entries[]` of `Entry { genesis: bytes32, author: address, cid: string, timestamp: uint256 }`. Caps: 100 authors, 20 devs.
+**State (INV-3 — append-only, DO NOT REORDER existing storage slots):** in declaration order — `safe` (address); `versions` (`mapping(bytes32 genesis => Version[])`, `Version { string cid; uint256 timestamp; bool tombstone }`); `genesisAuthor` (`genesis => address`); `latestIndex` (`genesis => uint256`); `whitelisted_authors[]`, `whitelisted_devs[]` (caps 100/20); deal set `_isDeal` / `dealList` / `dealPos` / `dealAt`; offer set `_isOffer` / `offerList` / `offerPos` / `offerAt`. `Entry { genesis, author, cid, timestamp }` is a **read-return struct only** (assembled by `getDeals` / `getOffers` / `getLatest` from `versions[genesis][latestIndex]` + `genesisAuthor`), **not a stored array** — there is no `entries[]`.
 
 **Write API + access control (precise — refines INV-10):**
 
@@ -53,8 +55,8 @@ pointer, or resolution — that is SPEC-contracts-ens.
 | `whitelistAuthor/removeWhitelistedAuthor` | `onlySafe` | manage author whitelist |
 | `whitelistDev/removeWhitelistedDev` | `onlySafe` | manage dev whitelist |
 | `makeOffer(genesis, cid)` | **anyone** | whitelisted/safe → appends immediately as **deal**; else → appends as **pending offer** |
-| `acceptOffer(genesis)` | `onlySafe` | demotes an offer → deal |
-| `retract(genesis)` | **safe ∨ dealAuthor** | asymmetric: author withdraws fully; safe demotes deal→offer or rejects offer |
+| `acceptOffer(genesis)` | `onlySafe` | promotes a pending offer → deal |
+| `retract(genesis)` | **safe ∨ genesisAuthor** | asymmetric: the genesis author withdraws fully (deals + offers); safe demotes deal→offer or rejects an offer |
 | `_authorizeUpgrade` | `onlySafe` | UUPS upgrade |
 
 **Read API (the gate the actions depend on):** `canPublish(addr)` → safe ∨ whitelisted dev ∨ whitelisted author; `hasDeal(genesis)` → bool; `hasOffer(genesis)` → bool; `getDeals(offset, limit)` → `Entry[]`; `getOffers(offset, limit)` → `Entry[]`; `authorOf(genesis)` → address. These back `canPublish`/`canRead` in `libs/gates.ts`.
@@ -63,7 +65,7 @@ pointer, or resolution — that is SPEC-contracts-ens.
 
 **NAME():** `"S2S Publication Module V2"` (was `"S2S Publication Module"` in V1 — both accepted for backwards-compatible discovery).
 
-**Gotchas:** `canPublish` has `// could be safe owners ???` — it checks the Safe *address*, so a Safe *owner* EOA does **not** pass; unresolved design Q. Whitelist removal ⇏ offer/retract. Factory deploys an `ERC1967Proxy` per Safe; `deployNewImplementation` retains version history. The old V1 license-state storage is gone — replaced by a single linear `entries[]` log indexed by `(offset, limit)`.
+**Gotchas:** `canPublish` has `// could be safe owners ???` — it checks the Safe *address*, so a Safe *owner* EOA does **not** pass; unresolved design Q. Whitelist removal ⇏ offer/retract. Factory deploys an `ERC1967Proxy` per Safe; `deployNewImplementation` retains version history. The old V1 license-state storage is gone — replaced by a **per-genesis** append log (`versions[genesis][]`) with a cached `latestIndex`, plus enumerable deal/offer sets (`dealList` / `offerList`) of genesis pointers. `(offset, limit)` paginates the deal/offer **sets**, not a global log; there is no single linear `entries[]` array.
 
 ### C2 — `S2SRecordsModule` (immutable; `NAME="S2S Records Module"`, `VERSION="1.1.0"`)
 
@@ -92,7 +94,7 @@ against.
 |---|---|---|
 | whitelist mgmt / acceptOffer / upgrade | ✓ | — |
 | `makeOffer` | — | **anyone** (creates pending offer unless whitelisted) |
-| `retract` | ✓ | the content's `dealAuthor` |
+| `retract` | ✓ | the content's `genesisAuthor` (set once on first append, never changes) |
 | records (config) writes | ✓ | — |
 
 ## Safe-to-change vs do-not-touch

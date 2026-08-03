@@ -11,7 +11,7 @@
         "refresh-key": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/refresh-key.ts",
         "update-protocol": "ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts",
         "deploy-action": "bash -c 'pnpm build-actions && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && ts-node --project ./tsconfig.json --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
-        "build-shared": "cd shared && tsc && cd ..",
+        "plugins": "pnpm -C shared run build && pnpm -C 0xobsidian run build && pnpm -C neutralpress run build",
         "test": "pnpm -r test",
         "lint": "eslint . --max-warnings 0",
         "lint:fix": "eslint . --fix",

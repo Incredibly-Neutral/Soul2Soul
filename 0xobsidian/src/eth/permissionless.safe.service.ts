@@ -544,7 +544,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
         });
       },
       getAddress() {
-        return self.signer.address;
+        return self.signer.address;  // EOA — the actual signer of the EIP-712 message
       },
     };
   }

@@ -38,12 +38,17 @@ export interface TypedDataSigner {
  * NOTE on EIP-712 shape: S2S_TYPES uses tagsHash/attributesHash (bytes32)
  * rather than the raw arrays. This function computes those hashes from
  * the tags/attributes fields on the public metadata before signing.
+ *
+ * @param author - explicit did:ethr for the author (e.g. the Safe address).
+ *                 When omitted, falls back to signer.getAddress() for compat.
+ *                 The proof.signer always records the actual signing key (EOA).
  */
 export async function buildSignedContentItem(
   pub: Omit<S2SPublicContent, 'author' | 'plaintextHash'>,
   body: S2SContentBody,
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
+  author?: DidEthr,
 ): Promise<S2SContentItem> {
   // 1. Canonicalize the body and compute plaintextHash
   const bodyJson = jcs(body);
@@ -51,10 +56,10 @@ export async function buildSignedContentItem(
 
   // 2. Compute tagsHash and attributesHash for EIP-712 (bytes32 fields)
   // 3. Build the signing view — matches S2S_TYPES exactly
-  const author = toDidEthr(signer.getAddress());
+  const authorAddr = author ?? toDidEthr(signer.getAddress());
   const publicPart: S2SPublicContent = {
     specVersion: pub.specVersion,
-    author,
+    author: authorAddr,
     postType: pub.postType,
     mediaType: pub.mediaType,
     parent: pub.parent,

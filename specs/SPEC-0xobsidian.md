@@ -1,5 +1,7 @@
 # SPEC-0xobsidian
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `0xobsidian/` — Obsidian plugin id **`oxo-core`**, the **author identity &
 > account** layer. Read **SPEC-00** first; types from **SPEC-shared**. It is the runtime dependency
 > of **SPEC-neutralpress** (which reads the active user/accounts from it). Follows SPEC-00 §7.

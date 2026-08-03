@@ -4,7 +4,7 @@ import {
   IFeeEstimator,
 } from "@safe-global/relay-kit";
 import { ethers } from "ethers";
-import { IMainController } from "src/main.ctrlr.js";
+import { IMainController } from "../main.ctrlr.js";
 import { getInternalTransactions } from "./eth_utils.js";
 
 export const sendTx = async (

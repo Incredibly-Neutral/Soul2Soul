@@ -1,5 +1,7 @@
 # Soul to Soul — System Contract (SPEC-00)
 
+> **Audited against live code:** 2026-08-03.
+>
 > **Audience:** an autonomous agent modifying an *isolated part* of this monorepo.
 > **Purpose:** the document you load *before* touching any single component. It tells you
 > what the rest of the system assumes about your part, which invariants a local edit can
@@ -79,7 +81,7 @@ any signing/decryption path must hold this model:
   things into one logical unit: the **PKP(s)** (wallets), the **permitted action CIDs**, and a
   scoped **usage key**. An action may use the key *iff its CID is in the Group's permitted set*.
   Deployed instance (`scripts/lit/config.json`): group `s2s`, `id: 14`, PKP
-  `0xddc4…b414`, usage key `9i8z…`, permitted actions `encrypt, prep, single, cbor, updateEvm`.
+  `0xddc4…b414`, usage key `9i8z…`, permitted actions `encrypt, prep, render, update`.
   The repo's `LIT_ACCOUNT_KEY` is the **master/admin** credential; the group's `usage_key` is the
   **scoped execution** credential. (Lit also exposes the on-chain Account contract, API Key
   Registry, and PKP Registry; the Group is the part this protocol manipulates.)
@@ -89,7 +91,7 @@ any signing/decryption path must hold this model:
 - `Lit.Actions.getPrivateKey({ pkpId })` — **CURRENT / correct for Chipotle.** The enclave
   derives the private key in-sandbox; the action signs directly with `ethers`.
 - `LitActions.signAndCombineEcdsa(...)` — **OLD threshold primitive (Datil/Naga). Removed.**
-  The commented block in `single/metadata.ts` is dead and is being deleted.
+  The commented block in `render/metadata.ts` is dead and is being deleted.
 
 **Footgun for editors:** because `getPrivateKey` materializes the raw key *inside* the action,
 an action must never log it, return it, or pass it outside the signing call. The security
@@ -118,12 +120,12 @@ client (neutralpress) ── signature over "lit actions auth"
 [PREP]    prep/main.ts        runtime: Bun runner (no signing)   → jobs[]
         │   reads: ENS→modules, config, Lens bodies
         ▼
-[SINGLE]  single/main.ts      runtime: Lit (PKP)                 → job.html (CID)
+[SINGLE]  render/main.ts      runtime: Lit (PKP)                 → job.html (CID)
         │   gate: canRead/canPublish (on-chain, Base)
         │   PKP: Lit.Actions.Decrypt
         │   sign: provenance JSON-LD (metadata.ts) ⚠ see GAP-1
         ▼
-[MERGED]  updateEvm/main.ts    runtime: Lit (PKP)                → new root CID
+[MERGED]  update/main.ts      runtime: Lit (PKP)                → new root CID
             builds IPFS MFS tree (delta pages + cp config.assetsCid → /assets),
             pins, evmWrite contenthash_wrapped  (only the PKP can perform this write)
 ```
@@ -153,7 +155,44 @@ So identical action source yields signed HTML on Lit and unsigned HTML in previe
 **IPFS endpoints (don't conflate):** the MERGED action builds the site tree on a **self-hosted Kubo
 node** (`ipfs.transport-union.dev`, MFS `files/*` + `pin/add`); **Pinata**
 (`neutralpress.mypinata.cloud`) is a separate pinning/CDN + path gateway used for action-code fetch
-and preview links. See OPEN-TASK-1 (subdomain gateway).
+and preview links. See §3.2 (storage tiers) and OPEN-TASK-1 (subdomain gateway).
+
+### 3.2 Storage tiers — Kubo canonical, Filecoin + Pinata durable
+
+Two distinct asset classes have **different** storage profiles. Do not treat storage as uniform.
+
+| Asset class | Canonical | Durability / availability backups | Who writes |
+|---|---|---|---|
+| **Content files** (encrypted/signed content items, publication config trees) | **Kubo** (`ipfs.transport-union.dev`) — the referenced CID | **Filecoin** (Synapse Onchain Cloud, warm storage) **and** **Pinata** pin | authoring side: `0xobsidian` `FilecoinController`, `neutralpress` (`uploadJson` / `uploadTree`, fire-and-forget after Kubo) |
+| **Rendered HTML** (site root + delta pages, the MERGED action output) | **Kubo** — quick view + the on-chain `contenthash_wrapped` pointer | **Pinata** gateway today; **Filecoin hot-storage IPFS gateway** planned (not yet implemented) | the `update` Lit action (`libs/ipfs.factory`, Kubo-only) |
+
+**CID parity is a hard invariant, not a nicety.** The Filecoin upload uses a CAR built with the
+`unixfs-v1-2025` profile so the **`rootCid` it returns equals the CID Kubo produces** for the same
+bytes; `neutralpress` asserts this parity and warns on mismatch. The Filecoin `pieceCid` is a
+*separate* identifier (for on-chain deal/PDP audit) — it is never the referenced identifier. So:
+**Kubo `rootCid` is always canonical**; Filecoin + Pinata are durability tiers over the same root.
+
+**Lit actions are Kubo-only.** `protocol/actions/src` has no Filecoin/Synapse/PieceCID code path —
+`libs/ipfs.factory` reads (`catFile`) and writes (`uploadFile`, MFS `files/*`, `pin/add`) exclusively
+against `ipfs.transport-union.dev`. Filecoin is an **authoring-side + management-side** concern, not
+a render-path concern. (Rationale: a Lit render must stay cheap and bounded; durability is staged
+asynchronously after the canonical Kubo write.)
+
+**Don't conflate "deal"** — the on-chain `deal`/`offer` in `S2SPublicationModuleV2` (§INV-append) is
+the **publishing-license** state machine, *not* a Filecoin storage deal. Filecoin deals are
+off-chain (Synapse/PDP verifier).
+
+**Payer model (current vs intended):** uploads to Filecoin are paid in **USDFC**. Today the
+**protocol acts as paymaster** via a funded root wallet + a session key
+(`FilecoinStorage.initWithSessionKey`, set up by `protocol/scripts/filecoin/setup-session-key.ts` /
+`setup-payment.ts`) — authors never touch USDFC. Intended: authors either **bring their own keys**
+or **buy a subscription from the protocol**. Either future path keeps the session-key paymaster as a
+fallback.
+
+**Pinata is currently doubled, may deprecate.** HTML availability today is Kubo (quick view) +
+Pinata gateway; the plan is to add **Filecoin hot-storage IPFS gateways** as a second
+real-availability path and *then* evaluate deprecating Pinata. Until the Filecoin gateway is live,
+Pinata stays — do not remove it.
 
 ---
 
@@ -163,19 +202,20 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 
 | ID | Invariant | Enforced across | Symptom if broken |
 |---|---|---|---|
-| **INV-1** | The auth message string is **exactly** `"lit actions auth"` everywhere it is signed or recovered. | client signer ↔ `libs/gates.ts` (`canRead`,`canPublish`) ↔ `single/main.ts` ↔ `updateEvm/main.ts` | signer recovers to wrong address → every gate fails → "cannot publish" |
-| **INV-append** | The append-log contract MUST gate every `append` to the genesis author (or permitted publication owners), verified against the `did:ethr` identity recorded in the genesis entry. This is the existing author/publication gate **extended to guard appends**, not only the initial publish. | append-log contract ↔ `resolveLatest`/`getHistory` (identity module) ↔ author EOA `buildSignedContentItem` | forgeable version history — anyone could append a new version to someone else's document |
-| **INV-2** | Config record **keys** match between writer and reader. Readers expect: `assets_gateway, data_gateway, ens_records, lens_app, lit_action_prep, lit_action_single, lit_action_cbor, lit_action_root_update, pkp_tokenId, pkp_publicKey, pkp_ethAddress`. | `shared/src/protocol/index.ts :: getRecords` ↔ whatever sets records (safe-app / scripts) | `getProtocolInfo` returns undefined fields → null PKP / missing action CIDs |
-| **INV-3** | `S2SPublicationModule` storage layout is append-only. Never reorder/insert existing slots. | the UUPS proxy + every future implementation | upgrade corrupts licenses/whitelist storage |
+| **INV-1** | The auth message string is **exactly** `"lit actions auth"` everywhere it is signed or recovered. | client signer ↔ `libs/gates.ts` (`canRead`,`canPublish`) ↔ `render/main.ts` ↔ `update/main.ts` | signer recovers to wrong address → every gate fails → "cannot publish" |
+| **INV-append** | The append-log contract (`S2SPublicationModuleV2`) MUST gate every `_append` to the genesis author (or `safe`), verified against the **genesis author address** recorded on first append — not a did:ethr string. On-chain identity is an `address` (`genesisAuthor[genesis]`, set by the first `canPublish` caller); subsequent appends require `msg.sender == genesisAuthor \|\| safe`. `did:ethr` is the **client-side** identity layer (`shared/src/identity`) that resolves to this address; the contract stores no did. This is the existing author/publication gate **extended to guard appends**, not only the initial publish. | `S2SPublicationModuleV2._append` ↔ `resolveLatest`/`getHistory` (identity module — **stubs**, see GAP-1) ↔ author EOA `buildSignedContentItem` | forgeable version history — anyone could append a new version to someone else's document |
+| **INV-2** | Config record **keys** match between writer and reader. Readers expect exactly: `data_gateway, ens_records, ens_registry, publication_factory, records_factory, pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update`. **Dropped** (must no longer be written or read): `assets_gateway, lens_app, pkp_tokenId, pkp_publicKey, lit_action_cbor, lit_action_single, lit_action_root_update`. **Renamed:** `lit_action_single`→`lit_action_render`, `lit_action_root_update`→`lit_action_update`. (Source of truth: `shared/src/protocol/index.ts` header comment + its `getRecords` call.) | `shared/src/protocol/index.ts :: getRecords` ↔ whatever sets records (safe-app / `protocol/scripts/lit/update-protocol.ts`) | `getProtocolInfo` returns undefined fields → null PKP / missing action CIDs |
+| **INV-3** | `S2SPublicationModuleV2` (C1) storage layout is append-only. Never reorder/insert existing storage slots — the per-genesis `versions` log, `genesisAuthor`/`latestIndex`, whitelists, and deal/offer sets (see SPEC-contracts-publication for the declaration-order slot list). | the UUPS proxy + every future implementation | upgrade corrupts the version log / author map / whitelist / deal-offer sets |
 | **INV-4** | Module discovery keys: `NAME()` must return exactly `"S2S Records Module"` / `"S2S Publication Module"`. | `getProtocolControllerAndModules`, neutralpress `getModuleAdresses` | modules not found → publication "missing config modules" |
-| **INV-5** | Provenance canonicalization in the verifier must replicate `metadata.ts` **byte-for-byte**, including its quirks (top-level-only key sort; `schemaCanonical + proofOptionsCanonical` concatenation; `keccak256(toUtf8Bytes(...))` digest). | `single/metadata.ts` ↔ any external verifier | signatures fail to verify; provenance unprovable. **Also see GAP-2 (nested keys not canonicalized).** |
-| **INV-6** | `contenthash_wrapped` round-trips between `toHexString` (write, `libs/evm.ts`) and `contenthashToIPFS` (read, `libs/ipfs.factory.ts`). The codec is **custom & non-standard**: `0x` + `e301` + base58-decoded **CIDv0** bytes — it omits the dag-pb `0x70` codec byte a standard ENS IPFS contenthash carries, and assumes a `Qm…` (base58) input. Internally consistent, but only the project's **own CCIP resolver/gateway** can resolve it. | `updateEvm/main.ts` ↔ `libs/evm.ts` ↔ `libs/ipfs.factory.ts` ↔ `ENSResolverWithCCIP`/`ccip_gateway` | site root unreadable; **and** because `toHexString` base58-decodes, emitting a CIDv1 root (OPEN-TASK-1) breaks the write — keep CIDv0 internally and let the gateway convert |
+| **INV-5** | Provenance canonicalization in the verifier must replicate `metadata.ts` **byte-for-byte**, including its quirks (top-level-only key sort; `schemaCanonical + proofOptionsCanonical` concatenation; `keccak256(toUtf8Bytes(...))` digest). | `render/metadata.ts` ↔ any external verifier | signatures fail to verify; provenance unprovable. **Also see GAP-2 (nested keys not canonicalized).** |
+| **INV-6** | `contenthash_wrapped` round-trips between `toHexString` (write, `libs/evm.ts`) and `contenthashToIPFS` (read, `libs/ipfs.factory.ts`). The codec is **custom & non-standard**: `0x` + `e301` + base58-decoded **CIDv0** bytes — it omits the dag-pb `0x70` codec byte a standard ENS IPFS contenthash carries, and assumes a `Qm…` (base58) input. Internally consistent, but only the project's **own CCIP resolver/gateway** can resolve it. | `update/main.ts` ↔ `libs/evm.ts` ↔ `libs/ipfs.factory.ts` ↔ `ENSResolverWithCCIP`/`ccip_gateway` | site root unreadable; **and** because `toHexString` base58-decodes, emitting a CIDv1 root (OPEN-TASK-1) breaks the write — keep CIDv0 internally and let the gateway convert. Codec consolidation: GAP-14 |
 | **INV-7** | Action source is runtime-agnostic: works under both the Bun shim (`Lit.Actions.*`, global `ethers@5`, **no signing**) and real Lit nodes. | `protocol/serverless` shim ↔ `protocol/actions/*` | preview passes, production fails (or vice-versa) on signing/decrypt steps |
 | **INV-8** | A redeployed action requires **two** on-chain updates that must stay in sync. **Canonical sequence:** `build-actions` (bundle → CID) → `swap-action.ts` (Lit **Group**: add new CID, remove old — INV-8b) → `update-protocol.ts` (records: `setRecord` the new CIDs — INV-8a/INV-2, **plus** the INV-12 `authorizeCaller`). `update-protocol` bundles all of this into **one Safe batch proposed to the protocol multisig** (not auto-executed — owners must confirm). | `swap-action.ts` (group) **and** `update-protocol.ts` (records + PKP auth) | **desync footgun:** records-only → orchestrator runs an unpermitted CID → enclave rejects; group-only → orchestrator still fetches the stale CID (also still permitted) → silently renders old code; proposal-not-executed → nothing changes |
-| **INV-9** | Chain assumptions: gates read `"BASE"`; provenance `verificationMethod` is `did:pkh:eip155:8453:<pkp>`. Both hardcode Base (8453). | `libs/gates.ts`, `libs/evm.ts`, `single/metadata.ts` | cross-chain deploys silently mis-attribute or mis-gate |
-| **INV-10** | Write authorization is **not** uniformly `onlySafe`. Records module: `onlySafe`. Publication module: whitelist mgmt / `acceptLicense` / upgrade = `onlySafe`, but `grantLicense` is **permissionless** (offer-or-direct) and `revokeLicense` is **safe ∨ licenseAuthor**. ENS records `setText` (site root) = `onlyAuthorized`. The neutral publisher writes the root via the **PKP**, never the Safe. | `S2SRecordsModule`, `S2SPublicationModule`, `ENSSubdomainRecordsContract`, `updateEvm` evmWrite | wrong assumption about who can call → reverts, or a security hole if loosened. See SPEC-contracts permissions matrix |
-| **INV-12** | The PKP's eth address must be an **`authorizedCaller`** on the ENS records contract (`ENSSubdomainRecordsContract`, Base), separate from the Lit group permission (INV-8). The grant is performed in **`update-protocol.ts`** (`authorizeCaller(pkp.ethAddress, true)`, in the same Safe batch as the record writes). Rotating the PKP requires re-running it. | `update-protocol.ts` ↔ `ENSSubdomainRecordsContract.authorizedCallers` ↔ `updateEvm` `setText` | publish-time `setText` reverts `"Not authorized"` even when the group permits the key — two independent grants gate a publish (INV-8 use-key, INV-12 write-root). **Note:** `update-protocol` writes only `pkp_ethAddress`; `pkp_tokenId`/`pkp_publicKey` are vestigial pre-Chipotle fields to be removed (GAP-11) |
-| **INV-11** | **Assets contract:** safe-app `AssetsBuilder` fetches `js/css/fonts/img/svg` from the publication's GitHub repo, builds an MFS dir, and emits an **`assetsCid`** into the publication config; the MERGED action copies that CID into the site root at **`/assets`**. Templates therefore reference assets by **root-absolute** paths (`/assets/...`). | safe-app `AssetsBuilder`/`config-builder` (producer) ↔ publication config `assetsCid` ↔ `updateEvm` (consumer) ↔ templates ↔ serving gateway | wrong/missing `assetsCid` → unstyled site; **and** any path-prefixing gateway (`/ipfs/<cid>/…`) breaks `/assets/...` → previews/sites must be served origin-per-CID (subdomain gateway / ENS·`.limo`), never a path gateway — see OPEN-TASK-1 |
+| **INV-9** | Chain assumptions: gates read `"BASE"`; provenance `verificationMethod` is `did:pkh:eip155:8453:<pkp>` (in-action metadata) / `did:ethr` client-side identity. Both hardcode Base (8453). | `libs/gates.ts`, `libs/evm.ts`, `render/metadata.ts` | cross-chain deploys silently mis-attribute or mis-gate |
+| **INV-10** | Write authorization is **not** uniformly `onlySafe`. Records module: `onlySafe`. Publication module (`S2SPublicationModuleV2`): whitelist mgmt / `acceptOffer` / upgrade = `onlySafe`; `makeOffer` is **permissionless** (anyone — whitelisted/safe → immediate deal, else → pending offer); `retract` is **safe ∨ genesisAuthor**. ENS records `setText` (site root) = `onlyAuthorized`. The neutral publisher writes the root via the **PKP**, never the Safe. | `S2SRecordsModule`, `S2SPublicationModuleV2`, ENS records contract, `update` evmWrite | wrong assumption about who can call → reverts, or a security hole if loosened. See SPEC-contracts-publication permissions matrix |
+| **INV-12** | The PKP's eth address must be an **`authorizedCaller`** on the ENS records contract (Base), separate from the Lit group permission (INV-8). The grant is performed in **`update-protocol.ts`** (`authorizeCaller(pkp.ethAddress, true)`, in the same Safe batch as the record writes). Rotating the PKP requires re-running it. | `update-protocol.ts` ↔ ENS records contract `.authorizedCallers` ↔ `update` `setText` | publish-time `setText` reverts `"Not authorized"` even when the group permits the key — two independent grants gate a publish (INV-8 use-key, INV-12 write-root). **Note:** `update-protocol` writes only `pkp_ethAddress`; `pkp_tokenId`/`pkp_publicKey` are vestigial pre-Chipotle fields (GAP-11, resolved in reader) |
+| **INV-11** | **Assets contract:** safe-app `AssetsBuilder` fetches `js/css/fonts/img/svg` from the publication's GitHub repo, builds an MFS dir, and emits an **`assetsCid`** into the publication config; the MERGED action copies that CID into the site root at **`/assets`**. Templates therefore reference assets by **root-absolute** paths (`/assets/...`). | safe-app `AssetsBuilder`/`config-builder` (producer) ↔ publication config `assetsCid` ↔ `update` (consumer) ↔ templates ↔ serving gateway | wrong/missing `assetsCid` → unstyled site; **and** any path-prefixing gateway (`/ipfs/<cid>/…`) breaks `/assets/...` → previews/sites must be served origin-per-CID (subdomain gateway / ENS·`.limo`), never a path gateway — see OPEN-TASK-1 |
+| **INV-13** | **CID parity across storage tiers.** The Kubo `rootCid` is the **canonical** referenced identifier for both content files and rendered HTML. Filecoin uploads use a CAR built with the `unixfs-v1-2025` profile so the returned `rootCid` **equals** Kubo's CID for the same bytes; `neutralpress` asserts parity and warns on mismatch. The Filecoin `pieceCid` is a *separate* audit identifier, never referenced as the content's address. | `0xobsidian`/`neutralpress` CAR builder (`filecoin-pin`, unixfs-v1-2025) ↔ Kubo `add`/`dag/export` ↔ `FilecoinStorage.uploadJson`/`uploadTree` | a non-matching CAR profile → Filecoin `rootCid` ≠ Kubo CID → silent content-address divergence; readers fetch one root, durability pins another |
 
 ---
 
@@ -183,18 +223,20 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 
 | ID | Where | Intended | Actual (as read) | Impact |
 |---|---|---|---|---|
-| **GAP-1** 🔶 | `single/main.ts` / content model | derive provenance + identity from real signed content | **SUPERSEDED** by `HANDOFF-content-item`. The new flat `S2SContentItem` (EIP-712 signed, `did:ethr` author, `objectId` = EIP-712 digest, append-log contract) replaces the old Lens-driven content model entirely. The old GAP-1 (hardcoded `S2SContentInfo`) is a legacy symptom of the old model — the fix is to migrate to the new content-item pipeline, not to patch the placeholder. Migration not yet started in action code. | See `shared/src/rendering/types.ts` and `shared/src/identity/` |
-| **GAP-2** | `single/metadata.ts` `canonicalize` | deterministic canonical JSON | `JSON.stringify(obj, keys.sort())` sorts **top-level keys only**; nested objects not canonicalized | non-deterministic signing for nested schema → verification fragility |
-| **GAP-3** ✅ | `single/metadata.ts` | choose one signing primitive | **RESOLVED (see §2.1).** Lit V3/Chipotle is TEE-based, not threshold. `getPrivateKey` (active) is correct; `signAndCombineEcdsa` (commented) is the removed Datil/Naga threshold primitive — delete the dead block. | trust root is TEE attestation + on-chain Base permissions, not honest-majority nodes |
+| **GAP-1** 🔶 | `render/main.ts` / content model | derive provenance + identity from real signed content | **SUPERSEDED** by `HANDOFF-content-item`. The new flat `S2SContentItem` (EIP-712 signed, `did:ethr` author, `objectId` = EIP-712 digest, append-log contract = `S2SPublicationModuleV2`) replaces the old Lens-driven content model entirely. **Migration in progress in action code:** `libs/module.factory.ts` adapts `S2SContentItem` (IPFS) → flat `S2SBody` (replacing `lens.factory`); `render/main.ts` builds provenance from real signed data + `did:ethr` (no longer a hardcoded placeholder). **Tail remaining:** (a) type-rename incomplete — `render/metadata.ts` and `render/main.ts` still import/type as `S2SContentInfo`; (b) the client-side history readers `resolveLatest`/`getHistory` (`shared/src/identity/verify-content.ts`) are still stubs logging "append-log contract pending" — the contract is no longer pending, so re-stamp the comment and wire them to `S2SPublicationModuleV2`. | See `shared/src/identity/` and `protocol/contracts/contracts/S2SPublicationModuleV2.sol` |
+| **GAP-2** | `render/metadata.ts` `canonicalize` | deterministic canonical JSON | `JSON.stringify(obj, keys.sort())` sorts **top-level keys only**; nested objects not canonicalized | non-deterministic signing for nested schema → verification fragility |
+| **GAP-3** ✅ | `render/metadata.ts` | choose one signing primitive | **RESOLVED (see §2.1).** Lit V3/Chipotle is TEE-based, not threshold. `getPrivateKey` (active) is correct; `signAndCombineEcdsa` (commented) is the removed Datil/Naga threshold primitive — delete the dead block. | trust root is TEE attestation + on-chain Base permissions, not honest-majority nodes |
 | **GAP-4** | `protocol/actions/src` | one renderer, one gates impl | `__renderer` **and** `renderer` both present; gates duplicated in `libs/gates.ts` **and** `shared/src/lit/gates/` | divergence risk; agent may edit the dead copy |
-| **GAP-5** | `updateEvm/main.ts` | single merged action | header says it "replaces cbor + root-update" yet a `cbor` action still exists | dead path; unclear which CID the records point to |
+| **GAP-5** ✅ | `update/main.ts` | single merged action | **RESOLVED.** The `cbor` action is gone — not in `config.json`'s permitted set, no `cbor/` directory. The merged `update` action is the sole root-builder. (The old note about a lingering `cbor` action is stale.) | none |
 | **GAP-6** ✅ | dev/preview | — | **NOT A GAP — design decision (see §3).** Preview intentionally omits signing/provenance to stay free/cheap (Lit render ≈ $0.20–0.50); it is for template/content iteration, not trust validation. | reader should not expect preview to validate trust-critical steps; that is by design |
 | **GAP-7** | module upgradeability | consistent policy | `S2SPublicationModule` is UUPS-upgradeable; `S2SRecordsModule` is immutable (`onlySafe`, constructor-bound) | asymmetric migration story |
 | **GAP-8** | `getProtocolControllerAndModules` (`shared/src/protocol/index.ts`) | one resolution path | `dev` branch resolves `dev.soul2soul.eth` instead of `soul2soul.eth` | **vestigial** — `dev.soul2soul.eth` was an abandoned preview idea, superseded by the Bun-runner preview (§3.1). Branch should be pruned; do **not** infer that preview needs a parallel on-chain deployment (note: the in-action `ens.factory` copy has no dev branch) |
 | **GAP-9** ⚠ | `protocol/actions/src/libs/constants.ts` | secrets injected, not embedded | **Alchemy, DRPC, and Pinata API key + secret are hardcoded in action source.** Actions are content-addressed and **public on IPFS** → these keys are publicly exposed. | high-severity leak; rotate keys and inject via action params / on-chain records instead |
-| **GAP-10** | `libs/lens.factory.ts` | production data store | Lens is queried at **`api.testnet.lens.xyz`** in the live path | content/provenance currently anchored to Lens **testnet**; confirm whether intentional (cost/dev) or a pre-mainnet placeholder |
-| **GAP-11** | `update-protocol.ts`, `getProtocolInfo` (both copies), `S2SProtocolInfo`, INV-2 key set | one PKP identifier | `pkp_tokenId` + `pkp_publicKey` are **vestigial from threshold-Lit**; Chipotle uses only `pkp_ethAddress` (signing keys off it). The commented writes in `update-protocol` are deliberate. | **cleanup, not a fix:** remove `pkp_tokenId`/`pkp_publicKey` from the record-key set (INV-2), both `getProtocolInfo` destructures, and the `pkp{}` shape — they are dead fields, harmless but misleading |
+| **GAP-10** ✅ | action content store | production data store | **RESOLVED.** Lens is gone from the action path (`libs/lens.factory.ts` deleted; replaced by `libs/module.factory.ts` reading the latest cid from the publication module + IPFS cat). `api.testnet.lens.xyz` is no longer called by actions. Lens remains only on the **authoring** side (`shared/src/publication/new.ts`, `neutralpress/src/publication/new.ts`) — confirm whether it is being phased out entirely or retained for authoring. | see `module.factory.ts`; §3.2 for the Kubo-canonical storage model |
+| **GAP-11** ✅ | `update-protocol.ts`, `getProtocolInfo`, `S2SProtocolInfo`, INV-2 key set | one PKP identifier | `pkp_tokenId` + `pkp_publicKey` are **vestigial from threshold-Lit**; Chipotle uses only `pkp_ethAddress`. **Resolved in the reader:** `shared/src/protocol/index.ts` no longer reads them and documents them as DROPPED (see INV-2). The commented writes in `update-protocol` are deliberate. | cleanup tail: confirm `update-protocol.ts` writes only the live key set, and prune any residual `pkp{}` shape fields if present |
 | **GAP-12** | safe-app `ConfigBuilder`, neutralpress `uploadConfig`, website-starter `LocalConfigBuilder` | one config builder | **three** implementations build the publication config | single-source violation — consolidate config-shaping into `shared`; they can (and the shape-drift suggests already do) diverge |
+| **GAP-13** | Filecoin hot-storage IPFS gateway for HTML serving | second real-availability path for rendered HTML | **Not yet implemented.** HTML availability today is Kubo (quick view) + Pinata gateway only. Planned: Filecoin hot-storage IPFS gateways as a second real-availability tier; Pinata may deprecate after it lands. Until then Pinata stays doubled (§3.2). | see §3.2 storage tiers; OPEN-TASK-1 (subdomain gateway) is the Kubo-side counterpart |
+| **GAP-14** | contenthash codec + CIDv1-for-subdomain conversion | one decode/encode + one display-label helper | **Duplicated across 4 files in 3 packages, and the canonical copy is trapped in the wrong layer.** `contenthashToIPFS` (the INV-6 codec: `0xe3` check + skip `0x01` + base58-decode CIDv0) lives at `protocol/actions/src/libs/ipfs.factory.ts:279` — **Lit Action libs, unreachable by client packages.** safe-app re-derives it by magic offset (`s2s-app.ts:117` `onchainHash.slice(6)`, no `0xe3` validation) and writes the encode side at `evm.ts:54` (`0xe3`). CIDv0→v1 display conversion is scattered: safe-app `s2s-app.ts:119` inline; `0xobsidian/src/ipfs/pinata.ctrlr.ts` 4× (L38/239/281/307). `shared/src/ipfs/index.ts` has **no** contenthash helper despite being the designated shared lib and already depending on `multiformats` (`^13.4.2`). neutralpress has none either (root cause of its preview-link gap, OPEN-TASK-1). | consolidate into `shared/src/ipfs` as pure helpers — `decodeContenthashWrapped` / `encodeContenthashWrapped` / `toPreviewLabel` — exported via the **zod-free** path (INV-7; mirror the `@s2s/soul2soul-shared/lit-actions` entry); action libs re-export, clients import. Closes the neutralpress preview gap and removes 3 divergent codec copies |
 
 ---
 
@@ -316,6 +358,35 @@ One sentence: what this component owns, and what it explicitly does NOT own.
   use a DNS plugin or `--manual --preferred-challenges dns`; (3) CIDv1 Base32 as above. Open only:
   whether it supplements or replaces the current Pinata path link in neutralpress FLOW §5.*
 
+  **Deployed state + client wiring (audited 2026-08-03):** the gateway is live and working —
+  neutralpress just never adopted it. Concretely:
+  - **Gateway (deployed, nginx on the Kubo host):** `preview.transport-union.dev` rewrites
+    `<cid>.preview.transport-union.dev/<path>` → `/ipfs/<cid>/<path>` (proxies to
+    `ipfs.transport-union.dev`). This is the **bare-`<cid>` non-namespaced** form (no `ipfs.`
+    label) flagged above as non-standard — implemented via the custom reverse proxy. The host
+    regex `^(?<cid>[a-z0-9]+)\.` is **lowercase-only**, so the subdomain label **must be CIDv1
+    (base32)**; a CIDv0 (`Qm…`, base58, mixed-case) does **not** match and will not resolve.
+    Root-absolute `/assets/...` resolves correctly here because the CID lives in the host
+    (origin-per-CID), not the path.
+  - **safe-app — wired (reference pattern):** `s2s-app.ts:220` builds the preview link as
+    `https://${rootCid}.preview.transport-union.dev`; `s2s-app.ts:119` converts the on-chain
+    CIDv0 → CIDv1 via `CID.decode(bytes).toV1().toString()` before constructing the label.
+    `multiformats` is a safe-app dep (`^13.4.1`).
+  - **neutralpress — NOT wired (the gap; cause of preview asset 404s):**
+    `main.ctrlr.ts:389` emits the **path** form
+    `https://ipfs.transport-union.dev/ipfs/${res.cid}/${res.path}` — it does **not** use
+    `preview.transport-union.dev`, does **not** convert `res.cid` (CIDv0, the `Qm…` MFS root) to
+    CIDv1, and has no `toV1`/`multiformats` display path. On a path gateway, root-absolute
+    `/assets/...` (INV-11) drops the `/ipfs/<cid>` base → 404 (the "MIME text/plain" refusal is
+    just the gateway's 404 body). `multiformats` is a neutralpress dep (`^13.4.2`) but unused
+    here. The publish-time `.link` notice (`main.ctrlr.ts:393`) is unaffected — ENS subdomain is
+    already origin-per-name.
+  - **Fix (code, not spec):** neutralpress `main.ctrlr.ts:389` → build
+    `https://${toPreviewLabel(res.cid)}.preview.transport-union.dev/${res.path}`, where
+    `toPreviewLabel` is the shared CIDv0→v1 helper (see GAP-14). Resolves OPEN-TASK-1's open
+    question: the preview gateway **supplements** Pinata and should **replace** the path-form
+    `ipfs.transport-union.dev/ipfs/...` author-preview link.
+
 - **OPEN-TASK-2 — pin down preview's unsigned guarantee (safety).** Confirm preview HTML carries
   **no** proof rather than an *invalid* proof. The INV-7 mechanism relies on `metadata.ts`'s
   `try/catch` returning unsigned HTML when the Bun shim's `getPrivateKey` throws — but if the shim
@@ -333,6 +404,10 @@ One sentence: what this component owns, and what it explicitly does NOT own.
   Notes: this is **developer-ergonomics/shape-correctness, not a trust boundary** (security stays the
   on-chain gates + TEE). Resolved: `bodySchema`↔`S2SBody` now a discriminated union (`protocol/types.ts` + `publication/validation.ts`),
   `S2STemplateConfig`/`S2SCollection` single-sourced in `protocol/types.ts`.
+  **Test coverage:** which tests exist for action I/O + the preview sequence, and their status
+  (stale/missing/skipped), are recorded in **SPEC-protocol-actions §Test coverage** — including the
+  fixture requirement (bytes32 genesis, not Lens id) and the `.env` gaps that currently make the
+  live preview test silently skip. Specs carry the coverage map; test code lives in the repo.
 
 ## 10. Working environment for an isolated agent (Hermes-harness / sandboxed container)
 

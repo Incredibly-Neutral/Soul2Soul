@@ -1,4 +1,4 @@
-import { MainController } from "src/main.ctrlr.js";
+import { MainController } from "../main.ctrlr.js";
 import {
   calculateIPFSHash,
   calculateIPFSHashFromContent,

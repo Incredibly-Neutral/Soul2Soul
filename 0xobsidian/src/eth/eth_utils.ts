@@ -22,7 +22,7 @@ export const getInternalTransactions = async (chain: string,txHash: string, toke
 
     return new Promise( (resolve, reject) : any => {
 
-        let url = `${ETHERSCAN_ENDPOINTS[chain]}?module=account&action=txlistinternal&txhash=${txHash}&apikey=${token}`;
+        let url = `${ETHERSCAN_ENDPOINTS[chain as keyof typeof ETHERSCAN_ENDPOINTS]}?module=account&action=txlistinternal&txhash=${txHash}&apikey=${token}`;
 
         console.log(url)
     

@@ -50,7 +50,7 @@ export interface S2SPublicContent {
 /** EIP-712 author signature over S2SPublicContent */
 export interface S2SProof {
   type: "eip712";
-  signer: `0x${string}`; // recovered address; MUST equal the EOA in public.author
+  signer: `0x${string}`; // recovered address (EOA); verified as a Safe owner of the author's Safe
   signature: `0x${string}`; // author EOA signature over the EIP-712 digest
 }
 

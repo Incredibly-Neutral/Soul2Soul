@@ -14,7 +14,7 @@ export const sampleTemplateConfig: S2STemplateConfig = {
 
 /** Minimal S2SJob used across all fixtures — html is "" before single renders it */
 export const sampleJob: S2SJob = {
-  id: 'lens-post-1',
+  id: '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063',
   templateConfig: sampleTemplateConfig,
   html: '',
   path: '/hello-world',

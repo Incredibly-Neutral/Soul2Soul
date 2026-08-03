@@ -125,7 +125,7 @@ export default class DSG extends Plugin {
 							const onSubmit = async () => {
 								await this.ctrlr.content.publishContent(file, subdomain);
 								await this.ctrlr.revokeLicense(subdomain, file);
-								// Read the signed_id from frontmatter after re-signing
+								// Read the genesis from frontmatter after re-signing
 								const { contentId } = await this.ctrlr.content.parseNote(file);
 								await this.ctrlr.renderCalls(ensName, [contentId ?? subdomain], this.ctrlr.oxo.settings.litUsageKey, true)
 							}

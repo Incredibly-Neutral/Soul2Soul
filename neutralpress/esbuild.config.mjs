@@ -40,7 +40,7 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
 	minifyIdentifiers: true,
-	outfile: "/home/joera/vaults/s2s/.obsidian/plugins/neutralpress/main.js",
+	outfile: "/home/joera/dist/neutralpress/main.js",
 });
 
 if (prod) {

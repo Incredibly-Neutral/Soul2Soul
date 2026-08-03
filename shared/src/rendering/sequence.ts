@@ -73,6 +73,8 @@ export const renderwithLitActions = async (
   }
 
   const successful = allResults.filter((r: any) => r.success && r.data?.ok);
+
+  console.log({"rendered jobs": successful})
   // Map the rendered job data out for the merged update
   const renderedJobs = successful.map((r: any) => r.data.data.job).filter((j: any) => j?.path);
 
@@ -80,11 +82,9 @@ export const renderwithLitActions = async (
   
   if (notice) notice.setMessage('merging EVM update ...'); else console.log('preparing evm update...');
 
-  console.log("pub2", publication)
   const evmInputs = validateEvmUpdateInput({ signature, authorSafeAddress, publication, jobs: renderedJobs, preview });
 
   const evmAction = await runAction( preview, lit, protocolInfo.litActions.update, evmInputs, litUsageKey);
-  console.log(evmAction)
   const validated = validateEvmUpdateOutput(evmAction);
   if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
   if (validated.ok) cid = validated.data.cid
