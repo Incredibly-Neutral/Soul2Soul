@@ -1,5 +1,7 @@
 # SPEC-protocol-actions
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `protocol/actions/` — the Lit Action pipeline (the "neutral publisher").
 > Read **SPEC-00** first. This spec follows the SPEC-00 §7 template and doubles as the
 > **I/O contract** for unit/integration tests: every action's Inputs/Outputs table is also its
@@ -317,7 +319,53 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
 - 🟢 Handlebars templates/helpers, RPC URLs, timeouts, log lines, dead code removal.
 - 🔴 The `"lit actions auth"` string; record-key names/set; module NAME() strings; the contenthash
   codec; the canonicalization in `metadata.ts`; anything that makes an action depend on a Node
-  built-in (breaks INV-7); emitting CIDv1 from updateEvm (breaks INV-6 / `toHexString`).
+  built-in (breaks INV-7); emitting CIDv1 from update (breaks INV-6 / `toHexString`).
+
+---
+
+## Test coverage (seam/invariant → test → status)
+
+> The I/O tables in §A are fixture definitions; this section records **which tests exist and their
+> status**, so gaps surface in the spec rather than only at runtime. Statuses: ✅ covered, ⚠ stale,
+> ⛔ missing, ⊘ skipped. **The action tag ≠ dir ≠ config name** (see §Sub-component map): dir/config
+> `render`/`update` emit tags `'single'`/`'evm-update'` — tests assert the tag.
+
+| Seam / invariant | Test file | Status | Note |
+|---|---|---|---|
+| `ActionResult` envelope (ok/action/trace; fatal-vs-non-fatal; `requireFields`) | `shared/src/rendering/action-io.test.ts` | ✅ | shape-only, Lens-era fixtures but value-agnostic |
+| preview `prep→single→update` sequence (Bun runner, no gates) | `shared/src/rendering/sequence.test.ts` | ⚠ **stale + blocked** | (1) hardcodes Lens-era `SINGLE_POST` (decimal post id) but `prep` now calls `fetchById(genesis)`→`getLatest(bytes32)` — a decimal id breaks ABI encoding; (2) ignores the `TEST_CONTENT_IDS` env var `.env` already provides; (3) `MAINNET_RPC_URL`/`BASE_RPC_URL` absent from `.env` → `chainReady=false` → live tests **silently skip**. Fix: read `TEST_CONTENT_IDS`, set RPC env, use a real bytes32 genesis. |
+| preview sequence shape contract (prep→single input handoff) | `sequence.test.ts` “seam contract” | ⚠ stale | inherits the same `SINGLE_POST` fixture || non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
+| stage-failure envelope (ok:false, string error, no throw) | `sequence.test.ts` Test 4 | ✅ (gated) | runs only when `chainReady`; covers a no-modules publication |
+| INV-append / `makeOffer` / `hasDeal` on-chain gating (the trust boundary) | — | ⛔ **missing** | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain. |
+| INV-8 desync (records-updated-but-group-not, and inverse) | — | ⛔ missing | flagged as a contract test in §Test seams; not authored |
+| GAP-2 canonicalization (nested-key sort → verify fail) | — | ⛔ missing | flagged; not authored |
+| determinism (frozen clock: `metadata.ts` `new Date()`, `update` `Date.now()`) | — | ⛔ missing | output CIDs non-deterministic; no clock injection |
+
+### Fixture requirement (preview test unblock)
+
+`contentIds` is a **bytes32 genesis**, not a Lens post id. Live fixture (from a real publish on
+`s3nl.soul2soul.eth`, makeOffer tx `0x6d10f033…`):
+
+- **publication:** `s3nl.soul2soul.eth` (`.env: TEST_PUBLICATION`, len 18)
+- **genesis / contentId:** `0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063`
+- **env vars present in `.env`:** `TEST_PUBLICATION`, `TEST_PRIVATE_KEY`, `TEST_AUTHOR_SAFE`, `TEST_CONTENT_IDS` (set, but **not read** by the test)
+- **env vars MISSING from `.env`:** `MAINNET_RPC_URL`, `BASE_RPC_URL` → must be added or the live tests skip silently (`describe.skipIf(!chainReady)`)
+
+**Code-edit handoff (specs can't touch code):**
+1. `shared/src/rendering/sequence.test.ts` — replace the hardcoded `SINGLE_POST` with
+   `env('TEST_CONTENT_IDS')` (split on comma), fallback to the genesis above; pass it as
+   `contentIds` in the prep + seam-contract tests.
+2. `shared/src/rendering/fixtures/inputs.ts` — `sampleJob.id` and `validPrepInput.contentIds` use
+   `'lens-post-1'`; update to a genesis-shaped id for consistency (value-agnostic for the local
+   shape tests, but stops misleading readers).
+3. `.env` — add `MAINNET_RPC_URL` + `BASE_RPC_URL` (L1/L2 endpoints) so `chainReady` is true.
+
+### Tests hit live infra — hermeticity gap
+
+The live sequence test fetches CIDs from the chain, calls the real Bun runner
+(`run.transport-union.dev`), and (in `preview:true` merged) **pins to the shared Kubo node** (skips
+only the on-chain write). There is **no unit test with mocked IPFS/RPC/runner** — runs are flaky and
+mutate shared state. A mocked-transport unit layer is the next step after the fixture unblock.
 
 ---
 
@@ -326,11 +374,11 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
 - **Determinism:** freeze the clock — `metadata.ts` `new Date().toISOString()` and `updateDagItem`
   `Date.now()` make output CIDs non-deterministic. Inject a test key for `getPrivateKey` to make
   signatures reproducible (and to verify INV-5 round-trip / expose GAP-2).
-- **Endpoints:** `IPFS_URL`, the Lens URL, RPC URLs, and the run URL are hardcoded — parameterize
-  to point unit/integration runs at ephemeral infra.
+- **Endpoints:** `IPFS_URL`, RPC URLs, and the run URL are hardcoded — parameterize
+  to point unit/integration runs at ephemeral infra. (Lens is gone from the action path — GAP-10.)
 - **Per-action fixtures:** capture one real `S2SProtocolInfo`, `S2SPublicationConfig`, encrypted +
   unencrypted `S2SBody`, and a `S2SJob`. Assert output shapes per the tables above.
-- **Sequence test:** prep.jobs → single(job) → updateEvm(renderedJobs); assert the shape handed
+- **Sequence test:** prep.jobs → single(job) → update(renderedJobs); assert the shape handed
   across each boundary (this is where the camelCase/snake class of bug surfaces first).
 - **Negative tests that prove invariants:** path-gateway serve → `/assets` breaks (INV-11);
   reordered nested metadata keys → signature verify fails (GAP-2); records-updated-but-group-not

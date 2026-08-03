@@ -164,6 +164,14 @@ is for tooling only; each package has its own tsconfig.
   - **Two separate uploads** (config JSON + assets tree) — single-DAG
     consolidation deferred. CID parity between Kubo and Filecoin Root CID is
     required and verified.
+  - **`typescript` is a per-package devDep, not a root dep.** There is no
+    root `node_modules/.bin/tsc`, so a bare `tsc` (a root script, or `tsc` from
+    the repo root) falls back to a **global** binary of unknown version —
+    which may differ from the packages' pinned `^5.9.3`. Always build via the
+    package scripts: `pnpm -C <pkg> run build` (or `pnpm build --filter <pkg>`)
+    — these prepend the package's own `node_modules/.bin`. Same for any
+    root-level convenience script: call `pnpm exec tsc` (resolves workspace
+    local), never bare `tsc`.
 
 ## What to update when
 - `AGENTS.md` — commands, structure, conventions, or stack change.

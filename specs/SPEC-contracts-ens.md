@@ -1,5 +1,7 @@
 # SPEC-contracts-ens
 
+> **Audited against live code:** 2026-08-03.
+>
 > Protocol-wide naming + resolution + site-root layer. Read **SPEC-00** first. Sibling:
 > **SPEC-contracts-publication** (per-publication Safe modules). Owns the read/write path for the
 > published site pointer. Follows SPEC-00 §7.

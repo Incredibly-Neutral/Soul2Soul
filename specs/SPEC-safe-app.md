@@ -1,5 +1,7 @@
 # SPEC-safe-app
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `safe-app/` — the **publisher's control panel**, a Safe{Wallet} app that runs
 > inside the Safe web UI iframe. Read **SPEC-00** first; types come from **SPEC-shared**; it drives
 > the contracts in **SPEC-contracts-publication / -ens**. Follows SPEC-00 §7.

@@ -1,5 +1,7 @@
 # SPEC-neutralpress
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `neutralpress/` — the Obsidian plugin for **publication lifecycle, content
 > authoring/encryption, and render triggering**. Read **SPEC-00** first; types from **SPEC-shared**.
 > Runtime-depends on **SPEC-0xobsidian** (`oxo-core`). The richest front-end — it wires authoring to
@@ -96,8 +98,19 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
   config, feed, records, owners, remove-temp-signer). Partial failure leaves a half-built publication;
   the **remove-temp-signer** step is especially delicate (lose it wrong → lockout). Needs idempotent
   re-run / recovery story.
-- **`contentId` ⇄ frontmatter contract:** the Lens post id is written back to the note as
-  `content_id`; the render pipeline fetches by it. Don't break this round-trip.
+- **`contentId` ⇄ frontmatter contract:** the note's genesis/objectId (bytes32) is written back
+  to frontmatter as `content_id` (the Lens post-id era is over — `main.ctrlr.ts:313`
+  `genesis = signedItem.objectId`); the render pipeline fetches by it as a genesis (`prep`
+  `fetchById`→`getLatest(bytes32)`). Don't break this round-trip — a non-bytes32 value breaks ABI
+  encoding at `getLatest`.
+- **Preview link uses the path gateway, not the preview subdomain gateway (OPEN-TASK-1, GAP-14).**
+  `main.ctrlr.ts:389` emits `https://ipfs.transport-union.dev/ipfs/${res.cid}/${res.path}` with
+  `res.cid` as CIDv0 (`Qm…` MFS root). Root-absolute `/assets/...` (INV-11) then drops the
+  `/ipfs/<cid>` base → asset 404s in preview (the "MIME text/plain" refusal is the gateway's 404
+  body). safe-app already wires the deployed `preview.transport-union.dev` subdomain gateway with
+  CIDv0→v1 conversion (`s2s-app.ts:119/220`); neutralpress does neither. Fix: build
+  `https://${toPreviewLabel(res.cid)}.preview.transport-union.dev/${res.path}` using the shared
+  helper (GAP-14). The publish-time `.link` notice (`main.ctrlr.ts:393`) is unaffected.
 - `tasks/migration.md` present → active migration; treat some paths as in-flux.
 
 ## Safe-to-change vs do-not-touch

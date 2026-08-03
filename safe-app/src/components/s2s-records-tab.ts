@@ -332,7 +332,14 @@ export class S2SRecordsTab extends HTMLElement {
         }
 
         .table { grid-template-columns: 1fr 3fr auto; }
-        .button.thin { padding: 0.25rem .5rem; }
+        .button.thin { 
+          padding: 0.25rem .5rem;
+          border: none;
+          height: 2rem;
+          margin-left: .5rem;
+          font-size: .875rem;
+
+        }
 
         .record-value-input {
           width: 100%;
@@ -429,39 +436,7 @@ export class S2SRecordsTab extends HTMLElement {
           <button class="button" data-action="update">Update Config</button>
         </div>
 
-        <div class="section">
-          <div class="list_header">
-            <h2 class="section-title">Filecoin Storage</h2>
-            ${this.loadingStorage ? `<span class="refreshing-badge">Loading…</span>` : ''}
-          </div>
-
-          <div class="table">
-            <div class="table-header">CIDs</div>
-            <div class="table-header">Provider</div>
-            <div class="table-header">Status</div>
-
-            ${this.storageItems.length === 0 ? `\n                <div class="empty-state" style="grid-column: 1/-1">
-                  <p>Click "Load Storage" to list your Filecoin pieces</p>
-                </div>\n              ` : this.storageItems.map(item => `
-                <div class="table-row">
-                  <div class="table-cell" style="font-size: 0.75rem; font-family: monospace; color: var(--gray-500);">
-                    ${item.rootCid ? `<a class="storage-link" href="https://ipfs.transport-union.dev/ipfs/${item.rootCid}" target="_blank" rel="noopener">🌐 ${item.rootCid.slice(0, 12)}…</a>` : '—'}
-                    <br>
-                    <span style="color: var(--gray-600);">${item.pieceCid ? item.pieceCid.slice(0, 12) + '…' : '—'}</span>
-                  </div>
-                  <div class="table-cell" style="font-size: 0.8rem;">
-                    ${item.provider}<br>
-                    <span style="font-size: 0.7rem; color: var(--gray-600);">${item.attributed ? '✓ attributed' : '○ unattributed'}</span>
-                  </div>
-                  <div class="table-cell" style="font-size: 0.75rem;">
-                    <a class="storage-link" href="https://filfox.info/en/message/${item.dataSetId}" target="_blank" rel="noopener">🔗 Filfox</a>
-                  </div>
-                </div>
-              `).join('')}
-          </div>
-
-          <button class="button button-secondary" data-action="load-storage">${this.loadingStorage ? 'Loading…' : 'Load Storage'}</button>
-        </div>
+       
       `}
     `;
 

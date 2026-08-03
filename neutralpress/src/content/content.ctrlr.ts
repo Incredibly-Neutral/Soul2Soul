@@ -9,6 +9,7 @@ import {
   buildSignedContentItem,
   type S2SContentItem,
   noOpEncrypt,
+  toDidEthr,
 } from "@s2s/soul2soul-shared";
 
 export interface IContentController {
@@ -98,9 +99,15 @@ export class ContentController implements IContentController {
         const signer = baseAccount.asTypedDataSigner();
         const now = Math.floor(Date.now() / 1000);
 
+        // Read existing genesis from frontmatter (stable identity for updates)
+        const cache = this.main.plugin.app.metadataCache.getFileCache(file);
+        const existingGenesis: string | null = cache?.frontmatter?.genesis || null;
+        console.log("existing genesis", existingGenesis)
+
         try {
             const signedItem = await buildSignedContentItem(
                 {
+
                     specVersion: "1",
                     postType: parsed.postType,
                     mediaType: "text/markdown",
@@ -119,18 +126,30 @@ export class ContentController implements IContentController {
                     custom: parsed.custom,
                 },
                 signer,
-                // encryptFn — pass-through for now; Lit encryption will integrate here
                 noOpEncrypt,
+                // Author is the Safe address (on-chain msg.sender).
+                // The EOA that signs is a Safe owner, verified off-chain.
+                toDidEthr(baseAccount.address),
             );
 
             console.log("publishing:", signedItem);
 
-            // Store the objectId and author DID in frontmatter
-            await this.updateFrontMatter(this.main.plugin.app, file, "signed_id", signedItem.objectId);
-            await this.updateFrontMatter(this.main.plugin.app, file, "signed_author", signedItem.public.author);
-            await this.updateFrontMatter(this.main.plugin.app, file, "signed_at", String(now));
+            // Preserve the original genesis on updates — the contract
+            // identifies content by its first-publish (genesis) objectId.
+            // Only the very first publish creates a new identity.
+            const objectId = existingGenesis ?? signedItem.objectId;
+            console.log("oid", objectId)
 
-            return signedItem;
+            // Store signed metadata to frontmatter (genesis publish only)
+            if (!existingGenesis) {
+                // Format modified time to match creation_date (no ms, no Z)
+                const mtime = new Date(file.stat.mtime).toJSON().split(".")[0];
+                await this.updateFrontMatter(this.main.plugin.app, file, "genesis", objectId);
+                await this.updateFrontMatter(this.main.plugin.app, file, "author", signedItem.public.author);
+                await this.updateFrontMatter(this.main.plugin.app, file, "modified_date", mtime);
+            }
+
+            return { ...signedItem, objectId };
 
         } catch (err) {
             console.error("publishContent: signing failed:", err);

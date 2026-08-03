@@ -96,8 +96,8 @@ export interface FilecoinUser {
 
 /** Minimal pino-compatible logger that delegates to console. */
 const noopLogger = {
-  info: (...args: any[]) => console.log("[filecoin]", ...args),
-  warn: (...args: any[]) => console.warn("[filecoin]", ...args),
+  info: (...args: any[]) => {}, // console.log("[filecoin]", ...args),
+  warn: (...args: any[]) => {}, //console.warn("[filecoin]", ...args),
   error: (...args: any[]) => console.error("[filecoin]", ...args),
   debug: () => {},
   trace: () => {},
@@ -280,7 +280,7 @@ export class FilecoinStorage {
     });
 
     if (existing && existing.length > 0) {
-      console.log(`[filecoin] piece already stored (pieceId ${existing[0]}), skipping upload`);
+      // console.log(`[filecoin] piece already stored (pieceId ${existing[0]}), skipping upload`);
       return {
         pieceCid: parsedCid.toString(),
         rootCid: "",
@@ -489,7 +489,7 @@ export class FilecoinStorage {
       }
     }
 
-    console.log("[storage] pieces:", items.length);
+    // console.log("[storage] pieces:", items.length);
     return items;
   }
 

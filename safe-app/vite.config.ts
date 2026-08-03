@@ -20,9 +20,9 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html')
       },
       output: {
-        entryFileNames: '[name].js',
-        chunkFileNames: '[name].js',
-        assetFileNames: '[name][extname]'
+          entryFileNames: '[name].[hash].js',
+          chunkFileNames: '[name].[hash].js',
+          assetFileNames: '[name].[hash][extname]'
       }
     },
     copyPublicDir: true,

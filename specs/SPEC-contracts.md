@@ -1,5 +1,7 @@
 # SPEC-contracts — SPLIT
 
+> **Audited against live code:** 2026-08-03.
+
 This spec has been split (per design decision) into two cohesive sub-system specs:
 
 - **SPEC-contracts-publication** — per-publication Safe modules (`S2SPublicationModuleV2`,

@@ -1,5 +1,7 @@
 # SPEC-shared
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `shared/` (`@s2s/soul2soul-shared`) — the common library every other package
 > imports. Read **SPEC-00** first. This spec is the **canonical type catalog** the front-end specs
 > (safe-app, 0xobsidian, neutralpress) point at instead of re-deriving shapes. Follows SPEC-00 §7.
@@ -158,6 +160,15 @@ entry. This is the existing author/publication gate, extended to guard appends.
 - **Two content-type systems coexist** during migration: the old Lens-era S2SBody/S2SPublicContent
   and the new S2SContentItem (rendering/types.ts). Actions still use the old; the identity modules
   use the new. Existing code not yet migrated.
+- **contenthash codec + CIDv1-for-subdomain conversion not yet homed here (GAP-14).** The INV-6
+  `contenthash_wrapped` codec (`0xe3`/`0x01`/base58-decode CIDv0) and the CIDv0→v1 display-label
+  conversion (OPEN-TASK-1's preview subdomain requires CIDv1 base32) are duplicated across 4 files
+  in 3 packages; the canonical `contenthashToIPFS` is trapped in `protocol/actions/src/libs`
+  (unreachable by clients). `shared/src/ipfs/index.ts` has no contenthash helper today despite
+  depending on `multiformats`. Consolidation target: pure helpers
+  `decodeContenthashWrapped` / `encodeContenthashWrapped` / `toPreviewLabel` here, exported via the
+  **zod-free** entry (INV-7; mirror `@s2s/soul2soul-shared/lit-actions`) so action libs re-export
+  and clients import. Doing so closes the neutralpress preview-link gap (OPEN-TASK-1).
 - **`isBasedOn` removed** from the new content-item shape. Edit history is the contract append log.
   Cross-document derivation is deferred.
 - **No `license` field on the new content-item.** The permission model is the access gate —

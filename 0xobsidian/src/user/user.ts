@@ -1,4 +1,4 @@
-import { IMainController } from "src/main.ctrlr.js";
+import { IMainController } from "../main.ctrlr.js";
 import { ethers} from "ethers";
 import { Wallet } from "ethers/wallet";
 

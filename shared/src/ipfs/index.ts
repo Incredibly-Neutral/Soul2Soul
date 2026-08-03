@@ -36,9 +36,9 @@ export class S2SIPFSMethods {
   ): Promise<Response> {
     const url = `https://${this.fixEndpoint(this.kuboGateway)}${path}`;
     const response = await fetch(url, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         ...extraHeaders,
       },
       body,
@@ -51,69 +51,52 @@ export class S2SIPFSMethods {
   // Template operations (string content → CID)
   // =========================================================================
 
-  async addToKubo(
-    fileContent: string | Blob,
-    name: string,
-    onlyHash?: boolean,
-  ): Promise<string> {
+  async addToKubo(fileContent: string | Blob, name: string, onlyHash?: boolean): Promise<string> {
     const formData = new FormData();
     const blob =
-      typeof fileContent === "string"
-        ? new Blob([fileContent], { type: "text/plain" })
+      typeof fileContent === 'string'
+        ? new Blob([fileContent], { type: 'text/plain' })
         : fileContent;
-    formData.append("file", blob, name);
+    formData.append('file', blob, name);
 
-    const apiPath = onlyHash ? "api/v0/add?only-hash=true" : "api/v0/add";
+    const apiPath = onlyHash ? 'api/v0/add?only-hash=true' : 'api/v0/add';
 
-    const response = await fetch(
-      `https://${this.fixEndpoint(this.kuboGateway)}/${apiPath}`,
-      {
-        method: "POST",
-        body: formData,
-      },
-    );
+    const response = await fetch(`https://${this.fixEndpoint(this.kuboGateway)}/${apiPath}`, {
+      method: 'POST',
+      body: formData,
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `IPFS add failed: ${response.status} ${response.statusText}\n${errorText}`,
-      );
+      throw new Error(`IPFS add failed: ${response.status} ${response.statusText}\n${errorText}`);
     }
 
     const result = await response.json();
-    return result.Hash || result.Cid?.["/"] || result.Cid;
+    return result.Hash || result.Cid?.['/'] || result.Cid;
   }
 
   async dagPut(fileContent: string, name: string): Promise<string> {
     const formData = new FormData();
-    const blob = new Blob([fileContent], { type: "application/json" });
-    formData.append("object data", blob, name || "dag.json");
+    const blob = new Blob([fileContent], { type: 'application/json' });
+    formData.append('object data', blob, name || 'dag.json');
 
-    const response = await fetch(
-      `https://${this.fixEndpoint(this.kuboGateway)}/api/v0/dag/put`,
-      {
-        method: "POST",
-        body: formData,
-      },
-    );
+    const response = await fetch(`https://${this.fixEndpoint(this.kuboGateway)}/api/v0/dag/put`, {
+      method: 'POST',
+      body: formData,
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `DAG put failed: ${response.status} ${response.statusText}\n${errorText}`,
-      );
+      throw new Error(`DAG put failed: ${response.status} ${response.statusText}\n${errorText}`);
     }
 
     const result = await response.json();
-    return result.Cid["/"] || result.Cid || result.Hash;
+    return result.Cid['/'] || result.Cid || result.Hash;
   }
 
   /** Fetch a DAG node by CID and parse as JSON. */
   async dagGet(cid: string): Promise<any> {
-    const res = await this.kuboPost(
-      `/api/v0/dag/get?arg=${cid}`,
-      S2SIPFSMethods.MFS_TIMEOUTS.cp,
-    );
+    const res = await this.kuboPost(`/api/v0/dag/get?arg=${cid}`, S2SIPFSMethods.MFS_TIMEOUTS.cp);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`dag/get failed for ${cid}: ${text}`);
@@ -126,17 +109,12 @@ export class S2SIPFSMethods {
   // =========================================================================
 
   async fetchFromKubo(cid: string): Promise<any> {
-    const response = await this.kuboPost(
-      `/api/v0/cat?arg=${cid}`,
-      S2SIPFSMethods.MFS_TIMEOUTS.cp,
-    );
+    const response = await this.kuboPost(`/api/v0/cat?arg=${cid}`, S2SIPFSMethods.MFS_TIMEOUTS.cp);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("IPFS error response:", errorText);
-      throw new Error(
-        `Failed to fetch from IPFS: ${response.status} ${response.statusText}`,
-      );
+      console.error('IPFS error response:', errorText);
+      throw new Error(`Failed to fetch from IPFS: ${response.status} ${response.statusText}`);
     }
 
     const text = await response.text();
@@ -144,8 +122,8 @@ export class S2SIPFSMethods {
     try {
       return JSON.parse(text);
     } catch (error) {
-      console.error("Failed to parse IPFS response as JSON:", text);
-      throw new Error("Invalid JSON response from IPFS");
+      console.error('Failed to parse IPFS response as JSON:', text);
+      throw new Error('Invalid JSON response from IPFS');
     }
   }
 
@@ -153,28 +131,22 @@ export class S2SIPFSMethods {
   // Pinata
   // =========================================================================
 
-  async uploadToPinata(
-    content: string | Blob,
-    filename: string,
-  ): Promise<string> {
+  async uploadToPinata(content: string | Blob, filename: string): Promise<string> {
     const formData = new FormData();
 
-    if (typeof content === "string") {
-      formData.append("file", new Blob([content]), filename);
+    if (typeof content === 'string') {
+      formData.append('file', new Blob([content]), filename);
     } else {
-      formData.append("file", content, filename);
+      formData.append('file', content, filename);
     }
 
-    const response = await fetch(
-      `https://api.pinata.cloud/pinning/pinFileToIPFS`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.pinataJWT}`,
-        },
-        body: formData,
+    const response = await fetch(`https://api.pinata.cloud/pinning/pinFileToIPFS`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.pinataJWT}`,
       },
-    );
+      body: formData,
+    });
 
     if (!response.ok) {
       throw new Error(`Pinata upload failed: ${response.statusText}`);
@@ -189,13 +161,10 @@ export class S2SIPFSMethods {
   // =========================================================================
 
   /** Create a temp MFS path, optionally copying from an existing root CID. */
-  async prepareTempMfs(
-    currentRoot: string,
-    tempDirName: string,
-  ): Promise<string> {
+  async prepareTempMfs(currentRoot: string, tempDirName: string): Promise<string> {
     const tmpPath = `/tmp/${tempDirName}`;
 
-    if (currentRoot && currentRoot !== "") {
+    if (currentRoot && currentRoot !== '') {
       const res = await this.kuboPost(
         `/api/v0/files/cp?arg=/ipfs/${encodeURIComponent(currentRoot)}&arg=${encodeURIComponent(tmpPath)}&parents=true`,
         S2SIPFSMethods.MFS_TIMEOUTS.cp,
@@ -238,7 +207,7 @@ export class S2SIPFSMethods {
       name: link.Name,
       hash: link.Hash,
       size: link.Size,
-      type: link.Tsize ? "file" : "directory",
+      type: link.Tsize ? 'file' : 'directory',
     }));
   }
 
@@ -260,21 +229,16 @@ export class S2SIPFSMethods {
       S2SIPFSMethods.MFS_TIMEOUTS.pinAdd,
     );
     if (!res.ok) {
-      return { ok: false, cid: "" };
+      return { ok: false, cid: '' };
     }
     const data = await res.json();
     const cid =
-      typeof data === "string"
-        ? data
-        : data["/"] || data.Hash || data.Cid?.["/"] || data.Cid || "";
+      typeof data === 'string' ? data : data['/'] || data.Hash || data.Cid?.['/'] || data.Cid || '';
     return { ok: true, cid };
   }
 
   /** Copy a file from IPFS (by CID) into an MFS path. */
-  async mfsCp(
-    sourceCid: string,
-    destMfsPath: string,
-  ): Promise<boolean> {
+  async mfsCp(sourceCid: string, destMfsPath: string): Promise<boolean> {
     const res = await this.kuboPost(
       `/api/v0/files/cp?arg=/ipfs/${encodeURIComponent(sourceCid)}&arg=${encodeURIComponent(destMfsPath)}&parents=true&flush=false`,
       S2SIPFSMethods.MFS_TIMEOUTS.cp,
@@ -293,7 +257,9 @@ export class S2SIPFSMethods {
 
   fixEndpoint(endpoint: string) {
     return endpoint
-      .replace(/^(https?:\/\/)/, "") // Remove protocol if present
-      .replace(/\/+$/, ""); // Remove trailing slashes
+      .replace(/^(https?:\/\/)/, '') // Remove protocol if present
+      .replace(/\/+$/, ''); // Remove trailing slashes
   }
 }
+// Contenthash helpers
+export * from './contenthash';

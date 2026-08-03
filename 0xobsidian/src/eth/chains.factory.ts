@@ -108,7 +108,7 @@ export const getRPCUrl = (chainId: number, api_key: string): string => {
 
   }
 
-  return rpc;
+  return rpc!;
 };
 
 export const getScanApi = (chainId: number): string => {

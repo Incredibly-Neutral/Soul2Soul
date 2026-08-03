@@ -39,4 +39,4 @@ coverage/
 *.log
 .tmp/
 temp/
-multi-part-lite-adopted/
+# multi-part-lite-adopted/

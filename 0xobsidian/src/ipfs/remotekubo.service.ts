@@ -514,7 +514,7 @@ export const getFile = async (
           }
         });
 
-        response.on("error", (err) => {
+        response.on("error", (err: Error) => {
           if (!resolved) {
             resolved = true;
             reject(err);

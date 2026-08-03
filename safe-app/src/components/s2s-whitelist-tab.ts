@@ -241,6 +241,12 @@ export class S2SWhitelistTab extends HTMLElement {
 
       .button.thin {
         padding: 0.25rem .5rem;
+        padding: 0.125rem .5rem;
+        border: none;
+        height: 2rem;
+        margin-left: .5rem;
+        font-size: .875rem;
+
       }
 
       .table {

@@ -1,5 +1,7 @@
 # SPEC-website-starter
 
+> **Audited against live code:** 2026-08-03.
+>
 > Component spec for `website-starter/` — the **downloadable templating starter** an author/templater
 > clones to build a publication's look, plus a **legacy local render loop** slated for replacement by
 > the Bun flow. Read **SPEC-00** first. It is the producer side of the config that

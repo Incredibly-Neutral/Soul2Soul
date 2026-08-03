@@ -1,4 +1,4 @@
-import Multipart from "./multi-part-lite-adopted/main.js";
+// import Multipart from "./multi-part-lite-adopted/main.js";
 
 import {
   dagGet,
@@ -27,7 +27,7 @@ export interface IpfsCtrlr {
   addFilesInDir: (files: string[], ipfs_endpoint: string) => Promise<string>;
   addRecursive: (sourcePath: string, ipfs_endpoint: string) => Promise<string>;
   addAsFolder: (assets: any[], ipfs_endpoint: string) => Promise<string>;
-  addFormData: (formData: Multipart, ipfs_endpoint: string) => Promise<string>;
+  // addFormData: (formData: Multipart, ipfs_endpoint: string) => Promise<string>;
   dagGet: (cid: string, ipfs_endpoint: string) => Promise<string>;
   dagPut: (note: string, ipfs_endpoint: string) => Promise<string>;
   getFile: (
@@ -49,7 +49,7 @@ export const ipfsController: IpfsCtrlr = {
   addFilesInDir,
   addRecursive,
   addAsFolder,
-  addFormData,
+  // addFormData,
   dagGet,
   dagPut,
   getJsonLike,
