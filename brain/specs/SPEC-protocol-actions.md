@@ -288,10 +288,28 @@ input.jobs[] →  verifyProvenance(htmlCid, id, pkp, gateway)
                     │    └───────────────────────────────────┼───────────────────────┘
                     │                                        │
                     └─ all pass ──▶ cp (add to tree)
-                      any fail  ──▶ throw (reject entire update)
+                      └─ any fail ──▶ throw (reject entire update)
 
-                    PREVIEW PATH (Bun shim, no getPrivateKey):
-                    preview=true → skip verify entirely → cp anyway
+                                          PREVIEW PATH (Bun shim, no getPrivateKey):
+                                          preview=true → skip verify entirely → cp anyway
+
+                                          SLUG OVERWRITE check (before rm+cp):
+                                          if existing entry at destPath and !preview:
+                                            │
+                                            ├─ readGenesisAtMfsPath(destPath)
+                                            │   → extract schema.identifier
+                                            │
+                                            ├─ existingGenesis == incomingGenesis?
+                                            │   └─ YES → allow (same page re-render)
+                                            │
+                                            └─ NO → hasDeal(genesis) on publicationModule?
+                                                    │
+                                                    ├─ true → throw (refuse overwrite)
+                                                    │   Path is occupied by deal-protected content
+                                                    │   from a different genesis. Buyers paid for
+                                                    │   that content; silent replacement steals it.
+                                                    │
+                                                    └─ false → allow (rm + cp)
 
 input.remove[] →  per-entry (parallel)
                     │
@@ -379,12 +397,20 @@ trusts it. If copy loop throws, remove loop never runs.
   Pre-gate content can be removed once a deal is revoked by calling `remove` with `replacedBy`
   set to a verified genesis arriving in the same update (rename the pre-gate path through
   verified content).
+- **Slug-overwrite deal check (`verifyPathAvailable`):** before `rm`+`cp` for an existing path,
+  the copy loop reads the existing HTML's JSON-LD, extracts its genesis, and calls `hasDeal`
+  on-chain. If a deal exists **and** the incoming genesis differs, the update throws. This
+  prevents an author from overwriting deal-protected content with their own content. Same-genesis
+  re-renders are exempt (the page just updated, deal unaffected). Preview (`!preview` guard)
+  skips this check.
 
 ### What this does NOT need
 
 - No new on-chain path→genesis index (sig carries genesis; contract already gates author; path is a
   render artifact per slug-override, not a content property — binding it on-chain fights the model).
-- No re-verifying the sig in the remove loop (add loop gated entry; removes parse-trust).
+- No re-verifying the PKP sig in the copy loop or remove loop (add loop gated the entry; remove
+  loop parse-trusts it). Exception: the **copy loop** reads the existing entry's JSON-LD to check
+  `hasDeal` — but that reads genesis, not re-verifying a sig.
 - No author signing of `jobs`/`remove` (PKP sig per-HTML is the stronger integrity proof and already
   exists; "sign the jobs" only binds who approved the list, not that the claims are true —
   superseded).
@@ -404,11 +430,11 @@ new one. No neutralpress changes needed. See §A1 Produces for details.
 
 ### Source files
 
-| File                                      | Role                                                                                        |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `protocol/actions/src/update/verify.ts`   | `verifyProvenance()`, `sanitizeRemovePath()`, `readGenesisAtMfsPath()`, `verifyRevocable()` |
-| `protocol/actions/src/update/main.ts`     | Caller — integrates checks into the job loop and remove loop                                |
-| `protocol/actions/src/render/metadata.ts` | Produce side — `identifier` field added to JSON-LD schema                                   |
+| File                                      | Role                                                                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `protocol/actions/src/update/verify.ts`   | `verifyProvenance()`, `verifyPathAvailable()`, `sanitizeRemovePath()`, `readGenesisAtMfsPath()`, `verifyRevocable()` |
+| `protocol/actions/src/update/main.ts`     | Caller — integrates checks into the job loop and remove loop                                                         |
+| `protocol/actions/src/render/metadata.ts` | Produce side — `identifier` field added to JSON-LD schema                                                            |
 
 ---
 
