@@ -8,7 +8,12 @@ import { contenthashToIPFS } from '../libs/ipfs.factory';
 import { fetchWithTimeout, requireFields } from '../libs/helpers';
 import { canPublish, extractSignerAddress } from '../libs/gates';
 import { getConfig } from '../render/config.ctrl';
-import { verifyProvenance, sanitizeRemovePath, verifyRevocable } from './verify';
+import {
+  verifyProvenance,
+  sanitizeRemovePath,
+  verifyRevocable,
+  verifyPathAvailable,
+} from './verify';
 
 const ACTION = 'evm-update';
 
@@ -149,6 +154,10 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
         // Remove existing entry so cp can overwrite
         if (prevHash) {
+          // Check existing content isn't under an active deal with a different genesis
+          if (!preview) {
+            await verifyPathAvailable(gateway!, destPath, job.id, publicationModule, rpcs?.L2);
+          }
           await fetchWithTimeout(
             `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(destPath)}`,
             { method: 'POST' },

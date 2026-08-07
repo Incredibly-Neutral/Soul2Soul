@@ -210,3 +210,49 @@ export async function verifyRevocable(
     throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… has an active deal`;
   }
 }
+
+/**
+ * Before overwriting an existing path in the tree, check that the existing content
+ * is not under an active deal with a different genesis. If it is, the overwrite
+ * would silently replace deal-protected content — reject.
+ *
+ * Throws if the existing content at `destPath` has an active deal and its genesis
+ * differs from `incomingGenesis`.
+ */
+export async function verifyPathAvailable(
+  gateway: string,
+  destPath: string,
+  incomingGenesis: string,
+  publicationModule: string,
+  rpcs: string[] | undefined,
+): Promise<void> {
+  let existingGenesis: string;
+  try {
+    existingGenesis = await readGenesisAtMfsPath(gateway, destPath);
+  } catch {
+    // No existing content or no parseable schema — path is free
+    return;
+  }
+
+  // Same genesis overwriting itself (re-render of the same page) — always allowed
+  if (existingGenesis === incomingGenesis) return;
+
+  // Different genesis — check if existing content has an active deal
+  const bytes32Genesis = HEX32_RE.test(existingGenesis)
+    ? existingGenesis.toLowerCase()
+    : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(existingGenesis));
+
+  const { provider } = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
+    chainId: 8453,
+    name: 'base',
+  });
+  const contract = new ethers.Contract(publicationModule, HAS_DEAL_ABI, provider);
+  const hasDeal: boolean = await contract.hasDeal(bytes32Genesis);
+
+  if (hasDeal) {
+    throw (
+      `Path occupied by genesis ${bytes32Genesis.slice(0, 12)}… ` +
+      `with active deal — refusing overwrite by genesis ${incomingGenesis.slice(0, 12)}…`
+    );
+  }
+}

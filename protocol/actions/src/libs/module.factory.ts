@@ -207,6 +207,13 @@ export const getVersion = async (
     rpcs,
   );
   if (count <= 1) return null; // no previous version to diff against
-  const v = await evmRead('L2', publicationModule, VERSION_ABI, 'getVersion', [genesis, count - 1], rpcs);
+  const v = await evmRead(
+    'L2',
+    publicationModule,
+    VERSION_ABI,
+    'getVersion',
+    [genesis, count - 2],
+    rpcs,
+  );
   return toVersion(v);
 };
