@@ -47,8 +47,6 @@ export class S2SApp extends HTMLElement {
   }
 
   async initFC() {
-    console.log("FC init")
-
     const skRes  = await fetch('/session-key.json');
     const skData = await skRes.json();
     const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED'; // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
@@ -56,7 +54,6 @@ export class S2SApp extends HTMLElement {
         skData,
         rpcUrl 
       );
-      console.log("FC inititalised")
   }
 
   async connectedCallback() {

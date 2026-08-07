@@ -12,6 +12,7 @@ export const canRead = async (
     safeAddress: string,
     publicationModule: string,
     signerAddress: string,
+    rpcs: string[],
 ): Promise<boolean> => {
 
 
@@ -20,39 +21,37 @@ export const canRead = async (
     // it keccak256-hashes anything else (e.g. a raw CID string).
     const genesis = toBytes32Id(contentId);
 
-    const [canPublish, isOwner, isDeal] = await Promise.all([
-        evmRead("BASE", publicationModule, [
+    const [cp, isOwner, isDeal] = await Promise.all([
+        evmRead("L2", publicationModule, [
             "function canPublish(address _author) view returns (bool)"
-        ], "canPublish", [safeAddress]),
-        evmRead("BASE", safeAddress, [
+        ], "canPublish", [safeAddress], rpcs),
+        evmRead("L2", safeAddress, [
             "function isOwner(address owner) view returns (bool)"
-        ], "isOwner", [signerAddress]),
-        evmRead("BASE", publicationModule, [
+        ], "isOwner", [signerAddress], rpcs),
+        evmRead("L2", publicationModule, [
             "function hasDeal(bytes32 genesis) view returns (bool)"
-        ], "hasDeal", [genesis])
+        ], "hasDeal", [genesis], rpcs)
     ]);
 
-    return canPublish && isOwner && isDeal;
+    return cp && isOwner && isDeal;
 };
 
 export const canPublish = async (
     authorSafeAddress: string,
     publicationModule: string,
     signerAddress: string,
+    rpcs?: string[],
 ): Promise<boolean> => {
 
     const [canPublishResult, isOwner] = await Promise.all([
-        evmRead("BASE", publicationModule, [
+        evmRead("L2", publicationModule, [
             "function canPublish(address _author) view returns (bool)"
-        ], "canPublish", [authorSafeAddress]),
+        ], "canPublish", [authorSafeAddress], rpcs),
 
-        evmRead("BASE", authorSafeAddress, [
+        evmRead("L2", authorSafeAddress, [
             "function isOwner(address owner) view returns (bool)"
-        ], "isOwner", [signerAddress]),
+        ], "isOwner", [signerAddress], rpcs),
     ]);
 
     return canPublishResult && isOwner;
 };
-
-
-

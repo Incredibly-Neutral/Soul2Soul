@@ -555,4 +555,12 @@ export const helpers = [
       return content instanceof Object ? "" : content;
     },
   },
+  {
+    name: "slice",
+    helper: (arr: any[], offset: number, limit?: number) => {
+      if (!arr || !Array.isArray(arr)) return [];
+      if (limit === undefined) return arr.slice(offset);
+      return arr.slice(offset, offset + limit);
+    },
+  },
 ];

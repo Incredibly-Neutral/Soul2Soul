@@ -39,6 +39,9 @@ importers:
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.19.17)(typescript@7.0.2)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript-eslint:
         specifier: ^8.63.0
         version: 8.63.0(eslint@10.7.0(jiti@2.7.0))(typescript@7.0.2)
@@ -2844,21 +2847,27 @@ packages:
 
   '@lit-protocol/access-control-conditions-schemas@8.0.2':
     resolution: {integrity: sha512-aMElsRHLfjOM/S5cEwta6G2+OblSnIve51lv9HGjpb5Lamru4qqVTA8yQwlh7Wh5Sk4/1vZyZc1Mwp3fLxK+Aw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/access-control-conditions@7.4.0':
     resolution: {integrity: sha512-cs6HpJGmUOnQhChZU6XnEFzzR9JqdTYgmlLwMJ052cF9DhHVJeH+qjyO37916CH+lf6mIPAbRnhradwLFZNKXw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/access-control-conditions@8.0.2':
     resolution: {integrity: sha512-5F5fA6QZL4+hYmF0knePoPzyfZLvEudKdf/4Sn3ioHn5jivgnr9QoYL//eHwry7G9kdgeFSJz8rbxdj/d6WjeQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/accs-schemas@0.0.24':
     resolution: {integrity: sha512-sjUfMAc8kj/Tj/GAFnlrbvs9PzoSK5wR3L1hK4kFI6lifq31LsDGqNLWmIEDXRubE/YusK5QaY30h+WPgk8RFQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/accs-schemas@0.0.36':
     resolution: {integrity: sha512-JTKbziOCgvmfHeHFw7v68kUnB4q+oMZ6IIElGnhrTX+2+9hRygrN9gGufJVPjjFDSg4TfZtrDvmD2uknKKpLxg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/auth-browser@7.4.0':
     resolution: {integrity: sha512-mFzRNp7bhEmA/qUkEALhpWCkpSM2m39tonZGCFdMWF5FUAvseauJBfc51bIxpgRZjpMvEjH7LCuvPntGV79hUQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/auth-helpers@7.4.0':
     resolution: {integrity: sha512-xsWZ40WwBYJ4pm3B77CbBEw27KAOEykYNAXrrf+mYYUxiFocHtNHm8K/Dr2FH1elW3BpFyQc1RURyv0U1n3oxw==}
@@ -2913,39 +2922,47 @@ packages:
 
   '@lit-protocol/contracts@0.0.74':
     resolution: {integrity: sha512-8uV038gzBp7ew7a4884SVt9Zhu8CtiTb+A8dKNnByxVoT1kFt4O4DmsaniV8p9AGjNR13IWfpU1NFChmPHVIpQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       typescript: ^5.0.0
 
   '@lit-protocol/contracts@0.5.3':
     resolution: {integrity: sha512-s5q/X0iGLdJYY8dGUJi8EmVkfVJRxMfsVXAb4t/8YEWvOC1oQHuO069nqTPmCqkJO8OcDUknaSSkuxuDIvp2oQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       typescript: ^5.0.0
 
   '@lit-protocol/contracts@0.8.2':
     resolution: {integrity: sha512-MUt+t4/RQOoj8lLyfVffmQfFEmJ5w8JnK/Ouokpv6Z+JzmnG0WVJX0ovUnMQgcUA6Ns99vYBBQKy3AZ4X01FFQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       typescript: ^5.0.0
 
   '@lit-protocol/contracts@0.9.0':
     resolution: {integrity: sha512-roswC9kJaMvKWqRrw9/ROKWpG3S+vPtlWPqVDS6JOjcPmaEEitMtfsAmCM4i3LykGKkbrW4MCvIatglByRu/Xw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       typescript: 5.8.3
       viem: 2.38.3
 
   '@lit-protocol/contracts@0.9.1':
     resolution: {integrity: sha512-nbc46P++OBouzIxTT6O30byZmOvfi7ORpT/vZCdW7a39+tMDd2dWWaKfcFRMP/4oqGPppGnvFHLVKNuaPtriwA==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       typescript: 5.8.3
       viem: 2.38.3
 
   '@lit-protocol/core@7.4.0':
     resolution: {integrity: sha512-FQsIK6Z127ak8lpKhigrfVtA9IWQ9/wSuaKQ9hMWbNqzTp82c7Ky/bEhHqB9vEWCadt4mNk2BsdjIGFmKfNEpg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/crypto@7.4.0':
     resolution: {integrity: sha512-OvuoPreYSPqgr0nZ5LHH/IR+JWPL/+q18AO1BOVnXvwXfCA2UBj7Q1EMeal4oEe0qwTw/016O5675Ca91oAlgA==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/crypto@8.1.0':
     resolution: {integrity: sha512-Ae2+sM6I6jB6r8VGKlnyU1+lhZ/rsJqassqWY3PRjOwgIVTZpu9AGFByQh5IqkLQ+s6BJXmksL64367cV5Zs3A==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/encryption@7.4.0':
     resolution: {integrity: sha512-MiWGEHx7Uy0EcpLdqcdjVqkv/pr1LAQpO06SEkWamILL7A/mqkpZZGpkLbmy+zxeYNt6frpxl1GEHcBpdo1h3Q==}
@@ -2959,6 +2976,7 @@ packages:
 
   '@lit-protocol/lit-node-client-nodejs@7.4.0':
     resolution: {integrity: sha512-SHeS9Di1+aZp7bpx5UoGnAEydfYFj6F3+VEshwHswYvo8u57CL+qF9VM9GDSU50uBPh+WdmhjSTPzaPcRfY7AQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/lit-node-client@7.4.0':
     resolution: {integrity: sha512-YmsxSUkjwmyjUmDqzRTMlBRP3rE2211wpr+sebH0gvpGxnX+PjEgEDCOL2BkC31Og/l0g3AZ86e+9mlLQQFc+g==}
@@ -2966,59 +2984,77 @@ packages:
 
   '@lit-protocol/logger@7.4.0':
     resolution: {integrity: sha512-fP0fmhRFC8WBbZltU3dz0R+0VoLfGVCEHTUhMjtqZ16k5fZkXAbnpGGqGxp8Ebe9LKOjnEq3MpZK1nuDpKsfxQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/logger@8.0.2':
     resolution: {integrity: sha512-261xUbpHs3UbCRnaardxn4IKe49fT5U1XeNkFWxyQqwF5XM6L/ldH+a3C3hM/Jr/Mm84vyqFsMqKFCQajjMEOQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/misc-browser@7.4.0':
     resolution: {integrity: sha512-iP8+oCzHHxrPME0yInJVxHY5qae7wJiuPtmYMSBDtiGB4WVCVNEvoK6qJikfWpT7z8h6ixy1JI/61iKeOfAqKg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/misc@7.4.0':
     resolution: {integrity: sha512-ERMNhhH8JTPw7sip0A044Mkgm4xzyhoAzpC+w1b1i+r36F7aUn9CUTCj9DQml2uktQxpU+G8qzS8mleakJFuDw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/nacl@7.1.1':
     resolution: {integrity: sha512-uuaHcVFnf3G4zRGYN2CrhSVHWXNcCY+VGG2uGS+pSk4EtyRvf9aw8mctQinItua02mTTj6SfFs508VSJ1imWsw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/nacl@7.4.0':
     resolution: {integrity: sha512-mI0MO7OxImpn03HJ6GKwDtrcbvdeP6I9dbU0Fq3buatXFI8wPDgmsOm9Z7rKzeyhnRoTKBqKuPb78jpXdVu3MQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/networks@8.4.1':
     resolution: {integrity: sha512-36uuhCtAghXQAR/1oqlx/QK0nuYuMPMvpeQ4Yx9aoI3V7c3HAmtP1F+93Th7Y5twcI8nVIoB56XntKwXHNrv7g==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
     peerDependencies:
       viem: 2.38.3
 
   '@lit-protocol/schemas@8.0.2':
     resolution: {integrity: sha512-SdbYcm8nGg7HDyIgp/LK3d9wDZ9jpzZdPiRJeBHfoKfVq5qf44hugy/BO3IJXROVb+6TqrsEbsUS1rlqbqi/0A==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/schemas@8.0.3':
     resolution: {integrity: sha512-0ZB1JXaiWRNoTL+Dci5weiT3MEq4SFcq1g5tLIx7cWTjLY8KHypfVnd5hFs/KX7yUQl9DS0BLRlSUUGzS9l0eQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/types@7.1.1':
     resolution: {integrity: sha512-oOtUOEA+5o6vb6xOx7x0vDG5IDsHANbWgB1nc23Ah7SctbITQM7F8VZNaCwRsSj8UxKjWD13eGsMHvMPxoFXdg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/types@7.4.0':
     resolution: {integrity: sha512-0/kqNe3ccYe1Ue35Y6Zm0jKx5+RQSTONIaCZdQ84Gz/dyyj9N2RmQaug3uvs3+VCLF0mnr6FqQn2EybFko1Rqw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/types@8.0.2':
     resolution: {integrity: sha512-IDppgwcAPiIBmzVhfgK5h/5WLhJPFnlEhKqq/6X24M+sD8JL/rfac9P99+lHYMienki8rj4L9+zIUDIotFZCLw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/types@8.0.3':
     resolution: {integrity: sha512-6Y2RZrJ6n/s3FmhbtK2ccYrfGuapRajEklsVxj21sqHzOx0Q2/rIP4QiEw/k85YjTWLCCWAaiuR23ntdbtXDhg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/types@8.0.4':
     resolution: {integrity: sha512-a3KCZakFOkFK3W1IXUqnAs1h60sebn2/W8qT0fbjQKd/xgYHO2IX9x7oGE08WnkP50RV8D8cD3dgUC4wU7zZVw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/uint8arrays@7.1.1':
     resolution: {integrity: sha512-9EycDdx3WQSH97DwIXUVhJXblVR1iJZCSa7watNzt+j2Au7CikO/DiBpIHfBe7ULVLkCI7li5hAnVB9vDfDEtQ==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/uint8arrays@7.4.0':
     resolution: {integrity: sha512-zVifLr9HybUZbnJx+kp+Ru9yFS7CwfUgMBPYbpd5IMctEltJbwipk85X4oNwvUDVpDBWH/DPvxE2ZuJDHO4OGw==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/wasm@7.4.0':
     resolution: {integrity: sha512-VpacY0o5pcdwYbqQDEzL2kUXMb6ST6dWsi+RhNgQ1lADBlMNRuHd5yEQpna8edfY/fypMq3fIe2CCJHjuj8pEA==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit-protocol/wasm@8.1.0':
     resolution: {integrity: sha512-V1EIJHdwoTdxdFoq6N9msatXBNBWZ8cIoa1RvnmerO2QcwAZmq+dYntVK9+F6lFN9p9YL6AI1PW5349WTxg1Zg==}
+    deprecated: This package targets a retired Lit Protocol network and is no longer maintained. See https://developer.litprotocol.com for the current SDK.
 
   '@lit/react@1.0.8':
     resolution: {integrity: sha512-p2+YcF+JE67SRX3mMlJ1TKCSTsgyOVdAwd/nxp3NuV1+Cb6MWALbN6nT7Ld4tpmYofcE5kcaSY1YBB9erY+6fw==}

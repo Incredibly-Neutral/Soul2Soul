@@ -1,6 +1,8 @@
 # SPEC-neutralpress
 
-> **Audited against live code:** 2026-08-03.
+> **Audited against live code:** 2026-08-03; **partial re-audit 2026-08-06** for the frontmatter
+> `slug` override and the (still-unwired) `remove[]` population for the update action (see
+> handoff `handoff-actions-fixes-and-remove.md`).
 >
 > Component spec for `neutralpress/` — the Obsidian plugin for **publication lifecycle, content
 > authoring/encryption, and render triggering**. Read **SPEC-00** first; types from **SPEC-shared**.
@@ -52,7 +54,7 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 | `publication/config.ts` / config.ctrl | `uploadConfig`, `getTaskConfig` (**overlaps safe-app ConfigBuilder**) |
 | `content/content.ctrlr.ts` | `parseNote`, `storeNoteOnLens`, `encryptContent` |
 | `content/_base.ts`, `_note.ts`, `_vault.ts`, `images.ts` | parse `.base`/`.md` notes, vault access, image distribution |
-| `factories/lens.factory.ts`, `note.factory.ts` | Lens posting + note construction (**overlaps shared/lens**) |
+| `factories/lens.factory.ts`, `note.factory.ts` | Lens posting + note construction; `note.factory` reads frontmatter `slug` override (**overlaps shared/lens**) |
 | `preview.ctrlr.ts` | preview rendering |
 | `protocol.abi.ts`, `publication/abi.ts` | ABIs (**overlap shared/contracts**) |
 
@@ -103,6 +105,17 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
   `genesis = signedItem.objectId`); the render pipeline fetches by it as a genesis (`prep`
   `fetchById`→`getLatest(bytes32)`). Don't break this round-trip — a non-bytes32 value breaks ABI
   encoding at `getLatest`.
+- **Slug override (2026-08-06):** `note.factory.ts:parseNote` reads `frontmatter?.slug` and uses it
+  in preference to `slug(title)`. The chosen slug propagates as `body.slug` through the pipeline
+  into the Lit render action's `createPath` (which interpolates `{slug}`). A changed `slug`
+  frontmatter therefore moves the page to a new path — and leaves the old path in the IPFS tree
+  unless the update action's `remove[]` is populated (see next).
+- **`remove[]` not yet populated (2026-08-06):** the update action now accepts
+  `remove?: { path; replacedBy? }[]` to delete stale MFS paths (slug renames via `replacedBy`
+  genesis, or revocations). **neutralpress does not yet build this list** — on a slug change or a
+  revoked render it must emit the old path (with `replacedBy` = the superseding job genesis for a
+  rename). Until wired, slug changes leave orphan paths in the published tree. Cross-ref
+  SPEC-protocol-actions A3.
 - **Preview link uses the path gateway, not the preview subdomain gateway (OPEN-TASK-1, GAP-14).**
   `main.ctrlr.ts:389` emits `https://ipfs.transport-union.dev/ipfs/${res.cid}/${res.path}` with
   `res.cid` as CIDv0 (`Qm…` MFS root). Root-absolute `/assets/...` (INV-11) then drops the
@@ -118,7 +131,8 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 - 🟢 UI/modals/notices, preview, note parsing details, dead-code/dup removal (into shared).
 - 🔴 the Safe creation **salt** (cross-chain address determinism); module `NAME()` discovery (INV-4);
   the author signature passed to render (INV-1); the `content_id` frontmatter round-trip; the
-  remove-temp-signer / owner-handover sequence.
+  frontmatter `slug` override → `body.slug` → `createPath` contract (a changed slug moves the page
+  path and must pair with a `remove[]` entry); the remove-temp-signer / owner-handover sequence.
 
 ## Test seams
 

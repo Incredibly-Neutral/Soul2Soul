@@ -5,12 +5,13 @@ export const decrypt = async (
   body: any,
   authorSafeAddress: string,
   publicationModule: string,
-  signerAddress: string
+  signerAddress: string,
+  rpcs?: string[],
 ): Promise<any> => {
   
   const ciphertext = JSON.parse(body.content);
 
-  if (await canRead(body.id, authorSafeAddress, publicationModule, signerAddress)) {
+  if (await canRead(body.id, authorSafeAddress, publicationModule, signerAddress, rpcs ?? [])) {
 
     let res; 
 

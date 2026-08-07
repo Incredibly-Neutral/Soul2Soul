@@ -356,7 +356,28 @@ const processEachBlocks = (text: string, context: TemplateData): string => {
         const fullMatch = result.substring(startPos, endPos + 9);
 
         try {
-          const array = getContextValue(arrayPath, context);
+          // Resolve subexpressions: {{#each (helperName arg1 arg2)}}
+          let array: any;
+          const subexprMatch = arrayPath.match(/^\(\s*(\w+)\s+(.+?)\s*\)$/);
+          if (subexprMatch) {
+            const helperName = subexprMatch[1];
+            const helper = helperMap.get(helperName);
+            if (helper) {
+              const args = subexprMatch[2].split(/\s+/).map((arg) => {
+                if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
+                  return arg.slice(1, -1);
+                }
+                if (/^\d+$/.test(arg)) return parseInt(arg, 10);
+                return getContextValue(arg, context);
+              });
+              array = (helper as Function)(...args);
+            } else {
+              array = undefined;
+            }
+          } else {
+            array = getContextValue(arrayPath, context);
+          }
+
           if (!Array.isArray(array)) {
             console.error(
               "Each block array not found or not an array:",
@@ -606,6 +627,7 @@ export const processPartials = async (
   template: string,
   partials: Partial[],
   templateData: TemplateData,
+  gateway?: string,
 ): Promise<string> => {
   // First fetch and clean all partials
   const processedPartials: { [key: string]: string } = {};
@@ -613,7 +635,7 @@ export const processPartials = async (
   for (const partial of partials) {
     try {
       const response = await fetch(
-        `https://ipfs.transport-union.dev/api/v0/cat?arg=${partial.cid}`,
+        `${gateway}/api/v0/cat?arg=${partial.cid}`,
         {
           method: "POST",
         },

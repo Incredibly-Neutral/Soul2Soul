@@ -21,6 +21,18 @@ export const sampleJob: S2SJob = {
 };
 
 // ============================================================================
+// Shared endpoints fixture
+// ============================================================================
+
+export const sampleEndpoints = {
+  ipfsGateway: 'https://ipfs.transport-union.dev',
+  rpcs: {
+    L1: ['https://lb.drpc.live/ethereum/key'],
+    L2: ['https://lb.drpc.live/base/key'],
+  },
+};
+
+// ============================================================================
 // Valid prep input
 // ============================================================================
 
@@ -28,6 +40,7 @@ export const validPrepInput: PrepActionInput = {
   publication: 'alice.soul2soul.eth',
   contentIds: ['lens-post-1'],
   configCid: 'QmConfig1',
+  endpoints: sampleEndpoints,
 };
 
 // ============================================================================
@@ -40,6 +53,7 @@ export const validSingleInput: SingleActionInput = {
   authorSafeAddress: '0xAuthorSafe' as string,
   publication: 'alice.soul2soul.eth',
   configCid: 'QmConfig1',
+  endpoints: sampleEndpoints,
 };
 
 // ============================================================================
@@ -51,4 +65,5 @@ export const validEvmUpdateInput: EvmUpdateActionInput = {
   jobs: [sampleJob],
   signature: '0xdeadbeef' as string,
   authorSafeAddress: '0xAuthorSafe' as string,
+  endpoints: sampleEndpoints,
 };

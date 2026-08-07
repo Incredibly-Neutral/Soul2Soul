@@ -20,6 +20,8 @@ export class S2SRecordsTab extends HTMLElement {
   private fetching = false;
   private searchTerm = '';
   private editingKey: string | null = null;
+  /** Keys that were changed by the last updateConfig call — gets a yellow highlight. */
+  private changedKeys: Set<string> = new Set();
   private storageItems: Array<{
     pieceCid: string;
     rootCid: string | null;
@@ -83,6 +85,8 @@ export class S2SRecordsTab extends HTMLElement {
           type: this.determineRecordType(key),
         }))
       );
+      // Fresh chain read clears changed-state highlights
+      this.changedKeys.clear();
     } catch (error) {
       console.error('Error loading records:', error);
     }
@@ -165,6 +169,8 @@ export class S2SRecordsTab extends HTMLElement {
       'https://neutralpress.mypinata.cloud',
     );
 
+    console.log(import.meta.env.VITE_GITHUB_TOKEN);
+    
     const assets = new AssetsBuilder(
       ipfs,
       import.meta.env.VITE_GITHUB_TOKEN,
@@ -228,8 +234,22 @@ export class S2SRecordsTab extends HTMLElement {
     }
 
     // ── existing ───────────────────────────────────────────────────────
+    const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
     window.open(executionUrl, '_blank');
+
+    // Mark changed keys for yellow highlight (before store update so the first
+    // subscriber-triggered render already has the class)
+    this.changedKeys.add('config');
+    const oldRepo = store.getRecord('repo');
+    if (oldRepo !== repo) {
+      this.changedKeys.add('repo');
+    }
+
+    // Optimistic local update so the new value shows immediately
+    store.setRecord({ key: 'config', value: configCid, type: 'content' });
+
+    this.render();
   }
 
   /**
@@ -372,6 +392,11 @@ export class S2SRecordsTab extends HTMLElement {
           color: var(--gray-600);
           font-size: 0.75rem;
         }
+
+        .record-changed {
+          background: rgba(238, 181, 29, 0.15);
+          border-left: 3px solid var(--color-yellow);
+        }
       </style>
 
       ${!hasCache && this.fetching ? `
@@ -389,8 +414,21 @@ export class S2SRecordsTab extends HTMLElement {
               <div class="table-header">Value</div>
               <div class="table-header"></div>
 
-              ${records.map(record => `
-                <div class="table-row">
+              ${records.map(record => {
+                const isChanged = this.changedKeys.has(record.key);
+                const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
+                const isConfig = record.key === 'config';
+                const isRepo = record.key === 'repo';
+                let valueDisplay: string;
+                if (isConfig && record.value) {
+                  valueDisplay = `<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                } else if (isRepo && record.value) {
+                  valueDisplay = `<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                } else {
+                  valueDisplay = `<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+                }
+                return `
+                <div class="${rowClass}">
                   <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
                     ${record.key}
                   </div>
@@ -403,11 +441,7 @@ export class S2SRecordsTab extends HTMLElement {
                         value="${record.value}"
                         id="edit-value-${record.key}"
                       />
-                    ` : `
-                      <span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">
-                        ${record.value}
-                      </span>
-                    `}
+                    ` : valueDisplay}
                   </div>
 
                   <div class="table-cell">
@@ -424,7 +458,7 @@ export class S2SRecordsTab extends HTMLElement {
                     `}
                   </div>
                 </div>
-              `).join('')}
+              `}).join('')}
             </div>
           ` : `
             <div class="empty-state">

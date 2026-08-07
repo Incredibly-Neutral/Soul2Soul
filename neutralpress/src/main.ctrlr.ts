@@ -349,8 +349,23 @@ export class MainController implements IMainController {
 		try {
 			if (this.notice) this.notice.setMessage('4/5 Rendering ...');
 
+			console.log(publication);
+
 			// move outside
 			const signature = await this.oxo.ctrlr.account['BASE'].signMessage('lit actions auth');
+			// Build RPC endpoints from the DRPC key, with Alchemy fallback
+			const rpcKey = this.oxo.ctrlr.plugin.settings.rpc_key;
+			const alchemyKey = 'REDACTED';
+			const rpcs = {
+				L1: [
+					`https://lb.drpc.live/ethereum/${rpcKey}`,
+					`https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`,
+				],
+				L2: [
+					`https://lb.drpc.live/base/${rpcKey}`,
+					`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`,
+				],
+			};
 			const res: any = await renderwithLitActions(
 				!publish,
 				this.oxo.ctrlr.lit,
@@ -362,6 +377,7 @@ export class MainController implements IMainController {
 				publication,
 				streamIds,
 				undefined,
+				rpcs,
 			);
 
 			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
@@ -395,18 +411,33 @@ export class MainController implements IMainController {
 			};
 
 			const v1Label = toPreviewLabel(res.cid);
-			new Notice(
-				_link(`${res.cid}`, `https://${v1Label}.preview.transport-union.dev/${res.path}`),
-				0,
+			// Preview link — root CID (full site)
+			const rootLink = _link(
+				`${v1Label}.preview → site root`,
+				`https://${v1Label}.preview.transport-union.dev/`,
 			);
+			// Preview link — published page
+			const pageLink = _link(
+				`${v1Label}.preview${res.path} → published`,
+				`https://${v1Label}.preview.transport-union.dev${res.path}`,
+			);
+			const previewNotice = new Notice('', 0);
+			previewNotice.noticeEl.appendChild(pageLink);
+			previewNotice.noticeEl.appendChild(rootLink);
 
-			console.log('https://' + v1Label + '.preview.transport-union.dev/' + res.path);
+			console.log(`preview root: https://${v1Label}.preview.transport-union.dev/`);
+			console.log(`preview page: https://${v1Label}.preview.transport-union.dev${res.path}`);
 			if (publish) {
-				console.log('https://' + publication + '.link' + res.path);
-				new Notice(
-					_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path),
-					0,
+				const prodRootLink = _link(`${publication} → root`, `https://${publication}.link/`);
+				const prodPageLink = _link(
+					`${publication}${res.path} → published`,
+					`https://${publication}.link${res.path}`,
 				);
+				const prodNotice = new Notice('', 0);
+				prodNotice.noticeEl.appendChild(prodPageLink);
+				prodNotice.noticeEl.appendChild(prodRootLink);
+				console.log(`prod root: https://${publication}.link/`);
+				console.log(`prod page: https://${publication}.link${res.path}`);
 			}
 		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);
