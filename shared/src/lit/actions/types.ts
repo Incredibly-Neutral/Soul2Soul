@@ -1,11 +1,23 @@
-import { S2SJob } from "../../protocol/types";
+import { S2SJob } from '../../protocol/types';
 
 export type ActionResult<T> =
-  | { ok: true;  action: string; data: T, trace: any[]}
-  | { ok: false; action: string; error: string, trace: any[] };
+  | { ok: true; action: string; data: T; trace: any[] }
+  | { ok: false; action: string; error: string; trace: any[] };
 
-export interface PrepInput  { publication: string; contentIds: string[]; configCid?: string }
-export interface PrepData   { jobs: S2SJob[] }
+export interface PrepInput {
+  publication: string;
+  contentIds: string[];
+  configCid?: string;
+  prevRootCid?: string;
+  endpoints: {
+    ipfsGateway?: string;
+    rpcs: { L1: string[]; L2: string[] };
+  };
+}
+export interface PrepData {
+  jobs: S2SJob[];
+  remove?: { path: string; replacedBy?: string }[];
+}
 
 export interface SingleInput {
   job: S2SJob;
@@ -14,6 +26,10 @@ export interface SingleInput {
   publication: string;
   configCid?: string;
   preview?: boolean;
+  endpoints: {
+    ipfsGateway?: string;
+    rpcs: { L1: string[]; L2: string[] };
+  };
 }
 export interface SingleData {
   job: S2SJob;
@@ -30,8 +46,14 @@ export interface EvmUpdateInput {
   signature: string;
   authorSafeAddress: string;
   preview?: boolean;
+  remove?: { path: string; replacedBy?: string }[];
+  endpoints: {
+    ipfsGateway?: string;
+    rpcs: { L1: string[]; L2: string[] };
+  };
 }
 
 export interface EvmUpdateData {
   cid: string;
+  trace?: any[];
 }

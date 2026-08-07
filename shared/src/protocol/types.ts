@@ -174,11 +174,7 @@ export interface S2STemplateData {
 // ============================================================================
 
 export interface S2SCollection {
-  source: string;
-  query: any;
   filters?: any[];
-  key: string;
-  value: string;
   slug: string;
 }
 
@@ -186,13 +182,14 @@ export interface S2SRipple {
   origins: string[];
   destination: string;
   reference: string;
-  query: any;
+  query?: any;
+  filters?: any[];
 }
 
 export interface S2STemplateConfig {
   reference: string;
-  file: string;
-  path: string;
+  file: string | null;
+  path: string | null;
   collections?: S2SCollection[];
   filters?: any[];
 }

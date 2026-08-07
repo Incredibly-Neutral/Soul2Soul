@@ -23,6 +23,7 @@ export const tableStylesString = `
     }
 
     .table-cell {
+        line-height: 1.275;
         padding: .75rem;
         border-bottom: 1px solid var(--gray-600);
         color: var(--gray-50);

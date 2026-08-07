@@ -14,9 +14,6 @@ export * from './lit';
 // pin
 export * from './pin';
 
-// eth-rpc
-export * from './eth-rpc';
-
 // metadata (provenance for rendered HTML, separate from content-item)
 export type { S2SContentInfo } from './metadata';
 

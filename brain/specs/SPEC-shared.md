@@ -1,6 +1,7 @@
 # SPEC-shared
 
-> **Audited against live code:** 2026-08-03.
+> **Audited against live code:** 2026-08-03; **partial re-audit 2026-08-06** for the
+> `EvmUpdateInput.remove` field + its zod schema (see handoff `handoff-actions-fixes-and-remove.md`).
 >
 > Component spec for `shared/` (`@s2s/soul2soul-shared`) — the common library every other package
 > imports. Read **SPEC-00** first. This spec is the **canonical type catalog** the front-end specs
@@ -136,6 +137,12 @@ decision).
 **NEW:** `rendering/action-io.ts` now also exports zod schemas for the new content-item types:
 `s2sPublicContentSchema`, `s2sProofSchema`, `s2sContentItemSchema`, `s2sSecretBodySchema`,
 `didEthrSchema`. These are the single source of truth for the new flat content-item shape.
+
+**2026-08-06:** `EvmUpdateActionInputSchema` (and the `EvmUpdateInput` interface in
+`lit/actions/types.ts`) gained an optional `remove: { path: string; replacedBy?: string }[]` field —
+the update action's stale-path-removal input (slug renames / revocations). The compile-time sentinel
+`_AssertEvmUpdateInputMatches` (interface ↔ zod-inferred) still resolves to `true`. Semantics live
+in SPEC-protocol-actions A3; client-side population is a neutralpress TODO (SPEC-neutralpress).
 
 `bodySchema` in `publication/validation.ts` is now **only for backward-compatibility with the
 S2SBody-driven actions** — new content-type validation should use `s2sContentItemSchema`.

@@ -5,11 +5,11 @@ import { getProtocolControllerAndModules } from "./ens.factory";
 import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts'
 
 
-export const getProtocolInfo = async (dev: boolean) => {
+export const getProtocolInfo = async (dev: boolean, rpcs?: { L1: string[]; L2: string[] }) => {
 
   try {
 
-  const { multisig, configModule } = await getProtocolControllerAndModules();
+  const { multisig, configModule } = await getProtocolControllerAndModules(rpcs);
 
   console.log(multisig, configModule)
 
@@ -17,7 +17,7 @@ export const getProtocolInfo = async (dev: boolean) => {
         throw new Error("Failed to get multisig or configModule from ENS");
     }
 
-    const [dataGateway, ensRecords, ensRegistry, publicationFactory, recordsFactory, pkpEthAddress, litActionPrep, litActionRender, litActionUpdate ] = await evmRead("BASE", configModule, Abi_S2SRecordsModule, "getRecords", [["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress", "lit_action_prep", "lit_action_render", "lit_action_update"]]);
+    const [dataGateway, ensRecords, ensRegistry, publicationFactory, recordsFactory, pkpEthAddress, litActionPrep, litActionRender, litActionUpdate ] = await evmRead("L2", configModule, Abi_S2SRecordsModule, "getRecords", [["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress", "lit_action_prep", "lit_action_render", "lit_action_update"]], rpcs?.L2);
 
     return {
       gateway: dataGateway,
