@@ -89,8 +89,8 @@ Key design decisions (from HANDOFF-content-item):
 
 | type | file | shape (abbrev) | status |
 |---|---|---|---|
-| `S2SBody` | `protocol/types.ts` | **discriminated union**: `S2SBodyBase` + `S2SBodyPlain` (`encryption: false`, `content`, `title`, `slug`, `custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields) | 🔸 Lens-era — superseded by `S2SContentItem` (rendering/types.ts). Actions still use it. |
-| `S2SPublicContent` | `content/types.ts` | Lens-era shape (`creationDate`, `modifiedDate`, `language`, ...) | 🔸 Deprecated — replaced by `rendering/types.ts` version |
+| `S2SBody` | `protocol/types.ts` | **discriminated union**: `S2SBodyBase` + `S2SBodyPlain` (`encryption: false`, `content`, `title`, `slug`, `custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields) | 🔸 Lens-era — superseded by `S2SContentItem` (`protocol/types.ts`). Actions still use it. |
+| `S2SPublicContent` | `content/types.ts` | Lens-era shape (`creationDate`, `modifiedDate`, `language`, ...) | 🔸 Deprecated — replaced by `protocol/types.ts` version |
 | `S2SContentItem` | `content/types.ts` | empty extension of Lens-era `S2SPublicContent` | 🔸 Deprecated — no purpose |
 | `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.lens`, `publisher`, `contentCid`, `license`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
 
@@ -120,7 +120,7 @@ Key design decisions (from HANDOFF-content-item):
 | `contracts/` | ABIs: `ens`, `records_module`, `safe_factory`, `safe_implementation` | the ABI source of truth |
 | `ens/` | ENS abi + helpers (namehash, node) | shared `node` convention (INV-6) |
 | `ipfs/`, `pin/` | IPFS add/cat/dag + pinning | client-side counterpart to in-action `ipfs.factory` |
-| `metadata/` | `S2SContentInfo` type (+ client-side provenance helpers) | signing itself is in the action (`single/metadata.ts`, INV-5) |
+| `metadata/` | `S2SContentInfo` type (+ client-side provenance helpers) | signing itself is in the action (`render/metadata.ts`, INV-5) |
 | `identity/` | **NEW** — sign-content, verify-content, JCS canonical JSON | EIP-712 signing and authorship verification. The `TypedDataSigner` interface is implemented by `PermissionlessSimpleService` in 0xobsidian (which already has `signTypedData`). `signContentItem` method wraps `buildSignedContentItem` for the publish pipeline. |
 | `helpers/` | `withRetry`, `callWithTimeout` | |
 | `eth-rpc/` | RPC helpers | |
@@ -165,7 +165,7 @@ entry. This is the existing author/publication gate, extended to guard appends.
   record-key set.
 - zod exists client-side but not in actions — *by design*, not a gap.
 - **Two content-type systems coexist** during migration: the old Lens-era S2SBody/S2SPublicContent
-  and the new S2SContentItem (rendering/types.ts). Actions still use the old; the identity modules
+  and the new S2SContentItem (protocol/types.ts). Actions still use the old; the identity modules
   use the new. Existing code not yet migrated.
 - **contenthash codec + CIDv1-for-subdomain conversion not yet homed here (GAP-14).** The INV-6
   `contenthash_wrapped` codec (`0xe3`/`0x01`/base58-decode CIDv0) and the CIDv0→v1 display-label

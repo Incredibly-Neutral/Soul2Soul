@@ -37,16 +37,17 @@ Kubo for config/asset building.
 
 | path | role |
 |---|---|
-| `components/s2s-app.ts` | root element; 3 tabs (Licenses/Whitelists/Records); two-phase render (cache→fetch); reads site root via `getText(node,"contenthash_wrapped")` |
-| `components/s2s-licences-tab.ts` | grant/accept/revoke + list active/pending licenses |
+| `components/s2s-app.ts` | root element; **4 tabs (Deals/Records/Storage/Whitelists)**; two-phase render (cache→fetch); reads site root via `getText(node,"contenthash_wrapped")` |
+| `components/s2s-deals-tab.ts` | Filecoin deals/offers via `getAllDealsAndOffers`; maps deals → list (replaces the old `s2s-licences-tab.ts`) |
+| `components/s2s-storage-tab.ts` | storage management (new tab) |
 | `components/s2s-whitelist-tab.ts` | author/dev whitelist management |
 | `components/s2s-records-tab.ts` | view/edit config records; config/asset build entry |
 | `components/copy-*.ts`, `toggle-button.ts` | UI atoms (clipboard, etc.) |
 | `state/store.ts` + `observable.ts` + `*.store.ts` + `storage.ts` | observable store, **localStorage-backed**, slice subscriptions |
 | `lib/safe-integration.ts` | Safe SDK wrapper: discover modules (INV-4), read records/licenses, **propose** mutations |
 | `lib/protocol-integration.ts` | `getProtocolInfo(false, L1, L2)` via **viem** clients |
-| `lib/config-builder.ts` | `ConfigBuilder`: GitHub repo → templates + `mapping.json` → `S2SPublicationConfig` |
-| `lib/assets-builder.ts` | `AssetsBuilder`: GitHub `js/css/fonts/img/svg` → MFS dir → `assetsCid` (INV-11) |
+| ~~`lib/config-builder.ts`~~ | ~~`ConfigBuilder`~~ — **moved to `shared/src/publication/config-builder.ts`** (GAP-12 consolidation); safe-app imports from shared |
+| ~~`lib/assets-builder.ts`~~ | ~~`AssetsBuilder`~~ — **moved to `shared/src/publication/assets-builder.ts`** (GAP-12 consolidation); safe-app imports from shared |
 | `lib/ipfs.factory.ts`, `ipfs-fs.factory.ts`, `evm.ts` | IPFS add/dag/MFS + RPC helpers |
 
 ## On-chain interaction model

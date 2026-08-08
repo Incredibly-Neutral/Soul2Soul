@@ -62,9 +62,9 @@ the plugin bundle — part of this package's code.
 | `eth/permissionless.safe.service.ts` | per-chain **4337 Safe** (publicClient + pimlicoClient + signer) | live |
 | `eth/` (safe.contracts, *.abi, tx.factory, provider.factory, chains.factory, waap.service) | Safe contracts/ABIs, tx building, chains | live; **ABIs overlap shared** |
 | `paymaster/` (userop.factory, paymaster.factory) | 4337 user-op + paymaster sponsorship | live |
-| `lens/lens.ctrlr.ts` | `LensService` — profile check/register, posting (local) | live |
+| ~~`lens/lens.ctrlr.ts`~~ | ~~`LensService` — profile check/register, posting (local)~~ | **gone** — file removed (2026-08-07 drift check). Only commented-out remnants remain (`main.ctrlr.ts`: `lens: any` fields + commented `checkLensProfile`/`addLensAccount` calls; `settings.ts`: commented Lens-profile UI). Reconcile whether lens is fully dead — residual `lens: any` fields still typed. |
 | `ipfs/` (pinata.ctrlr, remotekubo.service, ipld.factory, pin.factory) | pinning + IPFS (local); **`addJson()`** for dual-path upload | live |
-| `lit/_lit.service.ts` | old Lit SDK service (Naga/Chronicle Yellowstone, PKP minting) | **DEAD** — pre-Chipotle, superseded by shared `LitService` |
+| ~~`lit/_lit.service.ts`~~ | ~~old Lit SDK service (Naga/Chronicle Yellowstone, PKP minting)~~ | **removed** (was DEAD — pre-Chipotle, superseded by shared `LitService`). File deleted; shared `LitService` is current. |
 | `filecoin/filecoin.ctrlr.ts` | `FilecoinController` — CAR builder (filecoin-pin, unixfs-v1-2025), `uploadJson` (Filecoin SPs), `uploadToKubo` (delegates `addJson`), `retrieveJson` | **NEW** |
 | `settings.ts`, `settings.factory.ts` | persisted `authors[]` (incl. encrypted `key_blob`); `kubo_url` defaulting to `ipfs.transport-union.dev` | live; **plaintext never written** |
 | `keystore/keystore.ts` | `IKeystore`, `SafeStorageKeystore`, `PlaintextKeystore` fallback | **NEW** — Track A |
@@ -91,8 +91,11 @@ the plugin bundle — part of this package's code.
 
 ## Local gotchas / gaps (incl. single-source-of-truth violations)
 
-- **`lit/_lit.service.ts` is dead** (pre-Chipotle: `@lit-protocol/*` SDK, `nagaTest`,
-  `CRONICLE_YELLOWSTONE`, PKP minting). Remove — shared `LitService` is current.
+- **`lit/_lit.service.ts` removed** (was dead — pre-Chipotle: `@lit-protocol/*` SDK, `nagaTest`,
+  `CRONICLE_YELLOWSTONE`, PKP minting). File deleted; shared `LitService` is current. Done.
+- **`lens/lens.ctrlr.ts` gone** — file removed; only commented-out remnants in `main.ctrlr.ts`/
+  `settings.ts` (`lens: any` fields + commented calls). Reconcile residual typing + whether the
+  neutralpress `oxo.ctrlr.lens.createFeed` call (publication/new.ts) still resolves here.
 - **Duplication to consolidate into `shared` (SPEC-00 single-source rule):** Safe factory/
   implementation **ABIs** (`eth/*.abi.ts`) overlap `shared/contracts`; **IPFS/Pinata**
   (`ipfs/*`) overlaps `shared/ipfs` + `shared/pin`; **Lens** posting overlaps `shared/lens`. Each is

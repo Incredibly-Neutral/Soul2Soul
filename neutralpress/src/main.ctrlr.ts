@@ -11,6 +11,7 @@ import {
 	renderwithLitActions,
 	toPreviewLabel,
 } from '@s2s/soul2soul-shared';
+import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
 import { ContentController } from './content/content.ctrlr';
 
 export interface IMainController {
@@ -244,6 +245,43 @@ export class MainController implements IMainController {
 		return this.publications[subdomain];
 	}
 
+	/** Normalized Kubo API base URL (with protocol) for Filecoin tree export. */
+	private get kuboBaseUrl(): string {
+		const raw = this.oxo.settings.kubo_url || 'ipfs.transport-union.dev';
+		return raw.startsWith('http') ? raw : `https://${raw}`;
+	}
+
+	/**
+	 * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
+	 * Never throws, never blocks the main flow. When `expectedCid` is given,
+	 * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
+	 * notice on mismatch.
+	 */
+	private filecoinUploadBackground(
+		kind: string,
+		upload: () => Promise<FilecoinUploadResult>,
+		expectedCid?: string,
+	): void {
+		(async () => {
+			try {
+				const result = await upload();
+				console.log(`[filecoin] ${kind} uploaded:`, result);
+				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
+					console.error(
+						`[cid-mismatch] ${kind}: Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+					);
+					new Notice(
+						`⚠️ CID mismatch (${kind}): Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+					);
+				} else if (expectedCid && result.rootCid) {
+					console.log(`[cid-ok] ${kind}: both paths agree on root CID:`, expectedCid);
+				}
+			} catch (err) {
+				console.error(`[filecoin] ${kind} background upload failed:`, err);
+			}
+		})();
+	}
+
 	async publishToPublication(file: TFile, publication: string, publish: boolean) {
 		let license;
 		const subdomain = publication.split('.')[0];
@@ -266,36 +304,24 @@ export class MainController implements IMainController {
 		// The frontmatter root_cid is a fallback (handled below) if this upload fails.
 
 		// 1. Upload to Kubo → get IPFS CID
-		const kuboUrl = this.oxo.settings.kubo_url || 'ipfs.transport-union.dev';
+		const kuboUrl = this.kuboBaseUrl;
 		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
 		console.log('[kubo] uploaded:', kuboCid);
 
 		/// fire & forget — Filecoin upload doesn't need to block the main flow
-		(async () => {
-			try {
-				// 2. Upload to Filecoin → get Root CID + Piece CID
+		this.filecoinUploadBackground(
+			'article',
+			async () => {
 				const pubAddress = await service.getMultiSig();
 				const authorEoa = this.oxo.ctrlr.user?.eoa;
-				const fcResult = await this.oxo.ctrlr.storage.uploadJson(
+				return this.oxo.ctrlr.storage.uploadJson(
 					signedItem,
 					[pubAddress, authorEoa].filter(Boolean),
 					'article',
 				);
-				console.log('[filecoin]', fcResult);
-
-				// 3. Verify CIDs match — same bytes → same Root CID
-				if (kuboCid !== fcResult.rootCid) {
-					console.error('[cid-mismatch] Kubo:', kuboCid, '≠ Filecoin:', fcResult.rootCid);
-					new Notice(
-						`⚠️ CID mismatch: Kubo ${kuboCid.slice(0, 12)}… ≠ Filecoin ${fcResult.rootCid.slice(0, 12)}…`,
-					);
-				} else {
-					console.log('[cid-ok] both paths agree on root CID:', kuboCid);
-				}
-			} catch (err) {
-				console.error('[filecoin] background upload failed:', err);
-			}
-		})();
+			},
+			kuboCid,
+		);
 
 		////
 
@@ -383,12 +409,26 @@ export class MainController implements IMainController {
 			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
 
 			if (res.cid) {
-				await pinCidFromRemote(
+				// Fire-and-forget both the Pinata pin and the Filecoin upload in
+				// parallel — neither blocks the render flow, and the two durable-
+				// storage paths run concurrently (SPEC-00 §3.2: IPFS pinning +
+				// Filecoin hot-storage). pinCidFromRemote swallows errors and
+				// returns a boolean, so this can't throw into renderCalls.
+				void pinCidFromRemote(
 					res.cid,
 					'https://ipfs.transport-union.dev',
 					this.oxo.settings.pinata_jwt,
-				);
-				console.log('pinned on pinata');
+				).then((ok) => console.log(ok ? 'pinned on pinata' : 'pinata pin failed'));
+
+				if (publish) {
+					// Fire-and-forget Filecoin durability for the rendered site root
+					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage, not yet done).
+					this.filecoinUploadBackground(
+						'render-root',
+						() => this.oxo.ctrlr.storage.uploadTree(res.cid, this.kuboBaseUrl),
+						res.cid,
+					);
+				}
 			}
 
 			console.log({ RES: res });

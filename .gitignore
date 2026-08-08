@@ -39,4 +39,7 @@ coverage/
 *.log
 .tmp/
 temp/
+repomix-output.xml
 # multi-part-lite-adopted/
+.pi
+.hermes
