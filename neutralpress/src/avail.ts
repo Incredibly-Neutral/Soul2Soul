@@ -123,13 +123,17 @@ export async function measureAvailability(publication: string, cid: string): Pro
 
 /** ONE summary line comparing the three timings vs the .limo switch. */
 export function logAvailability(a: Availability): void {
-	const firstRetrievable = Math.min(
-		...[a.pinata, a.ipfsio].filter((x): x is number => x != null),
-	);
+	// Gateways that retrieved within the window. Empty-set case: if neither
+	// pinata nor ipfs.io returned 200, firstRetrievable stays null (never
+	// Infinity), so the verdict can't claim the publish was served at all.
+	const gateways = [a.pinata, a.ipfsio].filter((x): x is number => x != null);
+	const firstRetrievable = gateways.length ? Math.min(...gateways) : null;
+
 	const limoSwitched = a.limo.ms != null;
+	// 'graceful' requires a gateway to have actually retrieved AND limo to have
+	// switched no later than that first retrieval. No retrievable gateway => not graceful.
 	const graceful =
-		limoSwitched &&
-		(firstRetrievable == null || a.limo.ms! <= firstRetrievable);
+		limoSwitched && firstRetrievable != null && a.limo.ms! <= firstRetrievable;
 	const verdict = limoSwitched
 		? graceful
 			? 'graceful (limo switched first)'
