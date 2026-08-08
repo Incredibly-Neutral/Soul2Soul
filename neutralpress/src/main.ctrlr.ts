@@ -13,6 +13,7 @@ import {
 } from '@s2s/soul2soul-shared';
 import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
 import { ContentController } from './content/content.ctrlr';
+import { measureAvailability } from './avail';
 
 export interface IMainController {
 	basePath: string;
@@ -429,6 +430,11 @@ export class MainController implements IMainController {
 						res.cid,
 					);
 				}
+			}
+
+			if (res.cid) {
+				// Publish availability measurement — fire-and-forget, never blocks.
+				void measureAvailability(publication, res.cid);
 			}
 
 			console.log({ RES: res });
