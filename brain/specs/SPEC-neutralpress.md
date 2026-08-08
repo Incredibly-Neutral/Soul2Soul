@@ -54,7 +54,7 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 | `publication/config.ts` / config.ctrl | `uploadConfig`, `getTaskConfig` (**overlaps safe-app ConfigBuilder**) |
 | `content/content.ctrlr.ts` | `parseNote`, `storeNoteOnLens`, `encryptContent` |
 | `content/_base.ts`, `_note.ts`, `_vault.ts`, `images.ts` | parse `.base`/`.md` notes, vault access, image distribution |
-| `factories/lens.factory.ts`, `note.factory.ts` | Lens posting + note construction; `note.factory` reads frontmatter `slug` override (**overlaps shared/lens**) |
+| ~~`factories/lens.factory.ts`~~, `note.factory.ts` | ~~Lens posting~~ + note construction; `note.factory` reads frontmatter `slug` override | **`lens.factory.ts` gone** — file removed (2026-08-07 drift check); `note.factory.ts` remains. Lens posting now via `main.oxo.ctrlr.lens.createFeed` in `publication/new.ts:48` — but 0xobsidian's lens controller is commented-out (see SPEC-0xobsidian); reconcile whether that call is live or dead. |
 | `preview.ctrlr.ts` | preview rendering |
 | `protocol.abi.ts`, `publication/abi.ts` | ABIs (**overlap shared/contracts**) |
 
@@ -90,9 +90,11 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 
 - **Duplicate config path:** `publication/config` `uploadConfig` vs safe-app `ConfigBuilder` — two
   config builders that can diverge; consolidate the config-shaping into `shared`.
-- **Duplicate ABIs** (`protocol.abi.ts`, `publication/abi.ts`) vs `shared/contracts`; **duplicate
-  Lens** (`factories/lens.factory`) vs `shared/lens` — single-source candidates (cf. 0xobsidian,
-  which duplicates some of the same).
+- **Duplicate ABIs** (`protocol.abi.ts`, `publication/abi.ts`) vs `shared/contracts`; ~~duplicate
+  Lens (`factories/lens.factory`) vs `shared/lens`~~ — `factories/lens.factory.ts` **removed**
+  (2026-08-07); lens now called via `oxo.ctrlr.lens` (0xobsidian-side, commented-out). Reconcile
+  whether lens is fully dead across the authoring path (cf. 0xobsidian, which duplicates some of
+  the same).
 - **`litUsageKey` in plugin settings** with a `// hardcoded?` note — it's the INV-8 group credential
   that authorizes execution; treat its provisioning deliberately (and it's a secret at rest like the
   author key — low stakes per SPEC-0xobsidian, but it gates publishing).

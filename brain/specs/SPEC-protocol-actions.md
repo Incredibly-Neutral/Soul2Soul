@@ -2,7 +2,10 @@
 
 > **Audited against live code:** 2026-08-03; **partial re-audit 2026-08-06** for the Lit fetch-budget
 > fix, `evmRead` failover, MFS tree-path removal (`remove`), and slug-override propagation (see
-> handoff `handoff-actions-fixes-and-remove.md`). **Tree-mutation integrity gate implemented
+> handoff `handoff-actions-fixes-and-remove.md`). **Constants extraction implemented 2026-08-07**
+> (see handoff `handoff-actions-extract-constants.md`) — `libs/constants.ts` + `renderer/constants.ts`
+> deleted; gateway + RPCs now arrive via the `endpoints` action input (GAP-9 action-side resolved;
+> orchestrator `rpcs` source still unwired, see handoff §6). **Tree-mutation integrity gate implemented
 > 2026-08-07** (see §A3 Decision Tree below). Sub-component paths and the Lens→module migration
 > are reconciled to current code where today's work touched them; the ripples/collections narrative
 > still needs a full re-confirm against `prep` (flagged inline).
@@ -52,7 +55,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | `libs/ipfs.factory.ts`     | IPFS cat/add/dag/MFS + `contenthashToIPFS`                                                                                                                        | live (dag/cbor helpers mostly dead)                                                |
 | `libs/gates.ts`            | `canPublish`, `canRead`, `extractSignerAddress`                                                                                                                   | live                                                                               |
 | `libs/decrypt.ts`          | `decrypt` (gated `Lit.Actions.Decrypt`)                                                                                                                           | live                                                                               |
-| `libs/constants.ts`        | endpoints + **hardcoded API keys**                                                                                                                                | live ⚠ GAP-9                                                                       |
+| ~~`libs/constants.ts`~~     | ~~endpoints + hardcoded API keys~~                                                                                                                                | **gone** — extracted to action input `endpoints` 2026-08-07 (GAP-9 action-side resolved; `renderer/constants.ts` also deleted). `rpcs`/`gateway` now threaded through `evm.ts` / `ipfs.factory.ts` / etc. Orchestrator `rpcs` source still unwired (handoff §6). |
 | `libs/helpers.ts`          | `fetchWithTimeout`, `addressToUserId`                                                                                                                             | live                                                                               |
 
 ---
@@ -559,8 +562,10 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
   it now fetches **once** and filters per-collection in-memory. `getDeals` `pageSize` lowered
   200→100 to keep each response minimal. Lesson: inside a Lit action, never issue N identical
   on-chain reads — fetch once and filter locally.
-- **Hardcoded secrets (GAP-9):** `libs/constants.ts` exposes Pinata key+secret, Alchemy, DRPC in
-  public action code. Rotate + inject.
+- **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
+  `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
+  not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired
+  (handoff §6) + rotate the previously-exposed keys. See SPEC-00 GAP-9.
 - **Lens gone from the action path (GAP-10 ✅):** `api.testnet.lens.xyz` is no longer called by
   actions (`lens.factory.ts` → `module.factory.ts`). Lens remains only on the authoring side.
 - **Provenance (GAP-1):** `render/main.ts` builds the metadata from real signed data (`author.did`

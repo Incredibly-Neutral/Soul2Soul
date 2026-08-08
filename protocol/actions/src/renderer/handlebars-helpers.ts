@@ -4,21 +4,16 @@ function logObjectWithPosts(label: string, data: any) {
     const truncatedPosts = data.map((p) => ({
       title: p?.title,
       creation_date: p?.creation_date,
-      stream_id: p?.stream_id?.slice(0, 20) + "...",
+      stream_id: p?.stream_id?.slice(0, 20) + '...',
     }));
     console.log(label, truncatedPosts);
-  } else if (
-    data &&
-    typeof data === "object" &&
-    data.posts &&
-    Array.isArray(data.posts)
-  ) {
+  } else if (data && typeof data === 'object' && data.posts && Array.isArray(data.posts)) {
     const truncatedData = {
       ...data,
       posts: data.posts.map((p) => ({
         title: p?.title,
         creation_date: p?.creation_date,
-        stream_id: p?.stream_id?.slice(0, 20) + "...",
+        stream_id: p?.stream_id?.slice(0, 20) + '...',
       })),
     };
     console.log(label, truncatedData);
@@ -29,7 +24,7 @@ function logObjectWithPosts(label: string, data: any) {
 
 export const helpers = [
   {
-    name: "unique_years",
+    name: 'unique_years',
     helper: function (posts: any[]) {
       if (!posts || !Array.isArray(posts)) {
         return [];
@@ -66,7 +61,7 @@ export const helpers = [
               years.push(year);
             }
           } catch (e) {
-            console.error("Error processing post date:", e);
+            console.error('Error processing post date:', e);
           }
         }
 
@@ -75,13 +70,13 @@ export const helpers = [
 
         return years;
       } catch (error) {
-        console.error("Error in unique_years helper:", error);
+        console.error('Error in unique_years helper:', error);
         return [];
       }
     },
   },
   {
-    name: "filter_by_year",
+    name: 'filter_by_year',
     helper: function (year: any, posts: any[]) {
       if (!posts || !Array.isArray(posts) || !year) {
         return [];
@@ -118,10 +113,7 @@ export const helpers = [
                 if (!isNaN(date.getTime())) {
                   timestamp = Math.floor(date.getTime() / 1000);
                 }
-              } else if (
-                dateStr.length >= 4 &&
-                dateStr.substring(0, 4) === year
-              ) {
+              } else if (dateStr.length >= 4 && dateStr.substring(0, 4) === year) {
                 matches = true;
               }
             }
@@ -140,40 +132,38 @@ export const helpers = [
 
         // Simple sort by creation_date in descending order (newest first)
         filtered.sort((a, b) => {
-          const dateA =
-            a._timestamp || (a.creation_date ? parseInt(a.creation_date) : 0);
-          const dateB =
-            b._timestamp || (b.creation_date ? parseInt(b.creation_date) : 0);
+          const dateA = a._timestamp || (a.creation_date ? parseInt(a.creation_date) : 0);
+          const dateB = b._timestamp || (b.creation_date ? parseInt(b.creation_date) : 0);
           return dateB - dateA; // Descending order
         });
 
         return filtered;
       } catch (error) {
         // Log error but continue
-        console.error("Error in filter_by_year helper:", error);
+        console.error('Error in filter_by_year helper:', error);
         return [];
       }
     },
   },
   {
-    name: "extract_images",
+    name: 'extract_images',
     helper: (input: string) => {
-      if (!input) return "x";
+      if (!input) return 'x';
 
-      let arr: string[] = input.split("<").map((item) => item.trim());
+      let arr: string[] = input.split('<').map((item) => item.trim());
 
       let prevWasImage = false;
 
       // Remove the first and last elements from the array
-      arr[0] = "";
+      arr[0] = '';
       arr.pop();
 
       // Process each element of the array
       arr = arr.map((item) => {
-        if (item.startsWith("img") && !prevWasImage) {
+        if (item.startsWith('img') && !prevWasImage) {
           prevWasImage = true;
           return `/section><section class='container images'><${item}`;
-        } else if (!item.startsWith("img") && prevWasImage) {
+        } else if (!item.startsWith('img') && prevWasImage) {
           prevWasImage = false;
           return `/section><section class='small-container'><${item}`;
         } else {
@@ -182,17 +172,17 @@ export const helpers = [
       });
 
       // Join the array back into a string
-      return arr.join("<");
+      return arr.join('<');
     },
   },
   {
-    name: "markdown",
+    name: 'markdown',
     helper: (content: string) => {
       return content;
     },
   },
   {
-    name: "trim_seo_desc",
+    name: 'trim_seo_desc',
     helper: (content: string) => {
       if (content) {
         return content.length <= 140 ? content : content.substring(0, 140);
@@ -200,55 +190,55 @@ export const helpers = [
     },
   },
   {
-    name: "indexEqualsZero",
+    name: 'indexEqualsZero',
     helper: (index: number) => {
       return index === 0;
     },
   },
   {
-    name: "moreTag",
+    name: 'moreTag',
     helper: (content: string) => {
       content = content.replace(
-        "===more",
+        '===more',
         '<a href="#" class="more_link"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 30" fill="none" x="0px" y="0px"><path fill-rule="evenodd" clip-rule="evenodd" d="M5.6159 9.67991C5.79268 9.46777 6.10797 9.4391 6.3201 9.61589L12 14.3491L17.6799 9.61589C17.8921 9.4391 18.2073 9.46777 18.3841 9.67991C18.5609 9.89204 18.5322 10.2073 18.3201 10.3841L12.3201 15.3841C12.1347 15.5386 11.8653 15.5386 11.6799 15.3841L5.67992 10.3841C5.46778 10.2073 5.43912 9.89204 5.6159 9.67991Z" fill="black"/></svg><span>Lees verder ...</span></a><div class="more">',
       );
-      content = content.replace("<p></p>", "");
-      content = content + "</div>";
+      content = content.replace('<p></p>', '');
+      content = content + '</div>';
       return content;
     },
   },
   {
-    name: "relPath",
+    name: 'relPath',
     helper: (type: string, language: string, options: any) => {
-      let path = "./";
-      if (language == "en") {
-        path = "../";
+      let path = './';
+      if (language == 'en') {
+        path = '../';
       }
       return path;
     },
   },
   {
-    name: "backgroundify",
+    name: 'backgroundify',
     helper: (content: string) => {
-      if (!content) return "";
+      if (!content) return '';
 
       try {
-        if (typeof content !== "string") {
+        if (typeof content !== 'string') {
           content = String(content);
         }
 
-        content = content.replace(/<p>/g, "<p><span>");
-        content = content.replace(/<\/p>/g, "</span></p>");
+        content = content.replace(/<p>/g, '<p><span>');
+        content = content.replace(/<\/p>/g, '</span></p>');
 
         return content;
       } catch (error) {
-        console.error("Error in backgroundify helper:", error);
-        return "";
+        console.error('Error in backgroundify helper:', error);
+        return '';
       }
     },
   },
   {
-    name: "ifCond",
+    name: 'ifCond',
     helper: function (v1: any, operator: any, v2: any, options: any) {
       // Make sure we have valid options
       if (!options || typeof options !== 'object') {
@@ -257,34 +247,34 @@ export const helpers = [
 
       let result = false;
       switch (operator) {
-        case "==":
+        case '==':
           result = v1 == v2;
           break;
-        case "===":
+        case '===':
           result = v1 === v2;
           break;
-        case "!=":
+        case '!=':
           result = v1 != v2;
           break;
-        case "!==":
+        case '!==':
           result = v1 !== v2;
           break;
-        case "<":
+        case '<':
           result = v1 < v2;
           break;
-        case "<=":
+        case '<=':
           result = v1 <= v2;
           break;
-        case ">":
+        case '>':
           result = v1 > v2;
           break;
-        case ">=":
+        case '>=':
           result = v1 >= v2;
           break;
-        case "&&":
+        case '&&':
           result = !!(v1 && v2);
           break;
-        case "||":
+        case '||':
           result = !!(v1 || v2);
           break;
         default:
@@ -299,41 +289,41 @@ export const helpers = [
     },
   },
   {
-    name: "isUndefined",
-    helper: function(value: string, options: any) {
-      if (typeof value === "undefined") {
-        return options.inverse ? options.inverse(this) : "";
+    name: 'isUndefined',
+    helper: function (value: string, options: any) {
+      if (typeof value === 'undefined') {
+        return options.inverse ? options.inverse(this) : '';
       } else {
-        return options.fn ? options.fn(this) : "";
+        return options.fn ? options.fn(this) : '';
       }
     },
   },
   {
-    name: "or",
+    name: 'or',
     helper: (first: string, second: string) => {
       return first || second;
     },
   },
   {
-    name: "ifIn",
-    helper: function(elem: string, list: string[], options: any) {
+    name: 'ifIn',
+    helper: function (elem: string, list: string[], options: any) {
       if (list.indexOf(elem) > -1) {
-        return options.fn ? options.fn(this) : "";
+        return options.fn ? options.fn(this) : '';
       }
-      return options.inverse ? options.inverse(this) : "";
+      return options.inverse ? options.inverse(this) : '';
     },
   },
   {
-    name: "unlessIn",
-    helper: function(elem: string, list: string[], options: any) {
+    name: 'unlessIn',
+    helper: function (elem: string, list: string[], options: any) {
       if (list.indexOf(elem) > -1) {
-        return options.inverse ? options.inverse(this) : "";
+        return options.inverse ? options.inverse(this) : '';
       }
-      return options.fn ? options.fn(this) : "";
+      return options.fn ? options.fn(this) : '';
     },
   },
   {
-    name: "limit",
+    name: 'limit',
     helper: (arr: any[], limit: number) => {
       if (arr && arr.constructor === Array) {
         return arr.slice(0, limit);
@@ -343,107 +333,105 @@ export const helpers = [
     },
   },
   {
-    name: "ifMoreThan",
-    helper: function(a: string, b: number, options: any) {
+    name: 'ifMoreThan',
+    helper: function (a: string, b: number, options: any) {
       if (parseInt(a) > b) {
-        return options.fn ? options.fn(this) : "";
+        return options.fn ? options.fn(this) : '';
       } else {
-        return options.inverse ? options.inverse(this) : "";
+        return options.inverse ? options.inverse(this) : '';
       }
     },
   },
   {
-    name: "stripHTML",
+    name: 'stripHTML',
     helper: (content: string) => {
       if (content !== null && content !== undefined) {
-        const strippedFromHtml = content
-          .toString()
-          .replace(/(&nbsp;|<([^>]+)>)/gi, "");
+        const strippedFromHtml = content.toString().replace(/(&nbsp;|<([^>]+)>)/gi, '');
         return strippedFromHtml;
       } else {
-        return "";
+        return '';
       }
     },
   },
   {
-    name: "stripFromHashTags",
+    name: 'stripFromHashTags',
     helper: (content: string) => {
       if (content !== null && content !== undefined) {
-        const strippedFromHashTags = content.replace(/^(\s*#\w+\s*)+$/gm, "");
+        const strippedFromHashTags = content.replace(/^(\s*#\w+\s*)+$/gm, '');
         return strippedFromHashTags;
       } else {
-        return "";
+        return '';
       }
     },
   },
   {
-    name: "explode",
+    name: 'explode',
     helper: (array: any[]) => {
       if (array && array.length > 0) {
         const mappedArray = array.map((object) => {
           return object.slug;
         });
-        return mappedArray.join(" ");
+        return mappedArray.join(' ');
       } else {
-        return "";
+        return '';
       }
     },
   },
   {
-    name: "lowercase",
+    name: 'lowercase',
     helper: (words: string) => {
-      if (words !== undefined && words !== null && typeof words !== "object") {
+      if (words !== undefined && words !== null && typeof words !== 'object') {
         return words.toLowerCase();
       } else {
-        return "";
+        return '';
       }
     },
   },
   {
-    name: "sluggify",
+    name: 'sluggify',
     helper: (words: string) => {
-      if (words !== undefined && words !== null && typeof words !== "object") {
+      if (words !== undefined && words !== null && typeof words !== 'object') {
         return words
           .toLowerCase()
-          .replace(/[^a-zA-Z ]/g, "")
+          .replace(/[^a-zA-Z ]/g, '')
           .trim()
-          .split(" ")
-          .join("-");
+          .split(' ')
+          .join('-');
       } else {
-        return "fout in naam";
+        return 'fout in naam';
       }
     },
   },
   {
-    name: "anchorify",
+    name: 'anchorify',
     helper: (words: string) => {
-      if (words !== undefined && words !== null && typeof words !== "object") {
+      if (words !== undefined && words !== null && typeof words !== 'object') {
         return words
           .toString()
-          .replace(/(&nbsp;|<([^>]+)>)/gi, "")
+          .replace(/(&nbsp;|<([^>]+)>)/gi, '')
           .toLowerCase()
-          .replace(/[^a-zA-Z ]/g, "")
+          .replace(/[^a-zA-Z ]/g, '')
           .trim()
-          .split(" ")
+          .split(' ')
           .slice(0, 3)
-          .join("-");
+          .join('-');
       } else {
-        return "fout-in-anchor";
+        return 'fout-in-anchor';
       }
     },
   },
   {
-    name: "index_of",
+    name: 'index_of',
     helper: (context: any[], index: number) => {
       return context[index];
     },
   },
   {
-    name: "formatDate",
+    name: 'formatDate',
     helper: (date: string | number, language: string) => {
       try {
         let parsed;
-        if (typeof date === "string") {
+        if (typeof date === 'string') {
           // Try parsing as ISO string first
           parsed = new Date(date);
           // If invalid, try parsing as Unix timestamp
@@ -456,40 +444,40 @@ export const helpers = [
         }
 
         if (isNaN(parsed.getTime())) {
-          console.error("formatDate: Invalid date:", date);
-          return "";
+          console.error('formatDate: Invalid date:', date);
+          return '';
         }
 
-        let lCode = "";
+        let lCode = '';
         switch (language) {
-          case "nl":
-            lCode = "nl-NL";
+          case 'nl':
+            lCode = 'nl-NL';
             break;
           default:
-            lCode = "en-US";
+            lCode = 'en-US';
             break;
         }
 
         // Format date in Dutch style
         const formatter = new Intl.DateTimeFormat(lCode, {
-          day: "numeric",
-          month: "numeric",
-          year: "numeric",
+          day: 'numeric',
+          month: 'numeric',
+          year: 'numeric',
         });
 
         return formatter.format(parsed);
       } catch (error) {
-        console.error("formatDate error:", error);
-        return "";
+        console.error('formatDate error:', error);
+        return '';
       }
     },
   },
   {
-    name: "formatDateAsMonthYear",
+    name: 'formatDateAsMonthYear',
     helper: (date: string | number, language: string) => {
       try {
         let parsed;
-        if (typeof date === "string") {
+        if (typeof date === 'string') {
           // Try parsing as ISO string first
           parsed = new Date(date);
           // If invalid, try parsing as Unix timestamp
@@ -502,65 +490,94 @@ export const helpers = [
         }
 
         if (isNaN(parsed.getTime())) {
-          console.error("formatDate: Invalid date:", date);
-          return "";
+          console.error('formatDate: Invalid date:', date);
+          return '';
         }
 
-        let lCode = "";
+        let lCode = '';
         switch (language) {
-          case "nl":
-            lCode = "nl-NL";
+          case 'nl':
+            lCode = 'nl-NL';
             break;
           default:
-            lCode = "en-US";
+            lCode = 'en-US';
             break;
         }
 
         // Format date in Dutch style
         const formatter = new Intl.DateTimeFormat(lCode, {
           // day: 'numeric',
-          month: "long",
-          year: "numeric",
+          month: 'long',
+          year: 'numeric',
         });
 
         return formatter.format(parsed);
       } catch (error) {
-        console.error("formatDate error:", error);
-        return "";
+        console.error('formatDate error:', error);
+        return '';
       }
     },
   },
   {
-    name: "log",
+    name: 'log',
     helper: (data: string) => {
-      return "<script>console.log(" + data + ");</script>";
+      return '<script>console.log(' + data + ');</script>';
       // return '<script></script>';
     },
   },
   {
-    name: "json",
+    name: 'json',
     helper: (context: any) => {
       return JSON.stringify(context, null, 2);
     },
   },
   {
-    name: "concat",
+    name: 'concat',
     helper: (string1: string, string2: string) => {
       return string1 + string2;
     },
   },
   {
-    name: "noObject",
+    name: 'noObject',
     helper: (content: any) => {
-      return content instanceof Object ? "" : content;
+      return content instanceof Object ? '' : content;
     },
   },
   {
-    name: "slice",
+    name: 'slice',
     helper: (arr: any[], offset: number, limit?: number) => {
       if (!arr || !Array.isArray(arr)) return [];
       if (limit === undefined) return arr.slice(offset);
       return arr.slice(offset, offset + limit);
+    },
+  },
+  {
+    name: 'sections',
+    helper: (content: string) => {
+      if (!content || typeof content !== 'string') return content;
+
+      // Replace <!-- section {json} -->...<!-- /section --> with <tag attrs>...</tag>
+      return content.replace(
+        /<!--\s*section\s*\{([\s\S]*?)\}\s*-->\n?([\s\S]*?)<!--\s*\/section\s*-->/gi,
+        (_match: string, attrsJson: string, innerContent: string) => {
+          let raw: Record<string, string> = {};
+          try {
+            raw = JSON.parse('{' + attrsJson + '}');
+          } catch {
+            raw = {};
+          }
+
+          const tag = raw.tag || 'section';
+          const attrParts: string[] = [];
+          for (const key of Object.keys(raw)) {
+            if (key === 'tag') continue;
+            attrParts.push(key + '="' + String(raw[key]) + '"');
+          }
+          const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';
+
+          return '<' + tag + attrStr + '>\n' + innerContent.trim() + '\n</' + tag + '>';
+        },
+      );
     },
   },
 ];
