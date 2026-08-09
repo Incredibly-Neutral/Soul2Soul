@@ -140,10 +140,14 @@ export function logAvailability(a: Availability): void {
 	// reports the full window, which .limo naturally beats.
 	const gateways: GatewayResult[] = [a.pinata, a.ipfsio];
 
-	// 'graceful' only when .limo switched at-or-before EVERY gateway (each a
-	// number). If any gateway beat limo, or limo never switched, it's exposed.
+	// 'graceful' requires .limo switched AND at least one gateway actually
+	// retrieved AND .limo switched at-or-before EVERY gateway's ms. If no
+	// gateway ever retrieved, or any gateway beat limo, or limo never
+	// switched, it's exposed.
 	const graceful =
-		a.limo.switched && gateways.every((g) => a.limo.ms <= g.ms);
+		a.limo.switched &&
+		gateways.some((g) => g.reached) &&
+		gateways.every((g) => a.limo.ms <= g.ms);
 	const verdict = graceful
 		? 'graceful (limo switched at-or-before every gateway)'
 		: 'exposed (some gateway retrievable before limo switched, or none retrieved)';
