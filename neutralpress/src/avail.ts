@@ -14,7 +14,7 @@ import { parseCID } from '@s2s/soul2soul-shared';
  * the window reports the full window elapsed.
  */
 
-const POLL_TIMEOUT_MS = 300_000;
+const POLL_TIMEOUT_MS = 900_000;
 const POLL_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
