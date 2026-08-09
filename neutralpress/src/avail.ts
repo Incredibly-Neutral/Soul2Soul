@@ -26,10 +26,10 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 	return true;
 }
 
-/** Compare two CID strings as decoded bytes (multibase-stripped). */
+/** Compare two CID strings by version-independent multihash digest. */
 function sameCid(a: string, b: string): boolean {
 	try {
-		return bytesEqual(parseCID(a).bytes, parseCID(b).bytes);
+		return bytesEqual(parseCID(a).digest, parseCID(b).digest);
 	} catch {
 		return a === b;
 	}
