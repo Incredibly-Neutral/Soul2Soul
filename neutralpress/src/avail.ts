@@ -16,7 +16,7 @@ import { parseCID, toPreviewLabel } from '@s2s/soul2soul-shared';
 
 export const LIMO_FALLBACK_HOST = 'preview.transport-union.dev';
 
-const POLL_TIMEOUT_MS = 20_000;
+const POLL_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
