@@ -13,7 +13,7 @@ import {
 } from '@s2s/soul2soul-shared';
 import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
 import { ContentController } from './content/content.ctrlr';
-import { measureAvailability } from './avail';
+import { checkFilecoinStatus, logAvailability, measureAvailability } from './avail';
 
 export interface IMainController {
 	basePath: string;
@@ -256,16 +256,23 @@ export class MainController implements IMainController {
 	 * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
 	 * Never throws, never blocks the main flow. When `expectedCid` is given,
 	 * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
-	 * notice on mismatch.
+	 * notice on mismatch. When `onResult` is given, it is invoked with the
+	 * upload result (or `undefined` if the upload failed) — used to chain the
+	 * Filecoin availability check, which needs the piece CID only the upload
+	 * produces.
 	 */
 	private filecoinUploadBackground(
 		kind: string,
 		upload: () => Promise<FilecoinUploadResult>,
 		expectedCid?: string,
+		onResult?: (result: FilecoinUploadResult | undefined) => void,
 	): void {
 		(async () => {
 			try {
 				const result = await upload();
+				// Capture the {rootCid, pieceCid} result — Filecoin is indexed by
+				// piece CID, which the availability check polls via isRetrievable.
+				onResult?.(result);
 				// Quiet success — no logging unless CID parity is violated.
 				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
 					console.error(
@@ -286,6 +293,9 @@ export class MainController implements IMainController {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.error(`[filecoin] ${kind} background upload failed: ${msg}`);
 				}
+				// The upload is broken upstream (KNOWN) — surface the absence so the
+				// availability check can report a full-window, not-reached leg.
+				onResult?.(undefined);
 			}
 		})();
 	}
@@ -430,20 +440,35 @@ export class MainController implements IMainController {
 					this.oxo.settings.pinata_jwt,
 				).then((ok) => console.log(ok ? 'pinned on pinata' : 'pinata pin failed'));
 
+				// Publish availability — fire-and-forget, never blocks. The 3 HTTP
+				// legs (.link / pinata / ipfs.io) run immediately; the 4th leg
+				// (Filecoin isRetrievable) runs once the Filecoin upload resolves,
+				// because Filecoin is indexed by piece CID which only the upload
+				// produces. Once both have settled, log all four timings.
+				const basePromise = measureAvailability(publication, res.cid, this.oxo.settings.pinata_jwt);
+
+				const runFilecoinLeg = (result?: FilecoinUploadResult) => {
+					void checkFilecoinStatus(
+						{ pieceCid: result?.pieceCid ?? '' },
+						this.oxo.ctrlr.storage,
+					).then((filecoin) => basePromise.then((base) => logAvailability({ ...base, filecoin })));
+				};
+
 				if (publish) {
 					// Fire-and-forget Filecoin durability for the rendered site root
-					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage, not yet done).
+					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage). Currently
+					// broken upstream (KNOWN); on failure runFilecoinLeg gets undefined,
+					// so the leg reports a full-window, not-reached instead of crashing.
 					this.filecoinUploadBackground(
 						'render-root',
 						() => this.oxo.ctrlr.storage.uploadTree(res.cid, this.kuboBaseUrl),
 						res.cid,
+						runFilecoinLeg,
 					);
+				} else {
+					// Preview (no Filecoin upload): the leg reports not-reached.
+					runFilecoinLeg(undefined);
 				}
-			}
-
-			if (res.cid) {
-				// Publish availability measurement — fire-and-forget, never blocks.
-				void measureAvailability(publication, res.cid, this.oxo.settings.pinata_jwt);
 			}
 
 			

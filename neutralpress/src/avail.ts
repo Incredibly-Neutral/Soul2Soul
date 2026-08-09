@@ -3,14 +3,23 @@ import { parseCID } from '@s2s/soul2soul-shared';
 /**
  * Publish availability measurement (minimal).
  *
- * Three fire-and-forget checks run after a publish, each polling for a bounded
+ * Four fire-and-forget checks run after a publish, each polling for a bounded
  * window and reporting a timing in ms since the check started:
  *   1. .link cache-switch detection  (GET the publication front, x-ipfs-path matched the new CID)
  *   2. pinata API status             (authenticated GET /data/pinList confirms the CID is pinned)
  *   3. ipfs.io retrievability        (HEAD ipfs.io returns 200)
- * A single console.log summarizes the three timings.
+ *   4. filecoin retrievability       (poll the SP via isRetrievable(pieceCid))
+ * A single console.log summarizes the four timings.
  * Every check always returns a number in ms — a check that never hit within
  * the window reports the full window elapsed.
+ *
+ * Check 4 does NOT import the Filecoin SDK: neutralpress deliberately keeps
+ * @filoz/synapse-sdk (and the whole Filecoin module) out of the plugin bundle
+ * (see main.ctrlr.ts). Filecoin is indexed by PIECE CID (bafkz…), not the root
+ * IPFS CID, so the leg needs the pieceCid produced by the upload. The caller
+ * threads that pieceCid plus the already session-key-initialized
+ * FilecoinController (`this.oxo.ctrlr.storage`) as an opaque `unknown`; this
+ * module only calls the existing `isRetrievable(pieceCid)` probe.
  */
 
 const POLL_TIMEOUT_MS = 300_000;
@@ -149,34 +158,91 @@ export async function checkRetrievable(
 	return { ms: Date.now() - started, reached: false };
 }
 
+/**
+ * Check 4 — time (ms) until the Filecoin storage provider (SP) confirms it
+ * serves the piece for this publish. Polls the existing
+ * `storage.isRetrievable(pieceCid)` probe (a real HTTP GET of the SP's
+ * PDP/CDN URL — the strongest "the SP serves the bytes" signal) every
+ * POLL_INTERVAL_MS until it returns true, up to POLL_TIMEOUT_MS.
+ *
+ * Filecoin is indexed by PIECE CID (bafkz…), not the root IPFS CID, so the
+ * caller must supply the pieceCid that the upload produced.
+ *
+ * Defensive, never throws: when no pieceCid is available or the storage is
+ * unusable (the Filecoin upload is currently broken upstream, so a valid
+ * pieceCid may never arrive), it reports reached:false with the full window
+ * and leaves the other three legs unaffected.
+ *
+ * @param opts.pieceCid the Filecoin piece CID to probe (empty if none).
+ * @param opts.dataSetId optional Filecoin dataset id (threaded for context).
+ * @param storage       the session-key-initialized FilecoinController, kept an
+ *                      opaque `unknown` so neutralpress stays SDK-free.
+ */
+export async function checkFilecoinStatus(
+	opts: { pieceCid: string; dataSetId?: string },
+	storage: unknown, // FilecoinController (FilecoinStorage) — opaque to avoid the SDK import
+): Promise<GatewayResult> {
+	const started = Date.now();
+	const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+	const probe = (storage as { isRetrievable?: (pieceCid: string) => Promise<boolean> } | undefined)
+		?.isRetrievable;
+
+	// No piece CID (upload never produced one) or no usable probe: the leg can
+	// never reach — report the full window without touching the other legs.
+	if (!opts.pieceCid || typeof probe !== 'function') {
+		return { ms: POLL_TIMEOUT_MS, reached: false };
+	}
+
+	while (Date.now() < deadline) {
+		try {
+			if (await probe(opts.pieceCid)) {
+				return { ms: Date.now() - started, reached: true };
+			}
+		} catch {
+			/* retry silently — transient provider errors */
+		}
+		await sleep(POLL_INTERVAL_MS);
+	}
+	return { ms: Date.now() - started, reached: false };
+}
+
 export interface Availability {
 	publication: string;
 	cid: string;
 	limo: LimoResult;
 	pinata: PinataResult;
 	ipfsio: GatewayResult;
+	filecoin: GatewayResult;
 }
 
-/** Run all three checks in parallel and log the summary. */
+/**
+ * Run the three HTTP legs in parallel and return the partial Availability
+ * (without the Filecoin leg). The Filecoin leg is chained separately by the
+ * caller (it needs the piece CID produced by the upload, which is only known
+ * after the upload resolves), and the caller then calls logAvailability with
+ * all four legs.
+ */
 export async function measureAvailability(
 	publication: string,
 	cid: string,
 	pinataJwt: string,
-): Promise<void> {
+): Promise<Omit<Availability, 'filecoin'>> {
 	const [limo, pinata, ipfsio] = await Promise.all([
 		checkLimoCacheSwitch(publication, cid),
 		checkPinataStatus(cid, pinataJwt),
 		checkRetrievable(`https://ipfs.io/ipfs/${cid}`),
 	]);
-	logAvailability({ publication, cid, limo, pinata, ipfsio });
+	return { publication, cid, limo, pinata, ipfsio };
 }
 
-/** Log the three per-check timings. */
+/** Log the four per-check timings. */
 export function logAvailability(a: Availability): void {
 	console.log(
 		`[avail] publish ${a.publication} cid=${a.cid}\n` +
 			`  .link switch:  ${a.limo.ms}ms (switched: ${a.limo.switched})\n` +
 			`  pinata:        ${a.pinata.ms}ms (reached: ${a.pinata.reached})\n` +
-			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})`,
+			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})\n` +
+			`  filecoin:      ${a.filecoin.ms}ms (reached: ${a.filecoin.reached})`,
 	);
 }
