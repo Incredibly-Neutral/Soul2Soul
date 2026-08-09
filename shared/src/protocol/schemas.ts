@@ -1,52 +1,34 @@
 import { z } from 'zod';
 
 // ============================================================================
-// PKP
-// ============================================================================
-export const pkpSchema = z.object({
-  ethAddress: z.string(),
-  publicKey: z.string(),
-  tokenId: z.string(),
-});
-
-// ============================================================================
 // Protocol Info
 // ============================================================================
 export const protocolSchema = z.object({
-  addr: z.string(),
-  recordsModule: z.string(),
-  dataGateway: z.string(),
-  assetsGateway: z.string(),
-  lensApp: z.string(),
+  gateway: z.string(),
+  ensRegistry: z.string(),
   ensRecords: z.string(),
-  pkp: pkpSchema,
-  litActionPrep: z.string(),
-  litActionSingle: z.string(),
-  litActionCbor: z.string(),
-  litActionRootUpdate: z.string(),
+  publicationFactory: z.string(),
+  recordsFactory: z.string(),
+  pkp: z.string(),
+  litActions: z.object({
+    prep: z.string(),
+    render: z.string(),
+    update: z.string(),
+  }),
 });
 
 // ============================================================================
 // Template Config
 // ============================================================================
-export const querySchema = z.object({
-  method: z.string(),
-  args: z.any(),
-});
-
 export const collectionSchema = z.object({
-  source: z.string(),
-  query: querySchema,
-  filters: z.array(z.any()).optional(),
-  key: z.string(),
-  value: z.string(),
   slug: z.string(),
+  filters: z.array(z.any()).optional(),
 });
 
 export const templateConfigSchema = z.object({
   reference: z.string(),
-  file: z.string(),
-  path: z.string(),
+  file: z.string().nullable(),
+  path: z.string().nullable(),
   collections: z.array(collectionSchema).optional(),
   filters: z.array(z.any()).optional(),
 });
@@ -58,8 +40,8 @@ export const rippleSchema = z.object({
   origins: z.array(z.string()),
   destination: z.string(),
   reference: z.string(),
-  query: querySchema,
   filters: z.array(z.any()).optional(),
+  query: z.any().optional()
 });
 
 // ============================================================================

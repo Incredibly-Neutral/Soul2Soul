@@ -6,7 +6,9 @@ import type { EvmUpdateInput, SingleInput } from '../lit/actions/types';
 // Did:ethr schema
 // ============================================================================
 
-export const didEthrSchema = z.string().regex(/^did:ethr:0x[0-9a-fA-F]{40}$/, 'Author must be a did:ethr')
+export const didEthrSchema = z
+  .string()
+  .regex(/^did:ethr:0x[0-9a-fA-F]{40}$/, 'Author must be a did:ethr');
 
 // ============================================================================
 // S2SPublicContent (signed public metadata)
@@ -66,8 +68,18 @@ export const s2sContentBodySchema = z.object({
 // ============================================================================
 const ActionResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.discriminatedUnion('ok', [
-    z.object({ ok: z.literal(true), action: z.string(), data: dataSchema, trace: z.array(z.any()) }),
-    z.object({ ok: z.literal(false), action: z.string(), error: z.string(), trace: z.array(z.any()) }),
+    z.object({
+      ok: z.literal(true),
+      action: z.string(),
+      data: dataSchema,
+      trace: z.array(z.any()),
+    }),
+    z.object({
+      ok: z.literal(false),
+      action: z.string(),
+      error: z.string(),
+      trace: z.array(z.any()),
+    }),
   ]);
 
 // ============================================================================
@@ -78,6 +90,14 @@ export const PrepActionInputSchema = z.object({
   publication: z.string().min(1, 'publication ENS name is required'),
   contentIds: z.array(z.string()).min(1, 'contentIds must have at least one item'),
   configCid: z.string().optional(),
+  prevRootCid: z.string().optional(),
+  endpoints: z.object({
+    ipfsGateway: z.string().optional(),
+    rpcs: z.object({
+      L1: z.array(z.string()).min(1, 'L1 rpcs required'),
+      L2: z.array(z.string()).min(1, 'L2 rpcs required'),
+    }),
+  }),
 });
 
 export type PrepActionInput = z.infer<typeof PrepActionInputSchema>;
@@ -85,7 +105,15 @@ export type PrepActionInput = z.infer<typeof PrepActionInputSchema>;
 export const PrepActionOutputSchema = ActionResultSchema(
   z.object({
     jobs: z.array(jobSchema),
-  })
+    remove: z
+      .array(
+        z.object({
+          path: z.string(),
+          replacedBy: z.string().optional(),
+        }),
+      )
+      .optional(),
+  }),
 );
 
 export type PrepActionOutput = z.infer<typeof PrepActionOutputSchema>;
@@ -127,6 +155,13 @@ export const SingleActionInputSchema = z.object({
   publication: z.string().min(1, 'publication ENS name is required'),
   configCid: z.string().optional(),
   preview: z.boolean().optional(),
+  endpoints: z.object({
+    ipfsGateway: z.string().optional(),
+    rpcs: z.object({
+      L1: z.array(z.string()).min(1, 'L1 rpcs required'),
+      L2: z.array(z.string()).min(1, 'L2 rpcs required'),
+    }),
+  }),
 });
 
 export type SingleActionInput = z.infer<typeof SingleActionInputSchema>;
@@ -136,7 +171,7 @@ export const SingleActionOutputSchema = ActionResultSchema(
     job: jobSchema,
     html: z.string().optional(),
     timestamp: z.string(),
-  })
+  }),
 );
 
 export type SingleActionOutput = z.infer<typeof SingleActionOutputSchema>;
@@ -183,14 +218,29 @@ export const EvmUpdateActionInputSchema = z.object({
   signature: z.string().min(1, 'signature is required'),
   authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
   preview: z.boolean().optional(),
+  remove: z
+    .array(
+      z.object({
+        path: z.string(),
+        replacedBy: z.string().optional(),
+      }),
+    )
+    .optional(),
+  endpoints: z.object({
+    ipfsGateway: z.string().optional(),
+    rpcs: z.object({
+      L1: z.array(z.string()).min(1, 'L1 rpcs required'),
+      L2: z.array(z.string()).min(1, 'L2 rpcs required'),
+    }),
+  }),
 });
 
 export type EvmUpdateActionInput = z.infer<typeof EvmUpdateActionInputSchema>;
 
 export const EvmUpdateActionOutputSchema = ActionResultSchema(
   z.object({
-    cid: z.string().min(1, 'cid is required')
-  })
+    cid: z.string().min(1, 'cid is required'),
+  }),
 );
 
 export type EvmUpdateActionOutput = z.infer<typeof EvmUpdateActionOutputSchema>;

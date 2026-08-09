@@ -1,7 +1,5 @@
 export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<any> => {
         const url = `${ipfsGateway}/api/v0/cat?arg=${cid}`;
-
-        console.log(url)
         
         const response = await fetch(url, {
             method: 'POST',
@@ -12,6 +10,7 @@ export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<a
             }
         });
 
+
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -21,7 +20,6 @@ export const fetchFromIPFS = async (ipfsGateway: string, cid: string): Promise<a
         
         const text = await response.text();
 
-        console.log(text)
         
         try {
             return JSON.parse(text);
@@ -90,6 +88,31 @@ export const dagPut = async (
 
   const result = await response.json();
   return result.Cid['/'] || result.Cid || result.Hash;
+};
+
+/**
+ * Export a DAG from Kubo as CAR bytes via /api/v0/dag/export.
+ */
+export const dagExport = async (
+  cid: string,
+  ipfs_endpoint: string,
+): Promise<Uint8Array> => {
+  const url = `https://${fixEndpoint(ipfs_endpoint)}/api/v0/dag/export?arg=${cid}`;
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`DAG export failed: ${response.status} ${response.statusText}\n${errorText}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
 };
 
 const fixEndpoint = (endpoint: string) => {

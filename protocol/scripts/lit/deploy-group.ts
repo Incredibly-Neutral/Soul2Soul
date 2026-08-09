@@ -19,8 +19,8 @@ const ipfs = new S2SIPFSMethods(process.env.IPFS_URL!, process.env.PINATA_JWT!, 
 const ACTION_DEFS = [
     { name: 'encrypt', source: null as string | null },  // handled separately via encryptAction
     { name: 'prep',    source: '/home/joera/code/s2s/protocol/actions/dist/prep/main.js' },
-    { name: 'single',  source: '/home/joera/code/s2s/protocol/actions/dist/single/main.js' },
-    { name: 'updateEvm',    source: '/home/joera/code/s2s/protocol/actions/dist/updateEvm/main.js' }
+    { name: 'render',  source: '/home/joera/code/s2s/protocol/actions/dist/render/main.js' },
+    { name: 'update',  source: '/home/joera/code/s2s/protocol/actions/dist/update/main.js' }
 ];
 
 async function main() {

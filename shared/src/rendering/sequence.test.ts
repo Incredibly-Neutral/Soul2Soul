@@ -57,8 +57,9 @@ const BASE_RPC_URL    = process.env.BASE_RPC_URL;
 // You can add additional fixture sets here as the test suite grows.
 // ============================================================================
 
-/** Single post from s3nl */
-const SINGLE_POST = ['59576569822627528977768841523458803362723402109733483362861114645353366846746'];
+/** Content IDs — from TEST_CONTENT_IDS env var, fall back to real genesis CID. */
+const CONTENT_IDS = (env('TEST_CONTENT_IDS') || '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 /** Whether the chain-dependent tests (CID fetch + runner) can run. */
 const chainReady = !!(MAINNET_RPC_URL && BASE_RPC_URL && PUBLICATION && TEST_PRIVATE_KEY);
@@ -160,11 +161,11 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
   it('prep returns ok:true with valid jobs', async () => {
     const input: Record<string, unknown> = {
       publication: PUBLICATION,
-      contentIds: SINGLE_POST,
+      contentIds: CONTENT_IDS,
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
     prepResult = validatePrepOutput(raw);
 
     expect(prepResult.ok).toBe(true);
@@ -195,7 +196,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       };
       if (CONFIG_CID) singleInput.configCid = CONFIG_CID;
 
-      const raw = await callAction(protocolInfo.litActionSingle, singleInput);
+      const raw = await callAction(protocolInfo.litActions.render, singleInput);
       const result = validateSingleOutput(raw);
 
       if (!result.ok) {
@@ -230,7 +231,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       preview: true,
     };
 
-    const raw = await callAction(protocolInfo.litActionRootUpdate, evmInput);
+    const raw = await callAction(protocolInfo.litActions.update, evmInput);
     const result = validateEvmUpdateOutput(raw);
 
     if (!result.ok) {
@@ -265,11 +266,11 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
   it('prep output jobs pass validateSingleInput with orchestrator fields', async () => {
     const input: Record<string, unknown> = {
       publication: PUBLICATION,
-      contentIds: SINGLE_POST,
+      contentIds: CONTENT_IDS,
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
     const prepResult = validatePrepOutput(raw) as any;
     expect(prepResult.ok).toBe(true);
 
@@ -314,7 +315,7 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
     const badPublication = 'nonexistent-' + Date.now() + '.soul2soul.eth';
     const input = { publication: badPublication, contentIds: ['lens-post-1'] };
 
-    const raw = await callAction(protocolInfo.litActionPrep, input);
+    const raw = await callAction(protocolInfo.litActions.prep, input);
 
     expect(raw).toBeDefined();
     assertOkShape(raw, 'prep');

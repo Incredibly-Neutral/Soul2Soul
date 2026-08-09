@@ -1,9 +1,10 @@
-import {  LicenseMap, RecordMap } from './types.js';
+import {  DealMap, RecordMap } from './types.js';
 
 const RECORDS_STORAGE_KEY = 'records';
-const LICENSES_STORAGE_KEY = 'licenses';
+const DEALS_STORAGE_KEY = 'deals';
 const ROOT_STORAGE_KEY = 'root';
-const PENDING_STORAGE_KEY = 'PENDING';
+const OFFERS_STORAGE_KEY = 'offers';
+const PIECES_STORAGE_KEY = 'pieces';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -50,46 +51,72 @@ export function saveRecordToStorage(record: RecordMap | null): void {
   }
 }
 
-export function loadLicensesFromStorage(): LicenseMap | null {
+export function loadDealsFromStorage(): DealMap | null {
   try {
-    const stored = localStorage.getItem(LICENSES_STORAGE_KEY);
+    const stored = localStorage.getItem(DEALS_STORAGE_KEY);
     if (stored) return JSON.parse(stored);
   } catch (e) {
-    console.warn('Failed to load licenses from localStorage:', e);
+    console.warn('Failed to load deals from localStorage:', e);
   }
   return null;
 }
 
-export function saveLicensesToStorage(licenses: LicenseMap | null): void {
+export function saveDealsToStorage(deals: DealMap | null): void {
   try {
-    if (licenses === null) {
-      localStorage.removeItem(LICENSES_STORAGE_KEY);
+    if (deals === null) {
+      localStorage.removeItem(DEALS_STORAGE_KEY);
     } else {
-      localStorage.setItem(LICENSES_STORAGE_KEY, JSON.stringify(licenses));
+      localStorage.setItem(DEALS_STORAGE_KEY, JSON.stringify(deals));
     }
   } catch (e) {
-    console.warn('Failed to save licenses to localStorage:', e);
+    console.warn('Failed to save deals to localStorage:', e);
   }
 }
 
-export function loadPendingLicensesFromStorage(): LicenseMap | null {
+export function loadOffersFromStorage(): DealMap | null {
   try {
-    const stored = localStorage.getItem(PENDING_STORAGE_KEY);
+    const stored = localStorage.getItem(OFFERS_STORAGE_KEY);
     if (stored) return JSON.parse(stored);
   } catch (e) {
-    console.warn('Failed to load licenses from localStorage:', e);
+    console.warn('Failed to load offers from localStorage:', e);
   }
   return null;
 }
 
-export function savePendingLicensesToStorage(licenses: LicenseMap | null): void {
+export function saveOffersToStorage(deals: DealMap | null): void {
   try {
-    if (licenses === null) {
-      localStorage.removeItem(PENDING_STORAGE_KEY);
+    if (deals === null) {
+      localStorage.removeItem(OFFERS_STORAGE_KEY);
     } else {
-      localStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(licenses));
+      localStorage.setItem(OFFERS_STORAGE_KEY, JSON.stringify(deals));
     }
   } catch (e) {
-    console.warn('Failed to save licenses to localStorage:', e);
+    console.warn('Failed to save offers to localStorage:', e);
+  }
+}
+
+export function loadPiecesFromStorage<T>(): T[] | null {
+  try {
+    const stored = localStorage.getItem(PIECES_STORAGE_KEY);
+    if (stored) return JSON.parse(stored, (_k, v) =>
+      typeof v === 'string' && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v
+    );
+  } catch (e) {
+    console.warn('Failed to load pieces from localStorage:', e);
+  }
+  return null;
+}
+
+export function savePiecesToStorage<T>(pieces: T[] | null): void {
+  try {
+    if (pieces === null) {
+      localStorage.removeItem(PIECES_STORAGE_KEY);
+    } else {
+      localStorage.setItem(PIECES_STORAGE_KEY, JSON.stringify(pieces, (_k, v) =>
+        typeof v === 'bigint' ? v.toString() + 'n' : v
+      ));
+    }
+  } catch (e) {
+    console.warn('Failed to save pieces to localStorage:', e);
   }
 }

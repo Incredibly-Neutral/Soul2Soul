@@ -1,29 +1,12 @@
-import { ALCHEMY_KEY, DRPC_API_KEY } from "./constants";
-import { PKP } from "@s2s/soul2soul-shared/lit-actions";
-
-const RPC_URLS: Record<string, string[]> = {
-    ETHEREUM: [
-        `https://lb.drpc.live/ethereum/${DRPC_API_KEY}`,
-        `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-    ],
-    BASE: [
-        `https://lb.drpc.live/base/${DRPC_API_KEY}`,
-        `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-    ],
-    BASE_SEPOLIA: [
-        `https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-    ]
-};
-
 const NETWORK_CONFIG: Record<string, { chainId: number; name: string }> = {
-    ETHEREUM:     { chainId: 1,     name: "homestead" },
-    BASE:         { chainId: 8453,  name: "base" },
-    BASE_SEPOLIA: { chainId: 84532, name: "base-sepolia" },
+    L1:           { chainId: 1,     name: "homestead" },
+    L2:           { chainId: 8453,  name: "base" },
+    L2_SEPOLIA:   { chainId: 84532, name: "base-sepolia" },
 };
 
 const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: string) => {
 
-    const url = rpcUrl || RPC_URLS[chain]?.[0];
+    const url = rpcUrl;
     const network = NETWORK_CONFIG[chain];
 
     const provider = new ethers.providers.StaticJsonRpcProvider(url, network);
@@ -34,22 +17,24 @@ const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: str
 
 export const evmWrite = async (
     chain: string,
-    pkp: PKP,
+    pkp: string,
     contractAddress: string,
     abi: any,
     method: string,
     args: any[],
-    confirm: boolean = false
+    confirm: boolean = false,
+    rpc?: string,
 ) => {
-    const { provider, contract } = evmSetup(contractAddress, abi, chain);
+    if (!rpc) throw "evmWrite: rpc is required";
+    const { provider, contract } = evmSetup(contractAddress, abi, chain, rpc);
 
-    const pendingNonce = await provider.getTransactionCount(pkp.ethAddress, "pending");
+    const pendingNonce = await provider.getTransactionCount(pkp, "pending");
     const txData = contract.interface.encodeFunctionData(method, args);
 
     const estimatedGas = await provider.estimateGas({
         to: contractAddress,
         data: txData,
-        from: pkp.ethAddress,
+        from: pkp,
     }).catch((err: any) => {
         console.log("Gas estimation failed:", err.message);
         return ethers.BigNumber.from(60000);
@@ -72,7 +57,7 @@ export const evmWrite = async (
         type: 2,
     };
 
-    const wallet = new ethers.Wallet(await Lit.Actions.getPrivateKey({ pkpId: pkp.ethAddress }));
+    const wallet = new ethers.Wallet(await Lit.Actions.getPrivateKey({ pkpId: pkp }));
     const signedTx = await wallet.signTransaction(tx);
 
     try {
@@ -110,21 +95,29 @@ export const evmRead = async (
     contractAddress: string,
     abi: any,
     method: string,
-    args: any[]
+    args: any[],
+    rpcs?: string[],
 ) => {
-    const urls = RPC_URLS[chain] || [];
-    let lastError;
+    const urls = rpcs || [];
+    if (urls.length === 0) throw "evmRead: rpcs array is empty or missing";
+    const failures: string[] = [];
+    let lastError: any;
 
     for (const url of urls) {
         try {
             const { contract } = evmSetup(contractAddress, abi, chain, url);
             return await contract[method](...args);
-        } catch (error) {
+        } catch (error: any) {
+            const msg = `RPC call to ${url} failed: ${error?.message || String(error)}`;
+            failures.push(msg);
+            console.log(msg);
             lastError = error;
         }
     }
 
-    throw lastError;
+    const aggregated = new Error(failures.join(" | "));
+    (aggregated as any).failures = failures;
+    throw aggregated;
 };
 
 export const toHexString = (_cid: string) => {

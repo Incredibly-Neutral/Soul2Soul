@@ -1,11 +1,13 @@
 // s2s-app.ts
 import { SafeIntegration } from '../lib/safe-integration.js';
-import './s2s-licences-tab.js';
+import './s2s-deals-tab.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
+import './s2s-storage-tab.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { store } from '@/state/store.js';
 import { LitService } from '@s2s/soul2soul-shared';
+import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
 import { evmRead } from '@/lib/evm.js';
@@ -15,6 +17,7 @@ import './copy-hash.js';
 import './copy-module.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { tabStyles } from '@/styles/tab-styles.js';
+import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 
 const RECORDS_CONTRACT_ABI = [
   'function getText(bytes32 node, string key) view returns (string)',
@@ -25,7 +28,9 @@ export class S2SApp extends HTMLElement {
   private safeIntegration: SafeIntegration;
   private protocolIntegration: ProtocolIntegration;
   private lit: LitService;
-  private currentTab: 'licenses' | 'whitelist' | 'records' = 'licenses';
+  private filecoinStorage: FilecoinStorage;
+  private fcInitPromise: Promise<void> | null = null;
+  private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' = 'deals';
   private fetching = false;
   private unsubscribers: Array<() => void> = [];
 
@@ -36,6 +41,19 @@ export class S2SApp extends HTMLElement {
     this.safeIntegration = new SafeIntegration();
     this.protocolIntegration = new ProtocolIntegration();
     this.lit = new LitService({ environment: 'prod' });
+    this.filecoinStorage = new FilecoinStorage({}, browserFilecoinBuilder);
+    this.fcInitPromise = this.initFC()
+
+  }
+
+  async initFC() {
+    const skRes  = await fetch('/session-key.json');
+    const skData = await skRes.json();
+    const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED'; // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
+     await this.filecoinStorage.initWithSessionKey(
+        skData,
+        rpcUrl 
+      );
   }
 
   async connectedCallback() {
@@ -96,9 +114,47 @@ export class S2SApp extends HTMLElement {
         const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
         const bytes = window.ethers.getBytes('0x' + hex);
         const rootCid = CID.decode(bytes).toV1().toString();
-
-        console.log("RRRR", rootCid)
         store.setRoot(rootCid);
+      }
+
+      // === Fetch Filecoin storage pieces (store already has cache from constructor) ===
+      if (this.filecoinStorage) {
+        // Wait for FC init to complete before using storage
+        await this.fcInitPromise;
+
+        try {
+          const freshPieces = await this.filecoinStorage.listPublicationStorage(
+            this.filecoinStorage.walletAddress.toLowerCase()
+          );
+          const typed = freshPieces.map(p => ({ ...p, confirmed: true }));
+          store.setPieces(typed);
+
+          // Derive datasets from pieces (one pass, no extra chain call)
+          const datasetMap = new Map<string, {
+            dataSetId: string;
+            provider: string;
+            pieceCount: number;
+            pdpEndEpoch: bigint | null;
+            isLive: boolean;
+            metadata: Record<string, string>;
+          }>();
+          for (const p of typed) {
+            if (!datasetMap.has(p.dataSetId)) {
+              datasetMap.set(p.dataSetId, {
+                dataSetId: p.dataSetId,
+                provider: p.provider,
+                pieceCount: 0,
+                pdpEndEpoch: p.pdpEndEpoch,
+                isLive: p.isLive,
+                metadata: p.dataSetMetadata,
+              });
+            }
+            datasetMap.get(p.dataSetId)!.pieceCount++;
+          }
+          store.setDataSets(Array.from(datasetMap.values()));
+        } catch (e) {
+          console.warn('[storage] chain fetch failed, keeping cache:', e);
+        }
       }
     } catch (error) {
       console.error('Failed to fetch fresh data:', error);
@@ -108,7 +164,7 @@ export class S2SApp extends HTMLElement {
     this.render();
   }
 
-  private switchTab(tab: 'licenses' | 'whitelist' | 'records') {
+  private switchTab(tab: 'deals' | 'whitelist' | 'records' | 'storage') {
     this.currentTab = tab;
     this.render();
   }
@@ -172,10 +228,10 @@ export class S2SApp extends HTMLElement {
 
           <div class="tabs">
             <button
-              class="tab ${this.currentTab === 'licenses' ? 'active' : ''}"
-              id="licenses-tab"
+              class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
+              id="deals-tab"
               ${!this.safeIntegration.hasPublicationModule() ? 'disabled' : ''}
-            >Licenses</button>
+            >Deals</button>
             <button
               class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
               id="whitelist-tab"
@@ -186,6 +242,10 @@ export class S2SApp extends HTMLElement {
               id="records-tab"
               ${!this.safeIntegration.hasRecordsModule() ? 'disabled' : ''}
             >Records</button>
+            <button
+              class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
+              id="storage-tab"
+            >Storage</button>
           </div>
 
           <div class="tab-content" id="tab-content"></div>
@@ -201,12 +261,14 @@ export class S2SApp extends HTMLElement {
   }
 
   private attachEventListeners() {
-    this.shadowRoot?.querySelector('#licenses-tab')
-      ?.addEventListener('click', () => this.switchTab('licenses'));
+    this.shadowRoot?.querySelector('#deals-tab')
+      ?.addEventListener('click', () => this.switchTab('deals'));
     this.shadowRoot?.querySelector('#whitelist-tab')
       ?.addEventListener('click', () => this.switchTab('whitelist'));
     this.shadowRoot?.querySelector('#records-tab')
       ?.addEventListener('click', () => this.switchTab('records'));
+    this.shadowRoot?.querySelector('#storage-tab')
+      ?.addEventListener('click', () => this.switchTab('storage'));
   }
 
   private renderCurrentTab() {
@@ -215,9 +277,9 @@ export class S2SApp extends HTMLElement {
     tabContent.innerHTML = '';
 
     switch (this.currentTab) {
-      case 'licenses':
+      case 'deals':
         if (this.safeIntegration.hasPublicationModule()) {
-          const el = document.createElement('s2s-licenses-tab');
+          const el = document.createElement('s2s-deals-tab');
           (el as any).safeIntegration = this.safeIntegration;
           (el as any).protocolIntegration = this.protocolIntegration;
           (el as any).lit = this.lit;
@@ -239,6 +301,15 @@ export class S2SApp extends HTMLElement {
           (el as any).safeIntegration = this.safeIntegration;
           (el as any).protocolIntegration = this.protocolIntegration;
           (el as any).lit = this.lit;
+          (el as any).storage = this.filecoinStorage;
+          tabContent.appendChild(el);
+        }
+        break;
+
+      case 'storage':
+        {
+          const el = document.createElement('s2s-storage-tab');
+          (el as any).storage = this.filecoinStorage;
           tabContent.appendChild(el);
         }
         break;

@@ -1,5 +1,5 @@
 import { JsonRpcProvider } from "ethers";
-import { IMainController } from "src/main.ctrlr.js";
+import { IMainController } from "../main.ctrlr.js";
 import { getRPCUrl, getNetwork, getChainId } from "./chains.factory.js";
 
 export interface IBaseAccountService {

@@ -4,8 +4,8 @@ const fs = require("fs");
 
 const entries = [
   { in: "./protocol/actions/src/prep/main.ts", out: "./protocol/actions/dist/prep/main.js" },
-  { in: "./protocol/actions/src/single/main.ts", out: "./protocol/actions/dist/single/main.js" },
-  { in: "./protocol/actions/src/updateEvm/main.ts", out: "./protocol/actions/dist/updateEvm/main.js" },
+  { in: "./protocol/actions/src/render/main.ts", out: "./protocol/actions/dist/render/main.js" },
+  { in: "./protocol/actions/src/update/main.ts", out: "./protocol/actions/dist/update/main.js" },
 ];
 
 Promise.all(

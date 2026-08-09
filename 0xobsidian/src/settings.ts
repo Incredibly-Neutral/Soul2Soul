@@ -112,43 +112,26 @@ export class OxOAuthorsTab extends PluginSettingTab {
         )
         .addToggle((button) =>
           button.setValue(author.active).onChange(async () => {
-            for (let a of this.plugin.settings.authors.filter(
-              (a: any) => a.name != author.name,
-            )) {
-              a.active = false;
-            }
-            author.active = !author.active;
-            await this.plugin.saveSettings();
+            // Controller owns the "at most one active author" rule + persists.
             await this.plugin.ctrlr.toggleAuthor(author);
             this.plugin.authorsTab.display();
           }),
         )
         .addButton((button) =>
           button.setButtonText("Hide").onClick(async () => {
-            this.plugin.settings.authors = this.plugin.settings.authors.filter(
-              (a: any) => a.name != author.name,
-            );
-            await this.plugin.saveSettings();
-            this.plugin.authorsTab.display();
+            // Controller handles removal + clearing the active user/accounts
+            // so the next new author starts from a blank slate.
+            await this.plugin.ctrlr.hideAuthor(author);
           }),
         );
 
-      const didValue = `did:ethr:${author.eoa}`;
+      const didValue = `did:ethr:${author.safe}`;
       new Setting(authorEl)
         .setName("DID")
         .setDesc(didValue)
         .addButton((button) =>
           button.setButtonText("Copy").onClick(() => {
             navigator.clipboard.writeText(didValue);
-          }),
-        );
-
-      new Setting(authorEl)
-        .setName("Signer:")
-        .setDesc(author.eoa)
-        .addButton((button) =>
-          button.setButtonText("Copy").onClick(() => {
-            navigator.clipboard.writeText(author.eoa);
           }),
         );
 

@@ -17,6 +17,7 @@ export async function runAction(
   inputs: Record<string, unknown>,
   litUsageKey?: string,
 ): Promise<unknown> {
+
   if (preview) {
     const runnerUrl = process.env.S2S_RUNNER_URL || 'https://run.transport-union.dev/run';
     const r = await fetch(runnerUrl, {
@@ -25,6 +26,7 @@ export async function runAction(
       body: JSON.stringify({ cid, inputs }),
     });
     const wrapped = await r.json();
+    // console.log("RUNNER RESPONSE:", JSON.stringify(wrapped, null, 2));
     if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
     return wrapped.response; // ActiedonBarResult<T>
   } else {

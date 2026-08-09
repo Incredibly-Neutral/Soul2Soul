@@ -15,7 +15,7 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
 const groupName = 's2s';
-const validActions = ['prep', 'single', 'updateEvm', 'encrypt', 'cbor'];
+const validActions = ['prep', 'render', 'update', 'encrypt'];
 
 const action_name = process.argv[2];
 if (!action_name || !validActions.includes(action_name)) {

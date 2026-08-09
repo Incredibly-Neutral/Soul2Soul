@@ -29,6 +29,7 @@ export const parseNote = async (
 
 	const cache = main.plugin.app.metadataCache.getFileCache(file);
 	const frontmatter = cache?.frontmatter;
+	const slugOverride: string | undefined = frontmatter?.slug;
 	// const publicationAddress = await main.publication.getPublicationMultiSigAdresses(
 	// 	frontmatter?.tags,
 	// );
@@ -36,7 +37,7 @@ export const parseNote = async (
 	if (file.name != undefined)
 		toEncrypt.title = file.name.replace(/\.[^/.]+$/, "");
 	let [content, title, baseFileName] = extractTitleAndBase(rawFile, toEncrypt.title);
-	toEncrypt.slug = slug(title || toEncrypt.title);
+	toEncrypt.slug = slugOverride || slug(title || toEncrypt.title);
 
 	// if (baseFileName != undefined) {
 	// 	const baseFile = main.plugin.app.vault
@@ -63,7 +64,7 @@ export const parseNote = async (
 		main.plugin.app,
 		file,
 		toEncrypt.content,
-		main.protocolInfo.assetsGateway,
+		main.protocolInfo.gateway,
 	);
 
 	if (title != undefined && title != "") toEncrypt.title = title;

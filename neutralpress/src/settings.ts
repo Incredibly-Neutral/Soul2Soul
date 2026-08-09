@@ -25,12 +25,12 @@ export const DEFAULT_SETTINGS: Settings = {
 	
 	publications: [] as S2SPublication[],
 	contract_factory: "0x5a9F61C144862b46A29A434d5C17036Ff5fA40C0",
-	ens_registry: "0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5", // custom open subdomain registry
-	ens_resolver: "0x5ED9023eaDbE9757E347E92D1Da97F2e0b010b61", // custom resolver with ccip read
-	ens_records: "0x5D42f9b016B4251FC6407d5e8154DA887F394900",
-	safe_records_factory: "0xed933AB957aa3440133cdf1236662635d4eb2Ccf",
-	safe_publication_factory: "0x6C289E77E19e748ab2c219A6529544A49EFF6250",
-	proxy_admin: "0x66d5549fdfaCc3606EB5bcD702D989A846A936c0",
+	ens_registry: "0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5", // custom open subdomain registry // move to protocolInfo
+	ens_resolver: "0x5ED9023eaDbE9757E347E92D1Da97F2e0b010b61", // custom resolver with ccip read // move to protocolInfo
+	ens_records: "0x5D42f9b016B4251FC6407d5e8154DA887F394900", // move to protocolInfo
+	safe_records_factory: "0xed933AB957aa3440133cdf1236662635d4eb2Ccf", // move to protocolInfo
+	safe_publication_factory: "0xe948735151c43183accd8e85b992952b2711d554", // move to protocolInfo
+	proxy_admin: "0x66d5549fdfaCc3606EB5bcD702D989A846A936c0", // is tis used ? 
 	chain_id: "8453",
 };
 

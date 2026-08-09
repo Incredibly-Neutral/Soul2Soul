@@ -1,50 +1,113 @@
-import { ActionResult, PrepData, PrepInput, S2SBody, S2SJob, S2STemplateConfig } from "@s2s/soul2soul-shared/lit-actions";
-import { getDomainOwnerAndModules } from "../libs/ens.factory";
-import { fetchById, fetchByQuery } from "../libs/lens.factory";
-import { getConfig, getTaskConfig } from "../single/config.ctrl";
-import { requireFields } from "../libs/helpers";
+import {
+  ActionResult,
+  PrepData,
+  PrepInput,
+  S2SBody,
+  S2SJob,
+  S2STemplateConfig,
+} from '@s2s/soul2soul-shared/lit-actions';
+import { getDomainOwnerAndModules } from '../libs/ens.factory';
+import { getLatestEntry, fetchById, fetchByPublication, getVersion } from '../libs/module.factory';
+import { getConfig, getTaskConfig } from '../render/config.ctrl';
+import { requireFields } from '../libs/helpers';
+import { catFile } from '../libs/ipfs.factory';
 
-const ACTION = "prep";
+const ACTION = 'prep';
+
+/**
+ * For a content genesis, check the on-chain version log for the previous version.
+ * Fetch its content item from IPFS and extract the old slug.
+ * Returns the old slug, or null if this is the first version.
+ */
+async function getOldSlug(
+  genesis: string,
+  publicationModule: string,
+  rpcs: string[] | undefined,
+  gateway: string | undefined,
+): Promise<string | null> {
+  const version = await getVersion(genesis, publicationModule, rpcs);
+  if (!version || !version.cid) return null;
+
+  const item = JSON.parse(await catFile(gateway!, version.cid));
+  if (!item.body) return null;
+
+  const parsed = JSON.parse(item.body);
+  return parsed.slug || null;
+}
 
 async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
-
   let trace: any[] = [];
 
-  try {
-    requireFields(input, ["publication", "contentIds"]);          // configCid is optional
-    const { publication, configCid, contentIds } = input;
-    if (!Array.isArray(contentIds) || contentIds.length === 0)
-      throw "contentIds must be a non-empty array";
+  console.log(`prep action @ ${new Date()}`);
 
-    const { multisig, configModule, publicationModule } =
-      await getDomainOwnerAndModules(publication);
+  try {
+    requireFields(input, ['publication', 'contentIds', 'endpoints']);
+    const { publication, configCid, contentIds, endpoints } = input;
+    const gateway = endpoints.ipfsGateway;
+    const rpcs = endpoints.rpcs;
+    if (!Array.isArray(contentIds) || contentIds.length === 0)
+      throw 'contentIds must be a non-empty array';
+
+    const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
+      publication,
+      rpcs,
+    );
     if (!multisig || !configModule || !publicationModule)
       throw `modules not found for '${publication}' (multisig/config/publication)`;
 
-    const config = await getConfig(configCid, configModule);
+    const config = await getConfig(configCid, configModule, rpcs?.L2, gateway);
     const jobs: S2SJob[] = [];
+    const remove: { path: string; replacedBy?: string }[] = [];
 
     for (const contentId of contentIds) {
-      const body: S2SBody | null | undefined = await fetchById(contentId);
+      const body = await fetchById(contentId, publicationModule, rpcs?.L2, gateway);
       if (!body?.id) throw `content not found: '${contentId}'`;
 
-      const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
-      jobs.push({ id: body.id, templateConfig, templateData: undefined, html: "" });
+      // Slug-change detection: compare current slug with the first-version slug
+      const oldSlug = await getOldSlug(contentId, publicationModule, rpcs?.L2, gateway!);
+      if (oldSlug && body.slug && oldSlug !== body.slug) {
+        remove.push({ path: oldSlug, replacedBy: contentId });
+        trace.push(`slug change: ${oldSlug} → ${body.slug} (${contentId.slice(0, 12)}…)`);
+      }
 
-      // ripples = cascade re-renders; only expand for a single primary content id
+      const { templateConfig, rippleConfigs } = await getTaskConfig(config, body);
+
+      if (templateConfig && templateConfig.file != null) {
+        jobs.push({ id: body.id, templateConfig, templateData: undefined, html: '' });
+      }
+
       if (contentIds.length === 1) {
         for (const rippleConfig of rippleConfigs) {
           const rippleTemplateConfig: S2STemplateConfig | undefined =
             config.mapping.templateConfig.find(
-              (m: S2STemplateConfig) => m.reference === rippleConfig.destination);
+              (m: S2STemplateConfig) => m.reference === rippleConfig.destination,
+            );
           if (!rippleTemplateConfig)
             throw `ripple destination '${rippleConfig.destination}' not in mapping.templateConfig`;
 
-          const ripples = await fetchByQuery(rippleConfig.query.method, rippleConfig.query.args);
+          let ripples: any[];
+
+          if (rippleConfig.query?.genesis != undefined) {
+            ripples = [{ id: rippleConfig.query.genesis }];
+          } else {
+            ripples = await fetchByPublication(publicationModule, rpcs?.L2, gateway);
+            if (rippleConfig.filters?.length) {
+              ripples = ripples.filter((item) =>
+                rippleConfig.filters!.every((filter) =>
+                  Object.entries(filter).every(([key, value]) => item[key] === value),
+                ),
+              );
+            }
+          }
+
           for (const ripple of ripples)
             if (ripple?.id)
-              jobs.push({ id: ripple.id, templateConfig: rippleTemplateConfig,
-                          templateData: undefined, html: "" });
+              jobs.push({
+                id: ripple.id,
+                templateConfig: rippleTemplateConfig,
+                templateData: undefined,
+                html: '',
+              });
         }
       }
     }
@@ -58,9 +121,20 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
       uniqueJobs.push(job);
     }
 
-    return { ok: true, action: ACTION, data: { jobs: uniqueJobs }, trace };
+    return {
+      ok: true,
+      action: ACTION,
+      data: { jobs: uniqueJobs, remove: remove.length > 0 ? remove : undefined },
+      trace,
+    };
   } catch (e) {
-    return { ok: false, action: ACTION,
-             error: typeof e === "string" ? e : (e as Error)?.message ?? String(e), trace };
+    return {
+      ok: false,
+      action: ACTION,
+      error: typeof e === 'string' ? e : ((e as Error)?.message ?? String(e)),
+      trace,
+    };
   }
 }
+
+export { main };

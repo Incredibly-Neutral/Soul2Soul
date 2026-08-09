@@ -1,6 +1,6 @@
 import { App } from "electron";
 import { TFile } from "obsidian";
-import { IMainController } from "src/main.ctrlr";
+import { IMainController } from "../main.ctrlr";
 import TurndownService from "turndown";
 
 export const distributeImages = async (

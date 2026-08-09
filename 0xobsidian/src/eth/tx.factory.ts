@@ -4,7 +4,7 @@ import {
   IFeeEstimator,
 } from "@safe-global/relay-kit";
 import { ethers } from "ethers";
-import { IMainController } from "src/main.ctrlr.js";
+import { IMainController } from "../main.ctrlr.js";
 import { getInternalTransactions } from "./eth_utils.js";
 
 export const sendTx = async (
@@ -25,7 +25,7 @@ export const sendTx = async (
     });
 
     const identifier = ethers.keccak256(
-      ethers.toUtf8Bytes(main.user.name + main.user.eoa),
+      ethers.toUtf8Bytes(main.user!.name + main.user!.eoa),
     );
 
     // Direct access to callData (no .data)
