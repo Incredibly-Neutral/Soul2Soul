@@ -441,7 +441,7 @@ export class MainController implements IMainController {
 
 			if (res.cid) {
 				// Publish availability measurement — fire-and-forget, never blocks.
-				void measureAvailability(publication, res.cid);
+				void measureAvailability(publication, res.cid, this.oxo.settings.pinata_jwt);
 			}
 
 			console.log({ RES: res });
