@@ -2,17 +2,18 @@
 //
 // Probes every active mainnet PDP provider for browser usability.
 //
-// A provider must pass BOTH roles to be usable with copies > 1:
+// Under the two-independent-primary strategy the client uploads to each of the
+// TWO selected providers as its OWN PRIMARY (store + findPiece + commit) with
+// copies: 1 — the SP-to-SP pull path is never used. So only the PRIMARY role
+// is relevant here:
 //
 //   PRIMARY   — client PUTs the piece directly.
 //               Needs: HTTP/2 (Chromium only streams request bodies over h2)
 //                    + CORS on PUT /pdp/piece/uploads/{id}
 //                      (ACAO present AND content-type in Allow-Headers)
 //
-//   SECONDARY — client POSTs to /pdp/piece/pull, telling this provider to
-//               pull the piece from the primary (SP-to-SP).
-//               Needs: CORS on POST /pdp/piece/pull
-//                      (ACAO present AND content-type in Allow-Headers)
+// The SECONDARY (pull) role is reported for diagnostics only — a provider's
+// pull-endpoint health no longer gates whether it can be used for copies.
 //
 // The earlier version of this script only checked that ACAO existed on the
 // upload path. That was too lenient: provider 9 (ruka) passed, then failed at
@@ -219,16 +220,16 @@ const both       = rows.filter(r => r.primaryOk && r.secondaryOk);
 console.log(`\n${"═".repeat(70)}`);
 console.log(`active PDP providers probed : ${rows.length}`);
 console.log(`usable as PRIMARY  (h2 + upload CORS) : ${primaries.length}`);
-console.log(`usable as SECONDARY (pull CORS)       : ${secondaries.length}`);
+console.log(`usable as SECONDARY (pull CORS)       : ${secondaries.length}  (diagnostic only)`);
 console.log(`usable as BOTH                        : ${both.length}`);
 
-console.log(`\n=== usable as BOTH — safe for copies > 1 ===`);
-for (const r of both) {
+console.log(`\n=== usable as PRIMARY — safe as an INDEPENDENT PRIMARY (copies: 1) ===`);
+for (const r of primaries) {
   console.log(`  ${String(r.id).padEnd(3)} ${r.name.padEnd(24)} ${(r.status || "-").padEnd(8)} ${r.host}`);
 }
 
 console.log(`\n// paste into shared/src/filecoin/index.ts`);
-console.log(`const BROWSER_USABLE_PROVIDERS = [${both.map(r => r.id + "n").join(", ")}];`);
+console.log(`const BROWSER_USABLE_PROVIDERS = [${primaries.map(r => r.id + "n").join(", ")}];`);
 
 // Providers that can take the primary but can't be pulled to — usable only
 // with copies: 1, or as the primary in a mixed set.
@@ -245,7 +246,9 @@ NOTE: this probes CORS + ALPN only — i.e. "can a browser talk to it at all".
 It does NOT test whether an SP-to-SP pull actually completes: provider 6
 (Axiaoming) passed CORS but timed out pulling from the primary after 300s
 ("Failed to pull pieces from source provider"). That is a server-side
-reachability/performance issue between the two SPs and can only be found by
-attempting a real multi-copy upload. Treat this list as a necessary, not
-sufficient, filter — and keep copies > 1 tolerant of a secondary failing.
+reachability/performance issue between the two SPs and only mattered for the
+old one-primary-plus-one-pull strategy. Under two-independent-primary stores
+the pull path is never used, so a provider's pull-endpoint health is
+irrelevant — any PRIMARY-usable provider works as an independent primary.
+Treat this list as a necessary, not sufficient, filter.
 `);
