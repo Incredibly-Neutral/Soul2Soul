@@ -266,7 +266,7 @@ export class MainController implements IMainController {
 		(async () => {
 			try {
 				const result = await upload();
-				console.log(`[filecoin] ${kind} uploaded:`, result);
+				// Quiet success — no logging unless CID parity is violated.
 				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
 					console.error(
 						`[cid-mismatch] ${kind}: Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
@@ -274,11 +274,18 @@ export class MainController implements IMainController {
 					new Notice(
 						`⚠️ CID mismatch (${kind}): Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
 					);
-				} else if (expectedCid && result.rootCid) {
-					console.log(`[cid-ok] ${kind}: both paths agree on root CID:`, expectedCid);
 				}
 			} catch (err) {
-				console.error(`[filecoin] ${kind} background upload failed:`, err);
+				// Exactly one concise line — never the full error object / nested causes.
+				// Detect the min-2-copies failure by its stable error name rather than
+				// importing the class: a value import would force esbuild to bundle the
+				// whole filecoin module (and @filoz/synapse-sdk) into this plugin.
+				if (err instanceof Error && err.name === 'FilecoinMinCopiesError') {
+					console.error(`[filecoin] ${kind} background upload failed: ${err.message}`);
+				} else {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.error(`[filecoin] ${kind} background upload failed: ${msg}`);
+				}
 			}
 		})();
 	}

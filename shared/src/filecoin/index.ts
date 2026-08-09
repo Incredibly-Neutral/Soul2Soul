@@ -40,6 +40,7 @@ import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
 import { findPieceIdsByCid } from "@filoz/synapse-core/pdp-verifier";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
+import type { SynapseUploadResult } from "filecoin-pin/core/upload";
 import { CarReader } from "@ipld/car";
 import { CID } from "multiformats/cid";
 
@@ -126,6 +127,73 @@ export interface FilecoinCarBuilder {
 /** Providers verified to support HTTP/2 + CORS (browser-usable).
  *  Re-run protocol/scripts/filecoin/probe-providers.ts to refresh. */
 const BROWSER_USABLE_PROVIDERS = [1n, 13n, 15n, 16n, 29n, 30n, 32n];
+
+/**
+ * Thrown when fewer than two Filecoin copies could be committed across the
+ * available provider pool. The message is a single concise line naming the
+ * providers attempted; the nested SDK error chain is intentionally omitted.
+ */
+export class FilecoinMinCopiesError extends Error {
+  /** Provider IDs attempted (as strings) before the pool was exhausted. */
+  readonly providers: string[];
+
+  constructor(providers: string[]) {
+    super(
+      `could not store 2 Filecoin copies (providers attempted: ${
+        providers.length > 0 ? providers.join(", ") : "none"
+      })`,
+    );
+    this.name = "FilecoinMinCopiesError";
+    this.providers = providers;
+  }
+}
+
+function toProviderBigInt(value: unknown): bigint | undefined {
+  if (value == null) return undefined;
+  try {
+    return BigInt(value as bigint | number | string);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Try to reach `minCopies` committed copies by issuing upload attempts against
+ * pairs of providers drawn in order from `providerPool`. Providers reported as
+ * failed by an attempt (`failedProviders`) are excluded from subsequent pairs.
+ * Stops on the first attempt that reports `complete` and returns its `result`.
+ * Throws {@link FilecoinMinCopiesError} once fewer than `minCopies` providers
+ * remain in the pool.
+ */
+export async function uploadWithMinCopies<T>(
+  providerPool: bigint[],
+  minCopies: number,
+  attempt: (pair: bigint[]) => Promise<{
+    complete: boolean;
+    failedProviders: bigint[];
+    result?: T;
+  }>,
+): Promise<T> {
+  const excluded = new Set<bigint>();
+  const attempted: string[] = [];
+
+  for (;;) {
+    const remaining = providerPool.filter((id) => !excluded.has(id));
+    if (remaining.length < minCopies) {
+      throw new FilecoinMinCopiesError(attempted);
+    }
+
+    const pair = remaining.slice(0, minCopies);
+    attempted.push(...pair.map((id) => id.toString()));
+
+    const outcome = await attempt(pair);
+    if (outcome.complete && outcome.result !== undefined) {
+      return outcome.result;
+    }
+
+    for (const id of outcome.failedProviders) excluded.add(id);
+  }
+}
 
 export class FilecoinStorage {
   private main: FilecoinUser;
@@ -227,33 +295,13 @@ export class FilecoinStorage {
     // Extract root CID from the CAR bytes
     const rootCid = await this.extractRootCidFromCar(carBytes);
 
-    // Upload the CAR to Filecoin SPs via filecoin-pin's uploader
-    const result = await uploadToSynapse(
-      this.synapse,
+    // Upload the CAR to Filecoin SPs via filecoin-pin's uploader, retrying
+    // in provider pairs until at least two copies are committed.
+    return this.uploadCarWithMinCopies(
       carBytes,
-      rootCid as any,
-      noopLogger as any,
-      {
-        providerIds: BROWSER_USABLE_PROVIDERS,
-        pieceMetadata: {
-          attributedTo: JSON.stringify(owners.filter(Boolean)),
-          ...(kind ? { kind } : {}),
-        },
-      },
-    );
-    return {
       rootCid,
-      pieceCid: result.pieceCid.toString(),
-      size: result.size,
-      complete: result.complete,
-      copyCount: result.copies?.length ?? 0,
-      failedCount: result.failedAttempts?.length ?? 0,
-      copies:
-        result.copies?.map((c: any) => ({
-          provider: c.providerId?.toString() ?? "unknown",
-          dealId: c.dataSetId?.toString(),
-        })) ?? [],
-    };
+      this.buildPieceMetadata(owners, kind),
+    );
   }
 
   /**
@@ -331,33 +379,14 @@ export class FilecoinStorage {
     const { rootCid, carBytes } = await this.builder.buildCarFromBytes(bytes);
 
     // 2. Upload the CAR to Filecoin SPs via filecoin-pin's uploader
-    //    (which calls Synapse internally and attaches rootCid as piece metadata)
-    const result = await uploadToSynapse(
-      this.synapse,
+    //    (which calls Synapse internally and attaches rootCid as piece
+    //    metadata), retrying in provider pairs until at least two copies
+    //    are committed.
+    return this.uploadCarWithMinCopies(
       carBytes,
-      rootCid as any,   // uploadToSynapse expects CID type from multiformats
-      noopLogger as any,
-      {
-        providerIds: BROWSER_USABLE_PROVIDERS,
-        pieceMetadata: {
-          attributedTo: JSON.stringify(owners.filter(Boolean)),
-          ...(kind ? { kind } : {}),
-        },
-      },
-    );
-    return {
       rootCid,
-      pieceCid: result.pieceCid.toString(),
-      size: result.size,
-      complete: result.complete,
-      copyCount: result.copies?.length ?? 0,
-      failedCount: result.failedAttempts?.length ?? 0,
-      copies:
-        result.copies?.map((c: any) => ({
-          provider: c.providerId?.toString() ?? "unknown",
-          dealId: c.dataSetId?.toString(),
-        })) ?? [],
-    };
+      this.buildPieceMetadata(owners, kind),
+    );
   }
 
   /**
@@ -726,6 +755,69 @@ export class FilecoinStorage {
     const datasetCount = new Set(pieces.map(p => p.dataSetId)).size;
     const cost = FilecoinStorage.estimateMonthlyCost(totalBytes, datasetCount);
     return { ...cost, totalBytes, datasetCount };
+  }
+
+  private buildPieceMetadata(owners: string[], kind: string): Record<string, string> {
+    return {
+      attributedTo: JSON.stringify(owners.filter(Boolean)),
+      ...(kind ? { kind } : {}),
+    };
+  }
+
+  /**
+   * Upload CAR bytes to Filecoin, retrying in pairs of browser-usable
+   * providers until at least two copies are committed. Failed providers
+   * (from a thrown StoreError's `providerId`, or from the SDK result's
+   * `failedAttempts`) are excluded from subsequent pairs. Throws
+   * {@link FilecoinMinCopiesError} if the pool is exhausted first.
+   *
+   * The success-path result shape is unchanged from the previous single-shot
+   * upload — existing callers keep working.
+   */
+  private async uploadCarWithMinCopies(
+    carBytes: Uint8Array,
+    rootCid: string,
+    pieceMetadata: Record<string, string>,
+  ): Promise<FilecoinUploadResult> {
+    const mapResult = (result: SynapseUploadResult): FilecoinUploadResult => ({
+      rootCid,
+      pieceCid: result.pieceCid.toString(),
+      size: result.size,
+      complete: result.complete,
+      copyCount: result.copies?.length ?? 0,
+      failedCount: result.failedAttempts?.length ?? 0,
+      copies: (result.copies ?? []).map((c) => ({
+        provider: c.providerId?.toString() ?? "unknown",
+        dealId: c.dataSetId?.toString(),
+      })),
+    });
+
+    return uploadWithMinCopies(BROWSER_USABLE_PROVIDERS, 2, async (pair) => {
+      try {
+        const result = await uploadToSynapse(
+          this.synapse,
+          carBytes,
+          rootCid as any, // uploadToSynapse expects CID type from multiformats
+          noopLogger as any,
+          {
+            providerIds: pair,
+            copies: pair.length,
+            pieceMetadata,
+          },
+        );
+        const failedProviders = (result.failedAttempts ?? [])
+          .map((f) => toProviderBigInt(f.providerId))
+          .filter((v): v is bigint => v !== undefined);
+        return { complete: result.complete, failedProviders, result: mapResult(result) };
+      } catch (e) {
+        // Primary-store failure — the SDK throws StoreError with the failing
+        // provider's ID. Exclude it so the next pair skips it.
+        const failedProviders: bigint[] = [];
+        const pid = toProviderBigInt((e as { providerId?: unknown })?.providerId);
+        if (pid !== undefined) failedProviders.push(pid);
+        return { complete: false, failedProviders };
+      }
+    });
   }
 
   private ensureInit(): void {
