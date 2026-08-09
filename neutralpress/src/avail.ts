@@ -15,7 +15,7 @@ import { parseCID } from '@s2s/soul2soul-shared';
  */
 
 const POLL_TIMEOUT_MS = 300_000;
-const POLL_INTERVAL_MS = 2_000;
+const POLL_INTERVAL_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
