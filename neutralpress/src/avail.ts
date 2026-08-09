@@ -10,6 +10,8 @@ import { parseCID, toPreviewLabel } from '@s2s/soul2soul-shared';
  *   3. ipfs.io retrievability        (HEAD ipfs.io returns 200)
  * A single console.log summarizes the three timings and whether the publish
  * was graceful (limo switched first) or exposed (gateway retrievable first).
+ * Every check always returns a number in ms — a check that never hit within
+ * the window reports the full window elapsed.
  */
 
 export const LIMO_FALLBACK_HOST = 'preview.transport-union.dev';
@@ -42,10 +44,19 @@ function cidFromIpfsPath(path: string): string | null {
 }
 
 export interface LimoResult {
-	/** ms until the cache served the new CID, or null if never within the window. */
-	ms: number | null;
+	/** ms until the cache served the new CID, or the full window if never. */
+	ms: number;
+	/** true if the cache switched within the window, false if it never did. */
+	switched: boolean;
 	/** which host reported the switch: 'limo' or 'preview-fallback'. */
 	source: 'limo' | 'preview-fallback';
+}
+
+export interface GatewayResult {
+	/** ms until the gateway returned 200, or the full window if never. */
+	ms: number;
+	/** true if a 200 came back within the window, false if it never did. */
+	reached: boolean;
 }
 
 /** Check 1 — .limo cache-switch detection, with graceful TLS fallback. */
@@ -69,7 +80,7 @@ export async function checkLimoCacheSwitch(
 			});
 			const served = cidFromIpfsPath(res.headers.get('x-ipfs-path') ?? '');
 			if (res.status < 400 && served && sameCid(served, newCid)) {
-				return { ms: Date.now() - started, source };
+				return { ms: Date.now() - started, switched: true, source };
 			}
 		} catch (err) {
 			if (source === 'limo') {
@@ -81,11 +92,11 @@ export async function checkLimoCacheSwitch(
 		}
 		await sleep(POLL_INTERVAL_MS);
 	}
-	return { ms: null, source };
+	return { ms: Date.now() - started, switched: false, source };
 }
 
 /** Check 2/3 — time (ms) until the given gateway returns 200 for the CID. */
-export async function checkRetrievable(url: string): Promise<number | null> {
+export async function checkRetrievable(url: string): Promise<GatewayResult> {
 	const started = Date.now();
 	const deadline = Date.now() + POLL_TIMEOUT_MS;
 	while (Date.now() < deadline) {
@@ -94,21 +105,23 @@ export async function checkRetrievable(url: string): Promise<number | null> {
 				method: 'HEAD',
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
-			if (res.status === 200) return Date.now() - started;
+			if (res.status === 200) {
+				return { ms: Date.now() - started, reached: true };
+			}
 		} catch {
 			/* retry */
 		}
 		await sleep(POLL_INTERVAL_MS);
 	}
-	return null;
+	return { ms: Date.now() - started, reached: false };
 }
 
 export interface Availability {
 	publication: string;
 	cid: string;
 	limo: LimoResult;
-	pinata: number | null;
-	ipfsio: number | null;
+	pinata: GatewayResult;
+	ipfsio: GatewayResult;
 }
 
 /** Run all three checks in parallel and log the summary. */
@@ -121,29 +134,25 @@ export async function measureAvailability(publication: string, cid: string): Pro
 	logAvailability({ publication, cid, limo, pinata, ipfsio });
 }
 
-/** ONE summary line comparing the three timings vs the .limo switch. */
+/** ONE summary comparing the three timings vs the .limo switch. */
 export function logAvailability(a: Availability): void {
-	// Gateways that retrieved within the window. Empty-set case: if neither
-	// pinata nor ipfs.io returned 200, firstRetrievable stays null (never
-	// Infinity), so the verdict can't claim the publish was served at all.
-	const gateways = [a.pinata, a.ipfsio].filter((x): x is number => x != null);
-	const firstRetrievable = gateways.length ? Math.min(...gateways) : null;
+	// Every gateway reports a number in ms; a gateway that never retrieved
+	// reports the full window, which .limo naturally beats.
+	const gateways: GatewayResult[] = [a.pinata, a.ipfsio];
 
-	const limoSwitched = a.limo.ms != null;
-	// 'graceful' only when .limo switched at-or-before EVERY gateway that
-	// retrieved (and at least one gateway actually retrieved). If any gateway
-	// beat limo, or no gateway retrieved at all, the publish was exposed.
+	// 'graceful' only when .limo switched at-or-before EVERY gateway (each a
+	// number). If any gateway beat limo, or limo never switched, it's exposed.
 	const graceful =
-		limoSwitched && gateways.length > 0 && gateways.every((g) => a.limo.ms! <= g);
+		a.limo.switched && gateways.every((g) => a.limo.ms <= g.ms);
 	const verdict = graceful
 		? 'graceful (limo switched at-or-before every gateway)'
 		: 'exposed (some gateway retrievable before limo switched, or none retrieved)';
 
 	console.log(
 		`[avail] publish ${a.publication} cid=${a.cid}\n` +
-			`  .limo switch:  ${a.limo.ms != null ? `${a.limo.ms}ms (${a.limo.source})` : 'not switched'}\n` +
-			`  pinata:        ${a.pinata != null ? `${a.pinata}ms` : 'timeout'}\n` +
-			`  ipfs.io:       ${a.ipfsio != null ? `${a.ipfsio}ms` : 'timeout'}\n` +
-			`  first retrievable: ${firstRetrievable != null ? `${firstRetrievable}ms` : 'none'} — ${verdict}`,
+			`  .limo switch:  ${a.limo.ms}ms (switched: ${a.limo.switched}, ${a.limo.source})\n` +
+			`  pinata:        ${a.pinata.ms}ms (reached: ${a.pinata.reached})\n` +
+			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})\n` +
+			`  — ${verdict}`,
 	);
 }
