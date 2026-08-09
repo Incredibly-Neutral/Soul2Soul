@@ -103,13 +103,18 @@ export async function checkPinataStatus(cid: string, jwt: string): Promise<Pinat
 				const data = await res.json();
 				const rows = data?.rows;
 				if (Array.isArray(rows) && rows.length > 0) {
-					const status = rows[0].status;
-					if (status === 'pinned' && rows[0].size > 0) {
-						return { ms: Date.now() - started, reached: true, status };
-					}
+					const row = rows[0];
+					const status = row.status;
+					// Defensive terminal-failure log: a status that is present and
+					// terminal (e.g. 'failed') means the pin can never be reachable.
 					if (status === 'failed') {
 						console.log(`[avail] pinata failed: ${status}`);
 						return { ms: Date.now() - started, reached: false, status };
+					}
+					// A matching row with non-zero size is the ground-truth 'pinata
+					// has the object' signal — `status` is omitted when pinned.
+					if (row.size > 0) {
+						return { ms: Date.now() - started, reached: true, status };
 					}
 				}
 			}
