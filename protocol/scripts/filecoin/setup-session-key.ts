@@ -109,6 +109,8 @@ async function main() {
     permissions: [
       SessionKey.CreateDataSetPermission,
       SessionKey.AddPiecesPermission,
+      SessionKey.TerminateServicePermission,
+      SessionKey.SchedulePieceRemovalsPermission
     ],
     onHash(hash: any) {
       console.log(`   Tx submitted: ${hash}`);
@@ -130,6 +132,8 @@ async function main() {
   const hasPerms = sessionKey.hasPermissions([
     SessionKey.CreateDataSetPermission,
     SessionKey.AddPiecesPermission,
+    SessionKey.TerminateServicePermission,
+    SessionKey.SchedulePieceRemovalsPermission
   ]);
 
   if (!hasPerms) {
@@ -153,7 +157,7 @@ async function main() {
     /** ISO string of the expiry. */
     expiresAtISO: new Date(Number(EXPIRY) * 1000).toISOString(),
     /** Permission hashes granted. */
-    permissions: ["CreateDataSet", "AddPieces"],
+    permissions: ["CreateDataSet", "AddPieces", "TerminateService","SchedulePieceRemovals"],
   };
 
   writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));

@@ -1,271 +1,132 @@
 /**
- * FilecoinController — upload/retrieve JSON objects via Filecoin
- * Onchain Cloud, using filecoin-pin's CAR builder for deterministic
- * IPFS Root CID ↔ Filecoin PieceCID matching.
+ * FilecoinController — thin wrapper over the shared FilecoinStorage.
  *
- * ## Pipeline
+ * This file exists in 0xobsidian (NOT shared) because:
+ * 1. It depends on `addJson` from the local `remotekubo.service.js`
+ *    (which uses electron/net/request), so it cannot live in shared.
+ * 2. It preserves the original method names (`uploadJson`, `uploadToKubo`,
+ *    `retrieveJson`) so the two call sites in main.ctrlr.ts and
+ *    publishToPublication.ts don't change.
  *
- *   jsonBytes ──→ filecoin-pin CAR builder ──→ rootCid (IPFS, matches Kubo)
- *                                             └─→ carBytes ──→ Synapse upload ──→ pieceCid
- *
- * The rootCid uses the unixfs-v1-2025 profile (1 MiB chunks, raw leaves,
- * CIDv1, balanced layout) — the same spec Kubo applies with:
- *   ipfs config profile apply unixfs-v1-2025
- *
- * ## Two init modes (same as before)
- *   init()                  — author's own EOA pays
- *   initWithSessionKey()    — protocol payer pays via session key
- *
- * ## Upload results
- *   uploadJson(data) returns { rootCid, pieceCid, size, complete, copies }
+ * The heavy lifting (CAR builder, Synapse, session keys, viem) is in
+ * `@s2s/soul2soul-shared/filecoin`. This file is a one-line adapter.
  */
 
-import { Synapse, mainnet, calibration, TOKENS } from "@filoz/synapse-sdk";
-import * as SessionKey from "@filoz/synapse-core/session-key";
-import { privateKeyToAccount } from "viem/accounts";
-import { formatUnits, http, createWalletClient, custom } from "viem";
-import type { Hex } from "viem";
-import { IMainController } from "../main.ctrlr.js";
-import { createCarFromPath } from "filecoin-pin/core/unixfs";
-import { uploadToSynapse } from "filecoin-pin/core/upload";
-import { mkdtempSync, writeFileSync, readFileSync, unlinkSync, rmSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { FilecoinStorage, FilecoinUser, FilecoinUploadResult, type FilecoinSessionKeyData } from "@s2s/soul2soul-shared/filecoin";
+import { nodeFilecoinBuilder } from "./car-builder.js";
 import { addJson } from "../ipfs/remotekubo.service.js";
+import * as https from "https";
+import { URL } from "url";
 
-// ── Types ───────────────────────────────────────────────────────────
-
-export interface FilecoinBalance {
-  raw: bigint;
-  formatted: string;
-  formattedUsdfc: string;
+/** Minimal shape we need from the main controller for FilecoinStorage. */
+interface FilecoinMain {
+  user?: { private_key?: string };
 }
-
-export interface FilecoinCosts {
-  depositNeeded: bigint;
-  perMonth: bigint;
-  ready: boolean;
-}
-
-export interface FilecoinUploadResult {
-  /** IPFS CID (unixfs-v1-2025 profile) — matches what Kubo produces. */
-  rootCid: string;
-  /** Filecoin PieceCID — used for on-chain deal audit. */
-  pieceCid: string;
-  /** Raw bytes uploaded (before padding). */
-  size: number;
-  /** True when all copies were stored + committed. */
-  complete: boolean;
-  /** Number of provider copies. */
-  copyCount: number;
-  /** Number of failed copy attempts. */
-  failedCount: number;
-  /** Per-copy info. */
-  copies: Array<{ provider: string; dealId?: string }>;
-}
-
-export interface FilecoinSessionKeyData {
-  sessionPrivateKey: string;
-  sessionAddress: string;
-  rootAddress: string;
-  expiresAt: string;
-  permissions: string[];
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────
-
-/** Minimal pino-compatible logger that delegates to console. */
-const noopLogger = {
-  info: (...args: any[]) => console.log("[filecoin]", ...args),
-  warn: (...args: any[]) => console.warn("[filecoin]", ...args),
-  error: (...args: any[]) => console.error("[filecoin]", ...args),
-  debug: () => {},
-  trace: () => {},
-  fatal: (...args: any[]) => console.error("[filecoin:FATAL]", ...args),
-  child: () => noopLogger,
-  level: "info",
-  silent: () => noopLogger,
-  msgPrefix: "",
-};
-
-/**
- * Build a CAR file from raw bytes using filecoin-pin's UnixFS importer
- * (unixfs-v1-2025 profile). Returns the Root CID and the CAR bytes.
- */
-async function buildCarFromBytes(bytes: Uint8Array): Promise<{
-  rootCid: string;
-  carBytes: Uint8Array;
-}> {
-  const tmpDir = mkdtempSync(join(tmpdir(), "s2s-fc-"));
-  const jsonPath = join(tmpDir, "payload.json");
-  writeFileSync(jsonPath, bytes);
-
-  try {
-    const { rootCid, carPath } = await createCarFromPath(jsonPath, {
-      logger: noopLogger as any,
-    });
-    const carBytes = readFileSync(carPath);
-    unlinkSync(carPath);
-    return { rootCid: rootCid.toString(), carBytes };
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
-}
-
-// ── Controller ──────────────────────────────────────────────────────
 
 export class FilecoinController {
-  private main: IMainController;
-  private synapse: any;
-  private initialized = false;
-  private usingSessionKey = false;
+  private storage: FilecoinStorage;
 
-  constructor(main: IMainController) {
-    this.main = main;
+  constructor(main: FilecoinMain) {
+    this.storage = new FilecoinStorage(main as FilecoinUser, nodeFilecoinBuilder);
   }
 
-  async init(chain: "mainnet" | "calibration" = "mainnet"): Promise<void> {
-    if (this.initialized) return;
-    const pk = this.main.user?.private_key;
-    if (!pk) throw new Error("FilecoinController.init: no active user with a private key");
-    const chainConfig = chain === "mainnet" ? mainnet : calibration;
-    this.synapse = Synapse.create({
-      account: privateKeyToAccount(pk as Hex),
-      source: "oxo-core",
-      chain: chainConfig,
-    });
-    this.initialized = true;
+  // ── FilecoinStorage passthroughs ─────────────────────────────────
+
+  async init(chain?: "mainnet" | "calibration"): Promise<void> {
+    return this.storage.init(chain);
   }
 
   async initWithSessionKey(
-    skData: FilecoinSessionKeyData,
+    sessionKeyData: FilecoinSessionKeyData,
     rpcUrl: string,
-    chain: "mainnet" | "calibration" = "mainnet",
+    chain?: "mainnet" | "calibration",
   ): Promise<void> {
-    if (this.initialized) return;
-    const chainConfig = chain === "mainnet" ? mainnet : calibration;
-
-    const sessionKey = SessionKey.fromSecp256k1({
-      privateKey: skData.sessionPrivateKey as Hex,
-      root: skData.rootAddress as Hex,
-      chain: chainConfig,
-      transport: http(rpcUrl),
-    });
-    await sessionKey.syncExpirations();
-
-    const sessionSigner = privateKeyToAccount(skData.sessionPrivateKey as Hex);
-    const fcTransport = custom({
-      request: async ({ method, params }) => {
-        if (method === "eth_signTypedData_v4") {
-          const typedData = JSON.parse(params![1] as string);
-          return await sessionSigner.signTypedData({
-            domain: typedData.domain,
-            types: typedData.types,
-            message: typedData.message,
-            primaryType: typedData.primaryType,
-          });
-        }
-        const res = await fetch(rpcUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
-        });
-        const json = await res.json();
-        if (json.error) throw new Error(json.error.message);
-        return json.result;
-      },
-    });
-
-    const client = createWalletClient({
-      account: skData.rootAddress as Hex,
-      chain: chainConfig,
-      transport: fcTransport,
-    });
-
-    this.synapse = new Synapse({
-      client,
-      sessionClient: sessionKey.client,
-      source: "oxo-core",
-    });
-    this.initialized = true;
-    this.usingSessionKey = true;
-    console.log("[filecoin] Initialised with session key → root:", skData.rootAddress);
+    return this.storage.initWithSessionKey(sessionKeyData, rpcUrl, chain);
   }
 
-  // ── Upload / download ──────────────────────────────────────────
-
-  /**
-   * Upload JSON to Filecoin. Builds a CAR (unixfs-v1-2025 profile),
-   * gets the Root CID (IPFS-compatible), uploads to Filecoin SPs,
-   * and returns both the Root CID and PieceCID.
-   */
-  async uploadJson(data: unknown): Promise<FilecoinUploadResult> {
-    this.ensureInit();
-
-    const json = JSON.stringify(data, null, 2);
-    const bytes = new TextEncoder().encode(json);
-
-    // 1. Build CAR → get Root CID
-    const { rootCid, carBytes } = await buildCarFromBytes(bytes);
-
-    // 2. Upload the CAR to Filecoin SPs via filecoin-pin's uploader
-    //    (which calls Synapse internally and attaches rootCid as piece metadata)
-    const result = await uploadToSynapse(
-      this.synapse,
-      carBytes,
-      rootCid as any,   // uploadToSynapse expects CID type from multiformats
-      noopLogger as any,
-    );
-    return {
-      rootCid,
-      pieceCid: result.pieceCid.toString(),
-      size: result.size,
-      complete: result.complete,
-      copyCount: result.copies?.length ?? 0,
-      failedCount: result.failedAttempts?.length ?? 0,
-      copies:
-        result.copies?.map((c: any) => ({
-          provider: c.providerId?.toString() ?? "unknown",
-          dealId: c.dataSetId?.toString(),
-        })) ?? [],
-    };
+  async uploadJson(data: unknown, owners?: string[], kind?: string): Promise<FilecoinUploadResult> {
+    return this.storage.uploadJson(data, owners, kind);
   }
 
+  async listStorageFor(identity: string): Promise<any[]> {
+    return this.storage.listStorageFor(identity);
+  }
+
+  async retrieveJson(pieceCid: string): Promise<unknown> {
+    return this.storage.retrieveJson(pieceCid);
+  }
+
+  async isRetrievable(pieceCid: string): Promise<boolean> {
+    return this.storage.isRetrievable(pieceCid);
+  }
+
+  // ── Kubo upload (0xobsidian-local) ───────────────────────────────
+
   /**
-   * Upload the same bytes to a Kubo node (instant IPFS availability).
-   * Must be called separately, but uses the exact same bytes as uploadJson
-   * so the Root CID produced by both paths is identical.
-   *
-   * @param data    - Same data passed to uploadJson()
-   * @param kuboUrl - Kubo RPC endpoint (e.g. "ipfs.transport-union.dev")
-   * @returns The IPFS CID (should match uploadJson().rootCid)
+   * Upload to Kubo IPFS. Uses the local `addJson` which serialises with
+   * `JSON.stringify(data, null, 2)` — the same format filecoin-pin uses,
+   * so the CID from Kubo matches the `rootCid` from Filecoin.
    */
   async uploadToKubo(data: unknown, kuboUrl: string): Promise<string> {
     return addJson(data, kuboUrl);
   }
 
+  // ── Tree export + Filecoin upload ───────────────────────────────
+
   /**
-   * Retrieve a JSON object by PieceCID (via Filecoin SPs).
+   * Upload the full assets tree (config + templates + all assets) to Filecoin.
+   *
+   * 1. Exports the DAG from Kubo as CAR bytes via /api/v0/dag/export
+   * 2. Uploads the CAR bytes to Filecoin SPs via FilecoinStorage.uploadTree
+   *
+   * The root CID from Kubo is used — this guarantees CID parity since
+   * the CAR bytes from Kubo already have the correct unixfs-v1-2025
+   * serialization.
+   *
+   * @param configCid - Root CID of the assets tree in Kubo
+   * @param kuboUrl - Kubo RPC endpoint (e.g. "https://ipfs.transport-union.dev")
    */
-  async retrieveJson(pieceCid: string): Promise<unknown> {
-    this.ensureInit();
-    const bytes: Uint8Array = await this.synapse.storage.download({ pieceCid });
-    const text = new TextDecoder().decode(bytes);
-    return JSON.parse(text);
+  async uploadTree(configCid: string, kuboUrl: string): Promise<FilecoinUploadResult> {
+    const carBytes = await this.exportTreeFromKubo(configCid, kuboUrl);
+    return this.storage.uploadTree(carBytes);
   }
 
-  async isRetrievable(pieceCid: string): Promise<boolean> {
-    try {
-      await this.synapse.storage.download({ pieceCid });
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  /**
+   * Export a DAG from Kubo as CAR bytes via /api/v0/dag/export.
+   */
+  private async exportTreeFromKubo(cid: string, kuboUrl: string): Promise<Uint8Array> {
+    const url = new URL(kuboUrl);
+    const endpoint = `/api/v0/dag/export?arg=${cid}`;
 
-  // ── Internals ───────────────────────────────────────────────────
+    return new Promise<Uint8Array>((resolve, reject) => {
+      const options = {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: endpoint,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+        },
+      };
 
-  private ensureInit(): void {
-    if (!this.initialized) throw new Error("FilecoinController not initialised — call .init() or .initWithSessionKey() first");
+      const req = https.request(options, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on("end", () => {
+          const buf = Buffer.concat(chunks);
+          resolve(new Uint8Array(buf));
+        });
+      });
+
+      req.on("error", reject);
+      req.end();
+    });
   }
 }
+
+export type {
+  FilecoinSessionKeyData,
+  FilecoinBalance,
+  FilecoinCosts,
+  FilecoinUploadResult,
+} from "@s2s/soul2soul-shared/filecoin";

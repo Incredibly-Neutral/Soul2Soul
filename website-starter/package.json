@@ -4,8 +4,7 @@
   "scripts": {
     "sass": "sass scss/styles.scss css/styles.css",
     "serve": "http-server html -p 3008 --cors -c-1",
-    "upload": "ts-node scripts/upload.ts"
-
+    "upload": "tsx scripts/upload.ts"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

@@ -47,12 +47,12 @@ const config: HardhatUserConfig = {
 		),
 	),
 	paths: {
-		sources: ['contracts'],
+		sources: ['contracts/contracts'],
 	},
 	generateTypedArtifacts: {
 		destinations: [
 			{
-				folder: './generated',
+				folder: './contracts/generated',
 				mode: 'typescript',
 			},
 		],

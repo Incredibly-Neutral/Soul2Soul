@@ -5,7 +5,7 @@ const net = electron.remote.net;
 import FormData from 'form-data';
 import { importer } from 'ipfs-unixfs-importer';
 import { MemoryBlockstore } from 'blockstore-core/memory';
-import { MainController } from 'src/main.ctrlr.js';
+import { MainController } from '../main.ctrlr.js';
 
 // Function to calculate IPFS hash locally
 export const calculateIPFSHash = async (filePath: string): Promise<string> => {

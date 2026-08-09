@@ -1,6 +1,8 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SPublicationModule } from '../../../protocol/generated/abis/S2SPublicationModule'
+import { Abi_S2SPublicationModuleV2 } from '../../../protocol/generated/abis/S2SPublicationModuleV2'
 import { Abi_S2SRecordsModule } from '../../../protocol/generated/abis/S2SRecordsModule'
+
+import { toBytes32Id } from '@s2s/soul2soul-shared';
  
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -77,11 +79,12 @@ export class SafeIntegration {
             this.safeInfo.s2sRecords = moduleAddress;
             console.log("Found Records Module:", moduleAddress);
             
-          } else if (name === "S2S Publication Module") {
+          } else if ( name === "S2S Publication Module V2" ) {
+
             // Create full contract instance with complete ABI
             this.publicationModule = new window.ethers.Contract(
               moduleAddress,
-              Abi_S2SPublicationModule,
+              Abi_S2SPublicationModuleV2,
               provider
             );
             this.safeInfo.s2sPublication = moduleAddress;
@@ -161,129 +164,84 @@ export class SafeIntegration {
     });
   }
 
-  // ===== PUBLICATION MODULE - LICENSES =====
-  
-  async grantLicense(publication: string, contentId: string): Promise<void> {
+  // ===== PUBLICATION MODULE — DEALS & OFFERS =====
+
+  async makeOffer(genesis: string, cid: string): Promise<void> {
     if (!this.safeSdk || !this.publicationModule) {
       throw new Error('Safe SDK or publication module not initialized');
     }
-
-    const txData = this.publicationModule.interface.encodeFunctionData('grantLicense', [publication, contentId]);
-    
+    const txData = this.publicationModule.interface.encodeFunctionData(
+      'makeOffer', [toBytes32Id(genesis), cid]
+    );
     await this.safeSdk.txs.send({
-      txs: [{
-        to: this.safeInfo.s2sPublication || "",
-        value: '0',
-        data: txData
-      }]
+      txs: [{ to: this.safeInfo.s2sPublication!, value: '0', data: txData }]
     });
   }
 
-  async acceptLicense(contentId: string): Promise<void> {
+  async acceptOffer(genesis: string): Promise<void> {
     if (!this.safeSdk || !this.publicationModule) {
       throw new Error('Safe SDK or publication module not initialized');
     }
-
-    const txData = this.publicationModule.interface.encodeFunctionData('acceptLicense', [contentId]);
-    
+    const txData = this.publicationModule.interface.encodeFunctionData(
+      'acceptOffer', [toBytes32Id(genesis)]
+    );
     await this.safeSdk.txs.send({
-      txs: [{
-        to: this.safeInfo.s2sPublication!,
-        value: '0',
-        data: txData
-      }]
+      txs: [{ to: this.safeInfo.s2sPublication!, value: '0', data: txData }]
     });
   }
 
-  async revokeLicense(contentId: string): Promise<void> {
+  async retract(genesis: string): Promise<void> {
     if (!this.safeSdk || !this.publicationModule) {
       throw new Error('Safe SDK or publication module not initialized');
     }
-
-    const txData = this.publicationModule.interface.encodeFunctionData('revokeLicense', [contentId]);
-    
+    const txData = this.publicationModule.interface.encodeFunctionData(
+      'retract', [toBytes32Id(genesis)]
+    );
     await this.safeSdk.txs.send({
-      txs: [{
-        to: this.safeInfo.s2sPublication!,
-        value: '0',
-        data: txData
-      }]
+      txs: [{ to: this.safeInfo.s2sPublication!, value: '0', data: txData }]
     });
   }
 
-  async isLicensed(contentId: string): Promise<boolean> {
-    if (!this.publicationModule) {
-      throw new Error('Publication module not initialized');
-    }
-    return await this.publicationModule.isLicensed(contentId);
+  async hasDeal(genesis: string): Promise<boolean> {
+    if (!this.publicationModule) throw new Error('Publication module not initialized');
+    return await this.publicationModule.hasDeal(toBytes32Id(genesis));
   }
 
-  async getLicenseAuthor(contentId: string): Promise<string> {
-    if (!this.publicationModule) {
-      throw new Error('Publication module not initialized');
-    }
-    return await this.publicationModule.getLicenseAuthor(contentId);
-  }
-  
-  async getAllLicenses(): Promise<{
-      activeLicenses: Array<{ contentId: string; author: string; status: "active" | "pending" }>;
-      pendingLicenses: Array<{ contentId: string; author: string; status: "active" | "pending" }>;
-    }> {
-      if (!this.publicationModule) {
-        throw new Error('Publication module not initialized');
-      }
-
-      try {
-        const contentIdsProxy = await this.publicationModule.getAllContentIds();
-        const contentIds = Array.from(contentIdsProxy);
-      
-        const [licenseStatuses, pendingStatuses] = await Promise.all([
-          this.publicationModule.isLicensedBulk(contentIds),
-          Promise.all(contentIdsProxy.map((id: string) => this.publicationModule.hasPendingLicense(id)))
-        ]);
-
-        // Get active licenses with authors
-        const activeContentIds = contentIdsProxy.filter((_: string, i: number) => licenseStatuses[i]);
-        const activeAuthors = await Promise.all(
-          activeContentIds.map((id: string) => this.publicationModule.getLicenseAuthor(id))
-        );
-        
-        const activeLicenses = activeContentIds.map((contentId: string, i: number) => ({ 
-          contentId, 
-          author: activeAuthors[i] || 'Unknown',
-          status: 'active' as const 
-        }));
-        
-        // Get pending licenses with authors
-        const pendingContentIds = contentIdsProxy.filter((_: string, i: number) => pendingStatuses[i]);
-        const pendingLicenseInfos = await Promise.all(
-          pendingContentIds.map((id: string) => this.publicationModule.getPendingLicense(id))
-        );
-        
-        const pendingLicenses = pendingContentIds.map((contentId: string, i: number) => ({ 
-          contentId,
-          author: pendingLicenseInfos[i].author || 'Unknown',
-          status: 'pending' as const 
-        }));
-          
-        return { activeLicenses, pendingLicenses };
-        
-        console.log(activeLicenses)
-        
-      } catch (error) {
-        console.error('Error getting all licenses:', error);
-        return { activeLicenses: [], pendingLicenses: [] };
-      }
-    }
-
-  async getPendingLicenses(): Promise<Array<{ contentId: string; author: string; status: "active" | "pending" }>> {
-    const { pendingLicenses } = await this.getAllLicenses();
-    return pendingLicenses;
+  async getDeals(offset = 0, limit = 50): Promise<Array<{
+    genesis: string; author: string; cid: string; timestamp: bigint;
+  }>> {
+    if (!this.publicationModule) throw new Error('Publication module not initialized');
+    return await this.publicationModule.getDeals(offset, limit);
   }
 
-  async getActiveLicenses(): Promise<Array<{ contentId: string; author: string; status: "active" | "pending" }>> {
-    const { activeLicenses } = await this.getAllLicenses();
-    return activeLicenses;
+  async getOffers(offset = 0, limit = 50): Promise<Array<{
+    genesis: string; author: string; cid: string; timestamp: bigint;
+  }>> {
+    if (!this.publicationModule) throw new Error('Publication module not initialized');
+    return await this.publicationModule.getOffers(offset, limit);
+  }
+
+  async getAllDealsAndOffers(): Promise<{
+    deals: Array<{ genesis: string; author: string; cid: string; timestamp: bigint; status: 'deal' }>;
+    offers: Array<{ genesis: string; author: string; cid: string; timestamp: bigint; status: 'offer' }>;
+  }> {
+    if (!this.publicationModule) throw new Error('Publication module not initialized');
+    try {
+      const [rawDeals, rawOffers] = await Promise.all([
+        this.publicationModule.getDeals(0, 200),
+        this.publicationModule.getOffers(0, 200),
+      ]);
+      const deals = rawDeals.map((e: any) => ({
+        genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp, status: 'deal' as const,
+      }));
+      const offers = rawOffers.map((e: any) => ({
+        genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp, status: 'offer' as const,
+      }));
+      return { deals, offers };
+    } catch (error) {
+      console.error('Error getting deals and offers:', error);
+      return { deals: [], offers: [] };
+    }
   }
 
   // ===== PUBLICATION MODULE - WHITELISTS =====

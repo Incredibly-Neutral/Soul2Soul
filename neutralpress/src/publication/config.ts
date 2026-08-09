@@ -22,7 +22,7 @@ import { S2SProtocolInfo, S2SPublication, S2SPublicationConfig } from "@s2s/soul
 // 	);
 // 	return await main.oxo.ctrlr.ipfs.getJsonLike(
 // 		cid,
-// 		main.protocolInfo.dataGateway,
+// 		main.protocolInfo.gateway,
 // 	);
 // };
 
@@ -52,7 +52,7 @@ export const uploadConfig = async (
 	if (publication.configCid != undefined) {
 		config = await main.oxo.ctrlr.ipfs.getJsonLike(
 			publication.configCid,
-			main.protocolInfo.dataGateway,
+			main.protocolInfo.gateway,
 		);
 		if (config.Type == "error") {
 			config = {};
@@ -181,14 +181,14 @@ export const uploadConfig = async (
 			
 			const cid = await main.oxo.ctrlr.ipfs.add(
 				templateContent,
-				main.protocolInfo.dataGateway,
+				main.protocolInfo.gateway,
 				true,
 			);
 
 			if (!config.templates.map((a: any) => a.cid).includes(cid)) {
 				await main.oxo.ctrlr.ipfs.add(
 					templateContent,
-					main.protocolInfo.dataGateway,
+					main.protocolInfo.gateway,
 					false,
 				);
 				const existingAssetIndex = config.templates.findIndex(
@@ -213,7 +213,7 @@ export const uploadConfig = async (
 
 		let templatesCid = await main.oxo.ctrlr.ipfs.dagPut(
 			config.templates,
-			main.protocolInfo.dataGateway,
+			main.protocolInfo.gateway,
 		);
 
 		const commit_sha = await getLatestCommitSHA(publication);
@@ -241,7 +241,7 @@ export const uploadConfig = async (
 		//  console.log("config", publication_config);
 		config_cid = await main.oxo.ctrlr.ipfs.add(
 			publication_config,
-			main.protocolInfo.dataGateway,
+			main.protocolInfo.gateway,
 		);
 	} catch (error) {
 		console.log(error);
@@ -260,7 +260,7 @@ export const createConfig = (
 	return {
 		assetsCid: "",
 		contract: publication.contract || "",
-		dataGateway: protocolInfo.dataGateway || "",
+		dataGateway: protocolInfo.gateway || "",
 		mapping: JSON.parse(mapping),
 		name: publication.name,
 		templateCid: templatesCid,

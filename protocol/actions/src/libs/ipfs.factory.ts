@@ -1,4 +1,3 @@
-import { IPFS_URL } from "./constants";
 import { fetchWithTimeout } from "./helpers";
 
 interface StandardLink {
@@ -18,9 +17,9 @@ export interface DagNode {
   };
 }
 
-export const getPublicationConfig = async (configCid: string) => {
+export const getPublicationConfig = async (gateway: string, configCid: string) => {
   try {
-    const response = await fetch(`${IPFS_URL}/api/v0/cat?arg=${configCid}`, {
+    const response = await fetch(`${gateway}/api/v0/cat?arg=${configCid}`, {
       method: "POST",
     });
     if (!response.ok) {
@@ -40,8 +39,8 @@ export const getPublicationConfig = async (configCid: string) => {
   // });
 };
 
-export const uploadFile = async (output: string) => {
-  const ipfsApiUrl = `${IPFS_URL}/api/v0/add`;
+export const uploadFile = async (gateway: string, output: string) => {
+  const ipfsApiUrl = `${gateway}/api/v0/add`;
   const formData = new FormData();
   formData.append("file", output);
 
@@ -60,9 +59,9 @@ export const uploadFile = async (output: string) => {
   return result.Hash;
 };
 
-export const catFile = async (cid: string) => {
+export const catFile = async (gateway: string, cid: string) => {
 
-  const ipfsApiUrl = `${IPFS_URL}/api/v0/cat?arg=${cid}`;
+  const ipfsApiUrl = `${gateway}/api/v0/cat?arg=${cid}`;
 
   const response = await fetch(ipfsApiUrl, {
     method: "POST",
@@ -81,8 +80,8 @@ export const catFile = async (cid: string) => {
   return result;
 };
 
-export const getDag = async (cid: string) => {
-  const ipfsApiUrl = `${IPFS_URL}/api/v0/dag/get?arg=${cid}`;
+export const getDag = async (gateway: string, cid: string) => {
+  const ipfsApiUrl = `${gateway}/api/v0/dag/get?arg=${cid}`;
   const response = await fetch(ipfsApiUrl, {
     method: "POST",
   });
@@ -149,8 +148,8 @@ async function toBlob(data: any): Promise<Blob> {
   return new Blob([JSON.stringify(data)]);
 }
 
-export const putDag = async (dag: DagNode): Promise<string> => {
-  const ipfsApiUrl = `${IPFS_URL}/api/v0/dag/put?store-codec=dag-cbor&input-codec=dag-json&pin=true`;
+export const putDag = async (gateway: string, dag: DagNode): Promise<string> => {
+  const ipfsApiUrl = `${gateway}/api/v0/dag/put?store-codec=dag-cbor&input-codec=dag-json&pin=true`;
 
   // Convert DAG to blob
   const blob = await toBlob(dag);

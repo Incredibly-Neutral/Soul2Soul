@@ -1,11 +1,13 @@
 {
-  "sessionPrivateKey": "0x17d22a20412bb3cdf40f211725c9d90224f81b6fba2faf1e6873c36c003027cc",
-  "sessionAddress": "0x3aD34Cb3fBb59E6253a9ecD235679fc989Fe569B",
+  "sessionPrivateKey": "0x5b607304518d65f384c5fc998b0325708931ffcdf6a57b1c3eafbee26d1c2d61",
+  "sessionAddress": "0xC5b4069493427DC79a4390fC8d0407E007E18667",
   "rootAddress": "0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387",
-  "expiresAt": "1813689203",
-  "expiresAtISO": "2027-06-22T18:33:23.000Z",
+  "expiresAt": "1816437693",
+  "expiresAtISO": "2027-07-24T14:01:33.000Z",
   "permissions": [
     "CreateDataSet",
-    "AddPieces"
+    "AddPieces",
+    "TerminateService",
+    "SchedulePieceRemovals"
   ]
 }

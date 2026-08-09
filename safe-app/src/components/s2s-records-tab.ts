@@ -1,8 +1,7 @@
 // s2s-records-tab.ts
-import { ConfigBuilder } from '@/lib/config-builder.js';
+import { ConfigBuilder, AssetsBuilder, S2SIPFSMethods } from '@s2s/soul2soul-shared/safe-app';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { ProtocolIntegration } from '../lib/protocol-integration.js';
-import { AssetsBuilder } from '@/lib/assets-builder.js';
 import { store, OnChainRecord } from '../state/index.js';
 import { tableStyles } from '@/styles/table-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -10,14 +9,27 @@ import { LitService } from '@s2s/soul2soul-shared/safe-app';
 import { pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
+import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
+import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 
 export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
   public protocolIntegration!: ProtocolIntegration;
   private lit!: LitService;
+  private storage!: FilecoinStorage;
   private fetching = false;
   private searchTerm = '';
   private editingKey: string | null = null;
+  /** Keys that were changed by the last updateConfig call — gets a yellow highlight. */
+  private changedKeys: Set<string> = new Set();
+  private storageItems: Array<{
+    pieceCid: string;
+    rootCid: string | null;
+    dataSetId: string;
+    provider: string;
+    attributed: boolean;
+  }> = [];
+  private loadingStorage = false;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -73,6 +85,8 @@ export class S2SRecordsTab extends HTMLElement {
           type: this.determineRecordType(key),
         }))
       );
+      // Fresh chain read clears changed-state highlights
+      this.changedKeys.clear();
     } catch (error) {
       console.error('Error loading records:', error);
     }
@@ -149,11 +163,17 @@ export class S2SRecordsTab extends HTMLElement {
     const publicationUrl = await this.safeIntegration.getRecord('name');
     const pInfo          = await this.protocolIntegration.getInfo();
 
-    const assets = new AssetsBuilder(
-      pInfo.ensRecords,
+    const ipfs = new S2SIPFSMethods(
+      'https://ipfs.transport-union.dev',
       import.meta.env.VITE_PINATA_JWT,
       'https://neutralpress.mypinata.cloud',
-      'https://ipfs.transport-union.dev',
+    );
+
+    console.log(import.meta.env.VITE_GITHUB_TOKEN);
+    
+    const assets = new AssetsBuilder(
+      ipfs,
+      import.meta.env.VITE_GITHUB_TOKEN,
     );
 
     const [owner, repoName] = repo.split('/').slice(3);
@@ -162,25 +182,143 @@ export class S2SRecordsTab extends HTMLElement {
       owner, repoName, 'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
-      existingCid
     );
 
     const config = new ConfigBuilder(
-      import.meta.env.VITE_PINATA_JWT,
-      'https://neutralpress.mypinata.cloud',
-      'https://ipfs.transport-union.dev',
+      ipfs,
+      import.meta.env.VITE_GITHUB_TOKEN,
     );
 
-    const { cid: configCid } = await config.buildConfig(
+    const { cid: configCid, config: publicationConfig } = await config.buildConfig(
       owner, repoName, 'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
-      existingCid,
     );
 
+    console.log("[config] templateCid from builder:", publicationConfig.templateCid);
+    console.log("[config] configCid from builder:", configCid);
+
+    console.log("cid from kubo", configCid)
+
+    // ── Filecoin (additive, non-blocking) ──────────────────────────────
+    // Fetch the built config object from Kubo so we upload the same data
+    // that Pinata just pinned, then fire-and-forget.
+    try {
+      const configData = await ipfs.fetchFromKubo(configCid);
+      this.tryFilecoinUpload(configData, 'config');
+    } catch (err) {
+      console.warn('[filecoin] fetchFromKubo failed (non-fatal):', err);
+    }
+
+    // ── Filecoin uploadTree (full assets tree) ────────────────────────
+    // Export the full DAG from assetsCid (the actual tree of fonts, images, CSS, templates)
+    // as CAR and upload to Filecoin.
+    try {
+      this.tryFilecoinTreeUpload(assetsCid, 'assets');
+    } catch (err) {
+      console.warn('[filecoin] uploadTree failed (non-fatal):', err);
+    }
+
+    // ── Filecoin uploadTree (templates DAG) ──────────────────────────
+    // The templateCid was created by dagPut of the templates array (a single JSON
+    // node stored as DAG).  Export it from Kubo as CAR and upload to Filecoin
+    // the same way as the assets tree.
+    const templateCid = publicationConfig?.templateCid;
+    if (templateCid) {
+      try {
+        this.tryFilecoinTreeUpload(templateCid, 'templates');
+      } catch (err) {
+        console.warn('[filecoin] template uploadTree failed (non-fatal):', err);
+      }
+    }
+
+    // ── existing ───────────────────────────────────────────────────────
+    const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
     window.open(executionUrl, '_blank');
+
+    // Mark changed keys for yellow highlight (before store update so the first
+    // subscriber-triggered render already has the class)
+    this.changedKeys.add('config');
+    const oldRepo = store.getRecord('repo');
+    if (oldRepo !== repo) {
+      this.changedKeys.add('repo');
+    }
+
+    // Optimistic local update so the new value shows immediately
+    store.setRecord({ key: 'config', value: configCid, type: 'content' });
+
+    this.render();
+  }
+
+  /**
+   * Upload config data to Filecoin Storage (on-chain).
+   * Fire-and-forget — never throws, never blocks the Safe tx flow.
+   */
+  private async tryFilecoinUpload(data: unknown, kind: string = ''): Promise<void> {
+    try {
+      const publicationAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
+      const result = await this.storage.uploadJson(data, [publicationAddress], kind);
+      console.log('[filecoin] config uploaded:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
+    } catch (err) {
+      console.warn('[filecoin] upload failed (non-fatal):', err);
+    }
+  }
+
+  /**
+   * Upload the full assets tree (config + templates + assets) to Filecoin.
+   * Exports the DAG from Kubo as CAR, then uploads to Filecoin.
+   * Fire-and-forget — never throws, never blocks the Safe tx flow.
+   */
+  private async tryFilecoinTreeUpload(rootCid: string, kind: string = ''): Promise<void> {
+    try {
+      const publicationAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
+      const kuboUrl = 'https://ipfs.transport-union.dev';
+
+      // Import dagExport dynamically to avoid bundling issues
+      const { dagExport } = await import('../lib/ipfs.factory.js');
+
+      // Export the full DAG from Kubo as CAR bytes
+      console.log('[filecoin] exporting tree from Kubo:', rootCid);
+      const carBytes = await dagExport(rootCid, kuboUrl);
+      console.log('[filecoin] exported tree from Kubo:', rootCid, `(${carBytes.length} bytes)`);
+
+      // Upload the CAR to Filecoin
+      const result = await this.storage.uploadTree(carBytes, [publicationAddress].filter(Boolean), kind);
+      console.log('[filecoin] tree uploaded to Filecoin:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
+    } catch (err) {
+      console.warn('[filecoin] uploadTree failed (non-fatal):', err);
+    }
+  }
+
+  private async loadStorage() {
+    this.loadingStorage = true;
+    this.render();
+
+    const safeAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
+    if (!safeAddress) {
+      console.warn('[filecoin] no publication address — skipping storage listing');
+      this.loadingStorage = false;
+      this.render();
+      return;
+    }
+
+    try {
+      this.storageItems = await this.storage.listPublicationStorage(safeAddress);
+      console.log('[filecoin] storage items:', this.storageItems.length);
+    } catch (err) {
+      console.warn('[filecoin] loadStorage failed:', err);
+      this.storageItems = [];
+    }
+
+    this.loadingStorage = false;
+    this.render();
+  }
+
+  private renderStorageLink(url: string | null, label: string, icon: string): string {
+    if (!url) return `<span class="storage-link-unattributed">—</span>`;
+    return `<a class="storage-link" href="${url}" target="_blank" rel="noopener" title="${label}">${icon} ${label}</a>`;
   }
 
   private showNotification(message: string, type: 'success' | 'error') {
@@ -214,7 +352,14 @@ export class S2SRecordsTab extends HTMLElement {
         }
 
         .table { grid-template-columns: 1fr 3fr auto; }
-        .button.thin { padding: 0.25rem .5rem; }
+        .button.thin { 
+          padding: 0.25rem .5rem;
+          border: none;
+          height: 2rem;
+          margin-left: .5rem;
+          font-size: .875rem;
+
+        }
 
         .record-value-input {
           width: 100%;
@@ -236,6 +381,22 @@ export class S2SRecordsTab extends HTMLElement {
           padding: 3rem;
           color: #6b7280;
         }
+
+        .storage-link {
+          color: var(--blue-400);
+          text-decoration: none;
+          font-size: 0.75rem;
+          &:hover { text-decoration: underline; }
+        }
+        .storage-link-unattributed {
+          color: var(--gray-600);
+          font-size: 0.75rem;
+        }
+
+        .record-changed {
+          background: rgba(238, 181, 29, 0.15);
+          border-left: 3px solid var(--color-yellow);
+        }
       </style>
 
       ${!hasCache && this.fetching ? `
@@ -253,8 +414,21 @@ export class S2SRecordsTab extends HTMLElement {
               <div class="table-header">Value</div>
               <div class="table-header"></div>
 
-              ${records.map(record => `
-                <div class="table-row">
+              ${records.map(record => {
+                const isChanged = this.changedKeys.has(record.key);
+                const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
+                const isConfig = record.key === 'config';
+                const isRepo = record.key === 'repo';
+                let valueDisplay: string;
+                if (isConfig && record.value) {
+                  valueDisplay = `<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                } else if (isRepo && record.value) {
+                  valueDisplay = `<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                } else {
+                  valueDisplay = `<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+                }
+                return `
+                <div class="${rowClass}">
                   <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
                     ${record.key}
                   </div>
@@ -267,11 +441,7 @@ export class S2SRecordsTab extends HTMLElement {
                         value="${record.value}"
                         id="edit-value-${record.key}"
                       />
-                    ` : `
-                      <span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">
-                        ${record.value}
-                      </span>
-                    `}
+                    ` : valueDisplay}
                   </div>
 
                   <div class="table-cell">
@@ -288,7 +458,7 @@ export class S2SRecordsTab extends HTMLElement {
                     `}
                   </div>
                 </div>
-              `).join('')}
+              `}).join('')}
             </div>
           ` : `
             <div class="empty-state">
@@ -299,6 +469,8 @@ export class S2SRecordsTab extends HTMLElement {
 
           <button class="button" data-action="update">Update Config</button>
         </div>
+
+       
       `}
     `;
 
@@ -325,6 +497,8 @@ export class S2SRecordsTab extends HTMLElement {
           this.cancelEdit();
         } else if (action === 'update') {
           this.updateConfig();
+        } else if (action === 'load-storage') {
+          this.loadStorage();
         }
       });
     });

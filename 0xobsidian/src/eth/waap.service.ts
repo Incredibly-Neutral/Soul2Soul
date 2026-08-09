@@ -1,4 +1,4 @@
-import { IMainController } from "src/main.ctrlr.js";
+import { IMainController } from "../main.ctrlr.js";
 import { BaseAccountService, IBaseAccountService } from "./base.account.service.js";
 
 import { AuthenticationMethod, initWaaP } from "@human.tech/waap-sdk";
@@ -7,7 +7,7 @@ declare global {
     interface Window {
         waap: {
             login: () => Promise<'waap' | 'injected' | 'walletconnect' | null>;
-            request: (any) => Promise<any>;
+            request: (arg0: any) => Promise<any>;
         };
     }
 }

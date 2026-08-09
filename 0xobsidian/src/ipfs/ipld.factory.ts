@@ -1,7 +1,7 @@
 import { App, TFile, parseFrontMatterTags } from "obsidian";
 import { slugify } from "../utils.js";
 import { dagPut } from "./remotekubo.service.js";
-import { IpldPod } from "src/types/ipld.js";
+import { IpldPod } from "../types/ipld.js";
 
 const ipfs_endpoint = "https://ipfs.transport-union.dev";
 

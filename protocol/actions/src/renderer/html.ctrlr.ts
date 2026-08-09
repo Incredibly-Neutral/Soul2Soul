@@ -1,4 +1,3 @@
-import { IPFS_URL } from "./constants";
 import {
   cleanTemplateString,
   processPartials,
@@ -9,6 +8,7 @@ export const renderHTML = async (
   config: any,
   templateConfig: any,
   templateData: any,
+  gateway?: string,
 ) => {
   try {
     // Validate inputs
@@ -22,7 +22,7 @@ export const renderHTML = async (
 
     // Fetch template array
     const response = await fetch(
-      `${IPFS_URL}/api/v0/dag/get?arg=${config.templateCid}`,
+      `${gateway}/api/v0/dag/get?arg=${config.templateCid}`,
       {
         method: "POST",
       },
@@ -51,7 +51,7 @@ export const renderHTML = async (
 
     // Fetch template content
     const templateResponse = await fetch(
-      `${IPFS_URL}/api/v0/cat?arg=${templateFile.cid}`,
+      `${gateway}/api/v0/cat?arg=${templateFile.cid}`,
       {
         method: "POST",
       },
@@ -68,24 +68,22 @@ export const renderHTML = async (
 
     // Clean and process template
     const template = cleanTemplateString(await templateResponse.text())
-      .replace(/^"/, "") // Remove leading quote if present
-      .replace(/"$/, "") // Remove trailing quote if present
-      .replace(/(?<=>)"/g, "") // Remove quotes after >
-      .replace(/"(?=<)/g, ""); // Remove quotes before <
+      .replace(/^\"/, "") // Remove leading quote if present
+      .replace(/\"$/, "") // Remove trailing quote if present
+      .replace(/(?<=>)\"/g, "") // Remove quotes after >
+      .replace(/\"(?=<)/g, ""); // Remove quotes before <
 
     if (!template) {
       console.error("Empty template after cleaning");
       return "";
     }
 
-    // console.log(templateData);
-
     // Find and process partials
     const partialFiles = templateArray.filter(
       (t: any) =>
         t.path.includes("partials/") && t.path.endsWith(".handlebars"),
     );
-    const result = await processPartials(template, partialFiles, templateData);
+    const result = await processPartials(template, partialFiles, templateData, gateway);
 
     if (!result) {
       console.error("Empty result after processing");

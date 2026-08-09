@@ -34,7 +34,11 @@ export class ProtocolIntegration {
           transport: http(getRpcUrl(8453)),
         });
 
-        this.protocolInfo  = await getProtocolInfo(false, providerL1, providerL2);
+        this.protocolInfo  = await getProtocolInfo(
+          false,
+          providerL1 as any,
+          providerL2 as any,
+        );
 
         return this.protocolInfo;
 

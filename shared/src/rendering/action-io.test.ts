@@ -176,7 +176,7 @@ describe('validatePrepOutput', () => {
 describe('validateSingleInput', () => {
   it('parses a valid single input', () => {
     const result = validateSingleInput(validSingleInput);
-    expect(result.job.id).toBe('lens-post-1');
+    expect(result.job.id).toBe('0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063');
     expect(result.signature).toBeTruthy();
   });
 
@@ -203,7 +203,7 @@ describe('validateSingleInput', () => {
 
   it('accepts missing configCid (optional)', () => {
     const result = validateSingleInput(singleMissingConfigCid());
-    expect(result.job.id).toBe('lens-post-1');
+    expect(result.job.id).toBe('0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063');
   });
 });
 

@@ -1,11 +1,19 @@
-import { FileSystemAdapter, Notice, TAbstractFile, TFile } from "obsidian";
-import DSG from "./main";
-import { IPublicationSrv, PublicationService } from "./publication/publication.service";
-import { PreviewCtrlr } from "./preview.ctrlr";
-import { getPublicationMultiSig, isAvailableEnsName } from "./publication/ens";
-import { NewPublicationModal } from "./publication/new.modal";
-import { getProtocolInfo, S2SProtocolInfo, pinCidFromRemote, renderwithLitActions } from "@s2s/soul2soul-shared";
-import { ContentController } from "./content/content.ctrlr";
+import { FileSystemAdapter, Notice, TAbstractFile, TFile } from 'obsidian';
+import DSG from './main';
+import { IPublicationSrv, PublicationService } from './publication/publication.service';
+import { PreviewCtrlr } from './preview.ctrlr';
+import { getPublicationMultiSig, isAvailableEnsName } from './publication/ens';
+import { NewPublicationModal } from './publication/new.modal';
+import {
+	getProtocolInfo,
+	S2SProtocolInfo,
+	pinCidFromRemote,
+	renderwithLitActions,
+	toPreviewLabel,
+} from '@s2s/soul2soul-shared';
+import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
+import { ContentController } from './content/content.ctrlr';
+import { measureAvailability } from './avail';
 
 export interface IMainController {
 	basePath: string;
@@ -16,18 +24,19 @@ export interface IMainController {
 	publications: any;
 	protocolInfo: S2SProtocolInfo;
 
-	getInitializedService: (subdomain: string) => Promise<IPublicationSrv>
+	getInitializedService: (subdomain: string) => Promise<IPublicationSrv>;
 	newPublication: (ensName: string, file: TFile) => Promise<void>;
 	proposeContent: (_file: TAbstractFile, publish: boolean) => Promise<void>;
 	// previewNote: (_file: TAbstractFile) => Promise<void>;
-	grantLicense: (_file: TAbstractFile) => Promise<void>;
+	// grantLicense: (_file: TAbstractFile) => Promise<void>;
 	revokeLicense: (tagName: string, _file: TAbstractFile) => Promise<void>;
-	renderCalls: (publication: string, streamIds: string[], lit_usage_key: string, publish: boolean) => Promise<void>;
-	bulkrender: (
-		post_type: string,
-		ensName: string,
-		pubContract: string,
+	renderCalls: (
+		publication: string,
+		streamIds: string[],
+		lit_usage_key: string,
+		publish: boolean,
 	) => Promise<void>;
+	bulkrender: (post_type: string, ensName: string, pubContract: string) => Promise<void>;
 }
 
 export class MainController implements IMainController {
@@ -43,7 +52,7 @@ export class MainController implements IMainController {
 	constructor(plugin: DSG) {
 		this.plugin = plugin;
 		this.preview = new PreviewCtrlr(this);
-		this.content = new ContentController(this)
+		this.content = new ContentController(this);
 		this.publications = {};
 
 		// Set basePath using Obsidian's adapter
@@ -65,86 +74,74 @@ export class MainController implements IMainController {
 			while (attempts < maxAttempts) {
 				try {
 					// @ts-ignore
-					const oxoPlugin = this.plugin.app.plugins.plugins["oxo-core"];
-					
+					const oxoPlugin = this.plugin.app.plugins.plugins['oxo-core'];
+
 					if (oxoPlugin && oxoPlugin.ctrlr) {
-						
 						this.oxo = oxoPlugin;
 						return true; // Plugin and controller loaded successfully
 					}
 				} catch (error) {
-					console.warn("Error accessing 0xobsidian plugin:", error);
+					console.warn('Error accessing 0xobsidian plugin:', error);
 				}
 
 				attempts++;
 				await new Promise((resolve) => setTimeout(resolve, 1000));
 			}
 
-			console.warn("0xobsidian plugin not found after", maxAttempts, "attempts");
+			console.warn('0xobsidian plugin not found after', maxAttempts, 'attempts');
 			return false;
 		};
 
 		// Wait for plugin to be available
 		const pluginLoaded = await waitForPlugin();
-		
+
 		if (!pluginLoaded) {
-			console.log("0xo plugin not present")
+			console.log('0xo plugin not present');
 			return; // Plugin never loaded
 		}
 
 		// Plugin is loaded, now check for active user (no retries - either they have one or they don't)
 		if (!this.oxo.ctrlr.hasActiveUser()) {
-			console.log("0xObsidian does not have an active user selected");
+			console.log('0xObsidian does not have an active user selected');
 			return; // User needs to select an account manually
 		}
 
 		// We have a plugin AND an active user, now init chains
 		try {
-
-			// Dit toch naar 0x0? 
-			const success = await this.oxo.ctrlr.initChains([
-				"ETH_MAINNET",
-				"BASE",
-			]);
+			// Dit toch naar 0x0?
+			const success = await this.oxo.ctrlr.initChains(['ETH_MAINNET', 'BASE']);
 
 			if (success) {
 				this.protocolInfo = await getProtocolInfo(
-					this.plugin.settings.dev, 
-					this.oxo.ctrlr.account["ETH_MAINNET"].publicClient, 
-					this.oxo.ctrlr.account["BASE"].publicClient
+					this.plugin.settings.dev,
+					this.oxo.ctrlr.account['ETH_MAINNET'].publicClient,
+					this.oxo.ctrlr.account['BASE'].publicClient,
 				);
 
-				console.log("protocolInfo", this.protocolInfo);
+				console.log('protocolInfo', this.protocolInfo);
 				// this.oxo.ctrlr.lit.createPkpAuthContext(this.protocolInfo.pkp.publicKey)
-
-				
 			}
 		} catch (error) {
-			console.warn("Error initializing chains:", error);
+			console.warn('Error initializing chains:', error);
 		}
-
 	}
 
-	async newPublication(tagName: string, file: TFile)  {
-
-		const ensName = tagName.toLowerCase().replace("--s2s", "") + ".soul2soul.eth";
-		const subdomain = ensName.split(".")[0];
+	async newPublication(tagName: string, file: TFile) {
+		const ensName = tagName.toLowerCase().replace('--s2s', '') + '.soul2soul.eth';
+		const subdomain = ensName.split('.')[0];
 
 		if (this.publications[subdomain] != undefined) {
-			this.grantLicense(file);
+			//this.grantLicense(file);
 			return;
 		}
 
-		this.publications[subdomain] = new PublicationService(this,subdomain);
-	
+		this.publications[subdomain] = new PublicationService(this, subdomain);
+
 		const isAvailable = await isAvailableEnsName(this, tagName);
-		
+
 		if (!isAvailable) {
-		
 			await this.publications[subdomain].init();
-
 		} else {
-
 			new NewPublicationModal(
 				this.plugin.app,
 				this.plugin.ctrlr,
@@ -169,93 +166,126 @@ export class MainController implements IMainController {
 		}
 	}
 
-	async grantLicense(_file: TAbstractFile) {
-		const file = this.plugin.app.vault.getFileByPath(_file.path);
-		if (file != null) {
+	// async grantLicense(_file: TAbstractFile) {
+	// 	const file = this.plugin.app.vault.getFileByPath(_file.path);
+	// 	if (file != null) {
 
+	// 		const { tags, contentId } = await this.content.parseNote(file);
+	// 		const lensProfileId = "";
 
-			const { tags, contentId } = await this.content.parseNote(file);
-			const lensProfileId = "";
+	// 		const publications = tags
+	// 			.filter((tag: string) => tag.endsWith("--s2s"))
+	// 			.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
 
-			const publications = tags
-				.filter((tag: string) => tag.endsWith("--s2s"))
-				.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
+	// 		for (const pub of publications) {
 
-			for (const pub of publications) {
-	
-				const subdomain = pub.split(".")[0];
-			
-				if(this.publications[subdomain] == undefined) {
-					this.publications[subdomain] = new PublicationService(this, subdomain)
-					await this.publications[subdomain].init();
-				}
+	// 			const subdomain = pub.split(".")[0];
 
-				const licensedId = contentId ?? pub;
-				const isLicensed = await this.publications[subdomain].isLicensed(licensedId);
+	// 			if(this.publications[subdomain] == undefined) {
+	// 				this.publications[subdomain] = new PublicationService(this, subdomain)
+	// 				await this.publications[subdomain].init();
+	// 			}
 
-				console.log("isLicensed:", isLicensed)
+	// 			const licensedId = contentId ?? pub;
+	// 			const isLicensed = await this.publications[subdomain].isLicensed(licensedId);
 
-				if (!isLicensed) {
-					console.log("L1")
-					await this.publications[subdomain].grantLicense(licensedId, lensProfileId);
-					console.log("L2")
-				}
-			}
-		}
-	}
+	// 			console.log("isLicensed:", isLicensed)
+
+	// 			if (!isLicensed) {
+	// 				console.log("L1")
+	// 				await this.publications[subdomain].grantLicense(licensedId, lensProfileId);
+	// 				console.log("L2")
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	async revokeLicense(subdomain: string, _file: TAbstractFile): Promise<void> {
-
-		console.log("revoking license for", subdomain);
+		console.log('revoking license for', subdomain);
 
 		const file = this.plugin.app.vault.getFileByPath(_file.path);
 
 		if (file != null) {
 			try {
-				console.log(0)
+				console.log(0);
 				let { contentId }: any = await this.content.parseNote(file);
-			
+
 				if (this.publications[subdomain].dealsModule == undefined) {
 					await this.publications[subdomain].init();
 				}
 
-				console.log("S", contentId)
-				const dealExists = await this.publications[subdomain].isLicensed(contentId); 
-				console.log("DE", dealExists)
+				console.log('S', contentId);
+				const dealExists = await this.publications[subdomain].isLicensed(contentId);
+				console.log('DE', dealExists);
 
 				if (dealExists) {
-					console.log(1)
+					console.log(1);
 					const revokeResult = await this.publications[subdomain].revokeLicense(contentId);
-					console.log("RR", revokeResult)
+					console.log('RR', revokeResult);
 				}
-
 			} catch (error) {
-				console.error("Error in revokeDeal:", error);
+				console.error('Error in revokeDeal:', error);
 			}
 		}
 	}
 
-	isValidForPublishing(file: TFile | null) : file is TFile {
-
-		return file != null && file instanceof TFile && (file.path.endsWith(".base") || file.path.endsWith(".md")) ? true : false
-
+	isValidForPublishing(file: TFile | null): file is TFile {
+		return file != null &&
+			file instanceof TFile &&
+			(file.path.endsWith('.base') || file.path.endsWith('.md'))
+			? true
+			: false;
 	}
 
 	async getInitializedService(subdomain: string) {
+		if (this.publications[subdomain] == undefined) {
+			this.publications[subdomain] = new PublicationService(this, subdomain);
+			await this.publications[subdomain].init();
+		}
 
-			if (this.publications[subdomain] == undefined) {
+		return this.publications[subdomain];
+	}
 
-				this.publications[subdomain] = new PublicationService(this, subdomain);
-				await this.publications[subdomain].init();
+	/** Normalized Kubo API base URL (with protocol) for Filecoin tree export. */
+	private get kuboBaseUrl(): string {
+		const raw = this.oxo.settings.kubo_url || 'ipfs.transport-union.dev';
+		return raw.startsWith('http') ? raw : `https://${raw}`;
+	}
+
+	/**
+	 * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
+	 * Never throws, never blocks the main flow. When `expectedCid` is given,
+	 * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
+	 * notice on mismatch.
+	 */
+	private filecoinUploadBackground(
+		kind: string,
+		upload: () => Promise<FilecoinUploadResult>,
+		expectedCid?: string,
+	): void {
+		(async () => {
+			try {
+				const result = await upload();
+				console.log(`[filecoin] ${kind} uploaded:`, result);
+				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
+					console.error(
+						`[cid-mismatch] ${kind}: Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+					);
+					new Notice(
+						`⚠️ CID mismatch (${kind}): Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+					);
+				} else if (expectedCid && result.rootCid) {
+					console.log(`[cid-ok] ${kind}: both paths agree on root CID:`, expectedCid);
+				}
+			} catch (err) {
+				console.error(`[filecoin] ${kind} background upload failed:`, err);
 			}
-		
-			return this.publications[subdomain];
+		})();
 	}
 
 	async publishToPublication(file: TFile, publication: string, publish: boolean) {
-
 		let license;
-		const subdomain = publication.split(".")[0];
+		const subdomain = publication.split('.')[0];
 		const service = await this.getInitializedService(subdomain);
 
 		this.notice = new Notice('1/5 signing content ...', 0);
@@ -264,48 +294,59 @@ export class MainController implements IMainController {
 		const signedItem = await this.content.publishContent(file, subdomain);
 
 		if (!signedItem) {
-			console.error("publishToPublication: signing failed, aborting");
+			console.error('publishToPublication: signing failed, aborting');
 			this.notice.hide();
 			return;
 		}
 
 		this.notice.setMessage(`2/5 storing content item on Filecoin ... `);
 
+		// Always re-upload — the content may have changed since the last publish.
+		// The frontmatter root_cid is a fallback (handled below) if this upload fails.
+
 		// 1. Upload to Kubo → get IPFS CID
-		const kuboUrl = this.oxo.settings.kubo_url || "ipfs.transport-union.dev";
+		const kuboUrl = this.kuboBaseUrl;
 		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
-		console.log("[kubo] uploaded:", kuboCid);
+		console.log('[kubo] uploaded:', kuboCid);
 
-		// 2. Upload to Filecoin → get Root CID + Piece CID
-		const storageresult = await this.oxo.ctrlr.storage.uploadJson(signedItem);
-		console.log("[filecoin]", storageresult);
+		/// fire & forget — Filecoin upload doesn't need to block the main flow
+		this.filecoinUploadBackground(
+			'article',
+			async () => {
+				const pubAddress = await service.getMultiSig();
+				const authorEoa = this.oxo.ctrlr.user?.eoa;
+				return this.oxo.ctrlr.storage.uploadJson(
+					signedItem,
+					[pubAddress, authorEoa].filter(Boolean),
+					'article',
+				);
+			},
+			kuboCid,
+		);
 
-		// 3. Verify CIDs match — same bytes → same Root CID
-		if (kuboCid !== storageresult.rootCid) {
-			console.error("[cid-mismatch] Kubo:", kuboCid, "≠ Filecoin:", storageresult.rootCid);
-			new Notice(`⚠️ CID mismatch: Kubo ${kuboCid.slice(0,12)}… ≠ Filecoin ${storageresult.rootCid.slice(0,12)}…`);
-		} else {
-			console.log("[cid-ok] both paths agree on root CID:", kuboCid);
-		}
+		////
 
-		this.notice.setMessage(`3/5 registering permission to publish on ${subdomain} ... `);
+		this.notice.setMessage('3/5 appending version to publication contract ...');
 
-		// const isLicensed = await service.isLicensed(signedItem.objectId);
-		// if (!isLicensed) {
-		// 	license = await service.grantLicense(signedItem.objectId);
-		// 	console.log(license)
-		// }
+		// Record the version on-chain via the publication module
+		// genesis = signedItem.objectId (first version IS the genesis for a new note)
+		const rootCid = kuboCid;
+		const appendResult = await service.makeOffer(signedItem.objectId, rootCid);
+		console.log('[append] tx:', appendResult);
 
-		this.notice.setMessage('4/5 Authorizing ...')
-		
+		this.notice.setMessage('4/5 Authorizing ...');
+
 		// if (isLicensed || license != undefined) {
-		// 	await this.renderCalls(publication, [signedItem.objectId], this.oxo.settings.litUsageKey, publish);
-		// }
-
+		await this.renderCalls(
+			publication,
+			[signedItem.objectId],
+			this.oxo.settings.litUsageKey,
+			publish,
+		);
+		//  }
 	}
 
 	async proposeContent(_file: TAbstractFile, publish: boolean) {
-		
 		const file = this.plugin.app.vault.getFileByPath(_file.path);
 
 		if (!this.isValidForPublishing(file)) return;
@@ -313,43 +354,96 @@ export class MainController implements IMainController {
 		const { tags } = await this.content.parseNote(file);
 		const publications = tags
 			? tags
-				.filter((tag: string) => tag.endsWith("--s2s"))
-				.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"))
+					.filter((tag: string) => tag.endsWith('--s2s'))
+					.map((tag: string) => tag.replace('--s2s', '.soul2soul.eth'))
 			: [];
 
 		for (const publication of publications) {
-			this.publishToPublication(file, publication, publish)	
+			this.publishToPublication(file, publication, publish);
 		}
-		
 	}
 
-	async renderCalls(publication: string, streamIds: string[], lit_usage_key: string, publish: boolean) {
-
-		console.log(`Starting render process for publication ${publication} with ${streamIds.length} stream IDs`);
+	async renderCalls(
+		publication: string,
+		streamIds: string[],
+		lit_usage_key: string,
+		publish: boolean,
+	) {
+		console.log(
+			`Starting render process for publication ${publication} with ${streamIds.length} stream IDs`,
+		);
 
 		try {
-
 			if (this.notice) this.notice.setMessage('4/5 Rendering ...');
 
-			    // move outside
+			console.log(publication);
+
+			// move outside
 			const signature = await this.oxo.ctrlr.account['BASE'].signMessage('lit actions auth');
-			const res: any = await renderwithLitActions(false, this.oxo.ctrlr.lit, signature, lit_usage_key, this.protocolInfo, this.notice, this.oxo.ctrlr.user.safe, publication, streamIds, undefined)
+			// Build RPC endpoints from the DRPC key, with Alchemy fallback
+			const rpcKey = this.oxo.ctrlr.plugin.settings.rpc_key;
+			const alchemyKey = 'NFOkRqUo2swIC9g5tRJ7c';
+			const rpcs = {
+				L1: [
+					`https://lb.drpc.live/ethereum/${rpcKey}`,
+					`https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`,
+				],
+				L2: [
+					`https://lb.drpc.live/base/${rpcKey}`,
+					`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`,
+				],
+			};
+			const res: any = await renderwithLitActions(
+				!publish,
+				this.oxo.ctrlr.lit,
+				signature,
+				lit_usage_key,
+				this.protocolInfo,
+				this.notice,
+				this.oxo.ctrlr.user.safe,
+				publication,
+				streamIds,
+				undefined,
+				rpcs,
+			);
 
 			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
 
-			if(res.cid) {
+			if (res.cid) {
+				// Fire-and-forget both the Pinata pin and the Filecoin upload in
+				// parallel — neither blocks the render flow, and the two durable-
+				// storage paths run concurrently (SPEC-00 §3.2: IPFS pinning +
+				// Filecoin hot-storage). pinCidFromRemote swallows errors and
+				// returns a boolean, so this can't throw into renderCalls.
+				void pinCidFromRemote(
+					res.cid,
+					'https://ipfs.transport-union.dev',
+					this.oxo.settings.pinata_jwt,
+				).then((ok) => console.log(ok ? 'pinned on pinata' : 'pinata pin failed'));
 
-				await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", this.oxo.settings.pinata_jwt)
-				console.log("pinned on pinata")
+				if (publish) {
+					// Fire-and-forget Filecoin durability for the rendered site root
+					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage, not yet done).
+					this.filecoinUploadBackground(
+						'render-root',
+						() => this.oxo.ctrlr.storage.uploadTree(res.cid, this.kuboBaseUrl),
+						res.cid,
+					);
+				}
 			}
 
+			if (res.cid) {
+				// Publish availability measurement — fire-and-forget, never blocks.
+				void measureAvailability(publication, res.cid);
+			}
 
-			// do i want to unpin deprecated html ? 
+			console.log({ RES: res });
+
+			// do i want to unpin deprecated html ?
 
 			if (this.notice) this.notice.hide();
 
 			const _link = (text: string, url: string) => {
-
 				const fragment = document.createDocumentFragment();
 
 				const link = fragment.createEl('a', { text, href: url });
@@ -359,17 +453,38 @@ export class MainController implements IMainController {
 				});
 				fragment.createEl('br');
 
-				return fragment
+				return fragment;
 			};
 
-			new Notice(_link(`${res.cid}`, `https://ipfs.transport-union.dev/ipfs/${res.cid}/${res.path}`), 0);
-			console.log(res.jobs);
-			console.log('https://ipfs.transport-union.dev/ipfs' + res.cid);
-			if (publish) {
-				console.log('https://' + publication + '.link' + res.path);
-				new Notice(_link(publication + '.link' + res.path, 'https://' + publication + '.link' + res.path), 0);
-			}
+			const v1Label = toPreviewLabel(res.cid);
+			// Preview link — root CID (full site)
+			const rootLink = _link(
+				`${v1Label}.preview → site root`,
+				`https://${v1Label}.preview.transport-union.dev/`,
+			);
+			// Preview link — published page
+			const pageLink = _link(
+				`${v1Label}.preview${res.path} → published`,
+				`https://${v1Label}.preview.transport-union.dev${res.path}`,
+			);
+			const previewNotice = new Notice('', 0);
+			previewNotice.noticeEl.appendChild(pageLink);
+			previewNotice.noticeEl.appendChild(rootLink);
 
+			console.log(`preview root: https://${v1Label}.preview.transport-union.dev/`);
+			console.log(`preview page: https://${v1Label}.preview.transport-union.dev${res.path}`);
+			if (publish) {
+				const prodRootLink = _link(`${publication} → root`, `https://${publication}.link/`);
+				const prodPageLink = _link(
+					`${publication}${res.path} → published`,
+					`https://${publication}.link${res.path}`,
+				);
+				const prodNotice = new Notice('', 0);
+				prodNotice.noticeEl.appendChild(prodPageLink);
+				prodNotice.noticeEl.appendChild(prodRootLink);
+				console.log(`prod root: https://${publication}.link/`);
+				console.log(`prod page: https://${publication}.link${res.path}`);
+			}
 		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);
 			throw new Error(`Render process failed: ${error.message}`);
@@ -388,16 +503,12 @@ export class MainController implements IMainController {
 		// 		pubContract,
 		// 	);
 		// 	console.log(`Found ${streamIds.length} streamIds for bulkRender`);
-
 		// 	// Check which streamIds already have deals
-
 		// 	const subdomain = ensName.split(".")[0]
-
 		// 	const dealStatuses = await this.publications[subdomain].hasDealBatch(
 		// 		pubContract,
 		// 		streamIds,
 		// 	);
-
 		// 	// Filter to only streamIds that have deals
 		// 	const streamIdsWithDeals = streamIds.filter(
 		// 		(id) => dealStatuses[id],
@@ -405,27 +516,21 @@ export class MainController implements IMainController {
 		// 	console.log(
 		// 		`${streamIdsWithDeals.length} out of ${streamIds.length} items have deals`,
 		// 	);
-
 		// 	// Process streamIds in batches
 		// 	const batchSize = 3;
 		// 	const batches = [];
-
 		// 	// Split streamIds into batches
 		// 	for (let i = 0; i < streamIdsWithDeals.length; i += batchSize) {
 		// 		batches.push(streamIdsWithDeals.slice(i, i + batchSize));
 		// 	}
-
 		// 	console.log(
 		// 		`Processing streamIds in ${batches.length} batches of up to ${batchSize} items each`,
 		// 	);
-
 		// 	// Process each batch sequentially
 		// 	for (let i = 0; i < batches.length; i++) {
 		// 		const batch = batches[i];
 		// 		console.log(`Processing batch ${i + 1} of ${batches.length}`);
-
 		// 		await this.renderCalls(ensName, batch);
-
 		// 		console.log(`Completed batch ${i + 1} of ${batches.length}`);
 		// 	}
 		// } catch (error) {

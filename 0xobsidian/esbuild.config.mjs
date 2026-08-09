@@ -38,8 +38,9 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "/home/joera/vaults/s2s/.obsidian/plugins/0xobsidian/main.js",
+	outfile: "/home/joera/dist/0xobsidian/main.js",
 	platform: "node",
+	conditions: ['import'],
 	mainFields: ["module", "main"],
 	define: {
 		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
