@@ -174,24 +174,47 @@ export async function uploadWithMinCopies<T>(
     result?: T;
   }>,
 ): Promise<T> {
+  // Defensive hard cap on total rounds. Each round must shrink the pool
+  // (see the no-progress handling below), so this is belt-and-suspenders
+  // against any unforeseen path that fails to make progress.
+  const MAX_ATTEMPTS = 32;
   const excluded = new Set<bigint>();
+  const attemptedSet = new Set<string>();
   const attempted: string[] = [];
 
   for (;;) {
     const remaining = providerPool.filter((id) => !excluded.has(id));
-    if (remaining.length < minCopies) {
+    if (remaining.length < minCopies || attempted.length >= MAX_ATTEMPTS) {
       throw new FilecoinMinCopiesError(attempted);
     }
 
     const pair = remaining.slice(0, minCopies);
-    attempted.push(...pair.map((id) => id.toString()));
+    for (const id of pair) {
+      const s = id.toString();
+      if (!attemptedSet.has(s)) {
+        attemptedSet.add(s);
+        attempted.push(s);
+      }
+    }
 
     const outcome = await attempt(pair);
     if (outcome.complete && outcome.result !== undefined) {
       return outcome.result;
     }
 
+    // Exclude exactly the providers the attempt reported as failed.
     for (const id of outcome.failedProviders) excluded.add(id);
+
+    // No-progress case: the attempt failed WITHOUT identifying any provider
+    // (empty `failedProviders`) — e.g. a StoreError with no providerId, a
+    // context-resolution / createContexts failure, or a UserRejectedRequestError
+    // that propagates with no provider id. A `complete:true, result:undefined`
+    // outcome lands here too. Treat the whole pair as having made no progress
+    // and drop every member so the pool strictly shrinks and the loop is
+    // guaranteed to terminate instead of re-forming the identical pair forever.
+    if (outcome.failedProviders.length === 0) {
+      for (const id of pair) excluded.add(id);
+    }
   }
 }
 

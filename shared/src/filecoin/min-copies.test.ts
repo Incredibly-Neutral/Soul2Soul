@@ -91,4 +91,42 @@ describe('uploadWithMinCopies', () => {
       expect(err.message.split('\n')).toHaveLength(1);
     }
   });
+
+  it('does not re-attempt the same pair when an attempt fails with no provider id (whole pair excluded), then throws on pool exhaustion', async () => {
+    // `attempt` fails with NO provider id (empty `failedProviders`) on every
+    // call — e.g. a StoreError without providerId, a context-resolution /
+    // createContexts failure, or a UserRejectedRequestError that propagates as
+    // an error carrying no provider id. Before the fix this re-formed the
+    // identical pair forever; now the whole pair is excluded each round so the
+    // pool strictly shrinks and the function must terminate.
+    const attempt = vi.fn(async (pair: bigint[]) => ({
+      complete: false,
+      failedProviders: [], // no provider identified
+    }));
+
+    await expect(uploadWithMinCopies([1n, 13n, 15n, 16n], 2, attempt)).rejects.toThrow(
+      FilecoinMinCopiesError,
+    );
+
+    // Pair 1 [1n,13n] and pair 2 [15n,16n] are attempted, then the pool is
+    // empty (<2) and it throws. No provider is ever re-attempted.
+    expect(attempt.mock.calls).toEqual([[[1n, 13n]], [[15n, 16n]]]);
+    const seen: string[] = [];
+    for (const call of attempt.mock.calls) {
+      seen.push(...(call[0] as bigint[]).map((id) => id.toString()));
+    }
+    expect(new Set(seen).size).toBe(seen.length); // no provider repeated
+
+    try {
+      await uploadWithMinCopies([1n, 13n, 15n, 16n], 2, attempt);
+      expect.unreachable('uploadWithMinCopies should have thrown');
+    } catch (e) {
+      const err = e as FilecoinMinCopiesError;
+      expect(err.name).toBe('FilecoinMinCopiesError');
+      expect(err.providers).toEqual(['1', '13', '15', '16']);
+      expect(err.message).toBe('could not store 2 Filecoin copies (providers attempted: 1, 13, 15, 16)');
+      // message must be a single line — no nested cause chain
+      expect(err.message.split('\n')).toHaveLength(1);
+    }
+  });
 });
