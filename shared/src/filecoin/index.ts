@@ -40,7 +40,6 @@ import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
 import { findPieceIdsByCid } from "@filoz/synapse-core/pdp-verifier";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
-import type { SynapseUploadResult } from "filecoin-pin/core/upload";
 import { CarReader } from "@ipld/car";
 import { CID } from "multiformats/cid";
 
@@ -124,9 +123,12 @@ export interface FilecoinCarBuilder {
 
 // ── Controller ──────────────────────────────────────────────────────
 
-/** Providers verified to support HTTP/2 + CORS (browser-usable).
+/** Providers verified to support HTTP/2 + CORS on the PUT upload path
+ *  (browser-usable as an INDEPENDENT PRIMARY). Two-indep-primary strategy
+ *  only needs primary usability — the SP-to-SP pull path is bypassed, so a
+ *  provider's pull-endpoint health is irrelevant here.
  *  Re-run protocol/scripts/filecoin/probe-providers.ts to refresh. */
-const BROWSER_USABLE_PROVIDERS = [1n, 13n, 15n, 16n, 29n, 30n, 32n];
+const BROWSER_USABLE_PROVIDERS = [6n, 13n, 15n, 29n];
 
 /**
  * Thrown when fewer than two Filecoin copies could be committed across the
@@ -158,63 +160,76 @@ function toProviderBigInt(value: unknown): bigint | undefined {
 }
 
 /**
- * Try to reach `minCopies` committed copies by issuing upload attempts against
- * pairs of providers drawn in order from `providerPool`. Providers reported as
- * failed by an attempt (`failedProviders`) are excluded from subsequent pairs.
- * Stops on the first attempt that reports `complete` and returns its `result`.
- * Throws {@link FilecoinMinCopiesError} once fewer than `minCopies` providers
- * remain in the pool.
+ * Outcome of a single independent primary-store attempt. The two-independent-
+ * primary strategy calls {@link uploadToSynapse} once per provider with
+ * `providerIds:[p], copies:1`, so each provider is its own primary and the
+ * SP-to-SP pull path is never used. A provider counts as a committed copy only
+ * when that single-store call reports `complete`.
  */
-export async function uploadWithMinCopies<T>(
+export interface MinCopiesAttempt {
+  /** True when this provider committed a copy (its single-store call returned complete). */
+  committed: boolean;
+  /** Extra providers to exclude from later rounds (beyond the attempted one). */
+  failedProviders: bigint[];
+  /** The committed copy entry, present only when `committed` is true. */
+  copy?: { provider: string; dealId?: string };
+}
+
+/** A committed Filecoin copy (provider + optional deal id). */
+export type FilecoinCopy = { provider: string; dealId?: string };
+
+/**
+ * Reach `minCopies` committed copies via TWO INDEPENDENT PRIMARY STORES.
+ * Iterates the provider pool, attempting one provider at a time; a provider is
+ * an independent primary (store + findPiece + commit) and bypasses the pull
+ * path entirely. Stops (returning the committed copies) as soon as `minCopies`
+ * copies are committed, or throws {@link FilecoinMinCopiesError} once the pool
+ * is exhausted.
+ *
+ * Termination is guaranteed: the pool strictly shrinks every round — the
+ * attempted provider is always dropped (it either committed a copy, or it
+ * failed), any additional `failedProviders` are dropped too, and on a
+ * no-progress attempt (empty `failedProviders`) the attempted provider is
+ * still dropped so the identical attempt can never re-form. A hard attempt cap
+ * backs this up.
+ */
+export async function uploadWithMinCopies(
   providerPool: bigint[],
   minCopies: number,
-  attempt: (pair: bigint[]) => Promise<{
-    complete: boolean;
-    failedProviders: bigint[];
-    result?: T;
-  }>,
-): Promise<T> {
-  // Defensive hard cap on total rounds. Each round must shrink the pool
-  // (see the no-progress handling below), so this is belt-and-suspenders
-  // against any unforeseen path that fails to make progress.
+  attempt: (provider: bigint) => Promise<MinCopiesAttempt>,
+): Promise<FilecoinCopy[]> {
+  // Defensive hard cap on total rounds. Each round must shrink the pool (see
+  // above), so this is belt-and-suspenders against an unforeseen non-shrinking
+  // path.
   const MAX_ATTEMPTS = 32;
   const excluded = new Set<bigint>();
-  const attemptedSet = new Set<string>();
   const attempted: string[] = [];
+  const committed: FilecoinCopy[] = [];
 
   for (;;) {
     const remaining = providerPool.filter((id) => !excluded.has(id));
-    if (remaining.length < minCopies || attempted.length >= MAX_ATTEMPTS) {
+    if (remaining.length === 0 || attempted.length >= MAX_ATTEMPTS) {
       throw new FilecoinMinCopiesError(attempted);
     }
 
-    const pair = remaining.slice(0, minCopies);
-    for (const id of pair) {
-      const s = id.toString();
-      if (!attemptedSet.has(s)) {
-        attemptedSet.add(s);
-        attempted.push(s);
-      }
+    const provider = remaining[0];
+    attempted.push(provider.toString());
+
+    const outcome = await attempt(provider);
+
+    // Strictly shrink the pool: drop the attempted provider unconditionally —
+    // it either committed a copy (no point re-attempting the same primary) or
+    // it failed. On a no-progress attempt this is what guarantees we move on
+    // instead of re-forming the identical attempt forever.
+    excluded.add(provider);
+
+    if (outcome.committed && outcome.copy) {
+      committed.push(outcome.copy);
+      if (committed.length >= minCopies) return committed;
     }
 
-    const outcome = await attempt(pair);
-    if (outcome.complete && outcome.result !== undefined) {
-      return outcome.result;
-    }
-
-    // Exclude exactly the providers the attempt reported as failed.
+    // Drop any additional providers the attempt reported as failed.
     for (const id of outcome.failedProviders) excluded.add(id);
-
-    // No-progress case: the attempt failed WITHOUT identifying any provider
-    // (empty `failedProviders`) — e.g. a StoreError with no providerId, a
-    // context-resolution / createContexts failure, or a UserRejectedRequestError
-    // that propagates with no provider id. A `complete:true, result:undefined`
-    // outcome lands here too. Treat the whole pair as having made no progress
-    // and drop every member so the pool strictly shrinks and the loop is
-    // guaranteed to terminate instead of re-forming the identical pair forever.
-    if (outcome.failedProviders.length === 0) {
-      for (const id of pair) excluded.add(id);
-    }
   }
 }
 
@@ -788,11 +803,15 @@ export class FilecoinStorage {
   }
 
   /**
-   * Upload CAR bytes to Filecoin, retrying in pairs of browser-usable
-   * providers until at least two copies are committed. Failed providers
-   * (from a thrown StoreError's `providerId`, or from the SDK result's
-   * `failedAttempts`) are excluded from subsequent pairs. Throws
-   * {@link FilecoinMinCopiesError} if the pool is exhausted first.
+   * Upload CAR bytes to Filecoin, reaching two committed copies via TWO
+   * INDEPENDENT PRIMARY STORES. Iterates the browser-usable provider pool and,
+   * per provider, calls uploadToSynapse with `providerIds:[p], copies:1` so
+   * each provider is its own primary (store + findPiece + commit) — the
+   * SP-to-SP pull path that certain providers can't serve from the browser is
+   * bypassed entirely. A provider counts as a committed copy only when its
+   * single-store call returns complete with exactly one copy. Stops as soon as
+   * two copies are committed. Throws {@link FilecoinMinCopiesError} if the
+   * pool is exhausted first (single concise failure line, no nested chain).
    *
    * The success-path result shape is unchanged from the previous single-shot
    * upload — existing callers keep working.
@@ -802,45 +821,70 @@ export class FilecoinStorage {
     rootCid: string,
     pieceMetadata: Record<string, string>,
   ): Promise<FilecoinUploadResult> {
-    const mapResult = (result: SynapseUploadResult): FilecoinUploadResult => ({
-      rootCid,
-      pieceCid: result.pieceCid.toString(),
-      size: result.size,
-      complete: result.complete,
-      copyCount: result.copies?.length ?? 0,
-      failedCount: result.failedAttempts?.length ?? 0,
-      copies: (result.copies ?? []).map((c) => ({
-        provider: c.providerId?.toString() ?? "unknown",
-        dealId: c.dataSetId?.toString(),
-      })),
-    });
+    let pieceCid = "";
+    let size = 0;
+    let failedCount = 0;
 
-    return uploadWithMinCopies(BROWSER_USABLE_PROVIDERS, 2, async (pair) => {
-      try {
-        const result = await uploadToSynapse(
-          this.synapse,
-          carBytes,
-          rootCid as any, // uploadToSynapse expects CID type from multiformats
-          noopLogger as any,
-          {
-            providerIds: pair,
-            copies: pair.length,
-            pieceMetadata,
-          },
-        );
-        const failedProviders = (result.failedAttempts ?? [])
-          .map((f) => toProviderBigInt(f.providerId))
-          .filter((v): v is bigint => v !== undefined);
-        return { complete: result.complete, failedProviders, result: mapResult(result) };
-      } catch (e) {
-        // Primary-store failure — the SDK throws StoreError with the failing
-        // provider's ID. Exclude it so the next pair skips it.
-        const failedProviders: bigint[] = [];
-        const pid = toProviderBigInt((e as { providerId?: unknown })?.providerId);
-        if (pid !== undefined) failedProviders.push(pid);
-        return { complete: false, failedProviders };
-      }
-    });
+    const copies = await uploadWithMinCopies(
+      BROWSER_USABLE_PROVIDERS,
+      2,
+      async (provider) => {
+        try {
+          const result = await uploadToSynapse(
+            this.synapse,
+            carBytes,
+            rootCid as any, // uploadToSynapse expects CID type from multiformats
+            noopLogger as any,
+            {
+              providerIds: [provider],
+              copies: 1,
+              pieceMetadata,
+            },
+          );
+          const failedProviders = (result.failedAttempts ?? [])
+            .map((f) => toProviderBigInt(f.providerId))
+            .filter((v): v is bigint => v !== undefined);
+
+          // A committed copy is one where THIS single-store call completed with
+          // exactly one committed copy (its own independent primary store).
+          const committed = result.complete && (result.copies?.length ?? 0) === 1;
+          if (committed) {
+            pieceCid = result.pieceCid?.toString() ?? pieceCid;
+            size = result.size ?? size;
+            const c = result.copies![0];
+            return {
+              committed: true,
+              failedProviders,
+              copy: {
+                provider: c.providerId?.toString() ?? provider.toString(),
+                dealId: c.dataSetId?.toString(),
+              },
+            };
+          }
+
+          failedCount += 1;
+          return { committed: false, failedProviders };
+        } catch (e) {
+          failedCount += 1;
+          // Primary-store failure — the SDK throws StoreError with the failing
+          // provider's ID. Exclude it so future rounds skip it.
+          const failedProviders: bigint[] = [];
+          const pid = toProviderBigInt((e as { providerId?: unknown })?.providerId);
+          if (pid !== undefined) failedProviders.push(pid);
+          return { committed: false, failedProviders };
+        }
+      },
+    );
+
+    return {
+      rootCid,
+      pieceCid,
+      size,
+      complete: true,
+      copyCount: copies.length,
+      failedCount,
+      copies,
+    };
   }
 
   private ensureInit(): void {
