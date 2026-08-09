@@ -74,7 +74,7 @@ export async function checkLimoCacheSwitch(
 		} catch (err) {
 			if (source === 'limo') {
 				console.log(
-					`[avail] .limo TLS failed, falling back to ${fallbackUrl}: ${(err as Error).message}`,
+					`[avail] .limo fetch failed (${(err as Error).message}), falling back to ${fallbackUrl}`,
 				);
 				source = 'preview-fallback';
 			}
@@ -130,15 +130,14 @@ export function logAvailability(a: Availability): void {
 	const firstRetrievable = gateways.length ? Math.min(...gateways) : null;
 
 	const limoSwitched = a.limo.ms != null;
-	// 'graceful' requires a gateway to have actually retrieved AND limo to have
-	// switched no later than that first retrieval. No retrievable gateway => not graceful.
+	// 'graceful' only when .limo switched at-or-before EVERY gateway that
+	// retrieved (and at least one gateway actually retrieved). If any gateway
+	// beat limo, or no gateway retrieved at all, the publish was exposed.
 	const graceful =
-		limoSwitched && firstRetrievable != null && a.limo.ms! <= firstRetrievable;
-	const verdict = limoSwitched
-		? graceful
-			? 'graceful (limo switched first)'
-			: 'exposed (gateway retrievable before limo switched)'
-		: 'exposed (limo not switched within window)';
+		limoSwitched && gateways.length > 0 && gateways.every((g) => a.limo.ms! <= g);
+	const verdict = graceful
+		? 'graceful (limo switched at-or-before every gateway)'
+		: 'exposed (some gateway retrievable before limo switched, or none retrieved)';
 
 	console.log(
 		`[avail] publish ${a.publication} cid=${a.cid}\n` +
