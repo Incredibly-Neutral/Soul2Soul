@@ -16,7 +16,7 @@ import { parseCID, toPreviewLabel } from '@s2s/soul2soul-shared';
 
 export const LIMO_FALLBACK_HOST = 'preview.transport-union.dev';
 
-const POLL_TIMEOUT_MS = 20_000;
+const POLL_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
@@ -128,7 +128,7 @@ export interface Availability {
 export async function measureAvailability(publication: string, cid: string): Promise<void> {
 	const [limo, pinata, ipfsio] = await Promise.all([
 		checkLimoCacheSwitch(publication, cid),
-		checkRetrievable(`https://gateway.pinata.cloud/ipfs/${cid}`),
+		checkRetrievable(`https://neutralpress.mypinata.cloud/ipfs/${cid}`),
 		checkRetrievable(`https://ipfs.io/ipfs/${cid}`),
 	]);
 	logAvailability({ publication, cid, limo, pinata, ipfsio });
