@@ -8,8 +8,7 @@ import { parseCID } from '@s2s/soul2soul-shared';
  *   1. .link cache-switch detection  (GET the publication front, x-ipfs-path matched the new CID)
  *   2. pinata API status             (authenticated GET /data/pinList confirms the CID is pinned)
  *   3. ipfs.io retrievability        (HEAD ipfs.io returns 200)
- * A single console.log summarizes the three timings and whether the publish
- * was graceful (link switched first) or exposed (gateway retrievable first).
+ * A single console.log summarizes the three timings.
  * Every check always returns a number in ms — a check that never hit within
  * the window reports the full window elapsed.
  */
@@ -172,29 +171,12 @@ export async function measureAvailability(
 	logAvailability({ publication, cid, limo, pinata, ipfsio });
 }
 
-/** ONE summary comparing the gateway timings vs the .link switch. */
+/** Log the three per-check timings. */
 export function logAvailability(a: Availability): void {
-	// Every gateway reports a number in ms; a gateway that never retrieved
-	// reports the full window, which .link naturally beats.
-	const gateways: GatewayResult[] = [a.pinata, a.ipfsio];
-
-	// 'graceful' requires .link switched AND at least one gateway actually
-	// retrieved AND .link switched at-or-before EVERY gateway's ms. If no
-	// gateway ever retrieved, or any gateway beat link, or link never
-	// switched, it's exposed.
-	const graceful =
-		a.limo.switched &&
-		gateways.some((g) => g.reached) &&
-		gateways.every((g) => a.limo.ms <= g.ms);
-	const verdict = graceful
-		? 'graceful (link switched at-or-before every gateway)'
-		: 'exposed (some gateway retrievable before link switched, or none retrieved)';
-
 	console.log(
 		`[avail] publish ${a.publication} cid=${a.cid}\n` +
 			`  .link switch:  ${a.limo.ms}ms (switched: ${a.limo.switched})\n` +
 			`  pinata:        ${a.pinata.ms}ms (reached: ${a.pinata.reached})\n` +
-			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})\n` +
-			`  — ${verdict}`,
+			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})`,
 	);
 }
