@@ -414,6 +414,8 @@ export class MainController implements IMainController {
 				rpcs,
 			);
 
+			console.log({ RES: res });
+
 			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
 
 			if (res.cid) {
@@ -444,7 +446,7 @@ export class MainController implements IMainController {
 				void measureAvailability(publication, res.cid, this.oxo.settings.pinata_jwt);
 			}
 
-			console.log({ RES: res });
+			
 
 			// do i want to unpin deprecated html ?
 

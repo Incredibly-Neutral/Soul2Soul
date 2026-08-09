@@ -141,7 +141,7 @@ export const renderwithLitActions = async (
     remove: prepRemove,
   });
 
-  const evmAction = await runAction(
+  const evmAction: any  = await runAction(
     preview,
     lit,
     protocolInfo.litActions.update,
@@ -156,5 +156,6 @@ export const renderwithLitActions = async (
     success: validated.ok ? true : false,
     cid,
     path: primaryPath,
+    trace: evmAction.trace
   };
 };
