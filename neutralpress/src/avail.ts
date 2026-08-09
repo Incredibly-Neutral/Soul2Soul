@@ -1,4 +1,4 @@
-import { parseCID, toPreviewLabel } from '@s2s/soul2soul-shared';
+import { parseCID } from '@s2s/soul2soul-shared';
 
 /**
  * Publish availability measurement (minimal).
@@ -6,15 +6,13 @@ import { parseCID, toPreviewLabel } from '@s2s/soul2soul-shared';
  * Three fire-and-forget checks run after a publish, each polling for a bounded
  * window and reporting a timing in ms since the check started:
  *   1. .limo cache-switch detection  (x-ipfs-path matched the new CID)
- *   2. Pinata retrievability         (HEAD gateway.pinata.cloud returns 200)
+ *   2. Pinata retrievability         (GET neutralpress.mypinata.cloud returns 200)
  *   3. ipfs.io retrievability        (HEAD ipfs.io returns 200)
  * A single console.log summarizes the three timings and whether the publish
  * was graceful (limo switched first) or exposed (gateway retrievable first).
  * Every check always returns a number in ms — a check that never hit within
  * the window reports the full window elapsed.
  */
-
-export const LIMO_FALLBACK_HOST = 'preview.transport-union.dev';
 
 const POLL_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 2_000;
@@ -48,8 +46,6 @@ export interface LimoResult {
 	ms: number;
 	/** true if the cache switched within the window, false if it never did. */
 	switched: boolean;
-	/** which host reported the switch: 'limo' or 'preview-fallback'. */
-	source: 'limo' | 'preview-fallback';
 }
 
 export interface GatewayResult {
@@ -59,50 +55,44 @@ export interface GatewayResult {
 	reached: boolean;
 }
 
-/** Check 1 — .limo cache-switch detection, with graceful TLS fallback. */
+/** Check 1 — .limo cache-switch detection. */
 export async function checkLimoCacheSwitch(
 	publication: string,
 	newCid: string,
 ): Promise<LimoResult> {
-	const label = toPreviewLabel(newCid);
 	const limoUrl = `https://${publication}.limo/`;
-	const fallbackUrl = `https://${label}.${LIMO_FALLBACK_HOST}/`;
-	let source: LimoResult['source'] = 'limo';
 	const started = Date.now();
 	const deadline = Date.now() + POLL_TIMEOUT_MS;
 
 	while (Date.now() < deadline) {
-		const url = source === 'limo' ? limoUrl : fallbackUrl;
 		try {
-			const res = await fetch(url, {
+			const res = await fetch(limoUrl, {
 				method: 'HEAD',
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
 			const served = cidFromIpfsPath(res.headers.get('x-ipfs-path') ?? '');
 			if (res.status < 400 && served && sameCid(served, newCid)) {
-				return { ms: Date.now() - started, switched: true, source };
+				return { ms: Date.now() - started, switched: true };
 			}
-		} catch (err) {
-			if (source === 'limo') {
-				console.log(
-					`[avail] .limo fetch failed (${(err as Error).message}), falling back to ${fallbackUrl}`,
-				);
-				source = 'preview-fallback';
-			}
+		} catch {
+			/* retry silently — no fallback */
 		}
 		await sleep(POLL_INTERVAL_MS);
 	}
-	return { ms: Date.now() - started, switched: false, source };
+	return { ms: Date.now() - started, switched: false };
 }
 
 /** Check 2/3 — time (ms) until the given gateway returns 200 for the CID. */
-export async function checkRetrievable(url: string): Promise<GatewayResult> {
+export async function checkRetrievable(
+	url: string,
+	method: 'HEAD' | 'GET' = 'HEAD',
+): Promise<GatewayResult> {
 	const started = Date.now();
 	const deadline = Date.now() + POLL_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		try {
 			const res = await fetch(url, {
-				method: 'HEAD',
+				method,
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
 			if (res.status === 200) {
@@ -128,7 +118,7 @@ export interface Availability {
 export async function measureAvailability(publication: string, cid: string): Promise<void> {
 	const [limo, pinata, ipfsio] = await Promise.all([
 		checkLimoCacheSwitch(publication, cid),
-		checkRetrievable(`https://neutralpress.mypinata.cloud/ipfs/${cid}`),
+		checkRetrievable(`https://neutralpress.mypinata.cloud/ipfs/${cid}`, 'GET'),
 		checkRetrievable(`https://ipfs.io/ipfs/${cid}`),
 	]);
 	logAvailability({ publication, cid, limo, pinata, ipfsio });
@@ -154,7 +144,7 @@ export function logAvailability(a: Availability): void {
 
 	console.log(
 		`[avail] publish ${a.publication} cid=${a.cid}\n` +
-			`  .limo switch:  ${a.limo.ms}ms (switched: ${a.limo.switched}, ${a.limo.source})\n` +
+			`  .limo switch:  ${a.limo.ms}ms (switched: ${a.limo.switched})\n` +
 			`  pinata:        ${a.pinata.ms}ms (reached: ${a.pinata.reached})\n` +
 			`  ipfs.io:       ${a.ipfsio.ms}ms (reached: ${a.ipfsio.reached})\n` +
 			`  — ${verdict}`,
