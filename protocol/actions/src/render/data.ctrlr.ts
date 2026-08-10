@@ -1,6 +1,7 @@
 import { decrypt } from '../libs/decrypt';
 import { fetchByPublication } from '../libs/module.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
+import { transformContent } from './content-transforms';
 
 const createPath = (body: S2SBody, templateConfig: S2STemplateConfig): string => {
   if (templateConfig.path == null) return '/';
@@ -88,7 +89,9 @@ export const initTemplateData = async (
     gateway: protocolInfo.gateway,
     path,
     custom: body.custom || {},
-    content: (body.content || '').replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+    content: transformContent(
+      (body.content || '').replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+    ),
     revoked: false,
   };
 };

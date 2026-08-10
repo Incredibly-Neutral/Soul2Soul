@@ -16,7 +16,8 @@
     "filecoin:fund-account": "tsx ./scripts/filecoin/fund-account.ts",
     "filecoin:terminate-datasets": "tsx ./scripts/filecoin/terminate-datasets.ts",
     "filecoin:storage-info": "tsx ./scripts/filecoin/storage-info.ts",
-    "protocol:update": "tsx ./scripts/lit/update-protocol.ts"
+    "protocol:update": "tsx ./scripts/lit/update-protocol.ts",
+    "test": "vitest run --reporter=verbose"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
