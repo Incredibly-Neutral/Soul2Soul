@@ -23,7 +23,9 @@ export type ContentTransform = (content: string) => string;
  *   `<!-- section class="aside"> ... <!-- /section>` -> `<section class="aside">...</section>`
  *
  * - Accepts both `<!-- section` and `<!--section` (the space is optional).
- * - Attributes pass through raw as a string.
+ * - Attributes pass through raw as a string. A quoted attribute value may
+ *   contain `>` or `-->` without terminating the attribute
+ *   (`data-x="a>b">` / `data-x="a-->b">`).
  * - Attribute-less `<!-- section>` -> `<section>`.
  * - Tolerates a `-->` or `>` closer on both opener and closer
  *   (`<!-- /section>` / `<!-- /section -->`).
@@ -36,7 +38,7 @@ export const sectionsTransform: ContentTransform = (content: string): string => 
   if (typeof content !== 'string') return content;
 
   return content.replace(
-    /<!--\s*section\b([\s\S]*?)(?:-->|>)([\s\S]*?)<!--\s*\/section\s*(?:-->|>)/gi,
+    /<!--\s*section\b((?:"[^"]*"|'[^']*'|(?!-->)[^"'>])*?)(?:-->|>)([\s\S]*?)<!--\s*\/section\s*(?:-->|>)/gi,
     (_match: string, attrs: string, inner: string): string => {
       const attrStr = attrs.trim();
       return '<section' + (attrStr ? ' ' + attrStr : '') + '>' + inner + '</section>';
