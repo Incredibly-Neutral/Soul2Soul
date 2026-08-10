@@ -7,8 +7,19 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@s2s/renderer/*": [
+        "../protocol/actions/src/renderer/*"
+      ],
+      "@s2s/render/*": [
+        "../protocol/actions/src/render/*"
+      ]
+    }
   },
-  "include": ["hardhat.config.ts", "./scripts", "./test"],
-  "files": ["hardhat.config.ts"]
+  "include": [
+    "./scripts",
+    "./data"
+  ]
 }

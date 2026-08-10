@@ -4,19 +4,23 @@
   "scripts": {
     "sass": "sass scss/styles.scss css/styles.css",
     "serve": "http-server html -p 3008 --cors -c-1",
-    "upload": "tsx scripts/upload.ts"
+    "upload": "tsx scripts/upload.ts",
+    "render:local": "tsx scripts/local-render.ts",
+    "render:local:verify": "tsx scripts/verify-render.ts",
+    "render:local:typecheck": "bash scripts/typecheck-local.sh"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
+    "http-server": "^14.1.1",
     "sass": "^1.83.0",
     "ts-node": "^10.9.2"
   },
   "dependencies": {
-    "@s2s/soul2soul-shared": "workspace:*",
     "@lit-protocol/auth-helpers": "^7.1.1",
     "@lit-protocol/constants": "^7.1.1",
     "@lit-protocol/contracts-sdk": "^7.1.1",
     "@lit-protocol/lit-node-client": "^7.1.1",
+    "@s2s/soul2soul-shared": "workspace:*",
     "@safe-global/api-kit": "^3.0.1",
     "@safe-global/protocol-kit": "^6.0.4",
     "@safe-global/safe-core-sdk-types": "^5.1.0",
@@ -36,6 +40,7 @@
     "helmet": "^8.1.0",
     "html-entities": "^2.6.0",
     "ipfs-unixfs-importer": "^15.3.1",
+    "marked": "^15.0.12",
     "multiformats": "^13.4.2",
     "node-fetch": "^2.7.0",
     "path": "^0.12.7",
