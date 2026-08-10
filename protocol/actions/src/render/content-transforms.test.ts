@@ -16,6 +16,16 @@ describe('sectionsTransform', () => {
     expect(sectionsTransform(input)).toBe('<section data-x="1" data-y="2">content</section>');
   });
 
+  it('keeps a quoted `>` inside an attribute value', () => {
+    const input = '<!-- section data-x="a>b">content<!-- /section>';
+    expect(sectionsTransform(input)).toBe('<section data-x="a>b">content</section>');
+  });
+
+  it('keeps a quoted `-->` inside an attribute value', () => {
+    const input = '<!-- section class="c1" data-x="a-->b">content<!-- /section>';
+    expect(sectionsTransform(input)).toBe('<section class="c1" data-x="a-->b">content</section>');
+  });
+
   it('accepts `<!--section` without a space', () => {
     const input = '<!--section class="aside">no space<!-- /section>';
     expect(sectionsTransform(input)).toBe('<section class="aside">no space</section>');
