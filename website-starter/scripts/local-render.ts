@@ -21,10 +21,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { Dirent } from 'fs';
 import { marked } from 'marked';
-import {
-  cleanTemplateString,
-  processTemplate,
-} from '@s2s/renderer/handlebars.factory';
+import { cleanTemplateString, processTemplate } from '@s2s/renderer/handlebars.factory';
 import { transformContent } from '@s2s/render/content-transforms';
 import type { S2SBodyPlain } from '@s2s/soul2soul-shared';
 import { postFixtures, pageFixtures } from '../data/fixtures';
@@ -173,9 +170,10 @@ function languageOf(body: S2SBodyPlain): string {
 /** Path for a body, mirroring data.ctrlr.createPath (local re-implementation). */
 function createPath(body: S2SBodyPlain, templateConfig: TemplateConfigEntry): string {
   if (templateConfig.path == null) return '/';
-  let p = body.locale === 'nl' || body.locale === undefined
-    ? templateConfig.path
-    : `/en${templateConfig.path}`;
+  let p =
+    body.locale === 'nl' || body.locale === undefined
+      ? templateConfig.path
+      : `/en${templateConfig.path}`;
   if (!body.encryption && body.slug && p.includes('{slug}')) {
     p = p.replace('{slug}', body.slug);
   }
@@ -195,13 +193,13 @@ interface PageSpec {
   templateData: Record<string, any>;
 }
 
-async function buildPageSpecs(
-  mapping: Mapping,
-  pages: Map<string, string>,
-): Promise<PageSpec[]> {
+async function buildPageSpecs(mapping: Mapping, pages: Map<string, string>): Promise<PageSpec[]> {
   const configFor = (reference: string): TemplateConfigEntry => {
     const entry = mapping.templateConfig.find((t) => t.reference === reference);
-    if (!entry) throw new Error(`local-render: no templateConfig for reference "${reference}" in mapping.json`);
+    if (!entry)
+      throw new Error(
+        `local-render: no templateConfig for reference "${reference}" in mapping.json`,
+      );
     return entry;
   };
 
@@ -289,7 +287,9 @@ async function main(): Promise<void> {
   // Fail loudly on a spec whose template file is missing.
   for (const spec of specs) {
     if (!pages.has(spec.templateFile)) {
-      throw new Error(`local-render: template file "${spec.templateFile}" not found in ${TEMPLATES_DIR}`);
+      throw new Error(
+        `local-render: template file "${spec.templateFile}" not found in ${TEMPLATES_DIR}`,
+      );
     }
   }
 

@@ -10,16 +10,9 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@s2s/renderer/*": [
-        "../protocol/actions/src/renderer/*"
-      ],
-      "@s2s/render/*": [
-        "../protocol/actions/src/render/*"
-      ]
+      "@s2s/renderer/*": ["../protocol/actions/src/renderer/*"],
+      "@s2s/render/*": ["../protocol/actions/src/render/*"]
     }
   },
-  "include": [
-    "./scripts",
-    "./data"
-  ]
+  "include": ["./scripts", "./data"]
 }
