@@ -1,0 +1,12 @@
+{
+  "id": "home-fixture",
+  "author": "0xHome",
+  "locale": "nl",
+  "postType": "home",
+  "creationDate": "2026-08-10",
+  "publication": "test.s2s",
+  "encryption": false,
+  "title": "Home",
+  "content": "",
+  "custom": {}
+}

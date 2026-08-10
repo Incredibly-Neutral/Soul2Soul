@@ -1,0 +1,16 @@
+{
+  "template": "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Render Dev Demo</title></head>\n<body>\n<h1>{{titleCase title}}</h1>\n<p class=\"reversed\">{{reverse title}}</p>\n<article class=\"content\">\n{{{content}}}\n</article>\n</body>\n</html>",
+  "body": {
+    "id": "demo-fixture",
+    "author": "0xDemo",
+    "locale": "en",
+    "postType": "post",
+    "creationDate": "2026-08-10",
+    "publication": "test.s2s",
+    "encryption": false,
+    "title": "hello brave new world",
+    "slug": "demo",
+    "content": "<!-- section class=\"aside\">This is an aside<!-- /section -->\n<p>Demo body text.</p>",
+    "custom": {}
+  }
+}

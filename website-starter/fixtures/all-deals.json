@@ -1,0 +1,29 @@
+[
+  {
+    "id": "deal-1",
+    "title": "Featured One",
+    "author": "0xAlice",
+    "creationDate": "2026-08-01",
+    "path": "/posts/featured-one",
+    "postType": "post",
+    "featured": true
+  },
+  {
+    "id": "deal-2",
+    "title": "Plain Two",
+    "author": "0xBob",
+    "creationDate": "2026-08-02",
+    "path": "/posts/plain-two",
+    "postType": "post",
+    "featured": false
+  },
+  {
+    "id": "deal-3",
+    "title": "Featured Three",
+    "author": "0xCarol",
+    "creationDate": "2026-08-03",
+    "path": "/posts/featured-three",
+    "postType": "post",
+    "featured": true
+  }
+]
