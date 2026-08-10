@@ -4,12 +4,14 @@
   "scripts": {
     "sass": "sass scss/styles.scss css/styles.css",
     "serve": "http-server html -p 3008 --cors -c-1",
-    "upload": "tsx scripts/upload.ts"
+    "upload": "tsx scripts/upload.ts",
+    "render:dev": "tsx scripts/render-dev.ts"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "sass": "^1.83.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0"
   },
   "dependencies": {
     "@s2s/soul2soul-shared": "workspace:*",

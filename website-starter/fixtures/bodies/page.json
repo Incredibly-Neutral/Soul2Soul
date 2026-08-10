@@ -1,0 +1,13 @@
+{
+  "id": "page-fixture",
+  "author": "0xPage",
+  "locale": "nl",
+  "postType": "page",
+  "creationDate": "2026-08-10",
+  "publication": "test.s2s",
+  "encryption": false,
+  "title": "About us",
+  "slug": "about",
+  "content": "<!-- section class=\"aside\">A page aside<!-- /section -->\n<p>Page body text.</p>",
+  "custom": {}
+}
