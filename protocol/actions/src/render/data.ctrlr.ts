@@ -3,7 +3,7 @@ import { fetchByPublication } from '../libs/module.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
 
-const createPath = (body: S2SBody, templateConfig: S2STemplateConfig): string => {
+export const createPath = (body: S2SBody, templateConfig: S2STemplateConfig): string => {
   if (templateConfig.path == null) return '/';
   let path =
     body.locale == 'nl' || body.locale == undefined
@@ -53,6 +53,34 @@ export const pathsForCollections = (item: any, config: any) => {
   return _templateConfig != undefined ? createPath(item, _templateConfig) : undefined;
 };
 
+/**
+ * PURE template-data builder for a NON-encrypted (plaintext) body.
+ *
+ * This is the shared core of the non-decrypt `initTemplateData` path: computes
+ * the render path, unescapes the raw content, and applies the content-transform
+ * stage. No chain, no decrypt, no fetch. Used by production `initTemplateData`
+ * (when `body.encryption` is false) AND by the dev render action (which always
+ * receives plaintext).
+ */
+export const buildTemplateData = (
+  body: any,
+  templateConfig: S2STemplateConfig,
+  protocolInfo?: any,
+) => {
+  const path = createPath(body, templateConfig);
+
+  return {
+    ...body,
+    gateway: protocolInfo?.gateway,
+    path,
+    custom: body.custom || {},
+    content: transformContent(
+      (body.content || '').replace(/\\n/g, '\n').replace(/\\\"/g, '"').replace(/\\\\/g, '\\'),
+    ),
+    revoked: false,
+  };
+};
+
 export const initTemplateData = async (
   protocolInfo: any,
   authorSafeAddress: string,
@@ -82,18 +110,30 @@ export const initTemplateData = async (
     body = mergeDecrypted(body, decrypted);
   }
 
-  const path = createPath(body, templateConfig);
+  return buildTemplateData(body, templateConfig, protocolInfo);
+};
 
-  return {
-    ...body,
-    gateway: protocolInfo.gateway,
-    path,
-    custom: body.custom || {},
-    content: transformContent(
-      (body.content || '').replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
-    ),
-    revoked: false,
-  };
+/**
+ * PURE collection filter: applies one collection's `filters` to an injected
+ * `allDeals[]` array. No chain, no fetch. Shared by production
+ * `fetchCollections` and the dev render action (which injects `allDeals[]` or
+ * pre-built collections).
+ */
+export const filterCollection = (allDeals: any[], collection: any): any[] => {
+  let results = allDeals;
+
+  if (collection.filters !== undefined) {
+    results = results.filter((item: any) =>
+      collection.filters!.every((filter: any) =>
+        Object.entries(filter).every(([key, value]) => {
+          const itemVal = item[key];
+          return Array.isArray(itemVal) ? itemVal.includes(value) : itemVal === value;
+        }),
+      ),
+    );
+  }
+
+  return results;
 };
 
 export const fetchCollections = async (
@@ -112,20 +152,7 @@ export const fetchCollections = async (
   }
 
   for (const collection of templateConfig.collections || []) {
-    let results = allDeals;
-
-    if (collection.filters !== undefined) {
-      results = results.filter((item: any) =>
-        collection.filters!.every((filter: any) =>
-          Object.entries(filter).every(([key, value]) => {
-            const itemVal = item[key];
-            return Array.isArray(itemVal) ? itemVal.includes(value) : itemVal === value;
-          }),
-        ),
-      );
-    }
-
-    collections[collection.slug] = results;
+    collections[collection.slug] = filterCollection(allDeals, collection);
   }
 
   return collections;
