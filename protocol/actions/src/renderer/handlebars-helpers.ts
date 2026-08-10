@@ -551,33 +551,4 @@ export const helpers = [
       return arr.slice(offset, offset + limit);
     },
   },
-  {
-    name: 'sections',
-    helper: (content: string) => {
-      if (!content || typeof content !== 'string') return content;
-
-      // Replace <!-- section {json} -->...<!-- /section --> with <tag attrs>...</tag>
-      return content.replace(
-        /<!--\s*section\s*\{([\s\S]*?)\}\s*-->\n?([\s\S]*?)<!--\s*\/section\s*-->/gi,
-        (_match: string, attrsJson: string, innerContent: string) => {
-          let raw: Record<string, string> = {};
-          try {
-            raw = JSON.parse('{' + attrsJson + '}');
-          } catch {
-            raw = {};
-          }
-
-          const tag = raw.tag || 'section';
-          const attrParts: string[] = [];
-          for (const key of Object.keys(raw)) {
-            if (key === 'tag') continue;
-            attrParts.push(key + '="' + String(raw[key]) + '"');
-          }
-          const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';
-
-          return '<' + tag + attrStr + '>\n' + innerContent.trim() + '\n</' + tag + '>';
-        },
-      );
-    },
-  },
 ];
