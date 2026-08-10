@@ -1,0 +1,13 @@
+{
+  "id": "post-fixture",
+  "author": "0xAlice",
+  "locale": "nl",
+  "postType": "post",
+  "creationDate": "2026-08-10",
+  "publication": "test.s2s",
+  "encryption": false,
+  "title": "Hello brave new world",
+  "slug": "hello-brave-new-world",
+  "content": "<!-- section class=\"aside\">A post aside<!-- /section -->\n<p>Post body text.</p>",
+  "custom": {}
+}

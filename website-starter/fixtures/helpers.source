@@ -1,0 +1,17 @@
+// Publication-supplied helper source for the render-dev kit (RFC B, Option C).
+// This file is read VERBATIM and passed to the render-dev action as
+// `helpersSource`. The action evaluates it in-process as a JS expression that
+// yields a `{ name: (args) => ..., ... }` map of PURE functions, then EXTENDS
+// the built-in handlebars helper map with them (built-ins stay).
+//
+// NOTE: this must remain a BARE JS EXPRESSION with NO trailing semicolon — the
+// action wraps it as `return (SOURCE);`. That's also why it is NOT a `.js`
+// file: prettier would add a `;` and break the eval.
+//
+// To add a helper: append a `name: (args) => ...` entry below, then re-run
+// `pnpm render:dev` and refresh http://localhost:3008. No publish, no chain.
+// Keep helpers PURE (no I/O, no side effects) -- they run inside the action.
+({
+  titleCase: (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase()),
+  reverse: (s) => [...String(s)].reverse().join(''),
+})
