@@ -7,6 +7,7 @@
     "inspect-group": "tsx --require dotenv/config protocol/scripts/lit/inspect-group.ts",
     "actions:build": "node protocol/scripts/lit/build-actions.cjs",
     "actions:add": "tsx --require dotenv/config protocol/scripts/lit/add-action.ts",
+    "actions:add-dev": "tsx --require dotenv/config protocol/scripts/lit/add-dev-action.ts",
     "actions:swap": "tsx --require dotenv/config protocol/scripts/lit/swap-action.ts",
     "refresh-key": "tsx --require dotenv/config protocol/scripts/lit/refresh-key.ts",
     "update-protocol": "tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts",

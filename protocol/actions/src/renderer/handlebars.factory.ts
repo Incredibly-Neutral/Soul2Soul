@@ -623,14 +623,64 @@ export const cleanTemplateString = (content: string): string => {
     .trim();
 };
 
-export const processPartials = async (
-  template: string,
-  partials: Partial[],
+/**
+ * PURE partial substitution.
+ *
+ * Recursively replaces `{{> name}}` references in `html` using an injected
+ * `{ name -> source }` map. No gateway, no fetch, no CIDs — the caller is
+ * responsible for resolving partial sources (production resolves them from
+ * IPFS CIDs via `fetchPartialsSourceMap`; the dev render action injects them
+ * directly).
+ */
+export const replacePartials = (
+  html: string,
+  partialsMap: { [key: string]: string },
   templateData: TemplateData,
-  gateway?: string,
-): Promise<string> => {
-  // First fetch and clean all partials
+): string => {
+  // Clean each injected partial source once (mirrors the production fetch path)
   const processedPartials: { [key: string]: string } = {};
+  for (const [name, source] of Object.entries(partialsMap)) {
+    processedPartials[name] = cleanTemplateString(source);
+  }
+
+  // Then recursively replace partials in template
+  let result = html;
+  let depth = 0;
+  let changed = true;
+
+  while (changed && depth < 10) {
+    // Max 10 levels of nesting
+    changed = false;
+    for (const [name, content] of Object.entries(processedPartials)) {
+      const regex = new RegExp(`{{\\s*>\\s*${name}\\s*}}`, "g");
+      if (regex.test(result)) {
+        // Clean the content again after replacing to handle any nested quotes
+        result = result.replace(regex, content);
+        changed = true;
+      }
+    }
+    depth++;
+    // Clean any quotes that might have been introduced
+    result = cleanTemplateString(result);
+  }
+
+  // Process the complete template after all partials are inserted
+  return processTemplate(result, templateData);
+};
+
+/**
+ * PRODUCTION gateway wrapper: resolves partial CIDs to source text.
+ *
+ * Fetches each partial's content from the IPFS gateway (`cat?arg=<cid>`) and
+ * returns a `{ name -> rawSource }` map keyed by the partial's filename. This
+ * is the ONLY place the gateway `cat?arg=partial.cid` fetch lives — it is NOT
+ * part of the pure `replacePartials` path.
+ */
+export const fetchPartialsSourceMap = async (
+  partials: Partial[],
+  gateway?: string,
+): Promise<{ [key: string]: string }> => {
+  const partialsSourceMap: { [key: string]: string } = {};
 
   for (const partial of partials) {
     try {
@@ -643,42 +693,52 @@ export const processPartials = async (
 
       if (!response.ok) continue;
 
-      let content = await response.text();
-      content = cleanTemplateString(content);
+      const content = await response.text();
 
       // Get filename without path or extension
       const name = partial.path
         .substring(partial.path.lastIndexOf("/") + 1)
         .split(".")[0];
-      processedPartials[name] = content;
+      partialsSourceMap[name] = content;
     } catch (error) {
       continue;
     }
   }
 
-  // Then recursively replace partials in template
-  let html = template;
-  let depth = 0;
-  let changed = true;
+  return partialsSourceMap;
+};
 
-  while (changed && depth < 10) {
-    // Max 10 levels of nesting
-    changed = false;
-    for (const [name, content] of Object.entries(processedPartials)) {
-      const regex = new RegExp(`{{\\s*>\\s*${name}\\s*}}`, "g");
-      if (regex.test(html)) {
-        // Clean the content again after replacing to handle any nested quotes
-        html = html.replace(regex, content);
-        changed = true;
-      }
+/**
+ * PRODUCTION partial processor (gateway-fetching wrapper).
+ *
+ * Fetches partial sources from the gateway, then delegates the recursive
+ * substitution + templating to the pure `replacePartials`.
+ */
+export const processPartials = async (
+  template: string,
+  partials: Partial[],
+  templateData: TemplateData,
+  gateway?: string,
+): Promise<string> => {
+  const partialsSourceMap = await fetchPartialsSourceMap(partials, gateway);
+  return replacePartials(template, partialsSourceMap, templateData);
+};
+
+/**
+ * EXTEND (not replace) the built-in helper map with additional helpers.
+ *
+ * Used by the dev render action to inject publication-supplied helpers
+ * evaluated in-process as pure functions. Production behavior is untouched:
+ * the built-in `handlebars-helpers` list is the seed, and this only adds to it.
+ */
+export const extendHelperMap = (extraHelpers: {
+  [name: string]: Function;
+}): void => {
+  for (const [name, fn] of Object.entries(extraHelpers)) {
+    if (typeof fn === "function") {
+      helperMap.set(name, fn as any);
     }
-    depth++;
-    // Clean any quotes that might have been introduced
-    html = cleanTemplateString(html);
   }
-
-  // Process the complete template after all partials are inserted
-  return processTemplate(html, templateData);
 };
 
 // HTML escape function
