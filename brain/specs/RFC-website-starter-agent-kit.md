@@ -146,6 +146,18 @@ consumes RFC A's seam (a registered transform/helper table) but is independent o
 - [ ] **PR #16 merged by human** (also pending: merge **PR #14** quote-aware `sections` fix — still unmerged; main lacks it)
 - [x] Standalone kit (Slice 2, `website-starter`) — **PR #17** (feat/standalone-render-kit, commit `78fcb1e`): `scripts/render-dev.ts` + `pnpm render:dev`, fixtures (`fixtures/bodies/{home,page,post}.json`, `all-deals.json`, `helpers.source`), README iteration loop. Gates: live-runner end-to-end **4/4** (home/page/post/demo — sections transform → `<section class="aside">`, titleCase+reverse helpers, shared collection filter all verified in output; 0 raw `<!-- section` markers); `tsc --noEmit` + `node --check` pass; existing scripts unbroken; lockfile churn = tsx entry only. Independent review **PASS no blockers**. Kit is standalone (only `node:fs`/`node:path`/`dotenv` + global fetch; zero `@s2s` imports) and drives the dev-action CID.
 - [ ] **PR #17 merged by human** → full RFC B loop live: edit template/helper/fixture → `pnpm render:dev` → preview `pnpm serve` :3008
+- [x] **Mode 3 — on-chain contract pull implemented (2026-08-11)**, now in the standalone
+  `website-starter` repo (`github.com/Joera/website-starter`), branch `feat/cleanup-and-contract-render` @ `224d685`:
+  new `scripts/contract-pull.ts` (zero `@s2s` — `ethers5` on Base L2/8453, inlined module ABI,
+  paginated `getDeals`, IPFS `S2SContentItem` fetch, `toBody` mapping, drops `encryption===true`)
+  + `render:dev --source=contract [--limit N]` routing pulled bodies through the **same** render-dev
+  action into `html/` for `:3008` serve. Same branch bundled the **cleanup**: deleted 6 dead/orphan
+  scripts (`abi.ts`, `fs.ts`, `ipfs.ts`, `local-config-builder.ts`, `pinata.ts`, `upload.ts`), dropped
+  the `upload` script + `axios`/`form-data`/`@safe-global/*` deps, fixed `tsconfig.json` include
+  (was blocking `tsc`), added `pnpm-workspace.yaml` so `pnpm install` exits 0. Independent review
+  **PASS no blockers** (all gates live). Caveat: mode-3 happy path against a real content-bearing
+  module is **not yet exercised live** — only the empty factory implementation was reachable from
+  the sandbox; first real run needs a live `PUBLICATION_MODULE_ADDRESS`.
 
 ### TODO — block helpers (Track 2 forward work)
 
