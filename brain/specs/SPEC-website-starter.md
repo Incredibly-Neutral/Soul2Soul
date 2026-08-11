@@ -1,5 +1,13 @@
 # SPEC-website-starter
 
+> **Standalone location (2026-08-11):** `website-starter` was extracted from the s2s monorepo
+> (`git subtree split`, branch `publish/website-starter`) into its **own repo
+> `github.com/Joera/website-starter`** and removed from the monorepo + `pnpm-workspace.yaml`. It is
+> the one component a publication dev clones **standalone** (not `shared`/`protocol`), then forks
+> into concrete publication sites (e.g. `~/code/s2s-s3ntiment`). The monorepo no longer contains it;
+> this spec documents the component wherever it lives. The `@s2s/soul2soul-shared: workspace:*` dep
+> was dropped there so a bare `pnpm install` resolves.
+>
 > **Audited against live code:** 2026-08-03.
 >
 > Component spec for `website-starter/` — the **downloadable templating starter** an author/templater
@@ -74,6 +82,11 @@ dev-assistant is replaced by the Bun runner (which needs none of the Datil sessi
   `data_gateway` (snake) but `S2SProtocolInfo` is **camelCase**. Confirms these paths are stale.
 - **Hardcoded secret:** dev-assistant embeds a **Pinata JWT** (with scoped-key secret) in source +
   uses a named author's `PRIVATE_KEY_UNAMORE` — same class as GAP-9. Remove on the Bun migration.
+- **TODO — block helpers unsupported:** the renderer engine skips `{{#name}}…{{/name}}` block
+  patterns (`processIfBlocks`/`processEachBlocks` handle only a subset and `{{#…}}` block-helper
+  form is not implemented). Template authors must not design templates that depend on
+  `{{#featured}}…{{/featured}}` wrapping/iteration until the engine grows real block-helper
+  support (RFC B Track 2 forward work). Flagged in `website-starter/skills/template-design/SKILL.md`.
 
 ## Safe-to-change vs do-not-touch
 
