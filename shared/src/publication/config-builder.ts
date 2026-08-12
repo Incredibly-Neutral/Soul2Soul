@@ -144,9 +144,10 @@ export class ConfigBuilder {
    * Locate a publication-supplied template-helper module in the repo.
    *
    * Resolution order:
-   *   1. `fixtures/helpers.source` (the website-starter-style dev-kit layout),
-   *      found by recursively listing the `fixtures/` directory;
-   *   2. a repo-root `helpers.source`.
+   *   1. the repo ROOT `helpers.source` (canonical — level with mapping.json,
+   *      a config-level publication artifact);
+   *   2. `fixtures/helpers.source` (legacy fallback, the website-starter-style
+   *      dev-kit layout), found by recursively listing the `fixtures/` dir.
    *
    * Returns `null` when neither exists (clean no-op — the config is built
    * without a helpersCid and the render action degrades to built-ins only).
@@ -158,7 +159,19 @@ export class ConfigBuilder {
     repo: string,
     branch: string,
   ): Promise<GitHubFile | null> {
-    // Prefer the dev-kit fixtures path (website-starter-style layout).
+    // Canonical location: the repo ROOT, level with mapping.json — a
+    // config-level publication artifact, not a dev fixture.
+    try {
+      const rootFiles = await this.getGitHubFiles(owner, repo, branch, "");
+      const rootHelper = rootFiles.find(
+        (f) => f.type === "file" && f.path === HELPERS_SOURCE_FILENAME,
+      );
+      if (rootHelper) return rootHelper;
+    } catch {
+      // Root listing failed — treat as no helper source.
+    }
+
+    // Legacy fallback: the dev-kit fixtures path (website-starter-style layout).
     try {
       const fixturesFiles = await this.getAllFilesRecursive(
         owner,
@@ -173,18 +186,7 @@ export class ConfigBuilder {
       );
       if (fixturesHelper) return fixturesHelper;
     } catch {
-      // `fixtures/` may not exist in the repo — fall through to the root probe.
-    }
-
-    // Fall back to a repo-root helpers.source.
-    try {
-      const rootFiles = await this.getGitHubFiles(owner, repo, branch, "");
-      const rootHelper = rootFiles.find(
-        (f) => f.type === "file" && f.path === HELPERS_SOURCE_FILENAME,
-      );
-      if (rootHelper) return rootHelper;
-    } catch {
-      // Root listing failed — treat as no helper source.
+      // `fixtures/` may not exist in the repo — fall through to no helper.
     }
 
     return null;
