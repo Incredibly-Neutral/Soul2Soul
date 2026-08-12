@@ -15,6 +15,7 @@
 import { FilecoinStorage, FilecoinUser, FilecoinUploadResult, type FilecoinSessionKeyData } from "@s2s/soul2soul-shared/filecoin";
 import { nodeFilecoinBuilder } from "./car-builder.js";
 import { addJson } from "../ipfs/remotekubo.service.js";
+import { installCorsFetch, restoreCorsFetch } from "./cors-fetch.js";
 import * as https from "https";
 import { URL } from "url";
 
@@ -45,7 +46,15 @@ export class FilecoinController {
   }
 
   async uploadJson(data: unknown, owners?: string[], kind?: string): Promise<FilecoinUploadResult> {
-    return this.storage.uploadJson(data, owners, kind);
+    // Scope the CORS-free fetch to this Filecoin op: install before the
+    // passthrough (iso-web picks up globalThis.fetch at call time) and
+    // restore in a finally so native renderer fetch is untouched even on error.
+    installCorsFetch();
+    try {
+      return await this.storage.uploadJson(data, owners, kind);
+    } finally {
+      restoreCorsFetch();
+    }
   }
 
   async listStorageFor(identity: string): Promise<any[]> {
@@ -88,7 +97,14 @@ export class FilecoinController {
    */
   async uploadTree(configCid: string, kuboUrl: string): Promise<FilecoinUploadResult> {
     const carBytes = await this.exportTreeFromKubo(configCid, kuboUrl);
-    return this.storage.uploadTree(carBytes);
+    // Scope the CORS-free fetch to the Filecoin upload only (kubo export above
+    // uses node https and needs native fetch untouched). restore in finally.
+    installCorsFetch();
+    try {
+      return await this.storage.uploadTree(carBytes);
+    } finally {
+      restoreCorsFetch();
+    }
   }
 
   /**
