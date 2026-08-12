@@ -229,5 +229,84 @@ describe("ConfigBuilder", () => {
       expect(templatesPayload).toHaveLength(1);
       expect(templatesPayload[0].path).toBe("templates/post.hbs");
     });
+
+    it("pins a helpers.source and sets config.helpersCid when found in fixtures", async () => {
+      const helperSource = "({ reverse: (s) => [...s].reverse().join('') })";
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes("/commits/")) {
+          return Promise.resolve(makeResponse({ sha: "abc123def" }));
+        }
+        if (url.includes("api.github.com/repos")) {
+          // fixtures/ contains the helpers.source file
+          if (url.includes("/contents/fixtures")) {
+            return Promise.resolve(
+              makeResponse([
+                {
+                  path: "fixtures/helpers.source",
+                  type: "file",
+                  url: "https://api.github.com/fixtures/helpers.source",
+                  download_url: "https://download.helper/helpers.source",
+                },
+              ]),
+            );
+          }
+          // templates + everything else empty
+          return Promise.resolve(makeResponse([]));
+        }
+        if (url.includes("raw.githubusercontent.com")) {
+          return Promise.resolve(
+            makeResponse(JSON.stringify({ templateConfig: [], ripples: [] })),
+          );
+        }
+        // the helpers.source download_url
+        return Promise.resolve(makeResponse(helperSource));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({});
+      // First addToKubo call (helpers.source) returns the helpers CID; the
+      // final config addToKubo falls back to the default "mock-cid".
+      ipfs.addToKubo.mockResolvedValueOnce("helpers-cid");
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        "owner", "repo", "main",
+        "test.soul2soul.eth", "0x1234", "cid",
+      );
+
+      // helpers.source was pinned verbatim (raw text, no newline stripping)
+      expect(ipfs.addToKubo).toHaveBeenCalledWith(
+        helperSource,
+        "helpers.source",
+      );
+      expect(ipfs.uploadToPinata).toHaveBeenCalledWith(
+        helperSource,
+        "helpers.source",
+      );
+      expect(result.config.helpersCid).toBe("helpers-cid");
+    });
+
+    it("omits helpersCid and adds nothing extra when helpers.source is absent", async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({});
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        "owner", "repo", "main",
+        "test.soul2soul.eth", "0x1234", "cid",
+      );
+
+      expect(result.config.helpersCid).toBeUndefined();
+      // helpers.source was never pinned / mirrored
+      expect(ipfs.addToKubo).not.toHaveBeenCalledWith(
+        expect.any(String),
+        "helpers.source",
+      );
+      expect(ipfs.uploadToPinata).not.toHaveBeenCalledWith(
+        expect.any(String),
+        "helpers.source",
+      );
+    });
   });
 });
