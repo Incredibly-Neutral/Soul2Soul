@@ -20,7 +20,16 @@ export type S2SPublicationConfig = {
     dataGateway: string,
     mapping: S2SMapping,  // ✅ Single object
     name: string,
-    templateCid: string
+    templateCid: string,
+    /**
+     * Optional CID of a publication-supplied template-helper module (a bare
+     * pure-expression `{ name: fn }` object, merged into the built-in helper
+     * map at render time). camelCase, matching `assetsCid`/`templateCid`.
+     * When set it takes precedence over the on-chain `template_helpers_cid`
+     * record on the S2S Records Module. See brain/specs/RFC-content-transforms.md
+     * (Track 2).
+     */
+    helpersCid?: string,
 }
 
 // // to deprecate
