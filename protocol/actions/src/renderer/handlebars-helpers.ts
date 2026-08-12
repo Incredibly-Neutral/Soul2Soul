@@ -60,7 +60,8 @@ export const prevNextRing = (
   let next: any = null;
   for (const it of ordered) {
     const p = Number(it.position);
-    if (p < cur) prev = it; // greatest strictly-less
+    if (p < cur)
+      prev = it; // greatest strictly-less
     else if (p > cur && next == null) next = it; // least strictly-greater
   }
   if (prev == null) prev = ordered[ordered.length - 1]; // wrap: largest
