@@ -5,6 +5,18 @@
 import type { S2SIPFSMethods } from "../ipfs";
 import type { S2SPublicationConfig } from "./types";
 
+/**
+ * Upper bound on the publication-supplied template-helper source size in
+ * characters, mirrored from the render-time cap (protocol renderer
+ * helpers.ts: TEMPLATE_HELPERS_SOURCE_SIZE_CAP = 64 * 1024). This build-time
+ * check is an advisory fail-fast for a clearly-broken source; the render
+ * action remains the authoritative gate.
+ */
+const HELPERS_SOURCE_SIZE_CAP = 64 * 1024;
+
+/** File name a publication-owner supplies for their template-helper module. */
+const HELPERS_SOURCE_FILENAME = "helpers.source";
+
 export interface GitHubFile {
   path: string;
   url: string;
@@ -128,6 +140,58 @@ export class ConfigBuilder {
     return await response.text();
   }
 
+  /**
+   * Locate a publication-supplied template-helper module in the repo.
+   *
+   * Resolution order:
+   *   1. the repo ROOT `helpers.source` (canonical — level with mapping.json,
+   *      a config-level publication artifact);
+   *   2. `fixtures/helpers.source` (legacy fallback, the website-starter-style
+   *      dev-kit layout), found by recursively listing the `fixtures/` dir.
+   *
+   * Returns `null` when neither exists (clean no-op — the config is built
+   * without a helpersCid and the render action degrades to built-ins only).
+   * A missing `fixtures/` directory (GitHub 404) is treated as "no fixtures",
+   * not an error.
+   */
+  private async findHelpersSource(
+    owner: string,
+    repo: string,
+    branch: string,
+  ): Promise<GitHubFile | null> {
+    // Canonical location: the repo ROOT, level with mapping.json — a
+    // config-level publication artifact, not a dev fixture.
+    try {
+      const rootFiles = await this.getGitHubFiles(owner, repo, branch, "");
+      const rootHelper = rootFiles.find(
+        (f) => f.type === "file" && f.path === HELPERS_SOURCE_FILENAME,
+      );
+      if (rootHelper) return rootHelper;
+    } catch {
+      // Root listing failed — treat as no helper source.
+    }
+
+    // Legacy fallback: the dev-kit fixtures path (website-starter-style layout).
+    try {
+      const fixturesFiles = await this.getAllFilesRecursive(
+        owner,
+        repo,
+        branch,
+        "fixtures",
+      );
+      const fixturesHelper = fixturesFiles.find(
+        (f) =>
+          f.type === "file" &&
+          f.path.split("/").pop() === HELPERS_SOURCE_FILENAME,
+      );
+      if (fixturesHelper) return fixturesHelper;
+    } catch {
+      // `fixtures/` may not exist in the repo — fall through to no helper.
+    }
+
+    return null;
+  }
+
   async getLatestCommitSHA(
     owner: string,
     repo: string,
@@ -222,6 +286,66 @@ export class ConfigBuilder {
     const mappingContent = await this.fetchGitHubFile(mappingUrl);
     const mapping = JSON.parse(mappingContent);
 
+    // --- Capture a publication-supplied template-helper module, if present ---
+    // The render action reads the helper source at render time and evaluates it
+    // VERBATIM (no newline-stripping / unescaping, unlike templates), so the raw
+    // text is stored as-is. `config.helpersCid` takes precedence over the
+    // on-chain `template_helpers_cid` record (renderer helpers.ts). Render-time
+    // validation remains the authoritative gate; the checks below are an
+    // advisory build-time fail-fast for a clearly-broken source.
+    let helpersCid: string | undefined;
+    const helpersFile = await this.findHelpersSource(
+      github_account,
+      repo,
+      branch,
+    );
+    if (helpersFile) {
+      const helpersSource = await this.fetchGitHubFile(
+        helpersFile.download_url,
+      );
+      if (!helpersSource || helpersSource.length === 0) {
+        throw new Error(
+          `Template helpers source found (${helpersFile.path}) but is empty; ` +
+            "refusing to build a config with a broken helper module. " +
+            "Remove the file or supply a valid pure-expression module.",
+        );
+      }
+      if (helpersSource.length > HELPERS_SOURCE_SIZE_CAP) {
+        throw new Error(
+          `Template helpers source (${helpersFile.path}) exceeds size cap ` +
+            `(${helpersSource.length} > ${HELPERS_SOURCE_SIZE_CAP} chars = 64 KiB); ` +
+            "shrink the helper module. Render-time validation is the authoritative gate.",
+        );
+      }
+      // Build-time advisory fail-fast: the source must parse as a bare pure-JS
+      // expression (e.g. `({ reverse: (s) => ... })`). A statement (`const x = 1;`),
+      // a trailing semicolon, or an unbalanced brace is a red flag well before
+      // render. Render-time validation remains the authoritative gate.
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(`return (${helpersSource});`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Template helpers source (${helpersFile.path}) is not a valid bare ` +
+            `pure-JS expression: ${reason}. It must be a bare expression ` +
+            `(e.g. ({ reverse: (s) => ... })) with no trailing semicolon. ` +
+            "Render-time validation is the authoritative gate.",
+        );
+      }
+      // REAL add on the same Kubo the render catFile's against, so the CID is
+      // pinned and retrievable at render time. Mirrored to Pinata following
+      // the config dual-write pattern below.
+      helpersCid = await this.ipfs.addToKubo(
+        helpersSource,
+        HELPERS_SOURCE_FILENAME,
+      );
+      await this.ipfs.uploadToPinata(helpersSource, HELPERS_SOURCE_FILENAME);
+      console.log(
+        `[config-builder] helpers.source uploaded: ${helpersFile.path} -> ${helpersCid}`,
+      );
+    }
+
     // --- Build final config ---
     const finalConfig: S2SPublicationConfig = {
       assetsCid,
@@ -230,6 +354,7 @@ export class ConfigBuilder {
       mapping,
       name: publicationName,
       templateCid: templatesCid,
+      ...(helpersCid ? { helpersCid } : {}),
     };
 
     // --- Upload final config to both Pinata + Kubo ---
