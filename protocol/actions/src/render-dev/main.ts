@@ -16,19 +16,7 @@ import { validateDevRenderInput } from './schema';
 import { buildTemplateData, filterCollection } from '../render/data.ctrlr';
 import { renderHTMLFromSource } from '../renderer/html.ctrlr';
 import { extendHelperMap } from '../renderer/handlebars.factory';
-
-/**
- * Evaluate a `helpersSource` JS expression that yields a `{ name: fn }` module
- * of PURE functions. Evaluated in-process only (no eval of untrusted code here
- * beyond the publication-supplied helper source, which the dev runner is
- * explicitly designed to accept).
- */
-const evaluateHelpersSource = (source: string): Record<string, Function> => {
-  // The source is an object/expression, e.g. `({ reverse: (s) => ... })`.
-  // eslint-disable-next-line no-new-func
-  const fn = new Function(`return (${source});`);
-  return fn() as Record<string, Function>;
-};
+import { evaluateHelpersSource } from '../renderer/helpers';
 
 export async function main(input: unknown) {
   const trace: any[] = [];
