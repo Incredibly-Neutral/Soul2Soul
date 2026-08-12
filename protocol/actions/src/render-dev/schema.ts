@@ -84,10 +84,6 @@ export const devRenderInputSchema = z.object({
   // OR injected allDeals -> run the shared pure collection filter
   allDeals: z.array(z.any()).optional(),
 
-  // Publication-supplied helper module source: a JS expression that evaluates
-  // to { name: fn, ... } (pure functions, evaluated in-process)
-  helpersSource: z.string().optional(),
-
   // Optional protocol info (for gateway label on templateData)
   protocolInfo: z.any().optional(),
 });
