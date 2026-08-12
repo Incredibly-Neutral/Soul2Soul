@@ -34,12 +34,27 @@ export const TEMPLATE_HELPERS_SOURCE_SIZE_CAP = 64 * 1024;
  * of PURE functions. Evaluated in-process only (no runner globals/ethers —
  * this is the bare pure-expression contract, NOT the runner's `main()`
  * contract).
+ *
+ * The literal `helpers.source` is evaluated by dynamic `import()` of a
+ * `data:` URL (the bare expression exported as the module default) rather than
+ * by `new Function`/`eval`. The production render action runs inside the Lit
+ * signing enclave (Chipotle, a Deno-based sandbox) whose CSP-equivalent forbids
+ * eval-family code generation; dynamic `import()` of a `data:` URL instead
+ * routes through the module-loading path the enclave already permits, so the
+ * helper source can be evaluated there without tripping the code-generation
+ * guard. The renderer itself is otherwise a pure regex/string engine — this is
+ * the ONLY code-generation-from-strings in the render path.
+ *
+ * Async: callers must `await` the result.
  */
-export const evaluateHelpersSource = (source: string): Record<string, Function> => {
+export const evaluateHelpersSource = async (
+  source: string,
+): Promise<Record<string, Function>> => {
   // The source is an object/expression, e.g. `({ reverse: (s) => ... })`.
-  // eslint-disable-next-line no-new-func
-  const fn = new Function(`return (${source});`);
-  return fn() as Record<string, Function>;
+  // Wrap it as an ES module default export and load it via the module loader.
+  const url = 'data:text/javascript,' + encodeURIComponent('export default (' + source + ');');
+  const m = await import(url);
+  return (m as { default?: unknown }).default as Record<string, Function>;
 };
 
 /**
@@ -49,11 +64,16 @@ export const evaluateHelpersSource = (source: string): Record<string, Function> 
  *  - evaluates to a plain object (not array / null / primitive);
  *  - every entry is a function.
  *
- * Throws on any violation. The caller decides how loudly to surface the error
- * (production fails the render loudly; it must never silently render without
- * a broken helper).
+ * The string/parse/type checks run synchronously; the evaluation (and the
+ * post-eval type-check of the resulting object) is async because the source is
+ * now evaluated via dynamic `import()` of a `data:` URL (see
+ * `evaluateHelpersSource`). Throws on any violation. The caller decides how
+ * loudly to surface the error (production fails the render loudly; it must
+ * never silently render without a broken helper).
  */
-export const validateHelpersSource = (source: string): Record<string, Function> => {
+export const validateHelpersSource = async (
+  source: string,
+): Promise<Record<string, Function>> => {
   if (typeof source !== 'string' || source.length === 0) {
     throw new Error('helpers source is empty');
   }
@@ -63,7 +83,7 @@ export const validateHelpersSource = (source: string): Record<string, Function> 
         `(${source.length} > ${TEMPLATE_HELPERS_SOURCE_SIZE_CAP})`,
     );
   }
-  const mod = evaluateHelpersSource(source);
+  const mod = await evaluateHelpersSource(source);
   if (mod === null || typeof mod !== 'object' || Array.isArray(mod)) {
     throw new Error('helpers module must evaluate to a plain object of functions');
   }

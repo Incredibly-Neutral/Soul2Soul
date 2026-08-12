@@ -67,7 +67,7 @@ const injectPublicationHelpers = async (
       return null;
     }
     const source = await catFile(gateway!, helperCid);
-    const publicationHelpers = validateHelpersSource(source); // throws on broken module
+    const publicationHelpers = await validateHelpersSource(source); // throws on broken module
     const { merged, skipped } = mergePublicationHelpers(publicationHelpers);
     console.log(
       `[helpers] injected ${merged} publication helper(s) from cid ${helperCid}` +
