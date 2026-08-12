@@ -230,28 +230,28 @@ describe("ConfigBuilder", () => {
       expect(templatesPayload[0].path).toBe("templates/post.hbs");
     });
 
-    it("pins a helpers.source and sets config.helpersCid when found in fixtures", async () => {
+    it("pins a helpers.source at the repo root and sets config.helpersCid (canonical layout)", async () => {
       const helperSource = "({ reverse: (s) => [...s].reverse().join('') })";
       const fetchMock = vi.fn((url: string) => {
         if (url.includes("/commits/")) {
           return Promise.resolve(makeResponse({ sha: "abc123def" }));
         }
         if (url.includes("api.github.com/repos")) {
-          // fixtures/ contains the helpers.source file
-          if (url.includes("/contents/fixtures")) {
-            return Promise.resolve(
-              makeResponse([
-                {
-                  path: "fixtures/helpers.source",
-                  type: "file",
-                  url: "https://api.github.com/fixtures/helpers.source",
-                  download_url: "https://download.helper/helpers.source",
-                },
-              ]),
-            );
+          // templates dir is empty
+          if (url.includes("/contents/templates")) {
+            return Promise.resolve(makeResponse([]));
           }
-          // templates + everything else empty
-          return Promise.resolve(makeResponse([]));
+          // the repo ROOT contents listing carries the canonical helpers.source
+          return Promise.resolve(
+            makeResponse([
+              {
+                path: "helpers.source",
+                type: "file",
+                url: "https://api.github.com/helpers.source",
+                download_url: "https://download.helper/helpers.source",
+              },
+            ]),
+          );
         }
         if (url.includes("raw.githubusercontent.com")) {
           return Promise.resolve(
@@ -281,6 +281,56 @@ describe("ConfigBuilder", () => {
         "helpers.source",
       );
       expect(ipfs.uploadToPinata).toHaveBeenCalledWith(
+        helperSource,
+        "helpers.source",
+      );
+      expect(result.config.helpersCid).toBe("helpers-cid");
+    });
+
+    it("falls back to fixtures/helpers.source when no root helpers.source exists", async () => {
+      const helperSource = "({ upper: (s) => s.toUpperCase() })";
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes("/commits/")) {
+          return Promise.resolve(makeResponse({ sha: "abc123def" }));
+        }
+        if (url.includes("api.github.com/repos")) {
+          // fixtures/ contains the legacy helpers.source file
+          if (url.includes("/contents/fixtures")) {
+            return Promise.resolve(
+              makeResponse([
+                {
+                  path: "fixtures/helpers.source",
+                  type: "file",
+                  url: "https://api.github.com/fixtures/helpers.source",
+                  download_url: "https://download.helper/helpers.source",
+                },
+              ]),
+            );
+          }
+          // templates + root listing empty
+          return Promise.resolve(makeResponse([]));
+        }
+        if (url.includes("raw.githubusercontent.com")) {
+          return Promise.resolve(
+            makeResponse(JSON.stringify({ templateConfig: [], ripples: [] })),
+          );
+        }
+        // the helpers.source download_url
+        return Promise.resolve(makeResponse(helperSource));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({});
+      ipfs.addToKubo.mockResolvedValueOnce("helpers-cid");
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        "owner", "repo", "main",
+        "test.soul2soul.eth", "0x1234", "cid",
+      );
+
+      expect(ipfs.addToKubo).toHaveBeenCalledWith(
         helperSource,
         "helpers.source",
       );
