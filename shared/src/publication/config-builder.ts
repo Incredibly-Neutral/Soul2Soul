@@ -289,10 +289,11 @@ export class ConfigBuilder {
     // --- Capture a publication-supplied template-helper module, if present ---
     // The render action reads the helper source at render time and evaluates it
     // VERBATIM (no newline-stripping / unescaping, unlike templates), so the raw
-    // text is stored as-is. `config.helpersCid` takes precedence over the
-    // on-chain `template_helpers_cid` record (renderer helpers.ts). Render-time
-    // validation remains the authoritative gate; the checks below are an
-    // advisory build-time fail-fast for a clearly-broken source.
+    // text is stored as-is. `config.helpersCid` is the SOLE source for
+    // publication helpers at render time — there is no on-chain record fallback
+    // (renderer helpers.ts). Render-time validation remains the authoritative
+    // gate; the checks below are an advisory build-time fail-fast for a
+    // clearly-broken source.
     let helpersCid: string | undefined;
     const helpersFile = await this.findHelpersSource(
       github_account,

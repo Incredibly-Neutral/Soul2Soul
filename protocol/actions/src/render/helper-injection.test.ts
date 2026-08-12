@@ -2,14 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the chain/gateway boundary BEFORE importing main.ts so the module graph
 // picks up the mocks. `injectPublicationHelpers` / `resolveTemplateHelpersCid`
-// are exported from render/main.ts for exactly this unit coverage.
+// are exported from render/main.ts for exactly this unit coverage. The evm
+// mock is kept solely to ASSERT the helper path performs zero RPCs now that
+// config.helpersCid is the sole resolution source.
 vi.mock('../libs/evm', () => ({ evmRead: vi.fn() }));
 vi.mock('../libs/ipfs.factory', () => ({ catFile: vi.fn(), uploadFile: vi.fn() }));
 
 import { evmRead } from '../libs/evm';
 import { catFile } from '../libs/ipfs.factory';
 import {
-  isMissingRecordError,
   resolveTemplateHelpersCid,
   injectPublicationHelpers,
 } from './main';
@@ -17,7 +18,6 @@ import {
   evaluateHelpersSource,
   validateHelpersSource,
   mergePublicationHelpers,
-  TEMPLATE_HELPERS_RECORD_KEY,
   TEMPLATE_HELPERS_CONFIG_FIELD,
   TEMPLATE_HELPERS_SOURCE_SIZE_CAP,
 } from '../renderer/helpers';
@@ -29,7 +29,6 @@ import {
 import { renderHTMLFromSource } from '../renderer/html.ctrlr';
 
 const GW = 'https://gw.test';
-const MODULE = '0xConfigModule';
 const HELPER_CID = 'bafyHELPERSCID';
 
 // ── Shared-module behavior ───────────────────────────────────────────────────
@@ -175,61 +174,30 @@ describe('per-render helper isolation', () => {
   });
 });
 
-// ── Production: missing-key graceful degrade + CID resolution ───────────────
+// ── Production: config.helpersCid is the SOLE resolution source ─────────────
 
-describe('resolveTemplateHelpersCid (configModule getRecord)', () => {
+describe('resolveTemplateHelpersCid (config.helpersCid is the sole source)', () => {
   beforeEach(() => {
     vi.mocked(evmRead).mockReset();
   });
 
-  it('degrades gracefully (returns null) when the record is missing (KeyNotFound)', async () => {
-    vi.mocked(evmRead).mockRejectedValue(new Error('execution reverted: KeyNotFound'));
-    expect(await resolveTemplateHelpersCid({}, MODULE, ['rpc'])).toBeNull();
-    expect(evmRead).toHaveBeenCalledWith(
-      'L2',
-      MODULE,
-      expect.anything(),
-      'getRecord',
-      [TEMPLATE_HELPERS_RECORD_KEY],
-      ['rpc'],
-    );
-  });
-
-  it('degrades gracefully (returns null) when the record is missing (EmptyKey)', async () => {
-    vi.mocked(evmRead).mockRejectedValue(new Error('execution reverted: EmptyKey'));
-    expect(await resolveTemplateHelpersCid({}, MODULE, ['rpc'])).toBeNull();
-  });
-
-  it('returns the CID when the record is present', async () => {
-    vi.mocked(evmRead).mockResolvedValue(HELPER_CID);
-    expect(await resolveTemplateHelpersCid({}, MODULE, ['rpc'])).toBe(HELPER_CID);
-  });
-
-  it('prefers config.helpersCid when present and does NOT hit the chain', async () => {
-    const cid = await resolveTemplateHelpersCid(
-      { [TEMPLATE_HELPERS_CONFIG_FIELD]: HELPER_CID },
-      MODULE,
-      ['rpc'],
-    );
+  it('returns config.helpersCid when present and does NOT hit the chain', async () => {
+    const cid = await resolveTemplateHelpersCid({
+      [TEMPLATE_HELPERS_CONFIG_FIELD]: HELPER_CID,
+    });
     expect(cid).toBe(HELPER_CID);
     expect(evmRead).not.toHaveBeenCalled();
   });
 
-  it('surfaces a NON-missing read failure loudly (throws, does not degrade)', async () => {
-    vi.mocked(evmRead).mockRejectedValue(new Error('RPC timeout'));
-    await expect(resolveTemplateHelpersCid({}, MODULE, ['rpc'])).rejects.toThrow('RPC timeout');
+  it('returns null when the config carries no helpersCid (graceful no-op)', async () => {
+    expect(await resolveTemplateHelpersCid({})).toBeNull();
+    expect(evmRead).not.toHaveBeenCalled();
   });
-});
 
-describe('isMissingRecordError', () => {
-  it('matches KeyNotFound / EmptyKey messages', () => {
-    expect(isMissingRecordError(new Error('execution reverted: KeyNotFound'))).toBe(true);
-    expect(isMissingRecordError(new Error('execution reverted: EmptyKey'))).toBe(true);
-    expect(isMissingRecordError('execution reverted: KeyNotFound()')).toBe(true);
-  });
-  it('rejects other errors', () => {
-    expect(isMissingRecordError(new Error('RPC timeout'))).toBe(false);
-    expect(isMissingRecordError('boom')).toBe(false);
+  it('returns null for an empty/non-string helpersCid (graceful no-op)', async () => {
+    expect(await resolveTemplateHelpersCid({ [TEMPLATE_HELPERS_CONFIG_FIELD]: '' })).toBeNull();
+    expect(await resolveTemplateHelpersCid({ [TEMPLATE_HELPERS_CONFIG_FIELD]: 42 })).toBeNull();
+    expect(evmRead).not.toHaveBeenCalled();
   });
 });
 
@@ -246,20 +214,26 @@ describe('injectPublicationHelpers (production step)', () => {
     resetHelperMap(baseline);
   });
 
-  it('no helper record → returns null (graceful), trace marks not-injected', async () => {
-    vi.mocked(evmRead).mockRejectedValue(new Error('execution reverted: KeyNotFound'));
+  it('no helpersCid in config → returns null (graceful no-op), no RPC, no fetch', async () => {
     const trace: any[] = [];
-    const err = await injectPublicationHelpers({}, MODULE, ['rpc'], GW, trace);
+    const err = await injectPublicationHelpers({}, GW, trace);
     expect(err).toBeNull();
-    expect(trace).toContainEqual({ action: 'helpers', injected: false, reason: 'no helper record' });
+    expect(catFile).not.toHaveBeenCalled();
+    expect(evmRead).not.toHaveBeenCalled();
+    expect(trace).toContainEqual({ action: 'helpers', injected: false, reason: 'no helper in config' });
   });
 
   it('merges a fetched helper module into a production render', async () => {
-    vi.mocked(evmRead).mockResolvedValue(HELPER_CID);
     vi.mocked(catFile).mockResolvedValue('({ shout: (s) => String(s).toUpperCase() })');
     const trace: any[] = [];
-    const err = await injectPublicationHelpers({}, MODULE, ['rpc'], GW, trace);
+    const err = await injectPublicationHelpers(
+      { [TEMPLATE_HELPERS_CONFIG_FIELD]: HELPER_CID },
+      GW,
+      trace,
+    );
     expect(err).toBeNull();
+    expect(catFile).toHaveBeenCalledWith(GW, HELPER_CID);
+    expect(evmRead).not.toHaveBeenCalled();
     expect(trace).toContainEqual(
       expect.objectContaining({ action: 'helpers', injected: true, cid: HELPER_CID, merged: 1 }),
     );
@@ -273,22 +247,25 @@ describe('injectPublicationHelpers (production step)', () => {
   });
 
   it('a broken helper fails loudly (returns an error string, never silent "")', async () => {
-    vi.mocked(evmRead).mockResolvedValue(HELPER_CID);
     vi.mocked(catFile).mockResolvedValue('({ notAFunction: 42 })');
     const trace: any[] = [];
-    const err = await injectPublicationHelpers({}, MODULE, ['rpc'], GW, trace);
+    const err = await injectPublicationHelpers(
+      { [TEMPLATE_HELPERS_CONFIG_FIELD]: HELPER_CID },
+      GW,
+      trace,
+    );
     expect(err).toBeTruthy();
     expect(String(err)).toMatch(/must be a function/);
     expect(trace).toEqual([]); // never recorded as injected
   });
 
   it('audit-logs the CID that ran', async () => {
-    vi.mocked(evmRead).mockResolvedValue(HELPER_CID);
     vi.mocked(catFile).mockResolvedValue('({ pubHelper: () => 1 })');
     const trace: any[] = [];
-    await injectPublicationHelpers({}, MODULE, ['rpc'], GW, trace);
+    await injectPublicationHelpers({ [TEMPLATE_HELPERS_CONFIG_FIELD]: HELPER_CID }, GW, trace);
     const helperEvent = trace.find((t) => t.action === 'helpers');
     expect(helperEvent.cid).toBe(HELPER_CID);
     expect(helperEvent.injected).toBe(true);
+    expect(evmRead).not.toHaveBeenCalled();
   });
 });
