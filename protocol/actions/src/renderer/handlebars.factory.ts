@@ -560,6 +560,33 @@ const processWithBlocks = (text: string, context: TemplateData): string => {
 // Create a map of helpers for faster lookup
 const helperMap = new Map(helpers.map((h) => [h.name, h.helper]));
 
+/**
+ * Names of the built-in helpers — the seed of `helperMap`. Used by the
+ * publication-helper name-collision policy (built-ins win).
+ */
+export const getBuiltinHelperNames = (): Set<string> =>
+  new Set(helpers.map((h) => h.name));
+
+/**
+ * Snapshot the current helper map (including any publication helpers merged by
+ * `extendHelperMap`). Combined with `resetHelperMap`, this scopes helpers PER
+ * RENDER instead of process-wide.
+ */
+export const snapshotHelperMap = (): Map<string, Function> => new Map(helperMap);
+
+/**
+ * Reset the helper map back to a snapshot (typically the pristine built-in
+ * map). Clears ALL entries first, then re-seeds from `snapshot`. This is what
+ * prevents one publication's helpers from leaking into the next render or
+ * shadowing built-ins in a long-lived runner process.
+ */
+export const resetHelperMap = (snapshot: Map<string, Function>): void => {
+  helperMap.clear();
+  for (const [name, fn] of snapshot) {
+    helperMap.set(name, fn as any);
+  }
+};
+
 // Process helpers in the template
 const processHelpers = (text: string, context: TemplateData): string => {
   // Match both double and triple braces
