@@ -61,15 +61,26 @@ Implemented as a **content-transform stage** — a pure string-in/string-out uni
 `sections` transform as its built-in default and a registered/typed seam for additional transforms.
 This is the **inline version** of what can *ultimately* be fetched from publication source.
 
-**Future (not built yet):** a publication-supplied helper — a `helper_action?: string` (CID) field
-on `S2SPublicationConfig` (`shared/src/publication/types.ts`) — fetched by CID inside the verified
-render action, run **in-process, pre-sign**: pure `(content, ctx) => string`, no PKP key access, no
-network/`fetch` in the helper context, source-size cap, and audit-log of which `helper_action` CID
-ran. The fetch-and-eval harness is **trusted because it runs inside the audited, verified render
-action**, and every hop is content-addressed (config → CID → `cat?arg=<cid>`), which is byte-for-byte
-the trust model the system already uses for templates/partials — no new authority, no substitution
-vector. The inline stage is the seed into which this slots later. The dead `sections` mustache
-helper is superseded by the stage.
+**In progress (Track 2):** publication-scoped template helpers injected into the PRODUCTION render
+action. Decided shape (2026-08-12): the render action reads a helper-CID record off the **S2S Records
+Module** (`configModule` — the Safe KV store that already holds the `config` record; NOT
+`publicationModule`, which has no `getRecord`) via `getRecord('template_helpers_cid')` with
+`rpcs?.L2` + `gateway`. If the record is missing (`KeyNotFound`/`EmptyKey`) the render degrades
+gracefully to built-in helpers only — a missing record must never revert the render. If present:
+`catFile` the CID, eval the module as a bare pure expression (`new Function('return (' + source + ')')`
+— NOT the runner's `main()` contract, no runner globals/ethers injected), validate (plain object of
+functions mirroring the built-in `{ name, helper }[]` contract, source-size cap, name-collision
+policy with built-ins), merge via `extendHelperMap`, and audit-log the helper CID that ran. Run
+**in-process, pre-sign**: no PKP key access, no network/`fetch` in the helper context. Because
+`extendHelperMap` mutates the shared module-level `helperMap` (`handlebars.factory.ts:561,734`), the
+merge must be **per-render scoped** (snapshot + reset built-ins each render) so helpers cannot leak
+between publications or shadow built-ins in the long-lived runner process. Naming: record key
+`template_helpers_cid` (snake_case, on-chain convention); optional `S2SPublicationConfig` field
+`helpersCid` (camelCase, matching `assetsCid`/`templateCid`). The fetch-and-eval harness is
+**trusted because it runs inside the audited, verified render action**, and every hop is
+content-addressed (config → CID → `cat?arg=<cid>`) — byte-for-byte the trust model already used for
+templates/partials: no new authority, no substitution vector. The dead `sections` mustache helper
+is superseded by the stage.
 
 ---
 
@@ -94,7 +105,7 @@ helper specs + mapping, emits publication-specific dummy `S2SBody` fixtures / `t
 local render, and keeps them honest as helpers grow. Tracked with the Track-2 helper mechanism; see the
 Track-2 convention note below.
 
-**Track-2 convention (helpers, forward work):** the md→html **directive map** above is Track 1. Separately,
+**Track-2 convention (helpers — in progress):** the md→html **directive map** above is Track 1. Separately,
 publication devs supply **template helpers** (e.g. `filter_by_year` — a blog-specific helper that exists in
 `handlebars-helpers.ts` but is wired to no publication) as a named-function module fetched by `helpersCid`,
 mirroring the built-in `{ name, helper }[]` contract, merged into the helper map before `processTemplate`
