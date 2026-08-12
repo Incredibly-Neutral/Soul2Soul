@@ -22,6 +22,52 @@ function logObjectWithPosts(label: string, data: any) {
   }
 }
 
+/**
+ * prevNext ring selection — PURE, exported for unit testing.
+ *
+ * CIRCULAR RING prev/next navigation, ported from the s2s-s3ntiment
+ * helpers.source reference implementation. The Track-2 runtime publication-helper
+ * injection path is DEAD (see brain/specs/RFC-content-transforms.md) — the Lit
+ * signing enclave cannot compile source→function at render time — so `prevNext`
+ * is a BUILT-IN helper so `{{prevNext collections.why position}}` works in
+ * production via the statically-compiled bundle.
+ *
+ * Given a named collection in templateData (items carrying a `position`
+ * ordering key) and the currently-rendered item's position, select the PREV
+ * and NEXT items in a circular ring:
+ *   ORDER  collection ascending by position
+ *   PREV   = item with the greatest position strictly < current; if none, wrap
+ *            to the largest position (last item)
+ *   NEXT   = item with the least position strictly > current; if none, wrap to
+ *            the smallest position (first item)
+ * So every page always has both a prev and a next (n > 1). For n == 1, prev
+ * and next are the same single item. Returns null when the collection is empty
+ * or the position is not a number.
+ */
+export const prevNextRing = (
+  collection: any,
+  currentPosition: any,
+): { prev: any; next: any; ordered: any[] } | null => {
+  if (!Array.isArray(collection)) return null;
+  const cur = Number(currentPosition);
+  if (Number.isNaN(cur)) return null;
+  const ordered = collection
+    .filter((it) => it && it.position != null && !Number.isNaN(Number(it.position)))
+    .slice()
+    .sort((a, b) => Number(a.position) - Number(b.position));
+  if (ordered.length === 0) return null;
+  let prev: any = null;
+  let next: any = null;
+  for (const it of ordered) {
+    const p = Number(it.position);
+    if (p < cur) prev = it; // greatest strictly-less
+    else if (p > cur && next == null) next = it; // least strictly-greater
+  }
+  if (prev == null) prev = ordered[ordered.length - 1]; // wrap: largest
+  if (next == null) next = ordered[0]; // wrap: smallest
+  return { prev, next, ordered };
+};
+
 export const helpers = [
   {
     name: 'unique_years',
@@ -549,6 +595,38 @@ export const helpers = [
       if (!arr || !Array.isArray(arr)) return [];
       if (limit === undefined) return arr.slice(offset);
       return arr.slice(offset, offset + limit);
+    },
+  },
+  {
+    name: 'prevNext',
+    helper: (collection: any, currentPosition: any) => {
+      const ring = prevNextRing(collection, currentPosition);
+      if (!ring) return '';
+      const esc = (v: any) =>
+        String(v == null ? '' : v)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      const block = (it: any) =>
+        it
+          ? '<article id="' +
+            esc(it.id) +
+            '" class="block" author="' +
+            esc(it.author) +
+            '">\n<span class="tag">' +
+            esc(it.slug) +
+            '</span>\n' +
+            String((it.custom && it.custom.summary) || '') +
+            '\n<a href="' +
+            esc(it.path) +
+            '">Meer over ' +
+            esc(it.slug) +
+            '</a>\n</article>'
+          : '';
+      if (ring.ordered.length === 1) return block(ring.prev); // n == 1: the single item, once
+      return block(ring.prev) + '\n' + block(ring.next);
     },
   },
 ];

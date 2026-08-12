@@ -15,8 +15,6 @@
 import { validateDevRenderInput } from './schema';
 import { buildTemplateData, filterCollection } from '../render/data.ctrlr';
 import { renderHTMLFromSource } from '../renderer/html.ctrlr';
-import { extendHelperMap } from '../renderer/handlebars.factory';
-import { evaluateHelpersSource } from '../renderer/helpers';
 
 export async function main(input: unknown) {
   const trace: any[] = [];
@@ -36,7 +34,6 @@ export async function main(input: unknown) {
       body,
       collections,
       allDeals,
-      helpersSource,
       protocolInfo,
     } = parsed;
 
@@ -60,14 +57,12 @@ export async function main(input: unknown) {
       ms: Date.now() - t0,
     });
 
-    // 3. Merge publication-supplied helpers into the built-in helper map.
-    //    EXTEND, never replace — the built-in handlebars-helpers stay.
-    if (helpersSource) {
-      extendHelperMap(await evaluateHelpersSource(helpersSource));
-      trace.push({ action: 'helpers', injected: true, ms: Date.now() - t0 });
-    }
-
-    // 4. Pure render from injected template/partial sources.
+    // 3. Render from injected template/partial sources with BUILT-IN helpers
+    //    only. The Track-2 runtime publication-helper injection path is DEAD
+    //    (see brain/specs/RFC-content-transforms.md) — no source→function
+    //    compilation happens at render time, in dev or production. Any
+    //    `helpersSource` an old dev kit still sends is ignored (built-ins only,
+    //    which now includes the `prevNext` ring helper).
     const html = renderHTMLFromSource(templateSource, partialsSource || {}, templateData);
     trace.push({ action: 'render', htmlBytes: html.length, ms: Date.now() - t0 });
 
