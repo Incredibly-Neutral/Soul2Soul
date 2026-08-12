@@ -126,3 +126,18 @@ is tracked separately in **`RFC-website-starter-agent-kit.md` (RFC B)**.
 - [x] Decision — render-time (Option B), pluggable stage
 - [ ] Implementation + PR (dispatched)
 - [ ] Fold settled parts into `SPEC-protocol-actions` / `SPEC-shared` / `MAP.md` when merged
+
+**Track-2 build state (2026-08-12):** production helper-injection feature code is **built and preserved** in the
+s2s monorepo worktree worktree-pr/s2s-pub-helper-injection on branch `feat/render-pub-helper-injection` at
+commit `082c954` (shared `renderer/helpers.ts`, per-render isolation primitives in `handlebars.factory.ts`,
+production step + `resolveTemplateHelpersCid`/`injectPublicationHelpers` in `render/main.ts`, `helpersCid` on
+`S2SPublicationConfig`, test file `render/helper-injection.test.ts`). PR not yet open. Root cause of the red
+isolation tests is **confirmed**: (A) `processHelpers` (`handlebars.factory.ts:591`) requires ≥1 argument, so a
+bare `{{name}}` resolves as a variable lookup (unknown → empty), not a helper invocation — engine semantics,
+not a leak; (B) isolation test assertions self-collide (`not.toContain('P')` always fails via `DOCTYPE`, and
+`not.toContain('A')` vs `toContain('{{helperA}}')` are mutually exclusive). Decision: for this PR, **fix the
+tests** (assert isolation via arg-ful helper calls / map-state, fix collisions) and **do NOT** change the
+renderer's bare-mustache semantics. Bare zero-arg helper invocation (`{{helperA}}` → invoke registered helper)
+is a legitimate but **orthogonal engine enhancement** — attack as a separate follow-up with baseline-regression
+care (29 baseline tests). Blocked pending recovery of the s2s-builder worker's auth backend (two consecutive
+sessions hit a sustained 401 on all tools).
