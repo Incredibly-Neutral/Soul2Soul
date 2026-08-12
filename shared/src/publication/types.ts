@@ -25,9 +25,9 @@ export type S2SPublicationConfig = {
      * Optional CID of a publication-supplied template-helper module (a bare
      * pure-expression `{ name: fn }` object, merged into the built-in helper
      * map at render time). camelCase, matching `assetsCid`/`templateCid`.
-     * When set it takes precedence over the on-chain `template_helpers_cid`
-     * record on the S2S Records Module. See brain/specs/RFC-content-transforms.md
-     * (Track 2).
+     * This is the SOLE source for publication helpers at render time — there
+     * is no on-chain record fallback. See
+     * brain/specs/RFC-content-transforms.md (Track 2).
      */
     helpersCid?: string,
 }
