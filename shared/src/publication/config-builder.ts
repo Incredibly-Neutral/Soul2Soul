@@ -317,6 +317,22 @@ export class ConfigBuilder {
             "shrink the helper module. Render-time validation is the authoritative gate.",
         );
       }
+      // Build-time advisory fail-fast: the source must parse as a bare pure-JS
+      // expression (e.g. `({ reverse: (s) => ... })`). A statement (`const x = 1;`),
+      // a trailing semicolon, or an unbalanced brace is a red flag well before
+      // render. Render-time validation remains the authoritative gate.
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(`return (${helpersSource});`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Template helpers source (${helpersFile.path}) is not a valid bare ` +
+            `pure-JS expression: ${reason}. It must be a bare expression ` +
+            `(e.g. ({ reverse: (s) => ... })) with no trailing semicolon. ` +
+            "Render-time validation is the authoritative gate.",
+        );
+      }
       // REAL add on the same Kubo the render catFile's against, so the CID is
       // pinned and retrievable at render time. Mirrored to Pinata following
       // the config dual-write pattern below.

@@ -337,6 +337,57 @@ describe("ConfigBuilder", () => {
       expect(result.config.helpersCid).toBe("helpers-cid");
     });
 
+    it("rejects a root helpers.source that does not parse as a bare expression", async () => {
+      const invalidSource = "const x = 1;";
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes("/commits/")) {
+          return Promise.resolve(makeResponse({ sha: "abc123def" }));
+        }
+        if (url.includes("api.github.com/repos")) {
+          // templates dir is empty
+          if (url.includes("/contents/templates")) {
+            return Promise.resolve(makeResponse([]));
+          }
+          // the repo ROOT contents listing carries the helpers.source
+          return Promise.resolve(
+            makeResponse([
+              {
+                path: "helpers.source",
+                type: "file",
+                url: "https://api.github.com/helpers.source",
+                download_url: "https://download.helper/helpers.source",
+              },
+            ]),
+          );
+        }
+        if (url.includes("raw.githubusercontent.com")) {
+          return Promise.resolve(
+            makeResponse(JSON.stringify({ templateConfig: [], ripples: [] })),
+          );
+        }
+        // the helpers.source download_url returns invalid syntax
+        return Promise.resolve(makeResponse(invalidSource));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({});
+      const builder = makeBuilder(ipfs);
+
+      await expect(
+        builder.buildConfig(
+          "owner", "repo", "main",
+          "test.soul2soul.eth", "0x1234", "cid",
+        ),
+      ).rejects.toThrow(/not a valid bare pure-JS expression/);
+
+      // the invalid helpers.source must NOT be pinned
+      expect(ipfs.addToKubo).not.toHaveBeenCalledWith(
+        expect.any(String),
+        "helpers.source",
+      );
+    });
+
     it("omits helpersCid and adds nothing extra when helpers.source is absent", async () => {
       const ipfs = mockIPFS();
       ipfs.fetchFromKubo.mockResolvedValue({});
