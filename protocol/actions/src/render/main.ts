@@ -7,11 +7,8 @@ import {
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile } from '../libs/ipfs.factory';
-import { evmRead } from '../libs/evm';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { fetchById } from '../libs/module.factory';
-
-import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts';
 
 import { getConfig } from './config.ctrl';
 import {
@@ -24,7 +21,6 @@ import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
 import { snapshotHelperMap, resetHelperMap } from '../renderer/handlebars.factory';
 import {
-  TEMPLATE_HELPERS_RECORD_KEY,
   TEMPLATE_HELPERS_CONFIG_FIELD,
   validateHelpersSource,
   mergePublicationHelpers,
@@ -35,52 +31,19 @@ import { requireFields } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
- * True when a `getRecord` failure means the record is simply absent on-chain
- * (the S2S Records Module reverts with `EmptyKey` for an empty key and
- * `KeyNotFound` for a missing key). These DEGRADE gracefully to built-in-only
- * helpers; any other error is surfaced loudly.
- */
-export const isMissingRecordError = (e: unknown): boolean => {
-  const msg = typeof e === 'string' ? e : ((e as Error)?.message ?? String(e));
-  return /EmptyKey|KeyNotFound/i.test(msg);
-};
-
-/**
  * Resolve the publication's template-helper CID.
  *
- * 1. If the publication config carries `helpersCid` (camelCase, matching
- *    `assetsCid` / `templateCid`), use it directly — it takes precedence over
- *    the on-chain record so configs that already carry the CID avoid a chain hop.
- * 2. Otherwise read the `template_helpers_cid` record off the S2S Records
- *    Module (the `configModule` Safe KV store — the publication module has no
- *    `getRecord`) via `getRecord`.
+ * `config.helpersCid` (camelCase, matching `assetsCid` / `templateCid`) is the
+ * SOLE source for a publication-supplied helper module — there is no on-chain
+ * fallback. The CID is captured into the config by the safe-app `ConfigBuilder`
+ * at build time, so this path performs zero RPCs.
  *
- * Returns `null` (graceful degrade — render with built-ins only) when the
- * record is missing (`KeyNotFound`/`EmptyKey`). Throws on any other failure.
+ * Returns `null` (graceful no-op — render with built-in helpers only) when the
+ * config carries no `helpersCid`.
  */
-const resolveTemplateHelpersCid = async (
-  config: any,
-  configModule: string,
-  rpcs?: string[],
-): Promise<string | null> => {
+const resolveTemplateHelpersCid = async (config: any): Promise<string | null> => {
   const configCid = config?.[TEMPLATE_HELPERS_CONFIG_FIELD];
-  if (typeof configCid === 'string' && configCid.length > 0) {
-    return configCid;
-  }
-  try {
-    const cid = await evmRead(
-      'L2',
-      configModule,
-      Abi_S2SRecordsModule,
-      'getRecord',
-      [TEMPLATE_HELPERS_RECORD_KEY],
-      rpcs,
-    );
-    return typeof cid === 'string' && cid.length > 0 ? cid : null;
-  } catch (e) {
-    if (isMissingRecordError(e)) return null; // no helper record → built-ins only
-    throw e; // any other failure surfaces loudly upstream
-  }
+  return typeof configCid === 'string' && configCid.length > 0 ? configCid : null;
 };
 
 // exported for unit testing
@@ -94,15 +57,13 @@ export { resolveTemplateHelpersCid };
  */
 const injectPublicationHelpers = async (
   config: any,
-  configModule: string,
-  rpcs: string[] | undefined,
   gateway: string | undefined,
   trace: any[],
 ): Promise<string | null> => {
   try {
-    const helperCid = await resolveTemplateHelpersCid(config, configModule, rpcs);
+    const helperCid = await resolveTemplateHelpersCid(config);
     if (!helperCid) {
-      trace.push({ action: 'helpers', injected: false, reason: 'no helper record' });
+      trace.push({ action: 'helpers', injected: false, reason: 'no helper in config' });
       return null;
     }
     const source = await catFile(gateway!, helperCid);
@@ -233,8 +194,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       try {
         const helperFailure = await injectPublicationHelpers(
           config,
-          configModule,
-          rpcs?.L2,
           gateway,
           trace,
         );

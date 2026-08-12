@@ -13,16 +13,11 @@
 import { extendHelperMap, getBuiltinHelperNames } from './handlebars.factory';
 
 /**
- * On-chain record key on the S2S Records Module (the `configModule` Safe KV
- * store). snake_case, matching the on-chain naming convention (`config`,
- * `assets`, …). Read via `getRecord('template_helpers_cid')`.
- */
-export const TEMPLATE_HELPERS_RECORD_KEY = 'template_helpers_cid';
-
-/**
- * Optional config-side shorthand on `S2SPublicationConfig`. camelCase,
- * matching `assetsCid` / `templateCid`. When set, it takes precedence over the
- * on-chain record (avoids an extra chain hop for configs that already carry it).
+ * Optional config-side field on `S2SPublicationConfig` carrying the CID of a
+ * publication-supplied helper module. camelCase, matching `assetsCid` /
+ * `templateCid`. This is the SOLE source for publication helpers at render
+ * time — there is no on-chain record fallback (the helper CID is captured into
+ * the config by the safe-app `ConfigBuilder` at build time).
  */
 export const TEMPLATE_HELPERS_CONFIG_FIELD = 'helpersCid';
 
