@@ -63,7 +63,7 @@ export async function main(input: unknown) {
     // 3. Merge publication-supplied helpers into the built-in helper map.
     //    EXTEND, never replace — the built-in handlebars-helpers stay.
     if (helpersSource) {
-      extendHelperMap(evaluateHelpersSource(helpersSource));
+      extendHelperMap(await evaluateHelpersSource(helpersSource));
       trace.push({ action: 'helpers', injected: true, ms: Date.now() - t0 });
     }
 
