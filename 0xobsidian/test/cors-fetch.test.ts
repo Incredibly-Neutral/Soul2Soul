@@ -7,6 +7,8 @@
  *  1. WHATWG Response shape (.ok/.status/.headers/.text()/.clone(), 204 body).
  *  2. Streaming request body + duplex:"half" (the 3-leg PUT upload legs).
  *  3. install/restore semantics on globalThis.fetch, incl. restore-on-error.
+ *  4. Abort settlement — the shim MUST reject (AbortError) when the request
+ *     signal aborts, never hang (viem's http() withTimeout relies on it).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -29,6 +31,8 @@ import {
 interface CapturedRequest {
   options: Record<string, unknown>;
   chunks: Buffer[];
+  /** The underlying fake ClientRequest, so tests can emit transport events. */
+  clientRequest: any;
 }
 
 interface MockNetOptions {
@@ -37,6 +41,9 @@ interface MockNetOptions {
   headers?: Record<string, string>;
   body?: string | Buffer;
   error?: Error;
+  pending?: boolean;
+  /** After emitting a response, tear the body down with an "aborted" event (no end). */
+  abortIncoming?: boolean;
 }
 
 /** Build a fake `electron.remote.net` that answers with a canned response. */
@@ -44,7 +51,7 @@ function makeMockNet(opts: MockNetOptions = {}) {
   const requests: CapturedRequest[] = [];
   const net = {
     request(options: Record<string, unknown>) {
-      const captured: CapturedRequest = { options, chunks: [] };
+      const captured: CapturedRequest = { options, chunks: [], clientRequest: null as any };
       requests.push(captured);
       const clientRequest: any = {
         write: (chunk: Buffer | Uint8Array | string) => {
@@ -54,6 +61,7 @@ function makeMockNet(opts: MockNetOptions = {}) {
           return true;
         },
         end: () => {
+          if (opts.pending) return; // never respond — stays pending until aborted
           if (opts.error) {
             setImmediate(() => clientRequest.emit("error", opts.error));
             return;
@@ -75,13 +83,22 @@ function makeMockNet(opts: MockNetOptions = {}) {
           };
           setImmediate(() => {
             clientRequest.emit("response", incoming);
+            if (opts.abortIncoming) {
+              incoming.emit("aborted");
+              return;
+            }
             if (opts.body != null) {
               incoming.emit("data", Buffer.from(opts.body));
             }
             incoming.emit("end");
           });
         },
-        abort: vi.fn(),
+        // Faithful to Electron's ClientRequest: aborting emits an "abort"
+        // event (a no-op spy here would silently mask the indefinite-hang
+        // bug — see the abort-settlement regression tests).
+        abort: () => {
+          clientRequest.emit("abort");
+        },
       };
       // EventEmitter-style .on used by the shim.
       const handlers: Record<string, Array<(...a: any[]) => void>> = {};
@@ -92,6 +109,7 @@ function makeMockNet(opts: MockNetOptions = {}) {
       clientRequest.emit = (event: string, ...args: any[]) => {
         for (const h of handlers[event] ?? []) h(...args);
       };
+      captured.clientRequest = clientRequest;
       return clientRequest;
     },
   };
@@ -298,5 +316,98 @@ describe("install/restore semantics", () => {
 
     restoreAgain();
     expect(globalThis.fetch).toBe(originalFetch);
+  });
+});
+
+describe("abort settlement (RPC hang regression)", () => {
+  it("rejects with AbortError when the signal is already aborted (never hangs)", async () => {
+    const { net } = makeMockNet({ pending: true });
+    const fetchShim = createCorsFetch(() => net);
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      fetchShim("https://sp.example.com/jsonrpc", {
+        method: "POST",
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects with AbortError when the signal aborts mid-flight (viem withTimeout path)", async () => {
+    const { net } = makeMockNet({ pending: true });
+    const fetchShim = createCorsFetch(() => net);
+
+    const controller = new AbortController();
+    const pending = fetchShim("https://sp.example.com/jsonrpc", {
+      method: "POST",
+      signal: controller.signal,
+    });
+
+    // The request is in flight and has not responded. Abort now — this is
+    // exactly what viem's http() withTimeout does on timeout.
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects with AbortError when Electron emits an aborted event on the clientRequest", async () => {
+    const { net, requests } = makeMockNet({ pending: true });
+    const fetchShim = createCorsFetch(() => net);
+
+    const pending = fetchShim("https://sp.example.com/pdp/piece");
+    // Electron emits "aborted" on the ClientRequest if the request is
+    // aborted before a complete response is received.
+    requests[0].clientRequest.emit("aborted");
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects with AbortError when Electron emits an aborted event on the incoming response", async () => {
+    const { net } = makeMockNet({ status: 200, abortIncoming: true });
+    const fetchShim = createCorsFetch(() => net);
+
+    const pending = fetchShim("https://sp.example.com/pdp/piece");
+
+    // The mock emits a response then tears the body down with "aborted"
+    // (no end) — Electron's mid-read teardown. The shim must reject, not hang.
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("settles exactly once — a late abort after success cannot reject the resolved promise", async () => {
+    const { net } = makeMockNet({ status: 200, body: "ok" });
+    const fetchShim = createCorsFetch(() => net);
+
+    const controller = new AbortController();
+    const res = await fetchShim("https://sp.example.com/pdp/piece", {
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+
+    // Aborting after the response resolved must be a no-op (the abort
+    // listener was cleared on settle) — the promise is already settled.
+    controller.abort();
+    expect(await res.text()).toBe("ok");
+  });
+
+  it("a body-stream failure settles the promise instead of hanging", async () => {
+    const { net } = makeMockNet({ pending: true });
+    const fetchShim = createCorsFetch(() => net);
+
+    // A ReadableStream whose read() rejects mid-stream.
+    const failingStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("stream blew up"));
+      },
+    });
+
+    await expect(
+      fetchShim("https://sp.example.com/pdp/piece/uploads/uuid", {
+        method: "PUT",
+        body: failingStream,
+      }),
+    ).rejects.toThrow("stream blew up");
   });
 });

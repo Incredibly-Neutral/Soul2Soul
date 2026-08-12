@@ -326,23 +326,6 @@ export class MainController implements IMainController {
 		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
 		console.log('[kubo] uploaded:', kuboCid);
 
-		/// fire & forget — Filecoin upload doesn't need to block the main flow
-		this.filecoinUploadBackground(
-			'article',
-			async () => {
-				const pubAddress = await service.getMultiSig();
-				const authorEoa = this.oxo.ctrlr.user?.eoa;
-				return this.oxo.ctrlr.storage.uploadJson(
-					signedItem,
-					[pubAddress, authorEoa].filter(Boolean),
-					'article',
-				);
-			},
-			kuboCid,
-		);
-
-		////
-
 		this.notice.setMessage('3/5 appending version to publication contract ...');
 
 		// Record the version on-chain via the publication module
@@ -361,6 +344,26 @@ export class MainController implements IMainController {
 			publish,
 		);
 		//  }
+
+		/// fire & forget — Filecoin upload doesn't need to block the main flow.
+		/// Launched AFTER the awaited makeOffer + renderCalls RPCs complete so
+		/// its CORS-shim install window never overlaps an awaited viem
+		/// JSON-RPC (makeOffer / renderwithLitActions). viem's http() withTimeout
+		/// only aborts() the fetch on timeout and relies on it rejecting, so a
+		/// shim left installed across an awaited RPC could hang it indefinitely.
+		this.filecoinUploadBackground(
+			'article',
+			async () => {
+				const pubAddress = await service.getMultiSig();
+				const authorEoa = this.oxo.ctrlr.user?.eoa;
+				return this.oxo.ctrlr.storage.uploadJson(
+					signedItem,
+					[pubAddress, authorEoa].filter(Boolean),
+					'article',
+				);
+			},
+			kuboCid,
+		);
 	}
 
 	async proposeContent(_file: TAbstractFile, publish: boolean) {

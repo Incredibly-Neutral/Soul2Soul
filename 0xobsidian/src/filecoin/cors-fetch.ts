@@ -39,6 +39,8 @@ export type ElectronClientRequest = {
     listener: (response: ElectronIncomingMessage) => void,
   ): void;
   on(event: "error", listener: (error: Error) => void): void;
+  on(event: "abort", listener: () => void): void;
+  on(event: "aborted", listener: () => void): void;
   write(chunk: Buffer | Uint8Array | string): boolean;
   end(): void;
   abort(): void;
@@ -183,57 +185,111 @@ export function createCorsFetch(getNet: NetAccessor = defaultGetNet): CorsFetch 
     const net = getNet();
     const clientRequest = net.request({ method, url, headers });
 
-    // Abort propagation (iso-web passes a combined signal).
-    if (signal) {
-      if (signal.aborted) {
-        clientRequest.abort();
-      } else {
-        signal.addEventListener(
-          "abort",
-          () => clientRequest.abort(),
-          { once: true },
-        );
+    // ── Abort-safe lifecycle ──────────────────────────────────────────────
+    // `responsePromise` must ALWAYS settle — including on abort — because
+    // viem's `http()` transport wraps its fetch in a withTimeout that, on
+    // timeout, only calls controller.abort() and relies on the underlying
+    // fetch rejecting. If the shim never settles on abort, an on-chain
+    // JSON-RPC routed through the shim hangs INDEFINITELY (not an error, not
+    // a return). So every terminal ClientRequest/IncomingMessage event —
+    // success, error, abort, aborted — settles the pending promise exactly
+    // once, and an abort rejection carries name "AbortError" so viem's
+    // isAbortError() converts it into its TimeoutError.
+    let settled = false;
+    let abortListener: (() => void) | undefined;
+    let resolveResponse!: (response: Response) => void;
+    let rejectResponse!: (error: Error) => void;
+
+    const responsePromise = new Promise<Response>((resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    });
+
+    const clearAbortListener = () => {
+      if (abortListener && signal) {
+        signal.removeEventListener("abort", abortListener);
+        abortListener = undefined;
       }
-    }
+    };
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      // Once this request has settled, drop the signal abort listener so it
+      // can never abort a recycled/later in-flight request.
+      clearAbortListener();
+      fn();
+    };
+
+    const abortError = (): Error => {
+      const err = new Error("The operation was aborted.");
+      err.name = "AbortError";
+      return err;
+    };
 
     // Wire the response BEFORE writing the body so no data is missed.
-    const responsePromise = new Promise<Response>((resolve, reject) => {
-      clientRequest.on("response", (incoming) => {
-        const chunks: Buffer[] = [];
-        incoming.on("data", (chunk: Buffer) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        incoming.on("end", () => {
-          const status = incoming.statusCode ?? 0;
-          const statusText = incoming.statusMessage ?? "";
-          const responseHeaders = new Headers();
-          for (const [key, value] of Object.entries(incoming.headers ?? {})) {
-            if (value === undefined) continue;
-            if (Array.isArray(value)) {
-              for (const v of value) responseHeaders.append(key, v);
-            } else {
-              responseHeaders.set(key, String(value));
-            }
+    clientRequest.on("response", (incoming) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk: Buffer) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      incoming.on("end", () => {
+        const status = incoming.statusCode ?? 0;
+        const statusText = incoming.statusMessage ?? "";
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(incoming.headers ?? {})) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) {
+            for (const v of value) responseHeaders.append(key, v);
+          } else {
+            responseHeaders.set(key, String(value));
           }
-          const body = NULL_BODY_STATUS.has(status) ? null : Buffer.concat(chunks);
-          resolve(
+        }
+        const body = NULL_BODY_STATUS.has(status) ? null : Buffer.concat(chunks);
+        settle(() =>
+          resolveResponse(
             new Response(body, {
               status,
               statusText,
               headers: responseHeaders,
             }),
-          );
-        });
-        incoming.on("error", reject);
-        incoming.on("aborted", () =>
-          reject(new Error("Response aborted")),
+          ),
         );
       });
-      clientRequest.on("error", reject);
+      incoming.on("error", (e: Error) => settle(() => rejectResponse(e)));
+      incoming.on("aborted", () => settle(() => rejectResponse(abortError())));
     });
+    clientRequest.on("error", (e: Error) => settle(() => rejectResponse(e)));
+    clientRequest.on("abort", () => settle(() => rejectResponse(abortError())));
+    clientRequest.on("aborted", () =>
+      settle(() => rejectResponse(abortError())),
+    );
 
-    // Send the body (streaming-aware), then finish the request.
-    await writeRequestBody(clientRequest, request.body);
+    // Abort propagation (iso-web passes a combined signal). Registered AFTER
+    // the settlement handlers above so a pre-aborted signal's abort() still
+    // lands on the promise.
+    if (signal) {
+      if (signal.aborted) {
+        clientRequest.abort();
+      } else {
+        const onAbort = () => clientRequest.abort();
+        abortListener = onAbort;
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    // Send the body (streaming-aware), then finish the request. A body-stream
+    // failure must also settle the response promise (and drop the listener)
+    // so no phase can leave it hanging — return the settled promise so the
+    // rejection is observed by the caller.
+    try {
+      await writeRequestBody(clientRequest, request.body);
+    } catch (err) {
+      settle(() =>
+        rejectResponse(err instanceof Error ? err : new Error(String(err))),
+      );
+      return responsePromise;
+    }
     clientRequest.end();
 
     return responsePromise;
