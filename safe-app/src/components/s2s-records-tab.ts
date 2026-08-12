@@ -238,17 +238,6 @@ export class S2SRecordsTab extends HTMLElement {
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
     window.open(executionUrl, '_blank');
 
-    // Write the publication-supplied helper module record on-chain (snake_case
-    // `template_helpers_cid`, matching the convention the render action reads).
-    // Clean no-op when the config carries no helpersCid — no write, no error.
-    const helperCid = publicationConfig?.helpersCid;
-    if (helperCid) {
-      await this.safeIntegration.setRecord('template_helpers_cid', helperCid);
-      this.changedKeys.add('template_helpers_cid');
-      // Optimistic local update so the new value shows immediately.
-      store.setRecord({ key: 'template_helpers_cid', value: helperCid, type: 'content' });
-    }
-
     // Mark changed keys for yellow highlight (before store update so the first
     // subscriber-triggered render already has the class)
     this.changedKeys.add('config');
