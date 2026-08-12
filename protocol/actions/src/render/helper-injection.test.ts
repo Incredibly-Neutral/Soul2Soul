@@ -35,43 +35,53 @@ const HELPER_CID = 'bafyHELPERSCID';
 // ── Shared-module behavior ───────────────────────────────────────────────────
 
 describe('evaluateHelpersSource (shared)', () => {
-  it('evaluates a bare pure-expression helper module (no runner main() contract)', () => {
-    const mod = evaluateHelpersSource(
+  it('evaluates a bare pure-expression helper module (no runner main() contract) via the data: URL import path', async () => {
+    const mod = await evaluateHelpersSource(
       '({ shout: (s) => String(s).toUpperCase(), double: (n) => n * 2 })',
     );
     expect(typeof mod.shout).toBe('function');
     expect(mod.shout('hi')).toBe('HI');
     expect(mod.double(21)).toBe(42);
   });
+
+  it('returns the helper object as the resolved module default (import-path contract)', async () => {
+    const mod = await evaluateHelpersSource('({ greet: (n) => `hi ${n}` })');
+    expect(mod).toEqual({ greet: expect.any(Function) });
+    expect(mod.greet('world')).toBe('hi world');
+  });
+
+  it('a broken source still fails loudly (rejects, never resolves)', async () => {
+    await expect(evaluateHelpersSource('({ nope: this is not valid js })')).rejects.toBeTruthy();
+  });
 });
 
 describe('validateHelpersSource', () => {
-  it('accepts a plain object of functions', () => {
-    const mod = validateHelpersSource('({ a: () => 1, b: (x) => x })');
+  it('accepts a plain object of functions', async () => {
+    const mod = await validateHelpersSource('({ a: () => 1, b: (x) => x })');
     expect(typeof mod.a).toBe('function');
     expect(typeof mod.b).toBe('function');
   });
 
-  it('rejects an empty source', () => {
-    expect(() => validateHelpersSource('')).toThrow(/empty/);
+  it('rejects an empty source', async () => {
+    await expect(validateHelpersSource('')).rejects.toThrow(/empty/);
   });
 
-  it('rejects a non-object primitive', () => {
-    expect(() => validateHelpersSource('42')).toThrow(/plain object/);
-    expect(() => validateHelpersSource('null')).toThrow(/plain object/);
+  it('rejects a non-object primitive', async () => {
+    await expect(validateHelpersSource('42')).rejects.toThrow(/plain object/);
+    await expect(validateHelpersSource('null')).rejects.toThrow(/plain object/);
   });
 
-  it('rejects an array', () => {
-    expect(() => validateHelpersSource('[1,2,3]')).toThrow(/plain object/);
+  it('rejects an array', async () => {
+    await expect(validateHelpersSource('[1,2,3]')).rejects.toThrow(/plain object/);
   });
 
-  it('rejects a non-function entry', () => {
-    expect(() => validateHelpersSource('({ foo: 42 })')).toThrow(/must be a function/);
+  it('rejects a non-function entry', async () => {
+    await expect(validateHelpersSource('({ foo: 42 })')).rejects.toThrow(/must be a function/);
   });
 
-  it('rejects a source that exceeds the size cap', () => {
+  it('rejects a source that exceeds the size cap', async () => {
     const big = `({ f: () => '${'x'.repeat(TEMPLATE_HELPERS_SOURCE_SIZE_CAP + 1)}' })`;
-    expect(() => validateHelpersSource(big)).toThrow(/size cap/);
+    await expect(validateHelpersSource(big)).rejects.toThrow(/size cap/);
   });
 });
 
