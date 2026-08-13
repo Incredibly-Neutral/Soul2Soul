@@ -183,9 +183,13 @@ Decompose requests into these scoped, delegatable pieces:
 
 ## 6. Open items
 
-- [ ] Decide whether this becomes a real agent config under `~/omnigent/agent-configs/s2s-website`
-      (fork `config.yaml` from `s2s`; swap only the domain section + target-repo wiring + domain
-      skill).
+- [x] **Materialized as a real agent config (2026-08-13):** `/home/joera/.omnigent/agent-configs/
+      s2s-website/` — a faithful fork of `s2s` (config.yaml + `agents/{s2s-builder,solaris}` +
+      `skills/` + `vaults/`), re-tagged to `s2s-website` (name, description, identity, comments),
+      domain-tailored (DOMAIN preamble with the render pipeline / two surfaces / render:dev loop /
+      constraints; points at `skills/template-design/SKILL.md` + this spec + RFC B), with the domain
+      skill copied in from `website-starter` and the sub-agent prompts retargeted to a
+      website-starter clone (green gate = `pnpm render:dev` + asserted HTML substrings).
 - [ ] Which clone is canonical for template iteration right now — `~/code/s2s-s3ntiment` (the
       `why` template + `prevNext` work) vs. a fresh fork of `github.com/Joera/website-starter`.
 - [ ] Confirm `pnpm render:dev` gate is the enforceable green gate for every template PR
