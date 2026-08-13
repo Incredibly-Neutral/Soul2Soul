@@ -69,6 +69,31 @@ export const prevNextRing = (
   return { prev, next, ordered };
 };
 
+/**
+ * prevNextData — the data-returning prev/next helper, registered under the
+ * `prevNext` built-in name.
+ *
+ * PURE, exported for unit testing. Returns an ARRAY (not an HTML string) of
+ * the prev/next ring items so the engine's
+ * `{{#each (prevNext collections.why position)}}` iterates them and
+ * dev-authored HTML inside the loop works via `{{this.<field>}}` /
+ * `{{{this.custom.summary}}}`. Semantics mirror `prevNextRing` exactly:
+ *   n == 1  → [the single item]
+ *   n >  1  → [prev, next] (greatest position < current, least > current,
+ *            with wraparound)
+ *   empty / non-array / non-numeric position → []
+ * Each element is the raw ring item, exposing the same field surface the old
+ * HTML-string `prevNext` block() used: id, author, slug, path, and
+ * custom.summary.
+ */
+export const prevNextData = (collection: any, currentPosition: any): any[] => {
+  const ring = prevNextRing(collection, currentPosition);
+  if (!ring) return [];
+  // n == 1: the single item, once
+  if (ring.ordered.length === 1) return [ring.prev];
+  return [ring.prev, ring.next];
+};
+
 export const helpers = [
   {
     name: 'unique_years',
@@ -600,34 +625,6 @@ export const helpers = [
   },
   {
     name: 'prevNext',
-    helper: (collection: any, currentPosition: any) => {
-      const ring = prevNextRing(collection, currentPosition);
-      if (!ring) return '';
-      const esc = (v: any) =>
-        String(v == null ? '' : v)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      const block = (it: any) =>
-        it
-          ? '<article id="' +
-            esc(it.id) +
-            '" class="block" author="' +
-            esc(it.author) +
-            '">\n<span class="tag">' +
-            esc(it.slug) +
-            '</span>\n' +
-            String((it.custom && it.custom.summary) || '') +
-            '\n<a href="' +
-            esc(it.path) +
-            '">Meer over ' +
-            esc(it.slug) +
-            '</a>\n</article>'
-          : '';
-      if (ring.ordered.length === 1) return block(ring.prev); // n == 1: the single item, once
-      return block(ring.prev) + '\n' + block(ring.next);
-    },
+    helper: prevNextData,
   },
 ];
