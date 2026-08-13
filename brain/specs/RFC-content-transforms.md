@@ -61,26 +61,46 @@ Implemented as a **content-transform stage** — a pure string-in/string-out uni
 `sections` transform as its built-in default and a registered/typed seam for additional transforms.
 This is the **inline version** of what can *ultimately* be fetched from publication source.
 
-**In progress (Track 2):** publication-scoped template helpers injected into the PRODUCTION render
-action. Decided shape (2026-08-12): the render action reads a helper-CID record off the **S2S Records
-Module** (`configModule` — the Safe KV store that already holds the `config` record; NOT
-`publicationModule`, which has no `getRecord`) via `getRecord('template_helpers_cid')` with
-`rpcs?.L2` + `gateway`. If the record is missing (`KeyNotFound`/`EmptyKey`) the render degrades
-gracefully to built-in helpers only — a missing record must never revert the render. If present:
-`catFile` the CID, eval the module as a bare pure expression (`new Function('return (' + source + ')')`
-— NOT the runner's `main()` contract, no runner globals/ethers injected), validate (plain object of
-functions mirroring the built-in `{ name, helper }[]` contract, source-size cap, name-collision
-policy with built-ins), merge via `extendHelperMap`, and audit-log the helper CID that ran. Run
-**in-process, pre-sign**: no PKP key access, no network/`fetch` in the helper context. Because
-`extendHelperMap` mutates the shared module-level `helperMap` (`handlebars.factory.ts:561,734`), the
-merge must be **per-render scoped** (snapshot + reset built-ins each render) so helpers cannot leak
-between publications or shadow built-ins in the long-lived runner process. Naming: record key
-`template_helpers_cid` (snake_case, on-chain convention); optional `S2SPublicationConfig` field
-`helpersCid` (camelCase, matching `assetsCid`/`templateCid`). The fetch-and-eval harness is
-**trusted because it runs inside the audited, verified render action**, and every hop is
-content-addressed (config → CID → `cat?arg=<cid>`) — byte-for-byte the trust model already used for
-templates/partials: no new authority, no substitution vector. The dead `sections` mustache helper
-is superseded by the stage.
+**ABANDONED (2026-08-13): Track 2 — publication-helper injection into the PRODUCTION render action is
+DEAD. Do not resurrect without revisiting the hard constraints below.**
+
+**Why runtime code import is impossible in a Lit action** — verified live, not conjectured:
+1. `new Function` / `eval` — CSP-blocked in the Lit signing enclave (Chipotle/Deno sandbox):
+   "Code generation from strings disallowed for this context" (observed on `s3nl.soul2soul.eth`).
+2. dynamic `import()` — blocked by Lit's own bundle step: "Failed to bundle CDN imports: scanning
+   entry for literal dynamic imports" (`src/actions/client/execution.rs:146`) (observed live).
+3. Actions are **immutable + content-addressed (IPFS CID)**; the PKP signs *iff* the executed CID is
+   in the group's permitted set (SPEC-00 §2.1, INV-8). Per-render assembly/mutation of the submitted
+   code text is impossible (unpermitted CID → enclave rejects), PKP aside.
+
+**The only workaround** that keeps helpers executing inside the enclave would be **per-publication
+render-action builds** (bake a publication's helper module into its action via Lit's permitted external
+loader). **Decision: we are NOT doing render actions per publication** — the shared, immutable render
+action model stands. Therefore the idea is dead.
+
+**What replaced it (PR #24, `cleanup-helper-builtin`):** the runtime injection path was **removed**
+(injection/eval/import code deleted; production renders with built-in helpers only, graceful no-op);
+`prevNext` (circular ring/wrap nav) was added as a **built-in** helper in `handlebars-helpers.ts`
+(13 tests, driven through the real renderer with `{{{prevNext collections.why position}}}`);
+`helpersCid` was dropped from the config build/type. `templateCid`/`assetsCid` untouched. In-flight PRs
+tied to the dead path (#22 config-only simplify, #23 eval→import) are closed / not merged. The local
+dev-loop helper iteration in `website-starter` (Bun runner, helpers injected as `inputs` source) remains
+the place helpers are authored/tested — but they cannot be injected into the enclave render. The Track-1
+content-transform stage is unaffected.
+
+**Lit static-import capability (jsDelivr, 2026-08-13) — noted, not pursued.** Lit Actions can now
+statically `import` third-party ESM packages from jsDelivr at version-pinned specs with SHA-384
+integrity verification (TOFU + SRI, `integrity.lock` / inline `#sha384-`, no redirects, ≤10 MB, cached).
+This is a *different* mechanism from the two blocked paths — a **static** import written into the action
+source (baked into the immutable CID), not runtime eval / dynamic import. It does **NOT** revive
+per-publication helpers: a shared render action has one fixed import set at build time for all
+publications — the same shared model as the built-ins above, only a cleaner distribution form (publish
+an `@s2s/lit-helpers`-style package and import it). **Decision: for now there is no point in splitting
+the render action into parts** (no per-publication / modular action split); the unified shared action
+stands. Extracting shared helpers to a published package would be a maintainability refactor, not a
+return to dynamic injection, and is parked until needed. (If ever pursued: our `build-actions.cjs`
+esbuild IIFE must mark jsDelivr bare imports `external` and leave them literal so Lit resolves them at
+runtime — consistent with compaction/upload.)
 
 ---
 
@@ -105,12 +125,14 @@ helper specs + mapping, emits publication-specific dummy `S2SBody` fixtures / `t
 local render, and keeps them honest as helpers grow. Tracked with the Track-2 helper mechanism; see the
 Track-2 convention note below.
 
-**Track-2 convention (helpers — in progress):** the md→html **directive map** above is Track 1. Separately,
-publication devs supply **template helpers** (e.g. `filter_by_year` — a blog-specific helper that exists in
-`handlebars-helpers.ts` but is wired to no publication) as a named-function module fetched by `helpersCid`,
-mirroring the built-in `{ name, helper }[]` contract, merged into the helper map before `processTemplate`
-(`handlebars.factory.ts:561`). Trigger lives in the *template* (`{{filter_by_year 2023 posts}}`), so the
-sections-style "no trigger" failure cannot occur. Engine gaps a real template dev wants: block-helper support
+**Track-2 convention (helpers — ABANDONED, see above):** formerly the md→html **directive map** (Track 1)
+was complemented by publication-supplied **template helpers** (e.g. `filter_by_year`). As recorded in the
+ABANDONED section, that production path is dead (Lit cannot import code at render time; we are not doing
+per-publication render actions). Helper logic now lives as **built-in helpers** in `handlebars-helpers.ts`
+(e.g. `prevNext`); the local dev kit (`website-starter`) remains the authoring/testing surface. The
+fixture-generator agent below is **separate** — it scaffolds local `S2SBody`/`templateData` fixtures for
+the dev kit's render loop (which still works), independent of the dead production injection path.
+Engine gaps a real template dev wants: block-helper support
 (`{{#name}}…{{/name}}` — currently skipped), a surrounding-context/options arg, a `{{log}}`/`{{inspect}}`
 debug helper, and clear error surfacing (not silent `""`). Same pre-sign / no-key / no-network / audit-log
 posture as the transform stage.
@@ -127,8 +149,12 @@ is tracked separately in **`RFC-website-starter-agent-kit.md` (RFC B)**.
 - [ ] Implementation + PR (dispatched)
 - [ ] Fold settled parts into `SPEC-protocol-actions` / `SPEC-shared` / `MAP.md` when merged
 
-**Track-2 build state (2026-08-12):** production helper-injection feature code is **built and preserved** in the
-s2s monorepo worktree worktree-pr/s2s-pub-helper-injection on branch `feat/render-pub-helper-injection` at
+**Track-2 build state — SUPERSEDED / ABANDONED (see the ABANDONED Track-2 section above):** historical
+documentation of the now-dead runtime injection path (branch `feat/render-pub-helper-injection`, PR #18,
+commit `082c954`) follows for the record only. The entire mechanism was removed by **PR #24
+(`cleanup-helper-builtin`)** — production renders with built-in helpers only, `prevNext` became a
+built-in helper, and `helpersCid` was dropped from the config build. Treat everything below as history,
+not the plan. Historical detail (retained verbatim): `feat/render-pub-helper-injection` at
 commit `082c954` (shared `renderer/helpers.ts`, per-render isolation primitives in `handlebars.factory.ts`,
 production step + `resolveTemplateHelpersCid`/`injectPublicationHelpers` in `render/main.ts`, `helpersCid` on
 `S2SPublicationConfig`, test file `render/helper-injection.test.ts`). **PR #18 open** @ HEAD `1eb39ea` (amended single clean commit), base main — 52/52 protocol tests green (baseline 29, feature +23, verified by orchestrator), tests-only isolation rewrite at the state seam, no product-code change vs the feature commit, no lockfile churn. **Independent review clean (no blockers):** reviewer verified isolation-at-the-state-seam, graceful missing-record degrade, built-ins-win collision, loud-failure for broken helpers, bounded eval + CID audit, shared pure module reused by render-dev, no new deps. The one flagged verification gap (does a non-empty `errors` → `ok:false`) was **confirmed by orchestrator** at `render/main.ts:300` (`if (errors.length>0) return { ok:false, error: errors.join('; ') }`) — loud failure holds. Non-blocking follow-ups noted (not folded per user preference): trace array mixes string/object entries; `injectPublicationHelpers` is exported but not self-scoping (a future caller could forget the snapshot/finally and re-leak — consider encapsulating snapshot→inject→reset into one primitive); NITs (`.ts` import extension, `injected:true` when `merged:0`, `gateway!`, defensive `typeof` in merge). Root cause of the red
