@@ -3,12 +3,15 @@ import { fetchByPublication } from '../libs/module.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
 
-export const createPath = (body: S2SBody, templateConfig: S2STemplateConfig): string => {
+export const createPath = (
+  body: S2SBody,
+  templateConfig: S2STemplateConfig,
+  localePaths?: Record<string, string>,
+): string => {
   if (templateConfig.path == null) return '/';
-  let path =
-    body.locale == 'nl' || body.locale == undefined
-      ? templateConfig.path
-      : `/en${templateConfig.path}`;
+  const prefix = localePaths ? (localePaths[body.locale] ?? localePaths.default ?? '') : '';
+
+  let path = prefix + templateConfig.path;
 
   if (!body.encryption && body.slug && path.includes('{slug}')) {
     path = path.replace('{slug}', body.slug);
@@ -50,7 +53,9 @@ export const pathsForCollections = (item: any, config: any) => {
     (m: any) => m.reference === item.postType,
   );
 
-  return _templateConfig != undefined ? createPath(item, _templateConfig) : undefined;
+  return _templateConfig != undefined
+    ? createPath(item, _templateConfig, config.localePaths)
+    : undefined;
 };
 
 /**
@@ -66,8 +71,9 @@ export const buildTemplateData = (
   body: any,
   templateConfig: S2STemplateConfig,
   protocolInfo?: any,
+  localePaths?: Record<string, string>,
 ) => {
-  const path = createPath(body, templateConfig);
+  const path = createPath(body, templateConfig, localePaths);
 
   return {
     ...body,
@@ -89,6 +95,7 @@ export const initTemplateData = async (
   body: S2SBody,
   publicationModule: string,
   rpcs?: string[],
+  localePaths?: Record<string, string>,
 ) => {
   if (body.encryption) {
     const decrypted = await decrypt(
@@ -102,7 +109,7 @@ export const initTemplateData = async (
     if (!decrypted)
       return {
         ...body,
-        path: createPath(body, templateConfig),
+        path: createPath(body, templateConfig, localePaths),
         custom: {},
         content: '',
         revoked: true,
@@ -110,7 +117,7 @@ export const initTemplateData = async (
     body = mergeDecrypted(body, decrypted);
   }
 
-  return buildTemplateData(body, templateConfig, protocolInfo);
+  return buildTemplateData(body, templateConfig, protocolInfo, localePaths);
 };
 
 /**
