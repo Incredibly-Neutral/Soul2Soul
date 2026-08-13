@@ -69,6 +69,30 @@ export const prevNextRing = (
   return { prev, next, ordered };
 };
 
+/**
+ * prevNextData — DATA-RETURNING sibling of the `prevNext` built-in helper.
+ *
+ * PURE, exported for unit testing. Returns an ARRAY (not an HTML string) of
+ * the prev/next ring items so the engine's
+ * `{{#each (prevNextData collections.why position)}}` iterates them and
+ * dev-authored HTML inside the loop works via `{{this.<field>}}` /
+ * `{{{this.custom.summary}}}`. Semantics mirror `prevNextRing`/`prevNext`
+ * exactly:
+ *   n == 1  → [the single item]
+ *   n >  1  → [prev, next] (greatest position < current, least > current,
+ *            with wraparound)
+ *   empty / non-array / non-numeric position → []
+ * Each element is the raw ring item, exposing the same field surface the
+ * `prevNext` block() uses: id, author, slug, path, and custom.summary.
+ */
+export const prevNextData = (collection: any, currentPosition: any): any[] => {
+  const ring = prevNextRing(collection, currentPosition);
+  if (!ring) return [];
+  // n == 1: the single item, once
+  if (ring.ordered.length === 1) return [ring.prev];
+  return [ring.prev, ring.next];
+};
+
 export const helpers = [
   {
     name: 'unique_years',
@@ -629,5 +653,9 @@ export const helpers = [
       if (ring.ordered.length === 1) return block(ring.prev); // n == 1: the single item, once
       return block(ring.prev) + '\n' + block(ring.next);
     },
+  },
+  {
+    name: 'prevNextData',
+    helper: prevNextData,
   },
 ];
