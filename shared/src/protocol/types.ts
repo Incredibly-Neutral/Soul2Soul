@@ -184,6 +184,7 @@ export interface S2SRipple {
   reference: string;
   query?: any;
   filters?: any[];
+  trigger_filters?: Array<Record<string, string>>;
 }
 
 export interface S2STemplateConfig {

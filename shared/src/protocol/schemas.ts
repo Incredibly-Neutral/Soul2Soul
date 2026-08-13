@@ -41,7 +41,8 @@ export const rippleSchema = z.object({
   destination: z.string(),
   reference: z.string(),
   filters: z.array(z.any()).optional(),
-  query: z.any().optional()
+  query: z.any().optional(),
+  trigger_filters: z.array(z.record(z.string(), z.string())).optional()
 });
 
 // ============================================================================
