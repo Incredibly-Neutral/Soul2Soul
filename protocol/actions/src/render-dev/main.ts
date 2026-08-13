@@ -39,7 +39,12 @@ export async function main(input: unknown) {
 
     // 1. Build templateData via the SHARED non-decrypt init path.
     //    body is plaintext (encryption: false) — no decrypt, no chain.
-    const templateData = buildTemplateData(body as any, templateConfig as any, protocolInfo);
+    const templateData = buildTemplateData(
+      body as any,
+      templateConfig as any,
+      protocolInfo,
+      config?.localePaths,
+    );
 
     // 2. Collections: use injected pre-built collections, or run the shared
     //    pure collection filter over injected allDeals[].

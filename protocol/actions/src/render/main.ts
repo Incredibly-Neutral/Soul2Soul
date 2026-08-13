@@ -69,6 +69,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       body,
       publicationModule,
       rpcs?.L2,
+      config.localePaths,
     );
     trace.push(templateData);
 
