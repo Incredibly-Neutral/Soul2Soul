@@ -11,6 +11,7 @@ import { getLatestEntry, fetchById, fetchByPublication, getVersion } from '../li
 import { getConfig, getTaskConfig } from '../render/config.ctrl';
 import { requireFields } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
+import { rippleFiresForBody } from './ripple-gate';
 
 const ACTION = 'prep';
 
@@ -78,6 +79,12 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
 
       if (contentIds.length === 1) {
         for (const rippleConfig of rippleConfigs) {
+          // Trigger-side gate: the ripple fires only if its origins match the
+          // triggering body's postType AND every trigger_filters predicate
+          // matches the body. Runs BEFORE the destination job is built, so it
+          // gates both the genesis and non-genesis destination branches.
+          if (!rippleFiresForBody(rippleConfig, body)) continue;
+
           const rippleTemplateConfig: S2STemplateConfig | undefined =
             config.mapping.templateConfig.find(
               (m: S2STemplateConfig) => m.reference === rippleConfig.destination,
