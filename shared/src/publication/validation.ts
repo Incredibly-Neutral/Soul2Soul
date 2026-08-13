@@ -61,6 +61,7 @@ const publicationConfigSchema = z.object({
     mapping: mappingSchema,  // ✅ Single object (not array)
     name: z.string(),
     templateCid: z.string(),
+    localePaths: z.record(z.string(), z.string()).optional(),
 }).passthrough() satisfies z.ZodType<S2SPublicationConfig>;
 
 // ============================================================================

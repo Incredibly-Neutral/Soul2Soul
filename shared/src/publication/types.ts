@@ -21,6 +21,7 @@ export type S2SPublicationConfig = {
     mapping: S2SMapping,  // ✅ Single object
     name: string,
     templateCid: string,
+    localePaths?: Record<string, string>,  // optional locale → path-prefix map (monolingual by default)
 }
 
 // // to deprecate
