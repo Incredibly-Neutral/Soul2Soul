@@ -66,32 +66,6 @@ describe('render-dev: sections content transform', () => {
   });
 });
 
-describe('render-dev: publication-supplied helper transform', () => {
-  it('injects a helpersSource helper (title-case) and EXTENDS the built-in map', async () => {
-    const helpersSource = `({ titleCase: (s) => String(s).replace(/\\b\\w/g, (c) => c.toUpperCase()) })`;
-    const res = await main({
-      ...baseInput,
-      body: { ...baseInput.body, title: 'hello brave new world' },
-      helpersSource,
-      templateSource: `<!DOCTYPE html><html><body><h1>{{titleCase title}}</h1></body></html>`,
-    });
-    expect(res.ok).toBe(true);
-    expect((res as any).html).toContain('<h1>Hello Brave New World</h1>');
-  });
-
-  it('injects a reverse helper operating on body content', async () => {
-    const helpersSource = `({ reverse: (s) => [...String(s)].reverse().join('') })`;
-    const res = await main({
-      ...baseInput,
-      body: { ...baseInput.body, title: 'abc' },
-      helpersSource,
-      templateSource: `<!DOCTYPE html><html><body><h1>{{reverse title}}</h1></body></html>`,
-    });
-    expect(res.ok).toBe(true);
-    expect((res as any).html).toContain('<h1>cba</h1>');
-  });
-});
-
 describe('render-dev: plaintext body (encryption:false) through unescape', () => {
   it('unescapes \\n and \\" in the raw content before the content transform', async () => {
     // The body content carries escaped newlines / quotes (as stored plaintext

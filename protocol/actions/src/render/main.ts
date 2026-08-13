@@ -6,7 +6,7 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { catFile, uploadFile } from '../libs/ipfs.factory';
+import { uploadFile } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { fetchById } from '../libs/module.factory';
 
@@ -19,69 +19,10 @@ import {
 } from './data.ctrlr';
 import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
-import { snapshotHelperMap, resetHelperMap } from '../renderer/handlebars.factory';
-import {
-  TEMPLATE_HELPERS_CONFIG_FIELD,
-  validateHelpersSource,
-  mergePublicationHelpers,
-} from '../renderer/helpers';
 
 import { extractSignerAddress } from '../libs/gates';
 import { requireFields } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
-
-/**
- * Resolve the publication's template-helper CID.
- *
- * `config.helpersCid` (camelCase, matching `assetsCid` / `templateCid`) is the
- * SOLE source for a publication-supplied helper module — there is no on-chain
- * fallback. The CID is captured into the config by the safe-app `ConfigBuilder`
- * at build time, so this path performs zero RPCs.
- *
- * Returns `null` (graceful no-op — render with built-in helpers only) when the
- * config carries no `helpersCid`.
- */
-const resolveTemplateHelpersCid = async (config: any): Promise<string | null> => {
-  const configCid = config?.[TEMPLATE_HELPERS_CONFIG_FIELD];
-  return typeof configCid === 'string' && configCid.length > 0 ? configCid : null;
-};
-
-// exported for unit testing
-export { resolveTemplateHelpersCid };
-
-/**
- * Inject publication helpers for the CURRENT render into the shared helper map
- * (per-render scoped by the caller's snapshot/reset). Returns `null` on success
- * or a human-readable error string on a broken helper (the caller must surface
- * it loudly — never silently render without a broken helper).
- */
-const injectPublicationHelpers = async (
-  config: any,
-  gateway: string | undefined,
-  trace: any[],
-): Promise<string | null> => {
-  try {
-    const helperCid = await resolveTemplateHelpersCid(config);
-    if (!helperCid) {
-      trace.push({ action: 'helpers', injected: false, reason: 'no helper in config' });
-      return null;
-    }
-    const source = await catFile(gateway!, helperCid);
-    const publicationHelpers = await validateHelpersSource(source); // throws on broken module
-    const { merged, skipped } = mergePublicationHelpers(publicationHelpers);
-    console.log(
-      `[helpers] injected ${merged} publication helper(s) from cid ${helperCid}` +
-        (skipped.length ? `; skipped built-in collisions: ${skipped.join(', ')}` : ''),
-    );
-    trace.push({ action: 'helpers', injected: true, cid: helperCid, merged, skipped });
-    return null;
-  } catch (e) {
-    return typeof e === 'string' ? e : ((e as Error)?.message ?? String(e));
-  }
-};
-
-// exported for unit testing
-export { injectPublicationHelpers };
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
@@ -185,33 +126,15 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       templateData.collections = decryptedCollections;
       job.path = templateData.path;
 
-      // ── Track 2 (RFC A): publication-scoped template-helper injection ──
-      // Per-render isolation: snapshot the pristine built-in helper map, merge
-      // THIS publication's helpers for the duration of the render, then reset
-      // in `finally` so no helper leaks into another render or shadows a
-      // built-in in the long-lived runner process.
-      const helperSnapshot = snapshotHelperMap();
-      try {
-        const helperFailure = await injectPublicationHelpers(
-          config,
-          gateway,
-          trace,
-        );
-        if (helperFailure) {
-          // Broken helper → fail LOUDLY (never silently render without it).
-          const errorMsg = `template helper injection failed: ${helperFailure}`;
-          console.log(`[helpers] ${errorMsg}`);
-          errors.push(errorMsg);
-        } else {
-          html = await renderHTML(config, job.templateConfig, templateData, gateway);
-        }
-      } finally {
-        resetHelperMap(helperSnapshot);
-      }
+      // Render with BUILT-IN helpers only. The Track-2 runtime publication-helper
+      // injection path is DEAD (see brain/specs/RFC-content-transforms.md): the Lit
+      // signing enclave cannot compile source→function at render time (CSP blocks
+      // eval/new Function; the Lit bundler blocks dynamic import(); actions are
+      // immutable + CID-pinned for PKP). Any `config.helpersCid` an old deployed
+      // config still carries is IGNORED — graceful no-op, built-ins only. No
+      // code-gen, no helper fetch, no eval is attempted here.
+      html = await renderHTML(config, job.templateConfig, templateData, gateway);
 
-      // When a broken publication helper failed injection we did NOT render
-      // (html stays `undefined`); the errors check below returns ok:false for
-      // that case, so skip the downstream sign/upload work.
       if (typeof html === 'string') {
         console.log('HTML', html.slice(0, 400));
 
