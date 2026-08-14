@@ -6,14 +6,14 @@ import { getPublicationMultiSig, isAvailableEnsName } from './publication/ens';
 import { NewPublicationModal } from './publication/new.modal';
 import {
 	getProtocolInfo,
-	S2SProtocolInfo,
+	parseCID,
 	pinCidFromRemote,
 	renderwithLitActions,
+	S2SProtocolInfo,
 	toPreviewLabel,
 } from '@s2s/soul2soul-shared';
 import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
 import { ContentController } from './content/content.ctrlr';
-import { checkFilecoinStatus, logAvailability, measureAvailability } from './avail';
 
 export interface IMainController {
 	basePath: string;
@@ -256,23 +256,16 @@ export class MainController implements IMainController {
 	 * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
 	 * Never throws, never blocks the main flow. When `expectedCid` is given,
 	 * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
-	 * notice on mismatch. When `onResult` is given, it is invoked with the
-	 * upload result (or `undefined` if the upload failed) — used to chain the
-	 * Filecoin availability check, which needs the piece CID only the upload
-	 * produces.
+	 * notice on mismatch.
 	 */
 	private filecoinUploadBackground(
 		kind: string,
 		upload: () => Promise<FilecoinUploadResult>,
 		expectedCid?: string,
-		onResult?: (result: FilecoinUploadResult | undefined) => void,
 	): void {
 		(async () => {
 			try {
 				const result = await upload();
-				// Capture the {rootCid, pieceCid} result — Filecoin is indexed by
-				// piece CID, which the availability check polls via isRetrievable.
-				onResult?.(result);
 				// Quiet success — no logging unless CID parity is violated.
 				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
 					console.error(
@@ -293,9 +286,6 @@ export class MainController implements IMainController {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.error(`[filecoin] ${kind} background upload failed: ${msg}`);
 				}
-				// The upload is broken upstream (KNOWN) — surface the absence so the
-				// availability check can report a full-window, not-reached leg.
-				onResult?.(undefined);
 			}
 		})();
 	}
@@ -443,38 +433,16 @@ export class MainController implements IMainController {
 					this.oxo.settings.pinata_jwt,
 				).then((ok) => console.log(ok ? 'pinned on pinata' : 'pinata pin failed'));
 
-				// Publish availability — fire-and-forget, never blocks. The 3 HTTP
-				// legs (.link / pinata / ipfs.io) run immediately; the 4th leg
-				// (Filecoin isRetrievable) runs once the Filecoin upload resolves,
-				// because Filecoin is indexed by piece CID which only the upload
-				// produces. Once both have settled, log all four timings.
-				const basePromise = measureAvailability(publication, res.cid, this.oxo.settings.pinata_jwt);
-
-				const runFilecoinLeg = (result?: FilecoinUploadResult) => {
-					void checkFilecoinStatus(
-						{ pieceCid: result?.pieceCid ?? '' },
-						this.oxo.ctrlr.storage,
-					).then((filecoin) => basePromise.then((base) => logAvailability({ ...base, filecoin })));
-				};
-
 				if (publish) {
 					// Fire-and-forget Filecoin durability for the rendered site root
-					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage). Currently
-					// broken upstream (KNOWN); on failure runFilecoinLeg gets undefined,
-					// so the leg reports a full-window, not-reached instead of crashing.
+					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage).
 					this.filecoinUploadBackground(
 						'render-root',
 						() => this.oxo.ctrlr.storage.uploadTree(res.cid, this.kuboBaseUrl),
 						res.cid,
-						runFilecoinLeg,
 					);
-				} else {
-					// Preview (no Filecoin upload): the leg reports not-reached.
-					runFilecoinLeg(undefined);
 				}
 			}
-
-			
 
 			// do i want to unpin deprecated html ?
 
@@ -494,6 +462,29 @@ export class MainController implements IMainController {
 			};
 
 			const v1Label = toPreviewLabel(res.cid);
+
+			// The render pipeline hands back res.path already containing a leading
+			// `/ipfs/<cid>` segment (e.g. `/ipfs/<cid>/en/`), but the `.preview`
+			// subdomain gateway — and the `.link` DNSLink gateway — serve the site
+			// root at the domain itself, so that prefix 404s. Strip it, comparing
+			// the path's CID segment against this publish's CID digest-wise (CIDv0
+			// and CIDv1 share the multihash digest) so only a matching root is
+			// removed; a bare `/ipfs/<cid>` folds to `/`.
+			const pagePath = (p: string): string => {
+				const rest = p.replace(/^\/ipfs\/[^/]+/, '');
+				if (rest === p) return p; // no leading /ipfs/<cid> — leave unchanged
+				let matchesOwnCid = true;
+				try {
+					const seg = p.match(/^\/ipfs\/([^/]+)/)?.[1] ?? '';
+					const a = parseCID(seg).digest;
+					const b = parseCID(res.cid).digest;
+					matchesOwnCid = a.length === b.length && a.every((byte, i) => byte === b[i]);
+				} catch {
+					/* unparseable segment — treat it as the spurious prefix */
+				}
+				return matchesOwnCid ? (rest.length ? rest : '/') : p;
+			};
+
 			// Preview link — root CID (full site)
 			const rootLink = _link(
 				`${v1Label}.preview → site root`,
@@ -501,26 +492,28 @@ export class MainController implements IMainController {
 			);
 			// Preview link — published page
 			const pageLink = _link(
-				`${v1Label}.preview${res.path} → published`,
-				`https://${v1Label}.preview.transport-union.dev${res.path}`,
+				`${v1Label}.preview${pagePath(res.path)} → published`,
+				`https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`,
 			);
 			const previewNotice = new Notice('', 0);
 			previewNotice.noticeEl.appendChild(pageLink);
 			previewNotice.noticeEl.appendChild(rootLink);
 
 			console.log(`preview root: https://${v1Label}.preview.transport-union.dev/`);
-			console.log(`preview page: https://${v1Label}.preview.transport-union.dev${res.path}`);
+			console.log(
+				`preview page: https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`,
+			);
 			if (publish) {
 				const prodRootLink = _link(`${publication} → root`, `https://${publication}.link/`);
 				const prodPageLink = _link(
-					`${publication}${res.path} → published`,
-					`https://${publication}.link${res.path}`,
+					`${publication}${pagePath(res.path)} → published`,
+					`https://${publication}.link${pagePath(res.path)}`,
 				);
 				const prodNotice = new Notice('', 0);
 				prodNotice.noticeEl.appendChild(prodPageLink);
 				prodNotice.noticeEl.appendChild(prodRootLink);
 				console.log(`prod root: https://${publication}.link/`);
-				console.log(`prod page: https://${publication}.link${res.path}`);
+				console.log(`prod page: https://${publication}.link${pagePath(res.path)}`);
 			}
 		} catch (error: any) {
 			console.error(`Error during render process for ${publication}:`, error);
