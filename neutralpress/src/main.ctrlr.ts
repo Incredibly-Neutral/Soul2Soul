@@ -444,8 +444,6 @@ export class MainController implements IMainController {
 				}
 			}
 
-			
-
 			// do i want to unpin deprecated html ?
 
 			if (this.notice) this.notice.hide();
@@ -502,7 +500,9 @@ export class MainController implements IMainController {
 			previewNotice.noticeEl.appendChild(rootLink);
 
 			console.log(`preview root: https://${v1Label}.preview.transport-union.dev/`);
-			console.log(`preview page: https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`);
+			console.log(
+				`preview page: https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`,
+			);
 			if (publish) {
 				const prodRootLink = _link(`${publication} → root`, `https://${publication}.link/`);
 				const prodPageLink = _link(
