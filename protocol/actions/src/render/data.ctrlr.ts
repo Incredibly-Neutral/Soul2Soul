@@ -143,6 +143,58 @@ export const filterCollection = (allDeals: any[], collection: any): any[] => {
   return results;
 };
 
+/**
+ * PURE collection sorter: orders a filtered `items[]` per the collection's
+ * optional `sortBy` key. Shared by production `fetchCollections` and the dev
+ * render action (which injects `allDeals[]`).
+ *
+ *   'position'      -> ascending by Number(a.position) - Number(b.position)
+ *   'creationDate'  -> ascending by Date.parse(creationDate)
+ *   'modifiedDate'  -> ascending by Date.parse(modifiedDate)
+ *   'title'         -> ascending alphabetically by String(title)
+ *   absent/other    -> DEFAULT: ascending alphabetically by String(title)
+ *
+ * Defensive: missing/null/non-parseable fields sort LAST (treated as empty),
+ * matching the numeric-position convention in renderer/handlebars-helpers.ts.
+ * Returns a NEW array (never mutates the input).
+ */
+export const sortCollection = (items: any[], collection: any): any[] => {
+  const sortBy = collection?.sortBy;
+  const itemsCopy = items.slice();
+
+  // Treat null / undefined / empty string as missing -> sorts last.
+  const missing = (v: any) => v == null || v === '';
+
+  const sortKey = (item: any): string | number | undefined => {
+    if (sortBy === 'position') {
+      const raw = item?.position;
+      if (missing(raw)) return undefined;
+      const n = Number(raw);
+      return Number.isNaN(n) ? undefined : n;
+    }
+    if (sortBy === 'creationDate' || sortBy === 'modifiedDate') {
+      const raw = item?.[sortBy];
+      if (missing(raw)) return undefined;
+      const t = Date.parse(raw);
+      return Number.isNaN(t) ? undefined : t;
+    }
+    // 'title' or absent -> default alphabetical by title
+    const title = item?.title;
+    return missing(title) ? undefined : String(title);
+  };
+
+  return itemsCopy.sort((a, b) => {
+    const ka = sortKey(a);
+    const kb = sortKey(b);
+    // Missing/null/non-parseable values sort last (treated as empty).
+    if (ka === undefined && kb === undefined) return 0;
+    if (ka === undefined) return 1;
+    if (kb === undefined) return -1;
+    if (typeof ka === 'number' && typeof kb === 'number') return ka - kb;
+    return String(ka).localeCompare(String(kb));
+  });
+};
+
 export const fetchCollections = async (
   templateConfig: S2STemplateConfig,
   publicationModule: string,
@@ -159,7 +211,10 @@ export const fetchCollections = async (
   }
 
   for (const collection of templateConfig.collections || []) {
-    collections[collection.slug] = filterCollection(allDeals, collection);
+    collections[collection.slug] = sortCollection(
+      filterCollection(allDeals, collection),
+      collection,
+    );
   }
 
   return collections;

@@ -131,6 +131,42 @@ describe('render-dev: collections', () => {
     expect(res.ok).toBe(true);
     expect((res as any).html).toContain('Prebuilt');
   });
+
+  it('renders in sorted order for sortBy "position" over injected allDeals[]', async () => {
+    const res = await main({
+      ...baseInput,
+      templateConfig: {
+        ...baseInput.templateConfig,
+        collections: [{ slug: 'bypos', sortBy: 'position' }],
+      },
+      allDeals: [
+        { id: 'a', title: 'Zebra', position: '3' },
+        { id: 'b', title: 'Apple', position: '1' },
+        { id: 'c', title: 'Mango', position: '2' },
+      ],
+      templateSource: `<ul>{{#each collections.bypos}}{{title}}|{{/each}}</ul>`,
+    });
+    expect(res.ok).toBe(true);
+    expect((res as any).html).toContain('<ul>Apple|Mango|Zebra|</ul>');
+  });
+
+  it('renders in default title-alphabetical order when sortBy is absent', async () => {
+    const res = await main({
+      ...baseInput,
+      templateConfig: {
+        ...baseInput.templateConfig,
+        collections: [{ slug: 'byname' }],
+      },
+      allDeals: [
+        { id: 'a', title: 'Zulu' },
+        { id: 'b', title: 'Alpha' },
+        { id: 'c', title: 'Mike' },
+      ],
+      templateSource: `<ul>{{#each collections.byname}}{{title}}|{{/each}}</ul>`,
+    });
+    expect(res.ok).toBe(true);
+    expect((res as any).html).toContain('<ul>Alpha|Mike|Zulu|</ul>');
+  });
 });
 
 describe('render-dev: output shape', () => {
