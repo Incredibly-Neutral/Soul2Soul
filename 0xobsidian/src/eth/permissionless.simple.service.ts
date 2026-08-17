@@ -1,6 +1,6 @@
 import { toSimpleSmartAccount } from "permissionless/accounts";
 import { createSmartAccountClient } from "permissionless";
-import { createPimlicoClient } from "permissionless/clients/pimlico";
+import { createPimlicoClient, type PimlicoClient } from "permissionless/clients/pimlico";
 import {
   createPublicClient,
   encodeFunctionData,
@@ -22,6 +22,7 @@ import { TxOptions, TxResult } from "./tx.types.js";
 import { extractDeployedAddress } from "./contract-address.factory.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { TypedDataSigner } from "@s2s/soul2soul-shared";
+import { createGasPriceFetcher, warmUpPimlico, GasPriceResult } from "./pimlico.gas.js";
 
 const ENTRYPOINT_ADDRESS_V07 =
   "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -64,8 +65,10 @@ export class PermissionlessSimpleService
   smartAccount: any;
   smartAccountClient: any;
   publicClient: any;
-  pimlicoClient: any;
+  pimlicoClient: PimlicoClient;
   address!: `0x${string}`;
+
+  private readonly getGasPrice: () => Promise<GasPriceResult>;
 
   constructor(main: IMainController, chain: string) {
     this.main = main;
@@ -82,12 +85,21 @@ export class PermissionlessSimpleService
     this.pimlicoClient = createPimlicoClient({
       transport: http(
         `https://api.pimlico.io/v2/${this.chainId}/rpc?apikey=${main.plugin.settings.pimlico_key}`,
+        { timeout: 8000 },
       ) as Transport,
       entryPoint: {
         address: ENTRYPOINT_ADDRESS_V07,
         version: "0.7",
       },
     });
+
+    // Short-TTL gas-price cache + in-flight dedupe: N concurrent publishes
+    // share ONE Pimlico request, and a recent result is reused within the TTL.
+    this.getGasPrice = createGasPriceFetcher(() => this.pimlicoClient.getUserOperationGasPrice());
+
+    // Best-effort warm-up so the first real gas-price call doesn't touch a
+    // cold/stale pooled socket (intermittent TimeoutError on Base).
+    warmUpPimlico(this.pimlicoClient);
   }
 
   async updateSigner(pk: string): Promise<string> {
@@ -117,7 +129,7 @@ export class PermissionlessSimpleService
       paymaster: this.pimlicoClient,
       userOperation: {
         estimateFeesPerGas: async () =>
-          (await this.pimlicoClient.getUserOperationGasPrice()).fast,
+          (await this.getGasPrice()).fast,
       },
     });
 
@@ -180,7 +192,7 @@ export class PermissionlessSimpleService
     } = options;
 
     const data = encodeFunctionData({ abi, functionName: method, args });
-    const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    const gasPrice = await this.getGasPrice();
 
     const txHash: Hash = await this.smartAccountClient.sendTransaction({
       to: address as `0x${string}`,
@@ -217,7 +229,7 @@ export class PermissionlessSimpleService
     options: TxOptions = {},
   ): Promise<TxResult> {
     const { waitForReceipt = false, confirmations = 1 } = options;
-    const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    const gasPrice = await this.getGasPrice();
 
     const txHash: Hash = await this.smartAccountClient.sendTransaction({
       to: to as `0x${string}`,
@@ -240,7 +252,7 @@ export class PermissionlessSimpleService
   }
 
   async valueTx(to: `0x${string}`, amount: string): Promise<string> {
-    const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    const gasPrice = await this.getGasPrice();
 
     const txHash: Hash = await this.smartAccountClient.sendTransaction({
       to,
