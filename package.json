@@ -13,6 +13,7 @@
     "update-protocol": "tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts",
     "deploy-action": "bash -c 'pnpm actions:build && tsx --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
     "plugins": "pnpm -C shared run build && pnpm -C 0xobsidian run build && pnpm -C neutralpress run build",
+    "shared": "pnpm -C shared run build",
     "test": "pnpm -r test",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
