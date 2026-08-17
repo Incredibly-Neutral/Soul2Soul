@@ -24,13 +24,6 @@ export type S2SPublicationConfig = {
     localePaths?: Record<string, string>,  // optional locale → path-prefix map (monolingual by default)
 }
 
-// // to deprecate
-// export type S2SAsset = {
-//     path: string,
-//     cid: string
-// }
-
-
 export type S2SPublication = {
     name: string,
     owners: string[],
