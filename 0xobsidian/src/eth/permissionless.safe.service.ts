@@ -3,13 +3,13 @@ import {
   toSafeSmartAccount,
 } from "permissionless/accounts";
 import { createSmartAccountClient } from "permissionless";
-import { createPimlicoClient, type PimlicoClient } from "permissionless/clients/pimlico";
+import { createPimlicoClient } from "permissionless/clients/pimlico";
 import { createPublicClient, encodeFunctionData, http, keccak256, parseEther, toBytes, zeroAddress } from "viem";
 import { privateKeyToAccount  } from "viem/accounts";
 import { IMainController } from "../main.ctrlr.js";
 import { getChainId, getNetwork, getRPCUrl, getScanApi, getViemChainById, getViemChainByName } from "./chains.factory.js";
 import { JsonRpcProvider } from "ethers";
-import { createGasPriceFetcher, warmUpPimlico, GasPriceResult } from "./pimlico.gas.js";
+import { createGasPriceFetcher, warmUpPimlico, isRealApiKey, GasPriceResult } from "./pimlico.gas.js";
 
 
 const ENTRYPOINT_ADDRESS_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -66,7 +66,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
   private txMutex: Promise<void> = Promise.resolve();
   
-  private pimlicoClient: PimlicoClient;
+  private pimlicoClient: any;
 
   private readonly getGasPrice: () => Promise<GasPriceResult>;
 
@@ -97,8 +97,12 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     this.getGasPrice = createGasPriceFetcher(() => this.pimlicoClient.getUserOperationGasPrice());
 
     // Best-effort warm-up so the first real gas-price call doesn't touch a
-    // cold/stale pooled socket (intermittent TimeoutError on Base).
-    warmUpPimlico(this.pimlicoClient);
+    // cold/stale pooled socket (intermittent TimeoutError on Base). Only fire
+    // a real network call when a genuine API key is present — a dummy/empty
+    // key (tests, unconfigured plugin) must not hit the network at init.
+    if (isRealApiKey(main.plugin.settings.pimlico_key)) {
+      warmUpPimlico(this.pimlicoClient);
+    }
   }
 
   async updateSigner(pk: string) {
