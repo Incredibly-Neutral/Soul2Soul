@@ -101,6 +101,7 @@ describe("ConfigBuilder", () => {
                 JSON.stringify({
                   templateConfig: [{ template: "post", selector: ".post" }],
                   ripples: [],
+                  localePaths: { default: "", nl: "", en: "/en" },
                 }),
               ),
             );
@@ -147,6 +148,15 @@ describe("ConfigBuilder", () => {
       expect(result.config.dataGateway).toBe("ipfs.mock");
       expect(result.config.mapping).toBeDefined();
       expect(result.config.templateCid).toBe("mock-dag-cid");
+
+      // localePaths is hoisted to the top level of the built config so the
+      // renderer's createPath can read it (it reads config.localePaths, not
+      // config.mapping.localePaths)
+      expect(result.config.localePaths).toEqual({
+        default: "",
+        nl: "",
+        en: "/en",
+      });
     });
 
     it("fetches mapping.json at commit SHA not branch ref", async () => {
