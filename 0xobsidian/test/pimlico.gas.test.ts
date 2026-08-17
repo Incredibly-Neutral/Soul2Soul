@@ -16,6 +16,7 @@ import {
   createGasPriceFetcher,
   withRetryBackoff,
   warmUpPimlico,
+  isRealApiKey,
   GasPriceResult,
 } from '../src/eth/pimlico.gas.js';
 
@@ -148,13 +149,16 @@ describe('warmUpPimlico', () => {
     await new Promise((r) => setTimeout(r, 20));
   });
 
-  it('issues a no-op eth_chainId request', async () => {
+  it('issues a no-op eth_chainId request (with an abort signal attached)', async () => {
     const client = {
       request: vi.fn(() => Promise.resolve('0x2105')),
     };
     warmUpPimlico(client);
     await new Promise((r) => setTimeout(r, 20));
-    expect(client.request).toHaveBeenCalledWith({ method: 'eth_chainId' });
+    const args = client.request.mock.calls[0][0];
+    expect(args.method).toBe('eth_chainId');
+    // The request is passed on a timer so it can be aborted on race loss.
+    expect(typeof args.signal).not.toBe('undefined');
   });
 
   it('no-ops on a client without request', () => {
@@ -164,5 +168,54 @@ describe('warmUpPimlico', () => {
     expect(() => {
       warmUpPimlico({} as never);
     }).not.toThrow();
+  });
+});
+
+describe('warmUpPimlico (abort on race loss)', () => {
+  it('aborts the underlying request when the warm-up race times out', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const client = {
+      request: vi.fn((args) => {
+        capturedSignal = args.signal;
+        // Never resolves — simulates a hung request. Only settles via abort.
+        return new Promise((_resolve, reject) => {
+          args.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        });
+      }),
+    };
+    warmUpPimlico(client, { timeoutMs: 30 });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('does not abort when abortOnTimeout is disabled', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const client = {
+      request: vi.fn((args) => {
+        capturedSignal = args.signal;
+        return new Promise(() => {}); // never settles
+      }),
+    };
+    warmUpPimlico(client, { timeoutMs: 30, abortOnTimeout: false });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(capturedSignal?.aborted ?? false).toBe(false);
+  });
+});
+
+describe('isRealApiKey', () => {
+  it('treats empty/dummy keys as non-real (no live call)', () => {
+    expect(isRealApiKey('')).toBe(false);
+    expect(isRealApiKey(undefined)).toBe(false);
+    expect(isRealApiKey(null)).toBe(false);
+    expect(isRealApiKey('dummy')).toBe(false);
+    expect(isRealApiKey('  DUMMY  ')).toBe(false);
+    expect(isRealApiKey('changeme')).toBe(false);
+  });
+
+  it('treats a genuine-looking key as real (warm-up fires)', () => {
+    expect(isRealApiKey('pk_live_abc123')).toBe(true);
+    expect(isRealApiKey('  pk_prod_xyz  ')).toBe(true);
   });
 });
