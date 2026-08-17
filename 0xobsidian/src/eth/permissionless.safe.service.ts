@@ -3,12 +3,13 @@ import {
   toSafeSmartAccount,
 } from "permissionless/accounts";
 import { createSmartAccountClient } from "permissionless";
-import { createPimlicoClient } from "permissionless/clients/pimlico";
+import { createPimlicoClient, type PimlicoClient } from "permissionless/clients/pimlico";
 import { createPublicClient, encodeFunctionData, http, keccak256, parseEther, toBytes, zeroAddress } from "viem";
 import { privateKeyToAccount  } from "viem/accounts";
 import { IMainController } from "../main.ctrlr.js";
 import { getChainId, getNetwork, getRPCUrl, getScanApi, getViemChainById, getViemChainByName } from "./chains.factory.js";
 import { JsonRpcProvider } from "ethers";
+import { createGasPriceFetcher, warmUpPimlico, GasPriceResult } from "./pimlico.gas.js";
 
 
 const ENTRYPOINT_ADDRESS_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -65,7 +66,9 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
   private txMutex: Promise<void> = Promise.resolve();
   
-  private pimlicoClient: any;
+  private pimlicoClient: PimlicoClient;
+
+  private readonly getGasPrice: () => Promise<GasPriceResult>;
 
   constructor(main: IMainController, chain: string) {
     
@@ -82,12 +85,20 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
     });
 
     this.pimlicoClient = createPimlicoClient({
-      transport: http(`https://api.pimlico.io/v2/${this.chainId}/rpc?apikey=${main.plugin.settings.pimlico_key}`),
+      transport: http(`https://api.pimlico.io/v2/${this.chainId}/rpc?apikey=${main.plugin.settings.pimlico_key}`, { timeout: 8000 }),
       entryPoint: {
         address: ENTRYPOINT_ADDRESS_V07,
         version: "0.7",
       },
     });
+
+    // Short-TTL gas-price cache + in-flight dedupe: N concurrent publishes
+    // share ONE Pimlico request, and a recent result is reused within the TTL.
+    this.getGasPrice = createGasPriceFetcher(() => this.pimlicoClient.getUserOperationGasPrice());
+
+    // Best-effort warm-up so the first real gas-price call doesn't touch a
+    // cold/stale pooled socket (intermittent TimeoutError on Base).
+    warmUpPimlico(this.pimlicoClient);
   }
 
   async updateSigner(pk: string) {
@@ -252,7 +263,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
     // console.log("📝 Encoded data:", data);
 
-    const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    const gasPrice = await this.getGasPrice();
 
     // console.log("📤 About to call sendTransaction...");
     
@@ -288,7 +299,7 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
   async valueTx(to: `0x${string}`, amount: string): Promise<string> {
 
-    const gasPrice = await this.pimlicoClient.getUserOperationGasPrice();
+    const gasPrice = await this.getGasPrice();
 
     const txHash = await this.smartAccountClient.sendTransaction({
       to: to as `0x${string}`,
