@@ -4,6 +4,38 @@ declare const ethers: any;
 
 const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 
+// Max simultaneous NAME() eth_call probes (pageSize is 10 — keep the fan-out
+// well under it so a single prep/render/update can't burst ~10-20 connections).
+const MAX_CONCURRENT_NAME_PROBES = 3;
+
+// Small worker pool that maps `fn` over `items` with at most `limit` promises in
+// flight at once. Returns a PromiseSettledResult-per-item array (same shape and
+// ordering as Promise.allSettled) so callers can inspect fulfilled/rejected
+// results per index. Used to cap the parallel eth_call fan-out below so we can't
+// burst ~10-20 simultaneous RPC connections (which are a root cause of
+// intermittent ECONNRESET / 'missing response' transport failures).
+export async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(0, Math.min(limit, items.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        results[index] = { status: 'fulfilled', value: await fn(items[index]) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export const getProtocolControllerAndModules = async (rpcs?: { L1: string[]; L2: string[] }) => {
   try {
     const subdomainNode = ethers.utils.namehash('soul2soul.eth');
@@ -109,10 +141,15 @@ export const getDomainOwnerAndModules = async (publication: string, rpcs?: { L1:
   let configModule = null;
   let publicationModule = null;
 
-  const moduleNames = await Promise.allSettled(
-    modules.map((addr: string) =>
+  // Cap NAME() probe concurrency to avoid bursting ~10-20 simultaneous RPC
+  // connections (a root cause of intermittent ECONNRESET / 'missing response'
+  // transport failures). Preserves allSettled semantics: a module lacking
+  // NAME() (genuine revert) is still skipped silently below.
+  const moduleNames = await mapWithLimit(
+    modules,
+    MAX_CONCURRENT_NAME_PROBES,
+    (addr: string) =>
       evmRead('L2', addr, ['function NAME() view returns (string)'], 'NAME', [], rpcs?.L2),
-    ),
   );
 
   for (let i = 0; i < modules.length; i++) {
