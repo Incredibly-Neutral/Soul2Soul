@@ -67,35 +67,35 @@ async function resolveGenesis(main: IMainController, file: TFile): Promise<strin
 }
 
 /**
- * Enumerate the FULL live deal set (paginated) minus the revoked item,
- * post-retract. Paginate across all pages (B2) so a publication with more than
- * one page of deals isn't truncated — a partial page would silently drop
- * genuinely-live items from the rebuilt listings.
+ * Find ONE remaining live genesis to re-render post-retract, or null when the
+ * deal set is now empty. Paginates safely across pages (B2) so a publication
+ * with more than one page of deals is not misread as "none remaining" from a
+ * truncated first page, and returns as soon as a candidate is found so we
+ * never materialize the full deal list into memory.
  */
-async function remainingDealGeneses(
+async function remainingDealGenesis(
 	main: IMainController,
 	service: any,
 	revokedGenesis: string,
-): Promise<string[]> {
+): Promise<string | null> {
 	const PAGE_SIZE = 100;
 	const MAX_PAGES = 500; // safety cap against a pathological infinite page stream
-	const remaining: string[] = [];
 	let offset = 0;
 
 	for (let page = 0; page < MAX_PAGES; page++) {
 		const deals = ((await service.getDeals(offset, PAGE_SIZE)) ?? []) as { genesis?: string }[];
-		remaining.push(
-			...deals
-				.map((d) => d.genesis)
-				.filter((g): g is string => !!g && !sameGenesis(g, revokedGenesis)),
-		);
+		for (const d of deals) {
+			if (d.genesis && !sameGenesis(d.genesis, revokedGenesis)) {
+				return d.genesis;
+			}
+		}
 
 		// Fewer than a full page (or empty) ⇒ this was the last page.
 		if (deals.length < PAGE_SIZE) break;
 		offset += PAGE_SIZE;
 	}
 
-	return remaining;
+	return null;
 }
 
 /**
@@ -140,9 +140,9 @@ export async function revokeContent(
 		`Revoked '${slug}' from ${publication}; on-chain retract complete. Removal requested — if the publication uses a custom template path, it completes on the next full render.`,
 	);
 
-	const remaining = await remainingDealGeneses(main, service, genesis);
+	const remainingGenesis = await remainingDealGenesis(main, service, genesis);
 
-	if (remaining.length === 0) {
+	if (remainingGenesis === null) {
 		// The on-chain retract already flipped hasDeal → false. There is no safe
 		// "remove-only" update: prep requires a non-empty `contentIds` array and
 		// `validateEvmUpdateInput` requires `jobs.min(1)`, so an empty-streamIds
@@ -158,10 +158,25 @@ export async function revokeContent(
 		return;
 	}
 
+	// There ARE other live items: re-render JUST ONE of them with the revoked
+	// path in remove[]. The update action's cp-root staging preserves every
+	// other already-rendered item, the single refresh job overwrites this one
+	// item's path, and the remove loop deletes the revoked path — so the whole
+	// site stays intact at J=1 (update ≈32-34 + one ~20-22 render job, both
+	// well under Lit's 50-requests-per-session ceiling). Passing the FULL
+	// remaining array here would have carried J≈6 jobs into one update session
+	// (~65) and blown past 50 — that was the revoke re-render bug.
+	console.log(
+		`[retract] refreshed publication ${publication} with a single item (${remainingGenesis.slice(0, 12)}…) and remove entry ${removePath}`,
+	);
+	new Notice(
+		`Revoked '${slug}' from ${publication}; refreshed the publication without it`,
+	);
+
 	await renderCalls(
 		main,
 		publication,
-		remaining,
+		[remainingGenesis],
 		main.oxo.settings.litUsageKey,
 		true,
 		remove,
