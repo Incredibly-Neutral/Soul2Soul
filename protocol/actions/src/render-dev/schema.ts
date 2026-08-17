@@ -10,11 +10,12 @@ import { z } from 'zod';
 
 /**
  * A single collection spec in the injected config's `templateConfig.collections`.
- * Mirrors `S2SCollection` (`{ slug, filters?: any[] }`).
+ * Mirrors `S2SCollection` (`{ slug, filters?: any[], sortBy?: ... }`).
  */
 export const devCollectionSchema = z.object({
   slug: z.string().min(1, 'collection slug is required'),
   filters: z.array(z.any()).optional(),
+  sortBy: z.enum(['position', 'creationDate', 'modifiedDate', 'title']).optional(),
 });
 
 /**
