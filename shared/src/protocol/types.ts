@@ -49,7 +49,7 @@ export interface S2SPublicContent {
 
 /** EIP-712 author signature over S2SPublicContent */
 export interface S2SProof {
-  type: "eip712";
+  type: 'eip712';
   signer: `0x${string}`; // recovered address (EOA); verified as a Safe owner of the author's Safe
   signature: `0x${string}`; // author EOA signature over the EIP-712 digest
 }
@@ -76,26 +76,26 @@ export interface S2SContentBody {
 // ============================================================================
 
 export const S2S_DOMAIN = {
-  name: "S2S Content",
-  version: "1",
+  name: 'S2S Content',
+  version: '1',
   chainId: 8453, // Base
 } as const;
 
 export const S2S_TYPES = {
   S2SContent: [
-    { name: "specVersion", type: "string" },
-    { name: "author", type: "string" },
-    { name: "plaintextHash", type: "bytes32" },
-    { name: "postType", type: "string" },
-    { name: "mediaType", type: "string" },
-    { name: "parent", type: "string" },
-    { name: "position", type: "string" },
-    { name: "publication", type: "string" },
-    { name: "locale", type: "string" },
-    { name: "createdAt", type: "uint256" },
-    { name: "base", type: "string" },
-    { name: "tagsHash", type: "bytes32" },
-    { name: "attributesHash", type: "bytes32" },
+    { name: 'specVersion', type: 'string' },
+    { name: 'author', type: 'string' },
+    { name: 'plaintextHash', type: 'bytes32' },
+    { name: 'postType', type: 'string' },
+    { name: 'mediaType', type: 'string' },
+    { name: 'parent', type: 'string' },
+    { name: 'position', type: 'string' },
+    { name: 'publication', type: 'string' },
+    { name: 'locale', type: 'string' },
+    { name: 'createdAt', type: 'uint256' },
+    { name: 'base', type: 'string' },
+    { name: 'tagsHash', type: 'bytes32' },
+    { name: 'attributesHash', type: 'bytes32' },
   ],
 };
 
@@ -104,12 +104,12 @@ export const S2S_TYPES = {
 // ============================================================================
 
 export function toDidEthr(address: string): DidEthr {
-  const addr = address.startsWith("0x") ? address : `0x${address}`;
+  const addr = address.startsWith('0x') ? address : `0x${address}`;
   return `did:ethr:${addr}` as DidEthr;
 }
 
 export function eoaOf(did: DidEthr): `0x${string}` {
-  return did.replace("did:ethr:", "") as `0x${string}`;
+  return did.replace('did:ethr:', '') as `0x${string}`;
 }
 
 // ============================================================================
@@ -173,8 +173,11 @@ export interface S2STemplateData {
 // Collection, Ripple, Template Config, Mapping, Job
 // ============================================================================
 
+export type CollectionSortBy = 'position' | 'creationDate' | 'modifiedDate' | 'title';
+
 export interface S2SCollection {
   filters?: any[];
+  sortBy?: CollectionSortBy;
   slug: string;
 }
 
@@ -219,13 +222,13 @@ export interface S2SJob {
  * is a marked seam, intentionally unspecified until the paid service exists.
  */
 export type Metered<T> =
-  | { source: "byok"; value: T }
-  | { source: "subscription"; /* TODO: fetch/refresh details when service exists */ };
+  | { source: 'byok'; value: T }
+  | { source: 'subscription' /* TODO: fetch/refresh details when service exists */ };
 
 /** Helper: extract value from a Metered; throws if source is subscription (not implemented yet). */
 export const useMetered = <T>(m: Metered<T>): T => {
-  if (m.source === "byok") return m.value;
-  throw new Error("subscription-sourced capabilities not implemented yet");
+  if (m.source === 'byok') return m.value;
+  throw new Error('subscription-sourced capabilities not implemented yet');
 };
 
 /**
@@ -248,10 +251,10 @@ export interface S2SPublishSecrets {
 }
 
 export type StorageCredential =
-  | { kind: "pinata"; jwt: string }
-  | { kind: "filecoin-self" } // reuses S2SSignerSecrets.privateKey; no secret of its own
-  | { kind: "filecoin-session"; session: Metered<FilecoinSessionKeyData>; rpcUrl: string }
-  | { kind: "kubo-only" };
+  | { kind: 'pinata'; jwt: string }
+  | { kind: 'filecoin-self' } // reuses S2SSignerSecrets.privateKey; no secret of its own
+  | { kind: 'filecoin-session'; session: Metered<FilecoinSessionKeyData>; rpcUrl: string }
+  | { kind: 'kubo-only' };
 
 export interface FilecoinSessionKeyData {
   privateKey: string;

@@ -23,6 +23,7 @@ export const protocolSchema = z.object({
 export const collectionSchema = z.object({
   slug: z.string(),
   filters: z.array(z.any()).optional(),
+  sortBy: z.enum(['position', 'creationDate', 'modifiedDate', 'title']).optional(),
 });
 
 export const templateConfigSchema = z.object({
