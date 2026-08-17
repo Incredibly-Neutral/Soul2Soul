@@ -4,16 +4,10 @@ import { IPublicationSrv, PublicationService } from './publication/publication.s
 import { PreviewCtrlr } from './preview.ctrlr';
 import { getPublicationMultiSig, isAvailableEnsName } from './publication/ens';
 import { NewPublicationModal } from './publication/new.modal';
-import {
-	getProtocolInfo,
-	parseCID,
-	pinCidFromRemote,
-	renderwithLitActions,
-	S2SProtocolInfo,
-	toPreviewLabel,
-} from '@s2s/soul2soul-shared';
-import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
+import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared';
 import { ContentController } from './content/content.ctrlr';
+import { runIntent } from './publication/intents';
+import { renderCalls as renderCallsHelper } from './render/render.helper';
 
 export interface IMainController {
 	basePath: string;
@@ -23,22 +17,38 @@ export interface IMainController {
 	preview: PreviewCtrlr;
 	publications: any;
 	protocolInfo: S2SProtocolInfo;
+	notice: Notice;
 
 	getInitializedService: (subdomain: string) => Promise<IPublicationSrv>;
 	newPublication: (ensName: string, file: TFile) => Promise<void>;
-	proposeContent: (_file: TAbstractFile, publish: boolean) => Promise<void>;
-	// previewNote: (_file: TAbstractFile) => Promise<void>;
-	// grantLicense: (_file: TAbstractFile) => Promise<void>;
-	revokeLicense: (tagName: string, _file: TAbstractFile) => Promise<void>;
+	isValidForPublishing: (file: TFile | null) => file is TFile;
+	proposeContent: (_file: TAbstractFile) => Promise<void>;
+	revokeContent: (_file: TAbstractFile) => Promise<void>;
+	publishContent: (_file: TAbstractFile, publish: boolean) => Promise<void>;
 	renderCalls: (
 		publication: string,
 		streamIds: string[],
 		lit_usage_key: string,
 		publish: boolean,
+		remove?: { path: string; replacedBy?: string }[],
 	) => Promise<void>;
 	bulkrender: (post_type: string, ensName: string, pubContract: string) => Promise<void>;
 }
 
+/**
+ * MainController — thin delegating wrapper.
+ *
+ * The heavy lifting lives in single-intent modules under `src/`:
+ *   - publication/intents.ts   → runIntent + one function per intent
+ *   - publication/publish.ts   → upload/publish pipeline (render-gated)
+ *   - publication/revoke.ts    → retract flow (on-chain + remove re-render)
+ *   - publication/filecoin.ts  → durability helpers
+ *   - render/render.helper.ts  → renderCalls + RPC/path builders
+ *   - content/ens-tags.ts      → pure tag ⇄ ENS helpers
+ *
+ * IMainController's surface is kept stable (with `revokeContent` instead of
+ * the old mismatched `retractContent`) so main.ts and the modals don't break.
+ */
 export class MainController implements IMainController {
 	basePath!: string;
 	oxo: any;
@@ -131,7 +141,6 @@ export class MainController implements IMainController {
 		const subdomain = ensName.split('.')[0];
 
 		if (this.publications[subdomain] != undefined) {
-			//this.grantLicense(file);
 			return;
 		}
 
@@ -166,69 +175,6 @@ export class MainController implements IMainController {
 		}
 	}
 
-	// async grantLicense(_file: TAbstractFile) {
-	// 	const file = this.plugin.app.vault.getFileByPath(_file.path);
-	// 	if (file != null) {
-
-	// 		const { tags, contentId } = await this.content.parseNote(file);
-	// 		const lensProfileId = "";
-
-	// 		const publications = tags
-	// 			.filter((tag: string) => tag.endsWith("--s2s"))
-	// 			.map((tag: string) => tag.replace("--s2s", ".soul2soul.eth"));
-
-	// 		for (const pub of publications) {
-
-	// 			const subdomain = pub.split(".")[0];
-
-	// 			if(this.publications[subdomain] == undefined) {
-	// 				this.publications[subdomain] = new PublicationService(this, subdomain)
-	// 				await this.publications[subdomain].init();
-	// 			}
-
-	// 			const licensedId = contentId ?? pub;
-	// 			const isLicensed = await this.publications[subdomain].isLicensed(licensedId);
-
-	// 			console.log("isLicensed:", isLicensed)
-
-	// 			if (!isLicensed) {
-	// 				console.log("L1")
-	// 				await this.publications[subdomain].grantLicense(licensedId, lensProfileId);
-	// 				console.log("L2")
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	async revokeLicense(subdomain: string, _file: TAbstractFile): Promise<void> {
-		console.log('revoking license for', subdomain);
-
-		const file = this.plugin.app.vault.getFileByPath(_file.path);
-
-		if (file != null) {
-			try {
-				console.log(0);
-				let { contentId }: any = await this.content.parseNote(file);
-
-				if (this.publications[subdomain].dealsModule == undefined) {
-					await this.publications[subdomain].init();
-				}
-
-				console.log('S', contentId);
-				const dealExists = await this.publications[subdomain].isLicensed(contentId);
-				console.log('DE', dealExists);
-
-				if (dealExists) {
-					console.log(1);
-					const revokeResult = await this.publications[subdomain].revokeLicense(contentId);
-					console.log('RR', revokeResult);
-				}
-			} catch (error) {
-				console.error('Error in revokeDeal:', error);
-			}
-		}
-	}
-
 	isValidForPublishing(file: TFile | null): file is TFile {
 		return file != null &&
 			file instanceof TFile &&
@@ -246,279 +192,30 @@ export class MainController implements IMainController {
 		return this.publications[subdomain];
 	}
 
-	/** Normalized Kubo API base URL (with protocol) for Filecoin tree export. */
-	private get kuboBaseUrl(): string {
-		const raw = this.oxo.settings.kubo_url || 'ipfs.transport-union.dev';
-		return raw.startsWith('http') ? raw : `https://${raw}`;
+	/** Upload intent — append + durability, no rendering. */
+	async proposeContent(_file: TAbstractFile) {
+		await runIntent(this, _file, 'upload');
 	}
 
-	/**
-	 * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
-	 * Never throws, never blocks the main flow. When `expectedCid` is given,
-	 * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
-	 * notice on mismatch.
-	 */
-	private filecoinUploadBackground(
-		kind: string,
-		upload: () => Promise<FilecoinUploadResult>,
-		expectedCid?: string,
-	): void {
-		(async () => {
-			try {
-				const result = await upload();
-				// Quiet success — no logging unless CID parity is violated.
-				if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
-					console.error(
-						`[cid-mismatch] ${kind}: Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
-					);
-					new Notice(
-						`⚠️ CID mismatch (${kind}): Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
-					);
-				}
-			} catch (err) {
-				// Exactly one concise line — never the full error object / nested causes.
-				// Detect the min-2-copies failure by its stable error name rather than
-				// importing the class: a value import would force esbuild to bundle the
-				// whole filecoin module (and @filoz/synapse-sdk) into this plugin.
-				if (err instanceof Error && err.name === 'FilecoinMinCopiesError') {
-					console.error(`[filecoin] ${kind} background upload failed: ${err.message}`);
-				} else {
-					const msg = err instanceof Error ? err.message : String(err);
-					console.error(`[filecoin] ${kind} background upload failed: ${msg}`);
-				}
-			}
-		})();
+	/** Revoke intent — on-chain retract + remove-plumbing re-render. */
+	async revokeContent(_file: TAbstractFile) {
+		await runIntent(this, _file, 'retract');
 	}
 
-	async publishToPublication(file: TFile, publication: string, publish: boolean) {
-		let license;
-		const subdomain = publication.split('.')[0];
-		const service = await this.getInitializedService(subdomain);
-
-		this.notice = new Notice('1/5 signing content ...', 0);
-
-		// Build and sign the content item — this replaces the old Lens-based storeNoteOnLens
-		const signedItem = await this.content.publishContent(file, subdomain);
-
-		if (!signedItem) {
-			console.error('publishToPublication: signing failed, aborting');
-			this.notice.hide();
-			return;
-		}
-
-		this.notice.setMessage(`2/5 storing content item on Filecoin ... `);
-
-		// Always re-upload — the content may have changed since the last publish.
-		// The frontmatter root_cid is a fallback (handled below) if this upload fails.
-
-		// 1. Upload to Kubo → get IPFS CID
-		const kuboUrl = this.kuboBaseUrl;
-		const kuboCid = await this.oxo.ctrlr.storage.uploadToKubo(signedItem, kuboUrl);
-		console.log('[kubo] uploaded:', kuboCid);
-
-		this.notice.setMessage('3/5 appending version to publication contract ...');
-
-		// Record the version on-chain via the publication module
-		// genesis = signedItem.objectId (first version IS the genesis for a new note)
-		const rootCid = kuboCid;
-		const appendResult = await service.makeOffer(signedItem.objectId, rootCid);
-		console.log('[append] tx:', appendResult);
-
-		this.notice.setMessage('4/5 Authorizing ...');
-
-		// if (isLicensed || license != undefined) {
-		await this.renderCalls(
-			publication,
-			[signedItem.objectId],
-			this.oxo.settings.litUsageKey,
-			publish,
-		);
-		//  }
-
-		/// fire & forget — Filecoin upload doesn't need to block the main flow.
-		/// Launched AFTER the awaited makeOffer + renderCalls RPCs complete so
-		/// its CORS-shim install window never overlaps an awaited viem
-		/// JSON-RPC (makeOffer / renderwithLitActions). viem's http() withTimeout
-		/// only aborts() the fetch on timeout and relies on it rejecting, so a
-		/// shim left installed across an awaited RPC could hang it indefinitely.
-		this.filecoinUploadBackground(
-			'article',
-			async () => {
-				const pubAddress = await service.getMultiSig();
-				const authorEoa = this.oxo.ctrlr.user?.eoa;
-				return this.oxo.ctrlr.storage.uploadJson(
-					signedItem,
-					[pubAddress, authorEoa].filter(Boolean),
-					'article',
-				);
-			},
-			kuboCid,
-		);
+	/** Publish intent — append + full render (publish=false → preview). */
+	async publishContent(_file: TAbstractFile, publish: boolean) {
+		await runIntent(this, _file, 'publish', publish);
 	}
 
-	async proposeContent(_file: TAbstractFile, publish: boolean) {
-		const file = this.plugin.app.vault.getFileByPath(_file.path);
-
-		if (!this.isValidForPublishing(file)) return;
-
-		const { tags } = await this.content.parseNote(file);
-		const publications = tags
-			? tags
-					.filter((tag: string) => tag.endsWith('--s2s'))
-					.map((tag: string) => tag.replace('--s2s', '.soul2soul.eth'))
-			: [];
-
-		for (const publication of publications) {
-			this.publishToPublication(file, publication, publish);
-		}
-	}
-
+	/** Render pipeline (prep → render → EVM update) — delegates to render.helper. */
 	async renderCalls(
 		publication: string,
 		streamIds: string[],
 		lit_usage_key: string,
 		publish: boolean,
+		remove?: { path: string; replacedBy?: string }[],
 	) {
-		console.log(
-			`Starting render process for publication ${publication} with ${streamIds.length} stream IDs`,
-		);
-
-		try {
-			if (this.notice) this.notice.setMessage('4/5 Rendering ...');
-
-			console.log(publication);
-
-			// move outside
-			const signature = await this.oxo.ctrlr.account['BASE'].signMessage('lit actions auth');
-			// Build RPC endpoints from the DRPC key, with Alchemy fallback
-			const rpcKey = this.oxo.ctrlr.plugin.settings.rpc_key;
-			const alchemyKey = 'REDACTED';
-			const rpcs = {
-				L1: [
-					`https://lb.drpc.live/ethereum/${rpcKey}`,
-					`https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`,
-				],
-				L2: [
-					`https://lb.drpc.live/base/${rpcKey}`,
-					`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`,
-				],
-			};
-			const res: any = await renderwithLitActions(
-				!publish,
-				this.oxo.ctrlr.lit,
-				signature,
-				lit_usage_key,
-				this.protocolInfo,
-				this.notice,
-				this.oxo.ctrlr.user.safe,
-				publication,
-				streamIds,
-				undefined,
-				rpcs,
-			);
-
-			console.log({ RES: res });
-
-			if (this.notice) this.notice.setMessage('5/5 Pinning ...');
-
-			if (res.cid) {
-				// Fire-and-forget both the Pinata pin and the Filecoin upload in
-				// parallel — neither blocks the render flow, and the two durable-
-				// storage paths run concurrently (SPEC-00 §3.2: IPFS pinning +
-				// Filecoin hot-storage). pinCidFromRemote swallows errors and
-				// returns a boolean, so this can't throw into renderCalls.
-				void pinCidFromRemote(
-					res.cid,
-					'https://ipfs.transport-union.dev',
-					this.oxo.settings.pinata_jwt,
-				).then((ok) => console.log(ok ? 'pinned on pinata' : 'pinata pin failed'));
-
-				if (publish) {
-					// Fire-and-forget Filecoin durability for the rendered site root
-					// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage).
-					this.filecoinUploadBackground(
-						'render-root',
-						() => this.oxo.ctrlr.storage.uploadTree(res.cid, this.kuboBaseUrl),
-						res.cid,
-					);
-				}
-			}
-
-			// do i want to unpin deprecated html ?
-
-			if (this.notice) this.notice.hide();
-
-			const _link = (text: string, url: string) => {
-				const fragment = document.createDocumentFragment();
-
-				const link = fragment.createEl('a', { text, href: url });
-				link.addEventListener('click', (e) => {
-					e.preventDefault();
-					window.open(url, '_blank');
-				});
-				fragment.createEl('br');
-
-				return fragment;
-			};
-
-			const v1Label = toPreviewLabel(res.cid);
-
-			// The render pipeline hands back res.path already containing a leading
-			// `/ipfs/<cid>` segment (e.g. `/ipfs/<cid>/en/`), but the `.preview`
-			// subdomain gateway — and the `.link` DNSLink gateway — serve the site
-			// root at the domain itself, so that prefix 404s. Strip it, comparing
-			// the path's CID segment against this publish's CID digest-wise (CIDv0
-			// and CIDv1 share the multihash digest) so only a matching root is
-			// removed; a bare `/ipfs/<cid>` folds to `/`.
-			const pagePath = (p: string): string => {
-				const rest = p.replace(/^\/ipfs\/[^/]+/, '');
-				if (rest === p) return p; // no leading /ipfs/<cid> — leave unchanged
-				let matchesOwnCid = true;
-				try {
-					const seg = p.match(/^\/ipfs\/([^/]+)/)?.[1] ?? '';
-					const a = parseCID(seg).digest;
-					const b = parseCID(res.cid).digest;
-					matchesOwnCid = a.length === b.length && a.every((byte, i) => byte === b[i]);
-				} catch {
-					/* unparseable segment — treat it as the spurious prefix */
-				}
-				return matchesOwnCid ? (rest.length ? rest : '/') : p;
-			};
-
-			// Preview link — root CID (full site)
-			const rootLink = _link(
-				`${v1Label}.preview → site root`,
-				`https://${v1Label}.preview.transport-union.dev/`,
-			);
-			// Preview link — published page
-			const pageLink = _link(
-				`${v1Label}.preview${pagePath(res.path)} → published`,
-				`https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`,
-			);
-			const previewNotice = new Notice('', 0);
-			previewNotice.noticeEl.appendChild(pageLink);
-			previewNotice.noticeEl.appendChild(rootLink);
-
-			console.log(`preview root: https://${v1Label}.preview.transport-union.dev/`);
-			console.log(
-				`preview page: https://${v1Label}.preview.transport-union.dev${pagePath(res.path)}`,
-			);
-			if (publish) {
-				const prodRootLink = _link(`${publication} → root`, `https://${publication}.link/`);
-				const prodPageLink = _link(
-					`${publication}${pagePath(res.path)} → published`,
-					`https://${publication}.link${pagePath(res.path)}`,
-				);
-				const prodNotice = new Notice('', 0);
-				prodNotice.noticeEl.appendChild(prodPageLink);
-				prodNotice.noticeEl.appendChild(prodRootLink);
-				console.log(`prod root: https://${publication}.link/`);
-				console.log(`prod page: https://${publication}.link${pagePath(res.path)}`);
-			}
-		} catch (error: any) {
-			console.error(`Error during render process for ${publication}:`, error);
-			throw new Error(`Render process failed: ${error.message}`);
-		}
+		await renderCallsHelper(this, publication, streamIds, lit_usage_key, publish, remove);
 	}
 
 	async bulkrender(post_type: string, ensName: string, pubContract: string) {
@@ -554,7 +251,7 @@ export class MainController implements IMainController {
 		// 		batches.push(streamIdsWithDeals.slice(i, i + batchSize));
 		// 	}
 		// 	console.log(
-		// 		`Processing streamIds in ${batches.length} batches of up to ${batchSize} items each`,
+		// 		`Processing streamIds in batches of up to ${batchSize} items each`,
 		// 	);
 		// 	// Process each batch sequentially
 		// 	for (let i = 0; i < batches.length; i++) {
@@ -568,86 +265,4 @@ export class MainController implements IMainController {
 		// 	throw error;
 		// }
 	}
-
-	// async bulkUpload() {
-
-	//     console.log('readying for bulk upload');
-
-	//     const getFiles = async (distPath: string): Promise<string[]> => {
-	//         const adapter = this.plugin.app.vault.adapter;
-	//         const files = await adapter.list(distPath);
-	//         return files.files;
-	//     }
-
-	//     const pubName = this.plugin.settings.publication;
-	//     const path =  this.basePath + "/" + pubName;
-
-	//     let tasks: SGTask[] = [];
-	//     const fileNames = await getFiles(path);
-
-	//     for (let i = 0; i < fileNames.length; i++) {
-	//         const file = fileNames[i];
-	//         try {
-	//             const task: SGTask = {
-	//                 slug: file,
-	//                 // author: "Unamore",
-	//                 // post_type: "painting",
-	//                 // tags: "",
-	//                 // categories: "",
-	//                 // parent: "0",
-	//                 // creation_date: "",
-	//                 // modified_date: "",
-	//                 // title: "",
-	//                 // order: 0,
-	//                 // content: ""
-	//             }
-	//             tasks.push(task);
-	//         } catch(error) {
-	//             console.error('Error processing file:', file, error);
-	//         }
-	//     }
-
-	//     console.log(tasks);
-	// }
-
-	// async bulkUploadPaintings() {
-
-	//     console.log('readying for bulk upload');
-
-	//     const getFiles = async (distPath: string): Promise<string[]> => {
-	//         const adapter = this.plugin.app.vault.adapter;
-	//         const files = await adapter.list(distPath);
-	//         return files.files;
-	//     }
-
-	//     const folder = "paintings";
-	//     const path =  this.basePath + "/" + folder;
-
-	//     let tasks: SGTask[] = [];
-	//     const fileNames = await getFiles(path);
-
-	//     for (let i = 0; i < fileNames.length; i++) {
-	//         const file = fileNames[i];
-	//         try {
-	//             const task: SGTask = {
-	//                 slug: file,
-	//                 // author: "Unamore",
-	//                 // post_type: "painting",
-	//                 // tags: "",
-	//                 // categories: "",
-	//                 // parent: "0",
-	//                 // creation_date: "",
-	//                 // modified_date: "",
-	//                 // title: "",
-	//                 // order: 0,
-	//                 // content: ""
-	//             }
-	//             tasks.push(task);
-	//         } catch(error) {
-	//             console.error('Error processing file:', file, error);
-	//         }
-	//     }
-
-	//     console.log(tasks);
-	// }
 }

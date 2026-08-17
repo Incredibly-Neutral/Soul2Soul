@@ -32,7 +32,7 @@ import {
   validateSingleOutput,
   validateEvmUpdateOutput,
 } from './action-io';
-import { sampleJob } from './fixtures/inputs';
+import { sampleJob, sampleEndpoints } from './fixtures/inputs';
 
 // ============================================================================
 // Env-based configuration — TEST_* prefix preferred, S2S_* fallback
@@ -106,6 +106,7 @@ describe('sequence — local shape contracts', () => {
       authorSafeAddress: AUTHOR_SAFE,
       publication: 'test.soul2soul.eth',
       preview: true,
+      endpoints: sampleEndpoints,
     };
     expect(() => validateSingleInput(input)).not.toThrow();
   });
