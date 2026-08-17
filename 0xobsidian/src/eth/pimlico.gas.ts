@@ -28,10 +28,33 @@ export interface GasPriceResult {
 
 /** Minimal surface of the Pimlico/viem client used by warmUpPimlico. */
 interface WarmUpClient {
-  request: (args: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+  request: (args: {
+    method: string;
+    params?: readonly unknown[];
+    signal?: AbortSignal;
+  }) => Promise<unknown>;
 }
 
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+
+/** Substrings that identify a placeholder / dummy API key that should NOT
+ * trigger a live network call at construction time. */
+const DUMMY_API_KEYS = new Set([
+  "",
+  "dummy",
+  "undefined",
+  "null",
+  "none",
+  "changeme",
+  "your-api-key",
+]);
+
+/** True if the given Pimlico API key looks like a real, usable key. */
+export function isRealApiKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  const normalized = key.trim().toLowerCase();
+  return normalized.length > 0 && !DUMMY_API_KEYS.has(normalized);
+}
 
 /** Substrings that identify a transient transport/timeout failure worth retrying. */
 const RETRYABLE_MARKERS = [
@@ -51,18 +74,47 @@ const RETRYABLE_MARKERS = [
   "rate limit",
 ];
 
-/** Best-effort no-op RPC so the first gas-price call hits a warm socket. */
-export function warmUpPimlico(client: WarmUpClient | null | undefined): void {
+export interface WarmUpOptions {
+  /** How long to wait for the no-op request before giving up (ms). */
+  timeoutMs?: number;
+  /**
+   * When true (default), the losing side of the internal race aborts the
+   * underlying request, releasing a hung socket instead of stranding an
+   * undici keep-alive connection on plugin quit.
+   */
+  abortOnTimeout?: boolean;
+}
+
+/**
+ * Best-effort no-op RPC so the first gas-price call hits a warm socket.
+ * Fire-and-forget: a failed warm-up must never break account init.
+ */
+export function warmUpPimlico(
+  client: WarmUpClient | null | undefined,
+  options: WarmUpOptions = {},
+): void {
   if (!client || typeof client.request !== "function") return;
 
+  const { timeoutMs = 3000, abortOnTimeout = true } = options;
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const args: { method: string; signal?: AbortSignal } = { method: "eth_chainId" };
+  if (abortOnTimeout) args.signal = controller.signal;
+
   const noop = Promise.race([
-    client.request({ method: "eth_chainId" }),
-    sleep(3000).then(() => {
+    client.request(args),
+    sleep(timeoutMs).then(() => {
+      if (abortOnTimeout) {
+        timedOut = true;
+        controller.abort(); // release the socket instead of stranding it
+      }
       throw new Error("warm-up timed out");
     }),
   ]);
-  // Fire-and-forget: a failed warm-up must never break account init.
   noop.catch((err: unknown) => {
+    // Expected abort-after-timeout — nothing went wrong, don't add noise.
+    if (timedOut) return;
     const reason = err instanceof Error ? err.message : String(err);
     console.warn("[pimlico] warm-up failed (best-effort):", reason);
   });

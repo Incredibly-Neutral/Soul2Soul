@@ -1,6 +1,6 @@
 import { toSimpleSmartAccount } from "permissionless/accounts";
 import { createSmartAccountClient } from "permissionless";
-import { createPimlicoClient, type PimlicoClient } from "permissionless/clients/pimlico";
+import { createPimlicoClient } from "permissionless/clients/pimlico";
 import {
   createPublicClient,
   encodeFunctionData,
@@ -22,7 +22,7 @@ import { TxOptions, TxResult } from "./tx.types.js";
 import { extractDeployedAddress } from "./contract-address.factory.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { TypedDataSigner } from "@s2s/soul2soul-shared";
-import { createGasPriceFetcher, warmUpPimlico, GasPriceResult } from "./pimlico.gas.js";
+import { createGasPriceFetcher, warmUpPimlico, isRealApiKey, GasPriceResult } from "./pimlico.gas.js";
 
 const ENTRYPOINT_ADDRESS_V07 =
   "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -65,7 +65,7 @@ export class PermissionlessSimpleService
   smartAccount: any;
   smartAccountClient: any;
   publicClient: any;
-  pimlicoClient: PimlicoClient;
+  pimlicoClient: any;
   address!: `0x${string}`;
 
   private readonly getGasPrice: () => Promise<GasPriceResult>;
@@ -98,8 +98,12 @@ export class PermissionlessSimpleService
     this.getGasPrice = createGasPriceFetcher(() => this.pimlicoClient.getUserOperationGasPrice());
 
     // Best-effort warm-up so the first real gas-price call doesn't touch a
-    // cold/stale pooled socket (intermittent TimeoutError on Base).
-    warmUpPimlico(this.pimlicoClient);
+    // cold/stale pooled socket (intermittent TimeoutError on Base). Only fire
+    // a real network call when a genuine API key is present — a dummy/empty
+    // key (tests, unconfigured plugin) must not hit the network at init.
+    if (isRealApiKey(main.plugin.settings.pimlico_key)) {
+      warmUpPimlico(this.pimlicoClient);
+    }
   }
 
   async updateSigner(pk: string): Promise<string> {
