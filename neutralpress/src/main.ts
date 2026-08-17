@@ -63,12 +63,30 @@ export default class DSG extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
-				const activeFile = this.app.workspace.getActiveFile() as TFile;
+				menu.addItem((item) => {
+					item.setTitle("Upload")
+						.setIcon("document")
+						.onClick(() => this.ctrlr.proposeContent(file));
+				});
+			}),
+		);
 
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				menu.addItem((item) => {
+					item.setTitle("Revoke")
+						.setIcon("document")
+						.onClick(() => this.ctrlr.revokeContent(file));
+				});
+			}),
+		);
+
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
 				menu.addItem((item) => {
 					item.setTitle("Preview")
 						.setIcon("document")
-						.onClick(() => this.ctrlr.proposeContent(activeFile, false));
+						.onClick(() => this.ctrlr.publishContent(file, false));
 				});
 			}),
 		);
@@ -78,7 +96,7 @@ export default class DSG extends Plugin {
 				menu.addItem((item) => {
 					item.setTitle("Propose to print")
 						.setIcon("document")
-						.onClick(() => this.ctrlr.proposeContent(file, true));
+						.onClick(() => this.ctrlr.publishContent(file, true));
 				});
 			}),
 		);
@@ -119,18 +137,16 @@ export default class DSG extends Plugin {
 					} else if (removed.length > 0) {
 						if (removed[0].endsWith("--s2s")) {
 							console.log("Web tag removed:", removed[0]);
-							const contentId = this.getStreamID(updatedMeta) /// ????
 							const ensName = removed[0].toLowerCase().replace("--s2s", "") + ".soul2soul.eth";
-							const subdomain = ensName.split(".")[0]
+							// The real revoke flow: on-chain retract + remove-plumbing
+							// re-render (see publication/revoke.ts). Delegates to the same
+							// revokeContent used by the 'Retract' menu item — no re-sign,
+							// no makeOffer, no nonexistent revokeLicense.
 							const onSubmit = async () => {
-								await this.ctrlr.content.publishContent(file, subdomain);
-								await this.ctrlr.revokeLicense(subdomain, file);
-								// Read the genesis from frontmatter after re-signing
-								const { contentId } = await this.ctrlr.content.parseNote(file);
-								await this.ctrlr.renderCalls(ensName, [contentId ?? subdomain], this.ctrlr.oxo.settings.litUsageKey, true)
+								await this.ctrlr.revokeContent(file);
 							}
 							return new RevokeModal(this.app, this.ctrlr, ensName, onSubmit).open();
-							
+
 						}
 					}
 				}, 100); // short delay to let metadataCache update
@@ -142,7 +158,7 @@ export default class DSG extends Plugin {
 			name: "publish",
 			callback: () => {
 				const activeFile = this.app.workspace.getActiveFile() as TFile;
-				return this.ctrlr.proposeContent(activeFile, true);
+				return this.ctrlr.publishContent(activeFile, true);
 			},
 		});
 	}
