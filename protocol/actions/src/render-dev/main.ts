@@ -8,12 +8,12 @@
  * and gets an HTML string back. No chain, no Lit.Actions.* call, no keys.
  *
  * It shares the SAME pure renderer core as the production render action:
- * `buildTemplateData` (non-decrypt init path), `filterCollection`, and
- * `renderHTMLFromSource` — one source, two input-provisioning modes, so
- * preview ≈ production by construction.
+ * `buildTemplateData` (non-decrypt init path), `filterCollection`,
+ * `sortCollection`, and `renderHTMLFromSource` — one source, two
+ * input-provisioning modes, so preview ≈ production by construction.
  */
 import { validateDevRenderInput } from './schema';
-import { buildTemplateData, filterCollection } from '../render/data.ctrlr';
+import { buildTemplateData, filterCollection, sortCollection } from '../render/data.ctrlr';
 import { renderHTMLFromSource } from '../renderer/html.ctrlr';
 
 export async function main(input: unknown) {
@@ -47,12 +47,15 @@ export async function main(input: unknown) {
     );
 
     // 2. Collections: use injected pre-built collections, or run the shared
-    //    pure collection filter over injected allDeals[].
+    //    pure collection filter + sorter over injected allDeals[].
     let resolvedCollections: Record<string, any[]> = collections || {};
     if (allDeals && Array.isArray(allDeals) && (templateConfig.collections || []).length > 0) {
       resolvedCollections = {};
       for (const collection of templateConfig.collections || []) {
-        resolvedCollections[collection.slug] = filterCollection(allDeals, collection);
+        resolvedCollections[collection.slug] = sortCollection(
+          filterCollection(allDeals, collection),
+          collection,
+        );
       }
     }
     templateData.collections = resolvedCollections;
