@@ -37,6 +37,7 @@ export const renderwithLitActions = async (
   configCid?: string,
   _rpcs?: { L1: string[]; L2: string[] },
   _ipfsGateway?: string,
+  remove?: { path: string; replacedBy?: string }[],
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
@@ -78,6 +79,14 @@ export const renderwithLitActions = async (
   const prepRemove: { path: string; replacedBy?: string }[] | undefined = (validatedPrep as any).ok
     ? (validatedPrep as any).data?.remove
     : undefined;
+
+  // Merge caller-supplied removals (revocations from neutralpress) with the
+  // auto-detected slug-change removals. Caller removals are additive and
+  // default to none, so existing callers (safe-app, render tests) are safe.
+  const mergedRemove: { path: string; replacedBy?: string }[] = [
+    ...(prepRemove ?? []),
+    ...(remove ?? []),
+  ];
 
   // ---------------- Single Actions Stage ----------------------------------
 
@@ -138,7 +147,7 @@ export const renderwithLitActions = async (
     jobs: renderedJobs,
     preview,
     endpoints,
-    remove: prepRemove,
+    remove: mergedRemove.length > 0 ? mergedRemove : undefined,
   });
 
   const evmAction: any  = await runAction(
