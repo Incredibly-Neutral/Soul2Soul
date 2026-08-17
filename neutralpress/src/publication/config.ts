@@ -256,13 +256,15 @@ export const createConfig = (
 	templatesCid: string,
 	mapping: string,
 ): S2SPublicationConfig => {
+	const parsedMapping = JSON.parse(mapping);
 
 	return {
 		assetsCid: "",
 		contract: publication.contract || "",
 		dataGateway: protocolInfo.gateway || "",
-		mapping: JSON.parse(mapping),
+		mapping: parsedMapping,
 		name: publication.name,
 		templateCid: templatesCid,
+		localePaths: parsedMapping.localePaths,
 	};
 };

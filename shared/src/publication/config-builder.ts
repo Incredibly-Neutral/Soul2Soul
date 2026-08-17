@@ -230,6 +230,7 @@ export class ConfigBuilder {
       mapping,
       name: publicationName,
       templateCid: templatesCid,
+      localePaths: mapping.localePaths,
     };
 
     // --- Upload final config to both Pinata + Kubo ---
