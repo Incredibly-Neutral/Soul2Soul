@@ -124,18 +124,21 @@ export async function revokeContent(
 	const remove: RemoveEntry[] = [{ path: removePath }];
 
 	// User-facing confirmation + caveat (B1b): the derived remove path matches
-	// the default `/{slug}` scheme; a non-default templateConfig.path given in
-	// the publication's on-chain mapping.json cannot be derived client-side and
-	// would make the remove entry a no-op (update logs `skip remove`).
+	// the default `/{slug}` scheme, but the plugin cannot know a publication's
+	// on-chain `templateConfig.path` / `localePaths` (mapping.json) client-side
+	// REGARDLESS of locale — a non-default template path would make the remove
+	// entry a no-op (update logs `skip remove`). Always log the caveat and
+	// surface it in the Notice so a non-default-template publication is not
+	// silently misled into believing the item was removed from the rendered site.
 	console.log(
 		`[retract] remove entry ${removePath} (derived from slug+locale under the default /{slug} scheme)`,
 	);
-	if (locale) {
-		console.log(
-			`[retract] caveat: non-default templateConfig.path / localePaths (on-chain mapping.json) could make this remove path drift; actual path is re-verified at update time by verifyRevocable`,
-		);
-	}
-	new Notice(`Revoked '${slug}' from ${publication}; re-rendering site without it`);
+	console.warn(
+		`[retract] caveat: non-default templateConfig.path / localePaths (on-chain mapping.json) could make this remove path drift; actual path is re-verified at update time by verifyRevocable`,
+	);
+	new Notice(
+		`Revoked '${slug}' from ${publication}; on-chain retract complete. Removal requested — if the publication uses a custom template path, it completes on the next full render.`,
+	);
 
 	const remaining = await remainingDealGeneses(main, service, genesis);
 
