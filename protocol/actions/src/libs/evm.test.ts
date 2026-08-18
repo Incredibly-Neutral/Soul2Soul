@@ -1,104 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { classifyEvmError, evmRead } from './evm';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { evmRead } from './evm';
 import { mapWithLimit } from './ens.factory';
 
 // ============================================================================
-// classifyEvmError — distinguish GENUINE on-chain reverts (never retry) from
-// TRANSPORT / connection failures (retry with backoff).
+// evmRead — FAIL-FAST, single pass over the RPC URL list.
 //
-// The critical case: ethers v5 can MISLABEL a dropped response as an on-chain
-// revert — a CALL_EXCEPTION with reason 'missing revert data', data=0x, whose
-// TRUE cause lives in the nested `error.error` chain (SERVER_ERROR reason
-// 'missing response' / serverError ECONNRESET). The classifier must spot the
-// transport signal at any depth and NOT retry genuine reverts.
-// ============================================================================
-
-describe('classifyEvmError', () => {
-  it('classifies a genuine on-chain revert (ethers CALL_EXCEPTION) as revert', () => {
-    const err = {
-      code: 'CALL_EXCEPTION',
-      reason: 'execution reverted: not the owner',
-      data: '0x',
-      message: 'call revert exception',
-    };
-    expect(classifyEvmError(err)).toBe('revert');
-  });
-
-  it('classifies a revert carrying a real revert payload (data != 0x) as revert', () => {
-    const err = {
-      code: 'CALL_EXCEPTION',
-      reason: 'missing revert data',
-      data: '0x08c379a000000000000000000000000000000000000000000000000000000000',
-      message: 'call revert exception',
-    };
-    expect(classifyEvmError(err)).toBe('revert');
-  });
-
-  it('classifies a raw node error with RPC code 3 (execution reverted) as revert', () => {
-    const err = { code: 3, message: 'execution reverted: some reason' };
-    expect(classifyEvmError(err)).toBe('revert');
-  });
-
-  it('classifies a message containing "reverted" as revert', () => {
-    const err = { message: 'VM Exception while processing transaction: reverted' };
-    expect(classifyEvmError(err)).toBe('revert');
-  });
-
-  it('classifies a plain SERVER_ERROR missing-response / ECONNRESET as transport', () => {
-    const err = {
-      code: 'SERVER_ERROR',
-      reason: 'missing response',
-      serverError: { code: 'ECONNRESET', message: 'read ECONNRESET' },
-      message: 'missing response',
-    };
-    expect(classifyEvmError(err)).toBe('transport');
-  });
-
-  it('KEY CASE: classifies the ethers-v5 MISLABELLED CALL_EXCEPTION (data=0x wrapping a SERVER_ERROR missing response / ECONNRESET) as transport', () => {
-    const err = {
-      code: 'CALL_EXCEPTION',
-      reason: 'missing revert data',
-      data: '0x',
-      message: 'missing revert data',
-      error: {
-        code: 'SERVER_ERROR',
-        reason: 'missing response',
-        serverError: { code: 'ECONNRESET', message: 'The socket connection was closed unexpectedly' },
-        message: 'missing response',
-      },
-    };
-    expect(classifyEvmError(err)).toBe('transport');
-  });
-
-  it('classifies an ethers TIMEOUT error as transport (retryable)', () => {
-    const err = { code: 'TIMEOUT', reason: 'timeout', message: 'timeout' };
-    expect(classifyEvmError(err)).toBe('transport');
-  });
-
-  it('classifies a plain socket-closed network error as transport', () => {
-    const err = { code: 'SERVER_ERROR', message: 'The socket connection was closed unexpectedly' };
-    expect(classifyEvmError(err)).toBe('transport');
-  });
-
-  it('returns unknown when there is no clear revert or transport signal', () => {
-    const err = { code: 'UNPREDICTABLE_GAS_LIMIT', message: 'cannot estimate gas' };
-    expect(classifyEvmError(err)).toBe('unknown');
-  });
-
-  it('transport detection walks nested serverError objects at any depth', () => {
-    const err = {
-      code: 'CALL_EXCEPTION',
-      reason: 'missing revert data',
-      data: '0x',
-      error: { code: 'SERVER_ERROR', reason: 'missing response', serverError: { code: 'SCONNRESET' } },
-    };
-    expect(classifyEvmError(err)).toBe('transport');
-  });
-});
-
-// ============================================================================
-// evmRead — retries ONLY on transport failures; genuine reverts propagate as-is
-// with no retry, exactly once per URL.
+// Regression context (see evm.ts header): an in-session retry loop (MAX_ATTEMPTS
+// x the RPC URLs, with backoff) multiplied HTTP requests against Lit's
+// 50-request-per-session cap and blew the budget on multi-collection renders.
+// evmRead now tries each URL exactly once (failover) and throws when every URL
+// fails. The orchestrator (shared/src/rendering/sequence.ts) re-runs the whole
+// render in a fresh session on a transient failure instead.
 // ============================================================================
 
 // Minimal constructable stand-in for ethers' StaticJsonRpcProvider so the
@@ -113,8 +25,9 @@ class FakeStaticJsonRpcProvider {
 
 // Builds a fake global `ethers` (the bundle injects it at runtime) that lets us
 // drive the call outcome per invocation. `scenario` is called for every
-// `contract[method](...)`; if it throws the error is surfaced (classifier sees
-// it), otherwise the returned value is the result.
+// `contract[method](...)`; if it throws the error is surfaced, otherwise the
+// returned value is the result. Counts total contract-method invocations so we
+// can assert the fail-fast (single-pass, no retry) contract.
 function withFakeEthers(scenario: () => any) {
   const calls: Array<{ method: string; args: any[] }> = [];
   let contractCalls = 0;
@@ -148,41 +61,15 @@ function withFakeEthers(scenario: () => any) {
 const ABI = ['function NAME() view returns (string)'];
 const RPC_URLS = ['https://rpc.example'];
 
-describe('evmRead retry-on-transport-only behaviour', () => {
+describe('evmRead fail-fast (single pass, no in-session retry)', () => {
   beforeEach(() => {
     delete (globalThis as any).ethers;
   });
 
-  it('retries a transport failure and eventually succeeds', async () => {
-    const seq = [
-      Object.assign(new Error('RPC call to https://rpc.example failed'), {
-        code: 'SERVER_ERROR',
-        reason: 'missing response',
-        serverError: { code: 'ECONNRESET' },
-      }),
-      'NAME',
-    ];
-    const { contractCalls } = withFakeEthers(() => seq.shift());
-    const result = await evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS);
-    expect(result).toBe('NAME');
-    expect(contractCalls()).toBe(2); // attempt 1 failed (transport), attempt 2 succeeded
-  });
-
-  it('does NOT retry a genuine on-chain revert — propagates it immediately', async () => {
-    const revertErr = Object.assign(new Error('execution reverted'), {
-      code: 'CALL_EXCEPTION',
-      reason: 'execution reverted: no NAME()',
-      data: '0x',
-    });
-    const { contractCalls } = withFakeEthers(() => revertErr);
-    await expect(evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS)).rejects.toBe(revertErr);
-    expect(contractCalls()).toBe(1); // exactly one attempt, no retry
-  });
-
-  it('retries across multiple rpc URLs within an attempt on transport failure', async () => {
-    // Two URLs; the first always transport-fails, the second succeeds. evmRead
-    // must fall through to url B within the first attempt (no backoff between
-    // urls of the same attempt) and return B's value.
+  it('fails over to the next URL within the single pass and returns its value', async () => {
+    // Two URLs within the same attempt: the first always fails (transport),
+    // the second succeeds. evmRead must fall through to URL B exactly once
+    // (single pass — no retry round) and return B's value.
     const urls = ['https://a.example', 'https://b.example'];
     const seenPerUrl: Record<string, number> = {};
     class PerUrlContract {
@@ -192,9 +79,7 @@ describe('evmRead retry-on-transport-only behaviour', () => {
         return new Proxy(this, {
           get: () => () => {
             if (myUrl === 'https://a.example') {
-              throw Object.assign(new Error('x'), {
-                code: 'SERVER_ERROR', reason: 'missing response', serverError: { code: 'ECONNRESET' },
-              });
+              throw new Error('RPC call to https://a.example failed: missing response');
             }
             return 'ok';
           },
@@ -207,22 +92,48 @@ describe('evmRead retry-on-transport-only behaviour', () => {
     };
     const result = await evmRead('L2', '0xaddr', ABI, 'NAME', [], urls);
     expect(result).toBe('ok');
-    // URL a was attempted once and transport-failed; URL b succeeded on first try (no retry round needed).
+    // Each URL attempted exactly once — there is NO retry round on failure.
     expect(seenPerUrl['https://a.example']).toBe(1);
     expect(seenPerUrl['https://b.example']).toBe(1);
   });
 
-  it('still succeeds on a later attempt after every configured url transport-fails', async () => {
-    // Single URL that transport-fails twice then succeeds (exercise the backoff retry loop).
-    const outcomes = [
-      Object.assign(new Error('t1'), { code: 'SERVER_ERROR', reason: 'missing response', serverError: { code: 'ECONNRESET' } }),
-      Object.assign(new Error('t2'), { code: 'SERVER_ERROR', reason: 'missing response', serverError: { code: 'ECONNRESET' } }),
-      'ok',
-    ];
-    const { contractCalls } = withFakeEthers(() => outcomes.shift());
+  it('succeeds on the first URL (single request)', async () => {
+    const { contractCalls } = withFakeEthers(() => 'NAME');
     const result = await evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS);
-    expect(result).toBe('ok');
-    expect(contractCalls()).toBe(3);
+    expect(result).toBe('NAME');
+    expect(contractCalls()).toBe(1);
+  });
+
+  it('does NOT retry a single failure — throws after exactly one attempt per URL', async () => {
+    const err = new Error('RPC call to https://rpc.example failed: missing response');
+    const { contractCalls } = withFakeEthers(() => err);
+    await expect(evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS)).rejects.toThrow();
+    // Exactly one attempt on the single URL: fail-fast, no in-session retry.
+    expect(contractCalls()).toBe(1);
+  });
+
+  it('throws an aggregated error when EVERY url fails (single pass, no retry loop)', async () => {
+    const urls = ['https://a.example', 'https://b.example'];
+    class AlwaysFailContract {
+      constructor(_a: any, _b: any, provider: any) {
+        const myUrl = provider.connection.url;
+        return new Proxy(this, {
+          get: () => () => {
+            throw new Error(`RPC call to ${myUrl} failed: missing response`);
+          },
+        });
+      }
+    }
+    (globalThis as any).ethers = {
+      providers: { StaticJsonRpcProvider: FakeStaticJsonRpcProvider },
+      Contract: AlwaysFailContract,
+    };
+    const err: any = await evmRead('L2', '0xaddr', ABI, 'NAME', [], urls).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(Array.isArray(err.failures)).toBe(true);
+    expect(err.failures.length).toBe(2); // one failure per URL, no retries
+    expect(err.message).toContain('https://a.example');
+    expect(err.message).toContain('https://b.example');
   });
 });
 
