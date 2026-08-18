@@ -35,8 +35,13 @@ const RENDER_RETRY_BACKOFF_MS = 1500;
 
 const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Retry a render-action execution on the live path as described above. */
-async function runRenderActionWithRetry(
+/**
+ * Retry a render-action execution on the live path as described above.
+ *
+ * Exported so the retry logic is unit-testable in isolation (mocking `runAction`);
+ * the orchestrator (`renderwithLitActions`) is the only other consumer.
+ */
+export async function runRenderActionWithRetry(
   preview: boolean,
   lit: LitService,
   cid: string,
@@ -71,7 +76,22 @@ async function runRenderActionWithRetry(
 
   // Exhausted retries — surface the last failure as a throw so the caller's
   // existing catch marks this job failed (and it is filtered from the update).
-  throw lastFailure instanceof Error ? lastFailure : new Error(String(lastFailure));
+  //
+  // Preserve the REAL failure detail: a non-ok render envelope is an object of
+  // shape { ok:false, action:'render', error:'msg', trace:[...] }, and
+  // String(envelope) would yield '[object Object]', losing the message. Unwrap
+  // the human-readable detail (error ?? message ?? toString-of-last-resort) and
+  // attach the original failure object so callers/logs can still inspect it.
+  const err =
+    lastFailure instanceof Error
+      ? lastFailure
+      : new Error(
+          lastFailure?.error ??
+          lastFailure?.message ??
+          (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)),
+        );
+  (err as any).failure = lastFailure;
+  throw err;
 }
 
 // ===========================================================================
