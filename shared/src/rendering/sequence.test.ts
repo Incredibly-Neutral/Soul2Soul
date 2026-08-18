@@ -18,7 +18,7 @@
  *   TEST_CONFIG_CID          Config CID override
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createPublicClient, http } from 'viem';
 import { mainnet, base } from 'viem/chains';
 import { Wallet } from 'ethers';
@@ -26,6 +26,7 @@ import { Wallet } from 'ethers';
 import { getProtocolInfo } from '../protocol';
 import type { S2SProtocolInfo } from '../protocol';
 import { runAction } from './helpers';
+import { runRenderActionWithRetry } from './sequence';
 import {
   validatePrepOutput,
   validateSingleInput,
@@ -33,6 +34,17 @@ import {
   validateEvmUpdateOutput,
 } from './action-io';
 import { sampleJob, sampleEndpoints } from './fixtures/inputs';
+
+// RunAction spy: delegates to the real implementation by default (so the
+// chain/runner integration tests below keep working when env is present), but
+// lets the retry unit tests below drive it deterministically.
+vi.mock('./helpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./helpers')>();
+  return {
+    ...actual,
+    runAction: vi.fn(actual.runAction),
+  };
+});
 
 // ============================================================================
 // Env-based configuration — TEST_* prefix preferred, S2S_* fallback
@@ -324,4 +336,88 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
     expect((raw as any).error).toBeTruthy();
     expect(typeof (raw as any).error).toBe('string');
   }, 30_000);
+});
+
+// ============================================================================
+// runRenderActionWithRetry — live-path retry unit tests (no chain, no runner)
+//
+// These drive the exported retry wrapper directly, mocking `runAction` (see the
+// vi.mock('./helpers') spy at the top of this file). Each case pins the retry
+// semantics that the PR review asked to lock down: single-attempt on success,
+// retry on non-ok / throw, 3-attempt exhaustion with a preserved failure, and
+// preview never retrying.
+// ============================================================================
+
+describe('runRenderActionWithRetry — live-path retry', () => {
+  const cid = 'cid-test';
+  const okResult = { ok: true, action: 'render', data: { job: { path: '/x' } }, trace: [] };
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('returns immediately on ok (single runAction call, no retry)', async () => {
+    vi.mocked(runAction).mockResolvedValue(okResult as any);
+
+    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+
+    expect(result).toBe(okResult);
+    expect(runAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on non-ok then succeeds (two calls, returns the ok)', async () => {
+    vi.mocked(runAction)
+      .mockResolvedValueOnce({ ok: false, action: 'render', error: 'flaky transport', trace: [] } as any)
+      .mockResolvedValueOnce(okResult as any);
+
+    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+
+    expect(runAction).toHaveBeenCalledTimes(2);
+    expect(result).toBe(okResult);
+  });
+
+  it('retries when runAction throws once then succeeds', async () => {
+    vi.mocked(runAction)
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(okResult as any);
+
+    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+
+    expect(runAction).toHaveBeenCalledTimes(2);
+    expect(result).toBe(okResult);
+  });
+
+  it('throws after 3 attempts when always non-ok, preserving the real failure detail', async () => {
+    const fail = { ok: false, action: 'render', error: 'real failure message', trace: [] };
+    vi.mocked(runAction).mockResolvedValue(fail as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(runAction).toHaveBeenCalledTimes(3);
+    expect(thrown).toBeInstanceOf(Error);
+    // B4 fix: the thrown message carries the unwrapped envelope error, NOT '[object Object]'
+    expect(thrown.message).toContain('real failure message');
+    expect(thrown.message).not.toContain('[object Object]');
+    // B4 fix: the original failure object stays attached for callers/logs
+    expect(thrown.failure).toBe(fail);
+  });
+
+  it('preview mode: always-failing runAction makes exactly 1 call then throws', async () => {
+    vi.mocked(runAction).mockResolvedValue({ ok: false, action: 'render', error: 'nope', trace: [] } as any);
+
+    await expect(
+      runRenderActionWithRetry(true, mockLit, cid, { id: 'j1' }, {}),
+    ).rejects.toThrow();
+
+    expect(runAction).toHaveBeenCalledTimes(1);
+  });
 });
