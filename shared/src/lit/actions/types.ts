@@ -26,6 +26,7 @@ export interface SingleInput {
   publication: string;
   configCid?: string;
   preview?: boolean;
+  maintainCache?: boolean;
   endpoints: {
     ipfsGateway?: string;
     rpcs: { L1: string[]; L2: string[] };
