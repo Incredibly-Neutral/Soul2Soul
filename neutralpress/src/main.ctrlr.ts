@@ -32,7 +32,6 @@ export interface IMainController {
 		publish: boolean,
 		remove?: { path: string; replacedBy?: string }[],
 	) => Promise<void>;
-	bulkrender: (post_type: string, ensName: string, pubContract: string) => Promise<void>;
 }
 
 /**
@@ -218,51 +217,5 @@ export class MainController implements IMainController {
 		await renderCallsHelper(this, publication, streamIds, lit_usage_key, publish, remove);
 	}
 
-	async bulkrender(post_type: string, ensName: string, pubContract: string) {
-		// console.log(
-		// 	`Running bulkRender for post_type: ${post_type} on ${ensName}`,
-		// );
-		// try {
-		// 	const streamIds = await getFilesByPostType(
-		// 		this.plugin,
-		// 		post_type,
-		// 		ensName.replace(".--s2s.eth", "--s2s"),
-		// 		pubContract,
-		// 	);
-		// 	console.log(`Found ${streamIds.length} streamIds for bulkRender`);
-		// 	// Check which streamIds already have deals
-		// 	const subdomain = ensName.split(".")[0]
-		// 	const dealStatuses = await this.publications[subdomain].hasDealBatch(
-		// 		pubContract,
-		// 		streamIds,
-		// 	);
-		// 	// Filter to only streamIds that have deals
-		// 	const streamIdsWithDeals = streamIds.filter(
-		// 		(id) => dealStatuses[id],
-		// 	);
-		// 	console.log(
-		// 		`${streamIdsWithDeals.length} out of ${streamIds.length} items have deals`,
-		// 	);
-		// 	// Process streamIds in batches
-		// 	const batchSize = 3;
-		// 	const batches = [];
-		// 	// Split streamIds into batches
-		// 	for (let i = 0; i < streamIdsWithDeals.length; i += batchSize) {
-		// 		batches.push(streamIdsWithDeals.slice(i, i + batchSize));
-		// 	}
-		// 	console.log(
-		// 		`Processing streamIds in batches of up to ${batchSize} items each`,
-		// 	);
-		// 	// Process each batch sequentially
-		// 	for (let i = 0; i < batches.length; i++) {
-		// 		const batch = batches[i];
-		// 		console.log(`Processing batch ${i + 1} of ${batches.length}`);
-		// 		await this.renderCalls(ensName, batch);
-		// 		console.log(`Completed batch ${i + 1} of ${batches.length}`);
-		// 	}
-		// } catch (error) {
-		// 	console.error("Error getting files for bulkRender:", error);
-		// 	throw error;
-		// }
-	}
+
 }
