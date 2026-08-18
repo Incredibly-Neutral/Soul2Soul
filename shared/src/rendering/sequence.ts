@@ -15,6 +15,86 @@ import { S2SJob } from '../protocol/types';
 import { runAction } from './helpers';
 
 // ===========================================================================
+// Render-action retry (LIVE path only)
+// ===========================================================================
+// A transient transport failure on the live Lit path (flaky Base RPC) makes an
+// individual render action fail. We retry the WHOLE render action execution
+// HERE, at the orchestrator level, OUTSIDE the Lit session — so the re-issued
+// eth_calls do NOT count against Lit's per-session 50-request budget. This is
+// the counterpart to the in-session fail-fast evmRead (see protocol/actions
+// src/libs/evm.ts); together they keep a multi-collection render well under the
+// 50-request cap while still tolerating a flaky transport.
+//
+// Deliberately NOT retried here:
+//   - preview — runs on the free Bun runner (no 50-request cap) and has no
+//     need for this resilience;
+//   - the EVM-update action — it has on-chain side effects, so a retried
+//     update could double-write. Only the read-only render action is retried.
+const RENDER_RETRY_ATTEMPTS = 3;
+const RENDER_RETRY_BACKOFF_MS = 1500;
+
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Retry a render-action execution on the live path as described above.
+ *
+ * Exported so the retry logic is unit-testable in isolation (mocking `runAction`);
+ * the orchestrator (`renderwithLitActions`) is the only other consumer.
+ */
+export async function runRenderActionWithRetry(
+  preview: boolean,
+  lit: LitService,
+  cid: string,
+  job: any,
+  inputs: Record<string, unknown>,
+  litUsageKey?: string,
+): Promise<any> {
+  const attempts = preview ? 1 : RENDER_RETRY_ATTEMPTS;
+  let lastFailure: any;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) await sleepMs(RENDER_RETRY_BACKOFF_MS);
+    try {
+      const actionResult: any = await runAction(preview, lit, cid, inputs, litUsageKey);
+      // Envelope success (render action returns { ok: ... }). A non-ok result
+      // can be a transient transport failure surfaced by the action, so on the
+      // live path we re-run the (read-only) render action rather than giving up.
+      if (actionResult?.ok || actionResult?.success) return actionResult;
+      lastFailure = actionResult;
+      if (attempt < attempts)
+        console.error(
+          `[render job ${job?.id}] attempt ${attempt}/${attempts} returned non-ok; retrying in ${RENDER_RETRY_BACKOFF_MS}ms — ${JSON.stringify(actionResult?.error ?? actionResult)}`,
+        );
+    } catch (err: any) {
+      lastFailure = err;
+      if (attempt < attempts)
+        console.error(
+          `[render job ${job?.id}] attempt ${attempt}/${attempts} threw; retrying in ${RENDER_RETRY_BACKOFF_MS}ms — ${err?.message ?? String(err)}`,
+        );
+    }
+  }
+
+  // Exhausted retries — surface the last failure as a throw so the caller's
+  // existing catch marks this job failed (and it is filtered from the update).
+  //
+  // Preserve the REAL failure detail: a non-ok render envelope is an object of
+  // shape { ok:false, action:'render', error:'msg', trace:[...] }, and
+  // String(envelope) would yield '[object Object]', losing the message. Unwrap
+  // the human-readable detail (error ?? message ?? toString-of-last-resort) and
+  // attach the original failure object so callers/logs can still inspect it.
+  const err =
+    lastFailure instanceof Error
+      ? lastFailure
+      : new Error(
+          lastFailure?.error ??
+          lastFailure?.message ??
+          (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)),
+        );
+  (err as any).failure = lastFailure;
+  throw err;
+}
+
+// ===========================================================================
 // renderWithLitActions
 // ===========================================================================
 //
@@ -105,10 +185,11 @@ export const renderwithLitActions = async (
           preview,
           endpoints,
         });
-        const actionResult = await runAction(
+        const actionResult = await runRenderActionWithRetry(
           preview,
           lit,
           protocolInfo.litActions.render,
+          job,
           singleInputs,
           litUsageKey,
         );
