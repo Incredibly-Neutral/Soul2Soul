@@ -9,9 +9,22 @@
  *      (the gate the update action's `verifyRevocable` checks). It does NOT
  *      call `makeOffer`/`publishContent`/sign for the revoked item — that
  *      would re-add the deal.
- *   2. Re-render the live publication with the revoked item's old path in the
- *      `remove[]` list (threaded through renderCalls → renderwithLitActions →
- *      validateEvmUpdateInput/update). Because the deal is already retracted,
+ *   2. Re-render the REVOKED contentId itself (B2). Because the deal is
+ *      already retracted, the render action's hasDeal check — scoped to the
+ *      triggered contentIds (the id the caller rendered, threaded through by
+ *      the orchestrator) — marks the job `revoked`: it returns ok:true with
+ *      empty html and the preserved path, and the orchestrator auto-derives a
+ *      remove entry from that path (`revokedRemove` in
+ *      shared/src/rendering/sequence.ts). Prep expands ripples for the revoked
+ *      id just as on publish (postType matches a ripple origin → a cascaded
+ *      destination job, e.g. home), and the destination re-renders ACTIVE (it
+ *      is never hasDeal-checked) with its collection dropping the revoked
+ *      item. So the revoke propagates to dependent pages in production: home
+ *      re-renders and no longer lists the revoked post. When the postType has
+ *      NO ripple, the update still processes the lone remove via the zero-jobs
+ *      relaxation (jobs.length===0 && remove present). The `remove[]` list is
+ *      still threaded through renderCalls → renderwithLitActions →
+ *      validateEvmUpdateInput/update; because the deal is already retracted,
  *      `verifyRevocable` passes and the update action deletes the path
  *      recursively from the MFS tree.
  *
@@ -114,11 +127,6 @@ export function revokedPathFor(
 	return `${prefix}/${slug}`;
 }
 
-/** Case-insensitive genesis comparison (bytes32 ids are hex/0x-prefixed). */
-function sameGenesis(a: string, b: string): boolean {
-	return String(a).toLowerCase() === String(b).toLowerCase();
-}
-
 /** Resolve the note's on-chain genesis: frontmatter `genesis`, else `content_id`. */
 async function resolveGenesis(main: IMainController, file: TFile): Promise<string | null> {
 	const cache = main.plugin.app.metadataCache.getFileCache(file);
@@ -129,40 +137,9 @@ async function resolveGenesis(main: IMainController, file: TFile): Promise<strin
 }
 
 /**
- * Find ONE remaining live genesis to re-render post-retract, or null when the
- * deal set is now empty. Paginates safely across pages (B2) so a publication
- * with more than one page of deals is not misread as "none remaining" from a
- * truncated first page, and returns as soon as a candidate is found so we
- * never materialize the full deal list into memory.
- */
-async function remainingDealGenesis(
-	main: IMainController,
-	service: any,
-	revokedGenesis: string,
-): Promise<string | null> {
-	const PAGE_SIZE = 100;
-	const MAX_PAGES = 500; // safety cap against a pathological infinite page stream
-	let offset = 0;
-
-	for (let page = 0; page < MAX_PAGES; page++) {
-		const deals = ((await service.getDeals(offset, PAGE_SIZE)) ?? []) as { genesis?: string }[];
-		for (const d of deals) {
-			if (d.genesis && !sameGenesis(d.genesis, revokedGenesis)) {
-				return d.genesis;
-			}
-		}
-
-		// Fewer than a full page (or empty) ⇒ this was the last page.
-		if (deals.length < PAGE_SIZE) break;
-		offset += PAGE_SIZE;
-	}
-
-	return null;
-}
-
-/**
- * Revoke a note's claim on a publication: on-chain retract + re-render with a
- * remove entry for the item's old path. Never calls makeOffer for the item.
+ * Revoke a note's claim on a publication: on-chain retract + re-render the
+ * REVOKED contentId itself with a remove entry for the item's old path. Never
+ * calls makeOffer for the item.
  */
 export async function revokeContent(
 	main: IMainController,
@@ -181,7 +158,7 @@ export async function revokeContent(
 	await service.retract(genesis);
 	console.log('[retract] on-chain retract complete');
 
-	// 2. Re-render the live publication with the revoked path in remove[].
+	// 2. Re-render the REVOKED contentId itself with the revoked path in remove[].
 	// Resolve the publication's REAL on-chain localePaths so the remove path
 	// reproduces createPath's prefix exactly — a locale mapped to an EMPTY
 	// prefix (e.g. `localePaths.en === ''`) must NOT be derived as `/en/...`.
@@ -209,43 +186,28 @@ export async function revokeContent(
 		`Revoked '${slug}' from ${publication}; on-chain retract complete. Removal requested — if the publication uses a custom template path, it completes on the next full render.`,
 	);
 
-	const remainingGenesis = await remainingDealGenesis(main, service, genesis);
-
-	if (remainingGenesis === null) {
-		// The on-chain retract already flipped hasDeal → false. There is no safe
-		// "remove-only" update: prep requires a non-empty `contentIds` array and
-		// `validateEvmUpdateInput` requires `jobs.min(1)`, so an empty-streamIds
-		// render would fail validation. The revoked page therefore stays in the
-		// tree until a future render includes its remove path (verifyRevocable
-		// will then pass and delete it). Surface this instead of failing quiet.
-		console.warn(
-			`[retract] no remaining live deals to re-render; remove entry ${removePath} will fire on the next render`,
-		);
-		new Notice(
-			`Revoked '${slug}' from ${publication}; nothing left to re-render — page will be removed on the next render`,
-		);
-		return;
-	}
-
-	// There ARE other live items: re-render JUST ONE of them with the revoked
-	// path in remove[]. The update action's cp-root staging preserves every
-	// other already-rendered item, the single refresh job overwrites this one
-	// item's path, and the remove loop deletes the revoked path — so the whole
-	// site stays intact at J=1 (update ≈32-34 + one ~20-22 render job, both
-	// well under Lit's 50-requests-per-session ceiling). Passing the FULL
-	// remaining array here would have carried J≈6 jobs into one update session
-	// (~65) and blown past 50 — that was the revoke re-render bug.
+	// Re-render the REVOKED contentId itself (B2). The on-chain retract already
+	// flipped hasDeal → false, so the render action's hasDeal check — scoped to
+	// triggeredContentIds=[genesis] (the id the caller rendered) — marks this
+	// job `revoked`: it returns ok:true with empty html and the preserved path,
+	// and the orchestrator auto-derives a remove entry from the revoked job's
+	// path (revokedRemove in shared/src/rendering/sequence.ts) IN ADDITION to
+	// the caller-supplied `remove` below. Prep expands ripples for the revoked
+	// id just as on publish (postType matches a ripple origin → a cascaded
+	// destination job like home); the destination re-renders ACTIVE — it is
+	// never hasDeal-checked, since hasDeal is scoped to triggeredContentIds=
+	// [genesis] — and its collection drops the revoked item. So dependent pages
+	// re-render and no longer list the revoked post. If the postType has NO
+	// ripple, the update still processes the lone remove via the zero-jobs
+	// relaxation (jobs.length===0 && remove present).
+	//
+	// This is safe for Lit's 50-requests-per-session ceiling: at most the
+	// revoked job + one level of ripple destinations (J small) — NOT the full
+	// remaining deal array (that was the revoke re-render bug, ~65 requests).
 	console.log(
-		`[retract] refreshed publication ${publication} with a single item (${remainingGenesis.slice(0, 12)}…) and remove entry ${removePath}`,
+		`[retract] re-rendering revoked id ${genesis.slice(0, 12)}… with remove entry ${removePath}`,
 	);
-	new Notice(`Revoked '${slug}' from ${publication}; refreshed the publication without it`);
+	new Notice(`Revoked '${slug}' from ${publication}; re-rendered the publication without it`);
 
-	await renderCalls(
-		main,
-		publication,
-		[remainingGenesis],
-		main.oxo.settings.litUsageKey,
-		true,
-		remove,
-	);
+	await renderCalls(main, publication, [genesis], main.oxo.settings.litUsageKey, true, remove);
 }
