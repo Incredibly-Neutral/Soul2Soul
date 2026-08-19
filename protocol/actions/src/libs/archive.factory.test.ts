@@ -9,7 +9,7 @@ import {
 } from './archive.factory';
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).

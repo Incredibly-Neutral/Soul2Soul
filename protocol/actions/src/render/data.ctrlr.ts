@@ -3,7 +3,7 @@ import { fetchByPublication, getDeals, toBody, type Entry } from '../libs/module
 import { catFile } from '../libs/ipfs.factory';
 import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
-import type { S2SContentItem } from '@s2s/soul2soul-shared';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
 
 export const createPath = (

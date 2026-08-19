@@ -6,7 +6,7 @@ import {
   SingleInput,
   SingleData,
 } from '@s2s/soul2soul-shared/lit-actions';
-import type { S2SContentItem } from '@s2s/soul2soul-shared';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile } from '../libs/ipfs.factory';

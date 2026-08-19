@@ -1,7 +1,7 @@
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared';
-import { s2sContentItemSchema } from '@s2s/soul2soul-shared';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-publication IPFS content archive.

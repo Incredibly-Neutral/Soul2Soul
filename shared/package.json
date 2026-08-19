@@ -12,6 +12,10 @@
       "types": "./dist/lit-actions.d.ts",
       "default": "./dist/lit-actions.js"
     },
+    "./rendering": {
+      "types": "./dist/rendering/schema.d.ts",
+      "default": "./dist/rendering/schema.js"
+    },
     "./safe-app": {
       "types": "./dist/safe-app.d.ts",
       "default": "./dist/safe-app.js"
