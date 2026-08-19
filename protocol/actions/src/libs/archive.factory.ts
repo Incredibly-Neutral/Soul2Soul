@@ -1,13 +1,27 @@
 import type { Entry } from './module.factory';
+import { toBody } from './module.factory';
+import type { S2SContentItem } from '@s2s/soul2soul-shared';
+import { s2sContentItemSchema } from '@s2s/soul2soul-shared';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-publication IPFS content archive.
 //
-// Stores the flat toBody output for each genesis keyed by genesis, together
-// with the source cid it was built from. This is the "freshness oracle"
-// consumer: a given genesis entry is FRESH when its stored cid still matches
-// the latest cid returned by getDeals(); otherwise it is STALE/MISS and must
-// be re-catted and rebuilt.
+// Stores the FULL canonical content item (S2SContentItem — signed public
+// metadata + body + proof + objectId + encryption) for each genesis keyed by
+// genesis, together with the source cid it was built from. This is the
+// "freshness oracle" consumer: a given genesis entry is FRESH when its stored
+// cid still matches the latest cid returned by getDeals(); otherwise it is
+// STALE/MISS and must be re-catted and rebuilt.
+//
+// Each stored item is validated against the existing shared content-item
+// schema (s2sContentItemSchema, @s2s/soul2soul-shared) — so the archive
+// carries the full public metadata (specVersion, mediaType, plaintextHash,
+// ...) that the flat toBody output drops, typed with the real type — never
+// `any`.
+//
+// reconcile()'s OUTPUT stays the flat toBody bodies (the in-flight T3 read
+// path consumes exactly that): the archive stores the full item, but fresh
+// entries are served as toBody(deal, item) flat bodies.
 //
 // The core functions are pure/deterministic — no chain or IPFS calls inside —
 // so the whole correctness story is unit-testable in isolation. The caller
@@ -18,7 +32,7 @@ export const ARCHIVE_FORMAT = 's2s-publication-archive/1';
 
 export interface ArchiveItem {
   cid: string; // latest cid this entry was built from
-  body: any; // flat toBody output
+  item: S2SContentItem; // full canonical content item (validated against s2sContentItemSchema)
 }
 
 export interface Archive {
@@ -36,14 +50,26 @@ export const emptyArchive = (publication = ''): Archive => ({
 });
 
 /**
+ * True when `item` is a structurally valid S2SContentItem per the shared
+ * content-item schema. Used as the reconcile() wellFormed guard (bias toward
+ * inclusion: an unverifiable item is a MISS, refetch — never silently serve).
+ */
+const isValidItem = (item: unknown): item is S2SContentItem =>
+  !!item &&
+  typeof item === 'object' &&
+  !Array.isArray(item) &&
+  s2sContentItemSchema.safeParse(item).success;
+
+/**
  * Parse + validate an archive payload.
  *
  * Any malformed / unparseable / wrong-shape input MUST NOT throw: it fails
  * open to an EMPTY archive (no items), matching the current no-archive
  * behaviour so callers never crash on a corrupt cached blob. Individual
- * malformed items (missing cid, missing body, wrong shape) are dropped here;
- * reconcile() also treats absence as a MISS, so nothing is ever silently lost
- * — a dropped item will simply be refetched.
+ * malformed items (missing cid, missing item, or an item that fails the
+ * existing content-item schema) are dropped here; reconcile() also treats
+ * absence as a MISS, so nothing is ever silently lost — a dropped item will
+ * simply be refetched.
  */
 export function parseArchive(json: string): Archive {
   let parsed: any;
@@ -67,19 +93,23 @@ export function parseArchive(json: string): Archive {
   }
 
   const items: Record<string, ArchiveItem> = {};
-  for (const [genesis, item] of Object.entries(parsed.items)) {
+  for (const [genesis, entry] of Object.entries(parsed.items)) {
     if (
-      item &&
-      typeof item === 'object' &&
-      !Array.isArray(item) &&
-      typeof (item as ArchiveItem).cid === 'string' &&
-      (item as ArchiveItem).cid !== '' &&
-      (item as ArchiveItem).body !== undefined &&
-      (item as ArchiveItem).body !== null
+      entry &&
+      typeof entry === 'object' &&
+      !Array.isArray(entry) &&
+      typeof (entry as ArchiveItem).cid === 'string' &&
+      (entry as ArchiveItem).cid !== ''
     ) {
-      items[genesis] = { cid: (item as ArchiveItem).cid, body: (item as ArchiveItem).body };
+      const res = s2sContentItemSchema.safeParse((entry as ArchiveItem).item);
+      if (res.success) {
+        // Schema enforces the shape at runtime; the branded literals (DidEthr,
+        // `0x${string}`) are compile-time refinements the schema can't infer,
+        // so the validated data is re-cast to the canonical type.
+        items[genesis] = { cid: (entry as ArchiveItem).cid, item: res.data as S2SContentItem };
+      }
     }
-    // else: malformed item → omit; reconcile treats it as a MISS (refetch).
+    // else: malformed / schema-invalid item → omit; reconcile treats it as a MISS (refetch).
   }
 
   return {
@@ -93,14 +123,17 @@ export function parseArchive(json: string): Archive {
 /**
  * Classify each deal against the archive.
  *
- *  - archive entry present AND item.cid === deal.cid  → FRESH → `fresh.get(g) = body`
+ *  - archive entry present AND item.cid === deal.cid  → FRESH → `fresh.get(g) = toBody(deal, item)`
  *  - no entry                                         → MISS
  *  - item.cid !== deal.cid                            → STALE
- *  - malformed / unverifiable entry (missing cid or body) → MISS (bias toward
- *    inclusion: refetch rather than silently serve a broken/dropped entry)
+ *  - malformed / unverifiable entry (missing cid or invalid item) → MISS (bias
+ *    toward inclusion: refetch rather than silently serve a broken/dropped entry)
  *
  * Both MISS and STALE land in `needsFetch`, where the caller cats
  * `deal.cid` fresh and rebuilds the body.
+ *
+ * OUTPUT CONTRACT (unchanged): `fresh` carries the flat toBody bodies — the
+ * in-flight T3 read path consumes exactly this shape.
  */
 export function reconcile(
   deals: Entry[],
@@ -112,14 +145,10 @@ export function reconcile(
   for (const deal of deals) {
     const entry = archive?.items?.[deal.genesis];
     const wellFormed =
-      !!entry &&
-      typeof entry.cid === 'string' &&
-      entry.cid !== '' &&
-      entry.body !== undefined &&
-      entry.body !== null;
+      !!entry && typeof entry.cid === 'string' && entry.cid !== '' && isValidItem(entry.item);
 
     if (wellFormed && entry!.cid === deal.cid) {
-      fresh.set(deal.genesis, entry!.body);
+      fresh.set(deal.genesis, toBody(deal, entry!.item));
     } else {
       needsFetch.push(deal);
     }
@@ -135,7 +164,7 @@ export function reconcile(
  *  - start from prev (or an empty archive if null);
  *  - DROP any item whose genesis has no deal (deal-set floor — geneses that
  *    disappeared on-chain are pruned);
- *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, body }`;
+ *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, item }`;
  *  - deal'd-but-not-refreshed geneses stay as-is (absent if never present) —
  *    lazy, slow convergence is intended;
  *  - stamp `format`, `publication` (from prev) and `built` (now).
@@ -143,7 +172,7 @@ export function reconcile(
 export function mergeArchive(
   prev: Archive | null,
   deals: Entry[],
-  refreshed: Map<string, any>,
+  refreshed: Map<string, S2SContentItem>,
 ): Archive {
   const dealSet = new Set(deals.map((d) => d.genesis));
   const items: Record<string, ArchiveItem> = {};
@@ -158,7 +187,7 @@ export function mergeArchive(
 
   for (const deal of deals) {
     if (refreshed.has(deal.genesis)) {
-      items[deal.genesis] = { cid: deal.cid, body: refreshed.get(deal.genesis) };
+      items[deal.genesis] = { cid: deal.cid, item: refreshed.get(deal.genesis)! };
     }
   }
 
