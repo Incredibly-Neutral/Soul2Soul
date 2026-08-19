@@ -31,6 +31,40 @@ import { extractSignerAddress } from '../libs/gates';
 import { requireFields } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
+/**
+ * On-chain revoke check: is `jobId`'s genesis currently NOT under a deal?
+ *
+ * Conservative by design (reviewer C/G): this returns true ONLY when hasDeal
+ * is definitively false — a genuine on-chain revoke. On any RPC failure it
+ * returns false (treat as still active) so a transport error can never turn a
+ * live page into a revoked-and-removed one; the orchestrator's
+ * runRenderActionWithRetry handles transient RPC failures. Mirrors the
+ * established evmRead pattern in libs/gates.ts (canRead).
+ */
+export async function isRevokedByDealState(
+  jobId: string,
+  publicationModule: string,
+  rpcs?: string[],
+): Promise<boolean> {
+  const genesis = toBytes32Id(jobId);
+  let dealActive = true;
+  try {
+    dealActive = await evmRead(
+      'L2',
+      publicationModule,
+      ['function hasDeal(bytes32 genesis) view returns (bool)'],
+      'hasDeal',
+      [genesis],
+      rpcs,
+    );
+  } catch (e) {
+    console.log(
+      `hasDeal read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return !dealActive;
+}
+
 // ENS records contract ABI (getText/setText) — local mirror of update/main.ts;
 // no shared ABI import. Used to read the per-publication content archive
 // pointer (`content_cache_<publication>` text record on the publication node).
@@ -217,17 +251,22 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     // remove entry). The path is kept so the orchestrator can derive the
     // remove entry from the revoked job itself (no separate caller-supplied
     // remove entry required).
-    if (!templateData.revoked) {
-      const genesis = toBytes32Id(job.id);
-      const dealActive = await evmRead(
-        'L2',
-        publicationModule,
-        ['function hasDeal(bytes32 genesis) view returns (bool)'],
-        'hasDeal',
-        [genesis],
-        rpcs?.L2,
-      );
-      if (!dealActive) {
+    //
+    // Guard (reviewer C/G): hasDeal=false must only mark GENUINELY-revoked
+    // items as revoked, never a live page that merely isn't a deal or a
+    // transient RPC failure. Two conservative guards, matching the
+    // established evmRead pattern in libs/gates.ts (canRead):
+    //   a. Only run the check when the item has a known path — a genuinely
+    //      revoked item was previously rendered, so it has a path to remove.
+    //      A pathless job (never rendered, nothing to remove) is never
+    //      misclassified as revoked.
+    //   b. isRevokedByDealState wraps the evmRead defensively: on RPC failure
+    //      it defaults to NOT revoked (treat as still active). A transport
+    //      failure must never turn a live page into a revoked-and-removed one;
+    //      the orchestrator's runRenderActionWithRetry handles transient RPC
+    //      failures.
+    if (!templateData.revoked && templateData.path) {
+      if (await isRevokedByDealState(job.id, publicationModule, rpcs?.L2)) {
         console.log(`hasDeal false for ${job.id.slice(0, 12)}… — treating as revoked`);
         templateData.revoked = true;
       }
@@ -363,9 +402,17 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         }
       }
     } else {
+      // B1 (reviewer): a revoked render is a SUCCESSFUL-but-revoked result,
+      // NOT a hard failure. Return ok:true carrying job.revoked=true, the
+      // preserved path, and empty html so the orchestrator's `successful`
+      // list includes it and the activeJobs/revokedRemove separation in
+      // sequence.ts can derive the remove entry from the revoked job's path.
+      // (Before this fix the revoked branch pushed into `errors` and returned
+      // ok:false with no data.job, so the path was dropped, the job was
+      // retried 3x then thrown, and the remove entry never auto-derived — the
+      // revoked page lingered in the MFS tree.)
       const revokedMsg = 'Content was revoked or failed to decrypt';
       console.log(revokedMsg);
-      errors.push(revokedMsg);
       job.revoked = true;
       // Keep the path so the orchestrator can derive a remove entry from the
       // revoked job — the update action deletes the path from the MFS tree.
@@ -373,6 +420,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       // remove entry, requiring the caller (neutralpress) to supply it.
       job.path = templateData.path || '';
       job.html = '';
+      html = '';
     }
 
     if (errors.length > 0) {
@@ -403,3 +451,5 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     };
   }
 }
+
+export { main };
