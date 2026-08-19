@@ -6,12 +6,14 @@ import {
   SingleInput,
   SingleData,
 } from '@s2s/soul2soul-shared/lit-actions';
+import type { S2SContentItem } from '@s2s/soul2soul-shared';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { uploadFile } from '../libs/ipfs.factory';
+import { catFile, uploadFile } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
-import { evmRead } from '../libs/evm';
+import { evmRead, evmWrite, toHexString } from '../libs/evm';
 import { fetchById } from '../libs/module.factory';
+import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
 
 import { getConfig } from './config.ctrl';
 import {
@@ -19,6 +21,8 @@ import {
   fetchCollections,
   mergeDecrypted,
   pathsForCollections,
+  shouldWriteBackCache,
+  type CollectionsDrift,
 } from './data.ctrlr';
 import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
@@ -35,6 +39,77 @@ const RECORDS_CONTRACT_ABI = [
   'function setText(bytes32 node, string key, string value) nonpayable',
 ];
 
+/**
+ * T4 write-back: close the archive drift observed by the read path.
+ *
+ * I/O-bound and thin by design — all decisions are pure (reconcile in
+ * archive.factory, shouldWriteBackCache in data.ctrlr). The caller gates on
+ * `shouldWriteBackCache` (maintainCache === true && !preview && drift > 0) and
+ * wraps this in try/catch: a failure anywhere here (cat, parse, pin, evmWrite)
+ * must never fail the render — the cache is a performance optimization,
+ * getDeals is the correctness oracle.
+ *
+ * Flow (per the T4 contract):
+ *   a. archiveCid is already read by the T3 read path above (getText
+ *      'content_cache_<publication>'); an empty pointer ⇒ no archive to
+ *      maintain ⇒ no write.
+ *   b. cat the CURRENT archive fresh, parse, reconcile against the same deals
+ *      the read path used (reused — no extra getDeals RPC in-session).
+ *   c. if needsFetch non-empty (drift > 0): merge the freshly-fetched full
+ *      items into the archive, serialize, uploadFile → newCid.
+ *   d. evmWrite setText with confirm=false — fire-and-forget (await broadcast,
+ *      not receipt). Push the result to trace.
+ *   e. if drift === 0: no write — steady state stays read-only.
+ */
+async function writeBackArchiveCache(opts: {
+  archiveCid: string;
+  publication: string;
+  publicationModule: string;
+  protocolInfo: any;
+  gateway?: string;
+  rpcs?: { L1?: string[]; L2?: string[] };
+  drift: CollectionsDrift;
+  trace: any[];
+}): Promise<void> {
+  const { archiveCid, publication, publicationModule, protocolInfo, gateway, rpcs, drift, trace } =
+    opts;
+
+  // b. Read the current archive fresh (self-contained), parse, and reconcile
+  // against the same deals the read path used (reused — no extra getDeals RPC
+  // in-session; the freshness oracle is stable within one render).
+  const archive = parseArchive(await catFile(gateway!, archiveCid));
+  const { needsFetch } = reconcile(drift.deals, archive);
+
+  // e. Steady state (drift === 0) performs zero writes — read-only.
+  if (needsFetch.length === 0) return;
+
+  // c. Merge the freshly-fetched FULL items (tracked by the read path) into
+  // the archive, serialize, and pin via uploadFile. Encrypted items contribute
+  // ciphertext only — exactly as the archive lib handles.
+  const refreshed = new Map<string, S2SContentItem>();
+  for (const entry of needsFetch) {
+    const item = drift.fetchedItems.get(entry.genesis);
+    if (item) refreshed.set(entry.genesis, item);
+  }
+  const next = mergeArchive(archive, drift.deals, refreshed);
+  const newCid = await uploadFile(gateway!, serialize(next));
+
+  // d. Fire-and-forget pointer update: confirm=false → await broadcast, not
+  // receipt. Push the result to trace.
+  const node = ethers.utils.namehash(publication);
+  const result = await evmWrite(
+    'L2',
+    protocolInfo.pkp,
+    protocolInfo.ensRecords,
+    RECORDS_CONTRACT_ABI,
+    'setText',
+    [node, `content_cache_${publication}`, toHexString(newCid)],
+    false,
+    rpcs?.L2?.[0],
+  );
+  trace.push(JSON.stringify(result));
+}
+
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
   let t0 = Date.now();
@@ -44,7 +119,16 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
   try {
     requireFields(input, ['job', 'signature', 'authorSafeAddress', 'publication', 'endpoints']);
-    const { job, signature, authorSafeAddress, configCid, publication, preview, endpoints } = input;
+    const {
+      job,
+      signature,
+      authorSafeAddress,
+      configCid,
+      publication,
+      preview,
+      endpoints,
+      maintainCache,
+    } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
 
@@ -124,7 +208,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       let t2 = Date.now();
       trace.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
-      let collections = await fetchCollections(
+      const { collections, drift } = await fetchCollections(
         job.templateConfig,
         publicationModule,
         rpcs?.L2,
@@ -221,6 +305,31 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
         const htmlCid = await uploadFile(gateway!, html!);
         job.html = htmlCid;
+
+        // T4: drift-gated, fire-and-forget archive write-back. Only the
+        // designated last parallel job (maintainCache === true) ever writes,
+        // and never for preview. Best-effort: a failure anywhere in the
+        // write-back (cat, parse, pin, evmWrite) is caught and must NOT fail
+        // the render — the result is identical whether or not the cache write
+        // succeeded. Steady state (no drift) performs zero writes.
+        if (shouldWriteBackCache(maintainCache, preview, drift)) {
+          try {
+            await writeBackArchiveCache({
+              archiveCid,
+              publication,
+              publicationModule,
+              protocolInfo,
+              gateway,
+              rpcs,
+              drift,
+              trace,
+            });
+          } catch (e) {
+            console.log(
+              `archive write-back failed (best-effort, render unaffected): ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
       }
     } else {
       const revokedMsg = 'Content was revoked or failed to decrypt';
