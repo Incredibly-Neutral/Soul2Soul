@@ -31,6 +31,7 @@ import {
   validatePrepOutput,
   validateSingleInput,
   validateSingleOutput,
+  validateEvmUpdateInput,
   validateEvmUpdateOutput,
 } from './action-io';
 import { sampleJob, sampleEndpoints } from './fixtures/inputs';
@@ -55,14 +56,15 @@ function env(name: string, alt?: string): string | undefined {
   return process.env[name] ?? (alt ? process.env[alt] : undefined);
 }
 
-const RUNNER_URL        = env('TEST_RUNNER_URL', 'S2S_RUNNER_URL')   || 'https://run.transport-union.dev/run';
-const PUBLICATION       = env('TEST_PUBLICATION', 'S2S_PUBLICATION');
-const AUTHOR_SAFE     = env('TEST_AUTHOR_SAFE', 'S2S_AUTHOR_SAFE')     || '0x0000...0001';
-const CONFIG_CID        = env('TEST_CONFIG_CID', 'S2S_CONFIG_CID');
-const TEST_PRIVATE_KEY  = env('TEST_PRIVATE_KEY');
+const RUNNER_URL =
+  env('TEST_RUNNER_URL', 'S2S_RUNNER_URL') || 'https://run.transport-union.dev/run';
+const PUBLICATION = env('TEST_PUBLICATION', 'S2S_PUBLICATION');
+const AUTHOR_SAFE = env('TEST_AUTHOR_SAFE', 'S2S_AUTHOR_SAFE') || '0x0000...0001';
+const CONFIG_CID = env('TEST_CONFIG_CID', 'S2S_CONFIG_CID');
+const TEST_PRIVATE_KEY = env('TEST_PRIVATE_KEY');
 
 const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL;
-const BASE_RPC_URL    = process.env.BASE_RPC_URL;
+const BASE_RPC_URL = process.env.BASE_RPC_URL;
 
 // ============================================================================
 // Per-scenario content IDs — each test defines its own.
@@ -70,8 +72,12 @@ const BASE_RPC_URL    = process.env.BASE_RPC_URL;
 // ============================================================================
 
 /** Content IDs — from TEST_CONTENT_IDS env var, fall back to real genesis CID. */
-const CONTENT_IDS = (env('TEST_CONTENT_IDS') || '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063')
-  .split(',').map(s => s.trim()).filter(Boolean);
+const CONTENT_IDS = (
+  env('TEST_CONTENT_IDS') || '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /** Whether the chain-dependent tests (CID fetch + runner) can run. */
 const chainReady = !!(MAINNET_RPC_URL && BASE_RPC_URL && PUBLICATION && TEST_PRIVATE_KEY);
@@ -87,15 +93,12 @@ const mockLit = {} as any;
 async function makeSignature(): Promise<string> {
   if (TEST_PRIVATE_KEY) {
     const wallet = new Wallet(TEST_PRIVATE_KEY);
-    return wallet.signMessage("lit actions auth");
+    return wallet.signMessage('lit actions auth');
   }
   return '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
 }
 
-async function callAction(
-  cid: string,
-  inputs: Record<string, unknown>,
-): Promise<unknown> {
+async function callAction(cid: string, inputs: Record<string, unknown>): Promise<unknown> {
   return runAction(true, mockLit, cid, inputs);
 }
 
@@ -114,7 +117,8 @@ describe('sequence — local shape contracts', () => {
   it('a sample job passes validateSingleInput', () => {
     const input = {
       job: sampleJob,
-      signature: '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      signature:
+        '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
       authorSafeAddress: AUTHOR_SAFE,
       publication: 'test.soul2soul.eth',
       preview: true,
@@ -165,7 +169,10 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
   let renderedJobs: any[];
 
   beforeAll(async () => {
-    const l1 = createPublicClient({ chain: mainnet as any, transport: http(MAINNET_RPC_URL!) }) as any;
+    const l1 = createPublicClient({
+      chain: mainnet as any,
+      transport: http(MAINNET_RPC_URL!),
+    }) as any;
     const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
     SIGNATURE = await makeSignature();
@@ -270,7 +277,10 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
   let SIGNATURE: string;
 
   beforeAll(async () => {
-    const l1 = createPublicClient({ chain: mainnet as any, transport: http(MAINNET_RPC_URL!) }) as any;
+    const l1 = createPublicClient({
+      chain: mainnet as any,
+      transport: http(MAINNET_RPC_URL!),
+    }) as any;
     const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
     SIGNATURE = await makeSignature();
@@ -319,7 +329,10 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
   let protocolInfo: S2SProtocolInfo;
 
   beforeAll(async () => {
-    const l1 = createPublicClient({ chain: mainnet as any, transport: http(MAINNET_RPC_URL!) }) as any;
+    const l1 = createPublicClient({
+      chain: mainnet as any,
+      transport: http(MAINNET_RPC_URL!),
+    }) as any;
     const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
   }, 15_000);
@@ -371,7 +384,12 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
   it('retries on non-ok then succeeds (two calls, returns the ok)', async () => {
     vi.mocked(runAction)
-      .mockResolvedValueOnce({ ok: false, action: 'render', error: 'flaky transport', trace: [] } as any)
+      .mockResolvedValueOnce({
+        ok: false,
+        action: 'render',
+        error: 'flaky transport',
+        trace: [],
+      } as any)
       .mockResolvedValueOnce(okResult as any);
 
     const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
@@ -412,12 +430,57 @@ describe('runRenderActionWithRetry — live-path retry', () => {
   });
 
   it('preview mode: always-failing runAction makes exactly 1 call then throws', async () => {
-    vi.mocked(runAction).mockResolvedValue({ ok: false, action: 'render', error: 'nope', trace: [] } as any);
+    vi.mocked(runAction).mockResolvedValue({
+      ok: false,
+      action: 'render',
+      error: 'nope',
+      trace: [],
+    } as any);
 
-    await expect(
-      runRenderActionWithRetry(true, mockLit, cid, { id: 'j1' }, {}),
-    ).rejects.toThrow();
+    await expect(runRenderActionWithRetry(true, mockLit, cid, { id: 'j1' }, {})).rejects.toThrow();
 
     expect(runAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============================================================================
+// Revoked-job → remove-entry derivation (GAP-10 revoke ripples)
+// ============================================================================
+
+describe('renderwithLitActions — validateEvmUpdateInput accepts zero-jobs-with-remove', () => {
+  it('accepts empty jobs array when remove entries are present (revoke path)', () => {
+    const input = {
+      publication: 'test.soul2soul.eth',
+      jobs: [],
+      signature:
+        '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      authorSafeAddress: '0x0000...0001',
+      preview: true,
+      remove: [{ path: 'revoked-post-slug' }],
+      endpoints: {
+        ipfsGateway: 'https://ipfs.transport-union.dev',
+        rpcs: { L1: ['https://lb.drpc.live/ethereum/key'], L2: ['https://lb.drpc.live/base/key'] },
+      },
+    };
+    expect(() => validateEvmUpdateInput(input)).not.toThrow();
+    const result = validateEvmUpdateInput(input);
+    expect(result.jobs).toHaveLength(0);
+    expect(result.remove).toHaveLength(1);
+  });
+
+  it('still rejects empty jobs when NO remove entries are present', () => {
+    const input = {
+      publication: 'test.soul2soul.eth',
+      jobs: [],
+      signature:
+        '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      authorSafeAddress: '0x0000...0001',
+      preview: true,
+      endpoints: {
+        ipfsGateway: 'https://ipfs.transport-union.dev',
+        rpcs: { L1: ['https://lb.drpc.live/ethereum/key'], L2: ['https://lb.drpc.live/base/key'] },
+      },
+    };
+    expect(() => validateEvmUpdateInput(input)).toThrow('jobs');
   });
 });
