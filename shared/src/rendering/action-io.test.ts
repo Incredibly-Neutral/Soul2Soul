@@ -13,15 +13,11 @@ import {
 // with nodenext. Mirrors protocol/actions/src/libs/helpers.ts exactly.
 // ============================================================================
 function requireFields<T extends object>(obj: T, fields: (keyof T)[]): void {
-  const missing = fields.filter(f => obj[f] === undefined || obj[f] === null || obj[f] === "");
-  if (missing.length) throw `missing required field(s): ${missing.join(", ")}`;
+  const missing = fields.filter((f) => obj[f] === undefined || obj[f] === null || obj[f] === '');
+  if (missing.length) throw `missing required field(s): ${missing.join(', ')}`;
 }
 
-import {
-  validPrepInput,
-  validSingleInput,
-  validEvmUpdateInput,
-} from './fixtures/inputs';
+import { validPrepInput, validSingleInput, validEvmUpdateInput } from './fixtures/inputs';
 import {
   validPrepOutput,
   validSingleOutput,
@@ -45,6 +41,7 @@ import {
   evmMissingSignature,
   evmNonArrayJobs,
   evmEmptyJobs,
+  evmEmptyJobsWithRemove,
   evmMissingPreview,
 } from './fixtures/broken-inputs';
 
@@ -114,24 +111,15 @@ describe('validatePrepInput', () => {
   });
 
   it('rejects missing publication', () => {
-    assertFieldNamed(
-      () => validatePrepInput(prepMissingPublication()),
-      'publication',
-    );
+    assertFieldNamed(() => validatePrepInput(prepMissingPublication()), 'publication');
   });
 
   it('rejects contentIds as wrong type', () => {
-    assertFieldNamed(
-      () => validatePrepInput(prepNonArrayContentIds()),
-      'contentIds',
-    );
+    assertFieldNamed(() => validatePrepInput(prepNonArrayContentIds()), 'contentIds');
   });
 
   it('rejects empty contentIds array', () => {
-    assertFieldNamed(
-      () => validatePrepInput(prepEmptyContentIds()),
-      'contentIds',
-    );
+    assertFieldNamed(() => validatePrepInput(prepEmptyContentIds()), 'contentIds');
   });
 
   it('accepts missing configCid (optional)', () => {
@@ -162,10 +150,7 @@ describe('validatePrepOutput', () => {
   });
 
   it('rejects malformed data (missing jobs[0].id)', () => {
-    assertFieldNamed(
-      () => validatePrepOutput(makeMalformedPrepOutput()),
-      'id',
-    );
+    assertFieldNamed(() => validatePrepOutput(makeMalformedPrepOutput()), 'id');
   });
 });
 
@@ -176,34 +161,40 @@ describe('validatePrepOutput', () => {
 describe('validateSingleInput', () => {
   it('parses a valid single input', () => {
     const result = validateSingleInput(validSingleInput);
-    expect(result.job.id).toBe('0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063');
+    expect(result.job.id).toBe(
+      '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063',
+    );
     expect(result.signature).toBeTruthy();
   });
 
   it('rejects missing signature', () => {
-    assertFieldNamed(
-      () => validateSingleInput(singleMissingSignature()),
-      'signature',
-    );
+    assertFieldNamed(() => validateSingleInput(singleMissingSignature()), 'signature');
   });
 
   it('rejects job as wrong type', () => {
-    assertFieldNamed(
-      () => validateSingleInput(singleWrongTypeJob()),
-      'job',
-    );
+    assertFieldNamed(() => validateSingleInput(singleWrongTypeJob()), 'job');
   });
 
   it('rejects missing authorSafeAddress', () => {
-    assertFieldNamed(
-      () => validateSingleInput(singleMissingAuthorSafe()),
-      'authorSafeAddress',
-    );
+    assertFieldNamed(() => validateSingleInput(singleMissingAuthorSafe()), 'authorSafeAddress');
   });
 
   it('accepts missing configCid (optional)', () => {
     const result = validateSingleInput(singleMissingConfigCid());
-    expect(result.job.id).toBe('0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063');
+    expect(result.job.id).toBe(
+      '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063',
+    );
+  });
+
+  it('accepts triggeredContentIds (optional) — scopes the hasDeal revoke check to the triggered content', () => {
+    const triggered = ['0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063'];
+    const result = validateSingleInput({ ...validSingleInput, triggeredContentIds: triggered });
+    expect(result.triggeredContentIds).toEqual(triggered);
+  });
+
+  it('omits triggeredContentIds when absent (optional)', () => {
+    const result = validateSingleInput(validSingleInput);
+    expect(result.triggeredContentIds).toBeUndefined();
   });
 });
 
@@ -229,10 +220,7 @@ describe('validateSingleOutput', () => {
   });
 
   it('rejects malformed data (missing data.job.html on S2SJob)', () => {
-    assertFieldNamed(
-      () => validateSingleOutput(makeMalformedSingleOutput()),
-      'html',
-    );
+    assertFieldNamed(() => validateSingleOutput(makeMalformedSingleOutput()), 'html');
   });
 });
 
@@ -248,24 +236,21 @@ describe('validateEvmUpdateInput', () => {
   });
 
   it('rejects missing signature', () => {
-    assertFieldNamed(
-      () => validateEvmUpdateInput(evmMissingSignature()),
-      'signature',
-    );
+    assertFieldNamed(() => validateEvmUpdateInput(evmMissingSignature()), 'signature');
   });
 
   it('rejects jobs as wrong type', () => {
-    assertFieldNamed(
-      () => validateEvmUpdateInput(evmNonArrayJobs()),
-      'jobs',
-    );
+    assertFieldNamed(() => validateEvmUpdateInput(evmNonArrayJobs()), 'jobs');
   });
 
-  it('rejects empty jobs array', () => {
-    assertFieldNamed(
-      () => validateEvmUpdateInput(evmEmptyJobs()),
-      'jobs',
-    );
+  it('rejects empty jobs array WITHOUT remove entries', () => {
+    assertFieldNamed(() => validateEvmUpdateInput(evmEmptyJobs()), 'jobs');
+  });
+
+  it('accepts empty jobs array when remove entries are present (revoke path)', () => {
+    const result = validateEvmUpdateInput(evmEmptyJobsWithRemove());
+    expect(result.jobs).toHaveLength(0);
+    expect(result.remove).toHaveLength(1);
   });
 
   it('accepts missing preview (optional)', () => {
@@ -296,9 +281,6 @@ describe('validateEvmUpdateOutput', () => {
   });
 
   it('rejects malformed data (missing data.cid)', () => {
-    assertFieldNamed(
-      () => validateEvmUpdateOutput(makeMalformedEvmUpdateOutput()),
-      'cid',
-    );
+    assertFieldNamed(() => validateEvmUpdateOutput(makeMalformedEvmUpdateOutput()), 'cid');
   });
 });

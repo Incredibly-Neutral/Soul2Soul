@@ -37,8 +37,13 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
   try {
     requireFields(input, ['publication', 'jobs', 'signature', 'authorSafeAddress', 'endpoints']);
-    if (!Array.isArray(input.jobs) || input.jobs.length === 0)
-      throw 'jobs must be a non-empty array';
+    // A revoke with no matching ripple produces jobs.length === 0 but still
+    // carries a `remove` entry (the revoked path) that must be processed — do
+    // NOT treat "no jobs" as "nothing to do". Only reject when there is neither
+    // a job nor a remove entry (nothing meaningful to write).
+    const hasRemove = input.remove && input.remove.length > 0;
+    if (!Array.isArray(input.jobs) || (input.jobs.length === 0 && !hasRemove))
+      throw 'jobs must be a non-empty array when no remove entries are provided';
     const { publication, jobs, signature, authorSafeAddress, preview, endpoints, remove } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;

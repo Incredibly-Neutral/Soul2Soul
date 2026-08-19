@@ -156,6 +156,13 @@ export const SingleActionInputSchema = z.object({
   configCid: z.string().optional(),
   preview: z.boolean().optional(),
   maintainCache: z.boolean().optional(),
+  // The id(s) the caller rendered — the render action scopes its on-chain
+  // hasDeal revoke check to these ids ONLY. A cascade/ripple destination is
+  // never hasDeal-checked (a destination pinned via query.genesis may never
+  // have been a deal; hasDeal=false there must not revoke-and-remove a live
+  // page). Optional for backward compatibility with direct callers that do
+  // not drive a revoke-triggered render.
+  triggeredContentIds: z.array(z.string()).optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
     rpcs: z.object({
@@ -213,28 +220,36 @@ export function validateSingleOutput(output: unknown): SingleActionOutput {
 // EvmUpdate Action I/O
 // ============================================================================
 
-export const EvmUpdateActionInputSchema = z.object({
-  publication: z.string().min(1, 'publication ENS name is required'),
-  jobs: z.array(jobSchema).min(1, 'jobs must have at least one item'),
-  signature: z.string().min(1, 'signature is required'),
-  authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
-  preview: z.boolean().optional(),
-  remove: z
-    .array(
-      z.object({
-        path: z.string(),
-        replacedBy: z.string().optional(),
+export const EvmUpdateActionInputSchema = z
+  .object({
+    publication: z.string().min(1, 'publication ENS name is required'),
+    // `jobs` may be empty ONLY when remove entries are present (a revoke with
+    // no matching ripple renders zero active jobs but still removes the revoked
+    // path). The refine below enforces that invariant.
+    jobs: z.array(jobSchema),
+    signature: z.string().min(1, 'signature is required'),
+    authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
+    preview: z.boolean().optional(),
+    remove: z
+      .array(
+        z.object({
+          path: z.string(),
+          replacedBy: z.string().optional(),
+        }),
+      )
+      .optional(),
+    endpoints: z.object({
+      ipfsGateway: z.string().optional(),
+      rpcs: z.object({
+        L1: z.array(z.string()).min(1, 'L1 rpcs required'),
+        L2: z.array(z.string()).min(1, 'L2 rpcs required'),
       }),
-    )
-    .optional(),
-  endpoints: z.object({
-    ipfsGateway: z.string().optional(),
-    rpcs: z.object({
-      L1: z.array(z.string()).min(1, 'L1 rpcs required'),
-      L2: z.array(z.string()).min(1, 'L2 rpcs required'),
     }),
-  }),
-});
+  })
+  .refine((data) => data.jobs.length > 0 || (data.remove != null && data.remove.length > 0), {
+    message: 'jobs must have at least one item, or remove entries must be provided (revoke path)',
+    path: ['jobs'],
+  });
 
 export type EvmUpdateActionInput = z.infer<typeof EvmUpdateActionInputSchema>;
 

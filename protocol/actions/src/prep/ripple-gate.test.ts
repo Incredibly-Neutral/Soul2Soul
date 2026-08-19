@@ -102,3 +102,22 @@ describe('rippleFiresForBody: genesis path', () => {
     expect(rippleFiresForBody(r, body({ locale: 'nl' }))).toBe(true);
   });
 });
+
+describe('rippleFiresForBody: revoke path (GAP-10)', () => {
+  it('fires for a revoked body — gate is postType-only, not deal-aware', () => {
+    // A revoked content still carries its postType; the ripple gate
+    // must fire so the destination page (e.g. home) re-renders and
+    // its collection drops the revoked item.
+    const r = ripple({ origins: ['post'] });
+    const revokedBody = body({
+      postType: 'post',
+      // revoked content still has the same signed fields as a live post
+    });
+    expect(rippleFiresForBody(r, revokedBody)).toBe(true);
+  });
+
+  it('does NOT fire when revoked body postType does not match origins', () => {
+    const r = ripple({ origins: ['why'] });
+    expect(rippleFiresForBody(r, body({ postType: 'post' }))).toBe(false);
+  });
+});

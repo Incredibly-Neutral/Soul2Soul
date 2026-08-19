@@ -68,3 +68,12 @@ export function evmMissingPreview(): unknown {
   const { preview: _, ...rest } = validEvmUpdateInput;
   return rest; // optional — STILL valid
 }
+
+/** Zero jobs WITH a remove entry — valid revoke path (RFC ripples-from-revoke). */
+export function evmEmptyJobsWithRemove(): unknown {
+  return {
+    ...validEvmUpdateInput,
+    jobs: [],
+    remove: [{ path: 'revoked-slug' }],
+  };
+}

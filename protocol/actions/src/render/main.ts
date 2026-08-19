@@ -31,6 +31,40 @@ import { extractSignerAddress } from '../libs/gates';
 import { requireFields } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
+/**
+ * On-chain revoke check: is `jobId`'s genesis currently NOT under a deal?
+ *
+ * Conservative by design (reviewer C/G): this returns true ONLY when hasDeal
+ * is definitively false — a genuine on-chain revoke. On any RPC failure it
+ * returns false (treat as still active) so a transport error can never turn a
+ * live page into a revoked-and-removed one; the orchestrator's
+ * runRenderActionWithRetry handles transient RPC failures. Mirrors the
+ * established evmRead pattern in libs/gates.ts (canRead).
+ */
+export async function isRevokedByDealState(
+  jobId: string,
+  publicationModule: string,
+  rpcs?: string[],
+): Promise<boolean> {
+  const genesis = toBytes32Id(jobId);
+  let dealActive = true;
+  try {
+    dealActive = await evmRead(
+      'L2',
+      publicationModule,
+      ['function hasDeal(bytes32 genesis) view returns (bool)'],
+      'hasDeal',
+      [genesis],
+      rpcs,
+    );
+  } catch (e) {
+    console.log(
+      `hasDeal read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return !dealActive;
+}
+
 // ENS records contract ABI (getText/setText) — local mirror of update/main.ts;
 // no shared ABI import. Used to read the per-publication content archive
 // pointer (`content_cache_<publication>` text record on the publication node).
@@ -136,6 +170,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       preview,
       endpoints,
       maintainCache,
+      triggeredContentIds,
     } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
@@ -209,6 +244,43 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       config.localePaths,
     );
     trace.push(templateData);
+
+    // Revoke detection via on-chain deal state: the decrypt-path
+    // `revoked` flag only covers decrypt failures, not on-chain retract.
+    // Check hasDeal so a retracted (revoked) plaintext item also renders
+    // as revoked (empty html + preserved path for the orchestrator's
+    // remove entry). The path is kept so the orchestrator can derive the
+    // remove entry from the revoked job itself (no separate caller-supplied
+    // remove entry required).
+    //
+    // Guard (reviewer C/G): hasDeal=false must only mark GENUINELY-revoked
+    // items as revoked, never a live page that merely isn't a deal or a
+    // transient RPC failure. Three conservative guards:
+    //   a. TRIGGERED-CONTENT SCOPE: the check runs ONLY for the id(s) the
+    //      caller rendered (input.triggeredContentIds, threaded through by the
+    //      orchestrator from its contentIds). A cascade/ripple destination
+    //      (e.g. home) is re-rendered as a consequence of the trigger and is
+    //      NEVER hasDeal-checked — a destination pinned via query.genesis may
+    //      never have been a deal, so hasDeal=false there would falsely
+    //      revoke-and-remove a live page (publish-path regression, acceptance
+    //      4; breaks 1(b) in production). A revoke is always about the id the
+    //      caller rendered, never a destination.
+    //   b. Only run the check when the item has a known path — a genuinely
+    //      revoked item was previously rendered, so it has a path to remove.
+    //      A pathless job (never rendered, nothing to remove) is never
+    //      misclassified as revoked.
+    //   c. isRevokedByDealState wraps the evmRead defensively: on RPC failure
+    //      it defaults to NOT revoked (treat as still active). A transport
+    //      failure must never turn a live page into a revoked-and-removed one;
+    //      the orchestrator's runRenderActionWithRetry handles transient RPC
+    //      failures.
+    const triggeredIds: string[] = triggeredContentIds ?? [];
+    if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
+      if (await isRevokedByDealState(job.id, publicationModule, rpcs?.L2)) {
+        console.log(`hasDeal false for ${job.id.slice(0, 12)}… — treating as revoked`);
+        templateData.revoked = true;
+      }
+    }
 
     if (!templateData.revoked) {
       job.revoked = false;
@@ -340,12 +412,25 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         }
       }
     } else {
+      // B1 (reviewer): a revoked render is a SUCCESSFUL-but-revoked result,
+      // NOT a hard failure. Return ok:true carrying job.revoked=true, the
+      // preserved path, and empty html so the orchestrator's `successful`
+      // list includes it and the activeJobs/revokedRemove separation in
+      // sequence.ts can derive the remove entry from the revoked job's path.
+      // (Before this fix the revoked branch pushed into `errors` and returned
+      // ok:false with no data.job, so the path was dropped, the job was
+      // retried 3x then thrown, and the remove entry never auto-derived — the
+      // revoked page lingered in the MFS tree.)
       const revokedMsg = 'Content was revoked or failed to decrypt';
       console.log(revokedMsg);
-      errors.push(revokedMsg);
       job.revoked = true;
-      job.path = '';
+      // Keep the path so the orchestrator can derive a remove entry from the
+      // revoked job — the update action deletes the path from the MFS tree.
+      // An empty path would make the orchestrator unable to construct the
+      // remove entry, requiring the caller (neutralpress) to supply it.
+      job.path = templateData.path || '';
       job.html = '';
+      html = '';
     }
 
     if (errors.length > 0) {
@@ -376,3 +461,5 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     };
   }
 }
+
+export { main };
