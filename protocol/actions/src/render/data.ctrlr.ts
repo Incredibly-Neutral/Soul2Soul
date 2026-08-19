@@ -1,7 +1,7 @@
 import { decrypt } from '../libs/decrypt';
 import { fetchByPublication, getDeals, toBody, type Entry } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
-import { parseArchive, reconcile } from '../libs/archive.factory';
+import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
 
@@ -243,8 +243,24 @@ const fetchCollectionsFromArchive = async (
   rpcs?: string[],
   gateway?: string,
 ): Promise<any[]> => {
+  // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
+  // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
+  // no-archive path (today's N cats) rather than fail the render — the cache
+  // is a performance optimization, getDeals is the correctness oracle.
+  // getDeals is intentionally NOT wrapped: the no-archive path calls it too,
+  // so it fails identically either way. Catting first also means a cat failure
+  // never wastes the getDeals RPC.
+  let archive: Archive;
+  try {
+    archive = parseArchive(await catFile(gateway!, archiveCid));
+  } catch (e) {
+    console.warn(
+      `archive cat failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return fetchByPublication(publicationModule, rpcs, gateway);
+  }
+
   const deals = await getDeals(publicationModule, rpcs);
-  const archive = parseArchive(await catFile(gateway!, archiveCid));
   const { fresh, needsFetch } = reconcile(deals, archive);
   const fetched = await Promise.all(
     needsFetch.map(async (entry) => {
