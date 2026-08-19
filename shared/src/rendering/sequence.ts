@@ -87,8 +87,8 @@ export async function runRenderActionWithRetry(
       ? lastFailure
       : new Error(
           lastFailure?.error ??
-          lastFailure?.message ??
-          (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)),
+            lastFailure?.message ??
+            (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)),
         );
   (err as any).failure = lastFailure;
   throw err;
@@ -160,14 +160,6 @@ export const renderwithLitActions = async (
     ? (validatedPrep as any).data?.remove
     : undefined;
 
-  // Merge caller-supplied removals (revocations from neutralpress) with the
-  // auto-detected slug-change removals. Caller removals are additive and
-  // default to none, so existing callers (safe-app, render tests) are safe.
-  const mergedRemove: { path: string; replacedBy?: string }[] = [
-    ...(prepRemove ?? []),
-    ...(remove ?? []),
-  ];
-
   // ---------------- Single Actions Stage ----------------------------------
 
   if (notice) notice.setMessage('ispatching render actions ...');
@@ -211,11 +203,33 @@ export const renderwithLitActions = async (
   const successful = (allResults as any[]).filter((r: any) => r.success && r.data?.ok);
 
   console.log({ 'rendered jobs': successful });
-  // Map the rendered job data out for the merged update
-  const renderedJobs = successful.map((r: any) => r.data.data.job).filter((j: any) => j?.path);
 
-  // Primary job path (first in the rendered list = the content the user triggered)
-  const primaryPath = renderedJobs[0]?.path ?? '';
+  // Separate active (non-revoked) jobs from revoked jobs.
+  // Active jobs carry rendered HTML → copied to MFS by the update action.
+  // Revoked jobs carry only a path → their path goes into the remove list
+  // so the update action deletes it from the MFS tree (GAP-10 revoke ripples).
+  const activeJobs = successful
+    .map((r: any) => r.data.data.job)
+    .filter((j: any) => j?.path && !j?.revoked);
+
+  const revokedRemove: { path: string; replacedBy?: string }[] = [];
+  for (const r of successful) {
+    const job = (r as any).data?.data?.job;
+    if (job?.revoked && job?.path) {
+      revokedRemove.push({ path: job.path });
+    }
+  }
+
+  // Merge: auto-detected (slug-change) removals from prep + revoked-job
+  // paths + caller-supplied removals (neutralpress revoke flow).
+  const allRemove: { path: string; replacedBy?: string }[] = [
+    ...(prepRemove ?? []),
+    ...revokedRemove,
+    ...(remove ?? []),
+  ];
+
+  // Primary job path (first active rendered job = the content the user triggered)
+  const primaryPath = activeJobs[0]?.path ?? '';
 
   // ---------------- EVM Root Update Stage ---------------------------------
 
@@ -226,13 +240,13 @@ export const renderwithLitActions = async (
     signature,
     authorSafeAddress,
     publication,
-    jobs: renderedJobs,
+    jobs: activeJobs,
     preview,
     endpoints,
-    remove: mergedRemove.length > 0 ? mergedRemove : undefined,
+    remove: allRemove.length > 0 ? allRemove : undefined,
   });
 
-  const evmAction: any  = await runAction(
+  const evmAction: any = await runAction(
     preview,
     lit,
     protocolInfo.litActions.update,
@@ -247,6 +261,6 @@ export const renderwithLitActions = async (
     success: validated.ok ? true : false,
     cid,
     path: primaryPath,
-    trace: evmAction.trace
+    trace: evmAction.trace,
   };
 };
