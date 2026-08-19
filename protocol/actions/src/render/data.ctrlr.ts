@@ -3,6 +3,7 @@ import { fetchByPublication, getDeals, toBody, type Entry } from '../libs/module
 import { catFile } from '../libs/ipfs.factory';
 import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
+import type { S2SContentItem } from '@s2s/soul2soul-shared';
 import { transformContent } from './content-transforms';
 
 export const createPath = (
@@ -222,6 +223,47 @@ export const bodiesFromReconcile = (
 };
 
 /**
+ * The drift the archive read path observed, surfaced for the T4 write-back.
+ *
+ *  - `deals`        — the deal set reconciled against (the freshness oracle);
+ *  - `needsFetch`   — entries classified MISS/STALE by reconcile() (drift > 0);
+ *  - `fetchedItems` — the FULL canonical items fetched fresh for those drift
+ *    entries, keyed by genesis (what mergeArchive() stores — the flat toBody
+ *    bodies the read path consumes are NOT enough for the archive).
+ *
+ * `null` when the archive path was not used (no collections, no pointer, or
+ * the archive cat failed → no-archive fallback): there is nothing to merge
+ * into, so the write-back must not fire.
+ */
+export interface CollectionsDrift {
+  deals: Entry[];
+  needsFetch: Entry[];
+  fetchedItems: Map<string, S2SContentItem>;
+}
+
+/**
+ * PURE drift-gating decision for the T4 archive write-back.
+ *
+ * A write fires only when ALL of these hold:
+ *  - the job is the designated cache maintainer: `maintainCache === true` —
+ *    the zod field has NO `.default(false)`, so `undefined` must be treated
+ *    as falsy (never assume it is set);
+ *  - not preview (preview runs on the free Bun runner and stays read-only);
+ *  - the read path used the archive AND reconcile() found missing/stale items
+ *    (drift > 0). Steady state (drift === 0) performs zero writes — read-only.
+ *
+ * Doubles as a type predicate on `drift`: when it returns true, `drift` is
+ * non-null, so callers can hand it straight to the write-back without a
+ * second narrowing.
+ */
+export const shouldWriteBackCache = (
+  maintainCache: boolean | undefined,
+  preview: boolean | undefined,
+  drift: CollectionsDrift | null,
+): drift is CollectionsDrift =>
+  maintainCache === true && !preview && !!drift && drift.needsFetch.length > 0;
+
+/**
  * Archive-backed collection source: one cat of the archive + a bounded drift
  * refetch, instead of N cats per deal'd item.
  *
@@ -236,13 +278,18 @@ export const bodiesFromReconcile = (
  * Encrypted items arrive as their encrypted toBody shape (meta + ciphertext)
  * and are decrypted downstream in render/main.ts — the archive never bypasses
  * decryption and never stores decrypted plaintext.
+ *
+ * Alongside the bodies it surfaces the observed `drift` (deals + needsFetch +
+ * the FULL fetched items) for the T4 write-back — see CollectionsDrift. On
+ * archive cat failure it degrades to the no-archive path with `drift: null`
+ * (nothing to merge into ⇒ the write-back must not fire).
  */
 const fetchCollectionsFromArchive = async (
   archiveCid: string,
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
-): Promise<any[]> => {
+): Promise<{ bodies: any[]; drift: CollectionsDrift | null }> => {
   // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
   // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
   // no-archive path (today's N cats) rather than fail the render — the cache
@@ -257,15 +304,21 @@ const fetchCollectionsFromArchive = async (
     console.warn(
       `archive cat failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
     );
-    return fetchByPublication(publicationModule, rpcs, gateway);
+    return { bodies: await fetchByPublication(publicationModule, rpcs, gateway), drift: null };
   }
 
   const deals = await getDeals(publicationModule, rpcs);
   const { fresh, needsFetch } = reconcile(deals, archive);
+
+  // Track the FULL canonical items fetched fresh for the drift entries, keyed
+  // by genesis — the T4 write-back merges these into the next archive
+  // snapshot. The flat bodies below keep the read path byte-identical.
+  const fetchedItems = new Map<string, S2SContentItem>();
   const fetched = await Promise.all(
     needsFetch.map(async (entry) => {
       try {
         const item = JSON.parse(await catFile(gateway!, entry.cid));
+        fetchedItems.set(entry.genesis, item as S2SContentItem);
         return toBody(entry, item);
       } catch (e) {
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, e);
@@ -273,7 +326,10 @@ const fetchCollectionsFromArchive = async (
       }
     }),
   );
-  return bodiesFromReconcile(deals, fresh, needsFetch, fetched);
+  return {
+    bodies: bodiesFromReconcile(deals, fresh, needsFetch, fetched),
+    drift: { deals, needsFetch, fetchedItems },
+  };
 };
 
 export const fetchCollections = async (
@@ -282,15 +338,20 @@ export const fetchCollections = async (
   rpcs?: string[],
   gateway?: string,
   archiveCid?: string,
-) => {
+): Promise<{ collections: Record<string, any[]>; drift: CollectionsDrift | null }> => {
   const collections: any = {};
+  let drift: CollectionsDrift | null = null;
 
   // Fetch all deals once — every collection filters the same set.
   let allDeals: any[] = [];
   if ((templateConfig.collections || []).length > 0) {
-    allDeals = archiveCid
-      ? await fetchCollectionsFromArchive(archiveCid, publicationModule, rpcs, gateway)
-      : await fetchByPublication(publicationModule, rpcs, gateway);
+    if (archiveCid) {
+      const res = await fetchCollectionsFromArchive(archiveCid, publicationModule, rpcs, gateway);
+      allDeals = res.bodies;
+      drift = res.drift;
+    } else {
+      allDeals = await fetchByPublication(publicationModule, rpcs, gateway);
+    }
     allDeals = allDeals.filter((item) => item != null);
   }
 
@@ -301,7 +362,7 @@ export const fetchCollections = async (
     );
   }
 
-  return collections;
+  return { collections, drift };
 };
 
 // export const decryptCollection = async (collection: any, publicationModule: string, authorSafeAddress: string) => {
