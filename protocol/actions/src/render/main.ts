@@ -170,6 +170,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       preview,
       endpoints,
       maintainCache,
+      triggeredContentIds,
     } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
@@ -254,18 +255,27 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     //
     // Guard (reviewer C/G): hasDeal=false must only mark GENUINELY-revoked
     // items as revoked, never a live page that merely isn't a deal or a
-    // transient RPC failure. Two conservative guards, matching the
-    // established evmRead pattern in libs/gates.ts (canRead):
-    //   a. Only run the check when the item has a known path — a genuinely
+    // transient RPC failure. Three conservative guards:
+    //   a. TRIGGERED-CONTENT SCOPE: the check runs ONLY for the id(s) the
+    //      caller rendered (input.triggeredContentIds, threaded through by the
+    //      orchestrator from its contentIds). A cascade/ripple destination
+    //      (e.g. home) is re-rendered as a consequence of the trigger and is
+    //      NEVER hasDeal-checked — a destination pinned via query.genesis may
+    //      never have been a deal, so hasDeal=false there would falsely
+    //      revoke-and-remove a live page (publish-path regression, acceptance
+    //      4; breaks 1(b) in production). A revoke is always about the id the
+    //      caller rendered, never a destination.
+    //   b. Only run the check when the item has a known path — a genuinely
     //      revoked item was previously rendered, so it has a path to remove.
     //      A pathless job (never rendered, nothing to remove) is never
     //      misclassified as revoked.
-    //   b. isRevokedByDealState wraps the evmRead defensively: on RPC failure
+    //   c. isRevokedByDealState wraps the evmRead defensively: on RPC failure
     //      it defaults to NOT revoked (treat as still active). A transport
     //      failure must never turn a live page into a revoked-and-removed one;
     //      the orchestrator's runRenderActionWithRetry handles transient RPC
     //      failures.
-    if (!templateData.revoked && templateData.path) {
+    const triggeredIds: string[] = triggeredContentIds ?? [];
+    if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
       if (await isRevokedByDealState(job.id, publicationModule, rpcs?.L2)) {
         console.log(`hasDeal false for ${job.id.slice(0, 12)}… — treating as revoked`);
         templateData.revoked = true;

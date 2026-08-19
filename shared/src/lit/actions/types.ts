@@ -27,6 +27,11 @@ export interface SingleInput {
   configCid?: string;
   preview?: boolean;
   maintainCache?: boolean;
+  // The id(s) the caller rendered (the orchestrator's contentIds). The render
+  // action scopes its on-chain hasDeal revoke check to these ids ONLY — a
+  // cascade/ripple destination (e.g. home) is never hasDeal-checked, because
+  // a destination pinned via query.genesis may never have been a deal.
+  triggeredContentIds?: string[];
   endpoints: {
     ipfsGateway?: string;
     rpcs: { L1: string[]; L2: string[] };
