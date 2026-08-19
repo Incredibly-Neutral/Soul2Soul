@@ -28,7 +28,7 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared';
 // wires the I/O (getDeals, catFile, uploadFile) around these functions.
 // ───────────────────────────────────────────────────────────────────────────
 
-export const ARCHIVE_FORMAT = 's2s-publication-archive/1';
+export const ARCHIVE_FORMAT = 's2s-publication-archive/2';
 
 export interface ArchiveItem {
   cid: string; // latest cid this entry was built from
@@ -128,6 +128,9 @@ export function parseArchive(json: string): Archive {
  *  - item.cid !== deal.cid                            → STALE
  *  - malformed / unverifiable entry (missing cid or invalid item) → MISS (bias
  *    toward inclusion: refetch rather than silently serve a broken/dropped entry)
+ *  - schema-valid entry whose body cannot be flattened (e.g. non-JSON plain
+ *    body) → MISS, never throw (fail-open preserved — a corrupt-but-schema-valid
+ *    blob is refetched, not crashed on)
  *
  * Both MISS and STALE land in `needsFetch`, where the caller cats
  * `deal.cid` fresh and rebuilds the body.
@@ -148,7 +151,14 @@ export function reconcile(
       !!entry && typeof entry.cid === 'string' && entry.cid !== '' && isValidItem(entry.item);
 
     if (wellFormed && entry!.cid === deal.cid) {
-      fresh.set(deal.genesis, toBody(deal, entry!.item));
+      try {
+        fresh.set(deal.genesis, toBody(deal, entry!.item));
+      } catch {
+        // Corrupt-but-schema-valid blob (e.g. plain body that isn't parseable
+        // JSON): treat as MISS (refetch) — never throw (fail-open preserved,
+        // bias toward inclusion unchanged).
+        needsFetch.push(deal);
+      }
     } else {
       needsFetch.push(deal);
     }
