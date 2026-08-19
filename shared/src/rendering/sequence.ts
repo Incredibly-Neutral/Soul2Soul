@@ -183,6 +183,7 @@ export const renderwithLitActions = async (
           publication,
           job,
           preview,
+          maintainCache: index === jobs.length - 1,
           endpoints,
         });
         const actionResult = await runRenderActionWithRetry(
