@@ -80,9 +80,9 @@ describe('parseArchive', () => {
   it('returns an empty archive for valid JSON with a wrong shape', () => {
     expect(parseArchive('"just a string"').items).toEqual({});
     expect(parseArchive('{"format":"other/1","items":{}}').items).toEqual({});
-    expect(parseArchive('{"format":"s2s-publication-archive/1","items":[]}').items).toEqual({});
+    expect(parseArchive('{"format":"s2s-publication-archive/2","items":[]}').items).toEqual({});
     expect(
-      parseArchive('{"format":"s2s-publication-archive/1","publication":42,"items":{}}').items,
+      parseArchive('{"format":"s2s-publication-archive/2","publication":42,"items":{}}').items,
     ).toEqual({});
   });
 
@@ -130,6 +130,18 @@ describe('parseArchive', () => {
     expect(parsed.items.g2).toBeUndefined();
     expect(parsed.items.g3).toBeUndefined();
     expect(parsed.items.g4).toEqual({ cid: 'cid4', item: mkItem('g4') });
+  });
+
+  it('old-format (v1) archives parse to empty — full refetch after the format bump', () => {
+    const json = JSON.stringify({
+      format: 's2s-publication-archive/1',
+      publication: 'pub',
+      built: '2026-01-01T00:00:00.000Z',
+      items: { g1: { cid: 'cid1', item: mkItem('g1') } },
+    });
+    const parsed = parseArchive(json);
+    expect(parsed.format).toBe(ARCHIVE_FORMAT);
+    expect(parsed.items).toEqual({});
   });
 });
 
@@ -190,6 +202,19 @@ describe('reconcile', () => {
     const deals = [mkEntry('g1', 'cid1')];
     const badAuthor = { ...mkItem('g1'), public: { ...mkItem('g1').public, author: 'nope' } };
     const archive = mkArchive({ g1: { cid: 'cid1', item: badAuthor } });
+    const { fresh, needsFetch } = reconcile(deals, archive);
+    expect(fresh.size).toBe(0);
+    expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
+  });
+
+  it('does not throw on a schema-valid plain item with non-JSON body (MISS, refetch)', () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    // body is schema-valid (s2sContentItemSchema only requires z.string()) but
+    // not parseable JSON → toBody would throw; reconcile must treat it as MISS
+    // (fail-open preserved, bias toward inclusion unchanged).
+    const badBody = { ...mkItem('g1'), body: 'not-json' };
+    const archive = mkArchive({ g1: { cid: 'cid1', item: badBody } });
+    expect(() => reconcile(deals, archive)).not.toThrow();
     const { fresh, needsFetch } = reconcile(deals, archive);
     expect(fresh.size).toBe(0);
     expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
