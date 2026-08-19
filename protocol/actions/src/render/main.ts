@@ -91,6 +91,14 @@ async function writeBackArchiveCache(opts: {
     const item = drift.fetchedItems.get(entry.genesis);
     if (item) refreshed.set(entry.genesis, item);
   }
+
+  // N1 (reviewer): if the fresh reconcile surfaced entries the read path never
+  // fetched (e.g. the archive/pointer changed between read and write-back),
+  // `refreshed` can be empty — merging nothing would still pin + fire a
+  // pointless setText tx that burns gas. The archive snapshot would be
+  // unchanged anyway, so skip the write entirely (zero writes).
+  if (refreshed.size === 0) return;
+
   const next = mergeArchive(archive, drift.deals, refreshed);
   const newCid = await uploadFile(gateway!, serialize(next));
 
