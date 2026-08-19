@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createPath, sortCollection, bodiesFromReconcile, fetchCollections } from './data.ctrlr';
+import {
+  createPath,
+  sortCollection,
+  bodiesFromReconcile,
+  fetchCollections,
+  shouldWriteBackCache,
+  type CollectionsDrift,
+} from './data.ctrlr';
 import { catFile } from '../libs/ipfs.factory';
 import { fetchByPublication, getDeals } from '../libs/module.factory';
 
@@ -295,6 +302,39 @@ const mkBody = (genesis: string) => ({
   encryption: false,
 });
 
+/** A schema-valid canonical content item (plain by default; encrypted on demand). */
+const mkItem = (genesis: string, opts?: { encryption?: boolean }) => ({
+  public: {
+    specVersion: '1',
+    author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '0',
+    publication: 'pub',
+    locale: 'en',
+    createdAt: 1234,
+    base: '',
+    tags: [],
+    attributes: {},
+    plaintextHash: '0x' + '0'.repeat(64),
+  },
+  objectId: '0x' + '1'.repeat(64),
+  proof: {
+    type: 'eip712',
+    signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
+    signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
+  },
+  encryption: opts?.encryption ?? false,
+  body: opts?.encryption
+    ? `ciphertext-${genesis}`
+    : JSON.stringify({
+        title: `title-${genesis}`,
+        slug: `slug-${genesis}`,
+        content: `content-${genesis}`,
+      }),
+});
+
 describe('bodiesFromReconcile', () => {
   it('emits bodies in deal order, mixing fresh archive bodies and fetched drift', () => {
     const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2'), mkEntry('g3', 'cid3')];
@@ -359,6 +399,110 @@ describe('fetchCollections: archive cat-failure fallback', () => {
     // cat-first ordering: a failed cat never wastes the getDeals RPC
     expect(getDeals).not.toHaveBeenCalled();
     // same filter/sort pipeline as the no-archive path
-    expect(result.posts).toEqual([fallbackBody]);
+    expect(result.collections.posts).toEqual([fallbackBody]);
+  });
+});
+
+// ============================================================================
+// shouldWriteBackCache — the T4 drift-gating decision (pure).
+//
+// A write fires only when ALL hold: maintainCache === true (undefined is
+// falsy — the zod field has no .default(false)), not preview, and the read
+// path observed drift (archive used + needsFetch non-empty). Steady state
+// (drift === 0) and the no-archive path perform zero writes.
+// ============================================================================
+
+const mkDrift = (needsFetch: string[] = []): CollectionsDrift => ({
+  deals: needsFetch.map((g) => mkEntry(g, `cid-${g}`)),
+  needsFetch: needsFetch.map((g) => mkEntry(g, `cid-${g}`)),
+  fetchedItems: new Map(),
+});
+
+describe('shouldWriteBackCache', () => {
+  it('fires when maintainCache === true, not preview, and drift > 0', () => {
+    expect(shouldWriteBackCache(true, false, mkDrift(['g1']))).toBe(true);
+  });
+
+  it('treats undefined maintainCache as falsy (zod has no .default(false))', () => {
+    expect(shouldWriteBackCache(undefined, false, mkDrift(['g1']))).toBe(false);
+    expect(shouldWriteBackCache(false, false, mkDrift(['g1']))).toBe(false);
+  });
+
+  it('never fires when preview is explicitly true', () => {
+    expect(shouldWriteBackCache(true, true, mkDrift(['g1']))).toBe(false);
+  });
+
+  it('treats undefined preview as not-preview (live render) — write-back fires', () => {
+    expect(shouldWriteBackCache(true, undefined, mkDrift(['g1']))).toBe(true);
+  });
+
+  it('never fires when drift is null (no archive path used)', () => {
+    expect(shouldWriteBackCache(true, false, null)).toBe(false);
+  });
+
+  it('never fires on steady state (drift === 0 → zero writes)', () => {
+    expect(shouldWriteBackCache(true, false, mkDrift([]))).toBe(false);
+  });
+});
+
+// ============================================================================
+// fetchCollections: archive drift tracking (T4 write-back input).
+//
+// The read path surfaces the drift it observed — deals, needsFetch and the
+// FULL fetched items — so the write-back can merge them into the next archive
+// snapshot. Behavior of the collections output itself is unchanged.
+// ============================================================================
+
+describe('fetchCollections: archive drift tracking', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('surfaces deals, needsFetch and fetchedItems when the archive path is used', async () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const archive = JSON.stringify({
+      format: 's2s-publication-archive/2',
+      publication: 'pub',
+      built: '2026-01-01T00:00:00.000Z',
+      items: { g1: { cid: 'cid1', item: mkItem('g1') } }, // g1 fresh; g2 miss
+    });
+    const g2Item = mkItem('g2');
+
+    (catFile as any)
+      .mockResolvedValueOnce(archive) // archive cat
+      .mockResolvedValueOnce(JSON.stringify(g2Item)); // drift refetch of g2
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // read path unchanged: bodies in deal order, both items present
+    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1', 'g2']);
+    // drift surfaced for the write-back
+    expect(result.drift).not.toBeNull();
+    expect(result.drift!.deals).toEqual(deals);
+    expect(result.drift!.needsFetch.map((e) => e.genesis)).toEqual(['g2']);
+    expect(result.drift!.fetchedItems.get('g2')).toEqual(g2Item);
+  });
+
+  it('returns drift null when no archive pointer is set (no-archive path)', async () => {
+    (fetchByPublication as any).mockResolvedValue([
+      { id: 'g1', title: 'T', content: 'C', encryption: false },
+    ]);
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', undefined);
+    expect(result.drift).toBeNull();
+    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1']);
+  });
+
+  it('returns drift null when the archive cat fails (no-archive fallback)', async () => {
+    (catFile as any).mockRejectedValue(new Error('gateway down'));
+    (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
+    const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
+    (fetchByPublication as any).mockResolvedValue([fallbackBody]);
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+    expect(result.drift).toBeNull();
+    expect(result.collections.posts).toEqual([fallbackBody]);
   });
 });
