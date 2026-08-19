@@ -57,26 +57,30 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     if (!protocolInfo) throw 'Failed to fetch protocol info';
 
     // Per-publication content archive pointer (ENS text record). Mirrors
-    // update/main.ts's namehash + getText read for contenthash_wrapped.
-    const node = ethers.utils.namehash(publication);
+    // update/main.ts's namehash + getText read for contenthash_wrapped. Only
+    // read when the template actually has collections (fetchCollections only
+    // uses the archive then) — no collections ⇒ no pointer eth_call.
     let archiveCid = '';
-    try {
-      archiveCid = await evmRead(
-        'L2',
-        protocolInfo.ensRecords,
-        RECORDS_CONTRACT_ABI,
-        'getText',
-        [node, `content_cache_${publication}`],
-        rpcs?.L2,
-      );
-    } catch (e) {
-      // Cache pointer is non-authoritative (RFC trust model: the cache is a
-      // performance optimization, getDeals is the correctness oracle). A failed
-      // pointer read must never fail the render — degrade to the no-archive
-      // (N-cat) path, which fetchCollections handles when archiveCid is ''.
-      console.log(
-        `archive pointer read failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
-      );
+    if ((job.templateConfig.collections || []).length > 0) {
+      const node = ethers.utils.namehash(publication);
+      try {
+        archiveCid = await evmRead(
+          'L2',
+          protocolInfo.ensRecords,
+          RECORDS_CONTRACT_ABI,
+          'getText',
+          [node, `content_cache_${publication}`],
+          rpcs?.L2,
+        );
+      } catch (e) {
+        // Cache pointer is non-authoritative (RFC trust model: the cache is a
+        // performance optimization, getDeals is the correctness oracle). A failed
+        // pointer read must never fail the render — degrade to the no-archive
+        // (N-cat) path, which fetchCollections handles when archiveCid is ''.
+        console.log(
+          `archive pointer read failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(

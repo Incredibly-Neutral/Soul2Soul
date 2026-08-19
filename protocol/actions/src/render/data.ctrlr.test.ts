@@ -1,5 +1,19 @@
-import { describe, it, expect } from 'vitest';
-import { createPath, sortCollection, bodiesFromReconcile } from './data.ctrlr';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createPath, sortCollection, bodiesFromReconcile, fetchCollections } from './data.ctrlr';
+import { catFile } from '../libs/ipfs.factory';
+import { fetchByPublication, getDeals } from '../libs/module.factory';
+
+// Mock the I/O boundaries so fetchCollections' archive path can be exercised
+// without a chain/IPFS. The pure helpers above (createPath, sortCollection,
+// bodiesFromReconcile) don't touch these, so the mocks are inert for them.
+vi.mock('../libs/ipfs.factory', () => ({
+  catFile: vi.fn(),
+}));
+
+vi.mock('../libs/module.factory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/module.factory')>();
+  return { ...actual, getDeals: vi.fn(), fetchByPublication: vi.fn() };
+});
 
 // ============================================================================
 // createPath unit tests — config-driven locale routing (monolingual by default).
@@ -314,5 +328,37 @@ describe('bodiesFromReconcile', () => {
 
   it('returns an empty array for no deals', () => {
     expect(bodiesFromReconcile([], new Map(), [], [])).toEqual([]);
+  });
+});
+
+// ============================================================================
+// fetchCollections: archive cat-failure fallback (Fix 1).
+//
+// When the pointer is set but the archive blob can't be catted (gateway
+// hiccup, IPFS GC, unpinned), the render must NOT fail — it degrades to the
+// exact no-archive path (fetchByPublication = today's N cats).
+// ============================================================================
+
+describe('fetchCollections: archive cat-failure fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('falls back to fetchByPublication when the archive cat fails', async () => {
+    (catFile as any).mockRejectedValue(new Error('gateway down'));
+    (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
+    const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
+    (fetchByPublication as any).mockResolvedValue([fallbackBody]);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // archive cat was attempted, then degraded to the exact no-archive path
+    expect(catFile).toHaveBeenCalledWith('gateway', 'archiveCid');
+    expect(fetchByPublication).toHaveBeenCalledWith('module', ['rpc'], 'gateway');
+    // cat-first ordering: a failed cat never wastes the getDeals RPC
+    expect(getDeals).not.toHaveBeenCalled();
+    // same filter/sort pipeline as the no-archive path
+    expect(result.posts).toEqual([fallbackBody]);
   });
 });
