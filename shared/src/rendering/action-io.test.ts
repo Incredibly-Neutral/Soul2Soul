@@ -185,6 +185,17 @@ describe('validateSingleInput', () => {
       '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063',
     );
   });
+
+  it('accepts triggeredContentIds (optional) — scopes the hasDeal revoke check to the triggered content', () => {
+    const triggered = ['0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063'];
+    const result = validateSingleInput({ ...validSingleInput, triggeredContentIds: triggered });
+    expect(result.triggeredContentIds).toEqual(triggered);
+  });
+
+  it('omits triggeredContentIds when absent (optional)', () => {
+    const result = validateSingleInput(validSingleInput);
+    expect(result.triggeredContentIds).toBeUndefined();
+  });
 });
 
 describe('validateSingleOutput', () => {
