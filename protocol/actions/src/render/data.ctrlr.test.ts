@@ -1,5 +1,19 @@
-import { describe, it, expect } from 'vitest';
-import { createPath, sortCollection } from './data.ctrlr';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createPath, sortCollection, bodiesFromReconcile, fetchCollections } from './data.ctrlr';
+import { catFile } from '../libs/ipfs.factory';
+import { fetchByPublication, getDeals } from '../libs/module.factory';
+
+// Mock the I/O boundaries so fetchCollections' archive path can be exercised
+// without a chain/IPFS. The pure helpers above (createPath, sortCollection,
+// bodiesFromReconcile) don't touch these, so the mocks are inert for them.
+vi.mock('../libs/ipfs.factory', () => ({
+  catFile: vi.fn(),
+}));
+
+vi.mock('../libs/module.factory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/module.factory')>();
+  return { ...actual, getDeals: vi.fn(), fetchByPublication: vi.fn() };
+});
 
 // ============================================================================
 // createPath unit tests — config-driven locale routing (monolingual by default).
@@ -256,5 +270,95 @@ describe('sortCollection: defensive missing/null fields', () => {
     const survivor = sortCollection(mixed, { slug: 'x', sortBy: 'position' });
     expect(survivor.length).toBe(4);
     expect(survivor.filter(Boolean).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+});
+
+// ============================================================================
+// bodiesFromReconcile — the read-path reconcile wiring (pure).
+//
+// Assembles the deal-ordered body list from a reconcile() result: archive
+// bodies (`fresh`) plus freshly-fetched drift bodies (`fetched`, same order as
+// `needsFetch`). Emits in deal order so filterCollection/sortCollection see
+// byte-identical input to the no-archive `fetchByPublication` path.
+// ============================================================================
+
+const mkEntry = (genesis: string, cid: string) => ({
+  genesis,
+  author: '0xauthor',
+  cid,
+  timestamp: 1,
+});
+const mkBody = (genesis: string) => ({
+  id: genesis,
+  title: `t-${genesis}`,
+  content: `c-${genesis}`,
+  encryption: false,
+});
+
+describe('bodiesFromReconcile', () => {
+  it('emits bodies in deal order, mixing fresh archive bodies and fetched drift', () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2'), mkEntry('g3', 'cid3')];
+    const fresh = new Map<string, any>([
+      ['g1', mkBody('g1')], // archive body, fresh
+      ['g3', mkBody('g3')], // archive body, fresh
+    ]);
+    const needsFetch = [deals[1]]; // g2 was stale/miss → refetched
+    const fetched = [mkBody('g2')];
+
+    const bodies = bodiesFromReconcile(deals, fresh, needsFetch, fetched);
+    expect(bodies.map((b) => b.id)).toEqual(['g1', 'g2', 'g3']);
+  });
+
+  it('skips fetched bodies that failed to fetch (null), keeping deal order', () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const fresh = new Map<string, any>([['g1', mkBody('g1')]]);
+    const needsFetch = [deals[1]];
+    const fetched = [null]; // cat/toBody failed for g2
+
+    const bodies = bodiesFromReconcile(deals, fresh, needsFetch, fetched);
+    expect(bodies.map((b) => b.id)).toEqual(['g1']);
+  });
+
+  it('drops a genesis absent from both fresh and fetched (deal-set floor)', () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    // g2 has no archive body and its fetch failed → absent from the output
+    const bodies = bodiesFromReconcile(deals, new Map(), [deals[1]], [null]);
+    expect(bodies.map((b) => b.id)).toEqual([]);
+  });
+
+  it('returns an empty array for no deals', () => {
+    expect(bodiesFromReconcile([], new Map(), [], [])).toEqual([]);
+  });
+});
+
+// ============================================================================
+// fetchCollections: archive cat-failure fallback (Fix 1).
+//
+// When the pointer is set but the archive blob can't be catted (gateway
+// hiccup, IPFS GC, unpinned), the render must NOT fail — it degrades to the
+// exact no-archive path (fetchByPublication = today's N cats).
+// ============================================================================
+
+describe('fetchCollections: archive cat-failure fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('falls back to fetchByPublication when the archive cat fails', async () => {
+    (catFile as any).mockRejectedValue(new Error('gateway down'));
+    (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
+    const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
+    (fetchByPublication as any).mockResolvedValue([fallbackBody]);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // archive cat was attempted, then degraded to the exact no-archive path
+    expect(catFile).toHaveBeenCalledWith('gateway', 'archiveCid');
+    expect(fetchByPublication).toHaveBeenCalledWith('module', ['rpc'], 'gateway');
+    // cat-first ordering: a failed cat never wastes the getDeals RPC
+    expect(getDeals).not.toHaveBeenCalled();
+    // same filter/sort pipeline as the no-archive path
+    expect(result.posts).toEqual([fallbackBody]);
   });
 });
