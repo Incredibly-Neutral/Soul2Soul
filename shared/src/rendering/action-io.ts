@@ -155,6 +155,7 @@ export const SingleActionInputSchema = z.object({
   publication: z.string().min(1, 'publication ENS name is required'),
   configCid: z.string().optional(),
   preview: z.boolean().optional(),
+  maintainCache: z.boolean().optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
     rpcs: z.object({
