@@ -1,3 +1,5 @@
+/// <reference path="../action_globals.ts" />
+
 import {
   S2SContentInfo,
   ActionResult,
@@ -8,6 +10,7 @@ import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
+import { evmRead } from '../libs/evm';
 import { fetchById } from '../libs/module.factory';
 
 import { getConfig } from './config.ctrl';
@@ -23,6 +26,14 @@ import { renderHTML } from '../renderer/html.ctrlr';
 import { extractSignerAddress } from '../libs/gates';
 import { requireFields } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
+
+// ENS records contract ABI (getText/setText) — local mirror of update/main.ts;
+// no shared ABI import. Used to read the per-publication content archive
+// pointer (`content_cache_<publication>` text record on the publication node).
+const RECORDS_CONTRACT_ABI = [
+  'function getText(bytes32 node, string key) view returns (string)',
+  'function setText(bytes32 node, string key, string value) nonpayable',
+];
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
@@ -45,13 +56,43 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     const protocolInfo = await getProtocolInfo(false, rpcs);
     if (!protocolInfo) throw 'Failed to fetch protocol info';
 
-    const { multisig, configModule, publicationModule } =
-      await getDomainOwnerAndModules(publication, rpcs);
+    // Per-publication content archive pointer (ENS text record). Mirrors
+    // update/main.ts's namehash + getText read for contenthash_wrapped.
+    const node = ethers.utils.namehash(publication);
+    let archiveCid = '';
+    try {
+      archiveCid = await evmRead(
+        'L2',
+        protocolInfo.ensRecords,
+        RECORDS_CONTRACT_ABI,
+        'getText',
+        [node, `content_cache_${publication}`],
+        rpcs?.L2,
+      );
+    } catch (e) {
+      // Cache pointer is non-authoritative (RFC trust model: the cache is a
+      // performance optimization, getDeals is the correctness oracle). A failed
+      // pointer read must never fail the render — degrade to the no-archive
+      // (N-cat) path, which fetchCollections handles when archiveCid is ''.
+      console.log(
+        `archive pointer read failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
+      publication,
+      rpcs,
+    );
 
     if (multisig == null || configModule == null || publicationModule == null)
       throw 'Failed to resolve publication modules';
 
-    let body: any | undefined | null = await fetchById(job.id, publicationModule, rpcs?.L2, gateway);
+    let body: any | undefined | null = await fetchById(
+      job.id,
+      publicationModule,
+      rpcs?.L2,
+      gateway,
+    );
     if (body == undefined || body == null || body.id == undefined) throw 'Post content not found';
     trace.push(body);
 
@@ -79,7 +120,13 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       let t2 = Date.now();
       trace.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
-      let collections = await fetchCollections(job.templateConfig, publicationModule, rpcs?.L2, gateway);
+      let collections = await fetchCollections(
+        job.templateConfig,
+        publicationModule,
+        rpcs?.L2,
+        gateway,
+        archiveCid,
+      );
 
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
