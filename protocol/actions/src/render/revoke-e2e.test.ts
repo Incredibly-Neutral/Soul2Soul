@@ -17,7 +17,19 @@
  * caller-supplied remove):
  *   (a) the update input's `remove` contains the revoked path,
  *   (b) a cascaded home job is rendered and lands in the update input's jobs,
- *   (c) the update input's jobs EXCLUDE the revoked job (activeJobs filter).
+ *   (c) the update input's jobs EXCLUDE the revoked job (activeJobs filter),
+ *   (d) the destination (home) is NEVER marked revoked — it renders ACTIVE
+ *     through the real render action even when hasDeal(home) would be false,
+ *     because the hasDeal check is scoped to the triggered content only,
+ *   (e) the destination's path NEVER lands in `remove`.
+ *
+ * Regression that shipped (reviewer C/G): before the fix, the hasDeal revoke
+ * check ran on EVERY rendered job — including ripple destinations. A
+ * destination pinned via query.genesis (e.g. home) may never have been a deal,
+ * so hasDeal(home)=false falsely revoked-and-removed the homepage (publish-path
+ * regression, acceptance 4; breaks 1(b) in production). This test drives home
+ * through the REAL render action (not a canned envelope) so that class of
+ * regression is caught: it FAILS on 5a6704d and PASSES after the C/G fix.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as ethers from 'ethers5'; // protocol's v5 alias — render main needs ethers.utils (v5 semantics)
@@ -35,6 +47,8 @@ import { getConfig } from './config.ctrl';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
+import { fetchTemplateBundle, fetchPartialsSourceMap } from '../renderer/html.ctrlr';
+import { uploadFile } from '../libs/ipfs.factory';
 
 vi.mock('../../../../shared/src/rendering/helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../shared/src/rendering/helpers')>();
@@ -63,6 +77,24 @@ vi.mock('../libs/ens.factory', () => ({
 vi.mock('../libs/gates', () => ({
   extractSignerAddress: vi.fn(),
 }));
+// Keep the real renderHTML/renderHTMLFromSource but stub the gateway-bound
+// template fetch + partial source-map resolution so the REAL render main can
+// complete an ACTIVE render for the home destination in-process.
+vi.mock('../renderer/html.ctrlr', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../renderer/html.ctrlr')>();
+  return {
+    ...actual,
+    fetchTemplateBundle: vi.fn(),
+    fetchPartialsSourceMap: vi.fn(),
+  };
+});
+vi.mock('../libs/ipfs.factory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/ipfs.factory')>();
+  return {
+    ...actual,
+    uploadFile: vi.fn(),
+  };
+});
 
 const REVOKED_ID = '0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063';
 const HOME_ID = '0x1111111111111111111111111111111111111111111111111111111111111111';
@@ -95,6 +127,24 @@ const revokedBody = {
   custom: {},
 };
 
+const homeBody = {
+  id: HOME_ID,
+  author: '0xAuthor',
+  locale: 'en',
+  parent: '',
+  position: '',
+  postType: 'home',
+  creationDate: '2026-08-19',
+  modifiedDate: '2026-08-19',
+  tags: [],
+  publication: 'test.soul2soul.eth',
+  encryption: false,
+  title: 'Home',
+  slug: '',
+  content: 'home',
+  custom: {},
+};
+
 const protocolInfo = {
   gateway: 'https://ipfs.example',
   pkp: '0xpkp',
@@ -115,6 +165,9 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     vi.mocked(getProtocolInfo).mockReset();
     vi.mocked(getDomainOwnerAndModules).mockReset();
     vi.mocked(extractSignerAddress).mockReset();
+    vi.mocked(fetchTemplateBundle).mockReset();
+    vi.mocked(fetchPartialsSourceMap).mockReset();
+    vi.mocked(uploadFile).mockReset();
   });
 
   it('rendering a revoked postId yields a remove entry, a cascaded home job, and excludes the revoked job from the update', async () => {
@@ -126,9 +179,22 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
       configModule: '0xcfg',
       publicationModule: '0xpub',
     } as any);
-    vi.mocked(fetchById).mockResolvedValue(revokedBody as any);
+    vi.mocked(fetchById).mockImplementation(async (id: string) => {
+      if (id === REVOKED_ID) return revokedBody as any;
+      if (id === HOME_ID) return homeBody as any;
+      throw new Error(`unexpected id: ${id}`);
+    });
     vi.mocked(getConfig).mockResolvedValue({ localePaths: {} } as any);
-    vi.mocked(evmRead).mockResolvedValue(false); // hasDeal=false → genuine revoke
+    // hasDeal=false for BOTH ids — the revoked triggered job AND home. Home is
+    // a ripple destination (not the triggered id), so with the C/G fix the
+    // hasDeal check is scoped away from it and it must still render ACTIVE.
+    vi.mocked(evmRead).mockResolvedValue(false);
+    vi.mocked(fetchTemplateBundle).mockResolvedValue({
+      templateSource: '<html>home</html>',
+      partials: [],
+    } as any);
+    vi.mocked(fetchPartialsSourceMap).mockResolvedValue({});
+    vi.mocked(uploadFile).mockResolvedValue(HOME_HTML_CID);
 
     const revokedJob = {
       id: REVOKED_ID,
@@ -150,22 +216,13 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
         return { ok: true, action: 'prep', data: { jobs: [revokedJob, homeJob] }, trace: [] };
       }
       if (cid === RENDER_CID) {
-        const job = (inputs as any).job;
-        if (job.id === REVOKED_ID) {
-          // Run the REAL render action → hasDeal=false → revoked branch.
-          return renderMain(inputs as any);
-        }
-        // home (ripple destination) → active render
-        return {
-          ok: true,
-          action: 'render',
-          data: {
-            job: { ...job, path: HOME_PATH, html: HOME_HTML_CID, revoked: false },
-            html: HOME_HTML_CID,
-            timestamp: '2026-08-19T00:00:00.000Z',
-          },
-          trace: [],
-        };
+        // Run the REAL render action for BOTH jobs:
+        //  - the revoked triggered job → hasDeal=false → revoked branch;
+        //  - the home ripple destination → must render ACTIVE even though
+        //    hasDeal(home) would be false — home is NOT the triggered id, so
+        //    the hasDeal check is scoped away from it (C/G fix). Pre-fix this
+        //    falsely revoked home and put '/' into the remove list.
+        return renderMain(inputs as any);
       }
       if (cid === UPDATE_CID) {
         updateInputs = inputs;
@@ -201,6 +258,19 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
 
     // (b) the cascaded home job IS rendered and lands in the update jobs
     expect(updateJobIds).toContain(HOME_ID);
+
+    // (d) the destination (home) is NEVER marked revoked — it is a cascade
+    // consequence, not the triggered id. hasDeal(home) would be false, but the
+    // hasDeal check is scoped to the triggered content only, so home renders
+    // ACTIVE through the real render action.
+    const homeUpdateJob = updateInputs.jobs.find((j: any) => j.id === HOME_ID);
+    expect(homeUpdateJob).toBeDefined();
+    expect(homeUpdateJob.revoked).toBeFalsy();
+
+    // (e) the destination's path NEVER lands in remove — only the revoked
+    // triggered path is removed (a publish-path regression would put '/' into
+    // the remove list and delete the homepage).
+    expect(updateInputs.remove.map((r: any) => r.path)).not.toContain(HOME_PATH);
 
     // the orchestrator reports success
     expect(result.success).toBe(true);
