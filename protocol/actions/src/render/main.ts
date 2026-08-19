@@ -210,6 +210,29 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     );
     trace.push(templateData);
 
+    // Revoke detection via on-chain deal state: the decrypt-path
+    // `revoked` flag only covers decrypt failures, not on-chain retract.
+    // Check hasDeal so a retracted (revoked) plaintext item also renders
+    // as revoked (empty html + preserved path for the orchestrator's
+    // remove entry). The path is kept so the orchestrator can derive the
+    // remove entry from the revoked job itself (no separate caller-supplied
+    // remove entry required).
+    if (!templateData.revoked) {
+      const genesis = toBytes32Id(job.id);
+      const dealActive = await evmRead(
+        'L2',
+        publicationModule,
+        ['function hasDeal(bytes32 genesis) view returns (bool)'],
+        'hasDeal',
+        [genesis],
+        rpcs?.L2,
+      );
+      if (!dealActive) {
+        console.log(`hasDeal false for ${job.id.slice(0, 12)}… — treating as revoked`);
+        templateData.revoked = true;
+      }
+    }
+
     if (!templateData.revoked) {
       job.revoked = false;
 
@@ -344,7 +367,11 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       console.log(revokedMsg);
       errors.push(revokedMsg);
       job.revoked = true;
-      job.path = '';
+      // Keep the path so the orchestrator can derive a remove entry from the
+      // revoked job — the update action deletes the path from the MFS tree.
+      // An empty path would make the orchestrator unable to construct the
+      // remove entry, requiring the caller (neutralpress) to supply it.
+      job.path = templateData.path || '';
       job.html = '';
     }
 
