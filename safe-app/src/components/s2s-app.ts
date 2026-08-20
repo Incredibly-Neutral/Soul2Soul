@@ -251,7 +251,7 @@ export class S2SApp extends HTMLElement {
               class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
               id="website-tree-tab"
               ${!this.safeIntegration.hasRecordsModule() ? 'disabled' : ''}
-            >Website Tree</button>
+            >Tree</button>
           </div>
 
           <div class="tab-content" id="tab-content"></div>
