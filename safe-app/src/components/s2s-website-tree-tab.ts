@@ -141,10 +141,11 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       const data = (await res.json()) as { Objects?: { Links?: DagLink[] | null }[] };
       const obj = data.Objects?.[0];
       const links = obj?.Links;
-      if (links === null || links === undefined) {
-        // A file (or an empty/non-directory node) reports no links at all;
-        // an empty directory reports an empty array. Distinguish so the
-        // caller can degrade gracefully instead of recursing into a file.
+      // On this gateway (Kubo), ls on a FILE returns { Links: [] } — an empty
+      // array, not null. A node whose ls returns no links is a leaf (a file or
+      // an empty directory), so report it as isFile and let the caller render
+      // it as a leaf instead of recursing into a phantom empty folder.
+      if (links === null || links === undefined || links.length === 0) {
         return { links: [], isFile: true };
       }
       return { links, isFile: false };
@@ -173,7 +174,10 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       if (this.entryCount >= MAX_ENTRIES) break;
       this.entryCount++;
       const childPath = path === '' ? link.Name : `${path}/${link.Name}`;
-      if (link.Type === 2) {
+      // On this gateway, Type 1 = directory, Type 2 = file (inverted vs the
+      // original assumption). Recurse only into Type 1 links; everything else
+      // is a file leaf.
+      if (link.Type === 1) {
         const child = await this.fetchDir(link.Hash, childPath, depth + 1);
         node.children.push(child);
       } else {
@@ -314,8 +318,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
   private render(): void {
     if (!this.shadowRoot) return;
 
-    const publication = store.getRecord('name') ?? '';
-
     let body = '';
     if (!this.tree && !this.syncing) {
       body = '<div class="loading">Loading website tree…</div>';
@@ -325,8 +327,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         const children = this.tree.children.map((c) => this.renderNode(c, 1)).join('');
         body = `
           <div class="tree-root">
-            <div class="root-label">Root</div>
-            <div class="root-cid">${escapeHtml(this.tree.hash)}</div>
             <div class="tree-children">${children}</div>
           </div>
           <div class="stats">
@@ -340,8 +340,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       } else {
         body = `
           <div class="tree-root">
-            <div class="root-label">Root is a file</div>
-            <div class="root-cid">${escapeHtml(this.tree.hash)}</div>
             <div class="tree-file">
               <span class="tree-icon">📄</span>
               <span class="tree-name">${escapeHtml(this.tree.name || this.tree.hash)}</span>
@@ -378,11 +376,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
           font-size: 0.85rem;
         }
 
-        .publication {
-          color: var(--gray-300);
-          margin-bottom: 1rem;
-        }
-
         .error {
           margin: 1rem 0;
           padding: 0.75rem 1rem;
@@ -394,20 +387,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
 
         .tree-root {
           margin-top: 1rem;
-        }
-
-        .root-label {
-          font-size: 0.7rem;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          color: var(--gray-400);
-        }
-
-        .root-cid {
-          font-family: "Operator Mono A", "Operator Mono B";
-          color: var(--gray-100);
-          margin-bottom: 1rem;
-          word-break: break-all;
         }
 
         .tree-children {
@@ -569,8 +548,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         </button>
         ${this.lastSynced ? `<span class="last-synced">Last synced: ${escapeHtml(this.lastSynced)}</span>` : ''}
       </div>
-
-      ${publication ? `<div class="publication">${escapeHtml(publication)}</div>` : ''}
 
       ${this.error ? `<div class="error">⚠️ ${escapeHtml(this.error)}</div>` : ''}
 
