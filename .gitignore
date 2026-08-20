@@ -43,3 +43,4 @@ repomix-output.xml
 # multi-part-lite-adopted/
 .pi
 .hermes
+.s2s-orchestrator

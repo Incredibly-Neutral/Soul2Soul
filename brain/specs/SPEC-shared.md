@@ -52,6 +52,7 @@ get a runtime-free subset). Each entry tailors the surface to one build context:
 |---|---|---|---|
 | `@s2s/soul2soul-shared` (`index.ts`) | **everything** (services + types + ABIs + identity) | neutralpress, 0xobsidian (**esbuild**) | full runtime OK |
 | `@s2s/soul2soul-shared/lit-actions` (`lit-actions.ts`) | **types + ABIs only**, no runtime | `protocol/actions` (**action bundler**) | **INV-7:** never add runtime/Node deps; zod validators intentionally commented out (bundle size) |
+| `@s2s/soul2soul-shared/rendering/action-io` (`rendering/action-io.ts`) | **zod runtime schemas** for action I/O (e.g. `s2sContentItemSchema`) | `protocol/actions` — only the action that needs runtime validation (currently `render` via `archive.factory`) | **narrow, deliberate:** carries zod into exactly one action bundle; added 2026-08-19 to fix the 413 (root-barrel import had dragged the whole shared graph into `render/main.js`, 2.6 MB → 341 KB). Do NOT re-export these schemas from `lit-actions` (keeps it zod-free, INV-7); do NOT import them from the root barrel inside action code. |
 | `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | minimal: `getProtocolInfo`, `fetchById`, `LitService`, types | safe-app (**Vite**) | keep lean — "no Lit/Lens/CCIP baggage" |
 
 ## Canonical type catalog (single source of truth)
