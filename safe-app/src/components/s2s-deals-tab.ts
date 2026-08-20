@@ -236,6 +236,14 @@ export class S2SDealsTab extends HTMLElement {
       ? store.deals.filter((d) => d.encryption == false).map((d) => d.genesis)
       : store.deals.map((d) => d.genesis);
 
+    // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base).
+    // Key mirrors getRpcUrl in lib/evm.ts — no hardcoded keys in the bundle.
+    const apiKey = String(import.meta.env.VITE_DRPC_API_KEY ?? 'default');
+    const rpcs = {
+      L1: [`https://lb.drpc.live/ethereum/${apiKey}`],
+      L2: [`https://lb.drpc.live/base/${apiKey}`],
+    };
+
     const res = await renderwithLitActions(
       preview,
       this.lit,
@@ -247,6 +255,8 @@ export class S2SDealsTab extends HTMLElement {
       publication,
       genesisIds,
       configCid,
+      rpcs,
+      undefined, // ipfsGateway — fall back to protocolInfo.gateway
     );
 
     console.log(res);
