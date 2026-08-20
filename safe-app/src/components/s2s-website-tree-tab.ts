@@ -274,7 +274,7 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     if (isDir) {
       const children = node.children.map((c) => this.renderNode(c, depth + 1)).join('');
       return `
-        <details class="tree-dir${isAdded ? ' added' : ''}" open>
+        <details class="tree-dir${isAdded ? ' added' : ''}">
           <summary style="padding-left:${String(indent)}px">
             <span class="tree-icon">📁</span>
             <span class="tree-name">${escapeHtml(node.name)}</span>
