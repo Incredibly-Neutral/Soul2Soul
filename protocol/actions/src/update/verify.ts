@@ -199,7 +199,13 @@ export async function verifyRevocable(
     ? genesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(genesis));
 
-  const { provider } = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
+  // NOTE: destructuring `{ provider }` off a StaticJsonRpcProvider INSTANCE yields
+  // undefined (the instance has no `provider` property), so the Contract would be
+  // constructed with an undefined provider and ethers v5 sets contract.provider =
+  // null — `contract.hasDeal(...)` then reads this.provider.call(...) and throws
+  // "TypeError: Cannot read properties of null (reading 'call')". Construct the
+  // provider directly (mirrors libs/evm.ts evmSetup).
+  const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
     chainId: 8453,
     name: 'base',
   });
@@ -242,7 +248,7 @@ export async function verifyPathAvailable(
     ? existingGenesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(existingGenesis));
 
-  const { provider } = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
+  const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
     chainId: 8453,
     name: 'base',
   });
