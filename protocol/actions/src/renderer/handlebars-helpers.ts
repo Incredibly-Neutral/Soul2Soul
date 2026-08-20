@@ -310,57 +310,6 @@ export const helpers = [
     },
   },
   {
-    name: 'ifCond',
-    helper: function (v1: any, operator: any, v2: any, options: any) {
-      // Make sure we have valid options
-      if (!options || typeof options !== 'object') {
-        return '';
-      }
-
-      let result = false;
-      switch (operator) {
-        case '==':
-          result = v1 == v2;
-          break;
-        case '===':
-          result = v1 === v2;
-          break;
-        case '!=':
-          result = v1 != v2;
-          break;
-        case '!==':
-          result = v1 !== v2;
-          break;
-        case '<':
-          result = v1 < v2;
-          break;
-        case '<=':
-          result = v1 <= v2;
-          break;
-        case '>':
-          result = v1 > v2;
-          break;
-        case '>=':
-          result = v1 >= v2;
-          break;
-        case '&&':
-          result = !!(v1 && v2);
-          break;
-        case '||':
-          result = !!(v1 || v2);
-          break;
-        default:
-          result = false;
-      }
-
-      if (result) {
-        return options.fn ? options.fn(this) : '';
-      } else {
-        return options.inverse ? options.inverse(this) : '';
-      }
-    },
-  },
-  {
     name: 'isUndefined',
     helper: function (value: string, options: any) {
       if (typeof value === 'undefined') {
