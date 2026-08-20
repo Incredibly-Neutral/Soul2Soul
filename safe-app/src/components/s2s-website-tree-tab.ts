@@ -1,0 +1,593 @@
+// s2s-website-tree-tab.ts
+//
+// Read-only view of the published website tree. Fetches the site root CID from
+// the ENS records contract (`contenthash_wrapped`, INV-6) and walks the IPFS DAG
+// from that root via the Kubo gateway, rendering every entry as a collapsible
+// tree. A sync button re-reads the contract + re-walks the DAG (no page reload)
+// and diffs against the previous snapshot so the publisher can monitor
+// retractions (removed paths) and slug renames (added + removed paths).
+//
+// This tab never proposes Safe transactions and never writes to the publish
+// path, contracts, or actions — it is a read-only view.
+import { ethers } from 'ethers';
+import { CID } from 'multiformats';
+import { store } from '../state/index.js';
+import { evmRead } from '@/lib/evm.js';
+import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
+import { tableStyles } from '@/styles/table-styles.js';
+import { sectionStyles } from '@/styles/section-styles.js';
+import { typograhyStyles } from '@/styles/typography-styles.js';
+import { buttonStyles } from '@/styles/button-styles.js';
+
+const RECORDS_CONTRACT_ABI = [
+  'function getText(bytes32 node, string key) view returns (string)',
+  'function setText(bytes32 node, string key, string value) nonpayable',
+];
+
+const MAX_DEPTH = 6;
+const MAX_ENTRIES = 400;
+const LS_TIMEOUT_MS = 15_000;
+const SNAPSHOT_KEY = 's2s:website-tree:prev-snapshot';
+
+interface DagLink {
+  Name: string;
+  Hash: string;
+  Size: number;
+  Type: number;
+}
+
+interface TreeNode {
+  name: string;
+  hash: string;
+  size: number;
+  type: number; // 1 = file, 2 = directory
+  path: string; // '' for the root, otherwise e.g. 'about/index.html' or 'assets/'
+  children: TreeNode[];
+}
+
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+export class S2SWebsiteTreeTab extends HTMLElement {
+  private syncing = false;
+  private error: string | null = null;
+  private tree: TreeNode | null = null;
+  private lastSynced: string | null = null;
+  private previousSnapshot: Set<string> | null = null;
+  private addedPaths: Set<string> = new Set<string>();
+  private removedPaths: Set<string> = new Set<string>();
+  private unsubscriber: (() => void) | null = null;
+  private entryCount = 0;
+
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: 'open' });
+    root.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles];
+  }
+
+  async connectedCallback() {
+    this.unsubscriber = store.subscribeToRoot(() => {
+      this.render();
+    });
+    this.previousSnapshot = this.loadSnapshot();
+    this.render();
+    await this.sync();
+  }
+
+  disconnectedCallback() {
+    this.unsubscriber?.();
+    this.unsubscriber = null;
+  }
+
+  private loadSnapshot(): Set<string> | null {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_KEY);
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((item): item is string => typeof item === 'string'));
+      }
+    } catch {
+      // ignore a corrupt snapshot
+    }
+    return null;
+  }
+
+  private saveSnapshot(paths: Set<string>): void {
+    try {
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(([...paths] as string[]).sort()));
+    } catch {
+      // ignore quota / availability errors
+    }
+  }
+
+  /** Fresh root CID: re-read `contenthash_wrapped` from the ENS records contract
+   *  (mirrors s2s-app.ts fetchFreshData), falling back to the store root. */
+  private async fetchRootCid(): Promise<string | null> {
+    const publication = store.getRecord('name');
+    const protocolInfo = store.protocolInfo;
+    if (publication && protocolInfo?.ensRecords) {
+      try {
+        const node = ethers.namehash(publication);
+        const onchainHash = (await evmRead(
+          8453,
+          protocolInfo.ensRecords,
+          RECORDS_CONTRACT_ABI,
+          'getText',
+          [node, 'contenthash_wrapped']
+        )) as string;
+        if (onchainHash && onchainHash.length > 6) {
+          const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
+          const bytes = ethers.getBytes('0x' + hex);
+          return CID.decode(bytes).toV1().toString();
+        }
+      } catch (e) {
+        console.warn('[website-tree] ENS read failed, falling back to store root:', e);
+      }
+    }
+    return store.getRoot();
+  }
+
+  /** List the direct children of a DAG node by CID via /api/v0/ls. A file root
+   *  (or an unreachable node) is reported as `isFile` so the caller can degrade
+   *  gracefully instead of recursing into a non-directory. */
+  private async listLinks(cid: string): Promise<{ links: DagLink[]; isFile: boolean }> {
+    const url = `${IPFS_URL}/api/v0/ls?arg=${encodeURIComponent(cid)}`;
+    try {
+      const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(LS_TIMEOUT_MS) });
+      if (!res.ok) {
+        return { links: [], isFile: true };
+      }
+      const data = (await res.json()) as { Objects?: { Links?: DagLink[] | null }[] };
+      const obj = data.Objects?.[0];
+      const links = obj?.Links;
+      if (links === null || links === undefined) {
+        // A file (or an empty/non-directory node) reports no links at all;
+        // an empty directory reports an empty array. Distinguish so the
+        // caller can degrade gracefully instead of recursing into a file.
+        return { links: [], isFile: true };
+      }
+      return { links, isFile: false };
+    } catch {
+      return { links: [], isFile: true };
+    }
+  }
+
+  private async walkDag(cid: string): Promise<TreeNode> {
+    this.entryCount = 0;
+    return this.fetchDir(cid, '', 0);
+  }
+
+  private async fetchDir(cid: string, path: string, depth: number): Promise<TreeNode> {
+    const name = path === '' ? '' : (path.split('/').pop() ?? '');
+    const node: TreeNode = { name, hash: cid, size: 0, type: 2, path, children: [] };
+    if (depth >= MAX_DEPTH) return node;
+
+    const { links, isFile } = await this.listLinks(cid);
+    if (isFile) {
+      node.type = 1;
+      return node;
+    }
+
+    for (const link of links) {
+      if (this.entryCount >= MAX_ENTRIES) break;
+      this.entryCount++;
+      const childPath = path === '' ? link.Name : `${path}/${link.Name}`;
+      if (link.Type === 2) {
+        const child = await this.fetchDir(link.Hash, childPath, depth + 1);
+        node.children.push(child);
+      } else {
+        node.children.push({
+          name: link.Name,
+          hash: link.Hash,
+          size: link.Size,
+          type: 1,
+          path: childPath,
+          children: [],
+        });
+      }
+    }
+    return node;
+  }
+
+  private collectPaths(node: TreeNode): Set<string> {
+    const paths = new Set<string>();
+    const walk = (n: TreeNode): void => {
+      if (n.path !== '') {
+        paths.add(n.type === 2 ? `${n.path}/` : n.path);
+      }
+      for (const child of n.children) walk(child);
+    };
+    walk(node);
+    return paths;
+  }
+
+  private async sync(): Promise<void> {
+    if (this.syncing) return;
+    this.syncing = true;
+    this.error = null;
+    this.render();
+
+    try {
+      const rootCid = await this.fetchRootCid();
+      if (!rootCid) {
+        this.error = 'No site root available. Is the publication name and ENS records module configured?';
+        return;
+      }
+
+      const tree = await this.walkDag(rootCid);
+      const paths = this.collectPaths(tree);
+
+      const prev = this.previousSnapshot;
+      if (prev) {
+        this.addedPaths = new Set([...paths].filter((p) => !prev.has(p)));
+        this.removedPaths = new Set([...prev].filter((p) => !paths.has(p)));
+      } else {
+        this.addedPaths = new Set();
+        this.removedPaths = new Set();
+      }
+
+      this.previousSnapshot = paths;
+      this.saveSnapshot(paths);
+      this.tree = tree;
+      this.lastSynced = new Date().toLocaleString();
+    } catch (e) {
+      console.error('[website-tree] sync failed:', e);
+      this.error = e instanceof Error ? e.message : 'Failed to fetch the website tree from ENS/IPFS.';
+    } finally {
+      this.syncing = false;
+      this.render();
+    }
+  }
+
+  private computeStats(): { entries: number; pages: number } {
+    let entries = 0;
+    let pages = 0;
+    const walk = (n: TreeNode): void => {
+      entries++;
+      if (n.type === 1 && n.name === 'index.html') pages++;
+      for (const child of n.children) walk(child);
+    };
+    if (this.tree) walk(this.tree);
+    return { entries, pages };
+  }
+
+  private formatBytes(bytes: number): string {
+    if (!bytes || bytes <= 0) return '';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+    return `${String(parseFloat((bytes / Math.pow(k, i)).toFixed(1)))} ${sizes[i]}`;
+  }
+
+  private renderNode(node: TreeNode, depth: number): string {
+    const isDir = node.type === 2;
+    const isPage = !isDir && node.name === 'index.html';
+    const isAdded = this.addedPaths.has(node.path);
+    const indent = depth * 16;
+    const addedTag = isAdded ? '<span class="tag tag-added">new</span>' : '';
+
+    if (isDir) {
+      const children = node.children.map((c) => this.renderNode(c, depth + 1)).join('');
+      return `
+        <details class="tree-dir${isAdded ? ' added' : ''}" open>
+          <summary style="padding-left:${String(indent)}px">
+            <span class="tree-icon">📁</span>
+            <span class="tree-name">${escapeHtml(node.name)}</span>
+            <span class="tree-count">(${String(node.children.length)})</span>
+            ${addedTag}
+          </summary>
+          <div class="tree-children">${children}</div>
+        </details>`;
+    }
+
+    return `
+      <div class="tree-file${isAdded ? ' added' : ''}" style="padding-left:${String(indent)}px">
+        <span class="tree-icon">📄</span>
+        <span class="tree-name">${escapeHtml(node.name)}</span>
+        ${isPage ? '<span class="badge badge-page">page</span>' : ''}
+        <span class="tree-size">${escapeHtml(this.formatBytes(node.size))}</span>
+        ${addedTag}
+      </div>`;
+  }
+
+  private renderRemoved(): string {
+    if (this.removedPaths.size === 0) return '';
+    const items = ([...this.removedPaths] as string[])
+      .sort()
+      .map(
+        (p) => `
+      <div class="removed-row">
+        <span class="tree-icon">🗑️</span>
+        <span class="removed-name">${escapeHtml(p)}</span>
+        <span class="tag tag-removed">removed</span>
+      </div>`
+      )
+      .join('');
+    return `
+      <div class="removed-section">
+        <div class="removed-title">Removed since last sync (${String(this.removedPaths.size)})</div>
+        <div class="removed-list">${items}</div>
+      </div>`;
+  }
+
+  private render(): void {
+    if (!this.shadowRoot) return;
+
+    const publication = store.getRecord('name') ?? '';
+
+    let body = '';
+    if (!this.tree && !this.syncing) {
+      body = '<div class="loading">Loading website tree…</div>';
+    } else if (this.tree) {
+      if (this.tree.type === 2) {
+        const stats = this.computeStats();
+        const children = this.tree.children.map((c) => this.renderNode(c, 1)).join('');
+        body = `
+          <div class="tree-root">
+            <div class="root-label">Root</div>
+            <div class="root-cid">${escapeHtml(this.tree.hash)}</div>
+            <div class="tree-children">${children}</div>
+          </div>
+          <div class="stats">
+            <span class="stat">${String(stats.entries)} entries</span>
+            <span class="stat">${String(stats.pages)} pages</span>
+            ${this.addedPaths.size > 0 ? `<span class="stat stat-added">+${String(this.addedPaths.size)} added</span>` : ''}
+            ${this.removedPaths.size > 0 ? `<span class="stat stat-removed">−${String(this.removedPaths.size)} removed</span>` : ''}
+          </div>
+          ${this.renderRemoved()}
+        `;
+      } else {
+        body = `
+          <div class="tree-root">
+            <div class="root-label">Root is a file</div>
+            <div class="root-cid">${escapeHtml(this.tree.hash)}</div>
+            <div class="tree-file">
+              <span class="tree-icon">📄</span>
+              <span class="tree-name">${escapeHtml(this.tree.name || this.tree.hash)}</span>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          display: block;
+          padding: 2rem 0;
+          background: var(--gray-900);
+        }
+
+        .loading {
+          text-align: center;
+          padding: 3rem;
+          color: var(--gray-400);
+        }
+
+        .toolbar {
+          display: flex;
+          flex-direction: row;
+          align-items: center;
+          gap: 1rem;
+          margin-bottom: 1rem;
+        }
+
+        .last-synced {
+          color: var(--gray-400);
+          font-size: 0.85rem;
+        }
+
+        .publication {
+          color: var(--gray-300);
+          margin-bottom: 1rem;
+        }
+
+        .error {
+          margin: 1rem 0;
+          padding: 0.75rem 1rem;
+          border-radius: 6px;
+          background: rgba(239, 68, 68, 0.12);
+          color: #f87171;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .tree-root {
+          margin-top: 1rem;
+        }
+
+        .root-label {
+          font-size: 0.7rem;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: var(--gray-400);
+        }
+
+        .root-cid {
+          font-family: "Operator Mono A", "Operator Mono B";
+          color: var(--gray-100);
+          margin-bottom: 1rem;
+          word-break: break-all;
+        }
+
+        .tree-children {
+          border-left: 1px solid var(--gray-700);
+          margin-left: 0.5rem;
+          padding-left: 0.5rem;
+        }
+
+        .tree-dir {
+          margin: 0;
+        }
+
+        .tree-dir summary {
+          cursor: pointer;
+          list-style: none;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding-top: 0.3rem;
+          padding-bottom: 0.3rem;
+          color: var(--gray-100);
+        }
+
+        .tree-dir summary::-webkit-details-marker {
+          display: none;
+        }
+
+        .tree-dir summary::before {
+          content: "▸";
+          color: var(--gray-500);
+        }
+
+        .tree-dir[open] summary::before {
+          content: "▾";
+        }
+
+        .tree-file {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding-top: 0.3rem;
+          padding-bottom: 0.3rem;
+          color: var(--gray-100);
+        }
+
+        .tree-icon {
+          width: 1.1rem;
+          text-align: center;
+        }
+
+        .tree-name {
+          color: var(--gray-100);
+        }
+
+        .tree-count {
+          color: var(--gray-500);
+          font-size: 0.8rem;
+        }
+
+        .tree-size {
+          color: var(--gray-500);
+          font-size: 0.8rem;
+        }
+
+        .badge {
+          display: inline-block;
+          padding: 0.05rem 0.45rem;
+          border-radius: 4px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .badge-page {
+          background: rgba(16, 185, 129, 0.15);
+          color: #34d399;
+        }
+
+        .tag {
+          display: inline-block;
+          padding: 0.05rem 0.45rem;
+          border-radius: 4px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .tag-added {
+          background: rgba(16, 185, 129, 0.15);
+          color: #34d399;
+        }
+
+        .tag-removed {
+          background: rgba(239, 68, 68, 0.15);
+          color: #f87171;
+        }
+
+        .tree-dir.added summary .tree-name,
+        .tree-file.added .tree-name {
+          color: #34d399;
+        }
+
+        .stats {
+          display: flex;
+          gap: 1.25rem;
+          margin-top: 1.5rem;
+          padding: 0.75rem 1rem;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid var(--gray-700);
+          border-radius: 8px;
+        }
+
+        .stat {
+          color: var(--gray-300);
+          font-size: 0.85rem;
+        }
+
+        .stat-added {
+          color: #34d399;
+        }
+
+        .stat-removed {
+          color: #f87171;
+        }
+
+        .removed-section {
+          margin-top: 1.5rem;
+        }
+
+        .removed-title {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: #f87171;
+          margin-bottom: 0.5rem;
+        }
+
+        .removed-row {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding: 0.25rem 0;
+          color: var(--gray-400);
+        }
+
+        .removed-name {
+          text-decoration: line-through;
+          color: #f87171;
+        }
+      </style>
+
+      <div class="toolbar">
+        <div class="section-title">
+          <h2>Website Tree</h2>
+        </div>
+        <button class="button has-icon" id="sync-btn" ${this.syncing ? 'disabled' : ''}>
+          ${this.syncing ? 'Syncing…' : '↻ Sync'}
+        </button>
+        ${this.lastSynced ? `<span class="last-synced">Last synced: ${escapeHtml(this.lastSynced)}</span>` : ''}
+      </div>
+
+      ${publication ? `<div class="publication">${escapeHtml(publication)}</div>` : ''}
+
+      ${this.error ? `<div class="error">⚠️ ${escapeHtml(this.error)}</div>` : ''}
+
+      ${body}
+    `;
+
+    this.attachEventListeners();
+  }
+
+  private attachEventListeners(): void {
+    const syncBtn = this.shadowRoot?.querySelector('#sync-btn');
+    if (syncBtn) {
+      syncBtn.addEventListener('click', () => {
+        void this.sync();
+      });
+    }
+  }
+}
+
+customElements.define('s2s-website-tree-tab', S2SWebsiteTreeTab);

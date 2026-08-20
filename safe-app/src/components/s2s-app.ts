@@ -4,6 +4,7 @@ import './s2s-deals-tab.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
+import './s2s-website-tree-tab.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { store } from '@/state/store.js';
 import { LitService } from '@s2s/soul2soul-shared';
@@ -30,7 +31,7 @@ export class S2SApp extends HTMLElement {
   private lit: LitService;
   private filecoinStorage: FilecoinStorage;
   private fcInitPromise: Promise<void> | null = null;
-  private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' = 'deals';
+  private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' = 'deals';
   private fetching = false;
   private unsubscribers: Array<() => void> = [];
 
@@ -164,7 +165,7 @@ export class S2SApp extends HTMLElement {
     this.render();
   }
 
-  private switchTab(tab: 'deals' | 'whitelist' | 'records' | 'storage') {
+  private switchTab(tab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree') {
     this.currentTab = tab;
     this.render();
   }
@@ -246,6 +247,11 @@ export class S2SApp extends HTMLElement {
               class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
               id="storage-tab"
             >Storage</button>
+            <button
+              class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
+              id="website-tree-tab"
+              ${!this.safeIntegration.hasRecordsModule() ? 'disabled' : ''}
+            >Website Tree</button>
           </div>
 
           <div class="tab-content" id="tab-content"></div>
@@ -269,6 +275,10 @@ export class S2SApp extends HTMLElement {
       ?.addEventListener('click', () => this.switchTab('records'));
     this.shadowRoot?.querySelector('#storage-tab')
       ?.addEventListener('click', () => this.switchTab('storage'));
+    this.shadowRoot?.querySelector('#website-tree-tab')
+      ?.addEventListener('click', () => {
+        this.switchTab('websiteTree');
+      });
   }
 
   private renderCurrentTab() {
@@ -310,6 +320,13 @@ export class S2SApp extends HTMLElement {
         {
           const el = document.createElement('s2s-storage-tab');
           (el as any).storage = this.filecoinStorage;
+          tabContent.appendChild(el);
+        }
+        break;
+
+      case 'websiteTree':
+        if (this.safeIntegration.hasRecordsModule()) {
+          const el = document.createElement('s2s-website-tree-tab');
           tabContent.appendChild(el);
         }
         break;

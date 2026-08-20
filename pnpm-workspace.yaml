@@ -4,3 +4,8 @@ packages:
   - 'protocol'
   - 'shared'
   - 'safe-app'
+
+# Keep peer resolution stable (matches the committed lockfile's
+# `settings.autoInstallPeers: false`); pnpm 10 otherwise flips it to true
+# and re-resolves the whole graph.
+autoInstallPeers: false
