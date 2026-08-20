@@ -245,7 +245,7 @@ Each invariant lists the symptom if violated. If your edit touches a row, your c
 ## 6. Dependency edges (build/runtime)
 
 - `neutralpress` → `0xobsidian` at runtime (waits for Obsidian plugin `"oxo-core"`; uses its active user, chains, Lens, Safe).
-- everyone → `shared`. Note `shared` exposes **three entry points**: `index` (apps), `lit-actions` (action bundles), `safe-app`. Importing the wrong entry pulls the wrong build target.
+- everyone → `shared`. Note `shared` exposes **four entry points**: `index` (apps), `lit-actions` (action bundles), `rendering/action-io` (zod runtime schemas for the one action that needs them — added 2026-08-19 for the 413 fix), `safe-app`. Importing the wrong entry pulls the wrong build target.
 - `shared/src/identity/` — new module consumed by authoring surfaces (0xobsidian/neutralpress) at build time, not by action bundles. Exports: `buildSignedContentItem`, `verifyAuthorship`, `jcs`.
 - `protocol/actions/*` → `@s2s/soul2soul-shared/lit-actions` only (must stay bundleable into a single Lit Action file; no Node built-ins beyond the shim).
 - `safe-app` → `shared/safe-app` + Safe SDK; runs inside the Safe{Wallet} iframe.
