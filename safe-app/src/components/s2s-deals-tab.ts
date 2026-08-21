@@ -9,9 +9,43 @@ import { Deal } from '../types/index.js';
 import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
+import {
+  sortByColumn,
+  toggleSort,
+  renderSortableHeader,
+  type SortState,
+  type TableColumn,
+} from '@/utils/sort.js';
 import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
+
+// Per-column sort configuration for the Offers and Deals tables.
+const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
+  {
+    key: 'title',
+    label: 'ID / Title',
+    get: (o) => (o.encryption ? o.genesis : o.title ?? o.genesis),
+  },
+  { key: 'author', label: 'Author (safe)', get: (o) => o.author },
+  { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (o) => o.postType },
+  { key: 'created', label: 'Created', cls: 'hide-sm', get: (o) => o.creationDate },
+  { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (o) => o.tags?.join(', ') },
+  { key: 'status', label: 'Status', cls: 'hide-sm', get: (o) => o.status },
+];
+
+const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
+  {
+    key: 'title',
+    label: 'ID / Title',
+    get: (d) => (d.encryption ? d.genesis : d.title ?? d.genesis),
+  },
+  { key: 'author', label: 'Author (safe)', get: (d) => d.author },
+  { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (d) => d.postType },
+  { key: 'created', label: 'Creation Date', cls: 'hide-sm', get: (d) => d.creationDate },
+  { key: 'modified', label: 'Modified Date', cls: 'hide-sm', get: (d) => d.modifiedDate },
+  { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
+];
 
 export class S2SDealsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -23,6 +57,8 @@ export class S2SDealsTab extends HTMLElement {
   private unsubscriber!: () => void;
   private fetching: boolean = false;
   private previewMode: boolean = false;
+  private offersSort: SortState | null = null;
+  private dealsSort: SortState | null = null;
 
   constructor() {
     super();
@@ -280,8 +316,8 @@ export class S2SDealsTab extends HTMLElement {
   private render() {
     if (!this.shadowRoot) return;
 
-    const deals = store.deals;
-    const offers = store.offers;
+    const deals = sortByColumn(store.deals, DEAL_COLUMNS, this.dealsSort);
+    const offers = sortByColumn(store.offers, OFFER_COLUMNS, this.offersSort);
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -381,13 +417,8 @@ export class S2SDealsTab extends HTMLElement {
               <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
             </button>
           </div>
-          <div class="table">
-            <div class="table-header">ID / Title</div>
-            <div class="table-header">Author (safe)</div>
-            <div class="table-header hide-sm">Post type</div>
-            <div class="table-header hide-sm">Created</div>
-            <div class="table-header hide-sm">Tags</div>
-            <div class="table-header hide-sm">Status</div>
+          <div class="table table-offers">
+            ${OFFER_COLUMNS.map((c) => renderSortableHeader(c, this.offersSort)).join('')}
             <div class="table-header"></div>
 
             ${offers
@@ -431,13 +462,8 @@ export class S2SDealsTab extends HTMLElement {
         ${
           deals.length > 0
             ? `
-          <div class="table">
-            <div class="table-header">ID / Title</div>
-            <div class="table-header">Author (safe)</div>
-            <div class="table-header hide-sm">Post type</div>
-            <div class="table-header hide-sm">Creation Date</div>
-            <div class="table-header hide-sm">Modified Date</div>
-            <div class="table-header hide-sm">Tags</div>
+          <div class="table table-deals">
+            ${DEAL_COLUMNS.map((c) => renderSortableHeader(c, this.dealsSort)).join('')}
             <div class="table-header hide-sm">
               <button class="button has-icon" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
                 <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
@@ -500,6 +526,28 @@ export class S2SDealsTab extends HTMLElement {
   }
 
   private attachEventListeners() {
+    // Column header sorting — Offers table
+    this.shadowRoot?.querySelectorAll('.table-offers .table-header.sortable').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = (el as HTMLElement).dataset.sort;
+        if (key) {
+          this.offersSort = toggleSort(this.offersSort, key);
+          this.render();
+        }
+      });
+    });
+
+    // Column header sorting — Deals table
+    this.shadowRoot?.querySelectorAll('.table-deals .table-header.sortable').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = (el as HTMLElement).dataset.sort;
+        if (key) {
+          this.dealsSort = toggleSort(this.dealsSort, key);
+          this.render();
+        }
+      });
+    });
+
     // Preview toggle
     this.shadowRoot?.querySelector('toggle-button')?.addEventListener('toggle', ((
       e: CustomEvent,
