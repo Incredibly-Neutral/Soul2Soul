@@ -22,6 +22,29 @@ export const tableStylesString = `
         padding: .75rem  .75rem .75rem 0;
     }
 
+    /* Clickable column headers (per-column sorting, Excel-like) */
+    .table-header.sortable {
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--gray-600);
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        user-select: none;
+        text-align: left;
+        gap: .35rem;
+    }
+
+    .table-header.sortable:hover {
+        color: var(--gray-200);
+    }
+
+    .sort-indicator {
+        font-size: .7rem;
+        color: var(--color-yellow);
+        min-width: .8em;
+    }
+
     .table-cell {
         line-height: 1.275;
         padding: .75rem;
