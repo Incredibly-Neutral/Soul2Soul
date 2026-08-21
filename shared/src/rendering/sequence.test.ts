@@ -26,7 +26,7 @@ import { Wallet } from 'ethers';
 import { getProtocolInfo } from '../protocol';
 import type { S2SProtocolInfo } from '../protocol';
 import { runAction } from './helpers';
-import { runRenderActionWithRetry } from './sequence';
+import { runRenderActionWithRetry, renderwithLitActions } from './sequence';
 import {
   validatePrepOutput,
   validateSingleInput,
@@ -482,5 +482,149 @@ describe('renderwithLitActions — validateEvmUpdateInput accepts zero-jobs-with
       },
     };
     expect(() => validateEvmUpdateInput(input)).toThrow('jobs');
+  });
+
+  it('accepts empty jobs when reset is true (reset-only path)', () => {
+    const input = {
+      publication: 'test.soul2soul.eth',
+      jobs: [],
+      signature:
+        '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      authorSafeAddress: '0x0000...0001',
+      preview: true,
+      reset: true,
+      endpoints: {
+        ipfsGateway: 'https://ipfs.transport-union.dev',
+        rpcs: { L1: ['https://lb.drpc.live/ethereum/key'], L2: ['https://lb.drpc.live/base/key'] },
+      },
+    };
+    expect(() => validateEvmUpdateInput(input)).not.toThrow();
+    const result = validateEvmUpdateInput(input);
+    expect(result.jobs).toHaveLength(0);
+    expect(result.reset).toBe(true);
+  });
+});
+
+// ============================================================================
+// Reset-only orchestration (RFC-reset-tree-button.md §2, option A).
+//
+// When `renderwithLitActions` is called with `reset:true` AND zero contentIds,
+// prep + render are SKIPPED (prep rejects empty contentIds) and the update
+// action is driven directly with jobs:[] + reset:true so the tree is rebuilt
+// fresh. runAction is the vi.mocked spy from the top of this file.
+// ============================================================================
+
+describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)', () => {
+  const updateCid = 'cid-update';
+  const protocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: updateCid },
+  } as any;
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('skips prep + render and runs the update action directly with jobs:[] + reset:true', async () => {
+    let updateInputs: any;
+    vi.mocked(runAction).mockImplementation(async (_preview: any, _lit: any, cid: any, inputs: any) => {
+      expect(cid).toBe(updateCid); // only the update action may be reached
+      updateInputs = inputs;
+      return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
+    });
+
+    const res: any = await renderwithLitActions(
+      true, // preview
+      mockLit,
+      '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      'usage',
+      protocolInfo,
+      null, // notice
+      '0x0000...0001', // authorSafeAddress
+      'test.soul2soul.eth',
+      [], // contentIds (zero)
+      undefined, // configCid
+      sampleEndpoints.rpcs, // _rpcs
+      undefined, // _ipfsGateway
+      undefined, // remove
+      true, // reset
+    );
+
+    // Exactly ONE action dispatch — the update. No prep, no render.
+    expect(runAction).toHaveBeenCalledTimes(1);
+    expect(updateInputs.reset).toBe(true);
+    expect(updateInputs.jobs).toEqual([]);
+    expect(updateInputs.remove).toBeUndefined();
+    expect(res.success).toBe(true);
+    expect(res.cid).toBe('QmNewRoot');
+    expect(res.path).toBe('');
+  });
+
+  it('without reset, zero contentIds still goes through prep which rejects empty contentIds', async () => {
+    // validatePrepInput rejects empty contentIds — so a non-reset empty run
+    // must NOT silently reach the update action.
+    await expect(
+      renderwithLitActions(
+        true,
+        mockLit,
+        '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+        'usage',
+        protocolInfo,
+        null,
+        '0x0000...0001',
+        'test.soul2soul.eth',
+        [], // zero contentIds, NO reset
+        undefined,
+        sampleEndpoints.rpcs,
+      ),
+    ).rejects.toThrow();
+    expect(runAction).not.toHaveBeenCalled();
+  });
+
+  it('reset:true with non-empty contentIds still runs prep+render and threads reset to the update', async () => {
+    const renderedJob = { ...sampleJob, html: 'QmRendered', path: '/hello-world' };
+    vi.mocked(runAction).mockImplementation(async (_preview: any, _lit: any, cid: any, inputs: any) => {
+      if (cid === 'cid-prep') {
+        return {
+          ok: true,
+          action: 'prep',
+          data: { jobs: [sampleJob], remove: undefined },
+          trace: [],
+        };
+      }
+      if (cid === 'cid-render') {
+        return { ok: true, action: 'single', data: { job: renderedJob }, trace: [] };
+      }
+      if (cid === updateCid) {
+        expect(inputs.reset).toBe(true); // reset threaded through
+        return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
+      }
+      throw new Error('unexpected cid ' + cid);
+    });
+
+    const res: any = await renderwithLitActions(
+      true,
+      mockLit,
+      '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+      'usage',
+      protocolInfo,
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'], // non-empty contentIds
+      undefined,
+      sampleEndpoints.rpcs,
+      undefined,
+      undefined,
+      true, // reset
+    );
+
+    // prep + render + update = 3 dispatches
+    expect(runAction).toHaveBeenCalledTimes(3);
+    expect(res.success).toBe(true);
   });
 });

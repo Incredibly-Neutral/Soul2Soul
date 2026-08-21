@@ -55,3 +55,25 @@ export const canPublish = async (
 
     return canPublishResult && isOwner;
 };
+
+// A reset is a STRICTER gate than a normal publish: only an owner of the
+// PUBLICATION Safe (`multisig`, resolved by getDomainOwnerAndModules) may nuke
+// the tree — NOT merely an owner of a whitelisted author Safe. This mirrors the
+// `isOwner` read in `canPublish` but evaluates it against the publication Safe
+// (the value returned as `multisig` by getDomainOwnerAndModules) instead of the
+// author Safe. See RFC-reset-tree-button.md.
+export const canReset = async (
+    multisig: string,
+    signerAddress: string,
+    rpcs?: string[],
+): Promise<boolean> => {
+
+    return await evmRead(
+        "L2",
+        multisig,
+        ["function isOwner(address owner) view returns (bool)"],
+        "isOwner",
+        [signerAddress],
+        rpcs,
+    );
+};
