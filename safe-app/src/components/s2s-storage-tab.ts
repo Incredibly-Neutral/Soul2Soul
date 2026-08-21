@@ -2,6 +2,7 @@
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
 import { tableStyles } from '../styles/table-styles.js';
+import { filterStyles } from '@/styles/filter-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -12,6 +13,12 @@ import {
   type SortState,
   type TableColumn,
 } from '@/utils/sort.js';
+import {
+  filterByColumn,
+  uniqueValuesForColumn,
+  type FilterState,
+} from '@/utils/filter.js';
+import { TableFilter } from './table-filter.js';
 
 // Per-column sort configuration for the Pieces and Data Sets tables.
 const PIECE_COLUMNS: Array<TableColumn<StoragePiece>> = [
@@ -49,11 +56,13 @@ export class S2SStorageTab extends HTMLElement {
   private unsubscriber: (() => void) | null = null;
   private piecesSort: SortState | null = null;
   private datasetsSort: SortState | null = null;
+  private piecesFilters: FilterState = {};
+  private datasetsFilters: FilterState = {};
 
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles];
+    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles, filterStyles];
   }
 
   async connectedCallback() {
@@ -167,8 +176,17 @@ export class S2SStorageTab extends HTMLElement {
 
     const allPieces = store.pieces;
     const allDatasets = store.dataSets;
-    const pieces = sortByColumn(allPieces, PIECE_COLUMNS, this.piecesSort);
-    const datasets = sortByColumn(allDatasets, DATASET_COLUMNS, this.datasetsSort);
+    // Filter first, then sort (filters narrow the rows, sort orders the result).
+    const pieces = sortByColumn(
+      filterByColumn(allPieces, PIECE_COLUMNS, this.piecesFilters),
+      PIECE_COLUMNS,
+      this.piecesSort,
+    );
+    const datasets = sortByColumn(
+      filterByColumn(allDatasets, DATASET_COLUMNS, this.datasetsFilters),
+      DATASET_COLUMNS,
+      this.datasetsSort,
+    );
 
     // ── Cost summary ──
     let costHtml = '';
@@ -440,7 +458,7 @@ export class S2SStorageTab extends HTMLElement {
         }
       </style>
 
-      ${pieces.length === 0 ? `
+      ${allPieces.length === 0 ? `
         <div class="loading">
           <p>Loading storage data...</p>
         </div>
@@ -456,10 +474,25 @@ export class S2SStorageTab extends HTMLElement {
 
         ${costHtml}
 
+        <div class="table-filters">
+          <table-filter data-key="kind" label="Kind" value="${this.piecesFilters.kind ?? ''}"></table-filter>
+        </div>
+
+        ${
+          pieces.length > 0
+            ? `
         <div class="table table-pieces">
           ${pieceHeader}
           ${pieceRows}
         </div>
+      `
+            : `
+        <div class="empty-state">
+          <div class="empty-icon">📄</div>
+          <p>No pieces match the current filters</p>
+        </div>
+      `
+        }
 
         <div class="toolbar ds-section-title">
           <div class="section-title">
@@ -467,10 +500,25 @@ export class S2SStorageTab extends HTMLElement {
           </div>
         </div>
 
+        <div class="table-filters">
+          <table-filter data-key="state" label="State" value="${this.datasetsFilters.state ?? ''}"></table-filter>
+        </div>
+
+        ${
+          datasets.length === 0 && allDatasets.length > 0
+            ? `
+        <div class="empty-state">
+          <div class="empty-icon">📄</div>
+          <p>No data sets match the current filters</p>
+        </div>
+      `
+            : `
         <div class="table table-datasets">
           ${dsHeader}
           ${dsRows}
         </div>
+      `
+        }
       `}
     `;
 
@@ -497,6 +545,38 @@ export class S2SStorageTab extends HTMLElement {
           this.datasetsSort = toggleSort(this.datasetsSort, key);
           this.render();
         }
+      });
+    });
+
+    // Filter dropdowns — Pieces table
+    this.shadowRoot?.querySelectorAll('.table-pieces .table-filters table-filter').forEach((el) => {
+      const filterEl = el as TableFilter;
+      const key = (el as HTMLElement).dataset.key;
+      if (!key) return;
+      filterEl.options = uniqueValuesForColumn(store.pieces, PIECE_COLUMNS, key);
+      filterEl.addEventListener('change', (e) => {
+        const value = (e as CustomEvent).detail.value as string;
+        const next = { ...this.piecesFilters };
+        if (value) next[key] = value;
+        else delete next[key];
+        this.piecesFilters = next;
+        this.render();
+      });
+    });
+
+    // Filter dropdowns — Data Sets table
+    this.shadowRoot?.querySelectorAll('.table-datasets .table-filters table-filter').forEach((el) => {
+      const filterEl = el as TableFilter;
+      const key = (el as HTMLElement).dataset.key;
+      if (!key) return;
+      filterEl.options = uniqueValuesForColumn(store.dataSets, DATASET_COLUMNS, key);
+      filterEl.addEventListener('change', (e) => {
+        const value = (e as CustomEvent).detail.value as string;
+        const next = { ...this.datasetsFilters };
+        if (value) next[key] = value;
+        else delete next[key];
+        this.datasetsFilters = next;
+        this.render();
       });
     });
 

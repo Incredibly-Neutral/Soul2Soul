@@ -3,6 +3,7 @@ import { LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2so
 import { CID } from 'multiformats';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
+import { filterStyles } from '@/styles/filter-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { store } from '../state/index.js';
 import { Deal } from '../types/index.js';
@@ -16,6 +17,12 @@ import {
   type SortState,
   type TableColumn,
 } from '@/utils/sort.js';
+import {
+  filterByColumn,
+  uniqueValuesForColumn,
+  type FilterState,
+} from '@/utils/filter.js';
+import { TableFilter } from './table-filter.js';
 import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
@@ -59,6 +66,8 @@ export class S2SDealsTab extends HTMLElement {
   private previewMode: boolean = false;
   private offersSort: SortState | null = null;
   private dealsSort: SortState | null = null;
+  private offersFilters: FilterState = {};
+  private dealsFilters: FilterState = {};
 
   constructor() {
     super();
@@ -68,6 +77,7 @@ export class S2SDealsTab extends HTMLElement {
       sectionStyles,
       tableStyles,
       buttonStyles,
+      filterStyles,
     ];
   }
 
@@ -316,8 +326,17 @@ export class S2SDealsTab extends HTMLElement {
   private render() {
     if (!this.shadowRoot) return;
 
-    const deals = sortByColumn(store.deals, DEAL_COLUMNS, this.dealsSort);
-    const offers = sortByColumn(store.offers, OFFER_COLUMNS, this.offersSort);
+    // Filter first, then sort (filters narrow the rows, sort orders the result).
+    const offers = sortByColumn(
+      filterByColumn(store.offers, OFFER_COLUMNS, this.offersFilters),
+      OFFER_COLUMNS,
+      this.offersSort,
+    );
+    const deals = sortByColumn(
+      filterByColumn(store.deals, DEAL_COLUMNS, this.dealsFilters),
+      DEAL_COLUMNS,
+      this.dealsSort,
+    );
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -392,7 +411,7 @@ export class S2SDealsTab extends HTMLElement {
       </style>
 
       ${
-        this.fetching && deals.length === 0
+        this.fetching && store.deals.length === 0
           ? `
       <div class="loading">
         <p>Loading deals...</p>
@@ -408,7 +427,7 @@ export class S2SDealsTab extends HTMLElement {
      
 
       ${
-        offers.length > 0
+        store.offers.length > 0
           ? `
         <div class="section">
           <div class="list_header">
@@ -417,6 +436,13 @@ export class S2SDealsTab extends HTMLElement {
               <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
             </button>
           </div>
+          <div class="table-filters">
+            <table-filter data-key="author" label="Author" value="${this.offersFilters.author ?? ''}"></table-filter>
+            <table-filter data-key="postType" label="Post type" value="${this.offersFilters.postType ?? ''}"></table-filter>
+          </div>
+          ${
+            offers.length > 0
+              ? `
           <div class="table table-offers">
             ${OFFER_COLUMNS.map((c) => renderSortableHeader(c, this.offersSort)).join('')}
             <div class="table-header"></div>
@@ -446,9 +472,17 @@ export class S2SDealsTab extends HTMLElement {
                 </div>
               </div>
             `,
-              )
-              .join('')}
+            )
+            .join('')}
           </div>
+        `
+              : `
+          <div class="empty-state">
+            <div class="empty-icon">📄</div>
+            <p>No offers match the current filters</p>
+          </div>
+        `
+          }
         </div>
       `
           : ''
@@ -458,6 +492,17 @@ export class S2SDealsTab extends HTMLElement {
         <div class="list_header">
           <h2 class="section-title">Active Deals (${deals.length})</h2>
         </div>
+
+        ${
+          store.deals.length > 0
+            ? `
+        <div class="table-filters">
+          <table-filter data-key="author" label="Author" value="${this.dealsFilters.author ?? ''}"></table-filter>
+          <table-filter data-key="postType" label="Post type" value="${this.dealsFilters.postType ?? ''}"></table-filter>
+        </div>
+      `
+            : ''
+        }
 
         ${
           deals.length > 0
@@ -500,7 +545,7 @@ export class S2SDealsTab extends HTMLElement {
             : `
           <div class="empty-state">
             <div class="empty-icon">📄</div>
-            <p>No active deals yet</p>
+            <p>${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}</p>
           </div>
         `
         }
@@ -520,7 +565,7 @@ export class S2SDealsTab extends HTMLElement {
       }
     `;
 
-    if (!this.fetching || deals.length > 0) {
+    if (!this.fetching || store.deals.length > 0) {
       this.attachEventListeners();
     }
   }
@@ -545,6 +590,38 @@ export class S2SDealsTab extends HTMLElement {
           this.dealsSort = toggleSort(this.dealsSort, key);
           this.render();
         }
+      });
+    });
+
+    // Filter dropdowns — Offers table
+    this.shadowRoot?.querySelectorAll('.table-offers .table-filters table-filter').forEach((el) => {
+      const filterEl = el as TableFilter;
+      const key = (el as HTMLElement).dataset.key;
+      if (!key) return;
+      filterEl.options = uniqueValuesForColumn(store.offers, OFFER_COLUMNS, key);
+      filterEl.addEventListener('change', (e) => {
+        const value = (e as CustomEvent).detail.value as string;
+        const next = { ...this.offersFilters };
+        if (value) next[key] = value;
+        else delete next[key];
+        this.offersFilters = next;
+        this.render();
+      });
+    });
+
+    // Filter dropdowns — Deals table
+    this.shadowRoot?.querySelectorAll('.table-deals .table-filters table-filter').forEach((el) => {
+      const filterEl = el as TableFilter;
+      const key = (el as HTMLElement).dataset.key;
+      if (!key) return;
+      filterEl.options = uniqueValuesForColumn(store.deals, DEAL_COLUMNS, key);
+      filterEl.addEventListener('change', (e) => {
+        const value = (e as CustomEvent).detail.value as string;
+        const next = { ...this.dealsFilters };
+        if (value) next[key] = value;
+        else delete next[key];
+        this.dealsFilters = next;
+        this.render();
       });
     });
 
