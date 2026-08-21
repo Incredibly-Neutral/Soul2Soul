@@ -52,6 +52,9 @@ export interface EvmUpdateInput {
   signature: string;
   authorSafeAddress: string;
   preview?: boolean;
+  // Reset drops the existing MFS tree (incl. home index.html), keeps assets,
+  // and rewrites contenthash_wrapped. Publication-owner gated (canReset).
+  reset?: boolean;
   remove?: { path: string; replacedBy?: string }[];
   endpoints: {
     ipfsGateway?: string;
