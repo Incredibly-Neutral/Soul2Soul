@@ -5,6 +5,40 @@ import { tableStyles } from '../styles/table-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
+import {
+  sortByColumn,
+  toggleSort,
+  renderSortableHeader,
+  type SortState,
+  type TableColumn,
+} from '@/utils/sort.js';
+
+// Per-column sort configuration for the Pieces and Data Sets tables.
+const PIECE_COLUMNS: Array<TableColumn<StoragePiece>> = [
+  { key: 'pieceCid', label: 'Piece CID', get: (p) => p.pieceCid },
+  { key: 'rootCid', label: 'Root CID', get: (p) => p.rootCid },
+  { key: 'kind', label: 'Kind', get: (p) => p.metadata?.kind },
+  { key: 'size', label: 'Size', get: (p) => Number(p.size || 0) },
+  { key: 'dataSetId', label: 'Data Set', get: (p) => p.dataSetId },
+  { key: 'provider', label: 'Provider', get: (p) => p.provider },
+  { key: 'state', label: 'State', get: (p) => (p.scheduledForRemoval ? 'Rm' : 'Active') },
+];
+
+const DATASET_COLUMNS: Array<TableColumn<PublicationDataSet>> = [
+  { key: 'dataSetId', label: 'Data Set', get: (ds) => ds.dataSetId },
+  { key: 'provider', label: 'Provider', get: (ds) => ds.provider },
+  { key: 'pieces', label: 'Pieces', get: (ds) => ds.pieceCount },
+  {
+    key: 'state',
+    label: 'State',
+    get: (ds) => (ds.pdpEndEpoch != null && ds.pdpEndEpoch > 0n ? 'Terminated' : 'Active'),
+  },
+  {
+    key: 'endEpoch',
+    label: 'End Epoch',
+    get: (ds) => (ds.pdpEndEpoch != null && ds.pdpEndEpoch > 0n ? ds.pdpEndEpoch : null),
+  },
+];
 
 export class S2SStorageTab extends HTMLElement {
   private storage!: FilecoinStorage;
@@ -13,6 +47,8 @@ export class S2SStorageTab extends HTMLElement {
   private deleting = new Set<string>(); // "dataSetId:pieceId" keys
   private terminating = new Set<string>(); // dataSetIds being terminated
   private unsubscriber: (() => void) | null = null;
+  private piecesSort: SortState | null = null;
+  private datasetsSort: SortState | null = null;
 
   constructor() {
     super();
@@ -129,13 +165,15 @@ export class S2SStorageTab extends HTMLElement {
   private render() {
     if (!this.shadowRoot) return;
 
-    const pieces = store.pieces;
-    const datasets = store.dataSets;
+    const allPieces = store.pieces;
+    const allDatasets = store.dataSets;
+    const pieces = sortByColumn(allPieces, PIECE_COLUMNS, this.piecesSort);
+    const datasets = sortByColumn(allDatasets, DATASET_COLUMNS, this.datasetsSort);
 
     // ── Cost summary ──
     let costHtml = '';
-    if (pieces.length > 0 && pieces.some(p => p.confirmed)) {
-      const cost = FilecoinStorage.estimateMonthlyCostFromPieces(pieces);
+    if (allPieces.length > 0 && allPieces.some(p => p.confirmed)) {
+      const cost = FilecoinStorage.estimateMonthlyCostFromPieces(allPieces);
       costHtml = `
         <div class="cost-summary">
           <div class="cost-item">
@@ -160,13 +198,7 @@ export class S2SStorageTab extends HTMLElement {
 
     // ── Pieces table ──
     const pieceHeader = `
-      <div class="table-header">Piece CID</div>
-      <div class="table-header">Root CID</div>
-      <div class="table-header">Kind</div>
-      <div class="table-header">Size</div>
-      <div class="table-header">Data Set</div>
-      <div class="table-header">Provider</div>
-      <div class="table-header">State</div>
+      ${PIECE_COLUMNS.map((c) => renderSortableHeader(c, this.piecesSort)).join('')}
       <div class="table-header">Actions</div>
     `;
 
@@ -213,11 +245,7 @@ export class S2SStorageTab extends HTMLElement {
 
     // ── Data sets table ──
     const dsHeader = `
-      <div class="table-header">Data Set</div>
-      <div class="table-header">Provider</div>
-      <div class="table-header">Pieces</div>
-      <div class="table-header">State</div>
-      <div class="table-header">End Epoch</div>
+      ${DATASET_COLUMNS.map((c) => renderSortableHeader(c, this.datasetsSort)).join('')}
       <div class="table-header">Actions</div>
     `;
 
@@ -428,7 +456,7 @@ export class S2SStorageTab extends HTMLElement {
 
         ${costHtml}
 
-        <div class="table">
+        <div class="table table-pieces">
           ${pieceHeader}
           ${pieceRows}
         </div>
@@ -450,6 +478,28 @@ export class S2SStorageTab extends HTMLElement {
   }
 
   private attachEventListeners() {
+    // Column header sorting — Pieces table
+    this.shadowRoot?.querySelectorAll('.table-pieces .table-header.sortable').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = (el as HTMLElement).dataset.sort;
+        if (key) {
+          this.piecesSort = toggleSort(this.piecesSort, key);
+          this.render();
+        }
+      });
+    });
+
+    // Column header sorting — Data Sets table
+    this.shadowRoot?.querySelectorAll('.table-datasets .table-header.sortable').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = (el as HTMLElement).dataset.sort;
+        if (key) {
+          this.datasetsSort = toggleSort(this.datasetsSort, key);
+          this.render();
+        }
+      });
+    });
+
     const refreshBtn = this.shadowRoot?.querySelector('#refresh-btn');
     if (refreshBtn) {
       refreshBtn.addEventListener('click', () => {
