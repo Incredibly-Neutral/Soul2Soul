@@ -327,6 +327,8 @@ export class S2SApp extends HTMLElement {
       case 'websiteTree':
         if (this.safeIntegration.hasRecordsModule()) {
           const el = document.createElement('s2s-website-tree-tab');
+          (el as any).safeIntegration = this.safeIntegration;
+          (el as any).lit = this.lit;
           tabContent.appendChild(el);
         }
         break;

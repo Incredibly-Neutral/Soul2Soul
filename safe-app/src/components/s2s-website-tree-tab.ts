@@ -1,17 +1,22 @@
 // s2s-website-tree-tab.ts
 //
-// Read-only view of the published website tree. Fetches the site root CID from
-// the ENS records contract (`contenthash_wrapped`, INV-6) and walks the IPFS DAG
-// from that root via the Kubo gateway, rendering every entry as a collapsible
-// tree. A sync button re-reads the contract + re-walks the DAG (no page reload)
-// and diffs against the previous snapshot so the publisher can monitor
-// retractions (removed paths) and slug renames (added + removed paths).
+// View of the published website tree. Fetches the site root CID from the ENS
+// records contract (`contenthash_wrapped`, INV-6) and walks the IPFS DAG from
+// that root via the Kubo gateway, rendering every entry as a collapsible tree.
+// A sync button re-reads the contract + re-walks the DAG (no page reload) and
+// diffs against the previous snapshot so the publisher can monitor retractions
+// (removed paths) and slug renames (added + removed paths).
 //
-// This tab never proposes Safe transactions and never writes to the publish
-// path, contracts, or actions — it is a read-only view.
+// A "Reset tree" button runs the publication-owner reset through the existing
+// Lit pipeline (`renderwithLitActions` with `reset: true`) — clearing all pages
+// (including home), keeping assets, and leaving on-chain deals untouched — with
+// an optional "Reset & rebuild" that also re-renders every on-chain deal in the
+// same call. This tab never proposes Safe transactions.
+import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
 import { CID } from 'multiformats';
 import { store } from '../state/index.js';
+import { SafeIntegration } from '../lib/safe-integration.js';
 import { evmRead } from '@/lib/evm.js';
 import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
 import { tableStyles } from '@/styles/table-styles.js';
@@ -49,7 +54,10 @@ const escapeHtml = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export class S2SWebsiteTreeTab extends HTMLElement {
+  public safeIntegration!: SafeIntegration;
+  public lit!: LitService;
   private syncing = false;
+  private resetting = false;
   private error: string | null = null;
   private tree: TreeNode | null = null;
   private lastSynced: string | null = null;
@@ -204,6 +212,120 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     };
     walk(node);
     return paths;
+  }
+
+  /** Destructive-action confirm dialog: explains what a reset clears and keeps
+   *  (all pages incl. home, assets kept, on-chain deals unchanged) and offers
+   *  "Reset only" (clear-only) vs "Reset & rebuild" (clear + bulk re-render of
+   *  every on-chain deal). Default is "Reset only". */
+  private showResetDialog(): void {
+    if (!this.shadowRoot) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal">
+        <h3 class="modal-title">Reset website tree?</h3>
+        <p class="modal-text">
+          This <strong>clears ALL pages</strong> from the website tree — including the home
+          page (<code>index.html</code>). Assets are kept and re-copied from the config.
+          On-chain deals are <strong>unchanged</strong> (they remain the source of truth).
+        </p>
+        <div class="modal-actions">
+          <button class="button btn-secondary" id="reset-cancel-btn">Cancel</button>
+          <button class="button btn-danger" id="reset-only-btn">Reset only</button>
+          <button class="button btn-danger" id="reset-rebuild-btn">Reset &amp; rebuild</button>
+        </div>
+      </div>
+    `;
+    this.shadowRoot.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#reset-cancel-btn')?.addEventListener('click', close);
+    overlay.querySelector('#reset-only-btn')?.addEventListener('click', () => {
+      close();
+      void this.resetTree(false);
+    });
+    overlay.querySelector('#reset-rebuild-btn')?.addEventListener('click', () => {
+      close();
+      void this.resetTree(true);
+    });
+  }
+
+  /** Run the reset through the existing write pipeline (same as
+   *  s2s-deals-tab.ts bulkRender): `signWithSigner('lit actions auth')` then
+   *  `renderwithLitActions(..., reset: true)`. For "Reset only" contentIds is
+   *  empty (reset-only path — skips prep/render and drives the update action
+   *  directly with jobs:[] + reset:true). For "Reset & rebuild" all deal genesis
+   *  IDs are passed with reset:true so a single call runs prep+render AND the
+   *  mkdir-branch reset — reconstructing the tree from current on-chain state.
+   *  On success the tree is re-synced so the cleared/rebuilt tree shows at once.
+   *  The on-chain gate (canReset, publication-Safe owner) is not re-implemented
+   *  here — a non-owner signer surfaces as a pipeline error. */
+  private async resetTree(rebuild: boolean): Promise<void> {
+    if (this.syncing || this.resetting) return;
+    this.resetting = true;
+    this.error = null;
+    this.render();
+
+    try {
+      const configCid = store.getRecord('config');
+      const publication = store.getRecord('name');
+      const protocolInfo = store.protocolInfo;
+      const safeInfo = store.safeInfo;
+      if (
+        configCid == null ||
+        publication == null ||
+        protocolInfo == undefined ||
+        safeInfo == undefined
+      ) {
+        this.error = 'Cannot reset: missing config, publication, protocol, or Safe info.';
+        return;
+      }
+
+      const signature = await this.safeIntegration.signWithSigner('lit actions auth');
+
+      const contentIds = rebuild ? store.deals.map((d) => d.genesis) : [];
+
+      // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base). Mirrors
+      // s2s-deals-tab.ts bulkRender / getRpcUrl in lib/evm.ts — no hardcoded keys.
+      const apiKey = String(import.meta.env.VITE_DRPC_API_KEY ?? 'default');
+      const rpcs = {
+        L1: [`https://lb.drpc.live/ethereum/${apiKey}`],
+        L2: [`https://lb.drpc.live/base/${apiKey}`],
+      };
+
+      const res = await renderwithLitActions(
+        false, // preview — a reset is a real write, not a preview
+        this.lit,
+        signature,
+        import.meta.env.VITE_LIT_USAGE_KEY,
+        protocolInfo,
+        undefined, // notice
+        store.safeInfo?.safeAddress || '',
+        publication,
+        contentIds,
+        configCid,
+        rpcs,
+        undefined, // ipfsGateway — fall back to protocolInfo.gateway
+        undefined, // remove
+        true, // reset — 14th positional arg
+      );
+
+      if (!res.success) {
+        this.error = 'Reset failed — the pipeline did not report success.';
+        return;
+      }
+
+      // Re-sync the tree so the cleared/rebuilt tree is reflected immediately.
+      await this.sync();
+    } catch (e) {
+      // Surface the pipeline error (e.g. a non-owner signer rejected by canReset).
+      console.error('[website-tree] reset failed:', e);
+      this.error = e instanceof Error ? e.message : 'Reset failed.';
+    } finally {
+      this.resetting = false;
+      this.render();
+    }
   }
 
   private async sync(): Promise<void> {
@@ -537,14 +659,56 @@ export class S2SWebsiteTreeTab extends HTMLElement {
           text-decoration: line-through;
           color: #f87171;
         }
+
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.6);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+
+        .modal {
+          background: var(--gray-800);
+          border: 1px solid var(--gray-600);
+          border-radius: 10px;
+          padding: 1.5rem;
+          max-width: 420px;
+          width: 90%;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-title {
+          margin: 0 0 0.75rem;
+          color: #f87171;
+          font-size: 1.1rem;
+        }
+
+        .modal-text {
+          margin: 0 0 1.25rem;
+          color: var(--gray-300);
+          line-height: 1.5;
+        }
+
+        .modal-actions {
+          display: flex;
+          gap: 0.5rem;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+        }
       </style>
 
       <div class="toolbar">
         <div class="section-title">
           <h2>Website Tree</h2>
         </div>
-        <button class="button has-icon" id="sync-btn" ${this.syncing ? 'disabled' : ''}>
+        <button class="button has-icon" id="sync-btn" ${this.syncing || this.resetting ? 'disabled' : ''}>
           ${this.syncing ? 'Syncing…' : '↻ Sync'}
+        </button>
+        <button class="button btn-danger" id="reset-btn" ${this.syncing || this.resetting ? 'disabled' : ''}>
+          ${this.resetting ? 'Resetting…' : '🗑 Reset tree'}
         </button>
         ${this.lastSynced ? `<span class="last-synced">Last synced: ${escapeHtml(this.lastSynced)}</span>` : ''}
       </div>
@@ -562,6 +726,12 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     if (syncBtn) {
       syncBtn.addEventListener('click', () => {
         void this.sync();
+      });
+    }
+    const resetBtn = this.shadowRoot?.querySelector('#reset-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        this.showResetDialog();
       });
     }
   }
