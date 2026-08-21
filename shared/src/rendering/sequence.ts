@@ -118,9 +118,23 @@ export const renderwithLitActions = async (
   _rpcs?: { L1: string[]; L2: string[] },
   _ipfsGateway?: string,
   remove?: { path: string; replacedBy?: string }[],
+  reset?: boolean,
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
+
+  // A reset-only run (reset:true with zero contentIds) skips prep + render —
+  // prep rejects empty contentIds (prep/main.ts) — and drives the update action
+  // directly with jobs:[] + reset:true so the tree is rebuilt fresh. See
+  // RFC-reset-tree-button.md.
+  const resetOnly = reset === true && contentIds.length === 0;
+
+  // Render-stage results — hoisted so the EVM update stage below can consume
+  // them whether or not prep/render ran (a reset-only run leaves them empty).
+  let prepRemove: { path: string; replacedBy?: string }[] | undefined;
+  let activeJobs: any[] = [];
+  let allRemove: { path: string; replacedBy?: string }[] = [];
+  let primaryPath = '';
 
   // ── Build endpoints ──────────────────────────────────────────────
   // _rpcs: caller-supplied RPC endpoints (L1 = Ethereum, L2 = Base)
@@ -136,108 +150,104 @@ export const renderwithLitActions = async (
 
   // ---------------- Preperation Stage ------------------------------------
 
-  if (notice) notice.setMessage('prepping render ...');
-  else console.log('preview:', preview);
+  if (!resetOnly) {
+    if (notice) notice.setMessage('prepping render ...');
+    else console.log('preview:', preview);
 
-  console.log('pub1', publication);
-  const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
-  const prepAction = await runAction(
-    true,
-    lit,
-    protocolInfo.litActions.prep,
-    prepInputs,
-    litUsageKey,
-  );
-  const validatedPrep = validatePrepOutput(prepAction);
-  if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2));
-  if (validatedPrep.ok) {
-    jobs = (validatedPrep as any).data?.jobs;
-    console.log('Jobs dispatched:', jobs.length, jobs);
-  }
-
-  // Read auto-detected slug-change removals from prep output
-  const prepRemove: { path: string; replacedBy?: string }[] | undefined = (validatedPrep as any).ok
-    ? (validatedPrep as any).data?.remove
-    : undefined;
-
-  // ---------------- Single Actions Stage ----------------------------------
-
-  if (notice) notice.setMessage('ispatching render actions ...');
-  else console.log('dispatching render actions...');
-
-  const allResults = await Promise.all(
-    jobs.map(async (job: any, index: number) => {
-      try {
-        const singleInputs = validateSingleInput({
-          signature,
-          authorSafeAddress,
-          configCid,
-          publication,
-          job,
-          preview,
-          maintainCache: index === jobs.length - 1,
-          // The id(s the caller rendered — the render action scopes its on-chain
-          // hasDeal revoke check to these ids ONLY (a revoke is always about the
-          // id the caller rendered). A cascade/ripple destination (e.g. home) is
-          // re-rendered as a consequence of the trigger and must NEVER be
-          // hasDeal-checked: a destination pinned via query.genesis may never
-          // have been a deal, so hasDeal=false there would falsely revoke-and-
-          // remove a live page (publish-path regression, acceptance 4).
-          triggeredContentIds: contentIds,
-          endpoints,
-        });
-        const actionResult = await runRenderActionWithRetry(
-          preview,
-          lit,
-          protocolInfo.litActions.render,
-          job,
-          singleInputs,
-          litUsageKey,
-        );
-        return { success: true, index, data: actionResult };
-      } catch (err: any) {
-        return { success: false, index, error: err?.message ?? String(err) };
-      }
-    }),
-  );
-
-  // log every job that didn't cleanly succeed — both failure kinds, full object
-  for (const r of allResults) {
-    const failed = !r.success || !(r.data as any)?.ok;
-    if (failed)
-      console.error(`[single ${r.index}]`, JSON.stringify(r.data ?? { error: r.error }, null, 2));
-  }
-
-  const successful = (allResults as any[]).filter((r: any) => r.success && r.data?.ok);
-
-  console.log({ 'rendered jobs': successful });
-
-  // Separate active (non-revoked) jobs from revoked jobs.
-  // Active jobs carry rendered HTML → copied to MFS by the update action.
-  // Revoked jobs carry only a path → their path goes into the remove list
-  // so the update action deletes it from the MFS tree (GAP-10 revoke ripples).
-  const activeJobs = successful
-    .map((r: any) => r.data.data.job)
-    .filter((j: any) => j?.path && !j?.revoked);
-
-  const revokedRemove: { path: string; replacedBy?: string }[] = [];
-  for (const r of successful) {
-    const job = (r as any).data?.data?.job;
-    if (job?.revoked && job?.path) {
-      revokedRemove.push({ path: job.path });
+    console.log('pub1', publication);
+    const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
+    const prepAction = await runAction(
+      true,
+      lit,
+      protocolInfo.litActions.prep,
+      prepInputs,
+      litUsageKey,
+    );
+    const validatedPrep = validatePrepOutput(prepAction);
+    if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2));
+    if (validatedPrep.ok) {
+      jobs = (validatedPrep as any).data?.jobs;
+      console.log('Jobs dispatched:', jobs.length, jobs);
     }
+
+    // Read auto-detected slug-change removals from prep output
+    prepRemove = (validatedPrep as any).ok ? (validatedPrep as any).data?.remove : undefined;
+
+    // ---------------- Single Actions Stage ----------------------------------
+
+    if (notice) notice.setMessage('ispatching render actions ...');
+    else console.log('dispatching render actions...');
+
+    const allResults = await Promise.all(
+      jobs.map(async (job: any, index: number) => {
+        try {
+          const singleInputs = validateSingleInput({
+            signature,
+            authorSafeAddress,
+            configCid,
+            publication,
+            job,
+            preview,
+            maintainCache: index === jobs.length - 1,
+            // The id(s the caller rendered — the render action scopes its on-chain
+            // hasDeal revoke check to these ids ONLY (a revoke is always about the
+            // id the caller rendered). A cascade/ripple destination (e.g. home) is
+            // re-rendered as a consequence of the trigger and must NEVER be
+            // hasDeal-checked: a destination pinned via query.genesis may never
+            // have been a deal, so hasDeal=false there would falsely revoke-and-
+            // remove a live page (publish-path regression, acceptance 4).
+            triggeredContentIds: contentIds,
+            endpoints,
+          });
+          const actionResult = await runRenderActionWithRetry(
+            preview,
+            lit,
+            protocolInfo.litActions.render,
+            job,
+            singleInputs,
+            litUsageKey,
+          );
+          return { success: true, index, data: actionResult };
+        } catch (err: any) {
+          return { success: false, index, error: err?.message ?? String(err) };
+        }
+      }),
+    );
+
+    // log every job that didn't cleanly succeed — both failure kinds, full object
+    for (const r of allResults) {
+      const failed = !r.success || !(r.data as any)?.ok;
+      if (failed)
+        console.error(`[single ${r.index}]`, JSON.stringify(r.data ?? { error: r.error }, null, 2));
+    }
+
+    const successful = (allResults as any[]).filter((r: any) => r.success && r.data?.ok);
+
+    console.log({ 'rendered jobs': successful });
+
+    // Separate active (non-revoked) jobs from revoked jobs.
+    // Active jobs carry rendered HTML → copied to MFS by the update action.
+    // Revoked jobs carry only a path → their path goes into the remove list
+    // so the update action deletes it from the MFS tree (GAP-10 revoke ripples).
+    activeJobs = successful
+      .map((r: any) => r.data.data.job)
+      .filter((j: any) => j?.path && !j?.revoked);
+
+    const revokedRemove: { path: string; replacedBy?: string }[] = [];
+    for (const r of successful) {
+      const job = (r as any).data?.data?.job;
+      if (job?.revoked && job?.path) {
+        revokedRemove.push({ path: job.path });
+      }
+    }
+
+    // Merge: auto-detected (slug-change) removals from prep + revoked-job
+    // paths + caller-supplied removals (neutralpress revoke flow).
+    allRemove = [...(prepRemove ?? []), ...revokedRemove, ...(remove ?? [])];
+
+    // Primary job path (first active rendered job = the content the user triggered)
+    primaryPath = activeJobs[0]?.path ?? '';
   }
-
-  // Merge: auto-detected (slug-change) removals from prep + revoked-job
-  // paths + caller-supplied removals (neutralpress revoke flow).
-  const allRemove: { path: string; replacedBy?: string }[] = [
-    ...(prepRemove ?? []),
-    ...revokedRemove,
-    ...(remove ?? []),
-  ];
-
-  // Primary job path (first active rendered job = the content the user triggered)
-  const primaryPath = activeJobs[0]?.path ?? '';
 
   // ---------------- EVM Root Update Stage ---------------------------------
 
@@ -248,10 +258,11 @@ export const renderwithLitActions = async (
     signature,
     authorSafeAddress,
     publication,
-    jobs: activeJobs,
+    jobs: resetOnly ? [] : activeJobs,
     preview,
     endpoints,
     remove: allRemove.length > 0 ? allRemove : undefined,
+    reset: reset ? true : undefined,
   });
 
   const evmAction: any = await runAction(

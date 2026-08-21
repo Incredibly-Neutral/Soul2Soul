@@ -253,6 +253,22 @@ describe('validateEvmUpdateInput', () => {
     expect(result.remove).toHaveLength(1);
   });
 
+  it('accepts empty jobs array when reset is true (reset-only path)', () => {
+    const result = validateEvmUpdateInput({ ...validEvmUpdateInput, jobs: [], reset: true });
+    expect(result.jobs).toHaveLength(0);
+    expect(result.reset).toBe(true);
+  });
+
+  it('threads reset through when present (optional)', () => {
+    const result = validateEvmUpdateInput({ ...validEvmUpdateInput, reset: true });
+    expect(result.reset).toBe(true);
+  });
+
+  it('omits reset when absent (optional)', () => {
+    const result = validateEvmUpdateInput(validEvmUpdateInput);
+    expect(result.reset).toBeUndefined();
+  });
+
   it('accepts missing preview (optional)', () => {
     const result = validateEvmUpdateInput(evmMissingPreview());
     expect(result.jobs).toHaveLength(1);

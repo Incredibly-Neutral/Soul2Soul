@@ -6,7 +6,7 @@ import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { contenthashToIPFS } from '../libs/ipfs.factory';
 import { fetchWithTimeout, requireFields } from '../libs/helpers';
-import { canPublish, extractSignerAddress } from '../libs/gates';
+import { canPublish, canReset, extractSignerAddress } from '../libs/gates';
 import { getConfig } from '../render/config.ctrl';
 import {
   verifyProvenance,
@@ -40,11 +40,12 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // A revoke with no matching ripple produces jobs.length === 0 but still
     // carries a `remove` entry (the revoked path) that must be processed — do
     // NOT treat "no jobs" as "nothing to do". Only reject when there is neither
-    // a job nor a remove entry (nothing meaningful to write).
+    // a job nor a remove entry nor a reset flag (nothing meaningful to write).
     const hasRemove = input.remove && input.remove.length > 0;
-    if (!Array.isArray(input.jobs) || (input.jobs.length === 0 && !hasRemove))
-      throw 'jobs must be a non-empty array when no remove entries are provided';
-    const { publication, jobs, signature, authorSafeAddress, preview, endpoints, remove } = input;
+    if (!Array.isArray(input.jobs) || (input.jobs.length === 0 && !hasRemove && !input.reset))
+      throw 'jobs must be a non-empty array when no remove entries or reset are provided';
+    const { publication, jobs, signature, authorSafeAddress, preview, endpoints, remove, reset } =
+      input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
 
@@ -66,7 +67,14 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       `owner: ${multisig}, configModule ${configModule}, publicationModule ${publicationModule}`,
     );
 
-    if (!(await canPublish(authorSafeAddress, publicationModule, signerAddress, rpcs?.L2))) {
+    // A reset is publication-owner gated (stricter than canPublish): the signer
+    // must be an owner of the publication Safe (`multisig`), not merely an owner
+    // of a whitelisted author Safe. Normal publishes keep canPublish unchanged.
+    if (reset) {
+      if (!(await canReset(multisig, signerAddress, rpcs?.L2))) {
+        throw 'reset requires publication owner';
+      }
+    } else if (!(await canPublish(authorSafeAddress, publicationModule, signerAddress, rpcs?.L2))) {
       throw 'cannot publish';
     }
 
@@ -97,7 +105,10 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
     let newRootCid: string;
 
-    if (prevEncoded && prevEncoded.length > 0) {
+    // A reset forces the fresh `mkdir` branch even when a previous root exists:
+    // the old (confused) tree is never copied, so every page dir AND root
+    // index.html vanish; assets are still re-copied below; the root is rewritten.
+    if (prevEncoded && prevEncoded.length > 0 && !reset) {
       const prevCid = contenthashToIPFS(prevEncoded);
       trace.push(`cp root ${prevCid} → ${mfsPath}`);
 

@@ -225,11 +225,16 @@ export const EvmUpdateActionInputSchema = z
     publication: z.string().min(1, 'publication ENS name is required'),
     // `jobs` may be empty ONLY when remove entries are present (a revoke with
     // no matching ripple renders zero active jobs but still removes the revoked
-    // path). The refine below enforces that invariant.
+    // path) OR when `reset` is true (a reset-only run skips rendering entirely
+    // and rebuilds the tree fresh from assets). The refine below enforces that
+    // invariant.
     jobs: z.array(jobSchema),
     signature: z.string().min(1, 'signature is required'),
     authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
     preview: z.boolean().optional(),
+    // A reset drops the existing MFS tree (including root index.html), keeps
+    // assets, and rewrites contenthash_wrapped. See RFC-reset-tree-button.md.
+    reset: z.boolean().optional(),
     remove: z
       .array(
         z.object({
@@ -246,10 +251,17 @@ export const EvmUpdateActionInputSchema = z
       }),
     }),
   })
-  .refine((data) => data.jobs.length > 0 || (data.remove != null && data.remove.length > 0), {
-    message: 'jobs must have at least one item, or remove entries must be provided (revoke path)',
-    path: ['jobs'],
-  });
+  .refine(
+    (data) =>
+      data.jobs.length > 0 ||
+      (data.remove != null && data.remove.length > 0) ||
+      data.reset === true,
+    {
+      message:
+        'jobs must have at least one item, or remove entries must be provided (revoke path), or reset must be true (reset path)',
+      path: ['jobs'],
+    },
+  );
 
 export type EvmUpdateActionInput = z.infer<typeof EvmUpdateActionInputSchema>;
 
