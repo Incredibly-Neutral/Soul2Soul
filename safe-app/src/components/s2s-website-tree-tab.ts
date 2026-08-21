@@ -12,9 +12,17 @@
 // (including home), keeping assets, and leaving on-chain deals untouched — with
 // an optional "Reset & rebuild" that also re-renders every on-chain deal in the
 // same call. This tab never proposes Safe transactions.
-import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
+// `decodeContenthashWrapped` is the single-sourced EIP-1577 decoder
+// (shared/src/ipfs/contenthash.ts, re-exported through the shared root barrel).
+// It replaces the fragile local `slice(6)` + `CID.decode` pair that threw
+// "Incorrect length" on any contenthash that was not byte-exactly
+// `0xe3 0x01 <cid bytes>`.
+import {
+  LitService,
+  renderwithLitActions,
+  decodeContenthashWrapped,
+} from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
-import { CID } from 'multiformats';
 import { store } from '../state/index.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { evmRead } from '@/lib/evm.js';
@@ -24,9 +32,14 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 
+// NOTE: human-readable fragments only. ethers v6 rejects a trailing
+// state-mutability token on a named-parameter fragment ("Invalid Fragment"),
+// so setText is declared with bare types and no `nonpayable`. This tab never
+// writes — setText is here purely so the interface matches the deployed
+// contract. The protocol ABI is separate and unchanged.
 const RECORDS_CONTRACT_ABI = [
   'function getText(bytes32 node, string key) view returns (string)',
-  'function setText(bytes32 node, string key, string value) nonpayable',
+  'function setText(bytes32,string,string)',
 ];
 
 const MAX_DEPTH = 6;
@@ -109,26 +122,47 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     }
   }
 
+  /** Decode an on-chain `contenthash_wrapped` value to a CIDv1 string.
+   *  Returns null (never throws) when the value is absent or malformed, so the
+   *  caller can degrade to the store root instead of blowing up the sync. */
+  private decodeRootCid(onchainHash: unknown): string | null {
+    if (typeof onchainHash !== 'string') return null;
+    const raw = onchainHash.trim();
+    // Sanity check before decoding: 0x-prefixed, even-length, ipfs-ns (0xe3)
+    // + contenthash version (0x01) prefix, and long enough to carry a CID.
+    // '0x' + 'e301' + at least a 34-byte CIDv0 multihash => >= 74 chars.
+    if (!/^0x[0-9a-fA-F]+$/.test(raw) || raw.length % 2 !== 0) return null;
+    if (!raw.toLowerCase().startsWith('0xe301')) return null;
+    if (raw.length < 74) return null;
+    try {
+      const cid = decodeContenthashWrapped(raw);
+      const label = cid.toV1().toString();
+      return label.length > 0 ? label : null;
+    } catch (e) {
+      console.warn('[website-tree] contenthash decode failed:', e);
+      return null;
+    }
+  }
+
   /** Fresh root CID: re-read `contenthash_wrapped` from the ENS records contract
-   *  (mirrors s2s-app.ts fetchFreshData), falling back to the store root. */
+   *  (mirrors s2s-app.ts fetchFreshData), falling back to the store root.
+   *  Any read or decode failure degrades to the store root — this never throws. */
   private async fetchRootCid(): Promise<string | null> {
     const publication = store.getRecord('name');
     const protocolInfo = store.protocolInfo;
     if (publication && protocolInfo?.ensRecords) {
       try {
         const node = ethers.namehash(publication);
-        const onchainHash = (await evmRead(
+        const onchainHash = await evmRead(
           8453,
           protocolInfo.ensRecords,
           RECORDS_CONTRACT_ABI,
           'getText',
           [node, 'contenthash_wrapped']
-        )) as string;
-        if (onchainHash && onchainHash.length > 6) {
-          const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
-          const bytes = ethers.getBytes('0x' + hex);
-          return CID.decode(bytes).toV1().toString();
-        }
+        );
+        const decoded = this.decodeRootCid(onchainHash);
+        if (decoded) return decoded;
+        console.warn('[website-tree] unusable contenthash on-chain, using store root');
       } catch (e) {
         console.warn('[website-tree] ENS read failed, falling back to store root:', e);
       }
@@ -316,8 +350,18 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         return;
       }
 
+      // Use the FRESH root the pipeline just produced (the mkdir root written
+      // to `contenthash_wrapped` by the update action) rather than re-reading
+      // ENS: the write may not have propagated to the read RPC yet, and the
+      // store root is otherwise only ever set by s2s-app.ts fetchFreshData —
+      // i.e. stale — so a fallback there would re-render the OLD tree and make
+      // the reset look like a no-op.
+      if (res.cid) {
+        store.setRoot(res.cid);
+      }
+
       // Re-sync the tree so the cleared/rebuilt tree is reflected immediately.
-      await this.sync();
+      await this.sync(res.cid ?? undefined);
     } catch (e) {
       // Surface the pipeline error (e.g. a non-owner signer rejected by canReset).
       console.error('[website-tree] reset failed:', e);
@@ -328,14 +372,17 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     }
   }
 
-  private async sync(): Promise<void> {
+  /** Walk + render the tree. `rootOverride` short-circuits the ENS read: it is
+   *  passed straight after a reset, where the pipeline already handed us the
+   *  fresh root and an ENS re-read would race the just-issued write. */
+  private async sync(rootOverride?: string): Promise<void> {
     if (this.syncing) return;
     this.syncing = true;
     this.error = null;
     this.render();
 
     try {
-      const rootCid = await this.fetchRootCid();
+      const rootCid = rootOverride ?? (await this.fetchRootCid());
       if (!rootCid) {
         this.error = 'No site root available. Is the publication name and ENS records module configured?';
         return;
