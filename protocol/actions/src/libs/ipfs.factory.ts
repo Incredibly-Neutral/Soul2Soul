@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "./helpers";
+import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 interface StandardLink {
   Hash: { "/": string };
@@ -276,36 +277,9 @@ export const createUnixFSFromCbor = async (dag: any, gateway: string): Promise<s
 
 
 export const contenthashToIPFS = (hexString: string): string => {
-
-    const hex = hexString.startsWith('0x') ? hexString.slice(2) : hexString;
-    const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
-    
-    if (bytes[0] !== 0xe3) {
-        throw new Error('Not an IPFS contenthash (expected 0xe3)');
-    }
-    
-    // Skip 0xe3 (ipfs-ns) and 0x01 (version)
-    const cidBytes = bytes.slice(2);
-    
-    // Base58 encode
-    const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    
-    let num = BigInt(0);
-    for (const byte of cidBytes) {
-        num = num * 256n + BigInt(byte);
-    }
-    
-    let result = "";
-    while (num > 0n) {
-        result = BASE58_ALPHABET[Number(num % 58n)] + result;
-        num = num / 58n;
-    }
-    
-    // Handle leading zero bytes
-    for (const byte of cidBytes) {
-        if (byte !== 0) break;
-        result = "1" + result;
-    }
-    
-    return result;
+    // Decode the EIP-1577 ipfs-ns contenthash (0xe3 0x01 + CID bytes) back into
+    // a proper CID string: base32 for CIDv1 (bafy...), base58 for CIDv0 (Qm...).
+    // The old implementation blindly base58-encoded the raw CID bytes, which
+    // produced a garbage string for any CIDv1 contenthash.
+    return decodeContenthashWrapped(hexString).toString();
 }

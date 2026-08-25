@@ -29,6 +29,7 @@ export { toBytes32Id } from './identity/contract-id';
 
 // Contenthash helpers (zod-free, safe for Lit Actions — INV-7)
 export {
+  parseCID,
   decodeContenthashWrapped,
   encodeContenthashWrapped,
   toPreviewLabel,
