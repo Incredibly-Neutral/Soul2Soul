@@ -18,7 +18,8 @@ import {
   uniqueValuesForColumn,
   type FilterState,
 } from '@/utils/filter.js';
-import { TableFilter } from './table-filter.js';
+import type { TableFilter } from './table-filter.js';
+import './table-filter.js';
 
 // Per-column sort configuration for the Pieces and Data Sets tables.
 const PIECE_COLUMNS: Array<TableColumn<StoragePiece>> = [
