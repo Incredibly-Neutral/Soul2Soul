@@ -18,6 +18,16 @@
  * installing this shim around the Filecoin upload moves the whole PDP path
  * out of browser-CORS scope with no SDK patch.
  *
+ * The shim is URL-SCOPED: only Filecoin/PDP data-plane and IPFS-gateway
+ * traffic routes through the Electron net bridge. Every other URL — Pimlico,
+ * DRPC, Alchemy, any JSON-RPC / viem traffic — is delegated verbatim to the
+ * captured native fetch. This matters because the Filecoin upload window
+ * stays open for minutes (3-leg streaming, timeout:false), so a concurrent
+ * Pimlico RPC can land inside it; without scoping that RPC would ride the
+ * Electron shim and viem's 8s withTimeout would fire as a spurious
+ * TimeoutError on the second publish after a reload. See
+ * `isFilecoinOrIpfsUrl` for the classifier.
+ *
  * The electron accessor is injectable so the shim is unit-testable without a
  * real Electron runtime — pass a mock `() => net` to `createCorsFetch` /
  * `installCorsFetch`; it defaults to the real `electron.remote.net`.
@@ -88,6 +98,72 @@ function isNodeStream(value: unknown): boolean {
     typeof (value as { on?: unknown }).on === "function" &&
     typeof (value as { pipe?: unknown }).pipe === "function"
   );
+}
+
+/**
+ * Reduce a fetch `input` (string, URL, or Request) to its absolute URL string
+ * for classification. Returns `null` when the input cannot be resolved to a
+ * URL (unparseable relative string, or a Request whose own URL is
+ * unresolvable) — callers treat that as "not a Filecoin target" and delegate
+ * to native fetch, which performs its own (correct) relative-URL resolution.
+ */
+function resolveUrlString(input: RequestInfo | URL): string | null {
+  try {
+    if (input instanceof Request) return input.url ?? null;
+    if (typeof input === "string") return new URL(input).toString();
+    return input.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the given fetch input targets the Filecoin/PDP data plane or an
+ * IPFS gateway — i.e. traffic that MUST route through the Electron net shim to
+ * escape browser CORS. Everything else (Pimlico, DRPC, Alchemy, any JSON-RPC /
+ * viem traffic, Kubo, ...) returns false and is delegated to the captured
+ * native fetch so it never rides the Electron shim during an upload window.
+ *
+ * The PDP data plane is the ONLY part of the Filecoin upload path that lacks
+ * CORS headers; the SP provider host is dynamic (resolved from the SP registry
+ * at upload time, not a fixed catalog), so we classify by the `/pdp/` path
+ * prefix that every `@filoz/synapse-core` SP call uses (POST `/pdp/piece`,
+ * PUT `/pdp/piece/upload/{uuid}`, POST `/pdp/piece/uploads`, etc.) rather than
+ * by host. IPFS gateways are matched by host and/or the `/ipfs/` path prefix.
+ */
+export function isFilecoinOrIpfsUrl(input: RequestInfo | URL): boolean {
+  const url = resolveUrlString(input);
+  if (url === null) return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  // PDP data plane: every synapse-core SP call is `/pdp/`-prefixed.
+  if (parsed.pathname.includes("/pdp/")) return true;
+
+  const host = parsed.hostname.toLowerCase();
+  // IPFS gateways (host-based): gateway.ipfs.io, *.ipfs.dweb.link,
+  // *.trustless.gateway, *.nftstorage.link, *.mypinata.cloud, *.web3.storage.
+  if (
+    host === "ipfs.io" ||
+    host.endsWith(".ipfs.io") ||
+    /\.ipfs\./.test(host) ||
+    host.endsWith(".dweb.link") ||
+    host.endsWith(".nftstorage.link") ||
+    host.endsWith(".mypinata.cloud") ||
+    host.endsWith(".web3.storage")
+  ) {
+    return true;
+  }
+
+  // IPFS gateways (path-based): any host serving content under /ipfs/<cid>.
+  if (parsed.pathname.startsWith("/ipfs/")) return true;
+
+  return false;
 }
 
 /**
@@ -167,12 +243,36 @@ async function writeRequestBody(
 /**
  * Create a CORS-free fetch bound to the given electron accessor.
  * Defaults to the real `electron.remote.net`; pass a mock for tests.
+ *
+ * `nativeFetch` is the captured original `globalThis.fetch`. When supplied,
+ * any request whose URL is NOT a Filecoin/PDP or IPFS target is delegated to
+ * it verbatim (input + init passed through unchanged) — so Pimlico, DRPC,
+ * Alchemy and other RPC/viem traffic bypasses the Electron net shim even
+ * during an upload window. When omitted (direct `createCorsFetch` use in
+ * tests, or a pre-existing native fetch that is itself this shim), the shim
+ * handles every URL exactly as it did before.
  */
-export function createCorsFetch(getNet: NetAccessor = defaultGetNet): CorsFetch {
+export function createCorsFetch(
+  getNet: NetAccessor = defaultGetNet,
+  nativeFetch?: CorsFetch,
+): CorsFetch {
   return async function corsFetch(
     input: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> {
+    // ── URL scoping ────────────────────────────────────────────────────────
+    // Only Filecoin/PDP + IPFS traffic needs the CORS-free Electron bridge.
+    // Anything else must keep using the captured native fetch; routing it
+    // through Electron's net (which resolves on its own event loop, outside
+    // the renderer's fetch/CORS stack) is what caused Pimlico's
+    // pimlico_getUserOperationGasPrice to time out on the second publish
+    // after a reload (the RPC landed inside the first publish's still-open
+    // shim window). Delegate verbatim so viem's withTimeout/abort semantics
+    // see a genuine native fetch.
+    if (nativeFetch && !isFilecoinOrIpfsUrl(input)) {
+      return nativeFetch(input, init);
+    }
+
     const request = buildRequest(input, init);
     const { method, url, signal } = request;
 
@@ -315,7 +415,11 @@ let previousFetch: CorsFetch | undefined;
 export function installCorsFetch(getNet?: NetAccessor): () => void {
   if (installed) return restoreCorsFetch;
   previousFetch = globalThis.fetch;
-  globalThis.fetch = createCorsFetch(getNet);
+  // Pass the captured native fetch so the installed shim delegates any
+  // non-Filecoin/IPFS URL straight back to it (URL scoping). When no
+  // previous fetch existed (previousFetch undefined), delegation is skipped
+  // and the shim behaves exactly as before.
+  globalThis.fetch = createCorsFetch(getNet, previousFetch);
   installed = true;
   return restoreCorsFetch;
 }

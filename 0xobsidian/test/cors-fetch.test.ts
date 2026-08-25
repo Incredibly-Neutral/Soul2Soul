@@ -25,6 +25,7 @@ import {
   createCorsFetch,
   installCorsFetch,
   restoreCorsFetch,
+  isFilecoinOrIpfsUrl,
   type CorsFetch,
 } from "../src/filecoin/cors-fetch.js";
 
@@ -272,7 +273,7 @@ describe("install/restore semantics", () => {
 
     expect(globalThis.fetch).not.toBe(originalFetch);
 
-    const res = await globalThis.fetch("https://sp.example.com/upload", {
+    const res = await globalThis.fetch("https://sp.example.com/pdp/piece/uploads/uuid", {
       method: "PUT",
     });
     expect(res.status).toBe(200);
@@ -289,7 +290,7 @@ describe("install/restore semantics", () => {
     // Simulate the controller's try/finally: op throws, restore still runs.
     let threw = false;
     try {
-      await globalThis.fetch("https://sp.example.com/fail");
+      await globalThis.fetch("https://sp.example.com/pdp/piece/fail");
     } catch {
       threw = true;
     } finally {
@@ -409,5 +410,77 @@ describe("abort settlement (RPC hang regression)", () => {
         body: failingStream,
       }),
     ).rejects.toThrow("stream blew up");
+  });
+});
+
+describe("URL scoping", () => {
+  it("delegates non-Filecoin URLs verbatim to the captured native fetch", async () => {
+    const { net, requests } = makeMockNet({ status: 200, body: "shim-should-not-answer" });
+    // Recording stub — NOT vitest's real fetch, so no real network I/O.
+    const nativeFetch: CorsFetch = vi.fn(async () => new Response("native-ok", { status: 200 }));
+    const fetchShim = createCorsFetch(() => net, nativeFetch);
+
+    const input = "https://api.pimlico.io/v2/8453/rpc";
+    const init = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method: "pimlico_getUserOperationGasPrice", params: [] }),
+    };
+
+    const res = await fetchShim(input, init);
+
+    // The shim must NOT have answered — the mock net recorded zero requests.
+    expect(requests).toHaveLength(0);
+    // The native fetch got the exact same input + init, untouched.
+    expect(nativeFetch).toHaveBeenCalledTimes(1);
+    expect(nativeFetch).toHaveBeenCalledWith(input, init);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("native-ok");
+  });
+
+  it("routes /pdp/ data-plane URLs through the Electron shim", async () => {
+    const { net, requests } = makeMockNet({ status: 200, body: "shim-ok" });
+    const nativeFetch: CorsFetch = vi.fn(async () => new Response("native-should-not-answer", { status: 200 }));
+    const fetchShim = createCorsFetch(() => net, nativeFetch);
+
+    const res = await fetchShim("https://sp.example.com/pdp/piece/uploads/uuid", {
+      method: "PUT",
+      body: "data",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(nativeFetch).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("shim-ok");
+  });
+
+  it("isFilecoinOrIpfsUrl classifies /pdp/, IPFS gateways, and /ipfs/ paths", () => {
+    expect(isFilecoinOrIpfsUrl("https://sp.example.com/pdp/piece/uploads/uuid")).toBe(true);
+    expect(isFilecoinOrIpfsUrl("https://ipfs.io/ipfs/QmX")).toBe(true);
+    expect(isFilecoinOrIpfsUrl("https://gateway.ipfs.io/ipfs/QmX")).toBe(true);
+    expect(isFilecoinOrIpfsUrl("https://api.pimlico.io/v2/8453/rpc")).toBe(false);
+    expect(isFilecoinOrIpfsUrl("https://lb.drpc.live/base/")).toBe(false);
+  });
+
+  it("installCorsFetch passes the captured native fetch so non-Filecoin traffic bypasses the shim", async () => {
+    const { net, requests } = makeMockNet({ status: 200, body: "shim-ok" });
+    const stubFetch: CorsFetch = vi.fn(async () => new Response("native-ok", { status: 200 }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = stubFetch;
+    const restore = installCorsFetch(() => net);
+    try {
+      // non-Filecoin URL → captured native fetch (the stub), NOT the shim.
+      const res = await globalThis.fetch("https://api.pimlico.io/v2/8453/rpc");
+      expect(requests).toHaveLength(0);
+      expect(stubFetch).toHaveBeenCalledTimes(1);
+      expect(await res.text()).toBe("native-ok");
+
+      // /pdp/ URL → shim.
+      await globalThis.fetch("https://sp.example.com/pdp/piece/uploads/uuid");
+      expect(requests).toHaveLength(1);
+    } finally {
+      restore();
+      globalThis.fetch = originalFetch;
+    }
   });
 });
