@@ -161,3 +161,83 @@ flight; show errors inline (e.g. "failed to reach ENS/IPFS") without throwing.
   tab-switch doesn't lose the previous snapshot — but keep it simple.
 - Commit on the feature branch with a clear message; open your own PR; drive the gates green;
   get an independent review before the human merges.
+
+## Reset tree button — status & known bug (2026-08-25)
+
+Shipped (all merged by human):
+- PR #53 `feat(actions): reset-tree mode` — `reset?: boolean` on `EvmUpdateInput`,
+  `canReset` publication-owner gate (`gates.ts`), `!reset` mkdir branch in
+  `update/main.ts` (clears all pages incl. home, keeps assets), prep-skip for
+  reset-only runs in `sequence.ts`, reset tests 6/6.
+- PR #54 `feat(safe-app): Website Tree 'Reset tree' button` — toolbar button +
+  confirm modal ("Reset only" vs "Reset & rebuild"), `resetTree(rebuild)` reuses the
+  deals-tab `bulkRender` write pattern (`signWithSigner('lit actions auth')` +
+  `renderwithLitActions(..., reset: true)`), `s2s-app.ts` wires `safeIntegration`/`lit`
+  into the tree tab.
+- PR #57 `fix(safe-app): reset tree re-sync uses fresh pipeline root + robust ENS decode` —
+  `store.setRoot(res.cid)` + `sync(res.cid)` after reset; non-throwing `decodeRootCid()`
+  via shared `decodeContenthashWrapped`; fixed the tree tab's malformed `setText` ABI
+  fragment (ethers v6 rejects trailing `nonpayable`).
+
+KNOWN BUG (user report 2026-08-25): after a reset the app shows the fresh (cleared) tree,
+but the on-chain `contenthash_wrapped` is NOT rewritten — the published root still points at
+the old tree (verified: `dag/get` on the ENS-resolved root returns the full old tree; expected
+assets-only). Root cause is a silent-write-failure: `protocol/actions/src/update/main.ts`
+calls `evmWrite(...)` and never checks the result, so any write failure is reported as
+`ok:true` with the new cid; additionally `evmWrite` (`libs/evm.ts`) does not check
+`receipt.status`, so a mined-but-REVERTED tx is also reported success. The app then shows the
+fresh root while the on-chain record is unchanged. Gas is NOT the cause (Base base fee ~0.005
+gwei vs the action's 0.15 gwei maxFeePerGas).
+
+Fix in flight (branch `fix/reset-write-failure`, worktree `~/code/s2s-wt-reset-write`):
+- `libs/evm.ts`: check `receipt.status`; return `success:false` on revert.
+- `update/main.ts`: check the `evmWrite` result; return `ok:false` with the real error when
+  the write failed/reverted (applies to all update writes, not just reset).
+- `sequence.ts`: thread the update-action error through the `renderwithLitActions` return.
+- tree tab: display the real error + log the trace on reset failure.
+- Once merged, re-run a reset and confirm the on-chain `contenthash_wrapped` flips to the
+  assets-only root; if it still doesn't, the next suspect is the `setText` tx reverting
+  on-chain (PKP authorization on the ENS records contract / node) — check the surfaced error.
+
+## Fix status (2026-08-25, same day)
+
+PR #58 `fix(actions): fail loudly when contenthash_wrapped write fails or reverts` — OPEN,
+branch `fix/reset-write-failure`, commit `2775789`, 5 files +93/−2. Implementer-confirmed
+and orchestrator-verified gates: protocol reset tests 9/9 (6 pre-existing + 3 new
+write-failure tests), shared sequence+action-io 56 pass, shared + safe-app typecheck exit 0,
+safe-app build exit 0. Independent review (fresh session, diff + contract only): **APPROVE**,
+no blocking issues; 5 non-blocking notes (evm.ts revert branch drops `receipt` field; `status
+=== 0` misses undefined-status receipts; no direct unit test of the revert-detection branch
+since evmWrite is mocked; test-3 trace assertion weak; a THROWN evmWrite yields a
+differently-worded error than a returned failure — both still ok:false). None require changes.
+**Ready for human merge.** After merge: re-run reset, confirm on-chain record flips.
+
+## Reset follow-up (2026-08-25, same day) — NEW ROOT CAUSE: CIDv1 contenthash mangling
+
+PR #58 merged (main `2a63a90`). User re-ran a reset; this time the write LANDED on-chain
+(no loud failure) but the app then failed with:
+`listLinks(bahkw7sg34pqa7aslv5q42774thmykmnmxxenp7kj3nmlq5w3oruotp2ujq5mh4voqoryioa) 500`
+`invalid path "...": path does not have enough components`.
+
+Diagnosis (orchestrator-verified by direct reproduction):
+- `files/stat` on the fresh MFS root now returns a **CIDv1** (`bafy...`, base32) root.
+- `toHexString` in `protocol/actions/src/libs/evm.ts` **base58-decodes the CID string** —
+  CIDv0-only. Applied to a CIDv1 it mangles it: `toHexString('bafybeigadpvuv4m3txrx4r3wtjclnk
+  te5mvxb2hoyyvt4jlaqdeo6qrbwm')` = `0xe301` + 44 bytes starting `01 d5 6f c8 db e3 ...`
+  (verified by simulation), which the tree tab's `decodeRootCid` (PR #57) parses into the
+  invalid 72-char `bahkw...` (codec 14293, 41-byte digest) and returns non-null — so the
+  post-reset re-sync tries to `ls` an invalid CID instead of falling back to the store root.
+- So the reset wrote a GARBAGE `contenthash_wrapped` on-chain (tx mined, status 1), and the
+  on-chain root is now unresolvable. The app's immediate sync (using `res.cid`) still shows
+  the correct fresh/empty tree.
+
+Fix dispatched (branch `fix/contenthash-cidv1`, worktree `~/code/s2s-wt-contenthash`):
+1. `libs/evm.ts` `toHexString` — CID-version-agnostic: `0xe3 01` + hex of raw CID bytes
+   (version varint + codec varint + digest) for both CIDv0 and CIDv1; prefer shared
+   `parseCID` + `encodeContenthashWrapped` from `@s2s/soul2soul-shared/lit-actions`.
+2. `libs/ipfs.factory.ts` `contenthashToIPFS` — parse `0xe3 01` + CID bytes into a proper
+   CID string (base32 v1 / base58 v0) instead of blindly base58-encoding the bytes (fixes the
+   cp-root branch of normal publishes reading back a CIDv1 contenthash).
+3. tree tab `decodeRootCid` — validate the decoded CID (codec in {0x70,0x71,0x55}, sane
+   multihash) and return null on garbage → fall back to `store.getRoot()`.
+After merge: re-run a reset so the on-chain contenthash is rewritten correctly.

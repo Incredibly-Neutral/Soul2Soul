@@ -16,6 +16,7 @@ export const tableStylesString = `
         display: flex;
         justify-content: flex-start;
         align-items: center;
+        border-radius: 0;
     }
 
     .table-header:first-child {
