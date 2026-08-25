@@ -108,6 +108,19 @@ export const evmWrite = async (
             console.log("Waiting for confirmation...");
             const receipt = await txResponse.wait(1);
             console.log("Transaction confirmed! Block:", receipt.blockNumber);
+            // A mined-but-REVERTED tx (receipt.status === 0) is a FAILURE: the
+            // write did not land on-chain even though a receipt exists. Report
+            // it as success:false so callers (update/main.ts) fail loudly
+            // instead of silently reporting success with the new root CID.
+            if (receipt.status === 0) {
+                return {
+                    success: false,
+                    error:
+                        'transaction reverted (status 0)' +
+                        (receipt.transactionHash ? ' hash ' + receipt.transactionHash : ''),
+                    hash: receipt.transactionHash,
+                };
+            }
             return { success: true, hash: txResponse.hash, receipt };
         }
 

@@ -346,7 +346,12 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       );
 
       if (!res.success) {
-        this.error = 'Reset failed — the pipeline did not report success.';
+        // Log the full result — the trace contains the evmWrite outcome, so the
+        // real on-chain failure (e.g. a reverted contenthash_wrapped write) is
+        // visible in the console.
+        console.error('[website-tree] reset failed:', res);
+        this.error =
+          (res as any)?.error ?? 'Reset failed — the pipeline did not report success.';
         return;
       }
 
