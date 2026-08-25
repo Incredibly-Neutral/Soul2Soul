@@ -211,7 +211,7 @@ export class S2SApp extends HTMLElement {
               </div>
             </div>
 
-            <h1 class="title">Soul2Soul Publication Manager</h1>
+            <h1 class="title">Soul2Soul Publication Editor</h1>
 
             <div class="web-status">
               <div><copy-hash>${rootCid}</copy-hash></div>
