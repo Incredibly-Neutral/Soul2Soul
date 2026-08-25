@@ -22,7 +22,8 @@ import {
   uniqueValuesForColumn,
   type FilterState,
 } from '@/utils/filter.js';
-import { TableFilter } from './table-filter.js';
+import type { TableFilter } from './table-filter.js';
+import './table-filter.js';
 import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
