@@ -12,21 +12,23 @@
 // (including home), keeping assets, and leaving on-chain deals untouched — with
 // an optional "Reset & rebuild" that also re-renders every on-chain deal in the
 // same call. This tab never proposes Safe transactions.
-// `decodeContenthashWrapped` is the single-sourced EIP-1577 decoder
-// (shared/src/ipfs/contenthash.ts, re-exported through the shared root barrel).
-// It replaces the fragile local `slice(6)` + `CID.decode` pair that threw
-// "Incorrect length" on any contenthash that was not byte-exactly
-// `0xe3 0x01 <cid bytes>`.
+// `decodeRootCid` (lib/contenthash.ts) is the single-sourced EIP-1577 decoder
+// + validator (shared/src/ipfs/contenthash.ts, re-exported through the shared
+// root barrel). It replaces the fragile local `slice(6)` + `CID.decode` pair
+// that threw "Incorrect length" on any contenthash that was not byte-exactly
+// `0xe3 0x01 <cid bytes>`, and returns null on any value that decodes to a
+// non-plausible CID (garbage codec / malformed multihash) so the sync degrades
+// to the store root instead of walking an invalid CID.
 import {
   LitService,
   renderwithLitActions,
-  decodeContenthashWrapped,
 } from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
 import { store } from '../state/index.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { evmRead } from '@/lib/evm.js';
 import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
+import { decodeRootCid } from '@/lib/contenthash.js';
 import { tableStyles } from '@/styles/table-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
@@ -124,24 +126,10 @@ export class S2SWebsiteTreeTab extends HTMLElement {
 
   /** Decode an on-chain `contenthash_wrapped` value to a CIDv1 string.
    *  Returns null (never throws) when the value is absent or malformed, so the
-   *  caller can degrade to the store root instead of blowing up the sync. */
+   *  caller can degrade to the store root instead of blowing up the sync.
+   *  Single-sourced in lib/contenthash.ts (pure, unit-tested). */
   private decodeRootCid(onchainHash: unknown): string | null {
-    if (typeof onchainHash !== 'string') return null;
-    const raw = onchainHash.trim();
-    // Sanity check before decoding: 0x-prefixed, even-length, ipfs-ns (0xe3)
-    // + contenthash version (0x01) prefix, and long enough to carry a CID.
-    // '0x' + 'e301' + at least a 34-byte CIDv0 multihash => >= 74 chars.
-    if (!/^0x[0-9a-fA-F]+$/.test(raw) || raw.length % 2 !== 0) return null;
-    if (!raw.toLowerCase().startsWith('0xe301')) return null;
-    if (raw.length < 74) return null;
-    try {
-      const cid = decodeContenthashWrapped(raw);
-      const label = cid.toV1().toString();
-      return label.length > 0 ? label : null;
-    } catch (e) {
-      console.warn('[website-tree] contenthash decode failed:', e);
-      return null;
-    }
+    return decodeRootCid(onchainHash);
   }
 
   /** Fresh root CID: re-read `contenthash_wrapped` from the ENS records contract
