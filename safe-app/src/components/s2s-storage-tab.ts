@@ -475,7 +475,7 @@ export class S2SStorageTab extends HTMLElement {
 
         ${costHtml}
 
-        <div class="table-filters">
+        <div class="table-filters pieces-filters">
           <table-filter data-key="kind" label="Kind" value="${this.piecesFilters.kind ?? ''}"></table-filter>
         </div>
 
@@ -501,7 +501,7 @@ export class S2SStorageTab extends HTMLElement {
           </div>
         </div>
 
-        <div class="table-filters">
+        <div class="table-filters datasets-filters">
           <table-filter data-key="state" label="State" value="${this.datasetsFilters.state ?? ''}"></table-filter>
         </div>
 
@@ -550,7 +550,7 @@ export class S2SStorageTab extends HTMLElement {
     });
 
     // Filter dropdowns — Pieces table
-    this.shadowRoot?.querySelectorAll('.table-pieces .table-filters table-filter').forEach((el) => {
+    this.shadowRoot?.querySelectorAll('.pieces-filters table-filter').forEach((el) => {
       const filterEl = el as TableFilter;
       const key = (el as HTMLElement).dataset.key;
       if (!key) return;
@@ -566,7 +566,7 @@ export class S2SStorageTab extends HTMLElement {
     });
 
     // Filter dropdowns — Data Sets table
-    this.shadowRoot?.querySelectorAll('.table-datasets .table-filters table-filter').forEach((el) => {
+    this.shadowRoot?.querySelectorAll('.datasets-filters table-filter').forEach((el) => {
       const filterEl = el as TableFilter;
       const key = (el as HTMLElement).dataset.key;
       if (!key) return;
