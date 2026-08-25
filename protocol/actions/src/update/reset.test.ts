@@ -32,6 +32,9 @@ const mocks = vi.hoisted(() => ({
   canPublish: true,
   canReset: true,
   gatewayUrls: [] as string[],
+  // evmWrite outcome — { success:true } by default; tests override to simulate
+  // a failed/reverted on-chain write (see the write-failure describe below).
+  evmWriteResult: { success: true } as any,
 }));
 
 vi.mock('../libs/ens.factory', () => ({
@@ -55,7 +58,7 @@ vi.mock('../render/config.ctrl', () => ({
 
 vi.mock('../libs/evm', () => ({
   evmRead: vi.fn(async () => mocks.prevEncoded),
-  evmWrite: vi.fn(async () => ({})),
+  evmWrite: vi.fn(async () => mocks.evmWriteResult),
   toHexString: (cid: string) => '0x' + cid,
 }));
 
@@ -132,6 +135,7 @@ beforeEach(() => {
   mocks.gatewayUrls = [];
   mocks.canPublish = true;
   mocks.canReset = true;
+  mocks.evmWriteResult = { success: true };
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -197,6 +201,55 @@ describe('evm-update reset — branch selection', () => {
     expect(result.ok).toBe(true);
     expect(hasCall('files/mkdir')).toBe(true);
     expect(hasCall('arg=/ipfs/QmPrevRoot')).toBe(false);
+  });
+});
+
+describe('evm-update — contenthash_wrapped write failure propagation', () => {
+  it('reset:true returns ok:false with a contenthash_wrapped error when evmWrite fails', async () => {
+    mocks.evmWriteResult = { success: false, error: 'transaction reverted (status 0)' };
+    const result: any = await main({
+      ...baseInput,
+      preview: false, // a real (non-preview) write drives evmWrite
+      signature: await makeSignature(),
+      reset: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.action).toBe('evm-update');
+    expect(result.error).toContain('contenthash_wrapped');
+    expect(result.error).toContain('transaction reverted');
+  });
+
+  it('normal publish also fails loudly when the on-chain write fails', async () => {
+    mocks.evmWriteResult = { success: false, error: 'rpc down' };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+      // reset NOT set — normal publish path
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.action).toBe('evm-update');
+    expect(result.error).toContain('contenthash_wrapped');
+    expect(result.error).toContain('rpc down');
+  });
+
+  it('reports ok:true when evmWrite succeeds (write path, preview:false)', async () => {
+    mocks.evmWriteResult = { success: true, hash: '0x' + 'aa'.repeat(32) };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      signature: await makeSignature(),
+      reset: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('evm-update');
+    expect(result.data.cid).toBe('QmNewRoot');
+    // The evmWrite result (success) is recorded in the trace.
+    expect(result.trace.some((t: any) => String(t).includes('success'))).toBe(true);
   });
 });
 

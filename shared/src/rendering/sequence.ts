@@ -281,5 +281,12 @@ export const renderwithLitActions = async (
     cid,
     path: primaryPath,
     trace: evmAction.trace,
+    // Surface the REAL failure cause so callers (e.g. the website-tree reset
+    // tab) can display it instead of a generic "did not report success".
+    // `validated` is the schema-checked envelope (error present when ok:false);
+    // fall back to the raw action envelope, then a generic message.
+    error: validated.ok
+      ? undefined
+      : (validated as any)?.error ?? (evmAction as any)?.error ?? 'update action failed',
   };
 };
