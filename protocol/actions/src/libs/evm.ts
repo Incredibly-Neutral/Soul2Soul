@@ -1,3 +1,5 @@
+import { parseCID, encodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
+
 const NETWORK_CONFIG: Record<string, { chainId: number; name: string }> = {
     L1:           { chainId: 1,     name: "homestead" },
     L2:           { chainId: 8453,  name: "base" },
@@ -188,15 +190,12 @@ export const evmRead = async (
 };
 
 export const toHexString = (_cid: string) => {
-    const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-    let num = BigInt(0);
-    for (const char of _cid) {
-        num = num * 58n + BigInt(BASE58_ALPHABET.indexOf(char));
-    }
-
-    let hex = num.toString(16);
-    if (hex.length % 2) hex = "0" + hex;
-
-    return '0x' + 'e301' + hex;
+    // Parse the CID string (CIDv0 Qm... or CIDv1 bafy...) into its raw bytes
+    // (version varint + codec varint + multihash) and wrap them in the EIP-1577
+    // ipfs-ns contenthash envelope (0xe3 0x01 + CID bytes). This is the same
+    // encoding decodeContenthashWrapped expects, so the value round-trips back
+    // to the identical CID. The old implementation base58-decoded the CID
+    // string as a big number (CIDv0-only), which turned a CIDv1 root into
+    // garbage on-chain.
+    return encodeContenthashWrapped(parseCID(_cid));
 };
