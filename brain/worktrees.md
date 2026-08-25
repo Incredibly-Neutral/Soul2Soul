@@ -1,24 +1,45 @@
-# Worktree session index
+# s2s worktree registry
 
-Source of truth for (builder session → worktree → branch) mappings. Session metadata's
-`git_branch`/`workspace` slots are not settable via `sys_session_create`, so this file is the
-durable record. One line per delegation; mark closed/merged when done.
+Tracks active/orchestrated worktrees and their sub-agent sessions. Hybrid runs: orchestrator
+dispatching to a builder sub-agent in its own worktree; human merges each PR.
 
-<!-- format: - <ISO date> | session=<id or pending> | worktree=<path> | branch=<branch> | agent=<name> | model=<model> | task=<one-line> | status=<open|merged|abandoned> -->
+## 2026-08-25 — fix/table-filter-options (PR #63 APPROVED, ready to merge)
 
-- 2026-08-08 | session=f51e7575d62f440cb7c988c856a3dda8 | worktree=/home/joera/code/s2s-avail-measurement | branch=feat/avail-measurement | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=publish-availability measurement instrumentation (3-listener neutralpress) | status=open
-- 2026-08-08 | session=0d5ed8dfe0c14a61be442ae47eb53f2c | worktree=(none, main checkout — pre-skill) | branch=(none) | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=publish-availability measurement instrumentation | status=abandoned (model output corruption — DSML/special-token leakage; killed via /exit)
-- 2026-08-09 | session=(self cli) | worktree=/home/joera/code/s2s-two-indep-primary-stores | branch=feat/two-indep-primary-stores | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=two independent primary stores for filecoin min-2-copies | status=open (PR https://github.com/Joera/S2S-monorepo/pull/12, not merged)
-- 2026-08-13 | session=aedc73e10d5b4636a24744d00c22cb09 | worktree=/home/joera/code/s2s-prevnext-data | branch=feat/prevnext-data-replace | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=replace prevNext HTML emitter with data-returning prevNext ({{#each (prevNext coll pos)}} iterates dev HTML) | status=open (PR #28 @ 79ce30e, independent review APPROVE, no blockers — ready for human merge; supersedes closed PR #26)
-- 2026-08-17 | session=(self cli) | worktree=/home/joera/code/s2s-pimlico-gas-retry | branch=feat/pimlico-gas-retry | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=fix Pimlico gas-price intermittent TimeoutError: warm-up, short gas cache + in-flight dedupe, retry w/ backoff+jitter | status=open
-- 2026-08-17 | session=(self cli) | worktree=/home/joera/code/s2s-evm-rpc-retry | branch=feat/evm-rpc-retry | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=evm eth_call transport retry: classifier (genuine revert vs transport) + backoff/jitter retry + per-request timeout + ens.factory NAME() fan-out concurrency cap | status=open (PR #30 OPEN https://github.com/Joera/S2S-monorepo/pull/30, not merged)
-- 2026-08-17 | session=(pending) | worktree=/home/joera/code/s2s-locale-paths-hoist | branch=feat/locale-paths-hoist | agent=s2s-builder | model=deepseek-v4-flash-0731 | task=hoist localePaths into published config in both builders so locale path prefix reaches renderer (fixes 'en not in path' for en why-posts); see handoff-locale-paths-hoist.md | status=open (PR #32 https://github.com/Joera/S2S-monorepo/pull/32, commit 5149deb, independent review APPROVE no blockers — ready for human merge)
-- 2026-08-17 | session=02d5d665318c4d0888e1ac8803501143 | worktree=/home/joera/code/s2s-sort-collections | branch=feat/sort-collections | agent=s2s-builder | model=(default) | task=add optional sortBy to S2S collections (position/creationDate/modifiedDate/title, default title-alpha) + wire sorting into fetchCollections & render-dev + tests | status=open (PR #33 https://github.com/Joera/S2S-monorepo/pull/33, commit 5f5d3bf, independent review APPROVE no blockers — ready for human merge)
+**Task:** safe-app table-filter dropdowns render but options only show "All" — unique per-column
+values (author, post_type for Offers/Deals; kind for Pieces; state for Data Sets) never populate.
 
-- 2026-08-19 | session=ba7fceb94aab49af97aa12dc57739285 | worktree=/home/joera/code/s2s-prep-ripples-revoke | branch=feat/prep-ripples-from-revoke | agent=builder | model=deepseek-v4-flash-0731 | task=ripples from a revoke in the prep action (RFC-prep-ripples-from-revoke) | status=MERGED (PR #45, merge commit b8ad3ea, 2026-08-19; fix sessions 6b146878055640e2947a58013d2f309a + d541691a1c9d43a7abeb6de4ef0f388f) — worktree removed, local branch deleted, remote branch kept per repo convention
-- 2026-08-20 | session=b647a03f9b6044a1a7984bb3bcada803 | worktree=/home/joera/code/s2s-bulkrender-wire-rpcs | branch=feat/bulkrender-wire-rpcs | agent=builder | model=deepseek-v4-flash-0731 | task=debug safe-app bulkRender — wire endpoints.rpcs into renderwithLitActions (actions-extract-constants §6) | status=open (PR #47 https://github.com/Joera/S2S-monorepo/pull/47 @ 8e64d95, independent review APPROVE non-blocking only — ready for human merge; review session 9e12b93ff5a94b2091f1c4e02145f638)
-- 2026-08-20 | session=<pending> | worktree=/home/joera/code/s2s-website-tree-tab | branch=feat/website-tree-tab | agent=builder | model=deepseek-v4-flash-0731 | task=website tree tab in safe-app — new nav tab + component fetching the published site tree from the ENS contract (contenthash_wrapped → IPFS DAG walk), sync button, retraction/rename diff; handoff-website-tree-tab.md | status=open
-- 2026-08-21 | session=339e8df013c340d288422f3146fc16b6 | worktree=/home/joera/code/s2s-sortable-tables | branch=feat/sortable-tables | agent=builder | model=kimi-k2-7-code | task=safe-app per-column sortable tables (Excel-like) for deals/offers/storage (deals-tab + storage-tab); shared sort helper; gates = type-check + build; PR to main | status=MERGED (PR #55, merge commit fdb4f9d, 2026-08-21 16:59; implemented by human while orchestrator was blocked on the builder harness — see harness-fix note below). Files: s2s-deals-tab.ts, s2s-storage-tab.ts, table-styles.ts (new), utils/sort.ts (new). Independent review session 5fed7c0c498146069053c2fa110b1538.
+**Worktree:** `~/code/s2s-table-filter-options-fix` (branch `fix/table-filter-options` from origin/main `19d1010`)
 
-HARNESS FIX (2026-08-21): the builder worker completed turns but delivered "no output" — root cause: the pi-native extension posts a startup `idle` (session_ready) BEFORE any turn runs; the runner's external_session_status handler treats ANY idle as sub-agent completion and delivers the FIRST one (empty), discarding the real agent_end output as ALREADY_DELIVERED. Fix: (1) extension now posts startup `status: "waiting"` (non-terminal) in omnigent/resources/pi_native/omnigent_pi_native_extension.js + agent_end idle carries `output: finalOutput`; (2) runner app.py guards idle→terminal on having seen a `running` edge (takes effect on next omnigent restart). Verified via probe (PROBE_DELIVERY_VERIFIED). Both are shipped-resource patches — overwritten on omnigent upgrade; worth filing upstream.
-- 2026-08-21 | session=3167b31a0a91416da1ebade289586271 | worktree=/home/joera/code/s2s-table-filters | branch=feat/table-filters | agent=builder | model=(default) | task=ssafe-app table filters: dropdown filters on deals/offers (author, post type) + storage (kind, dataset state); reusable <table-filter> component + utils/filter.ts; reusable CSS in style files; gates type-check + build; handoff-table-filters.md | status=open
+**Root cause (confirmed by explore, session 09bacc32186144b79805d844e080f990):** structural, not a
+timing race. `.table-filters` is rendered as a SIBLING of `.table-<name>`, but every
+`attachEventListeners()` selector requires it as a DESCENDANT
+(`.table-deals .table-filters table-filter`, etc. at deals-tab.ts:598/614, storage-tab.ts:553/569).
+`querySelectorAll` matches nothing, so `options` is never assigned and every `<table-filter>` keeps
+its default single "All". Deterministic across all 4 tables. Sorting works because the sortable-header
+selectors (`.table-deals .table-header.sortable`) genuinely match the nested `.table-header`.
+
+**Fix (8-line change, no deps, no store/subscription changes):** tag each filter wrapper with a
+per-table class and target that class:
+- deals-tab.ts:440 `.table-filters` → `.table-filters offers-filters`; :598 selector → `.offers-filters table-filter`
+- deals-tab.ts:500 `.table-filters` → `.table-filters deals-filters`; :614 selector → `.deals-filters table-filter`
+- storage-tab.ts:478 `.table-filters` → `.table-filters pieces-filters`; :553 selector → `.pieces-filters table-filter`
+- storage-tab.ts:504 `.table-filters` → `.table-filters datasets-filters`; :569 selector → `.datasets-filters table-filter`
+
+(`uniqueValuesForColumn`, the options setter, and the option computation in `attachEventListeners` are
+already correct — no changes.)
+
+**Gates:** `pnpm type-check` + `pnpm build` from `safe-app/`. Verification step: rebuild then grep
+the bundle for `.offers-filters table-filter` etc. (the new selectors) present.
+
+**Deliverable:** PR `fix/table-filter-options` → `main`.
+
+**Status:** implementer committed a9831ce (8+/8- across the 2 files), pushed, opened PR #63
+(https://github.com/Joera/S2S-monorepo/pull/63). Gates verified by orchestrator: type-check exit 0,
+build exit 0, all four new selectors present in built bundle. Independent review APPROVED
+(session bfb1abdf3a8143eeb3e902421caeb1b0) — no blocking issues; one non-blocking note that scoping
+now relies on the new wrapper-class names (future typo/duplicate could cross-match; maintainability
+only, not in scope).
+
+**Secondary (out of scope, do NOT fix):** offers subscription gap — deals tab subscribes only to
+`store.subscribeToDeals`, flows mutating offers alone can leave the offers table stale. Orthogonal to
+the visible bug; excluded per no-scope-expansion.
