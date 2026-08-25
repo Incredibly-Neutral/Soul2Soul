@@ -437,7 +437,7 @@ export class S2SDealsTab extends HTMLElement {
               <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
             </button>
           </div>
-          <div class="table-filters">
+          <div class="table-filters offers-filters">
             <table-filter data-key="author" label="Author" value="${this.offersFilters.author ?? ''}"></table-filter>
             <table-filter data-key="postType" label="Post type" value="${this.offersFilters.postType ?? ''}"></table-filter>
           </div>
@@ -497,7 +497,7 @@ export class S2SDealsTab extends HTMLElement {
         ${
           store.deals.length > 0
             ? `
-        <div class="table-filters">
+        <div class="table-filters deals-filters">
           <table-filter data-key="author" label="Author" value="${this.dealsFilters.author ?? ''}"></table-filter>
           <table-filter data-key="postType" label="Post type" value="${this.dealsFilters.postType ?? ''}"></table-filter>
         </div>
@@ -595,7 +595,7 @@ export class S2SDealsTab extends HTMLElement {
     });
 
     // Filter dropdowns — Offers table
-    this.shadowRoot?.querySelectorAll('.table-offers .table-filters table-filter').forEach((el) => {
+    this.shadowRoot?.querySelectorAll('.offers-filters table-filter').forEach((el) => {
       const filterEl = el as TableFilter;
       const key = (el as HTMLElement).dataset.key;
       if (!key) return;
@@ -611,7 +611,7 @@ export class S2SDealsTab extends HTMLElement {
     });
 
     // Filter dropdowns — Deals table
-    this.shadowRoot?.querySelectorAll('.table-deals .table-filters table-filter').forEach((el) => {
+    this.shadowRoot?.querySelectorAll('.deals-filters table-filter').forEach((el) => {
       const filterEl = el as TableFilter;
       const key = (el as HTMLElement).dataset.key;
       if (!key) return;
