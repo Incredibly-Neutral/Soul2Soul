@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { evmRead } from './evm';
+import { evmRead, toHexString } from './evm';
 import { mapWithLimit } from './ens.factory';
+import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
 // evmRead — FAIL-FAST, single pass over the RPC URL list.
@@ -134,6 +135,47 @@ describe('evmRead fail-fast (single pass, no in-session retry)', () => {
     expect(err.failures.length).toBe(2); // one failure per URL, no retries
     expect(err.message).toContain('https://a.example');
     expect(err.message).toContain('https://b.example');
+  });
+});
+
+// ============================================================================
+// toHexString — EIP-1577 contenthash encode (CIDv0 AND CIDv1).
+//
+// Regression context: files/stat now returns CIDv1 (bafy...) roots, but the
+// old toHexString base58-decoded the CID string as a big number (CIDv0-only),
+// so a CIDv1 root was encoded on-chain as 0xe3 0x01 + a 44-byte misparse that
+// decodeRootCid later rendered as an invalid CID (tree sync failed with
+// 'invalid path'). toHexString now parses the CID (v0 or v1) and wraps its raw
+// bytes (version varint + codec varint + multihash) in the EIP-1577 ipfs-ns
+// envelope, so the value round-trips through decodeContenthashWrapped.
+// ============================================================================
+
+const TEST_V0 = 'QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco';
+const TEST_V1 = 'bafybeigadpvuv4m3txrx4r3wtjclnkte5mvxb2hoyyvt4jlaqdeo6qrbwm';
+
+describe('toHexString (EIP-1577 contenthash encode)', () => {
+  it('round-trips a CIDv0 through decodeContenthashWrapped', () => {
+    const hex = toHexString(TEST_V0);
+    expect(hex).toMatch(/^0xe301/);
+    const decoded = decodeContenthashWrapped(hex);
+    expect(decoded.toString()).toBe(TEST_V0);
+  });
+
+  it('round-trips a CIDv1 through decodeContenthashWrapped', () => {
+    const hex = toHexString(TEST_V1);
+    expect(hex).toMatch(/^0xe301/);
+    const decoded = decodeContenthashWrapped(hex);
+    expect(decoded.toString()).toBe(TEST_V1);
+    expect(decoded.toV1().toString()).toBe(TEST_V1);
+  });
+
+  it('does not base58-decode the CID string (the CIDv0-only bug)', () => {
+    // The old implementation turned a CIDv1 string into 0xe301 + 44 garbage
+    // bytes. The fixed implementation encodes the raw CID bytes: 0x (2) +
+    // e301 (4) + version 01 (2) + codec 70 (2) + multihash 12 20 (4) + 32-byte
+    // digest (64) = 78 hex chars.
+    expect(toHexString(TEST_V1).length).toBe(78);
+    expect(toHexString(TEST_V0).length).toBe(78);
   });
 });
 
