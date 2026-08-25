@@ -319,6 +319,19 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           rpcs?.L2?.[0],
         );
         trace.push(JSON.stringify(result));
+        // The on-chain write is the whole point of this action — a failed or
+        // reverted contenthash_wrapped write must NEVER be reported as success
+        // (the app would show the fresh root while the on-chain record is
+        // unchanged). Fail loudly for ALL update writes (normal publishes and
+        // reset) so the caller can surface the real cause.
+        if (!result?.success) {
+          return {
+            ok: false,
+            action: ACTION,
+            error: 'contenthash_wrapped write failed: ' + (result?.error ?? 'unknown error'),
+            trace,
+          };
+        }
       }
 
       return { ok: true, action: ACTION, data: { cid: newRootCid, trace }, trace };
