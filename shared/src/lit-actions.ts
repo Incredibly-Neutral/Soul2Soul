@@ -14,6 +14,8 @@ export type {
   ActionResult,
   EvmUpdateData,
   EvmUpdateInput,
+  MaintainCacheData,
+  MaintainCacheInput,
   PrepData,
   PrepInput,
   SingleData,

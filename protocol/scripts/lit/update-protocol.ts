@@ -125,7 +125,8 @@ export const updateProtocol = async (
   prepActionCid: string,
   renderActionCid: string,
   updateActionCid: string,
-  encryptActionCid: string
+  encryptActionCid: string,
+  maintainCacheActionCid?: string
 ) => {
   const transactions = [
     // Write current values
@@ -134,6 +135,12 @@ export const updateProtocol = async (
     setRecord("lit_action_render", renderActionCid),
     setRecord("lit_action_update", updateActionCid),
     setRecord('lit_action_encrypt', encryptActionCid),
+    // Optional: the dedicated maintain-cache action (parallel cache pointer
+    // write). Only written when the action has been built + registered, so a
+    // protocol update before this feature's deploy stays valid.
+    ...(maintainCacheActionCid
+      ? [setRecord("lit_action_maintainCache", maintainCacheActionCid)]
+      : []),
     setRecord("ens_records", ENS_RECORDS_ADDRESS),
     setRecord("data_gateway", process.env.IPFS_URL || ""),
     setRecord("ens_registry", process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || ""),
@@ -210,14 +217,28 @@ const main = async () => {
   const prep    = group.actions.find((a: any) => a.name === 'prep');
   const render  = group.actions.find((a: any) => a.name === 'render');
   const update  = group.actions.find((a: any) => a.name === 'update');
+  const maintainCache = group.actions.find((a: any) => a.name === 'maintain-cache');
 
   if (!prep || !render || !update) {
     throw new Error(`Missing action CIDs. Found: ${JSON.stringify(group.actions.map((a: any) => a.name))}`);
   }
 
-  console.log("Action CIDs:", { prep: prep.cid, render: render.cid, update: update.cid });
+  console.log("Action CIDs:", {
+    prep: prep.cid,
+    render: render.cid,
+    update: update.cid,
+    maintainCache: maintainCache?.cid ?? '(not deployed)',
+  });
 
-  await updateProtocol(account, pkpInfo, prep.cid, render.cid, update.cid, encrypt.cid);
+  await updateProtocol(
+    account,
+    pkpInfo,
+    prep.cid,
+    render.cid,
+    update.cid,
+    encrypt.cid,
+    maintainCache?.cid,
+  );
 };
 
 main()
