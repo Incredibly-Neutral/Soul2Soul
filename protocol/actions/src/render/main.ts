@@ -85,15 +85,24 @@ const RECORDS_CONTRACT_ABI = [
  *
  * Flow (per the T4 contract):
  *   a. archiveCid is already read by the T3 read path above (getText
- *      'content_cache_<publication>'); an empty pointer ⇒ no archive to
- *      maintain ⇒ no write.
- *   b. cat the CURRENT archive fresh, parse, reconcile against the same deals
- *      the read path used (reused — no extra getDeals RPC in-session).
+ *      'content_cache_<publication>'); an EMPTY pointer means the cache has
+ *      NEVER been bootstrapped — the CURRENT archive is treated as `null` and
+ *      the first snapshot is SEEDED from mergeArchive(null, deals, refreshed)
+ *      (the bootstrap drift from the no-archive read path). Otherwise the
+ *      warm path cats + parses the current archive.
+ *   b. reconcile against the same deals the read path used (reused — no extra
+ *      getDeals RPC in-session). With a null (seed) archive this classifies
+ *      every dealt genesis as a MISS (needsFetch = all deals).
  *   c. if needsFetch non-empty (drift > 0): merge the freshly-fetched full
  *      items into the archive, serialize, uploadFile → newCid.
- *   d. evmWrite setText with confirm=false — fire-and-forget (await broadcast,
- *      not receipt). Push the result to trace.
+ *   d. evmWrite setText with confirm=true and a revert check — the pointer
+ *      update is awaited to a mined receipt and a REVERTED tx (status === 0)
+ *      THROWS, so a dropped/reverted pointer update is never silently
+ *      swallowed. Mirrors the update action's contenthash write semantics.
  *   e. if drift === 0: no write — steady state stays read-only.
+ *
+ *   The caller (main.ts) gates on shouldWriteBackCache and wraps this in
+ *   try/catch, so a failure/throw here never fails the render.
  */
 async function writeBackArchiveCache(opts: {
   archiveCid: string;
@@ -111,7 +120,13 @@ async function writeBackArchiveCache(opts: {
   // b. Read the current archive fresh (self-contained), parse, and reconcile
   // against the same deals the read path used (reused — no extra getDeals RPC
   // in-session; the freshness oracle is stable within one render).
-  const archive = parseArchive(await catFile(gateway!, archiveCid));
+  // BOOTSTRAP: an empty pointer means the cache has never been seeded — treat
+  // the current archive as `null` (mergeArchive/reconcile both accept that) so
+  // the first snapshot is seeded from the bootstrap drift. The warm path
+  // (non-empty archiveCid) is untouched, byte-for-byte.
+  const archive: null | ReturnType<typeof parseArchive> = archiveCid
+    ? parseArchive(await catFile(gateway!, archiveCid))
+    : null;
   const { needsFetch } = reconcile(drift.deals, archive);
 
   // e. Steady state (drift === 0) performs zero writes — read-only.
@@ -136,8 +151,13 @@ async function writeBackArchiveCache(opts: {
   const next = mergeArchive(archive, drift.deals, refreshed);
   const newCid = await uploadFile(gateway!, serialize(next));
 
-  // d. Fire-and-forget pointer update: confirm=false → await broadcast, not
-  // receipt. Push the result to trace.
+  // d. RELIABLE + OBSERVABLE pointer update: confirm=true → await the mined
+  // receipt, and detect status === 0 (revert). The cache is DEAD when the
+  // pointer update is silently dropped — so a reverted/failed write must not be
+  // swallowed. Throwing surfaces a clear error; the caller's try/catch around
+  // writeBackArchiveCache keeps the render unaffected (cache is best-effort).
+  // Mirrors the update action's contenthash_wrapped write (parse + confirm +
+  // revert-check).
   const node = ethers.utils.namehash(publication);
   const result = await evmWrite(
     'L2',
@@ -146,10 +166,16 @@ async function writeBackArchiveCache(opts: {
     RECORDS_CONTRACT_ABI,
     'setText',
     [node, `content_cache_${publication}`, toHexString(newCid)],
-    false,
+    true,
     rpcs?.L2?.[0],
   );
   trace.push(JSON.stringify(result));
+  if (!result?.success) {
+    throw new Error(
+      `content_cache_${publication} pointer write failed: ${result?.error ?? 'unknown error'}` +
+        (result?.hash ? ` (hash ${result.hash})` : ''),
+    );
+  }
 }
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
