@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { contenthashToIPFS } from './ipfs.factory';
+import { contenthashToIPFS, decodeArchiveCid } from './ipfs.factory';
+import { toHexString } from './evm';
 import { parseCID, encodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
@@ -34,5 +35,41 @@ describe('contenthashToIPFS', () => {
   it('throws on a non-ipfs-ns contenthash', () => {
     // First byte is 0x01, not 0xe3 (ipfs-ns) — decodeContenthashWrapped rejects it.
     expect(() => contenthashToIPFS('0x' + '01'.repeat(40))).toThrow();
+  });
+});
+
+// ============================================================================
+// decodeArchiveCid — shared cache-READ helper (render + maintain-cache).
+//
+// The on-chain `content_cache_<publication>` pointer is an EIP-1577 ipfs-ns
+// contenthash envelope (0xe3 0x01 + CID bytes, written by toHexString()). The
+// READ paths previously passed that raw envelope straight to catFile, which
+// 500'd (garbage CID) and dropped to the expensive cold no-archive path. This
+// helper decodes it back to a raw CID, and collapses ''/invalid to the ''
+// no-archive sentinel.
+// ============================================================================
+
+describe('decodeArchiveCid', () => {
+  it('decodes a CIDv1 contenthash pointer to the same CID (bafy...)', () => {
+    const envelope = toHexString(TEST_V1);
+    expect(decodeArchiveCid(envelope)).toBe(TEST_V1);
+  });
+
+  it('decodes a CIDv0 contenthash pointer to the same CID (Qm...)', () => {
+    const envelope = toHexString(TEST_V0);
+    expect(decodeArchiveCid(envelope)).toBe(TEST_V0);
+  });
+
+  it('round-trips through encodeContenthashWrapped(parseCID(...))', () => {
+    const envelope = encodeContenthashWrapped(parseCID(TEST_V1));
+    expect(decodeArchiveCid(envelope)).toBe(TEST_V1);
+  });
+
+  it('passes through the empty string (no-archive sentinel)', () => {
+    expect(decodeArchiveCid('')).toBe('');
+  });
+
+  it('collapses a non-ipfs-ns value to the no-archive sentinel instead of throwing', () => {
+    expect(decodeArchiveCid('0x' + '01'.repeat(40))).toBe('');
   });
 });
