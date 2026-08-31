@@ -352,7 +352,7 @@ export const renderwithLitActions = async (
     // fall back to the raw action envelope, then a generic message.
     error: validated.ok
       ? undefined
-      : (validated as any)?.error ?? (evmAction as any)?.error ?? 'update action failed',
+      : ((validated as any)?.error ?? (evmAction as any)?.error ?? 'update action failed'),
     // Result of the dedicated maintain-cache action (null when not fired). Kept
     // on the envelope so callers/observers can see the cache write outcome.
     maintainCache: maintainCacheResult,
