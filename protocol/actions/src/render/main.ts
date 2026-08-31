@@ -192,6 +192,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   console.log(`new render @ ${new Date()}`);
   let trace: any[] = [];
   let errors: string[] = [];
+  // Cache-drift signal surfaced in the success envelope: set true when the
+  // write-back would fire (shouldFire). The orchestrator uses this to launch
+  // the dedicated maintain-cache action in its own fresh session.
+  let maintainCachePending = false;
 
   try {
     requireFields(input, ['job', 'signature', 'authorSafeAddress', 'publication', 'endpoints']);
@@ -452,6 +456,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         // the render — the result is identical whether or not the cache write
         // succeeded. Steady state (no drift) performs zero writes.
         const shouldFire = shouldWriteBackCache(maintainCache, preview, drift);
+        maintainCachePending = shouldFire;
         trace.push({
           cache: 'gate',
           maintainCache,
@@ -517,6 +522,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         job,
         html,
         timestamp: new Date().toISOString(),
+        maintainCache: maintainCachePending,
       },
     };
   } catch (e) {

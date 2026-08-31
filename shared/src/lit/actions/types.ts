@@ -41,6 +41,11 @@ export interface SingleData {
   job: S2SJob;
   html?: string;
   timestamp: string;
+  // True on a successful render that observed archive drift (cache write-back
+  // would fire / did fire). The orchestrator uses this as the signal to fire
+  // the dedicated maintain-cache action in its own fresh session. Optional for
+  // backward compatibility with existing render callers/envelopes.
+  maintainCache?: boolean;
 }
 
 // ============================================================================
@@ -65,4 +70,28 @@ export interface EvmUpdateInput {
 export interface EvmUpdateData {
   cid: string;
   trace?: any[];
+}
+
+// ============================================================================
+// Maintain-Cache (parallel per-publication archive pointer write)
+// ============================================================================
+// Fired by the orchestrator after a successful render whose envelope flagged
+// pending cache drift. Runs in its OWN fresh Lit session (own 50-request budget,
+// young provider) mirroring the conditions under which the update action's
+// setText is provably reliable — versus the render inline write-back firing at
+// the tail of a heavy session. See protocol/actions/src/maintain-cache/main.ts.
+export interface MaintainCacheInput {
+  publication: string;
+  signature: string;
+  authorSafeAddress: string;
+  preview?: boolean;
+  endpoints: {
+    ipfsGateway?: string;
+    rpcs: { L1: string[]; L2: string[] };
+  };
+}
+
+export interface MaintainCacheData {
+  cid: string;
+  wrote: boolean;
 }

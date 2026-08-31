@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { jobSchema } from '../protocol/schemas';
-import type { EvmUpdateInput, SingleInput } from '../lit/actions/types';
+import type { EvmUpdateInput, MaintainCacheInput, SingleInput } from '../lit/actions/types';
 
 // ============================================================================
 // Did:ethr schema
@@ -179,6 +179,9 @@ export const SingleActionOutputSchema = ActionResultSchema(
     job: jobSchema,
     html: z.string().optional(),
     timestamp: z.string(),
+    // Cache-drift signal (see SingleData.maintainCache): the orchestrator fires
+    // the parallel maintain-cache action when true.
+    maintainCache: z.boolean().optional(),
   }),
 );
 
@@ -301,6 +304,73 @@ export function validateEvmUpdateOutput(output: unknown): EvmUpdateActionOutput 
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join('\n');
     throw new Error(`EvmUpdate action output validation failed:\n${issues}`);
+  }
+  return result.data;
+}
+
+// ============================================================================
+// Maintain-Cache Action I/O
+// ============================================================================
+
+export const MaintainCacheActionInputSchema = z.object({
+  publication: z.string().min(1, 'publication ENS name is required'),
+  signature: z.string().min(1, 'signature is required'),
+  authorSafeAddress: z.string().min(1, 'authorSafeAddress is required'),
+  preview: z.boolean().optional(),
+  endpoints: z.object({
+    ipfsGateway: z.string().optional(),
+    rpcs: z.object({
+      L1: z.array(z.string()).min(1, 'L1 rpcs required'),
+      L2: z.array(z.string()).min(1, 'L2 rpcs required'),
+    }),
+  }),
+});
+
+export type MaintainCacheActionInput = z.infer<typeof MaintainCacheActionInputSchema>;
+
+export const MaintainCacheActionOutputSchema = ActionResultSchema(
+  z.object({
+    // cid may be EMPTY (''): steady state (no drift to merge) returns
+    // { cid: '', wrote: false } — zero writes. Required-but-may-be-empty,
+    // matching MaintainCacheData.cid: string. "missing" (undefined) still
+    // fails validation.
+    cid: z.string(),
+    wrote: z.boolean().optional(),
+  }),
+);
+
+export type MaintainCacheActionOutput = z.infer<typeof MaintainCacheActionOutputSchema>;
+
+// ============================================================================
+// Compile-time sentinel: interface ↔ schema must match
+// ============================================================================
+
+type _AssertMaintainCacheInputMatches = MaintainCacheInput extends MaintainCacheActionInput
+  ? true
+  : never;
+
+// ============================================================================
+// Validation helpers
+// ============================================================================
+
+export function validateMaintainCacheInput(input: unknown): MaintainCacheActionInput {
+  const result = MaintainCacheActionInputSchema.safeParse(input);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+      .join('\n');
+    throw new Error(`MaintainCache action input validation failed:\n${issues}`);
+  }
+  return result.data;
+}
+
+export function validateMaintainCacheOutput(output: unknown): MaintainCacheActionOutput {
+  const result = MaintainCacheActionOutputSchema.safeParse(output);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+      .join('\n');
+    throw new Error(`MaintainCache action output validation failed:\n${issues}`);
   }
   return result.data;
 }

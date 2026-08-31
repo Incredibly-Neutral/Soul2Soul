@@ -18,6 +18,12 @@ export interface S2SProtocolInfo {
     prep: string; // was litActionPrep (unchanged)
     render: string; // was litActionSingle (RENAMED)
     update: string; // was litActionRootUpdate (RENAMED); cbor merged INTO this action
+    // CID of the dedicated maintain-cache action. OPTIONAL: present only once
+    // the action is built + pinned + its lit_action_maintainCache record is
+    // written on-chain. The orchestrator fires the parallel cache-maintenance
+    // action only when this is non-empty (graceful — the render inline
+    // write-back remains the fallback until then).
+    maintainCache?: string;
   };
 }
 
