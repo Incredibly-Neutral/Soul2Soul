@@ -122,7 +122,12 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
 
     // Steady state: pointer already holds every deal → zero writes.
     if (needsFetch.length === 0) {
-      trace.push({ cache: 'writeback', stage: 'steady-state', skipped: true, reason: 'no drift to merge' });
+      trace.push({
+        cache: 'writeback',
+        stage: 'steady-state',
+        skipped: true,
+        reason: 'no drift to merge',
+      });
       return {
         ok: true,
         action: ACTION,
@@ -140,14 +145,23 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
           const item = JSON.parse(await catFile(gateway!, entry.cid)) as S2SContentItem;
           refreshed.set(entry.genesis, item);
         } catch (e) {
-          console.warn(`[maintain-cache] drift fetch failed for ${entry.genesis} (${entry.cid}):`, e);
+          console.warn(
+            `[maintain-cache] drift fetch failed for ${entry.genesis} (${entry.cid}):`,
+            e,
+          );
         }
       }),
     );
 
     // Nothing fetchable and nothing already present ⇒ nothing to merge/write.
     if (refreshed.size === 0) {
-      trace.push({ cache: 'writeback', stage: 'merge', skipped: true, reason: 'no fetchable drift', refreshedSize: 0 });
+      trace.push({
+        cache: 'writeback',
+        stage: 'merge',
+        skipped: true,
+        reason: 'no fetchable drift',
+        refreshedSize: 0,
+      });
       return { ok: true, action: ACTION, data: { cid: '', wrote: false }, trace };
     }
 
@@ -170,14 +184,22 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
       true,
       rpcs?.L2?.[0],
     );
-    trace.push({ cache: 'writeback', stage: 'setText', key: cacheKey, success: result?.success, hash: result?.hash, error: result?.error });
+    trace.push({
+      cache: 'writeback',
+      stage: 'setText',
+      key: cacheKey,
+      success: result?.success,
+      hash: result?.hash,
+      error: result?.error,
+    });
     trace.push(JSON.stringify(result));
 
     if (!result?.success) {
       return {
         ok: false,
         action: ACTION,
-        error: `${cacheKey} pointer write failed: ${result?.error ?? 'unknown error'}` +
+        error:
+          `${cacheKey} pointer write failed: ${result?.error ?? 'unknown error'}` +
           (result?.hash ? ` (hash ${result.hash})` : ''),
         trace,
       };
