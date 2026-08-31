@@ -8,7 +8,7 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { uploadFile } from '../libs/ipfs.factory';
+import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { evmRead } from '../libs/evm';
 import { fetchById } from '../libs/module.factory';
@@ -120,6 +120,13 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
           [node, `content_cache_${publication}`],
           rpcs?.L2,
         );
+        // The pointer is an EIP-1577 ipfs-ns contenthash envelope (0xe3 0x01 +
+        // CID bytes, written by toHexString in the maintain-cache/update write
+        // path). Convert it BACK to a raw CID for fetchCollections' catFile —
+        // passing the raw envelope straight to /api/v0/cat?arg=0xe3... 500s and
+        // blows the session HTTP cap; decodeArchiveCid swallows decode failures
+        // (records that aren't an ipfs-ns contenthash) into '' → no-archive.
+        archiveCid = decodeArchiveCid(archiveCid);
       } catch (e) {
         // Cache pointer is non-authoritative (RFC trust model: the cache is a
         // performance optimization, getDeals is the correctness oracle). A failed
