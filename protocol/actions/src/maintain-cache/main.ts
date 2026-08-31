@@ -9,7 +9,7 @@ import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { catFile, uploadFile } from '../libs/ipfs.factory';
+import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
 import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
 import { canPublish, extractSignerAddress } from '../libs/gates';
@@ -102,6 +102,10 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
         [node, cacheKey],
         rpcs?.L2,
       );
+      // Pointer is an EIP-1577 ipfs-ns contenthash envelope (0xe3...), not a
+      // raw CID. Decode back to a CID for catFile below; a decode failure
+      // collapses to '' → archive stays null (no-archive), never a garbage CID.
+      archiveCid = decodeArchiveCid(archiveCid);
     } catch (e) {
       console.log(
         `[maintain-cache] pointer read failed, treating as empty: ${e instanceof Error ? e.message : String(e)}`,
