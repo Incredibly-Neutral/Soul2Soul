@@ -37,6 +37,26 @@ const RENDER_RETRY_BACKOFF_MS = 1500;
 const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Matches Lit's DETERMINISTIC session-budget error, e.g.
+ * 'You may not send more than 50 HTTP requests per session and you have
+ * attempted to exceed that limit.'
+ *
+ * A job whose per-session request count exceeds Lit's budget will determin-
+ * istically blow on EVERY retry: each retry opens a fresh session with a
+ * fresh 50-request budget and re-runs the same budget-blowing work — pure
+ * cost with zero chance of success. So when this error surfaces we fast-fail
+ * the retry loop instead of wasting the remaining attempts.
+ *
+ * Matched on the stable substring 'HTTP requests per session', which is
+ * robust to the request-count ('50') changing. Deliberately NOT matched on
+ * the generic 'Decryption error for item' prefix — that class mixes transient
+ * and budget failures; we match the budget substring wherever it is embedded.
+ */
+export function isDeterministicBudgetError(msg: string): boolean {
+  return /HTTP requests per session/i.test(msg);
+}
+
+/**
  * Retry a render-action execution on the live path as described above.
  *
  * Exported so the retry logic is unit-testable in isolation (mocking `runAction`);
@@ -62,12 +82,30 @@ export async function runRenderActionWithRetry(
       // live path we re-run the (read-only) render action rather than giving up.
       if (actionResult?.ok || actionResult?.success) return actionResult;
       lastFailure = actionResult;
+      // Deterministic session-budget overflow ("more than 50 HTTP requests per
+      // session") will recur on every retry — each retry re-opens a budget and
+      // re-runs the same budget-blowing work. Fast-fail to skip wasted retries.
+      const nonOkMsg = String(actionResult?.error ?? '');
+      if (isDeterministicBudgetError(nonOkMsg)) {
+        console.error(
+          `[render job ${job?.id}] attempt ${attempt}/${attempts} deterministic session-budget error; NOT retrying — ${nonOkMsg}`,
+        );
+        break;
+      }
       if (attempt < attempts)
         console.error(
           `[render job ${job?.id}] attempt ${attempt}/${attempts} returned non-ok; retrying in ${RENDER_RETRY_BACKOFF_MS}ms — ${JSON.stringify(actionResult?.error ?? actionResult)}`,
         );
     } catch (err: any) {
       lastFailure = err;
+      // Same deterministic budget class on the thrown path — fast-fail the loop.
+      const thrownMsg = err?.message ?? '';
+      if (isDeterministicBudgetError(thrownMsg)) {
+        console.error(
+          `[render job ${job?.id}] attempt ${attempt}/${attempts} deterministic session-budget error; NOT retrying — ${thrownMsg}`,
+        );
+        break;
+      }
       if (attempt < attempts)
         console.error(
           `[render job ${job?.id}] attempt ${attempt}/${attempts} threw; retrying in ${RENDER_RETRY_BACKOFF_MS}ms — ${err?.message ?? String(err)}`,

@@ -441,6 +441,83 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 
     expect(runAction).toHaveBeenCalledTimes(1);
   });
+
+  // --- deterministic session-budget fast-fail (PR-B) ---
+  const budgetErr =
+    'You may not send more than 50 HTTP requests per session and you have attempted to exceed that limit.';
+
+  it('non-ok result with a session-budget error does NOT retry (1 call) and the throw preserves it', async () => {
+    const fail = { ok: false, action: 'render', error: budgetErr, trace: [] };
+    vi.mocked(runAction).mockResolvedValue(fail as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    // Deterministic budget error → zero wasted retries, exactly one attempt.
+    expect(runAction).toHaveBeenCalledTimes(1);
+    // The preserved-failure path still throws the real failure.
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('HTTP requests per session');
+    expect(thrown.failure).toBe(fail);
+  });
+
+  it('transient non-ok still retries up to RENDER_RETRY_ATTEMPTS (no fast-fail)', async () => {
+    const fail = {
+      ok: false,
+      action: 'render',
+      error: 'RPC call to https://lb.example failed',
+      trace: [],
+    };
+    vi.mocked(runAction).mockResolvedValue(fail as any);
+
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch {
+      /* expected after exhaustion */
+    }
+
+    expect(runAction).toHaveBeenCalledTimes(3); // RENDER_RETRY_ATTEMPTS
+  });
+
+  it('thrown budget error (err.message match) also fast-fails with 1 call', async () => {
+    vi.mocked(runAction).mockRejectedValueOnce(new Error(budgetErr) as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(runAction).toHaveBeenCalledTimes(1);
+    // The original thrown Error is the preserved lastFailure and is re-thrown.
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('HTTP requests per session');
+  });
+
+  it('budget message embedded as a Decryption-error suffix still fast-fails (substring match)', async () => {
+    const msg = `Decryption error for item abc123: ${budgetErr}`;
+    vi.mocked(runAction).mockResolvedValueOnce({
+      ok: false,
+      action: 'render',
+      error: msg,
+      trace: [],
+    } as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(runAction).toHaveBeenCalledTimes(1);
+    expect(thrown.message).toContain('HTTP requests per session');
+  });
 });
 
 // ============================================================================
@@ -531,11 +608,13 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
 
   it('skips prep + render and runs the update action directly with jobs:[] + reset:true', async () => {
     let updateInputs: any;
-    vi.mocked(runAction).mockImplementation(async (_preview: any, _lit: any, cid: any, inputs: any) => {
-      expect(cid).toBe(updateCid); // only the update action may be reached
-      updateInputs = inputs;
-      return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
-    });
+    vi.mocked(runAction).mockImplementation(
+      async (_preview: any, _lit: any, cid: any, inputs: any) => {
+        expect(cid).toBe(updateCid); // only the update action may be reached
+        updateInputs = inputs;
+        return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
+      },
+    );
 
     const res: any = await renderwithLitActions(
       true, // preview
@@ -587,24 +666,26 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
 
   it('reset:true with non-empty contentIds still runs prep+render and threads reset to the update', async () => {
     const renderedJob = { ...sampleJob, html: 'QmRendered', path: '/hello-world' };
-    vi.mocked(runAction).mockImplementation(async (_preview: any, _lit: any, cid: any, inputs: any) => {
-      if (cid === 'cid-prep') {
-        return {
-          ok: true,
-          action: 'prep',
-          data: { jobs: [sampleJob], remove: undefined },
-          trace: [],
-        };
-      }
-      if (cid === 'cid-render') {
-        return { ok: true, action: 'single', data: { job: renderedJob }, trace: [] };
-      }
-      if (cid === updateCid) {
-        expect(inputs.reset).toBe(true); // reset threaded through
-        return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
-      }
-      throw new Error('unexpected cid ' + cid);
-    });
+    vi.mocked(runAction).mockImplementation(
+      async (_preview: any, _lit: any, cid: any, inputs: any) => {
+        if (cid === 'cid-prep') {
+          return {
+            ok: true,
+            action: 'prep',
+            data: { jobs: [sampleJob], remove: undefined },
+            trace: [],
+          };
+        }
+        if (cid === 'cid-render') {
+          return { ok: true, action: 'single', data: { job: renderedJob }, trace: [] };
+        }
+        if (cid === updateCid) {
+          expect(inputs.reset).toBe(true); // reset threaded through
+          return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
+        }
+        throw new Error('unexpected cid ' + cid);
+      },
+    );
 
     const res: any = await renderwithLitActions(
       true,
