@@ -1,5 +1,11 @@
 import { decrypt } from '../libs/decrypt';
-import { fetchByPublication, getDeals, toBody, type Entry } from '../libs/module.factory';
+import {
+  fetchByPublication,
+  fetchByPublicationDetailed,
+  getDeals,
+  toBody,
+  type Entry,
+} from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
 import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
@@ -231,9 +237,15 @@ export const bodiesFromReconcile = (
  *    entries, keyed by genesis (what mergeArchive() stores — the flat toBody
  *    bodies the read path consumes are NOT enough for the archive).
  *
- * `null` when the archive path was not used (no collections, no pointer, or
- * the archive cat failed → no-archive fallback): there is nothing to merge
- * into, so the write-back must not fire.
+ * `null` only when the read path has nothing to hand the write-back: no
+ * collections at all, or the archive pointer WAS set but the archive cat
+ * failed (no-archive fallback — nothing to merge into).
+ *
+ * When the pointer is empty (cache never bootstrapped), the no-archive path
+ * now surfaces a NON-NULL bootstrap drift (deals = all entries, needsFetch =
+ * all entries, fetchedItems = the full freshly-fetched items) so the
+ * maintainer render can SEED the first archive snapshot instead of deadlocking
+ * forever on the N-cat path.
  */
 export interface CollectionsDrift {
   deals: Entry[];
@@ -350,7 +362,26 @@ export const fetchCollections = async (
       allDeals = res.bodies;
       drift = res.drift;
     } else {
-      allDeals = await fetchByPublication(publicationModule, rpcs, gateway);
+      // NO-ARCHIVE BOOTSTRAP path (archive pointer empty — cache never written).
+      // Capture the full freshly-fetched items + the deals IN THE SAME SINGLE
+      // PASS that builds the bodies (fetchByPublicationDetailed — never a
+      // second fetch) and surface a NON-NULL bootstrap CollectionsDrift:
+      //   deals       = all deal entries;
+      //   needsFetch  = all entries (nothing is cached yet ⇒ everything is a MISS);
+      //   fetchedItems= every freshly-fetched S2SContentItem keyed by genesis.
+      //
+      // This is what un-deadlocks the cache: shouldWriteBackCache now sees
+      // needsFetch > 0 (before, drift was null and the write-back never fired),
+      // so the maintainer render SEEDS the archive instead of staying forever on
+      // the N-cat path. With no deals there is nothing to fetch — drift keeps
+      // needsFetch empty and no write fires (steady state).
+      const res = await fetchByPublicationDetailed(publicationModule, rpcs, gateway);
+      allDeals = res.bodies;
+      drift = {
+        deals: res.entries,
+        needsFetch: res.entries,
+        fetchedItems: res.items,
+      };
     }
     allDeals = allDeals.filter((item) => item != null);
   }
