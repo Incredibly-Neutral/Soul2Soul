@@ -4,6 +4,25 @@ declare const ethers: any;
 
 const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 
+// Known enabled modules on the publication Safe that can NEVER be an S2S module,
+// so probing them with NAME() is pure waste (each probe is an eth_call that
+// counts against Lit's 50-requests-per-session cap, and every one reverts —
+// logging the evmRead failover twice per action, once per RPC URL). We still
+// treat these as present in the Safe's module list; we just never issue a
+// NAME() eth_call for them.
+//
+// Provenance: the canonical Safe Account Abstraction (4337) Module at
+// 0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226 — SAFE_4337_MODULE_ADDRESS per
+// @safe-global/safe-modules-deployments safe-4337-module/v0.3.0 (and mirrored
+// in permissionless's toSafeSmartAccount.ts). Safe 1.4.1 + EntryPoint 0.7 on
+// Base 8453. It never implements NAME().
+const KNOWN_NON_S2S_MODULES: string[] = ['0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226'];
+
+// Compare addresses in canonical lowercase form so a lower/checksum-case
+// mismatch can't defeat the KNOWN_NON_S2S_MODULES filter.
+const isKnownNonS2SModule = (address: string): boolean =>
+  KNOWN_NON_S2S_MODULES.some((known) => known.toLowerCase() === address.toLowerCase());
+
 // Max simultaneous NAME() eth_call probes (pageSize is 10 — keep the fan-out
 // well under it so a single prep/render/update can't burst ~10-20 connections).
 const MAX_CONCURRENT_NAME_PROBES = 3;
@@ -77,6 +96,9 @@ export const getProtocolControllerAndModules = async (rpcs?: { L1: string[]; L2:
     let configModule = null;
 
     for (const moduleAddress of modules[0]) {
+      // Skip known non-S2S modules (e.g. the canonical Safe 4337 Module): they
+      // can never be an S2S module and probing them just burns RPC requests.
+      if (isKnownNonS2SModule(moduleAddress)) continue;
       try {
         const name = await evmRead(
           'L2',
@@ -109,7 +131,10 @@ export const getProtocolControllerAndModules = async (rpcs?: { L1: string[]; L2:
   }
 };
 
-export const getDomainOwnerAndModules = async (publication: string, rpcs?: { L1: string[]; L2: string[] }) => {
+export const getDomainOwnerAndModules = async (
+  publication: string,
+  rpcs?: { L1: string[]; L2: string[] },
+) => {
   const nameWrapperAddress = await evmRead(
     'L1',
     ENS_REGISTRY_ADDRESS,
@@ -141,27 +166,34 @@ export const getDomainOwnerAndModules = async (publication: string, rpcs?: { L1:
   let configModule = null;
   let publicationModule = null;
 
+  // Drop known non-S2S modules (e.g. the canonical Safe 4337 Module) from
+  // NAME() probing entirely — they can never be an S2S module, and each probe
+  // is an eth_call that reverts and counts against Lit's 50-request-session
+  // cap. They remain conceptually present in the Safe's module list; we just
+  // never issue a NAME() evmRead for them.
+  const probeableModules = modules.filter((addr: string) => !isKnownNonS2SModule(addr));
+
   // Cap NAME() probe concurrency to avoid bursting ~10-20 simultaneous RPC
   // connections (a root cause of intermittent ECONNRESET / 'missing response'
   // transport failures). Preserves allSettled semantics: a module lacking
   // NAME() (genuine revert) is still skipped silently below.
   const moduleNames = await mapWithLimit(
-    modules,
+    probeableModules,
     MAX_CONCURRENT_NAME_PROBES,
     (addr: string) =>
       evmRead('L2', addr, ['function NAME() view returns (string)'], 'NAME', [], rpcs?.L2),
   );
 
-  for (let i = 0; i < modules.length; i++) {
+  for (let i = 0; i < probeableModules.length; i++) {
     const result = moduleNames[i];
     if (result.status === 'fulfilled') {
       if (result.value === 'S2S Records Module') {
-        configModule = modules[i];
+        configModule = probeableModules[i];
       } else if (
         result.value === 'S2S Publication Module V2' ||
         result.value === 'S2S Publication Module' // backwards compat
       ) {
-        publicationModule = modules[i];
+        publicationModule = probeableModules[i];
       }
     }
   }
