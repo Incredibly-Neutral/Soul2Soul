@@ -11,18 +11,23 @@
         },
         {
           "name": "prep",
-          "cid": "QmRAaLUnLKRqMBtFV7BhNE2MbDdCcfGKEq5JPv38HcPCgV",
-          "hashedCid": "0x1802eb25d9ad0550ad315d46f44551548dcf14f9af8bf8cf9cd73019133fa068"
+          "cid": "QmcnFkP6QTMGuvzpQhZbCKMnMCwTuVN2X4j18SLR1hrXTZ",
+          "hashedCid": "0xf80a407fe37dd9d6c45a9bd07bf8f47cf2f8dd9f45b5845d8ce3fe1781669478"
         },
         {
           "name": "render",
-          "cid": "QmbNrx21eNnsK3u84SzYWCR3VmUitguiwUxKTvRvNyY6LH",
-          "hashedCid": "0xaebcabc6b026ee4f333204031db4f409332f6ca2f76fd19e06a2555a5d8fb37a"
+          "cid": "QmSrMsfkQHq4i2USano2bFA4aoSwtZsNhv5VS1SBof6RM9",
+          "hashedCid": "0x39ce94dfb5a0f5191e309bb528d132969618adcab68b1e887d3cb74e7e6fe51d"
         },
         {
           "name": "update",
           "cid": "QmfYRYQdna5K6GF3ybSMDWGpPMCX5g7zUdcYsxR14Jkk2q",
           "hashedCid": "0x905daba952f9225e74a7cc992248bff4253b8eb0bb73c0058755ef72eee929a1"
+        },
+        {
+          "name": "maintain-cache",
+          "cid": "QmcvCDWQTtZYoPeR2zpRskZ5FxnjW7nhkddv26MsPHp6W2",
+          "hashedCid": "0x94b1b7db339884f99f4533bd648640dcc2396658607900144fed20df9f1c1e38"
         }
       ],
       "pkps": [

@@ -16,7 +16,7 @@ import * as dotenv from 'dotenv';
 // console.log(configPath)
 // const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));   
 
-const groupId = 7;
+const groupId = 14;
 
 async function main() {
 
