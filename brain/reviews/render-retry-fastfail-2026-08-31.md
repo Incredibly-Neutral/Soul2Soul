@@ -79,6 +79,6 @@ Sequence file alone: `19 passed | 5 skipped | 1 todo`.
   failure, unrelated to this change.
 
 ## Commit / PR
-- Commit hash: (see below)
+- Commit hash: `848e77c`
 - Branch: `fix/render-retry-fastfail`
-- PR: (see below)
+- PR: **#75** — https://github.com/Joera/S2S-monorepo/pull/75 (against `main`, NOT merged)
