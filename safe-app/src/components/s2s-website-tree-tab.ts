@@ -19,16 +19,14 @@
 // `0xe3 0x01 <cid bytes>`, and returns null on any value that decodes to a
 // non-plausible CID (garbage codec / malformed multihash) so the sync degrades
 // to the store root instead of walking an invalid CID.
-import {
-  LitService,
-  renderwithLitActions,
-} from '@s2s/soul2soul-shared';
+import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
 import { store } from '../state/index.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { evmRead } from '@/lib/evm.js';
 import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
 import { decodeRootCid } from '@/lib/contenthash.js';
+import './copy-hash.js';
 import { tableStyles } from '@/styles/table-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
@@ -81,6 +79,9 @@ export class S2SWebsiteTreeTab extends HTMLElement {
   private removedPaths: Set<string> = new Set<string>();
   private unsubscriber: (() => void) | null = null;
   private entryCount = 0;
+  /** The DECODED, actual root CID (CIDv1) of the site tree, shown in the
+   *  footer as a gateway link. Null until the first successful sync. */
+  private rootCid: string | null = null;
 
   constructor() {
     super();
@@ -141,12 +142,12 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     if (publication && protocolInfo?.ensRecords) {
       try {
         const node = ethers.namehash(publication);
-        const onchainHash = await evmRead(
+        const onchainHash: unknown = await evmRead(
           8453,
           protocolInfo.ensRecords,
           RECORDS_CONTRACT_ABI,
           'getText',
-          [node, 'contenthash_wrapped']
+          [node, 'contenthash_wrapped'],
         );
         const decoded = this.decodeRootCid(onchainHash);
         if (decoded) return decoded;
@@ -261,7 +262,9 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     `;
     this.shadowRoot.appendChild(overlay);
 
-    const close = () => overlay.remove();
+    const close = () => {
+      overlay.remove();
+    };
     overlay.querySelector('#reset-cancel-btn')?.addEventListener('click', close);
     overlay.querySelector('#reset-only-btn')?.addEventListener('click', () => {
       close();
@@ -320,10 +323,10 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         false, // preview — a reset is a real write, not a preview
         this.lit,
         signature,
-        import.meta.env.VITE_LIT_USAGE_KEY,
+        import.meta.env.VITE_LIT_USAGE_KEY as string,
         protocolInfo,
         undefined, // notice
-        store.safeInfo?.safeAddress || '',
+        store.safeInfo?.safeAddress ?? '',
         publication,
         contentIds,
         configCid,
@@ -338,8 +341,11 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         // real on-chain failure (e.g. a reverted contenthash_wrapped write) is
         // visible in the console.
         console.error('[website-tree] reset failed:', res);
+        const resetError: unknown = res.error;
         this.error =
-          (res as any)?.error ?? 'Reset failed — the pipeline did not report success.';
+          typeof resetError === 'string'
+            ? resetError
+            : 'Reset failed — the pipeline did not report success.';
         return;
       }
 
@@ -377,9 +383,15 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     try {
       const rootCid = rootOverride ?? (await this.fetchRootCid());
       if (!rootCid) {
-        this.error = 'No site root available. Is the publication name and ENS records module configured?';
+        this.error =
+          'No site root available. Is the publication name and ENS records module configured?';
         return;
       }
+
+      // Retain the prior value on the failure path: store the decoded root CID
+      // as soon as we have it, before the DAG walk, so a walk failure still
+      // shows the actual CID in the footer.
+      this.rootCid = rootCid;
 
       const tree = await this.walkDag(rootCid);
       const paths = this.collectPaths(tree);
@@ -399,11 +411,38 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       this.lastSynced = new Date().toLocaleString();
     } catch (e) {
       console.error('[website-tree] sync failed:', e);
-      this.error = e instanceof Error ? e.message : 'Failed to fetch the website tree from ENS/IPFS.';
+      this.error =
+        e instanceof Error ? e.message : 'Failed to fetch the website tree from ENS/IPFS.';
     } finally {
       this.syncing = false;
       this.render();
     }
+  }
+
+  /** Shorten a CID to `len` leading/trailing chars with an ellipsis, mirroring
+   *  the s2s-storage-tab helper so the footer link looks consistent with the
+   *  rest of the app. Never throws: empty input short-circuits to '-'. */
+  private shortenCid(cid: string, len = 8): string {
+    if (!cid || cid.length <= len * 2) return cid || '-';
+    return `${cid.slice(0, len)}...${cid.slice(-len)}`;
+  }
+
+  private gatewayUrl(cid: string): string {
+    return `https://ipfs.io/ipfs/${cid}`;
+  }
+
+  /** Footer row showing the decoded root CID as an ipfs.io gateway link with a
+   *  copy button (reusing the <copy-hash> web component). Renders nothing when
+   *  no root CID is known yet (initial load / error / reset) — never throws. */
+  private renderRootCidFooter(): string {
+    if (!this.rootCid) return '';
+    return `
+      <div class="cid-footer">
+        <span class="cid-label">Site root CID</span>
+        <a href="${this.gatewayUrl(this.rootCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link" title="Open on IPFS gateway">
+          <copy-hash>${this.shortenCid(this.rootCid)}</copy-hash>
+        </a>
+      </div>`;
   }
 
   private computeStats(): { entries: number; pages: number } {
@@ -467,7 +506,7 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         <span class="tree-icon">🗑️</span>
         <span class="removed-name">${escapeHtml(p)}</span>
         <span class="tag tag-removed">removed</span>
-      </div>`
+      </div>`,
       )
       .join('');
     return `
@@ -700,6 +739,40 @@ export class S2SWebsiteTreeTab extends HTMLElement {
           color: #f87171;
         }
 
+        .cid-footer {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 1.5rem;
+          padding-top: 1rem;
+          border-top: 1px solid var(--gray-700);
+        }
+
+        .cid-label {
+          color: var(--gray-400);
+          font-size: 0.85rem;
+          white-space: nowrap;
+        }
+
+        .gateway-link {
+          text-decoration: none;
+          color: inherit;
+          display: inline-flex;
+          align-items: center;
+        }
+
+        .gateway-link:hover {
+          text-decoration: underline;
+          color: var(--blue-400, #60a5fa);
+        }
+
+        .gateway-link::after {
+          content: "↗";
+          margin-left: 0.25rem;
+          font-size: 0.75rem;
+          opacity: 0.6;
+        }
+
         .modal-overlay {
           position: fixed;
           inset: 0;
@@ -756,6 +829,8 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       ${this.error ? `<div class="error">⚠️ ${escapeHtml(this.error)}</div>` : ''}
 
       ${body}
+
+      ${this.renderRootCidFooter()}
     `;
 
     this.attachEventListeners();
