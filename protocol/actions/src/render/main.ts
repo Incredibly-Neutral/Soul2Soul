@@ -6,14 +6,12 @@ import {
   SingleInput,
   SingleData,
 } from '@s2s/soul2soul-shared/lit-actions';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { catFile, uploadFile } from '../libs/ipfs.factory';
+import { uploadFile } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
-import { evmRead, evmWrite, toHexString } from '../libs/evm';
+import { evmRead } from '../libs/evm';
 import { fetchById } from '../libs/module.factory';
-import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
 
 import { getConfig } from './config.ctrl';
 import {
@@ -22,7 +20,6 @@ import {
   mergeDecrypted,
   pathsForCollections,
   shouldWriteBackCache,
-  type CollectionsDrift,
 } from './data.ctrlr';
 import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
@@ -65,126 +62,12 @@ export async function isRevokedByDealState(
   return !dealActive;
 }
 
-// ENS records contract ABI (getText/setText) — local mirror of update/main.ts;
-// no shared ABI import. Used to read the per-publication content archive
+// ENS records contract ABI (getText only) — local mirror of update/main.ts;
+// no shared ABI import. Used to READ the per-publication content archive
 // pointer (`content_cache_<publication>` text record on the publication node).
-const RECORDS_CONTRACT_ABI = [
-  'function getText(bytes32 node, string key) view returns (string)',
-  'function setText(bytes32 node, string key, string value) nonpayable',
-];
-
-/**
- * T4 write-back: close the archive drift observed by the read path.
- *
- * I/O-bound and thin by design — all decisions are pure (reconcile in
- * archive.factory, shouldWriteBackCache in data.ctrlr). The caller gates on
- * `shouldWriteBackCache` (maintainCache === true && !preview && drift > 0) and
- * wraps this in try/catch: a failure anywhere here (cat, parse, pin, evmWrite)
- * must never fail the render — the cache is a performance optimization,
- * getDeals is the correctness oracle.
- *
- * Flow (per the T4 contract):
- *   a. archiveCid is already read by the T3 read path above (getText
- *      'content_cache_<publication>'); an EMPTY pointer means the cache has
- *      NEVER been bootstrapped — the CURRENT archive is treated as `null` and
- *      the first snapshot is SEEDED from mergeArchive(null, deals, refreshed)
- *      (the bootstrap drift from the no-archive read path). Otherwise the
- *      warm path cats + parses the current archive.
- *   b. reconcile against the same deals the read path used (reused — no extra
- *      getDeals RPC in-session). With a null (seed) archive this classifies
- *      every dealt genesis as a MISS (needsFetch = all deals).
- *   c. if needsFetch non-empty (drift > 0): merge the freshly-fetched full
- *      items into the archive, serialize, uploadFile → newCid.
- *   d. evmWrite setText with confirm=true and a revert check — the pointer
- *      update is awaited to a mined receipt and a REVERTED tx (status === 0)
- *      THROWS, so a dropped/reverted pointer update is never silently
- *      swallowed. Mirrors the update action's contenthash write semantics.
- *   e. if drift === 0: no write — steady state stays read-only.
- *
- *   The caller (main.ts) gates on shouldWriteBackCache and wraps this in
- *   try/catch, so a failure/throw here never fails the render.
- */
-async function writeBackArchiveCache(opts: {
-  archiveCid: string;
-  publication: string;
-  publicationModule: string;
-  protocolInfo: any;
-  gateway?: string;
-  rpcs?: { L1?: string[]; L2?: string[] };
-  drift: CollectionsDrift;
-  trace: any[];
-}): Promise<void> {
-  const { archiveCid, publication, publicationModule, protocolInfo, gateway, rpcs, drift, trace } =
-    opts;
-
-  // b. Read the current archive fresh (self-contained), parse, and reconcile
-  // against the same deals the read path used (reused — no extra getDeals RPC
-  // in-session; the freshness oracle is stable within one render).
-  // BOOTSTRAP: an empty pointer means the cache has never been seeded — treat
-  // the current archive as `null` (mergeArchive/reconcile both accept that) so
-  // the first snapshot is seeded from the bootstrap drift. The warm path
-  // (non-empty archiveCid) is untouched, byte-for-byte.
-  const archive: null | ReturnType<typeof parseArchive> = archiveCid
-    ? parseArchive(await catFile(gateway!, archiveCid))
-    : null;
-  const { needsFetch } = reconcile(drift.deals, archive);
-  trace.push({ cache: 'writeback', stage: 'reconcile', needsFetch: needsFetch.length });
-
-  // e. Steady state (drift === 0) performs zero writes — read-only.
-  if (needsFetch.length === 0) {
-    trace.push({ cache: 'writeback', stage: 'steady-state', skipped: true, reason: 'no drift to merge' });
-    return;
-  }
-
-  // c. Merge the freshly-fetched FULL items (tracked by the read path) into
-  // the archive, serialize, and pin via uploadFile. Encrypted items contribute
-  // ciphertext only — exactly as the archive lib handles.
-  const refreshed = new Map<string, S2SContentItem>();
-  for (const entry of needsFetch) {
-    const item = drift.fetchedItems.get(entry.genesis);
-    if (item) refreshed.set(entry.genesis, item);
-  }
-
-  // N1 (reviewer): if the fresh reconcile surfaced entries the read path never
-  // fetched (e.g. the archive/pointer changed between read and write-back),
-  // `refreshed` can be empty — merging nothing would still pin + fire a
-  // pointless setText tx that burns gas. The archive snapshot would be
-  // unchanged anyway, so skip the write entirely (zero writes).
-  if (refreshed.size === 0) {
-    trace.push({ cache: 'writeback', stage: 'merge', skipped: true, reason: 'reconcile surfaced nothing fetchable', refreshedSize: refreshed.size });
-    return;
-  }
-
-  const next = mergeArchive(archive, drift.deals, refreshed);
-  const newCid = await uploadFile(gateway!, serialize(next));
-
-  // d. RELIABLE + OBSERVABLE pointer update: confirm=true → await the mined
-  // receipt, and detect status === 0 (revert). The cache is DEAD when the
-  // pointer update is silently dropped — so a reverted/failed write must not be
-  // swallowed. Throwing surfaces a clear error; the caller's try/catch around
-  // writeBackArchiveCache keeps the render unaffected (cache is best-effort).
-  // Mirrors the update action's contenthash_wrapped write (parse + confirm +
-  // revert-check).
-  const node = ethers.utils.namehash(publication);
-  const result = await evmWrite(
-    'L2',
-    protocolInfo.pkp,
-    protocolInfo.ensRecords,
-    RECORDS_CONTRACT_ABI,
-    'setText',
-    [node, `content_cache_${publication}`, toHexString(newCid)],
-    true,
-    rpcs?.L2?.[0],
-  );
-  trace.push({ cache: 'writeback', stage: 'setText', key: `content_cache_${publication}`, success: result?.success, hash: result?.hash, error: result?.error });
-  trace.push(JSON.stringify(result));
-  if (!result?.success) {
-    throw new Error(
-      `content_cache_${publication} pointer write failed: ${result?.error ?? 'unknown error'}` +
-        (result?.hash ? ` (hash ${result.hash})` : ''),
-    );
-  }
-}
+// The render only reads; the dedicated maintain-cache action owns the pointer
+// write (setText), so setText is intentionally not included here.
+const RECORDS_CONTRACT_ABI = ['function getText(bytes32 node, string key) view returns (string)'];
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
@@ -449,12 +332,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         const htmlCid = await uploadFile(gateway!, html!);
         job.html = htmlCid;
 
-        // T4: drift-gated, fire-and-forget archive write-back. Only the
-        // designated last parallel job (maintainCache === true) ever writes,
-        // and never for preview. Best-effort: a failure anywhere in the
-        // write-back (cat, parse, pin, evmWrite) is caught and must NOT fail
-        // the render — the result is identical whether or not the cache write
-        // succeeded. Steady state (no drift) performs zero writes.
+        // Cache-drift signal: compute whether the maintain-cache action should
+        // fire and surface it in the success envelope. The orchestrator uses
+        // this to launch the dedicated maintain-cache action (PR #69) in its
+        // own fresh session — the render no longer writes the pointer itself.
         const shouldFire = shouldWriteBackCache(maintainCache, preview, drift);
         maintainCachePending = shouldFire;
         trace.push({
@@ -464,24 +345,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
           drift: drift ? 'present' : 'null',
           fire: shouldFire,
         });
-        if (shouldFire) {
-          try {
-            await writeBackArchiveCache({
-              archiveCid,
-              publication,
-              publicationModule,
-              protocolInfo,
-              gateway,
-              rpcs,
-              drift,
-              trace,
-            });
-          } catch (e) {
-            console.log(
-              `archive write-back failed (best-effort, render unaffected): ${e instanceof Error ? e.message : String(e)}`,
-            );
-          }
-        }
       }
     } else {
       // B1 (reviewer): a revoked render is a SUCCESSFUL-but-revoked result,
