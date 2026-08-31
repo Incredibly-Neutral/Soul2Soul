@@ -38,8 +38,65 @@ const NETWORK_CONFIG: Record<string, { chainId: number; name: string }> = {
 const READ_TIMEOUT_MS = 8000;
 
 // ---------------------------------------------------------------------------
-// Provider setup
+// Receipt-wait retry policy (WRITE-CONFIRMATION path only).
+//
+// ethers v5's txResponse.wait() -> waitForTransaction -> poll() already retries
+// with backoff while the receipt is still null (pending/indexing), but on a
+// transient RPC transport error (SERVER_ERROR / 'missing response' / network —
+// @ethersproject/web index.js:395-399) it REJECTS IMMEDIATELY with no retry.
+// The evm-update write path has a single RPC URL and no retry, so one DRPC
+// load-balancer hiccup during the receipt wait fails the whole write even
+// though the tx is legitimately still indexing.
+//
+// So we poll getTransactionReceipt ourselves with a bounded retry-with-backoff
+// loop that treats BOTH a null receipt (still indexing) AND a transient
+// transport error as "not ready yet": sleep + exponential backoff (250ms floor
+// growing to a ~10s ceiling, matching ethers' own scaling) up to a bounded total
+// budget before giving up. We only fail hard once that budget is exhausted — or
+// later when the mined receipt confirms status === 0 (reverted).
 // ---------------------------------------------------------------------------
+const RECEIPT_POLL_INITIAL_MS = 250;   // floor — matches ethers' own poll start
+const RECEIPT_POLL_MAX_MS = 10_000;    // ceiling — in line with ethers' growth
+const RECEIPT_RETRY_BUDGET_MS = 90_000; // ~90s total budget before we give up
+
+const waitForReceipt = async (provider: any, txHash: string): Promise<any> => {
+    const start = Date.now();
+    const deadline = start + RECEIPT_RETRY_BUDGET_MS;
+    let delay = RECEIPT_POLL_INITIAL_MS;
+
+    for (let attempt = 0; ; attempt++) {
+        let receipt: any = null;
+        try {
+            receipt = await provider.getTransactionReceipt(txHash);
+        } catch (err) {
+            // Transient RPC transport error — NOT a failure. The tx may be
+            // legitimately still indexing (or already mined) while the RPC
+            // hiccups; ethers v5's wait() would reject immediately here. Log
+            // and retry within the bounded budget instead.
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(
+                `getTransactionReceipt transport error (attempt ${attempt}): ${msg} — retrying with backoff`,
+            );
+        }
+
+        // A mined receipt (non-null with a block number) means the wait is over.
+        if (receipt && receipt.blockNumber !== undefined && receipt.blockNumber !== null) {
+            return receipt;
+        }
+
+        // Not ready yet (null or still indexing) or we hit a transient error;
+        // give up only once the bounded budget is exhausted.
+        if (Date.now() >= deadline) {
+            throw new Error(
+                `receipt for ${txHash} not confirmed within ${RECEIPT_RETRY_BUDGET_MS}ms ` +
+                    `(last receipt: ${receipt ? 'still indexing' : 'null'})`,
+            );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, RECEIPT_POLL_MAX_MS);
+    }
+};
 
 const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: string) => {
 
@@ -108,7 +165,10 @@ export const evmWrite = async (
 
         if (confirm) {
             console.log("Waiting for confirmation...");
-            const receipt = await txResponse.wait(1);
+            // Retry-with-backoff receipt polling (see waitForReceipt)
+            // instead of the single-shot ethers wait(), which rejects
+            // immediately on a transient RPC transport error.
+            const receipt = await waitForReceipt(provider, txResponse.hash);
             console.log("Transaction confirmed! Block:", receipt.blockNumber);
             // A mined-but-REVERTED tx (receipt.status === 0) is a FAILURE: the
             // write did not land on-chain even though a receipt exists. Report
