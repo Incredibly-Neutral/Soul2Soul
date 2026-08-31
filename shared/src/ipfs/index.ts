@@ -3,13 +3,15 @@ export class S2SIPFSMethods {
   private pinataJWT: string;
   private pinataGateway: string;
 
-  // Kubo MFS API timeouts
+  // Kubo MFS API timeouts — cp/pinAdd move content into the remote kubo node
+  // (cp-root copies a whole tree) and need a realistic bound; metadata ops stay
+  // at 5s.
   static readonly MFS_TIMEOUTS = {
     mkdir: 5_000,
     stat: 5_000,
     ls: 5_000,
-    cp: 10_000,
-    pinAdd: 10_000,
+    cp: 60_000,
+    pinAdd: 60_000,
     rm: 5_000,
   };
 

@@ -22,13 +22,18 @@ const RECORDS_CONTRACT_ABI = [
   'function setText(bytes32 node, string key, string value) nonpayable',
 ];
 
+// MFS ops that move content INTO the remote data_gateway Kubo node (cp-root
+// copies the whole previous tree; per-file/assets cp and pin-add fetch and
+// persist blocks) legitimately take far longer than metadata ops against a
+// remote node. 10s was aborting deterministic cp-root runs with a bare
+// AbortError; 60s is the realistic bound for a remote gateway.
 const TIMEOUTS = {
   mkdir: 5_000,
-  cpRoot: 10_000,
-  cpFile: 10_000,
+  cpRoot: 60_000,
+  cpFile: 60_000,
   stat: 5_000,
   rm: 5_000,
-  pinAdd: 10_000,
+  pinAdd: 60_000,
   pinLs: 5_000,
 };
 
