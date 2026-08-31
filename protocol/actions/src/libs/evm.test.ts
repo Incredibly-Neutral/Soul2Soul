@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { evmRead, toHexString } from './evm';
+import { evmRead, evmWrite, toHexString } from './evm';
 import { mapWithLimit } from './ens.factory';
 import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
@@ -61,6 +61,201 @@ function withFakeEthers(scenario: () => any) {
 
 const ABI = ['function NAME() view returns (string)'];
 const RPC_URLS = ['https://rpc.example'];
+
+// ============================================================================
+// evmWrite receipt-wait retry (WRITE-CONFIRMATION path only).
+//
+// Regression context (see evm.ts header): the single-shot ethers v5
+// txResponse.wait(1) -> waitForTransaction -> poll() retries with backoff while
+// the receipt is still null (pending/indexing) but REJECTS IMMEDIATELY on a
+// transient RPC transport error (SERVER_ERROR / 'missing response' —
+// @ethersproject/web index.js:395-399). The write path has one RPC URL and no
+// retry, so a single DRPC load-balancer hiccup during the receipt wait failed
+// the whole contenthash_wrapped write. waitForReceipt now polls
+// getTransactionReceipt with bounded retry+backoff, treating BOTH a null
+// receipt AND a transient transport error as 'not ready yet'.
+// ============================================================================
+
+describe('evmWrite receipt-wait retry (confirm:true)', () => {
+  // Writes a fake global `ethers` (the bundle injects it at runtime) plus the
+  // `Lit` global evmWrite touches, driving provider.getTransactionReceipt from
+  // `receiptBehavior(callIndex)` so each test controls the receipt sequence
+  // (throw SERVER_ERROR once / return null / return a mined receipt).
+  const withFakeEthersWrite = (receiptBehavior: (callIndex: number) => any) => {
+    let receiptCalls = 0;
+    const HASH = '0x' + 'ab'.repeat(32);
+
+    class FakeBigNumber {
+      bn: number;
+      constructor(n: any) {
+        this.bn = Number(n);
+      }
+      mul(x: any) {
+        return new FakeBigNumber(this.bn * Number(x));
+      }
+      div(x: any) {
+        return new FakeBigNumber(Math.floor(this.bn / Number(x)));
+      }
+      toString() {
+        return String(this.bn);
+      }
+    }
+
+    class FakeProvider {
+      connection: any;
+      constructor(connection: any) {
+        this.connection = connection;
+      }
+      async getTransactionCount() {
+        return 5;
+      }
+      async estimateGas() {
+        return new FakeBigNumber(60000);
+      }
+      async sendTransaction() {
+        return { hash: HASH };
+      }
+      async getTransactionReceipt() {
+        receiptCalls++;
+        return receiptBehavior(receiptCalls);
+      }
+    }
+
+    class FakeContract {
+      interface = { encodeFunctionData: () => '0xdeadbeef' };
+      constructor(_a: any, _b: any, _p: any) {}
+    }
+
+    class FakeWallet {
+      async signTransaction() {
+        return '0x' + 'cd'.repeat(32);
+      }
+    }
+
+    (globalThis as any).ethers = {
+      providers: { StaticJsonRpcProvider: FakeProvider },
+      Contract: FakeContract,
+      Wallet: FakeWallet,
+      utils: { parseUnits: () => ({ toString: () => '0' }) },
+      BigNumber: { from: (n: any) => new FakeBigNumber(n) },
+    };
+    (globalThis as any).Lit = {
+      Actions: { getPrivateKey: async () => '0x' + '11'.repeat(32) },
+    };
+
+    return { receiptCalls: () => receiptCalls, HASH };
+  };
+
+  const minedReceipt = (blockNumber: number, status: number) => ({
+    blockNumber,
+    status,
+    confirmations: 1,
+    transactionHash: '0x' + 'ab'.repeat(32),
+  });
+
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+    delete (globalThis as any).Lit;
+  });
+
+  it('retries a transient SERVER_ERROR and succeeds on the next poll', async () => {
+    // First getTransactionReceipt throws the exact DRPC transport error that
+    // used to fail the whole write; the second returns a mined receipt.
+    const seq = [
+      new Error(
+        'missing response (requestBody="{...}", url="https://lb.drpc.live/base/<key>", code=SERVER_ERROR, version=web/5.7.1)',
+      ),
+      minedReceipt(123, 1),
+    ];
+    const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      true, // confirm:true — the WRITE-CONFIRMATION path this fix targets
+      'https://lb.drpc.live/base/<key>',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.hash).toBe(HASH);
+    expect(result.receipt.blockNumber).toBe(123);
+    // One failed poll (SERVER_ERROR, retried) + one success = two calls.
+    expect(receiptCalls()).toBe(2);
+  });
+
+  it('treats a null receipt (still indexing) as not-ready and retries until mined', async () => {
+    // Pending/indexing returns null (ethers returns null while not mined); the
+    // second poll returns a mined receipt.
+    const seq = [null, minedReceipt(456, 1)];
+    const { receiptCalls, HASH } = withFakeEthersWrite((i) => seq[i - 1]);
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      true,
+      'https://rpc.example',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.hash).toBe(HASH);
+    expect(result.receipt.blockNumber).toBe(456);
+    expect(receiptCalls()).toBe(2);
+  });
+
+  it('still reports a mined-but-reverted receipt (status 0) as a failure', async () => {
+    // Regression guard: the status === 0 reverted check must keep working on
+    // the now-retried receipt path.
+    const seq = [minedReceipt(789, 0)];
+    const { receiptCalls } = withFakeEthersWrite((i) => seq[i - 1]);
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      true,
+      'https://rpc.example',
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('transaction reverted (status 0)');
+    expect(receiptCalls()).toBe(1);
+  });
+
+  it('does NOT wait when confirm is false (fire-and-forget unchanged)', async () => {
+    // confirm:false must not touch getTransactionReceipt at all.
+    let called = false;
+    const { receiptCalls } = withFakeEthersWrite(() => {
+      called = true;
+      return minedReceipt(1, 1);
+    });
+
+    const result = await evmWrite(
+      'L2',
+      '0x' + '11'.repeat(20),
+      '0x' + '22'.repeat(20),
+      ABI,
+      'setText',
+      ['contenthash_wrapped', '0xabc'],
+      false, // confirm:false — no receipt wait
+      'https://rpc.example',
+    );
+
+    expect(result.success).toBe(true);
+    expect(called).toBe(false);
+    expect(receiptCalls()).toBe(0);
+  });
+});
 
 describe('evmRead fail-fast (single pass, no in-session retry)', () => {
   beforeEach(() => {
