@@ -8,7 +8,8 @@ import {
   type CollectionsDrift,
 } from './data.ctrlr';
 import { catFile } from '../libs/ipfs.factory';
-import { fetchByPublication, getDeals } from '../libs/module.factory';
+import { fetchByPublication, fetchByPublicationDetailed, getDeals } from '../libs/module.factory';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 
 // Mock the I/O boundaries so fetchCollections' archive path can be exercised
 // without a chain/IPFS. The pure helpers above (createPath, sortCollection,
@@ -19,7 +20,12 @@ vi.mock('../libs/ipfs.factory', () => ({
 
 vi.mock('../libs/module.factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/module.factory')>();
-  return { ...actual, getDeals: vi.fn(), fetchByPublication: vi.fn() };
+  return {
+    ...actual,
+    getDeals: vi.fn(),
+    fetchByPublication: vi.fn(),
+    fetchByPublicationDetailed: vi.fn(),
+  };
 });
 
 // ============================================================================
@@ -485,14 +491,50 @@ describe('fetchCollections: archive drift tracking', () => {
     expect(result.drift!.fetchedItems.get('g2')).toEqual(g2Item);
   });
 
-  it('returns drift null when no archive pointer is set (no-archive path)', async () => {
-    (fetchByPublication as any).mockResolvedValue([
-      { id: 'g1', title: 'T', content: 'C', encryption: false },
-    ]);
+  it('bootstrap: no archive pointer → non-null drift (all deals as needsFetch, items keyed by genesis)', async () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const g1Item = mkItem('g1');
+    const g2Item = mkItem('g2');
+    // The no-archive bootstrap path asks the detailed single-pass fetcher for
+    // bodies + the full items + the deal entries; stub it as a clean unit so
+    // the drift constructed from its return is exercised in isolation.
+    (fetchByPublicationDetailed as any).mockResolvedValue({
+      bodies: [mkBody('g1'), mkBody('g2')],
+      items: new Map([
+        ['g1', g1Item],
+        ['g2', g2Item],
+      ]),
+      entries: deals,
+    });
+
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', undefined);
-    expect(result.drift).toBeNull();
-    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1']);
+
+    // bodies built in the same single pass (one detailed call, no second fetch).
+    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1', 'g2']);
+    expect(fetchByPublicationDetailed).toHaveBeenCalledTimes(1);
+    expect(fetchByPublication).not.toHaveBeenCalled();
+
+    // bootstrap drift: non-null, needsFetch = all entries, items keyed by genesis.
+    expect(result.drift).not.toBeNull();
+    expect(result.drift!.deals).toEqual(deals);
+    expect(result.drift!.needsFetch).toEqual(deals);
+    expect(result.drift!.fetchedItems.get('g1')).toEqual(g1Item);
+    expect(result.drift!.fetchedItems.get('g2')).toEqual(g2Item);
+  });
+
+  it('bootstrap drift triggers shouldWriteBackCache for the maintainer (maintainCache && !preview)', () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const bootstrapDrift: CollectionsDrift = {
+      deals,
+      needsFetch: deals,
+      fetchedItems: new Map<string, S2SContentItem>([['g1', mkItem('g1') as S2SContentItem]]),
+    };
+    expect(shouldWriteBackCache(true, false, bootstrapDrift)).toBe(true);
+    // a maintainer whose bootstrap saw NO deals (needsFetch empty) stays read-only
+    expect(
+      shouldWriteBackCache(true, false, { deals: [], needsFetch: [], fetchedItems: new Map() }),
+    ).toBe(false);
   });
 
   it('returns drift null when the archive cat fails (no-archive fallback)', async () => {
