@@ -1,5 +1,6 @@
 import { evmRead } from './evm';
 import { catFile } from './ipfs.factory';
+import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 
 // ── Module ABIs (Base) ────────────────────────────────────────────────────
 // Entry tuple returned by getLatest / getDeals / getOffers.
@@ -178,6 +179,41 @@ export const fetchByPublication = async (
     }),
   );
   return bodies.filter((b): b is any => b != null);
+};
+
+/**
+ * Bootstrap variant of fetchByPublication for the cache-maintainer render's
+ * NO-ARCHIVE path (archive pointer empty — cache never bootstrapped).
+ *
+ * Returns the SAME flat bodies as fetchByPublication (single pass, byte-identical
+ * ordering) but ALSO captures, in that same single cat per entry, the full
+ * canonical S2SContentItem (keyed by genesis) and the deal entries — exactly
+ * what the T4 write-back needs to SEED the first archive snapshot. There is NO
+ * second fetch: build bodies and archive-source items together.
+ *
+ * `fetchByPublication` itself is left untouched (its array-of-bodies return
+ * type is contractual — prep/main.ts reads it).
+ */
+export const fetchByPublicationDetailed = async (
+  publicationModule: string,
+  rpcs?: string[],
+  gateway?: string,
+): Promise<{ bodies: any[]; items: Map<string, S2SContentItem>; entries: Entry[] }> => {
+  const entries = await getDeals(publicationModule, rpcs);
+  const bodies: any[] = [];
+  const items = new Map<string, S2SContentItem>();
+  await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        const item = JSON.parse(await catFile(gateway!, entry.cid));
+        items.set(entry.genesis, item as S2SContentItem);
+        bodies.push(toBody(entry, item));
+      } catch (e) {
+        console.warn(`fetchByPublicationDetailed: skip ${entry.genesis} (${entry.cid})`, e);
+      }
+    }),
+  );
+  return { bodies, items, entries };
 };
 
 export interface Version {

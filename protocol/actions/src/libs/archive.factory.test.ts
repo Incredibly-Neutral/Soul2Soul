@@ -10,6 +10,7 @@ import {
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).
@@ -270,5 +271,44 @@ describe('mergeArchive', () => {
     const merged = mergeArchive(prev, deals, new Map());
     expect(merged.items.g1).toEqual({ cid: 'cid1', item: mkItem('g1') });
     expect(merged.items.g2).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// BOOTSTRAP WRITE-BACK SEED (cache-unbootstrap fix).
+//
+// When the per-publication archive pointer is empty (content_cache_ never
+// written), the write-back must SEED the first snapshot from a null archive:
+//   mergeArchive(null, deals, refreshed) → serialize → parseArchive round-trip.
+// This mirrors what render/main.ts writeBackArchiveCache does for archiveCid=''.
+// ============================================================================
+
+describe('bootstrap write-back seed (archiveCid === "")', () => {
+  it('seeds a parseable, schema-valid archive from mergeArchive(null, deals, refreshed)', () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const refreshed = new Map<string, S2SContentItem>([
+      ['g1', mkItem('g1')],
+      ['g2', mkItem('g2', { encryption: true })],
+    ]);
+
+    // reconcile(deals, null) — the null-archive seed contract — classifies
+    // EVERY deal as a MISS, so the bootstrap drift's needsFetch === all deals.
+    const { fresh, needsFetch } = reconcile(deals, null);
+    expect(fresh.size).toBe(0);
+    expect(needsFetch).toEqual(deals);
+
+    // Seed the first snapshot exactly as the write-back does for archiveCid=''.
+    const next = mergeArchive(null, deals, refreshed);
+    const parsed = parseArchive(serialize(next));
+
+    // Round-trips through serialize/parseArchive as a valid archive.
+    expect(parsed.format).toBe(ARCHIVE_FORMAT);
+    expect(parsed.items.g1).toEqual({ cid: 'cid1', item: mkItem('g1') });
+    expect(parsed.items.g2).toEqual({ cid: 'cid2', item: mkItem('g2', { encryption: true }) });
+
+    // Each stored item still validates against the shared content-item schema.
+    for (const item of [parsed.items.g1.item, parsed.items.g2.item]) {
+      expect(s2sContentItemSchema.safeParse(item).success).toBe(true);
+    }
   });
 });
