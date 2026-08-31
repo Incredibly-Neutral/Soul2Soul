@@ -3,6 +3,8 @@
 // View of the published website tree. Fetches the site root CID from the ENS
 // records contract (`contenthash_wrapped`, INV-6) and walks the IPFS DAG from
 // that root via the Kubo gateway, rendering every entry as a collapsible tree.
+// The footer below the tree shows the per-publication content-cache CID
+// (`content_cache_<publication>`) as a gateway link — not the site root.
 // A sync button re-reads the contract + re-walks the DAG (no page reload) and
 // diffs against the previous snapshot so the publisher can monitor retractions
 // (removed paths) and slug renames (added + removed paths).
@@ -79,9 +81,11 @@ export class S2SWebsiteTreeTab extends HTMLElement {
   private removedPaths: Set<string> = new Set<string>();
   private unsubscriber: (() => void) | null = null;
   private entryCount = 0;
-  /** The DECODED, actual root CID (CIDv1) of the site tree, shown in the
-   *  footer as a gateway link. Null until the first successful sync. */
-  private rootCid: string | null = null;
+  /** The DECODED per-publication content-cache CID (CIDv1) read from the ENS
+   *  records contract (`content_cache_<publication>`), shown in the footer as a
+   *  gateway link. Null until the first successful sync (or if missing or
+   *  malformed on-chain, in which case the footer renders nothing). */
+  private contentCacheCid: string | null = null;
 
   constructor() {
     super();
@@ -157,6 +161,32 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       }
     }
     return store.getRoot();
+  }
+
+  /** Per-publication content-cache CID: re-read `content_cache_<publication>`
+   *  from the ENS records contract (mirrors fetchRootCid's ENS read + decode)
+   *  and decode it to a CIDv1 string. Unlike the site root this never falls
+   *  back to the store — it returns null (never throws) when the value is
+   *  absent or malformed, so the footer simply renders nothing. */
+  private async fetchContentCacheCid(): Promise<string | null> {
+    const publication = store.getRecord('name');
+    const protocolInfo = store.protocolInfo;
+    if (publication && protocolInfo?.ensRecords) {
+      try {
+        const node = ethers.namehash(publication);
+        const onchainHash: unknown = await evmRead(
+          8453,
+          protocolInfo.ensRecords,
+          RECORDS_CONTRACT_ABI,
+          'getText',
+          [node, `content_cache_${publication}`],
+        );
+        return this.decodeRootCid(onchainHash);
+      } catch (e) {
+        console.warn('[website-tree] content-cache CID read failed:', e);
+      }
+    }
+    return null;
   }
 
   /** List the direct children of a DAG node by CID via /api/v0/ls. A file root
@@ -388,10 +418,10 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         return;
       }
 
-      // Retain the prior value on the failure path: store the decoded root CID
-      // as soon as we have it, before the DAG walk, so a walk failure still
-      // shows the actual CID in the footer.
-      this.rootCid = rootCid;
+      // Fetch the per-publication content-cache CID before the DAG walk so the
+      // footer shows it even if the walk later fails. Missing/malformed values
+      // decode to null and the footer simply renders nothing.
+      this.contentCacheCid = await this.fetchContentCacheCid();
 
       const tree = await this.walkDag(rootCid);
       const paths = this.collectPaths(tree);
@@ -431,16 +461,17 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     return `https://ipfs.io/ipfs/${cid}`;
   }
 
-  /** Footer row showing the decoded root CID as an ipfs.io gateway link with a
-   *  copy button (reusing the <copy-hash> web component). Renders nothing when
-   *  no root CID is known yet (initial load / error / reset) — never throws. */
-  private renderRootCidFooter(): string {
-    if (!this.rootCid) return '';
+  /** Footer row showing the decoded per-publication content-cache CID as an
+   *  ipfs.io gateway link with a copy button (reusing the <copy-hash> web
+   *  component). Renders nothing when no content-cache CID is known yet
+   *  (initial load / error / missing record) — never throws. */
+  private renderContentCacheFooter(): string {
+    if (!this.contentCacheCid) return '';
     return `
       <div class="cid-footer">
-        <span class="cid-label">Site root CID</span>
-        <a href="${this.gatewayUrl(this.rootCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link" title="Open on IPFS gateway">
-          <copy-hash>${this.shortenCid(this.rootCid)}</copy-hash>
+        <span class="cid-label">Content cache CID</span>
+        <a href="${this.gatewayUrl(this.contentCacheCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link" title="Open on IPFS gateway">
+          <copy-hash>${this.shortenCid(this.contentCacheCid)}</copy-hash>
         </a>
       </div>`;
   }
@@ -830,7 +861,7 @@ export class S2SWebsiteTreeTab extends HTMLElement {
 
       ${body}
 
-      ${this.renderRootCidFooter()}
+      ${this.renderContentCacheFooter()}
     `;
 
     this.attachEventListeners();
