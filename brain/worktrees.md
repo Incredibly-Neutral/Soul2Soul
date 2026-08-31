@@ -43,3 +43,40 @@ only, not in scope).
 **Secondary (out of scope, do NOT fix):** offers subscription gap — deals tab subscribes only to
 `store.subscribeToDeals`, flows mutating offers alone can leave the offers table stale. Orthogonal to
 the visible bug; excluded per no-scope-expansion.
+
+## 2026-08-31 — bulkRender evm-update saga (PR #47, #65 merged; PR #66 APPROVED, ready to merge)
+
+Debugging `bulkRender` from the safe-app through a chain of failures. Three PRs, in order:
+
+**PR #47 (MERGED)** `fix(safe-app): wire endpoints.rpcs into bulkRender renderwithLitActions` —
+safe-app `s2s-deals-tab.ts` bulkRender was omitting the now-required `endpoints.rpcs` action input
+(`endpoints.rpcs not wired` guard). Fixed by building `rpcs {L1,L2}` from `VITE_DRPC_API_KEY` and
+passing it as the 11th positional arg.
+
+**PR #65 (MERGED)** `fix(actions): surface cp-root abort as a clear timeout — raise MFS cp timeout` —
+`evm-update` was aborting at the `cp root` MFS op with bare `AbortError`. Raised `cpRoot`/`cpFile`/
+`pinAdd` 10s→60s in `protocol/actions/src/update/main.ts` and relabeled the abort as `timed out after
+<ms>ms calling <url>` in `fetchWithTimeout` (`libs/helpers.ts`). NOTE: the running action executes the
+on-chain `lit_action_update` bundle, NOT repo main — the fix only took effect after re-pinning the
+bundle (on-chain is now `QmNizaG…`, the fixed bundle).
+
+**PR #66 (APPROVED-WITH-NOTES, ready to merge)** `fix(actions): retry-with-backoff on contenthash write
+receipt wait` — with the timeout fixed, the remaining failure moved to the write path: `contenthash_wrapped
+write failed: missing response (… code=SERVER_ERROR, version=web/5.7.1)` while the tx was still indexing.
+Root cause: `evm.ts` used ethers v5 `txResponse.wait(1)` -> `waitForTransaction` -> `poll()`, which retries
+on a NULL receipt but rejects IMMEDIATELY on a transient RPC transport error (`SERVER_ERROR`/'missing
+response'); DRPC `lb.drpc.live` throws exactly that during indexing.
+
+- **Worktree:** `~/code/s2s-contenthash-receipt-fix` (branch `feat/fix-contenthash-receipt-wait`, base main `a98c3dd`)
+- **Fix (`protocol/actions/src/libs/evm.ts`, +tests in `evm.test.ts`):** new `waitForReceipt` bounded
+  retry-with-backoff loop (250ms floor → 10s ceiling, 90s total budget) replaces `wait(1)`. Null/
+  still-indexing receipt AND transient transport error both treated as "not ready" → log + retry;
+  hard-fail only on budget exhausted or `status===0` (reverted). Scoped to write-confirmation only
+  (`confirm:true` single caller `update/main.ts:316`); read-side `evmRead` fail-fast and `confirm:false`
+  path untouched.
+- **Gates (implementer-report, tri-signal verified):** protocol tests 157/157, shared build pass.
+- **Commits:** `ea73ccc`.
+- **PR:** https://github.com/Joera/S2S-monorepo/pull/66 (OPEN, MERGEABLE). Independent review
+  APPROVE-WITH-NOTES, 0 blocking (N1 fake-timer backoff test, N2 catch breadth, N3 log lexicon; all
+  cosmetic). **Pending deploy caveat (recorded, out of scope):** must rebuild + re-pin/re-register the
+  `lit_action_update` bundle on-chain for this to take effect in the running app.

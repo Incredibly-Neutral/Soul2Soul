@@ -128,9 +128,13 @@ async function writeBackArchiveCache(opts: {
     ? parseArchive(await catFile(gateway!, archiveCid))
     : null;
   const { needsFetch } = reconcile(drift.deals, archive);
+  trace.push({ cache: 'writeback', stage: 'reconcile', needsFetch: needsFetch.length });
 
   // e. Steady state (drift === 0) performs zero writes — read-only.
-  if (needsFetch.length === 0) return;
+  if (needsFetch.length === 0) {
+    trace.push({ cache: 'writeback', stage: 'steady-state', skipped: true, reason: 'no drift to merge' });
+    return;
+  }
 
   // c. Merge the freshly-fetched FULL items (tracked by the read path) into
   // the archive, serialize, and pin via uploadFile. Encrypted items contribute
@@ -146,7 +150,10 @@ async function writeBackArchiveCache(opts: {
   // `refreshed` can be empty — merging nothing would still pin + fire a
   // pointless setText tx that burns gas. The archive snapshot would be
   // unchanged anyway, so skip the write entirely (zero writes).
-  if (refreshed.size === 0) return;
+  if (refreshed.size === 0) {
+    trace.push({ cache: 'writeback', stage: 'merge', skipped: true, reason: 'reconcile surfaced nothing fetchable', refreshedSize: refreshed.size });
+    return;
+  }
 
   const next = mergeArchive(archive, drift.deals, refreshed);
   const newCid = await uploadFile(gateway!, serialize(next));
@@ -169,6 +176,7 @@ async function writeBackArchiveCache(opts: {
     true,
     rpcs?.L2?.[0],
   );
+  trace.push({ cache: 'writeback', stage: 'setText', key: `content_cache_${publication}`, success: result?.success, hash: result?.hash, error: result?.error });
   trace.push(JSON.stringify(result));
   if (!result?.success) {
     throw new Error(
@@ -235,6 +243,14 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         );
       }
     }
+
+    trace.push({
+      cache: 'pointer',
+      publication,
+      archiveCid: archiveCid || '(empty)',
+      collections: (job.templateConfig.collections || []).length,
+      maintainCache,
+    });
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,
@@ -314,6 +330,15 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       let t2 = Date.now();
       trace.push(`decrypted body: ${((t2 - t0) / 1000).toFixed(3)} seconds`);
 
+      trace.push({
+        cache: 'job',
+        jobId: job.id,
+        template: job.templateConfig?.reference ?? job.templateConfig?.file ?? '(unknown)',
+        collections: (job.templateConfig?.collections || []).length,
+        maintainCache,
+        preview,
+      });
+
       const { collections, drift } = await fetchCollections(
         job.templateConfig,
         publicationModule,
@@ -324,6 +349,14 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
+      trace.push({
+        cache: 'drift',
+        hasDrift: !!drift,
+        deals: drift?.deals?.length,
+        needsFetch: drift?.needsFetch?.length,
+        fetchedItems: drift?.fetchedItems?.size,
+        maintainCache,
+      });
 
       const decryptedCollections: Record<string, any[]> = {};
       for (const key of Object.keys(collections)) {
@@ -418,7 +451,15 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         // write-back (cat, parse, pin, evmWrite) is caught and must NOT fail
         // the render — the result is identical whether or not the cache write
         // succeeded. Steady state (no drift) performs zero writes.
-        if (shouldWriteBackCache(maintainCache, preview, drift)) {
+        const shouldFire = shouldWriteBackCache(maintainCache, preview, drift);
+        trace.push({
+          cache: 'gate',
+          maintainCache,
+          preview,
+          drift: drift ? 'present' : 'null',
+          fire: shouldFire,
+        });
+        if (shouldFire) {
           try {
             await writeBackArchiveCache({
               archiveCid,
