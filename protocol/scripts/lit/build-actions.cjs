@@ -7,6 +7,10 @@ const entries = [
   { in: './protocol/actions/src/render/main.ts', out: './protocol/actions/dist/render/main.js' },
   { in: './protocol/actions/src/update/main.ts', out: './protocol/actions/dist/update/main.js' },
   {
+    in: './protocol/actions/src/maintain-cache/main.ts',
+    out: './protocol/actions/dist/maintain-cache/main.js',
+  },
+  {
     in: './protocol/actions/src/render-dev/main.ts',
     out: './protocol/actions/dist/render-dev/main.js',
   },
