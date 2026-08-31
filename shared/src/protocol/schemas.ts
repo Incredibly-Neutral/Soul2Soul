@@ -14,6 +14,7 @@ export const protocolSchema = z.object({
     prep: z.string(),
     render: z.string(),
     update: z.string(),
+    maintainCache: z.string().optional(),
   }),
 });
 

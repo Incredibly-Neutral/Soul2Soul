@@ -6,6 +6,8 @@ import {
   validateSingleOutput,
   validateEvmUpdateInput,
   validateEvmUpdateOutput,
+  validateMaintainCacheInput,
+  validateMaintainCacheOutput,
 } from './action-io';
 
 // ============================================================================
@@ -298,5 +300,121 @@ describe('validateEvmUpdateOutput', () => {
 
   it('rejects malformed data (missing data.cid)', () => {
     assertFieldNamed(() => validateEvmUpdateOutput(makeMalformedEvmUpdateOutput()), 'cid');
+  });
+});
+
+// ============================================================================
+// Maintain-Cache action I/O (parallel per-publication cache pointer write)
+// ============================================================================
+
+const validMaintainCacheInput = {
+  publication: 'test.soul2soul.eth',
+  signature:
+    '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+  authorSafeAddress: '0x0000000000000000000000000000000000000001',
+  endpoints: {
+    ipfsGateway: 'https://ipfs.transport-union.dev',
+    rpcs: {
+      L1: ['https://lb.drpc.live/ethereum/key'],
+      L2: ['https://lb.drpc.live/base/key'],
+    },
+  },
+};
+
+describe('validateMaintainCacheInput', () => {
+  it('parses a valid maintain-cache input', () => {
+    const result = validateMaintainCacheInput(validMaintainCacheInput);
+    expect(result.publication).toBe('test.soul2soul.eth');
+    expect(result.endpoints.rpcs.L2).toHaveLength(1);
+  });
+
+  it('accepts missing preview (optional)', () => {
+    const result = validateMaintainCacheInput(validMaintainCacheInput);
+    expect(result.preview).toBeUndefined();
+  });
+
+  it('rejects missing publication', () => {
+    const { publication, ...rest } = validMaintainCacheInput;
+    expect(() => validateMaintainCacheInput(rest)).toThrow('publication');
+  });
+
+  it('rejects missing signature', () => {
+    const { signature, ...rest } = validMaintainCacheInput;
+    expect(() => validateMaintainCacheInput(rest)).toThrow('signature');
+  });
+
+  it('rejects missing endpoints.rpcs.L2', () => {
+    const input = {
+      ...validMaintainCacheInput,
+      endpoints: { ipfsGateway: 'x', rpcs: { L1: ['a'], L2: [] } },
+    };
+    expect(() => validateMaintainCacheInput(input)).toThrow('L2');
+  });
+});
+
+describe('validateMaintainCacheOutput', () => {
+  it('parses an ok:true wrote result', () => {
+    const result: any = validateMaintainCacheOutput({
+      ok: true,
+      action: 'maintain-cache',
+      data: { cid: 'bafy...', wrote: true },
+      trace: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.data.cid).toBe('bafy...');
+    expect(result.data.wrote).toBe(true);
+  });
+
+  it('parses a steady-state (wrote:false) result', () => {
+    const result: any = validateMaintainCacheOutput({
+      ok: true,
+      action: 'maintain-cache',
+      data: { cid: '', wrote: false },
+      trace: [],
+    });
+    expect(result.data.wrote).toBe(false);
+  });
+
+  it('rejects an ok:true envelope missing data.cid', () => {
+    expect(() =>
+      validateMaintainCacheOutput({
+        ok: true,
+        action: 'maintain-cache',
+        data: { wrote: true },
+        trace: [],
+      }),
+    ).toThrow('cid');
+  });
+
+  it('parses an ok:false envelope (loud failure)', () => {
+    const result: any = validateMaintainCacheOutput({
+      ok: false,
+      action: 'maintain-cache',
+      error: 'content_cache_test.soul2soul.eth pointer write failed: reverted',
+      trace: [],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('pointer write failed');
+  });
+});
+
+// ============================================================================
+// Single render output — new maintainCache drift signal
+// ============================================================================
+
+describe('validateSingleOutput — maintainCache drift signal', () => {
+  it('accepts data.maintainCache:true (cache drift flagged)', () => {
+    const base: any = validSingleOutput;
+    const result: any = validateSingleOutput({
+      ...base,
+      data: { ...(base as any).data, maintainCache: true },
+    } as any);
+    expect(result.ok).toBe(true);
+    expect(result.data.maintainCache).toBe(true);
+  });
+
+  it('accepts data.maintainCache omitted (backward compatible)', () => {
+    const result: any = validateSingleOutput(validSingleOutput);
+    expect(result.data.maintainCache).toBeUndefined();
   });
 });

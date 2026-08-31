@@ -6,6 +6,7 @@ import { LitService } from '../lit';
 import {
   validateEvmUpdateInput,
   validateEvmUpdateOutput,
+  validateMaintainCacheInput,
   validatePrepInput,
   validatePrepOutput,
   validateSingleInput,
@@ -135,6 +136,9 @@ export const renderwithLitActions = async (
   let activeJobs: any[] = [];
   let allRemove: { path: string; replacedBy?: string }[] = [];
   let primaryPath = '';
+  // True when any successful render flagged pending cache drift (data.
+  // maintainCache === true). Drives the parallel maintain-cache action below.
+  let maintainCachePending = false;
 
   // ── Build endpoints ──────────────────────────────────────────────
   // _rpcs: caller-supplied RPC endpoints (L1 = Ethereum, L2 = Base)
@@ -225,6 +229,12 @@ export const renderwithLitActions = async (
 
     console.log({ 'rendered jobs': successful });
 
+    // Any successful render that surfaced cache drift flags the parallel
+    // maintain-cache action for firing (see the EVM update stage below).
+    maintainCachePending = successful.some(
+      (r: any) => (r.data?.data as any)?.maintainCache === true,
+    );
+
     // Separate active (non-revoked) jobs from revoked jobs.
     // Active jobs carry rendered HTML → copied to MFS by the update action.
     // Revoked jobs carry only a path → their path goes into the remove list
@@ -276,6 +286,61 @@ export const renderwithLitActions = async (
   if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
   if (validated.ok) cid = (validated as any).data.cid;
 
+  // ── Parallel per-publication cache maintenance ─────────────────────────┐
+  // A successful render flagged pending archive drift (data.maintainCache) and
+  // the maintain-cache action is deployed (litActions.maintainCache set). Fire
+  // it in its OWN fresh session so the pointer's setText gets a young provider
+  // + a dedicated 50-request budget — the conditions under which the update
+  // action's setText is provably reliable — instead of the render's tail.
+  //
+  // Run AFTER the update action completes (not truly concurrent) to avoid a PKP
+  // nonce collision: both the update and the maintain-cache write via the SAME
+  // PKP, each drawing the same "pending" nonce from getTransactionCount — two
+  // concurrent broadcasts with the same nonce would drop one. Sequencing keeps
+  // the two writes on consecutive nonces. The render itself is already done;
+  // this only tails the (separate) update call.
+  //
+  // Best-effort WRT the publish result: a failure here is logged LOUDLY (never
+  // swallowed like the old fire-and-forget) but must not fail the already-
+  // successful publish. The render's inline write-back remains the first-
+  // attempt path.
+  let maintainCacheResult: any = null;
+  if (!preview && maintainCachePending && protocolInfo.litActions.maintainCache) {
+    try {
+      const maintainInputs = validateMaintainCacheInput({
+        signature,
+        authorSafeAddress,
+        publication,
+        preview,
+        endpoints,
+      });
+      console.log(
+        `[maintain-cache] firing dedicated action (${protocolInfo.litActions.maintainCache}) after render flagged drift`,
+      );
+      maintainCacheResult = await runAction(
+        preview,
+        lit,
+        protocolInfo.litActions.maintainCache,
+        maintainInputs,
+        litUsageKey,
+      );
+    } catch (err: any) {
+      console.error(`[maintain-cache] dedicated action threw: ${err?.message ?? String(err)}`);
+      maintainCacheResult = { ok: false, error: err?.message ?? String(err) };
+    }
+    // Log loudly, never swallow — the pointer write must be observable, not
+    // silently dropped the way the old fire-and-forget write-back was.
+    console.log(
+      `[maintain-cache] result: ${JSON.stringify({
+        ok: maintainCacheResult?.ok,
+        action: maintainCacheResult?.action,
+        error: maintainCacheResult?.error,
+        wrote: maintainCacheResult?.data?.wrote,
+        cid: maintainCacheResult?.data?.cid,
+      })}`,
+    );
+  }
+
   return {
     success: validated.ok ? true : false,
     cid,
@@ -288,5 +353,8 @@ export const renderwithLitActions = async (
     error: validated.ok
       ? undefined
       : (validated as any)?.error ?? (evmAction as any)?.error ?? 'update action failed',
+    // Result of the dedicated maintain-cache action (null when not fired). Kept
+    // on the envelope so callers/observers can see the cache write outcome.
+    maintainCache: maintainCacheResult,
   };
 };
