@@ -85,14 +85,19 @@ const RECORDS_CONTRACT_ABI = [
  *
  * Flow (per the T4 contract):
  *   a. archiveCid is already read by the T3 read path above (getText
- *      'content_cache_<publication>'); an empty pointer ⇒ no archive to
- *      maintain ⇒ no write.
+ *      'content_cache_<publication>'); an empty pointer is the BOOTSTRAP case
+ *      — there is no archive yet, so the current archive is treated as null and
+ *      the first snapshot is seeded via mergeArchive(null, ...).
  *   b. cat the CURRENT archive fresh, parse, reconcile against the same deals
- *      the read path used (reused — no extra getDeals RPC in-session).
+ *      the read path used (reused — no extra getDeals RPC in-session). For the
+ *      bootstrap case (archiveCid === '') the archive IS null: reconcile nulls
+ *      every deal to needsFetch, seeding the intended all-deals refresh.
  *   c. if needsFetch non-empty (drift > 0): merge the freshly-fetched full
  *      items into the archive, serialize, uploadFile → newCid.
- *   d. evmWrite setText with confirm=false — fire-and-forget (await broadcast,
- *      not receipt). Push the result to trace.
+ *   d. evmWrite setText with confirm=true — await the MINED receipt (mirrors
+ *      the update/main.ts contenthash_wrapped write). A reverted write
+ *      (receipt.status === 0) is surfaced as an error rather than silently
+ *      swallowed; the caller's try/catch keeps the render unaffected.
  *   e. if drift === 0: no write — steady state stays read-only.
  */
 async function writeBackArchiveCache(opts: {
@@ -111,7 +116,13 @@ async function writeBackArchiveCache(opts: {
   // b. Read the current archive fresh (self-contained), parse, and reconcile
   // against the same deals the read path used (reused — no extra getDeals RPC
   // in-session; the freshness oracle is stable within one render).
-  const archive = parseArchive(await catFile(gateway!, archiveCid));
+  //
+  // BOOTSTRAP: `archiveCid === ''` means the pointer was never written (the
+  // dead-on-arrival case) — there is nothing to cat. Treat the current archive
+  // as null instead of parseArchive(catFile(gateway!, '')) (which would throw).
+  // reconcile(deals, null) returns ALL deals as needsFetch — the intended seed
+  // semantics — and mergeArchive(null, ...) below starts the first snapshot.
+  const archive = archiveCid ? parseArchive(await catFile(gateway!, archiveCid)) : null;
   const { needsFetch } = reconcile(drift.deals, archive);
 
   // e. Steady state (drift === 0) performs zero writes — read-only.
@@ -136,8 +147,14 @@ async function writeBackArchiveCache(opts: {
   const next = mergeArchive(archive, drift.deals, refreshed);
   const newCid = await uploadFile(gateway!, serialize(next));
 
-  // d. Fire-and-forget pointer update: confirm=false → await broadcast, not
-  // receipt. Push the result to trace.
+  // d. RELIABLE + OBSERVABLE pointer update (requirement 4): confirm=true →
+  // await the MINED receipt (mirrors the contenthash_wrapped write in
+  // update/main.ts:316). A dropped/reverted pointer update would silently
+  // leave the cache stale again, so a reverted write (evmWrite returns
+  // success:false on receipt.status === 0) is surfaced as a clear error
+  // rather than quietly pushed to trace. Safe: the caller's try/catch around
+  // writeBackArchiveCache (main.ts:397) keeps a write-back failure from
+  // failing the render.
   const node = ethers.utils.namehash(publication);
   const result = await evmWrite(
     'L2',
@@ -146,9 +163,14 @@ async function writeBackArchiveCache(opts: {
     RECORDS_CONTRACT_ABI,
     'setText',
     [node, `content_cache_${publication}`, toHexString(newCid)],
-    false,
+    true,
     rpcs?.L2?.[0],
   );
+  if (result && result.success === false) {
+    throw new Error(
+      `content_cache_${publication} pointer write reverted (status 0): ${result.error ?? 'unknown reason'}`,
+    );
+  }
   trace.push(JSON.stringify(result));
 }
 

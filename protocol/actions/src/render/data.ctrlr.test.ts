@@ -8,7 +8,7 @@ import {
   type CollectionsDrift,
 } from './data.ctrlr';
 import { catFile } from '../libs/ipfs.factory';
-import { fetchByPublication, getDeals } from '../libs/module.factory';
+import { fetchByPublication, fetchByPublicationFull, getDeals } from '../libs/module.factory';
 
 // Mock the I/O boundaries so fetchCollections' archive path can be exercised
 // without a chain/IPFS. The pure helpers above (createPath, sortCollection,
@@ -19,7 +19,12 @@ vi.mock('../libs/ipfs.factory', () => ({
 
 vi.mock('../libs/module.factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/module.factory')>();
-  return { ...actual, getDeals: vi.fn(), fetchByPublication: vi.fn() };
+  return {
+    ...actual,
+    getDeals: vi.fn(),
+    fetchByPublication: vi.fn(),
+    fetchByPublicationFull: vi.fn(),
+  };
 });
 
 // ============================================================================
@@ -485,16 +490,6 @@ describe('fetchCollections: archive drift tracking', () => {
     expect(result.drift!.fetchedItems.get('g2')).toEqual(g2Item);
   });
 
-  it('returns drift null when no archive pointer is set (no-archive path)', async () => {
-    (fetchByPublication as any).mockResolvedValue([
-      { id: 'g1', title: 'T', content: 'C', encryption: false },
-    ]);
-    const tpl = { collections: [{ slug: 'posts' }] } as any;
-    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', undefined);
-    expect(result.drift).toBeNull();
-    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1']);
-  });
-
   it('returns drift null when the archive cat fails (no-archive fallback)', async () => {
     (catFile as any).mockRejectedValue(new Error('gateway down'));
     (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
@@ -504,5 +499,71 @@ describe('fetchCollections: archive drift tracking', () => {
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
     expect(result.drift).toBeNull();
     expect(result.collections.posts).toEqual([fallbackBody]);
+  });
+});
+
+// ============================================================================
+// fetchCollections: cache-bootstrap drift on the no-archive path (the fix).
+//
+// When the content_cache_ pointer is empty (archiveCid falsy), the render runs
+// on the N-cat `fetchByPublicationFull` path. THIS is the dead-on-arrival fix:
+// instead of returning `drift: null`, we capture the full freshly-fetched items
+// + deal entries in the SAME single pass and surface a NON-NULL bootstrap
+// CollectionsDrift (deals = all entries; needsFetch = all entries; fetchedItems
+// keyed by genesis). shouldWriteBackCache(maintainCache, !preview, drift) then
+// fires on the maintainer render, which seeds the first archive snapshot.
+// ============================================================================
+
+describe('fetchCollections: no-archive bootstrap drift (cache bootstrap fix)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('bootstraps a non-null drift from a single no-archive pass (no double fetch)', async () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const g1Item = mkItem('g1');
+    const g2Item = mkItem('g2');
+
+    (fetchByPublicationFull as any).mockResolvedValue({
+      bodies: [
+        { id: 'g1', title: 'T1', content: 'C1', encryption: false },
+        { id: 'g2', title: 'T2', content: 'C2', encryption: false },
+      ],
+      items: new Map([
+        ['g1', g1Item],
+        ['g2', g2Item],
+      ]),
+      entries: deals,
+    });
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', undefined);
+
+    // collections output unchanged (N-cat path)
+    expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1', 'g2']);
+    // bootstrap drift: non-null, needsFetch covers ALL entries, items keyed by genesis
+    expect(result.drift).not.toBeNull();
+    expect(result.drift!.deals).toEqual(deals);
+    expect(result.drift!.needsFetch.map((e) => e.genesis)).toEqual(['g1', 'g2']);
+    expect(result.drift!.fetchedItems.get('g1')).toEqual(g1Item);
+    expect(result.drift!.fetchedItems.get('g2')).toEqual(g2Item);
+    // archive cat NOT attempted (nothing to cat on the no-archive path)
+    expect(catFile).not.toHaveBeenCalled();
+    // the maintainer render gate fires for the bootstrap drift
+    expect(shouldWriteBackCache(true, false, result.drift)).toBe(true);
+  });
+
+  it('bootstrapped drift does NOT fire when maintainCache is false or preview', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (fetchByPublicationFull as any).mockResolvedValue({
+      bodies: [{ id: 'g1', title: 'T', content: 'C', encryption: false }],
+      items: new Map([['g1', mkItem('g1')]]),
+      entries: deals,
+    });
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway');
+    expect(result.drift).not.toBeNull();
+    expect(shouldWriteBackCache(false, false, result.drift)).toBe(false);
+    expect(shouldWriteBackCache(true, true, result.drift)).toBe(false);
   });
 });

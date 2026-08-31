@@ -1,5 +1,11 @@
 import { decrypt } from '../libs/decrypt';
-import { fetchByPublication, getDeals, toBody, type Entry } from '../libs/module.factory';
+import {
+  fetchByPublication,
+  fetchByPublicationFull,
+  getDeals,
+  toBody,
+  type Entry,
+} from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
 import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
@@ -350,7 +356,25 @@ export const fetchCollections = async (
       allDeals = res.bodies;
       drift = res.drift;
     } else {
-      allDeals = await fetchByPublication(publicationModule, rpcs, gateway);
+      // No-archive path (archiveCid falsy — the content_cache_ pointer was
+      // never written, or the template has collections but no cache). Single
+      // pass: `fetchByPublicationFull` returns the flat bodies the pipeline
+      // consumes AND the full canonical items + deal entries in the SAME N
+      // cats (no double fetch).
+      const res = await fetchByPublicationFull(publicationModule, rpcs, gateway);
+      allDeals = res.bodies;
+      // BOOTSTRAP: prime the cache lazily on this maintainer render. There is
+      // no archive to merge into yet, so mark EVERY freshly-fetched entry as
+      // needing to be seeded (mirrors reconcile(deals, null) ⇒ all-deals
+      // needsFetch) and carry all fetched items keyed by genesis. This makes
+      // `shouldWriteBackCache` fire (needsFetch > 0) and causes
+      // writeBackArchiveCache to seed the first snapshot via
+      // mergeArchive(null, deals, refreshed) instead of dead-on-arrival null.
+      drift = {
+        deals: res.entries,
+        needsFetch: res.entries,
+        fetchedItems: res.items,
+      };
     }
     allDeals = allDeals.filter((item) => item != null);
   }

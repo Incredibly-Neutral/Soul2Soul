@@ -10,6 +10,7 @@ import {
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).
@@ -270,5 +271,57 @@ describe('mergeArchive', () => {
     const merged = mergeArchive(prev, deals, new Map());
     expect(merged.items.g1).toEqual({ cid: 'cid1', item: mkItem('g1') });
     expect(merged.items.g2).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// Cache bootstrap: seeding the FIRST archive snapshot (write-back with
+// archiveCid === '').
+//
+// When the content_cache_ pointer is empty (dead-on-arrival), the write-back
+// treats the current archive as null. reconcile(deals, null) nulls EVERY deal
+// to needsFetch (the intended seed semantics), the write-back pulls the full
+// freshly-fetched items into `refreshed`, and mergeArchive(null, deals,
+// refreshed) seeds the first snapshot. This must serialize to a buffer that
+// parseArchive round-trips with the expected genesis → {cid, item} entries,
+// each item validating against the shared content-item schema.
+// ============================================================================
+
+describe("cache bootstrap: seed first archive snapshot (write-back with archiveCid === '')", () => {
+  it('seeds a valid archive from mergeArchive(null, deals, refreshed) that round-trips and validates', () => {
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2'), mkEntry('g3', 'cid3')];
+
+    // The no-archive read path observes a FULL all-deals needsFetch drift
+    // (reconcile against a null archive nulls every deal).
+    const { fresh, needsFetch } = reconcile(deals, null);
+    expect(fresh.size).toBe(0);
+    expect(needsFetch.map((e) => e.genesis)).toEqual(['g1', 'g2', 'g3']);
+
+    // The write-back pulls the FULL freshly-fetched items for those needsFetch
+    // entries (the bootstrap drift's fetchedItems) into `refreshed`.
+    const refreshed = new Map<string, S2SContentItem>([
+      ['g1', mkItem('g1')],
+      ['g2', mkItem('g2', { encryption: true })],
+    ]);
+    // g3 is dealt but not fetched/refreshed → must NOT appear (deal-set floor /
+    // lazy convergence; the N1 guard in the write-back also skips an empty
+    // refresh).
+
+    // Seed the first snapshot from a null previous archive.
+    const next = mergeArchive(null, deals, refreshed);
+
+    // Serialized archive parses back cleanly with the expected genesis entries.
+    const serialized = serialize(next);
+    const parsed = parseArchive(serialized);
+    expect(parsed.format).toBe(ARCHIVE_FORMAT);
+    expect(parsed.items.g1).toEqual({ cid: 'cid1', item: mkItem('g1') });
+    expect(parsed.items.g2).toEqual({ cid: 'cid2', item: mkItem('g2', { encryption: true }) });
+    expect(parsed.items.g3).toBeUndefined();
+
+    // Every stored item validates against the shared content-item schema.
+    expect(Object.keys(parsed.items).length).toBe(2);
+    for (const entry of Object.values(parsed.items)) {
+      expect(s2sContentItemSchema.safeParse(entry.item).success).toBe(true);
+    }
   });
 });
