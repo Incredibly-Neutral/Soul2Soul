@@ -2,8 +2,8 @@
 // Replaces both safe-app/src/lib/config-builder.ts and the old shared S2SConfigBuilder.
 // D1-D4 resolved: no import.meta.env, no hardcoded IPFS_URL, all IPFS through S2SIPFSMethods.
 
-import type { S2SIPFSMethods } from "../ipfs";
-import type { S2SPublicationConfig } from "./types";
+import type { S2SIPFSMethods } from '../ipfs';
+import type { S2SPublicationConfig } from './types';
 
 export interface GitHubFile {
   path: string;
@@ -16,15 +16,12 @@ export interface GitHubFile {
  * Helper: fetch from the GitHub API with the configured token.
  * Used by both ConfigBuilder and AssetsBuilder.
  */
-export async function authenticatedGitHubFetch(
-  url: string,
-  token: string,
-): Promise<Response> {
+export async function authenticatedGitHubFetch(url: string, token: string): Promise<Response> {
   const headers: Record<string, string> = {
-    Accept: "application/vnd.github.v3+json",
+    Accept: 'application/vnd.github.v3+json',
   };
   if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
   }
   const response = await fetch(url, {
     headers,
@@ -41,22 +38,20 @@ export function parseGitHubUrl(githubUrl: string): {
   repo: string;
   branch: string;
 } {
-  const match = githubUrl.match(
-    /github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+))?/,
-  );
+  const match = /github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+))?/.exec(githubUrl);
   if (!match) {
-    throw new Error("Invalid GitHub URL");
+    throw new Error('Invalid GitHub URL');
   }
   return {
     owner: match[1],
     repo: match[2],
-    branch: match[3] || "main",
+    branch: match[3] || 'main',
   };
 }
 
 export class ConfigBuilder {
-  private ipfs: S2SIPFSMethods;
-  private githubToken: string;
+  private readonly ipfs: S2SIPFSMethods;
+  private readonly githubToken: string;
 
   constructor(ipfs: S2SIPFSMethods, githubToken: string) {
     this.ipfs = ipfs;
@@ -80,14 +75,14 @@ export class ConfigBuilder {
     owner: string,
     repo: string,
     branch: string,
-    path: string = "",
+    path = '',
   ): Promise<GitHubFile[]> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
     const response = await authenticatedGitHubFetch(url, this.githubToken);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(
-        `GitHub API error: ${response.status} - ${(data as any).message || response.statusText}`,
+        `GitHub API error: ${response.status} - ${data.message || response.statusText}`,
       );
     }
     const data = await response.json();
@@ -98,21 +93,16 @@ export class ConfigBuilder {
     owner: string,
     repo: string,
     branch: string,
-    path: string = "",
+    path = '',
   ): Promise<GitHubFile[]> {
     const files = await this.getGitHubFiles(owner, repo, branch, path);
     let allFiles: GitHubFile[] = [];
 
     for (const file of files) {
-      if (file.type === "file") {
+      if (file.type === 'file') {
         allFiles.push(file);
-      } else if (file.type === "dir") {
-        const subFiles = await this.getAllFilesRecursive(
-          owner,
-          repo,
-          branch,
-          file.path,
-        );
+      } else if (file.type === 'dir') {
+        const subFiles = await this.getAllFilesRecursive(owner, repo, branch, file.path);
         allFiles = allFiles.concat(subFiles);
       }
     }
@@ -128,17 +118,11 @@ export class ConfigBuilder {
     return await response.text();
   }
 
-  async getLatestCommitSHA(
-    owner: string,
-    repo: string,
-    branch: string,
-  ): Promise<string> {
+  async getLatestCommitSHA(owner: string, repo: string, branch: string): Promise<string> {
     const url = `https://api.github.com/repos/${owner}/${repo}/commits/${branch}`;
     const response = await authenticatedGitHubFetch(url, this.githubToken);
     if (!response.ok) {
-      throw new Error(
-        `Failed to get commit: ${response.statusText}`,
-      );
+      throw new Error(`Failed to get commit: ${response.statusText}`);
     }
     const data = await response.json();
     return data.sha;
@@ -164,7 +148,7 @@ export class ConfigBuilder {
       try {
         config = await this.ipfs.fetchFromKubo(existingConfigCid);
       } catch (error) {
-        console.warn("Could not load existing config, creating new one");
+        console.warn('Could not load existing config, creating new one');
       }
     }
 
@@ -177,24 +161,19 @@ export class ConfigBuilder {
       github_account,
       repo,
       branch,
-      "templates",
+      'templates',
     );
 
     for (const template of templateFiles) {
-      if (template.type !== "file") continue;
+      if (template.type !== 'file') continue;
 
       let content = await this.fetchGitHubFile(template.download_url);
-      content = content.replace(/\n/g, "");
-      content = content.replace(/\\([^\\])/g, "$1");
+      content = content.replace(/\n/g, '');
+      content = content.replace(/\\([^\\])/g, '$1');
 
-      const cid = await this.ipfs.addToKubo(
-        content,
-        template.path.split("/").pop() || "template",
-      );
+      const cid = await this.ipfs.addToKubo(content, template.path.split('/').pop() || 'template');
 
-      const existingIndex = config.templates.findIndex(
-        (t: any) => t.path === template.path,
-      );
+      const existingIndex = config.templates.findIndex((t: any) => t.path === template.path);
 
       if (existingIndex !== -1) {
         config.templates[existingIndex].cid = cid;
@@ -206,18 +185,11 @@ export class ConfigBuilder {
     }
 
     // --- Upload templates DAG ---
-    const templatesCid = await this.ipfs.dagPut(
-      JSON.stringify(config.templates),
-      "templates.json",
-    );
-    console.log("[config-builder] templates dagPut CID:", templatesCid);
+    const templatesCid = await this.ipfs.dagPut(JSON.stringify(config.templates), 'templates.json');
+    console.log('[config-builder] templates dagPut CID:', templatesCid);
 
     // --- Fetch mapping.json at the pinned commit SHA ---
-    const commitSHA = await this.getLatestCommitSHA(
-      github_account,
-      repo,
-      branch,
-    );
+    const commitSHA = await this.getLatestCommitSHA(github_account, repo, branch);
     const mappingUrl = `https://raw.githubusercontent.com/${github_account}/${repo}/${commitSHA}/mapping.json`;
     const mappingContent = await this.fetchGitHubFile(mappingUrl);
     const mapping = JSON.parse(mappingContent);
@@ -233,16 +205,11 @@ export class ConfigBuilder {
       localePaths: mapping.localePaths,
     };
 
-    // --- Upload final config to both Pinata + Kubo ---
+    // --- Upload final config to both Filebase + Kubo ---
     // (Dual-write preserves both CDNs; return the kubo CID for on-chain records)
-    await this.ipfs.uploadToPinata(
-      JSON.stringify(finalConfig),
-      "config.json",
-    );
-    const kuboConfigCid = await this.ipfs.addToKubo(
-      JSON.stringify(finalConfig),
-      "config.json",
-    );
+    // Pinata disabled in favor of Filebase (eth.link recommends Filebase)
+    await this.ipfs.uploadToPinata(JSON.stringify(finalConfig), 'config.json');
+    const kuboConfigCid = await this.ipfs.addToKubo(JSON.stringify(finalConfig), 'config.json');
 
     console.log(`✅ Config uploaded: ${kuboConfigCid}`);
 

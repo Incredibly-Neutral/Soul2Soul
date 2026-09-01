@@ -1,7 +1,8 @@
 export class S2SIPFSMethods {
-  private kuboGateway: string;
-  private pinataJWT: string;
-  private pinataGateway: string;
+  private readonly kuboGateway: string;
+  private readonly pinataJWT: string;
+  private readonly pinataGateway: string;
+  private filebaseToken: string;
 
   // Kubo MFS API timeouts — cp/pinAdd move content into the remote kubo node
   // (cp-root copies a whole tree) and need a realistic bound; metadata ops stay
@@ -15,10 +16,21 @@ export class S2SIPFSMethods {
     rm: 5_000,
   };
 
-  constructor(kuboGateway: string, pinataJWT: string, pinataGateway: string) {
+  constructor(
+    kuboGateway: string,
+    pinataJWT: string,
+    pinataGateway: string,
+    filebaseToken?: string,
+  ) {
     this.kuboGateway = kuboGateway;
     this.pinataJWT = pinataJWT;
     this.pinataGateway = pinataGateway;
+    this.filebaseToken = filebaseToken || '';
+  }
+
+  /** Set the Filebase access token after construction (e.g. from env vars). */
+  setFilebaseToken(token: string) {
+    this.filebaseToken = token;
   }
 
   /** Accessor so builders that hold only this.ipfs can read the gateway. */
@@ -130,10 +142,42 @@ export class S2SIPFSMethods {
   }
 
   // =========================================================================
-  // Pinata
+  // Upload to Filebase (was Pinata — disabled in favor of Filebase per eth.link recommendation)
+  // Filebase RPC endpoint: POST https://rpc.filebase.io/api/v0/add (Kubo-compatible)
+  // Auth: Authorization: Bearer <access-token>
   // =========================================================================
 
   async uploadToPinata(content: string | Blob, filename: string): Promise<string> {
+    const formData = new FormData();
+
+    if (typeof content === 'string') {
+      formData.append('file', new Blob([content]), filename);
+    } else {
+      formData.append('file', content, filename);
+    }
+
+    // Filebase RPC: direct upload via /api/v0/add
+    const response = await fetch(`https://rpc.filebase.io/api/v0/add`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.filebaseToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Filebase upload failed: ${response.status} ${response.statusText} - ${errorText}`,
+      );
+    }
+
+    const data = await response.json();
+    return data.Hash;
+  }
+
+  /* ── Pinata uploadToPinata (disabled — eth.link recommends Filebase) ──
+  async uploadToPinata_pinata(content: string | Blob, filename: string): Promise<string> {
     const formData = new FormData();
 
     if (typeof content === 'string') {
@@ -157,6 +201,7 @@ export class S2SIPFSMethods {
     const data = await response.json();
     return data.IpfsHash;
   }
+  */
 
   // =========================================================================
   // MFS (Mutable File System) helpers
