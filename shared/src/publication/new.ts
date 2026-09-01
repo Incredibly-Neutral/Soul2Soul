@@ -1,10 +1,10 @@
-import type { S2SPublication } from "./types";
-import type { TxRunner } from "./tx-runner";
-import type { S2SProtocolInfo } from "../protocol";
-import type { S2SIPFSMethods } from "../ipfs";
-import { safeAbi, ensSubdomainRegistryAbi } from "../contracts";
-import { AssetsBuilder } from "./assets-builder";
-import { ConfigBuilder, parseGitHubUrl } from "./config-builder";
+import type { S2SPublication } from './types';
+import type { TxRunner } from './tx-runner';
+import type { S2SProtocolInfo } from '../protocol';
+import type { S2SIPFSMethods } from '../ipfs';
+import { safeAbi, ensSubdomainRegistryAbi } from '../contracts';
+import { AssetsBuilder } from './assets-builder';
+import { ConfigBuilder, parseGitHubUrl } from './config-builder';
 
 // =============================================================================
 // Protocol-generated ABIs injected because they live outside shared's rootDir.
@@ -36,8 +36,8 @@ export async function newPublicationSafe(
   deps: NewPublicationDeps,
   publication: S2SPublication,
 ): Promise<void> {
-  const salt = "publication_safe_" + publication.name;
-  const subdomain: string = publication.name.split(".")[0] || "";
+  const salt = 'publication_safe_' + publication.name;
+  const subdomain: string = publication.name.split('.')[0] || '';
 
   const signer = await deps.l1.updateSigner(deps.privateKey);
   await deps.l2.updateSigner(deps.privateKey);
@@ -49,12 +49,12 @@ export async function newPublicationSafe(
 
   // FIX: recordsModule was incorrectly destructured as [recordsModule] in the
   // original code, slicing the first character off the returned address string.
-  const [registration, recordsModule] = (await Promise.all([
+  const [registration, recordsModule] = await Promise.all([
     // L1: ENS registration
     deps.l1.genericTx(
       deps.protocolInfo.ensRegistry as `0x${string}`,
       JSON.stringify(ensSubdomainRegistryAbi),
-      "registerSubdomain",
+      'registerSubdomain',
       [subdomain, publicationAddress1],
       false,
     ),
@@ -63,13 +63,13 @@ export async function newPublicationSafe(
     deps.l2.genericTx(
       deps.protocolInfo.recordsFactory as `0x${string}`,
       JSON.stringify(deps.recordsModuleFactoryAbi),
-      "createModule",
+      'createModule',
       [publicationAddress2],
       true,
     ),
-  ])) as [string, string];
+  ]);
 
-  console.log("ENS registered:", registration);
+  console.log('ENS registered:', registration);
 
   // Safe on L2 is now deployed — reconnect before sending FROM it
   await deps.l1.connectToExistingSafe(publicationAddress1);
@@ -78,25 +78,25 @@ export async function newPublicationSafe(
   const publicationModule = await deps.l2.genericTx(
     deps.protocolInfo.publicationFactory as `0x${string}`,
     JSON.stringify(deps.publicationModuleFactoryAbi),
-    "createModule",
+    'createModule',
     [publicationAddress2, publication.authors, []],
     true,
   );
 
-  console.log("Created modules:", recordsModule, publicationModule);
+  console.log('Created modules:', recordsModule, publicationModule);
 
   await deps.l2.batchGenericTx([
     {
       address: publicationAddress2,
       abi: JSON.stringify(safeAbi),
-      method: "enableModule",
+      method: 'enableModule',
       args: [recordsModule],
       deploy: false,
     },
     {
       address: publicationAddress2,
       abi: JSON.stringify(safeAbi),
-      method: "enableModule",
+      method: 'enableModule',
       args: [publicationModule],
       deploy: false,
     },
@@ -146,7 +146,7 @@ export async function newPublicationSafe(
   // =========================================================================
   const feedAddress = await deps.createFeed(
     publication.name,
-    "Publication Feed for Soul2Soul Protocol",
+    'Publication Feed for Soul2Soul Protocol',
     publicationAddress2,
   );
 
@@ -154,11 +154,11 @@ export async function newPublicationSafe(
 
   await setRecordsWithRetry(deps.l2, recordsModule, deps.recordsModuleAbi, publication);
 
-  if (publication.owners!.length > 0) {
-    const addOwnerCalls = publication.owners!.map((owner: string) => ({
+  if (publication.owners.length > 0) {
+    const addOwnerCalls = publication.owners.map((owner: string) => ({
       address: publicationAddress2,
       abi: JSON.stringify(safeAbi),
-      method: "addOwnerWithThreshold",
+      method: 'addOwnerWithThreshold',
       args: [owner, 1],
     }));
 
@@ -170,7 +170,7 @@ export async function newPublicationSafe(
     await removeInitialSigner(deps.l2, publicationAddress2, signer, publication.owners || []);
   }
 
-  console.log("FINISHED: ", publicationAddress1);
+  console.log('FINISHED: ', publicationAddress1);
 }
 
 // =============================================================================
@@ -192,13 +192,13 @@ export async function verifyModulesEnabled(
     let retries = 0;
 
     while (!isEnabled && retries < 20) {
-      console.log("checking for module:", module);
+      console.log('checking for module:', module);
       retries++;
       try {
         isEnabled = await runner.genericRead(
           publicationAddress as `0x${string}`,
           JSON.stringify(safeAbi),
-          "isModuleEnabled",
+          'isModuleEnabled',
           [module],
         );
 
@@ -215,12 +215,8 @@ export async function verifyModulesEnabled(
     }
 
     if (!isEnabled) {
-      console.error(
-        `❌ Module ${module} still not verified after ${retries} retries`,
-      );
-      console.log(
-        "Continuing anyway - modules are enabled but state not readable yet",
-      );
+      console.error(`❌ Module ${module} still not verified after ${retries} retries`);
+      console.log('Continuing anyway - modules are enabled but state not readable yet');
     }
   }
 
@@ -237,7 +233,7 @@ export async function setRecordsWithRetry(
   let success = false;
   let attempts = 0;
 
-  console.log("recordsmodule", recordsModule);
+  console.log('recordsmodule', recordsModule);
 
   while (!success && attempts < 3) {
     attempts++;
@@ -247,9 +243,9 @@ export async function setRecordsWithRetry(
       const setRecords = await runner.genericTx(
         recordsModule as `0x${string}`,
         JSON.stringify(recordsModuleAbi),
-        "setRecords",
+        'setRecords',
         [
-          ["name", "config", "repo", "branch", "feed"],
+          ['name', 'config', 'repo', 'branch', 'feed'],
           [
             publication.name,
             publication.configCid,
@@ -261,7 +257,7 @@ export async function setRecordsWithRetry(
         false,
       );
 
-      console.log("✅ setRecords succeeded:", setRecords);
+      console.log('✅ setRecords succeeded:', setRecords);
       success = true;
     } catch (error: any) {
       console.log(`❌ Attempt ${attempts} failed:`, error.message);
@@ -281,7 +277,7 @@ export async function verifyOwnersAdded(
 ) {
   if (owners.length === 0) return;
 
-  console.log("Verifying owners added...");
+  console.log('Verifying owners added...');
   let isOwner = false;
   let retries = 0;
 
@@ -291,7 +287,7 @@ export async function verifyOwnersAdded(
       isOwner = await runner.genericRead(
         publicationAddress as `0x${string}`,
         JSON.stringify(safeAbi),
-        "isOwner",
+        'isOwner',
         [owners[0]],
       );
 
@@ -320,11 +316,11 @@ export async function removeInitialSigner(
   const currentOwners = await runner.genericRead(
     publicationAddress as `0x${string}`,
     JSON.stringify(safeAbi),
-    "getOwners",
+    'getOwners',
     [],
   );
 
-  console.log("Current owners:", currentOwners);
+  console.log('Current owners:', currentOwners);
 
   const ownerToRemove = signer;
   const ownerIndex = currentOwners.findIndex(
@@ -332,16 +328,16 @@ export async function removeInitialSigner(
   );
 
   if (ownerIndex === -1) {
-    console.log("Owner already removed or not found");
+    console.log('Owner already removed or not found');
   } else {
     const prevOwner =
       ownerIndex === 0
-        ? "0x0000000000000000000000000000000000000001"
+        ? '0x0000000000000000000000000000000000000001'
         : currentOwners[ownerIndex - 1];
 
-    console.log("Removing owner:", ownerToRemove);
-    console.log("prevOwner:", prevOwner);
-    console.log("New threshold:", owners.length);
+    console.log('Removing owner:', ownerToRemove);
+    console.log('prevOwner:', prevOwner);
+    console.log('New threshold:', owners.length);
 
     let removeOwnerSuccess = false;
     let attempts = 0;
@@ -354,12 +350,12 @@ export async function removeInitialSigner(
         const rmOwner = await runner.genericTx(
           publicationAddress as `0x${string}`,
           JSON.stringify(safeAbi),
-          "removeOwner",
+          'removeOwner',
           [prevOwner, ownerToRemove, owners.length.toString()],
           false,
         );
 
-        console.log("✅ removeOwner succeeded:", rmOwner);
+        console.log('✅ removeOwner succeeded:', rmOwner);
         removeOwnerSuccess = true;
       } catch (error: any) {
         console.log(`❌ Attempt ${attempts} failed:`, error.message);

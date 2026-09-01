@@ -193,7 +193,7 @@ export interface S2SRipple {
   reference: string;
   query?: any;
   filters?: any[];
-  trigger_filters?: Array<Record<string, string>>;
+  trigger_filters?: Record<string, string>[];
 }
 
 export interface S2STemplateConfig {
@@ -258,6 +258,7 @@ export interface S2SPublishSecrets {
 
 export type StorageCredential =
   | { kind: 'pinata'; jwt: string }
+  | { kind: 'filebase'; token: string; bucket: string }
   | { kind: 'filecoin-self' } // reuses S2SSignerSecrets.privateKey; no secret of its own
   | { kind: 'filecoin-session'; session: Metered<FilecoinSessionKeyData>; rpcUrl: string }
   | { kind: 'kubo-only' };
