@@ -35,15 +35,18 @@ export class S2SRecordsTab extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles];
+    this.shadowRoot!.adoptedStyleSheets = [
+      typograhyStyles,
+      sectionStyles,
+      tableStyles,
+      buttonStyles,
+    ];
   }
 
   async connectedCallback() {
-     console.count('connect'); 
-    this.unsubscribers.forEach(fn => fn());
-    this.unsubscribers = [
-      store.subscribeToRecords(() => this.render()),
-    ];
+    console.count('connect');
+    this.unsubscribers.forEach((fn) => fn());
+    this.unsubscribers = [store.subscribeToRecords(() => this.render())];
 
     this.render();
 
@@ -56,7 +59,7 @@ export class S2SRecordsTab extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this.unsubscribers.forEach(fn => fn());
+    this.unsubscribers.forEach((fn) => fn());
     this.unsubscribers = [];
   }
 
@@ -66,9 +69,8 @@ export class S2SRecordsTab extends HTMLElement {
     const all: OnChainRecord[] = map ? Object.values(map) : [];
     if (!this.searchTerm) return all;
     const term = this.searchTerm.toLowerCase();
-    return all.filter(r =>
-      r.key.toLowerCase().includes(term) ||
-      r.value.toLowerCase().includes(term)
+    return all.filter(
+      (r) => r.key.toLowerCase().includes(term) || r.value.toLowerCase().includes(term),
     );
   }
 
@@ -83,7 +85,7 @@ export class S2SRecordsTab extends HTMLElement {
           key,
           value: values[index],
           type: this.determineRecordType(key),
-        }))
+        })),
       );
       // Fresh chain read clears changed-state highlights
       this.changedKeys.clear();
@@ -97,7 +99,7 @@ export class S2SRecordsTab extends HTMLElement {
 
   private determineRecordType(key: string): 'metadata' | 'content' {
     const contentKeys = ['ipfs-root', 'content-hash', 'data-uri', 'ipfs', 'hash', 'cid'];
-    return contentKeys.some(ck => key.toLowerCase().includes(ck)) ? 'content' : 'metadata';
+    return contentKeys.some((ck) => key.toLowerCase().includes(ck)) ? 'content' : 'metadata';
   }
 
   private async addRecord(key: string, value: string) {
@@ -106,7 +108,7 @@ export class S2SRecordsTab extends HTMLElement {
       return;
     }
 
-    if (this.filteredRecords.some(r => r.key === key)) {
+    if (this.filteredRecords.some((r) => r.key === key)) {
       this.showNotification('Key already exists', 'error');
       return;
     }
@@ -158,48 +160,47 @@ export class S2SRecordsTab extends HTMLElement {
   }
 
   private async updateConfig() {
-    const existingCid    = await this.safeIntegration.getRecord('config');
-    const repo           = await this.safeIntegration.getRecord('repo');
+    const existingCid = await this.safeIntegration.getRecord('config');
+    const repo = await this.safeIntegration.getRecord('repo');
     const publicationUrl = await this.safeIntegration.getRecord('name');
-    const pInfo          = await this.protocolIntegration.getInfo();
+    const pInfo = await this.protocolIntegration.getInfo();
 
     const ipfs = new S2SIPFSMethods(
       'https://ipfs.transport-union.dev',
       import.meta.env.VITE_PINATA_JWT,
       'https://neutralpress.mypinata.cloud',
+      import.meta.env.VITE_FILEBASE_TOKEN || '',
     );
 
     console.log(import.meta.env.VITE_GITHUB_TOKEN);
-    
-    const assets = new AssetsBuilder(
-      ipfs,
-      import.meta.env.VITE_GITHUB_TOKEN,
-    );
+
+    const assets = new AssetsBuilder(ipfs, import.meta.env.VITE_GITHUB_TOKEN);
 
     const [owner, repoName] = repo.split('/').slice(3);
 
     const { cid: assetsCid } = await assets.buildAssets(
-      owner, repoName, 'main',
+      owner,
+      repoName,
+      'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
     );
 
-    const config = new ConfigBuilder(
-      ipfs,
-      import.meta.env.VITE_GITHUB_TOKEN,
-    );
+    const config = new ConfigBuilder(ipfs, import.meta.env.VITE_GITHUB_TOKEN);
 
     const { cid: configCid, config: publicationConfig } = await config.buildConfig(
-      owner, repoName, 'main',
+      owner,
+      repoName,
+      'main',
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
     );
 
-    console.log("[config] templateCid from builder:", publicationConfig.templateCid);
-    console.log("[config] configCid from builder:", configCid);
+    console.log('[config] templateCid from builder:', publicationConfig.templateCid);
+    console.log('[config] configCid from builder:', configCid);
 
-    console.log("cid from kubo", configCid)
+    console.log('cid from kubo', configCid);
 
     // ── Filecoin (additive, non-blocking) ──────────────────────────────
     // Fetch the built config object from Kubo so we upload the same data
@@ -260,7 +261,12 @@ export class S2SRecordsTab extends HTMLElement {
     try {
       const publicationAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
       const result = await this.storage.uploadJson(data, [publicationAddress], kind);
-      console.log('[filecoin] config uploaded:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
+      console.log(
+        '[filecoin] config uploaded:',
+        result.rootCid,
+        result.pieceCid,
+        kind ? `(${kind})` : '',
+      );
     } catch (err) {
       console.warn('[filecoin] upload failed (non-fatal):', err);
     }
@@ -285,8 +291,17 @@ export class S2SRecordsTab extends HTMLElement {
       console.log('[filecoin] exported tree from Kubo:', rootCid, `(${carBytes.length} bytes)`);
 
       // Upload the CAR to Filecoin
-      const result = await this.storage.uploadTree(carBytes, [publicationAddress].filter(Boolean), kind);
-      console.log('[filecoin] tree uploaded to Filecoin:', result.rootCid, result.pieceCid, kind ? `(${kind})` : '');
+      const result = await this.storage.uploadTree(
+        carBytes,
+        [publicationAddress].filter(Boolean),
+        kind,
+      );
+      console.log(
+        '[filecoin] tree uploaded to Filecoin:',
+        result.rootCid,
+        result.pieceCid,
+        kind ? `(${kind})` : '',
+      );
     } catch (err) {
       console.warn('[filecoin] uploadTree failed (non-fatal):', err);
     }
@@ -333,7 +348,10 @@ export class S2SRecordsTab extends HTMLElement {
     `;
     notification.textContent = message;
     document.body.appendChild(notification);
-    setTimeout(() => document.body.contains(notification) && document.body.removeChild(notification), 5000);
+    setTimeout(
+      () => document.body.contains(notification) && document.body.removeChild(notification),
+      5000,
+    );
   }
 
   private render() {
@@ -341,7 +359,7 @@ export class S2SRecordsTab extends HTMLElement {
     console.count('render');
 
     const records = this.filteredRecords; // ← already an array, null-safe
-    const hasCache = records.length > 0;  // ← was store.getAllRecords().length which threw on null
+    const hasCache = records.length > 0; // ← was store.getAllRecords().length which threw on null
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -399,79 +417,98 @@ export class S2SRecordsTab extends HTMLElement {
         }
       </style>
 
-      ${!hasCache && this.fetching ? `
+      ${
+        !hasCache && this.fetching
+          ? `
         <div class="loading"><p>Loading records...</p></div>
-      ` : `
+      `
+          : `
         <div class="section">
           <div class="list_header">
             <h2 class="section-title">Records (${records.length})</h2>
             ${this.fetching ? `<span class="refreshing-badge">Refreshing…</span>` : ''}
           </div>
 
-          ${records.length > 0 ? `
+          ${
+            records.length > 0
+              ? `
             <div class="table">
               <div class="table-header">Key</div>
               <div class="table-header">Value</div>
               <div class="table-header"></div>
 
-              ${records.map(record => {
-                const isChanged = this.changedKeys.has(record.key);
-                const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
-                const isConfig = record.key === 'config';
-                const isRepo = record.key === 'repo';
-                let valueDisplay: string;
-                if (isConfig && record.value) {
-                  valueDisplay = `<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
-                } else if (isRepo && record.value) {
-                  valueDisplay = `<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
-                } else {
-                  valueDisplay = `<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
-                }
-                return `
+              ${records
+                .map((record) => {
+                  const isChanged = this.changedKeys.has(record.key);
+                  const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
+                  const isConfig = record.key === 'config';
+                  const isRepo = record.key === 'repo';
+                  let valueDisplay: string;
+                  if (isConfig && record.value) {
+                    valueDisplay = `<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                  } else if (isRepo && record.value) {
+                    valueDisplay = `<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+                  } else {
+                    valueDisplay = `<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+                  }
+                  return `
                 <div class="${rowClass}">
                   <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
                     ${record.key}
                   </div>
 
                   <div class="table-cell">
-                    ${this.editingKey === record.key ? `
+                    ${
+                      this.editingKey === record.key
+                        ? `
                       <input
                         type="text"
                         class="record-value-input"
                         value="${record.value}"
                         id="edit-value-${record.key}"
                       />
-                    ` : valueDisplay}
+                    `
+                        : valueDisplay
+                    }
                   </div>
 
                   <div class="table-cell">
-                    ${this.editingKey === record.key ? `
+                    ${
+                      this.editingKey === record.key
+                        ? `
                       <div style="display: flex; gap: 0.5rem;">
                         <button class="button thin" data-action="save" data-key="${record.key}">✓ Save</button>
                         <button class="button button-secondary thin" data-action="cancel">✗ Cancel</button>
                       </div>
-                    ` : `
+                    `
+                        : `
                       <div style="display: flex; gap: 0.5rem;">
                         <button class="button thin" data-action="edit" data-key="${record.key}">✏️ Edit</button>
                         <button class="button button-danger thin" data-action="delete" data-key="${record.key}">🗑️ Delete</button>
                       </div>
-                    `}
+                    `
+                    }
                   </div>
                 </div>
-              `}).join('')}
+              `;
+                })
+                .join('')}
             </div>
-          ` : `
+          `
+              : `
             <div class="empty-state">
               <div>📄</div>
               <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
             </div>
-          `}
+          `
+          }
 
           <button class="button" data-action="update">Update Config</button>
         </div>
 
        
-      `}
+      `
+      }
     `;
 
     if (hasCache || !this.fetching) {
@@ -480,11 +517,11 @@ export class S2SRecordsTab extends HTMLElement {
   }
 
   private attachEventListeners() {
-    this.shadowRoot?.querySelectorAll('[data-action]').forEach(btn => {
+    this.shadowRoot?.querySelectorAll('[data-action]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLButtonElement;
         const action = target.dataset.action;
-        const key    = target.dataset.key;
+        const key = target.dataset.key;
 
         if (action === 'edit' && key) {
           this.startEdit(key);
