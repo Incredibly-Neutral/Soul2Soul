@@ -30,8 +30,44 @@ export async function runAction(
     if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
     return wrapped.response; // ActiedonBarResult<T>
   } else {
-    const code = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`).then(r => r.text());
-    const raw = await lit.executeAction(code, inputs as any, litUsageKey!);
+    // =====================================================================
+    // [RENDER-DEBUG] TEMPORARY diagnostic instrumentation — root-causing the
+    // live 'silent stop after Jobs dispatched with no Lit charge' bug.
+    // LOG-ONLY: no behavior change, no timeout added. Remove after diagnosis
+    // by grepping for [RENDER-DEBUG]. Keys/tokens are NEVER printed — only
+    // presence/length.
+    // =====================================================================
+    const t0 = Date.now();
+    const hasKey = typeof litUsageKey === 'string' && litUsageKey.length > 0;
+    console.log(
+      `[RENDER-DEBUG] runAction live begin cid=${cid} preview=${String(preview)} t0=${String(t0)} litUsageKey=${String(hasKey)}` +
+        (typeof litUsageKey === 'string' ? ` len=${litUsageKey.length}` : ''),
+    );
+
+    let code: string;
+    try {
+      const codeResp = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`);
+      console.log(
+        `[RENDER-DEBUG] cid code fetch done cid=${cid} status=${String(codeResp.status)} elapsed=${String(Date.now() - t0)}ms`,
+      );
+      code = await codeResp.text();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`[RENDER-DEBUG] cid code fetch THREW cid=${cid} elapsed=${String(Date.now() - t0)}ms err=${msg}`);
+      throw err;
+    }
+
+    console.log(`[RENDER-DEBUG] executing lit action for cid=${cid} hasKey=${String(hasKey)}`);
+    const t1 = Date.now();
+    let raw: { response: unknown; logs: string[]; has_error: boolean } | undefined;
+    try {
+      raw = await lit.executeAction(code, inputs, litUsageKey);
+      console.log(`[RENDER-DEBUG] lit executeAction returned cid=${cid} elapsed=${String(Date.now() - t1)}ms`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`[RENDER-DEBUG] lit executeAction THREW cid=${cid} elapsed=${String(Date.now() - t1)}ms err=${msg}`);
+      throw err;
+    }
     // failure is logged in lit service
     return raw.response;      // ActionBarResult<T> — same shape
   }
