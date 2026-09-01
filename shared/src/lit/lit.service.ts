@@ -63,8 +63,8 @@ export class LitService {
         });
         console.log(`[RENDER-DEBUG] lit fetch done endpoint=${endpoint} status=${String(response.status)} elapsed=${String(Date.now() - tFetch)}ms`);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.log(`[RENDER-DEBUG] lit fetch THREW (network) endpoint=${endpoint} elapsed=${String(Date.now() - tFetch)}ms err=${msg}`);
+        const errType = err instanceof Error ? err.name : typeof err;
+        console.log(`[RENDER-DEBUG] lit fetch THREW (network) endpoint=${endpoint} elapsed=${String(Date.now() - tFetch)}ms errType=${errType}`);
         throw err;
       }
 
