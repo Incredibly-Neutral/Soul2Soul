@@ -58,6 +58,7 @@ async function main() {
     process.env.IPFS_URL!,
     process.env.PINATA_JWT!,
     process.env.PINATA_GATEWAY!,
+    process.env.VITE_FILEBASE_TOKEN || '',
   );
   const cid = await ipfs.uploadToPinata(_action, ACTION_NAME);
   console.log(`\nUploaded ${ACTION_NAME} (${_action.length} chars compact)`);

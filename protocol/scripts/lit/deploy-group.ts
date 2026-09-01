@@ -7,77 +7,81 @@ import path from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: '../.env'});
+dotenv.config({ path: '../.env' });
 
 const configPath = path.join(__dirname, 'config.json');
 console.log(configPath);
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
 const groupName = 's2s';
-const ipfs = new S2SIPFSMethods(process.env.IPFS_URL!, process.env.PINATA_JWT!, process.env.PINATA_GATEWAY!);
+const ipfs = new S2SIPFSMethods(
+  process.env.IPFS_URL!,
+  process.env.PINATA_JWT!,
+  process.env.PINATA_GATEWAY!,
+  process.env.VITE_FILEBASE_TOKEN || '',
+);
 
 const ACTION_DEFS = [
-    { name: 'encrypt', source: null as string | null },  // handled separately via encryptAction
-    { name: 'prep',    source: '/home/joera/code/s2s/protocol/actions/dist/prep/main.js' },
-    { name: 'render',  source: '/home/joera/code/s2s/protocol/actions/dist/render/main.js' },
-    { name: 'update',  source: '/home/joera/code/s2s/protocol/actions/dist/update/main.js' }
+  { name: 'encrypt', source: null as string | null }, // handled separately via encryptAction
+  { name: 'prep', source: '/home/joera/code/s2s/protocol/actions/dist/prep/main.js' },
+  { name: 'render', source: '/home/joera/code/s2s/protocol/actions/dist/render/main.js' },
+  { name: 'update', source: '/home/joera/code/s2s/protocol/actions/dist/update/main.js' },
 ];
 
 async function main() {
+  const lit = new LitService({
+    environment: 'prod',
+    accountKey: process.env.LIT_ACCOUNT_KEY!,
+  });
 
-    const lit = new LitService({
-        environment: 'prod',
-        accountKey: process.env.LIT_ACCOUNT_KEY!
-    });
+  const pkpAddress = await lit.createPkp();
 
-    const pkpAddress = await lit.createPkp();
+  const actions = [];
 
-    const actions = [];
+  for (const def of ACTION_DEFS) {
+    const raw = def.source ? fs.readFileSync(def.source, 'utf-8') : encryptAction;
+    const compacted = compactAction(raw);
+    const cid = await lit.getActionCid(compacted);
 
-    for (const def of ACTION_DEFS) {
-        const raw = def.source ? fs.readFileSync(def.source, 'utf-8') : encryptAction;
-        const compacted = compactAction(raw);
-        const cid = await lit.getActionCid(compacted);
+    const pinnedCid = await ipfs.uploadToPinata(compacted, def.name);
+    if (cid !== pinnedCid) console.warn(`CID mismatch for ${def.name}:`, cid, pinnedCid);
 
-        const pinnedCid = await ipfs.uploadToPinata(compacted, def.name);
-        if (cid !== pinnedCid) console.warn(`CID mismatch for ${def.name}:`, cid, pinnedCid);
+    const { hashedCid } = await lit.registerAction(cid, def.name);
 
-        const { hashedCid } = await lit.registerAction(cid, def.name);
+    actions.push({ name: def.name, cid, hashedCid });
+  }
 
-        actions.push({ name: def.name, cid, hashedCid });
-    }
+  const { group_id: groupId } = await lit.createGroup(
+    groupName,
+    '',
+    [pkpAddress],
+    actions.map((a) => a.hashedCid),
+  );
 
-    const { group_id: groupId } = await lit.createGroup(
-        groupName,
-        '',
-        [pkpAddress],
-        actions.map(a => a.hashedCid)
-    );
+  const { usage_api_key } = await lit.createUsageKey({ executeInGroups: [groupId] });
 
-    const { usage_api_key } = await lit.createUsageKey({ executeInGroups: [groupId] });
+  console.log('API', usage_api_key);
 
-    console.log("API", usage_api_key);
+  const groupIndex = config.groups.findIndex((g: any) => g.name === groupName);
 
-    const groupIndex = config.groups.findIndex((g: any) => g.name === groupName);
+  config.groups[groupIndex] = {
+    name: groupName,
+    id: groupId,
+    actions,
+    pkps: [pkpAddress],
+    usage_key: usage_api_key,
+  };
 
-    config.groups[groupIndex] = {
-        name: groupName,
-        id: groupId,
-        actions,
-        pkps: [pkpAddress],
-        usage_key: usage_api_key
-    };
-
-    console.log(config);
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-    console.log("FINISHED");
+  console.log(config);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  console.log('FINISHED');
 }
 
 main()
-    .catch((error) => {
-        console.error(error);
-        process.exitCode = 1;
-    })
-    .finally(() => {
-        process.exit(0);
-    });
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    process.exit(0);
+  });
