@@ -51,11 +51,22 @@ export class LitService {
 
       // return withRetry<T>(
       //     async (retrySignal) => {
-      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      const tFetch = Date.now();
+      // [RENDER-DEBUG] temporary instrumentation around the Lit POST (log-only).
+      console.log(`[RENDER-DEBUG] lit fetch begin endpoint=${endpoint} method=${method}`);
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}${endpoint}`, {
           method,
           headers,
           body: body ? JSON.stringify(body) : undefined,
-      });
+        });
+        console.log(`[RENDER-DEBUG] lit fetch done endpoint=${endpoint} status=${String(response.status)} elapsed=${String(Date.now() - tFetch)}ms`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`[RENDER-DEBUG] lit fetch THREW (network) endpoint=${endpoint} elapsed=${String(Date.now() - tFetch)}ms err=${msg}`);
+        throw err;
+      }
 
       const text = await response.text();
       let data: any;
@@ -258,10 +269,14 @@ export class LitService {
     jsParams: Record<string, unknown> = {},
     key: string | undefined = undefined
   ) {
+    const endpoint = '/lit_action';
+    // [RENDER-DEBUG] temporary instrumentation (log-only).
+    const t0 = Date.now();
+    const beginHasKey = typeof key === 'string' && key.length > 0;
+    console.log(`[RENDER-DEBUG] executeAction POST begin endpoint=${endpoint} hasKey=${String(beginHasKey)}`);
 
-
-    return this.call<{ response: unknown; logs: string[]; has_error: boolean }>(
-      '/lit_action',
+    const result = await this.call<{ response: unknown; logs: string[]; has_error: boolean }>(
+      endpoint,
       {
         method: 'POST',
         body: { code, js_params: jsParams },
@@ -269,6 +284,9 @@ export class LitService {
         retries: 0,
       }
     );
+
+    console.log(`[RENDER-DEBUG] executeAction done endpoint=${endpoint} elapsed=${String(Date.now() - t0)}ms`);
+    return result;
   }
 
   // ============================================================
