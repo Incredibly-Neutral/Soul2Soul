@@ -41,7 +41,7 @@ export async function runAction(
     const hasKey = typeof litUsageKey === 'string' && litUsageKey.length > 0;
     console.log(
       `[RENDER-DEBUG] runAction live begin cid=${cid} preview=${String(preview)} t0=${String(t0)} litUsageKey=${String(hasKey)}` +
-        (typeof litUsageKey === 'string' ? ` len=${litUsageKey.length}` : ''),
+        (typeof litUsageKey === 'string' ? ` len=${String(litUsageKey.length)}` : ''),
     );
 
     let code: string;
@@ -52,8 +52,8 @@ export async function runAction(
       );
       code = await codeResp.text();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(`[RENDER-DEBUG] cid code fetch THREW cid=${cid} elapsed=${String(Date.now() - t0)}ms err=${msg}`);
+      const errType = err instanceof Error ? err.name : typeof err;
+      console.log(`[RENDER-DEBUG] cid code fetch THREW cid=${cid} elapsed=${String(Date.now() - t0)}ms errType=${errType}`);
       throw err;
     }
 
@@ -64,8 +64,8 @@ export async function runAction(
       raw = await lit.executeAction(code, inputs, litUsageKey);
       console.log(`[RENDER-DEBUG] lit executeAction returned cid=${cid} elapsed=${String(Date.now() - t1)}ms`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(`[RENDER-DEBUG] lit executeAction THREW cid=${cid} elapsed=${String(Date.now() - t1)}ms err=${msg}`);
+      const errType = err instanceof Error ? err.name : typeof err;
+      console.log(`[RENDER-DEBUG] lit executeAction THREW cid=${cid} elapsed=${String(Date.now() - t1)}ms errType=${errType}`);
       throw err;
     }
     // failure is logged in lit service
