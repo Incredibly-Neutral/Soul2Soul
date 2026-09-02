@@ -2,8 +2,10 @@
 
 Content-addressed → location-addressed static site mirror.
 
-Resolves an ENS publication name (or bare CID) to a root CID via on-chain contenthash
-(EIP-1577), traverses the IPFS tree through a kubo RPC endpoint, and downloads every leaf
+Resolves an ENS publication name (or bare CID) to a root CID via the canonical s2s
+mechanism — reading the `contenthash_wrapped` text record from the ensRecords records
+contract on Base L2 (chainId 8453) and decoding the EIP-1577 `0xe3 01 <CID>` envelope —
+then traverses the IPFS tree through a kubo RPC endpoint, and downloads every leaf
 file to a local `webcontent/` directory with standard URL path structure — so nginx (or any
 static file server) can serve it as a plain location-addressed website.
 
@@ -12,7 +14,7 @@ static file server) can serve it as a plain location-addressed website.
 ```bash
 # 1. Configure
 cp .env.example .env
-# Edit .env: set PUBLICATION_URL, L1_RPC_URL, IPFS_API_URL
+# Edit .env: set PUBLICATION_URL, L1_RPC_URL, L2_RPC_URL, IPFS_API_URL
 
 # 2. Build and start
 docker compose up --build
@@ -84,7 +86,9 @@ Rationale:
 | Variable              | Required | Default               | Description                                |
 |-----------------------|----------|-----------------------|--------------------------------------------|
 | `PUBLICATION_URL`     | yes      | —                     | ENS name (`xxx.soul2soul.eth`) or bare CID |
-| `L1_RPC_URL`          | yes      | —                     | L1 RPC for ENS resolution                  |
+| `L1_RPC_URL`          | yes      | —                     | Ethereum mainnet (chainId 1) — used only for the s2s ENS controller discovery leg |
+| `L2_RPC_URL`          | yes      | —                     | Base mainnet (chainId 8453) — where the root CID is read (`contenthash_wrapped` on the records contract) |
+| `RECORDS_CONTRACT`    | no       | (discover)            | Override the s2s ensRecords records contract address; unset = discover via s2s ENS flow |
 | `IPFS_API_URL`        | no       | `http://127.0.0.1:5001` | Kubo RPC base URL                        |
 | `PORT`                | no       | `3000`                | API server port                            |
 | `REFRESH_INTERVAL_MS` | no       | (off)                 | Auto-refresh interval in ms                |
@@ -144,5 +148,7 @@ cid-mirror/
   s2s monorepo. Pure, dependency-free base58/base32/CID math. Maintains the attribution header.
 - **`src/ipfs/kubo.ts`** — mirrors kubo RPC patterns from `S2SIPFSMethods`
   (`shared/src/ipfs/index.ts`) and `ipfs.factory.ts` (`protocol/actions/src/libs/ipfs.factory.ts`).
-- **`src/ens.ts`** — ENS resolution mirrors patterns from `shared/src/ens/index.ts` and
-  `protocol/actions/src/libs/ens.factory.ts`.
+- **`src/ens.ts`** — s2s root-CID resolution mirrors `protocol/actions/src/libs/ens.factory.ts`
+  + `protocol.factory.ts` (getProtocolInfo): namehash → L2 (Base 8453) records-contract
+  `getText('contenthash_wrapped')` → decode the `0xe3 01 <CID>` envelope. (The old standard-ENS
+  `registry.resolver → contenthash` path is NOT how s2s publishes.)
