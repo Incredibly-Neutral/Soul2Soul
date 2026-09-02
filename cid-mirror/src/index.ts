@@ -24,7 +24,14 @@ async function main(): Promise<void> {
   const kubo = new KuboClient(cfg.ipfsApiUrl, cfg.ipfsApiAuth);
 
   // Initialize mirror engine
-  const mirror = new Mirror(kubo, 'webcontent', cfg.publicationUrl, cfg.l1RpcUrl);
+  const mirror = new Mirror(
+    kubo,
+    'webcontent',
+    cfg.publicationUrl,
+    cfg.l1RpcUrl,
+    cfg.l2RpcUrl,
+    cfg.recordsContract,
+  );
 
   // Resolve root CID
   let rootCid: string | null = null;
