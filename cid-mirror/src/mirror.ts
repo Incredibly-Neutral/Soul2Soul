@@ -19,7 +19,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { KuboClient, type KuboLink } from './ipfs/kubo.js';
+import { KuboClient, hashToString, type KuboLink } from './ipfs/kubo.js';
 import { isEnsName, resolveEnsToCID } from './ens.js';
 
 export interface MirrorState {
@@ -208,9 +208,12 @@ export class Mirror {
     const files: KuboLink[] = [];
 
     for (const link of links) {
-      // In IPFS ls, directories usually have Tsize = 0 (or very small)
-      // Files have real sizes. This is heuristic but works for unixFS.
-      if (link.Tsize === 0 || link.Name.endsWith('/')) {
+      // Real /api/v0/ls returns `Size` and `Type` (NOT `Tsize`), and dir
+      // names have NO trailing slash. A link is a directory when
+      // `Type === 1` (prefer Type when present); older kubo omits Type, so
+      // fall back to `Size === 0`. Files have Type === 2 / Size > 0.
+      const isDir = link.Type !== undefined ? link.Type === 1 : link.Size === 0;
+      if (isDir) {
         dirs.push(link);
       } else {
         files.push(link);
@@ -221,7 +224,7 @@ export class Mirror {
     // Use link.Name only (not the full prefix path) because destDir already
     // reflects the directory nesting from the traversal.
     const fileDownloadTasks = files.map((link) => async () => {
-      const childCid = link.Hash['/'];
+      const childCid = hashToString(link.Hash);
       await this.downloadLeaf(childCid, link.Name, destDir);
     });
 
@@ -231,7 +234,7 @@ export class Mirror {
 
     // Recurse into directories
     for (const link of dirs) {
-      const childCid = link.Hash['/'];
+      const childCid = hashToString(link.Hash);
       const childPrefix = prefix ? `${prefix}/${link.Name}` : link.Name;
       const childDest = path.join(destDir, link.Name);
       await fsp.mkdir(childDest, { recursive: true });
