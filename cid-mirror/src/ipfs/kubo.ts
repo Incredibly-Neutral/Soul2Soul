@@ -39,7 +39,9 @@ export function hashToString(h: unknown): string {
 export interface KuboLink {
   Name: string;
   Hash: KuboHash;
-  Tsize: number;
+  Size: number;
+  /** 1 = directory, 2 = file (kubo >= 0.12); omitted by older kubo */
+  Type?: number;
 }
 
 export interface KuboLsResult {
