@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const kubo = new KuboClient(cfg.ipfsApiUrl, cfg.ipfsApiAuth);
 
   // Initialize mirror engine
-  const mirror = new Mirror(kubo);
+  const mirror = new Mirror(kubo, 'webcontent', cfg.publicationUrl, cfg.l1RpcUrl);
 
   // Resolve root CID
   let rootCid: string | null = null;
@@ -75,13 +75,13 @@ async function main(): Promise<void> {
     console.log(`[cid-mirror] API server listening on port ${cfg.port}`);
   });
 
-  // Optional auto-refresh
+  // Optional auto-refresh — always re-resolves ENS if applicable
   if (cfg.refreshIntervalMs && rootCid) {
     console.log(`[cid-mirror] Auto-refresh every ${cfg.refreshIntervalMs}ms`);
     setInterval(async () => {
       console.log('[cid-mirror] Auto-refresh triggered');
       try {
-        const result = await mirror.refresh(rootCid!);
+        const result = await mirror.refreshResolved();
         console.log(`[cid-mirror] Auto-refresh complete: ${result.files} files, ${result.durationMs}ms`);
       } catch (err) {
         console.error('[cid-mirror] Auto-refresh failed:', err);

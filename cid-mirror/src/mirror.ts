@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { KuboClient, type KuboLink } from './ipfs/kubo.js';
+import { isEnsName, resolveEnsToCID } from './ens.js';
 
 export interface MirrorState {
   rootCid: string;
@@ -54,11 +55,15 @@ export function mapPath(ipfsPath: string): string {
 export class Mirror {
   private readonly kubo: KuboClient;
   private readonly webRoot: string;
+  private readonly publicationUrl?: string;
+  private readonly l1RpcUrl?: string;
   private state: MirrorState;
 
-  constructor(kubo: KuboClient, webRoot: string = WEBCONTENT_DIR) {
+  constructor(kubo: KuboClient, webRoot: string = WEBCONTENT_DIR, publicationUrl?: string, l1RpcUrl?: string) {
     this.kubo = kubo;
     this.webRoot = webRoot;
+    this.publicationUrl = publicationUrl;
+    this.l1RpcUrl = l1RpcUrl;
     this.state = {
       rootCid: '',
       files: 0,
@@ -69,6 +74,27 @@ export class Mirror {
 
   getState(): MirrorState {
     return { ...this.state };
+  }
+
+  /**
+   * Perform a full refresh with ENS re-resolution.
+   *
+   * If the publication URL is an ENS name, the name is re-resolved to the
+   * latest contenthash CID before traversing — ensuring the freshest tree.
+   * Bare CIDs / direct identifiers reuse the currently stored root CID.
+   */
+  async refreshResolved(concurrency = 10): Promise<RefreshResult> {
+    if (this.publicationUrl && this.l1RpcUrl && isEnsName(this.publicationUrl)) {
+      const resolved = await resolveEnsToCID(this.publicationUrl, this.l1RpcUrl);
+      if (!resolved) {
+        throw new Error('ENS re-resolution failed — could not resolve ' + this.publicationUrl);
+      }
+      return this.refresh(resolved, concurrency);
+    }
+    if (!this.state.rootCid) {
+      throw new Error('No root CID available for refresh');
+    }
+    return this.refresh(this.state.rootCid, concurrency);
   }
 
   /**
