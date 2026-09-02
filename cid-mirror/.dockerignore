@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnpm/
+
+# Build outputs
+dist/
+build/
+
+# Source maps (keep these for debugging? No, keep image small)
+*.tsbuildinfo
+
+# Environment files (never leak secrets)
+.env
+.env.*
+!.env.example
+
+# Tests (not needed at runtime)
+tests/
+vitest.config.ts
+coverage/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.log
+.tmp/
+temp/
