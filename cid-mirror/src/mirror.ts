@@ -80,8 +80,13 @@ export class Mirror {
    * Perform a full refresh with ENS re-resolution.
    *
    * If the publication URL is an ENS name, the name is re-resolved to the
-   * latest contenthash CID before traversing — ensuring the freshest tree.
-   * Bare CIDs / direct identifiers reuse the currently stored root CID.
+   * latest root CID before traversing — ensuring the freshest tree. The
+   * re-resolution uses the canonical s2s mechanism: read the
+   * `contenthash_wrapped` text record from the ensRecords records contract
+   * on Base L2 (8453), discovered via the s2s ENS flow (or the
+   * L2_RPC_URL / RECORDS_CONTRACT env vars, loaded by config.ts at startup)
+   * — see resolveEnsToCID in ens.ts. Bare CIDs / direct identifiers reuse the
+   * currently stored root CID.
    */
   async refreshResolved(concurrency = 10): Promise<RefreshResult> {
     if (this.publicationUrl && this.l1RpcUrl && isEnsName(this.publicationUrl)) {
