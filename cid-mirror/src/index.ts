@@ -24,7 +24,14 @@ async function main(): Promise<void> {
   const kubo = new KuboClient(cfg.ipfsApiUrl, cfg.ipfsApiAuth);
 
   // Initialize mirror engine
-  const mirror = new Mirror(kubo, 'webcontent', cfg.publicationUrl, cfg.l1RpcUrl);
+  const mirror = new Mirror(
+    kubo,
+    'webcontent',
+    cfg.publicationUrl,
+    cfg.l1RpcUrl,
+    cfg.l2RpcUrl,
+    cfg.recordsContract,
+  );
 
   // Resolve root CID
   let rootCid: string | null = null;
@@ -34,7 +41,10 @@ async function main(): Promise<void> {
     console.log(`[cid-mirror] Using bare CID: ${rootCid}`);
   } else if (isEnsName(name)) {
     console.log(`[cid-mirror] Resolving ENS name: ${name}`);
-    rootCid = await resolveEnsToCID(name, cfg.l1RpcUrl);
+    // Canonical s2s mechanism: namehash -> getText('contenthash_wrapped') on
+    // the Base-L2 (8453) ensRecords records contract. L1 is used only for the
+    // controller discovery leg; the CID itself is read on L2.
+    rootCid = await resolveEnsToCID(name, cfg.l1RpcUrl, cfg.l2RpcUrl, cfg.recordsContract);
     if (!rootCid) {
       console.error('[cid-mirror] Failed to resolve ENS name to CID. Service will start but refresh will fail until a CID is resolved.');
     } else {

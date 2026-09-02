@@ -57,13 +57,24 @@ export class Mirror {
   private readonly webRoot: string;
   private readonly publicationUrl?: string;
   private readonly l1RpcUrl?: string;
+  private readonly l2RpcUrl?: string;
+  private readonly recordsContract?: string;
   private state: MirrorState;
 
-  constructor(kubo: KuboClient, webRoot: string = WEBCONTENT_DIR, publicationUrl?: string, l1RpcUrl?: string) {
+  constructor(
+    kubo: KuboClient,
+    webRoot: string = WEBCONTENT_DIR,
+    publicationUrl?: string,
+    l1RpcUrl?: string,
+    l2RpcUrl?: string,
+    recordsContract?: string,
+  ) {
     this.kubo = kubo;
     this.webRoot = webRoot;
     this.publicationUrl = publicationUrl;
     this.l1RpcUrl = l1RpcUrl;
+    this.l2RpcUrl = l2RpcUrl;
+    this.recordsContract = recordsContract;
     this.state = {
       rootCid: '',
       files: 0,
@@ -80,12 +91,23 @@ export class Mirror {
    * Perform a full refresh with ENS re-resolution.
    *
    * If the publication URL is an ENS name, the name is re-resolved to the
-   * latest contenthash CID before traversing — ensuring the freshest tree.
-   * Bare CIDs / direct identifiers reuse the currently stored root CID.
+   * latest root CID before traversing — ensuring the freshest tree. The
+   * re-resolution uses the canonical s2s mechanism: read the
+   * `contenthash_wrapped` text record from the ensRecords records contract
+   * on Base L2 (8453), discovered via the s2s ENS flow (or the
+   * l2RpcUrl / recordsContract constructor options; resolveEnsToCID falls
+   * back to the process.env L2_RPC_URL / RECORDS_CONTRACT vars at call time)
+   * — see resolveEnsToCID in ens.ts. Bare CIDs / direct identifiers reuse the
+   * currently stored root CID.
    */
   async refreshResolved(concurrency = 10): Promise<RefreshResult> {
     if (this.publicationUrl && this.l1RpcUrl && isEnsName(this.publicationUrl)) {
-      const resolved = await resolveEnsToCID(this.publicationUrl, this.l1RpcUrl);
+      const resolved = await resolveEnsToCID(
+        this.publicationUrl,
+        this.l1RpcUrl,
+        this.l2RpcUrl,
+        this.recordsContract,
+      );
       if (!resolved) {
         throw new Error('ENS re-resolution failed — could not resolve ' + this.publicationUrl);
       }

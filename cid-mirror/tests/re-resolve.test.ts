@@ -75,7 +75,9 @@ describe('ENS re-resolution on refresh', () => {
       stub,
       TEST_WEBROOT,
       'app.soul2soul.eth',
-      'https://rpc.example.com',
+      'https://rpc.example.com', // l1RpcUrl
+      'https://l2-rpc.example.com', // l2RpcUrl
+      '0x' + 'aa'.repeat(20), // recordsContract override
     );
   });
 
@@ -91,11 +93,14 @@ describe('ENS re-resolution on refresh', () => {
 
     const result = await mirror.refreshResolved();
 
-    // Verify ENS was re-resolved (the mock was called)
+    // Verify ENS was re-resolved (the mock was called), threading the
+    // l2RpcUrl / recordsContract constructor options through refreshResolved.
     expect(mockResolveEnsToCID).toHaveBeenCalledTimes(1);
     expect(mockResolveEnsToCID).toHaveBeenCalledWith(
       'app.soul2soul.eth',
       'https://rpc.example.com',
+      'https://l2-rpc.example.com',
+      '0x' + 'aa'.repeat(20),
     );
 
     // Verify the fresh CID was used
