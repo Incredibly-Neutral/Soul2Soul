@@ -62,7 +62,7 @@ const SEL = {
   parentDomainController: '0xe4df1462', // function parentDomainController() view returns (address)
   getModulesPaginated: '0xcc2f8452', // function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)
   name: '0xa3f4df7e', // function NAME() view returns (string)
-  getRecords: '0xbe880b7a', // function getRecords(string[] keys) view returns (address[])
+  getRecords: '0xbe880b7a', // function getRecords(string[] keys) view returns (string[])
   getText: '0xad428dac', // function getText(bytes32 node, string key) view returns (string)
 } as const;
 
@@ -158,15 +158,26 @@ function decodeStringReturn(hex: string): string {
   return Buffer.from(data, 'hex').toString('utf8');
 }
 
-/** Decode an ABI `address[]` return (offset + length + padded addresses). */
-function decodeAddressListReturn(hex: string): string[] {
+/**
+ * Decode an ABI `string[]` return (offset word → array length → per-element
+ * offset/length/utf8 data). S2SRecordsModule.getRecords() returns `string[]`
+ * (literal strings: addresses, URLs, CIDs — NOT ABI `address` words), so each
+ * element is decoded via its offset + length words rather than sliced as a
+ * padded address. Element offsets are measured from the byte right after the
+ * array length word.
+ */
+function decodeStringListReturn(hex: string): string[] {
   const raw = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const offset = parseInt(raw.slice(0, 64), 16) * 2;
+  const offset = parseInt(raw.slice(0, 64), 16) * 2; // nibbles to length word
   const len = parseInt(raw.slice(offset, offset + 64), 16);
   const out: string[] = [];
   for (let i = 0; i < len; i++) {
-    const word = raw.slice(offset + 64 + i * 64, offset + 64 + i * 64 + 64);
-    out.push('0x' + word.slice(-40));
+    const elemOffset =
+      parseInt(raw.slice(offset + 64 + i * 64, offset + 64 + i * 64 + 64), 16) * 2;
+    const abs = offset + 64 + elemOffset; // element data start (nibbles)
+    const elemLen = parseInt(raw.slice(abs, abs + 64), 16);
+    const data = raw.slice(abs + 64, abs + 64 + elemLen * 2);
+    out.push(Buffer.from(data, 'hex').toString('utf8'));
   }
   return out;
 }
@@ -201,6 +212,7 @@ async function ethCall(
   rpcUrl: string,
   to: string,
   data: string,
+  chainId?: number,
 ): Promise<string> {
   const body = JSON.stringify({
     jsonrpc: '2.0',
@@ -222,7 +234,8 @@ async function ethCall(
 
   const json: any = await res.json();
   if (json.error) {
-    throw new Error(`eth_call error: ${JSON.stringify(json.error)}`);
+    const chain = chainId ? ` (chainId ${chainId})` : '';
+    throw new Error(`eth_call error${chain}: ${JSON.stringify(json.error)}`);
   }
   return json.result as string;
 }
@@ -268,6 +281,7 @@ export async function getConfigModule(
       l2RpcUrl,
       controller,
       calldataGetModulesPaginated('0x0000000000000000000000000000000000000001', 10),
+      L2_CHAIN_ID,
     ),
   );
 
@@ -275,7 +289,7 @@ export async function getConfigModule(
     if (isKnownNonS2SModule(moduleAddress)) continue;
     try {
       const name = decodeStringReturn(
-        await ethCall(l2RpcUrl, moduleAddress, SEL.name),
+        await ethCall(l2RpcUrl, moduleAddress, SEL.name, L2_CHAIN_ID),
       );
       if (name === 'S2S Records Module') return moduleAddress;
     } catch {
@@ -287,16 +301,17 @@ export async function getConfigModule(
 
 /**
  * Read the `ens_records` records-contract address from the config module's
- * getRecords() (L2 only).
+ * getRecords() (L2 only). getRecords returns `string[]` — the ens_records
+ * element is a literal 0x-prefixed address string, returned verbatim.
  */
 export async function getRecordsContract(
   configModule: string,
   l2RpcUrl: string,
 ): Promise<string> {
-  const addresses = decodeAddressListReturn(
-    await ethCall(l2RpcUrl, configModule, calldataGetRecords()),
+  const records = decodeStringListReturn(
+    await ethCall(l2RpcUrl, configModule, calldataGetRecords(), L2_CHAIN_ID),
   );
-  return addresses[1] ?? ''; // index 1 == 'ens_records'
+  return records[1] ?? ''; // index 1 == 'ens_records' (string[] element)
 }
 
 /**
@@ -433,7 +448,7 @@ export async function resolveEnsToCID(
     }
 
     // Step 3: getText(node, 'contenthash_wrapped') on the records contract (L2)
-    const textHex = await ethCall(l2, ensRecords, calldataGetText(node, 'contenthash_wrapped'));
+    const textHex = await ethCall(l2, ensRecords, calldataGetText(node, 'contenthash_wrapped'), L2_CHAIN_ID);
     if (!textHex || textHex === '0x') {
       console.error(`ENS: no contenthash_wrapped text record for ${ensName}`);
       return null;

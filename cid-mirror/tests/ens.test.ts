@@ -116,13 +116,24 @@ function abiEncodeString(s: string): string {
   );
 }
 
-function abiEncodeAddressList(addrs: string[]): string {
-  return (
-    '0x' +
-    pad64(0x20) +
-    pad64(addrs.length) +
-    addrs.map((a) => pad64(a)).join('')
-  );
+function abiEncodeStringArray(strings: string[]): string {
+  // Real string[] ABI return (offsets + lengths + utf8 data) — the same shape
+  // S2SRecordsModule.getRecords() actually emits. Decoding this as address[]
+  // (the pre-B1 bug) yields bogus non-empty addresses, so this mock catches
+  // regressions of the getRecords string[] decode.
+  const elems = strings.map((s) => {
+    const bytes = new TextEncoder().encode(s);
+    const padded = new Uint8Array(Math.ceil(bytes.length / 32) * 32);
+    padded.set(bytes);
+    return pad64(bytes.length) + Buffer.from(padded).toString('hex');
+  });
+  let head = '0x' + pad64(0x20) + pad64(strings.length);
+  let pos = 32 + 32 * strings.length; // first element data byte (from array data start)
+  for (let i = 0; i < strings.length; i++) {
+    head += pad64(pos - 32); // element offsets are relative to byte after length word
+    pos += elems[i].length / 2;
+  }
+  return head + elems.join('');
 }
 
 // (address[] array, address next)
@@ -221,13 +232,13 @@ describe('resolveEnsToCID (s2s Base-L2 records contract)', () => {
       { to: controller, selector: '0xcc2f8452', result: abiEncodeModules([configModule], controller) },
       // L2: configModule.NAME() == 'S2S Records Module'
       { to: configModule, selector: '0xa3f4df7e', result: abiEncodeString('S2S Records Module') },
-      // L2: configModule.getRecords(...) → ens_records is index 1
+      // L2: configModule.getRecords(...) → string[]; ens_records is index 1
       {
         to: configModule,
         selector: '0xbe880b7a',
-        result: abiEncodeAddressList([
-          '0x' + 'aa'.repeat(20), // data_gateway
-          ensRecords, // ens_records
+        result: abiEncodeStringArray([
+          'https://data-gateway.example.com', // data_gateway (URL string)
+          ensRecords, // ens_records — literal 0x-prefixed address string
           '0x' + 'cc'.repeat(20), // ens_registry
         ]),
       },
@@ -263,5 +274,36 @@ describe('resolveEnsToCID (s2s Base-L2 records contract)', () => {
     );
 
     expect(resolved).toBeNull();
+  });
+
+  it('returns the ens_records string element verbatim (B1 regression: getRecords is string[], not address[])', async () => {
+    const configModule = '0x' + '44'.repeat(20);
+    const ensRecords = '0x5D42f9b016B4251FC6407d5e8154DA887F394900';
+    const fetchMock = makeRpcMock([
+      // getRecords(string[]) returns string[] — index 1 is the literal
+      // 0x-prefixed ens_records address string.
+      {
+        to: configModule,
+        selector: '0xbe880b7a',
+        result: abiEncodeStringArray([
+          'https://data-gateway.example.com',
+          ensRecords,
+          '0x' + 'cc'.repeat(20),
+        ]),
+      },
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getRecordsContract } = await import('../src/ens.js');
+    const result = await getRecordsContract(
+      configModule,
+      'https://base-mainnet.example.com',
+    );
+
+    // The full literal address string must be returned verbatim — decoding
+    // the return as address[] (the pre-B1 bug) yields a bogus non-empty
+    // address, so this assertion fails under the old decoder.
+    expect(result).toBe(ensRecords);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
