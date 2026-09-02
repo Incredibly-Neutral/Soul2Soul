@@ -208,9 +208,12 @@ export class Mirror {
     const files: KuboLink[] = [];
 
     for (const link of links) {
-      // In IPFS ls, directories usually have Tsize = 0 (or very small)
-      // Files have real sizes. This is heuristic but works for unixFS.
-      if (link.Tsize === 0 || link.Name.endsWith('/')) {
+      // Real /api/v0/ls returns `Size` and `Type` (NOT `Tsize`), and dir
+      // names have NO trailing slash. A link is a directory when
+      // `Type === 1` (prefer Type when present); older kubo omits Type, so
+      // fall back to `Size === 0`. Files have Type === 2 / Size > 0.
+      const isDir = link.Type !== undefined ? link.Type === 1 : link.Size === 0;
+      if (isDir) {
         dirs.push(link);
       } else {
         files.push(link);

@@ -109,10 +109,11 @@ describe('Mirror traversal with stubbed kubo', () => {
     const file1Cid = 'QmFile1';
     const file2Cid = 'QmFile2';
 
-    // Root is a directory with two files. Real kubo ls shape: plain-string Hash.
+    // Root is a directory with two files. Real kubo ls shape: plain-string
+    // Hash, Size>0 + Type:2 for files.
     stub.addLsResponse(rootCid, [
-      { Name: 'index.html', Hash: file1Cid, Tsize: 100 },
-      { Name: 'about.html', Hash: file2Cid, Tsize: 200 },
+      { Name: 'index.html', Hash: file1Cid, Size: 100, Type: 2 },
+      { Name: 'about.html', Hash: file2Cid, Size: 200, Type: 2 },
     ]);
 
     stub.addCatResponse(file1Cid, '<h1>Home</h1>');
@@ -141,15 +142,16 @@ describe('Mirror traversal with stubbed kubo', () => {
     const file2Cid = 'QmStyle';
 
     // Root has one file and one directory. dag/get-style JSON-CID Hash shape
-    // must still be accepted (backwards compat).
+    // must still be accepted (backwards compat). Dirs use real ls fields:
+    // Size:0 + Type:1 with a SLASH-LESS Name.
     stub.addLsResponse(rootCid, [
-      { Name: 'index.html', Hash: { '/': file1Cid }, Tsize: 50 },
-      { Name: 'assets', Hash: { '/': dirCid }, Tsize: 0 },
+      { Name: 'index.html', Hash: { '/': file1Cid }, Size: 50, Type: 2 },
+      { Name: 'assets', Hash: { '/': dirCid }, Size: 0, Type: 1 },
     ]);
 
     // Assets dir has one file
     stub.addLsResponse(dirCid, [
-      { Name: 'style.css', Hash: { '/': file2Cid }, Tsize: 300 },
+      { Name: 'style.css', Hash: { '/': file2Cid }, Size: 300, Type: 2 },
     ]);
 
     stub.addCatResponse(file1Cid, '<h1>Home</h1>');
@@ -183,13 +185,14 @@ describe('Mirror traversal with stubbed kubo', () => {
     // NOT a { '/': cid } JSON-CID object. The old client read link.Hash['/'],
     // which is `undefined` for a plain-string Hash, so catBytes(undefined)
     // failed on a real kubo node. This test must FAIL under that old code.
+    // Dirs use real ls fields: Size:0 + Type:1 with SLASH-LESS Name.
     stub.addLsResponse(rootCid, [
-      { Name: 'index.html', Hash: file1Cid, Tsize: 100 },
-      { Name: 'about.html', Hash: file2Cid, Tsize: 200 },
-      { Name: 'assets', Hash: dirCid, Tsize: 0 },
+      { Name: 'index.html', Hash: file1Cid, Size: 100, Type: 2 },
+      { Name: 'about.html', Hash: file2Cid, Size: 200, Type: 2 },
+      { Name: 'assets', Hash: dirCid, Size: 0, Type: 1 },
     ]);
     stub.addLsResponse(dirCid, [
-      { Name: 'style.css', Hash: file3Cid, Tsize: 300 },
+      { Name: 'style.css', Hash: file3Cid, Size: 300, Type: 2 },
     ]);
 
     stub.addCatResponse(file1Cid, '<h1>Home</h1>');
@@ -216,6 +219,58 @@ describe('Mirror traversal with stubbed kubo', () => {
       'utf-8',
     );
     expect(style).toBe('body { color: red; }');
+  });
+
+  it('downloads a NESTED subdirectory tree (regression: real ls dir-vs-file heuristic)', async () => {
+    const rootCid = 'QmDeepRoot';
+    const blogCid = 'QmBlog';
+    const postsCid = 'QmPosts';
+    const file1Cid = 'QmDeepIndex';
+    const file2Cid = 'QmHomeMd';
+    const file3Cid = 'QmHelloMd';
+
+    // Real kubo /api/v0/ls: dirs have Size:0 + Type:1 and a SLASH-LESS Name
+    // (no trailing '/'); files have Size>0 + Type:2. `Tsize` is NEVER
+    // returned by /api/v0/ls, so the old `link.Tsize === 0 ||
+    // link.Name.endsWith('/')` heuristic classified every real subdir as a
+    // file and cat'd a directory CID (kubo returns HTTP 500 "this dag node
+    // is a directory"). This test must FAIL under that old heuristic.
+    stub.addLsResponse(rootCid, [
+      { Name: 'index.html', Hash: file1Cid, Size: 100, Type: 2 },
+      { Name: 'blog', Hash: blogCid, Size: 0, Type: 1 },
+    ]);
+    stub.addLsResponse(blogCid, [
+      { Name: 'posts', Hash: postsCid, Size: 0, Type: 1 },
+      { Name: 'home.md', Hash: file2Cid, Size: 50, Type: 2 },
+    ]);
+    stub.addLsResponse(postsCid, [
+      { Name: 'hello.md', Hash: file3Cid, Size: 60, Type: 2 },
+    ]);
+
+    stub.addCatResponse(file1Cid, '<h1>Home</h1>');
+    stub.addCatResponse(file2Cid, '# Home page');
+    stub.addCatResponse(file3Cid, '# Hello world');
+
+    const result = await mirror.refresh(rootCid);
+    expect(result.files).toBe(3);
+
+    const indexHtml = await fsp.readFile(
+      path.join(TEST_WEBROOT, 'current', 'index.html'),
+      'utf-8',
+    );
+    expect(indexHtml).toBe('<h1>Home</h1>');
+
+    const homeMd = await fsp.readFile(
+      path.join(TEST_WEBROOT, 'current', 'blog', 'home.md'),
+      'utf-8',
+    );
+    expect(homeMd).toBe('# Home page');
+
+    const helloMd = await fsp.readFile(
+      path.join(TEST_WEBROOT, 'current', 'blog', 'posts', 'hello.md'),
+      'utf-8',
+    );
+    expect(helloMd).toBe('# Hello world');
   });
 
   it('performs atomic swap (staging is not visible after success)', async () => {
