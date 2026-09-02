@@ -19,7 +19,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { KuboClient, type KuboLink } from './ipfs/kubo.js';
+import { KuboClient, hashToString, type KuboLink } from './ipfs/kubo.js';
 import { isEnsName, resolveEnsToCID } from './ens.js';
 
 export interface MirrorState {
@@ -221,7 +221,7 @@ export class Mirror {
     // Use link.Name only (not the full prefix path) because destDir already
     // reflects the directory nesting from the traversal.
     const fileDownloadTasks = files.map((link) => async () => {
-      const childCid = link.Hash['/'];
+      const childCid = hashToString(link.Hash);
       await this.downloadLeaf(childCid, link.Name, destDir);
     });
 
@@ -231,7 +231,7 @@ export class Mirror {
 
     // Recurse into directories
     for (const link of dirs) {
-      const childCid = link.Hash['/'];
+      const childCid = hashToString(link.Hash);
       const childPrefix = prefix ? `${prefix}/${link.Name}` : link.Name;
       const childDest = path.join(destDir, link.Name);
       await fsp.mkdir(childDest, { recursive: true });

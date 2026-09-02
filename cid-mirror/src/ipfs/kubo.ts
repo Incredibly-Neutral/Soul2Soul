@@ -10,15 +10,41 @@
  * Concurrency is NOT handled here; the caller (mirror engine) manages a limit.
  */
 
+/**
+ * A kubo link Hash is normally a plain CID string — `/api/v0/ls` returns
+ * each link's Hash as e.g. `"Qm..."`. Some endpoints (notably
+ * `/api/v0/dag/get`) instead wrap CIDs as a JSON-CID object
+ * (`{ "/": "Qm..." }`). Accept both shapes so we interoperate with
+ * whichever a real node returns.
+ */
+export type KuboHash = string | { '/': string };
+
+/**
+ * Normalize a kubo link Hash to a plain CID string.
+ *
+ * Accepts the two shapes kubo can return: a plain string (`/api/v0/ls`)
+ * or a JSON-CID object (`{ "/": "Qm..." }`, from `/api/v0/dag/get`).
+ * Throws a clear error if the value is neither.
+ */
+export function hashToString(h: unknown): string {
+  if (typeof h === 'string' && h !== '') return h;
+  if (typeof h === 'object' && h !== null && typeof (h as { '/': unknown })['/'] === 'string') {
+    return (h as { '/': string })['/'];
+  }
+  throw new Error(
+    `Cannot resolve IPFS link hash to a CID string: expected a string or a { "/": string } JSON-CID object, got ${JSON.stringify(h)}`,
+  );
+}
+
 export interface KuboLink {
   Name: string;
-  Hash: { '/': string };
+  Hash: KuboHash;
   Tsize: number;
 }
 
 export interface KuboLsResult {
   Objects: Array<{
-    Hash: { '/': string };
+    Hash: KuboHash;
     Links: KuboLink[];
   }>;
 }
