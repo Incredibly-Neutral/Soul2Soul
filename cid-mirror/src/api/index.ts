@@ -13,16 +13,10 @@ import type { Mirror } from '../mirror.js';
 export function createApi(mirror: Mirror): express.Router {
   const router = express.Router();
 
-  // POST /api/refresh — trigger tree re-mirror
+  // POST /api/refresh — trigger tree re-mirror (re-resolves ENS if applicable)
   router.post('/refresh', async (_req, res) => {
-    const state = mirror.getState();
-    if (!state.rootCid) {
-      res.status(400).json({ error: 'No root CID resolved yet; service may still be starting.' });
-      return;
-    }
-
     try {
-      const result = await mirror.refresh(state.rootCid);
+      const result = await mirror.refreshResolved();
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
