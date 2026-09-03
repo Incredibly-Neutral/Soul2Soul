@@ -13,7 +13,10 @@ import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 import { ethers } from 'ethers';
 import { evmRead } from '../lib/evm.js';
-import { verifyDomainOwnership } from '../lib/domain-validation.js';
+import {
+  maybeVerifyDomainOwnership,
+  DOMAIN_VALIDATION_CONFIG,
+} from '../lib/domain-validation.js';
 
 export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -202,11 +205,12 @@ export class S2SRecordsTab extends HTMLElement {
   }
 
   /**
-   * 'Add domain' flow: hard-gate the entered ENS domain on ownership — it must
-   * resolve to the SAME publication Safe as the current publication name
-   * (otherwise the EVM update action would write contenthash to an arbitrary
-   * node). On success the domain is passed through updateConfig → buildConfig,
-   * landing in the built config's `domain` field; on failure nothing is saved.
+   * 'Add domain' flow: sets the ENS write-target domain via updateConfig →
+   * buildConfig, landing in the built config's `domain` field. By default the
+   * same-Safe ownership check is OFF (see DOMAIN_VALIDATION_CONFIG — the single
+   * enforcement toggle in domain-validation.ts); when it is ON, the entered
+   * domain must resolve to the SAME publication Safe as the current publication
+   * name and is rejected with a clear message (nothing saved) otherwise.
    */
   private async addDomain() {
     const input = this.shadowRoot?.querySelector('#domain-input') as HTMLInputElement | null;
@@ -217,7 +221,7 @@ export class S2SRecordsTab extends HTMLElement {
     }
 
     const publication = await this.safeIntegration.getRecord('name').catch(() => '');
-    const check = await verifyDomainOwnership(domain, publication, {
+    const check = await maybeVerifyDomainOwnership(domain, publication, {
       namehash: (name: string) => ethers.namehash(name),
       evmRead,
     });
@@ -228,7 +232,12 @@ export class S2SRecordsTab extends HTMLElement {
     }
 
     if (input) input.value = '';
-    this.showNotification(`Domain "${domain}" verified — updating config…`, 'success');
+    this.showNotification(
+      DOMAIN_VALIDATION_CONFIG.enforceOwnership
+        ? `Domain "${domain}" verified — updating config…`
+        : `Domain "${domain}" saved as write-target — updating config…`,
+      'success',
+    );
     await this.updateConfig(domain);
   }
 
