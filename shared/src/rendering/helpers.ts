@@ -1,4 +1,5 @@
 import { LitService } from "../lit";
+import { callWithTimeout } from "../helpers/timeout";
 
 // ===========================================================================
 // runAction — single source of truth for dev/prod transport
@@ -33,9 +34,10 @@ export async function runAction(
     // =====================================================================
     // [RENDER-DEBUG] TEMPORARY diagnostic instrumentation — root-causing the
     // live 'silent stop after Jobs dispatched with no Lit charge' bug.
-    // LOG-ONLY: no behavior change, no timeout added. Remove after diagnosis
-    // by grepping for [RENDER-DEBUG]. Keys/tokens are NEVER printed — only
-    // presence/length.
+    // LOG-ONLY: keys/tokens are NEVER printed — only presence/length.
+    // Remove after diagnosis by grepping for [RENDER-DEBUG]. The code-CID
+    // fetch below is guarded with callWithTimeout (30s) so a stalled gateway
+    // becomes a thrown error instead of a silent infinite hang.
     // =====================================================================
     const t0 = Date.now();
     const hasKey = typeof litUsageKey === 'string' && litUsageKey.length > 0;
@@ -46,7 +48,15 @@ export async function runAction(
 
     let code: string;
     try {
-      const codeResp = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`);
+      const codeResp = await callWithTimeout(
+        (signal) => fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`, { signal }),
+        30_000,
+      );
+      if (!codeResp.ok) {
+        throw new Error(
+          `render action code fetch failed for cid=${cid}: HTTP ${String(codeResp.status)} ${codeResp.statusText}`,
+        );
+      }
       console.log(
         `[RENDER-DEBUG] cid code fetch done cid=${cid} status=${String(codeResp.status)} elapsed=${String(Date.now() - t0)}ms`,
       );
