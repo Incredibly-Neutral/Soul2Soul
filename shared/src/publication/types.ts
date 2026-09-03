@@ -22,6 +22,13 @@ export type S2SPublicationConfig = {
     name: string,
     templateCid: string,
     localePaths?: Record<string, string>,  // optional locale → path-prefix map (monolingual by default)
+    /**
+     * Optional ENS name the publication's on-chain contenthash is written to.
+     * When set, the EVM update action writes `contenthash_wrapped` at
+     * `namehash(domain)` instead of the default `namehash(name)` subdomain
+     * target. When absent, the default subdomain write target is used.
+     */
+    domain?: string,
 }
 
 export type S2SPublication = {
