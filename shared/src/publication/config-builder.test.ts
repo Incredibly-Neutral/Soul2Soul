@@ -242,6 +242,70 @@ describe('ConfigBuilder', () => {
       expect(result.config.domain).toBeUndefined();
     });
 
+    it('sets the domain on the built config when a domain override is provided', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        undefined,
+        's3ntiment.eth',
+      );
+
+      expect(result.config.domain).toBe('s3ntiment.eth');
+      // The write target is a plain string that the EVM update action feeds to
+      // namehash(domain); the rest of the config is untouched.
+      expect(result.config.name).toBe('test.soul2soul.eth');
+    });
+
+    it('explicit domain override wins over the carried existing config domain', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({
+        domain: 'old.soul2soul.eth',
+      });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+        'new.soul2soul.eth',
+      );
+
+      expect(result.config.domain).toBe('new.soul2soul.eth');
+    });
+
+    it('an empty string domain override clears the carried existing config domain', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({
+        domain: 'old.soul2soul.eth',
+      });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+        '',
+      );
+
+      expect(result.config.domain).toBeUndefined();
+    });
+
     it('merges templates: existing CID stays when template files unchanged', async () => {
       const ipfs = mockIPFS();
       ipfs.fetchFromKubo.mockResolvedValue({
