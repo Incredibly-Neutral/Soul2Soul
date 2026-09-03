@@ -92,7 +92,15 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     const config = await getConfig(undefined, configModule, rpcs?.L2, gateway);
     trace.push(`config: ${config}`);
 
-    const node = ethers.utils.namehash(publication);
+    // The WRITE node may differ from the publication identity: when the
+    // publication config sets an optional `domain`, the contenthash is written
+    // to namehash(domain) instead of the default namehash(publication)
+    // subdomain. Only the write target changes here — ownership/discovery
+    // (getDomainOwnerAndModules(publication), canPublish/canReset) stays keyed
+    // on the original `publication` identity, not the configured domain.
+    const writeDomain =
+      config && config.domain ? config.domain : publication;
+    const node = ethers.utils.namehash(writeDomain);
     trace.push(`node: ${node}`);
 
     // Read previous contenthash_wrapped on-chain

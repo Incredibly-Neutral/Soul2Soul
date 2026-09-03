@@ -62,6 +62,7 @@ const publicationConfigSchema = z.object({
     name: z.string(),
     templateCid: z.string(),
     localePaths: z.record(z.string(), z.string()).optional(),
+    domain: z.string().optional(),
 }).passthrough() satisfies z.ZodType<S2SPublicationConfig>;
 
 // ============================================================================

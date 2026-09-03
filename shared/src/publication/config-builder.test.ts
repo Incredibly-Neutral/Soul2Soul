@@ -204,6 +204,44 @@ describe('ConfigBuilder', () => {
       expect(ipfs.fetchFromKubo).toHaveBeenCalledWith('existing-config-cid');
     });
 
+    it('carries the optional domain from the existing config into the built config', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({
+        domain: 'custom.soul2soul.eth',
+      });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+      );
+
+      expect(result.config.domain).toBe('custom.soul2soul.eth');
+    });
+
+    it('omits domain from the built config when the existing config has none', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({});
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+      );
+
+      expect(result.config.domain).toBeUndefined();
+    });
+
     it('merges templates: existing CID stays when template files unchanged', async () => {
       const ipfs = mockIPFS();
       ipfs.fetchFromKubo.mockResolvedValue({
