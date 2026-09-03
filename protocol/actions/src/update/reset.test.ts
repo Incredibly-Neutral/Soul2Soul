@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   canPublish: true,
   canReset: true,
   gatewayUrls: [] as string[],
+  // getConfig return value — no domain by default (fallback write target)
+  config: { assetsCid: 'QmAssets' } as any,
   // evmWrite outcome — { success:true } by default; tests override to simulate
   // a failed/reverted on-chain write (see the write-failure describe below).
   evmWriteResult: { success: true } as any,
@@ -53,7 +55,7 @@ vi.mock('../libs/protocol.factory', () => ({
 }));
 
 vi.mock('../render/config.ctrl', () => ({
-  getConfig: vi.fn(async () => ({ assetsCid: 'QmAssets' })),
+  getConfig: vi.fn(async () => mocks.config),
 }));
 
 vi.mock('../libs/evm', () => ({
@@ -135,6 +137,7 @@ beforeEach(() => {
   mocks.gatewayUrls = [];
   mocks.canPublish = true;
   mocks.canReset = true;
+  mocks.config = { assetsCid: 'QmAssets' };
   mocks.evmWriteResult = { success: true };
   vi.stubGlobal(
     'fetch',
@@ -289,5 +292,60 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
 
     expect(result.ok).toBe(true);
     expect(canReset).not.toHaveBeenCalled();
+  });
+});
+
+describe('evm-update — contenthash_wrapped write target (config.domain)', () => {
+  const setTextNodeOf = async (): Promise<string | undefined> => {
+    const { evmWrite } = await import('../libs/evm');
+    const calls = (evmWrite as any).mock.calls as any[][];
+    const setText = calls.find((c) => c[4] === 'setText');
+    return setText ? setText[5][0] : undefined;
+  };
+
+  it('writes to namehash(publication) when config.domain is absent (fallback)', async () => {
+    mocks.config = { assetsCid: 'QmAssets' }; // no domain
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await setTextNodeOf()).toBe(ethers.utils.namehash('alice.soul2soul.eth'));
+  });
+
+  it('writes to namehash(config.domain) when config.domain is set', async () => {
+    mocks.config = { assetsCid: 'QmAssets', domain: 'custom.soul2soul.eth' };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await setTextNodeOf()).toBe(
+      ethers.utils.namehash('custom.soul2soul.eth'),
+    );
+    // The write target changed, not the publication identity
+    expect(await setTextNodeOf()).not.toBe(
+      ethers.utils.namehash('alice.soul2soul.eth'),
+    );
+  });
+
+  it('still fails loudly on write failure when a domain is configured', async () => {
+    mocks.config = { assetsCid: 'QmAssets', domain: 'custom.soul2soul.eth' };
+    mocks.evmWriteResult = { success: false, error: 'reverted' };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('contenthash_wrapped');
   });
 });

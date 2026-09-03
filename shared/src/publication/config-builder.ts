@@ -195,6 +195,11 @@ export class ConfigBuilder {
     const mapping = JSON.parse(mappingContent);
 
     // --- Build final config ---
+    // Carry the optional ENS write-target domain from the existing config
+    // (if any) into the built config. Absent when the config has no domain,
+    // keeping the default subdomain write target unchanged.
+    const loadedDomain = (config as { domain?: string } | undefined)?.domain;
+
     const finalConfig: S2SPublicationConfig = {
       assetsCid,
       contract: contractAddress,
@@ -203,6 +208,7 @@ export class ConfigBuilder {
       name: publicationName,
       templateCid: templatesCid,
       localePaths: mapping.localePaths,
+      ...(loadedDomain !== undefined ? { domain: loadedDomain } : {}),
     };
 
     // --- Upload final config to both Filebase + Kubo ---
