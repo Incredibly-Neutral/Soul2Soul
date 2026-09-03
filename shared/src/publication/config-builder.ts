@@ -140,6 +140,7 @@ export class ConfigBuilder {
     contractAddress: string,
     assetsCid: string,
     existingConfigCid?: string,
+    domain?: string,
   ): Promise<{ config: S2SPublicationConfig; cid: string }> {
     // Load existing config or create new one
     let config: any = {};
@@ -195,10 +196,15 @@ export class ConfigBuilder {
     const mapping = JSON.parse(mappingContent);
 
     // --- Build final config ---
-    // Carry the optional ENS write-target domain from the existing config
-    // (if any) into the built config. Absent when the config has no domain,
-    // keeping the default subdomain write target unchanged.
+    // Resolve the optional ENS write-target domain. Precedence:
+    //   1. An explicit `domain` override (the safe-app 'Add domain' path).
+    //      An empty string clears the target (restores the default subdomain
+    //      write target); any other value sets config.domain.
+    //   2. Otherwise carry the domain from the existing config (if any).
+    //   3. Otherwise leave `domain` unset — exactly today's behaviour, keeping
+    //      the default subdomain write target unchanged.
     const loadedDomain = (config as { domain?: string } | undefined)?.domain;
+    const effectiveDomain = domain !== undefined ? domain : loadedDomain;
 
     const finalConfig: S2SPublicationConfig = {
       assetsCid,
@@ -208,7 +214,9 @@ export class ConfigBuilder {
       name: publicationName,
       templateCid: templatesCid,
       localePaths: mapping.localePaths,
-      ...(loadedDomain !== undefined ? { domain: loadedDomain } : {}),
+      ...(effectiveDomain !== undefined && effectiveDomain !== ''
+        ? { domain: effectiveDomain }
+        : {}),
     };
 
     // --- Upload final config to both Filebase + Kubo ---
