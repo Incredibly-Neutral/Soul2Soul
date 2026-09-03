@@ -11,6 +11,9 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
+import { ethers } from 'ethers';
+import { evmRead } from '../lib/evm.js';
+import { verifyDomainOwnership } from '../lib/domain-validation.js';
 
 export class S2SRecordsTab extends HTMLElement {
   public safeIntegration!: SafeIntegration;
@@ -30,6 +33,9 @@ export class S2SRecordsTab extends HTMLElement {
     attributed: boolean;
   }> = [];
   private loadingStorage = false;
+  /** The publication's ENS write-target domain, read from the on-chain config.
+   *  Null when no custom domain is set (default subdomain write target). */
+  private currentDomain: string | null = null;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -89,6 +95,7 @@ export class S2SRecordsTab extends HTMLElement {
       );
       // Fresh chain read clears changed-state highlights
       this.changedKeys.clear();
+      await this.loadCurrentDomain();
     } catch (error) {
       console.error('Error loading records:', error);
     }
@@ -159,18 +166,79 @@ export class S2SRecordsTab extends HTMLElement {
     this.render();
   }
 
-  private async updateConfig() {
-    const existingCid = await this.safeIntegration.getRecord('config');
-    const repo = await this.safeIntegration.getRecord('repo');
-    const publicationUrl = await this.safeIntegration.getRecord('name');
-    const pInfo = await this.protocolIntegration.getInfo();
+  /**
+   * Read the publication's current ENS write-target domain from the `config`
+   * record (the `domain` field of the config JSON at the config CID). Null
+   * when unset (default subdomain write target).
+   */
+  private async loadCurrentDomain(): Promise<void> {
+    const cached = store.getRecord('config');
+    const configCid =
+      cached ?? (await this.safeIntegration.getRecord('config').catch(() => null));
+    if (!configCid) {
+      this.currentDomain = null;
+      this.render();
+      return;
+    }
+    try {
+      const config = await this.makeIPFS().fetchFromKubo(configCid);
+      this.currentDomain = (config as { domain?: string } | undefined)?.domain ?? null;
+    } catch (error) {
+      console.warn('[records] could not read current domain from config:', error);
+      this.currentDomain = null;
+    } finally {
+      this.render();
+    }
+  }
 
-    const ipfs = new S2SIPFSMethods(
+  /** Shared IPFS client for config reads/writes in this tab. */
+  private makeIPFS(): S2SIPFSMethods {
+    return new S2SIPFSMethods(
       'https://ipfs.transport-union.dev',
       import.meta.env.VITE_PINATA_JWT,
       'https://neutralpress.mypinata.cloud',
       import.meta.env.VITE_FILEBASE_TOKEN || '',
     );
+  }
+
+  /**
+   * 'Add domain' flow: hard-gate the entered ENS domain on ownership — it must
+   * resolve to the SAME publication Safe as the current publication name
+   * (otherwise the EVM update action would write contenthash to an arbitrary
+   * node). On success the domain is passed through updateConfig → buildConfig,
+   * landing in the built config's `domain` field; on failure nothing is saved.
+   */
+  private async addDomain() {
+    const input = this.shadowRoot?.querySelector('#domain-input') as HTMLInputElement | null;
+    const domain = input?.value.trim() || '';
+    if (!domain) {
+      this.showNotification('Enter an ENS domain to add.', 'error');
+      return;
+    }
+
+    const publication = await this.safeIntegration.getRecord('name').catch(() => '');
+    const check = await verifyDomainOwnership(domain, publication, {
+      namehash: (name: string) => ethers.namehash(name),
+      evmRead,
+    });
+
+    if (!check.ok) {
+      this.showNotification(check.reason || 'Domain ownership verification failed.', 'error');
+      return;
+    }
+
+    if (input) input.value = '';
+    this.showNotification(`Domain "${domain}" verified — updating config…`, 'success');
+    await this.updateConfig(domain);
+  }
+
+  private async updateConfig(domainOverride?: string) {
+    const existingCid = await this.safeIntegration.getRecord('config');
+    const repo = await this.safeIntegration.getRecord('repo');
+    const publicationUrl = await this.safeIntegration.getRecord('name');
+    const pInfo = await this.protocolIntegration.getInfo();
+
+    const ipfs = this.makeIPFS();
 
     console.log(import.meta.env.VITE_GITHUB_TOKEN);
 
@@ -195,10 +263,16 @@ export class S2SRecordsTab extends HTMLElement {
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
+      existingCid,
+      domainOverride,
     );
 
     console.log('[config] templateCid from builder:', publicationConfig.templateCid);
     console.log('[config] configCid from builder:', configCid);
+    // Keep the current write-target in sync with what we just built. Without an
+    // override the existing config's domain (if any) is carried through, so a
+    // domain set previously survives later plain 'Update Config' runs.
+    this.currentDomain = publicationConfig.domain ?? null;
 
     console.log('cid from kubo', configCid);
 
@@ -415,6 +489,21 @@ export class S2SRecordsTab extends HTMLElement {
           background: rgba(238, 181, 29, 0.15);
           border-left: 3px solid var(--color-yellow);
         }
+
+        .domain-current {
+          color: var(--gray-50);
+          font-size: 0.875rem;
+          margin: 0.5rem 0 0;
+        }
+        .domain-current code {
+          color: var(--blue-400);
+          font-family: 'Monaco', 'Menlo', monospace;
+        }
+        .domain-hint {
+          color: var(--gray-500);
+          font-size: 0.75rem;
+          margin: 0.375rem 0 0;
+        }
       </style>
 
       ${
@@ -503,6 +592,26 @@ export class S2SRecordsTab extends HTMLElement {
           `
           }
 
+          <div class="domain-section">
+            <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target domain</h3>
+            ${
+              this.currentDomain
+                ? `<p class="domain-current">Current write-target: <code>${this.currentDomain}</code></p>`
+                : `<p class="domain-current">No custom write-target set — the contenthash is written to the default subdomain of the publication name.</p>`
+            }
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
+              <input
+                id="domain-input"
+                type="text"
+                class="record-value-input"
+                style="max-width: 320px;"
+                placeholder="e.g. s3ntiment.eth"
+              />
+              <button class="button" data-action="add-domain">Add domain</button>
+            </div>
+            <p class="domain-hint">The domain must be owned by this publication Safe — ownership is verified before saving.</p>
+          </div>
+
           <button class="button" data-action="update">Update Config</button>
         </div>
 
@@ -534,6 +643,8 @@ export class S2SRecordsTab extends HTMLElement {
           this.cancelEdit();
         } else if (action === 'update') {
           this.updateConfig();
+        } else if (action === 'add-domain') {
+          this.addDomain();
         } else if (action === 'load-storage') {
           this.loadStorage();
         }
