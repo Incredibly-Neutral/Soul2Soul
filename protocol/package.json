@@ -6,7 +6,7 @@
   "scripts": {
     "compile": "hardhat --config contracts/hardhat.config.ts compile",
     "deploy:pubfac": "npx tsx contracts/scripts/deploy-publication-factory.ts",
-    "deploy:pub":  "npx tsx contracts/scripts/update-impl.ts",
+    "deploy:pub": "npx tsx contracts/scripts/update-impl.ts",
     "deploy:ens": "hardhat --config contracts/hardhat.config.ts deploy --tags ENS --network @@MODE @@",
     "verify": "npx tsx contracts/scripts/verify-pub.ts",
     "export": "ldenv rocketh-export -e @@MODE @@",
@@ -56,6 +56,8 @@
   },
   "dependencies": {
     "@ensdomains/content-hash": "^3.0.0",
+    "@hono/node-server": "*",
+    "hono": "*",
     "@ensdomains/ens-contracts": "^1.6.2",
     "@ensdomains/eth-ens-namehash": "^2.0.15",
     "@filoz/synapse-core": "^0.7.0",
