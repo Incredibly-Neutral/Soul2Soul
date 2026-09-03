@@ -145,5 +145,5 @@ docker compose up --build
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `4269` | HTTP server port |
-| `IPFS_GATEWAY` | `https://neutralpress.mypinata.cloud` | IPFS Pinata gateway (URLs: `{IPFS_GATEWAY}/ipfs/{cid}`) |
+| `IPFS_GATEWAY` | `https://ipfs.filebase.io` | IPFS Filebase gateway (URLs: `{IPFS_GATEWAY}/ipfs/{cid}`) |
 | `ACTION_TIMEOUT_MS` | `30000` | Max execution time per action (ms) |
