@@ -6,9 +6,11 @@ import { IInvite, IUpdate } from './types/oxo.js';
 import { accountField } from './settings.factory.js';
 import { AuthorModal } from './user/author.modal.js';
 
+export type PinProvider = 'pinata' | 'filebase';
+
 export interface IOxOSettings {
 	authors: IOXOUser[];
-	updates: { [key: string]: IUpdate[] };
+	updates: Record<string, IUpdate[]>;
 	invites: IInvite[];
 	updatesIncludeMyOwn: boolean;
 	listening: boolean;
@@ -21,6 +23,7 @@ export interface IOxOSettings {
 	pinata_secret_key: string;
 	pinata_jwt: string;
 	filebase_token: string;
+	pin_provider: PinProvider;
 	litUsageKey: string;
 	kubo_url: string;
 }
@@ -40,6 +43,7 @@ export const DEFAULT_SETTINGS: IOxOSettings = {
 	pinata_jwt: '',
 	pinata_secret_key: '',
 	filebase_token: '',
+	pin_provider: 'filebase',
 	litUsageKey: '',
 	kubo_url: 'ipfs.transport-union.dev',
 };
@@ -48,7 +52,7 @@ export class OxOAuthorsTab extends PluginSettingTab {
 	plugin: OxO;
 	name: string;
 	/** Track which authors have their private key revealed in the UI. */
-	private privateKeyRevealed: Set<string> = new Set();
+	private readonly privateKeyRevealed = new Set<string>();
 
 	constructor(app: App, plugin: OxO) {
 		super(app, plugin);
@@ -160,7 +164,7 @@ export class OxOAuthorsTab extends PluginSettingTab {
 				);
 
 			// moeten we niet meteen alles inladen ? [user][chain]?
-			for (let chain of Object.keys(this.plugin.ctrlr.account)) {
+			for (const chain of Object.keys(this.plugin.ctrlr.account)) {
 				accountField(chain, author, authorEl);
 			}
 
@@ -182,7 +186,7 @@ export class OxOAuthorsTab extends PluginSettingTab {
 					const onSubmit = async (name: string, type: string, privateKey?: string) => {
 						await this.plugin.ctrlr.newAuthor(name, type, privateKey);
 					};
-					return new AuthorModal(this.app, this.plugin.ctrlr, onSubmit).open();
+					new AuthorModal(this.app, this.plugin.ctrlr, onSubmit).open();
 				}),
 			);
 
@@ -240,9 +244,7 @@ export class OxOAuthorsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('PINATA JWT')
-			.setDesc(
-				'Service to serve content addressed uploads (disabled — eth.link recommends Filebase)',
-			)
+			.setDesc('JWT for Pinata IPFS pinning (used when pin_provider is set to pinata)')
 			.addText((text) =>
 				text.setValue(this.plugin.settings.pinata_jwt).onChange(async (value) => {
 					this.plugin.settings.pinata_jwt = value;
@@ -252,12 +254,26 @@ export class OxOAuthorsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('FILEBASE TOKEN')
-			.setDesc('Filebase access token for IPFS pinning (eth.link recommends Filebase)')
+			.setDesc('Filebase access token for IPFS pinning (used when pin_provider is set to filebase)')
 			.addText((text) =>
 				text.setValue(this.plugin.settings.filebase_token).onChange(async (value) => {
 					this.plugin.settings.filebase_token = value;
 					await this.plugin.saveSettings();
 				}),
+			);
+
+		new Setting(containerEl)
+			.setName('PIN PROVIDER')
+			.setDesc('Storage provider for IPFS pinning: "pinata" or "filebase" (default: filebase)')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('filebase', 'Filebase')
+					.addOption('pinata', 'Pinata')
+					.setValue(this.plugin.settings.pin_provider)
+					.onChange(async (value) => {
+						this.plugin.settings.pin_provider = value as PinProvider;
+						await this.plugin.saveSettings();
+					}),
 			);
 
 		new Setting(containerEl)
