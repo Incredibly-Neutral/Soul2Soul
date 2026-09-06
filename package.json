@@ -11,6 +11,7 @@
     "actions:swap": "tsx --require dotenv/config protocol/scripts/lit/swap-action.ts",
     "refresh-key": "tsx --require dotenv/config protocol/scripts/lit/refresh-key.ts",
     "update-protocol": "tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts",
+    "lit:probe-core-api": "node protocol/scripts/lit/lit-core-api-probe.mjs",
     "deploy-action": "bash -c 'pnpm actions:build && tsx --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
     "plugins": "pnpm -C shared run build && pnpm -C 0xobsidian run build && pnpm -C neutralpress run build",
     "shared": "pnpm -C shared run build",
