@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   verifyDomainOwnership,
+  maybeVerifyDomainOwnership,
   getEnsOwner,
+  DOMAIN_VALIDATION_CONFIG,
   ENS_REGISTRY_ADDRESS,
   ENS_L1_CHAIN_ID,
   type DomainOwnershipDeps,
@@ -148,5 +150,64 @@ describe('verifyDomainOwnership', () => {
     );
     const result = await verifyDomainOwnership('s3ntiment.eth', 'testpub.soul2soul.eth', deps);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('enforcement toggle (maybeVerifyDomainOwnership / DOMAIN_VALIDATION_CONFIG)', () => {
+  it('is OFF by default', () => {
+    expect(DOMAIN_VALIDATION_CONFIG.enforceOwnership).toBe(false);
+  });
+
+  it('accepts any entered domain with the gate OFF and skips the ownership check entirely', async () => {
+    // evmRead that throws if it is ever called — proving the check is skipped.
+    const evmRead = vi.fn().mockRejectedValue(new Error('must not be called'));
+    const deps: DomainOwnershipDeps = {
+      namehash: (name: string) => nodeFor(name),
+      evmRead,
+    };
+
+    const result = await maybeVerifyDomainOwnership(
+      'anything.eth',
+      'testpub.soul2soul.eth',
+      deps,
+      { enforceOwnership: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(evmRead).not.toHaveBeenCalled();
+  });
+
+  it('delegates to the full ownership gate when the gate is ON — different-Safe domain still rejected', async () => {
+    const deps = makeDeps({
+      's3ntiment.eth': OTHER_SAFE,
+      'testpub.soul2soul.eth': PUB_SAFE,
+    });
+
+    const result = await maybeVerifyDomainOwnership(
+      's3ntiment.eth',
+      'testpub.soul2soul.eth',
+      deps,
+      { enforceOwnership: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain(OTHER_SAFE);
+  });
+
+  it('delegates to the full ownership gate when the gate is ON — same-Safe domain still accepted', async () => {
+    const deps = makeDeps({
+      's3ntiment.eth': PUB_SAFE,
+      'testpub.soul2soul.eth': PUB_SAFE,
+    });
+
+    const result = await maybeVerifyDomainOwnership(
+      's3ntiment.eth',
+      'testpub.soul2soul.eth',
+      deps,
+      { enforceOwnership: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.domainOwner).toBe(PUB_SAFE);
   });
 });
