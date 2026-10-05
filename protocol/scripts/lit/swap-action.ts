@@ -92,11 +92,20 @@ async function main(): Promise<void> {
     throw new Error(`Group "${groupName}" has no valid on-chain id in ${configPath}`);
   }
 
-  // 1. Compact + compute CID + pin (same as the API-mode script).
+  // 1. Compact + compute CID (same as the API-mode script).
   const _action = compactAction(code);
   const cid = await lit.getActionCid(_action);
-  const pinnedCid = await ipfs.uploadToPinata(_action, actionName);
-  if (cid !== pinnedCid)
+
+  // Dry-run gate BEFORE the live Pinata upload: LIT_DRY_RUN=1 must not pin.
+  let pinnedCid: string | null = null;
+  if (dryRun) {
+    console.log(
+      `dry-run: would upload "${actionName}" (${_action.length} chars compact) to Pinata`,
+    );
+  } else {
+    pinnedCid = await ipfs.uploadToPinata(_action, actionName);
+  }
+  if (pinnedCid !== null && cid !== pinnedCid)
     console.warn(`CID mismatch for ${actionName}: ${cid} vs pinned ${pinnedCid}`);
 
   const newHashedCid = actionHash(cid);

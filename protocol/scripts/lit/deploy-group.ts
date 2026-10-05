@@ -13,8 +13,9 @@
  *   3. POST /core/v1/prepare_wallet -> { wallet_address, derivation_path }  (no auth)
  *   4. mint a usage key locally ('lk_' + 32 CSPRNG bytes); only its keccak256 goes on-chain
  *   5. build + propose ONE Safe batch:
+ *        registerWalletDerivation(new PKP)  (FIRST — addGroup binds the new PKP in pkpIds,
+ *                                            so its derivation must be registered first)
  *        addGroup                (binds the 5 action hashes + new PKP to the group)
- *        registerWalletDerivation(new PKP)
  *        addAction x5
  *        addActionToGroup x5
  *        addPkpToGroup
@@ -39,6 +40,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import {
   ACCOUNT_CONFIG_ADDRESS,
+  PROTOCOL_SAFE_ADDRESS,
   actionHash,
   adminHash,
   buildSafeBatch,
@@ -128,6 +130,17 @@ function buildProvisionBatch(opts: {
   const { adminHash: ah, pkpAddress, derivationPath, usageHash: uh, groupId, actions } = opts;
 
   const writes = [
+    // Register the freshly minted PKP FIRST (derivation_path passed VERBATIM).
+    // Must precede addGroup: addGroup binds the new PKP in pkpIds, and the
+    // facet validates the derivation is registered before binding it — an
+    // atomic Safe-batch revert would occur if this came after addGroup.
+    encodeRegisterWalletDerivation({
+      apiKeyHash: ah,
+      pkpId: pkpAddress as `0x${string}`,
+      derivationPath: derivationPath as `0x${string}`,
+      name: `${groupName} pkp`,
+      description: 's2s protocol PKP (chain-secured re-provision)',
+    }),
     // Create the group, binding the 5 action hashes + the new PKP to it.
     encodeAddGroup({
       apiKeyHash: ah,
@@ -135,14 +148,6 @@ function buildProvisionBatch(opts: {
       description: GROUP_DESCRIPTION,
       cidHashes: actions.map((a) => a.hashedCid as `0x${string}`),
       pkpIds: [pkpAddress as `0x${string}`],
-    }),
-    // Register the freshly minted PKP (derivation_path passed VERBATIM).
-    encodeRegisterWalletDerivation({
-      apiKeyHash: ah,
-      pkpId: pkpAddress as `0x${string}`,
-      derivationPath: derivationPath as `0x${string}`,
-      name: `${groupName} pkp`,
-      description: 's2s protocol PKP (chain-secured re-provision)',
     }),
     // Re-register action metadata + bind each action to the group.
     ...actions.flatMap((a) => [
@@ -238,10 +243,10 @@ async function finalize(safeTxHash: string): Promise<void> {
   fs.rmSync(pendingPath, { force: true });
   console.log(`🧹 Removed ${pendingPath}`);
 
-  printEnvInstructions(pending);
+  printEnvInstructions(pending, Number(groupId));
 }
 
-function printEnvInstructions(pending: PendingProvision): void {
+function printEnvInstructions(pending: PendingProvision, actualGroupId?: number): void {
   console.log('');
   console.log('=== NEXT STEPS ===');
   console.log('Add to root .env:');
@@ -259,7 +264,7 @@ function printEnvInstructions(pending: PendingProvision): void {
   console.log('Reminders:');
   console.log(`  - New PKP address: ${pending.pkp.address} (save it)`);
   console.log(
-    `  - New group id:    ${String(pending.predictedGroupId)} (from receipt at finalize)`,
+    `  - New group id:    ${String(actualGroupId ?? pending.predictedGroupId)} (from the finalize receipt)`,
   );
   console.log('  - If the Safe batch is rejected/reverts, re-run `pnpm deploy-group` — it mints a');
   console.log('    fresh PKP + usage key (the unregistered keypair is compute cost only).');
