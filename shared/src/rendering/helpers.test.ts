@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { LitService } from '../lit';
 import { runAction } from './helpers';
+// runRenderActionWithRetry lives in sequence.ts but is tested here (through the
+// real runAction + the stubbed runner fetch below) because its final error
+// construction is the other half of this 504-empty-envelope regression.
+import { runRenderActionWithRetry } from './sequence';
 
 // ============================================================================
 // runAction (preview branch) — defensive handling of the Bun runner response.
@@ -101,5 +105,37 @@ describe('runAction preview branch', () => {
     expect(result).toEqual({ ok: false });
     expect(logSpy).toHaveBeenCalledWith('bun serverless call failed: boom');
     logSpy.mockRestore();
+  });
+});
+
+// ============================================================================
+// runRenderActionWithRetry — empty runner envelope (504-empty-JSON case).
+//
+// When the runner returns a non-ok envelope with no error field (e.g. an HTTP
+// 504 whose JSON body lacked success===false, so runAction resolved to
+// undefined), the retry wrapper's final error construction must produce a
+// NON-EMPTY meaningful message instead of new Error(undefined), which yields an
+// empty message that hides the real failure from the caller. Drives through the
+// real runAction + the stubbed runner fetch (S2S_RUNNER_URL).
+// ============================================================================
+
+describe('runRenderActionWithRetry — empty runner envelope (504-empty-JSON)', () => {
+  it('produces a non-empty meaningful error when the runner envelope is undefined', async () => {
+    // Runner returns a JSON body with NO `response` field → runAction resolves
+    // to undefined → the retry loop sees a non-ok result and throws.
+    fetchMock.mockResolvedValue(jsonResponse({ success: false, error: 'gateway timeout' }));
+
+    const err: unknown = await runRenderActionWithRetry(
+      true, // preview (single attempt)
+      mockLit,
+      CID,
+      { id: 'j1' },
+      INPUTS,
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toBe('');
+    expect((err as Error).message).toContain('render action returned no result');
+    expect((err as Error).message).toContain('non-ok/empty envelope');
   });
 });
