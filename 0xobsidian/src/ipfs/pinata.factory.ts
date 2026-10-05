@@ -6,6 +6,7 @@ import FormData from 'form-data';
 import { importer } from 'ipfs-unixfs-importer';
 import { MemoryBlockstore } from 'blockstore-core/memory';
 import { MainController } from '../main.ctrlr.js';
+import type { PinProvider } from '../settings.js';
 
 // Function to calculate IPFS hash locally
 export const calculateIPFSHash = async (filePath: string): Promise<string> => {
@@ -74,7 +75,50 @@ export const upload = async (
 		const formData = new FormData();
 		formData.append('file', fs.createReadStream(filePath));
 
-		// ── Filebase RPC: upload via /api/v0/add (Pinata disabled — eth.link recommends Filebase) ──
+		const provider: PinProvider = main.plugin.settings.pin_provider || 'filebase';
+
+		if (provider === 'pinata') {
+			const request = net.request({
+				method: 'POST',
+				url: 'https://api.pinata.cloud/pinning/pinFileToIPFS',
+				headers: {
+					pinata_api_key: main.plugin.settings.pinata_api_key,
+					pinata_secret_api_key: main.plugin.settings.pinata_secret_key,
+					'Content-Type': `multipart/form-data; boundary=${formData.getBoundary()}`,
+				},
+			});
+
+			return new Promise((resolve, reject) => {
+				request.on('response', (response: any) => {
+					console.log('Got response with status:', response.statusCode);
+					let data = '';
+					response.on('data', (chunk: any) => {
+						console.log('Response chunk:', chunk.toString());
+						data += chunk;
+						try {
+							const jsonResponse = JSON.parse(data);
+							if (response.statusCode === 200) {
+								resolve(jsonResponse.IpfsHash);
+							} else {
+								reject(new Error(`Failed to upload to Pinata: ${data}`));
+							}
+						} catch (error) {
+							reject(error);
+						}
+					});
+				});
+
+				request.on('error', (error: any) => {
+					console.log('Request error:', error);
+					reject(error);
+				});
+
+				request.write(formData);
+				request.end();
+			});
+		}
+
+		// Filebase RPC: upload via /api/v0/add (default)
 		const request = net.request({
 			method: 'POST',
 			url: 'https://rpc.filebase.io/api/v0/add',
@@ -112,47 +156,6 @@ export const upload = async (
 			request.write(formData);
 			request.end();
 		});
-
-		/* ── Pinata upload (disabled — eth.link recommends Filebase) ──
-        const request = net.request({
-            method: 'POST',
-            url: 'https://api.pinata.cloud/pinning/pinFileToIPFS',
-            headers: {
-                'pinata_api_key': main.plugin.settings.pinata_api_key,
-                'pinata_secret_api_key': main.plugin.settings.pinata_secret_key,
-                'Content-Type': `multipart/form-data; boundary=${formData.getBoundary()}`
-            }
-        });
-
-        return new Promise((resolve, reject) => {
-            request.on('response', (response: any) => {
-                console.log('Got response with status:', response.statusCode);
-                let data = '';
-                response.on('data', (chunk: any) => {
-                    console.log('Response chunk:', chunk.toString());
-                    data += chunk;
-                    try {
-                        const jsonResponse = JSON.parse(data);
-                        if (response.statusCode === 200) {
-                            resolve(jsonResponse.IpfsHash);
-                        } else {
-                            reject(new Error(`Failed to upload to Pinata: ${data}`));
-                        }
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-
-            request.on('error', (error: any) => {
-                console.log('Request error:', error);
-                reject(error);
-            });
-
-            request.write(formData);
-            request.end();
-        });
-        */
 	} catch (error) {
 		throw error;
 	}

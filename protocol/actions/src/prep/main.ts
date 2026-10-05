@@ -44,6 +44,7 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
   try {
     requireFields(input, ['publication', 'contentIds', 'endpoints']);
     const { publication, configCid, contentIds, endpoints } = input;
+    console.log(endpoints);
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
     if (!Array.isArray(contentIds) || contentIds.length === 0)
