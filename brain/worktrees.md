@@ -80,3 +80,19 @@ response'); DRPC `lb.drpc.live` throws exactly that during indexing.
   APPROVE-WITH-NOTES, 0 blocking (N1 fake-timer backoff test, N2 catch breadth, N3 log lexicon; all
   cosmetic). **Pending deploy caveat (recorded, out of scope):** must rebuild + re-pin/re-register the
   `lit_action_update` bundle on-chain for this to take effect in the running app.
+
+## 2026-09-03 — feat/render-500-nonjson-harden
+
+**Task:** Harden the PREVIEW branch of `runAction` in `shared/src/rendering/helpers.ts` — the
+neutralpress render PREP stage fails with `SyntaxError: Unexpected token 'I', "Internal S"... is
+not valid JSON` because `runAction()` does an unwrapped `await r.json()` on the Bun runner response.
+When the runner returns HTTP 500 with a plain-text body (Hono default 'Internal Server Error'),
+`r.json()` throws the raw SyntaxError (opaque, unactionable). Add an `AbortSignal.timeout(10000)`
+on the fetch (mirroring the runner's 10s IPFS fetch timeout) and a defensive body read that wraps
+non-JSON bodies in an actionable `Error('runner <status> returned non-JSON: <body>')`. Live branch
+(else) untouched.
+
+**Worktree:** `~/code/s2s-render-500-nonjson-harden` (branch `feat/render-500-nonjson-harden` from main `d1cbbf8`)
+
+**Status:** committed f203f4f, pushed, PR #89 OPEN (https://github.com/Joera/S2S-monorepo/pull/89). Not merged.
+- 2026-09-03 | session=self (DeepSeek V4 Flash 0731) | worktree=/home/joera/code/s2s-serverless-error-handling | branch=feat/serverless-error-handling | agent=builder(self) | model=deepseek-v4-flash-0731 | task=harden protocol/serverless/server.ts error handling (JSON on all error paths) + regression test | PR=https://github.com/Joera/S2S-monorepo/pull/88
