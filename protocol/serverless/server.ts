@@ -25,9 +25,9 @@ declare global {
 
 export const app = new Hono();
 
-const IPFS_GATEWAY = process.env.IPFS_GATEWAY || 'https://neutralpress.mypinata.cloud';
-const ACTION_TIMEOUT = parseInt(process.env.ACTION_TIMEOUT_MS || '30000', 10);
-const PORT = parseInt(process.env.PORT || '4269', 10);
+const IPFS_GATEWAY = process.env.IPFS_GATEWAY || "https://ipfs.filebase.io";
+const ACTION_TIMEOUT = parseInt(process.env.ACTION_TIMEOUT_MS || "30000", 10);
+const PORT = parseInt(process.env.PORT || "4269", 10);
 
 // ═══ Lit Actions shim (no signing) ═══
 globalThis.Lit = {

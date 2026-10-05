@@ -24,8 +24,20 @@ export async function runAction(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cid, inputs }),
+      // Mirror the runner's own 10s IPFS fetch timeout so a hung runner
+      // aborts client-side instead of hanging the render PREP stage.
+      signal: AbortSignal.timeout(10000),
     });
-    const wrapped = await r.json();
+    const text = await r.text();
+    let wrapped: { success?: boolean; error?: string; response: unknown };
+    try {
+      wrapped = JSON.parse(text) as { success?: boolean; error?: string; response: unknown };
+    } catch {
+      // Runner returns plain-text bodies on HTTP 500 (Hono default 'Internal
+      // Server Error'); surface that as an actionable message instead of a raw
+      // SyntaxError from the unwrapped r.json().
+      throw new Error(`runner ${String(r.status)} returned non-JSON: ${text.slice(0, 200)}`);
+    }
     // console.log("RUNNER RESPONSE:", JSON.stringify(wrapped, null, 2));
     if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
     return wrapped.response; // ActiedonBarResult<T>

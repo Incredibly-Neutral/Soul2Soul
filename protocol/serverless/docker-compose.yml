@@ -7,7 +7,7 @@ services:
       - "4269:4269"
     environment:
       - PORT=4269
-      - IPFS_GATEWAY=${IPFS_GATEWAY:-https://neutralpress.mypinata.cloud}
+      - IPFS_GATEWAY=${IPFS_GATEWAY:-https://ipfs.filebase.io}
       - ACTION_TIMEOUT_MS=${ACTION_TIMEOUT_MS:-30000}
     volumes:
       - ./public:/app/public
