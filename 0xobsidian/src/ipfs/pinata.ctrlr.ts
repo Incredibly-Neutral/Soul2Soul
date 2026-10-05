@@ -8,6 +8,7 @@ import * as path from 'path';
 import { PinataSDK } from 'pinata-web3';
 import { CID } from 'multiformats/cid';
 import { Readable } from 'stream';
+import type { PinProvider } from '../settings.js';
 
 export class PinataService {
 	main: MainController;
@@ -21,6 +22,12 @@ export class PinataService {
 			pinataGateway: 'neutralpress.mypinata.cloud',
 		});
 	}
+
+	/** Resolve the active storage provider from plugin settings (default: filebase). */
+	private get provider(): PinProvider {
+		return this.main.plugin.settings.pin_provider || 'filebase';
+	}
+
 	// using internal net.request and formdata
 	// couldnt get contentype txt/css to work
 	async upload(filePath: string, onlyHash: boolean = false): Promise<string> {
@@ -57,8 +64,6 @@ export class PinataService {
 		try {
 			const fileBuffer = fs.readFileSync(filePath);
 
-			// Filebase RPC: upload content directly via /api/v0/add
-			// (Pinata disabled in favor of Filebase — eth.link recommends Filebase)
 			const formData = new FormData();
 			formData.append(
 				'file',
@@ -66,6 +71,27 @@ export class PinataService {
 				fileName,
 			);
 
+			if (this.provider === 'pinata') {
+				const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${this.main.plugin.settings.pinata_jwt}`,
+					},
+					body: formData,
+				});
+
+				if (!response.ok) {
+					const errorText = await response.text();
+					throw new Error(
+						`Pinata upload failed: ${response.status} ${response.statusText} - ${errorText}`,
+					);
+				}
+
+				const result = await response.json();
+				return result.IpfsHash;
+			}
+
+			// Filebase RPC: upload content directly via /api/v0/add (default)
 			const response = await fetch('https://rpc.filebase.io/api/v0/add', {
 				method: 'POST',
 				headers: {
@@ -83,13 +109,6 @@ export class PinataService {
 
 			const result = await response.json();
 			return result.Hash;
-
-			/* ── Pinata uploadFileFromPath (disabled — eth.link recommends Filebase) ──
-      const blob = new Blob([new Uint8Array(fileBuffer)]);
-      const file = new File([blob], fileName, { type: contentType });
-      const upload = await this.pinata.upload.file(file);
-      return upload.IpfsHash;
-      */
 		} catch (error) {
 			console.log(error);
 			return 'QmUrU11u74YrLbj9d1Z9JvPPZ2nXmgMVTgh2ZvjrTUc4ZQ';
@@ -199,10 +218,13 @@ export class PinataService {
 				cid = cid.replace('ipfs://', '');
 			}
 
+			if (this.provider === 'pinata') {
+				return this.pinCidPinata(cid, remote);
+			}
+
 			console.log('Pinning CID with Filebase:', cid);
 
-			// Filebase Pinning Service API: repin existing CID
-			// (Pinata disabled in favor of Filebase — eth.link recommends Filebase)
+			// Filebase Pinning Service API: repin existing CID (default)
 			const response = await fetch('https://api.filebase.io/v1/ipfs/pins', {
 				method: 'POST',
 				headers: {
@@ -232,56 +254,52 @@ export class PinataService {
 		}
 	}
 
-	/* ── Pinata pinCidFromRemote (disabled — eth.link recommends Filebase) ──
-  async pinCidFromRemote_pinata(cid: string, remote: string): Promise<boolean> {
-    try {
-      if (cid.startsWith("ipfs://")) {
-        cid = cid.replace("ipfs://", "");
-      }
+	/** Pin a CID via Pinata's pinByHash endpoint. */
+	private async pinCidPinata(cid: string, remote: string): Promise<boolean> {
+		try {
+			if (cid.startsWith('ipfs://')) {
+				cid = cid.replace('ipfs://', '');
+			}
 
-      const body = {
-        hashToPin: cid,
-        pinataMetadata: {
-          name: `pinned-${Date.now()}`,
-        },
-        pinataOptions: {
-          sourceIpfs: {
-            apiUrl: remote + "/api/v0",
-          },
-        },
-      };
+			const body = {
+				hashToPin: cid,
+				pinataMetadata: {
+					name: `pinned-${Date.now()}`,
+				},
+				pinataOptions: {
+					sourceIpfs: {
+						apiUrl: remote + '/api/v0',
+					},
+				},
+			};
 
-      console.log("Pinning CID with Pinata:", body);
+			console.log('Pinning CID with Pinata:', body);
 
-      const response = await fetch(
-        "https://api.pinata.cloud/pinning/pinByHash",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.main.plugin.settings.pinata_jwt}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-        },
-      );
+			const response = await fetch('https://api.pinata.cloud/pinning/pinByHash', {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${this.main.plugin.settings.pinata_jwt}`,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(body),
+			});
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Pinata error response:", errorText);
-        throw new Error(
-          `Pinata upload failed: ${response.status} ${response.statusText} - ${errorText}`,
-        );
-      }
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.error('Pinata error response:', errorText);
+				throw new Error(
+					`Pinata upload failed: ${response.status} ${response.statusText} - ${errorText}`,
+				);
+			}
 
-      const result = await response.json();
-      console.log("Pinata pinByHash result:", result);
-      return true;
-    } catch (error) {
-      console.error("Error pinning CID:", error);
-      return false;
-    }
-  }
-  */
+			const result = await response.json();
+			console.log('Pinata pinByHash result:', result);
+			return true;
+		} catch (error) {
+			console.error('Error pinning CID:', error);
+			return false;
+		}
+	}
 
 	async uploadFileFromUrl(
 		url: string,
@@ -397,11 +415,27 @@ export class PinataService {
 			const contentType = this.getContentType(fileExt);
 			console.log('contentType before upload:', contentType);
 
-			// Filebase RPC: upload content directly via /api/v0/add
-			// (Pinata disabled in favor of Filebase — eth.link recommends Filebase)
 			const formData = new FormData();
 			formData.append('file', new Blob([data], { type: contentType }), fileName);
 
+			if (this.provider === 'pinata') {
+				const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${this.main.plugin.settings.pinata_jwt}`,
+					},
+					body: formData,
+				});
+
+				if (!response.ok) {
+					throw new Error(`Pinata upload failed: ${response.statusText}`);
+				}
+
+				const upload = await response.json();
+				return upload.IpfsHash;
+			}
+
+			// Filebase RPC: upload content directly via /api/v0/add (default)
 			const response = await fetch('https://rpc.filebase.io/api/v0/add', {
 				method: 'POST',
 				headers: {
@@ -417,7 +451,7 @@ export class PinataService {
 			const upload = await response.json();
 			return upload.Hash;
 
-			/* ── Pinata uploadFileFromContent (disabled — eth.link recommends Filebase) ──
+			/* ── Pinata uploadFileFromContent (disabled — kept for reference) ──
       const file = new File([data], fileName, { type: contentType });
       console.log("upload file size:", file.size);
       const upload = await this.pinata.upload.file(file);
@@ -475,8 +509,43 @@ export class PinataService {
 				formData.append('pinataOptions', JSON.stringify({ wrapWithDirectory: true }));
 			}
 
-			// Filebase RPC: upload directory via /api/v0/add with wrapWithDirectory (Pinata disabled — eth.link recommends Filebase)
-			// Note: Filebase /api/v0/add supports FormData with multiple files + wrapWithDirectory
+			if (this.provider === 'pinata') {
+				const response = await fetch('https://api.pinata.cloud/pinning/pinDirectoryToIPFS', {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${this.main.plugin.settings.pinata_jwt}`,
+					},
+					body: formData,
+				}).catch((error) => {
+					console.error(`Network error during Pinata API call:`, error);
+					throw new Error(`Network error during Pinata API call: ${error.message}`);
+				});
+
+				if (!response.ok) {
+					const errorText = await response
+						.text()
+						.catch((e) => `Failed to get error text: ${e.message}`);
+					console.error(`Pinata API error: ${response.status} ${response.statusText}`, errorText);
+					throw new Error(
+						`Pinata API error: ${response.status} ${response.statusText} - ${errorText}`,
+					);
+				}
+
+				const result = await response.json().catch((error) => {
+					console.error(`Error parsing Pinata response:`, error);
+					throw new Error(`Failed to parse Pinata response: ${error.message}`);
+				});
+
+				if (!result.IpfsHash) {
+					console.error(`Invalid Pinata response:`, result);
+					throw new Error(`Pinata response missing IpfsHash: ${JSON.stringify(result)}`);
+				}
+				console.log(`Successfully uploaded directory structure with CID: ${result.IpfsHash}`);
+
+				return result;
+			}
+
+			// Filebase RPC: upload directory via /api/v0/add with wrapWithDirectory (default)
 			const response = await fetch('https://rpc.filebase.io/api/v0/add', {
 				method: 'POST',
 				headers: {
@@ -499,7 +568,6 @@ export class PinataService {
 			}
 
 			// Filebase /api/v0/add with wrapWithDirectory returns the directory CID
-			// The JSON response for wrapWithDirectory is the directory entry (last in the NDJSON stream)
 			const resultText = await response.text();
 			const lines = resultText.trim().split('\n');
 			const lastLine = lines[lines.length - 1];
@@ -513,7 +581,7 @@ export class PinataService {
 
 			return { IpfsHash: result.Hash };
 
-			/* ── Pinata uploadDirectoryStructure (disabled — eth.link recommends Filebase) ──
+			/* ── Pinata uploadDirectoryStructure (disabled — kept for reference) ──
       const response = await fetch(
         "https://api.pinata.cloud/pinning/pinDirectoryToIPFS",
         {

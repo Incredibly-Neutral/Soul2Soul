@@ -40,6 +40,9 @@ coverage/
 .tmp/
 temp/
 repomix-output.xml
+# chain-secured deploy-group sidecar (cleartext usage key + derivation path)
+protocol/scripts/lit/chain-secured-pending.json
+protocol/scripts/lit/config.chain-secured-pending.json
 # multi-part-lite-adopted/
 .pi
 .hermes

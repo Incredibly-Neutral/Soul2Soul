@@ -1,9 +1,14 @@
 /**
  * add-dev-action.ts — build + upload the dev "render-dev" action to Pinata.
  *
+ * CHAIN-SECURED-aware full replacement, mirroring the current behavior.
+ *
  * LIGHTER than add-action.ts by design: the dev action is a no-key, no-sign
  * pure renderer that runs on the Bun runner (S2S_RUNNER_URL), so it needs NO
- * Lit registration, NO PKP binding, NO group membership. All we do is:
+ * Lit registration, NO PKP binding, NO group membership, and therefore no
+ * Safe-signed chain-secured write at all. Under the chain-secured account this
+ * is unchanged — it never talks to the Lit API (no LIT_ACCOUNT_KEY, no usage
+ * key). We only:
  *
  *   1. build protocol/actions/dist/render-dev/main.js via build-actions.cjs
  *   2. compactAction(code)
@@ -11,8 +16,8 @@
  *      PINATA_GATEWAY env)
  *   4. print + record the CID in protocol/scripts/lit/dev-actions.json
  *
- * The website-starter kit then points its `S2S_RUNNER_URL` + dev-action CID at
- * this artifact and POSTs `{ cid, inputs }` to render locally.
+ * Dry-run: LIT_DRY_RUN=1 or --dry-run compacts the built action and prints
+ * `dry-run: would upload` instead of uploading, then stops.
  *
  * Usage (from repo root, or via `pnpm actions:add-dev`):
  *   tsx --require dotenv/config protocol/scripts/lit/add-dev-action.ts
@@ -36,7 +41,11 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const ACTION_NAME = 'render-dev';
 
-async function main() {
+const isDryRun = () => process.env.LIT_DRY_RUN === '1' || process.argv.includes('--dry-run');
+
+async function main(): Promise<void> {
+  const dryRun = isDryRun();
+
   // 1. Build all actions (the render-dev entry is wired into build-actions.cjs).
   console.log('→ building actions (render-dev entry) ...');
   execSync('node protocol/scripts/lit/build-actions.cjs', {
@@ -53,7 +62,15 @@ async function main() {
   // 2. Compact the IIFE bundle.
   const _action = compactAction(code);
 
-  // 3. Upload to Pinata. No LitService — no registerAction / addActionToGroup.
+  if (dryRun) {
+    console.log(`dry-run: would upload ${ACTION_NAME} (${_action.length} chars compact) to Pinata`);
+    console.log('dry-run: would record CID in protocol/scripts/lit/dev-actions.json');
+    console.log('dry-run: STOPPING before upload.');
+    return;
+  }
+
+  // 3. Upload to Pinata. No LitService — no registerAction / addActionToGroup,
+  //    and no Safe-signed chain-secured write (dev action runs on the Bun runner).
   const ipfs = new S2SIPFSMethods(
     process.env.IPFS_URL!,
     process.env.PINATA_JWT!,
@@ -82,7 +99,7 @@ async function main() {
 }
 
 main()
-  .catch((error) => {
+  .catch((error: any) => {
     console.error(error);
     process.exitCode = 1;
   })
