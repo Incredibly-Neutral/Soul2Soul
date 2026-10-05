@@ -5,7 +5,7 @@ export default mergeConfig(
   base,
   defineConfig({
     test: {
-      include: ['actions/src/**/*.test.ts'],
+      include: ['actions/src/**/*.test.ts', 'serverless/**/*.test.ts'],
       root: '.',
     },
   }),
