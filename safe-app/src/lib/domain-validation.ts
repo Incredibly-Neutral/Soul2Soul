@@ -12,6 +12,13 @@
 // the SAME publication Safe that owns the current publication name, so the write
 // target is always a node controlled by the publication's own Safe.
 //
+// ENFORCEMENT TOGGLE: the ownership gate is OFF by default right now (product
+// decision — it should not block the Add-domain flow). The gate code, tests and
+// `verifyDomainOwnership` all stay intact for when it is re-enabled — flip
+// `DOMAIN_VALIDATION_CONFIG.enforceOwnership` to `true` to turn it back on. See
+// `maybeVerifyDomainOwnership` for the enforcement-aware entry point used by the
+// Records tab.
+//
 // `namehash`, `evmRead` and `rpcs` are injected so the check is a pure function
 // and unit-testable in node (see safe-app/tests/domain-validation.test.ts).
 
@@ -136,4 +143,42 @@ export async function verifyDomainOwnership(
     publicationOwner,
     reason: `"${trimmed}" is owned by ${domainOwner}, not this publication Safe (${publicationOwner}). Only the publication Safe may set the ENS write-target domain.`,
   };
+}
+
+// =============================================================================
+// Enforcement toggle
+// =============================================================================
+
+/** Whether the Records tab enforces the same-Safe ownership check when a domain
+ *  is added. OFF by default (the gate should not block the Add-domain flow);
+ *  flip `enforceOwnership` to `true` to re-enable the blocking gate. */
+export interface DomainValidationConfig {
+  enforceOwnership: boolean;
+}
+
+/** Single source of truth for the Add-domain ownership gate. Default OFF — the
+ *  Add-domain flow saves the domain without requiring ownership. Toggle here:
+ *
+ *      DOMAIN_VALIDATION_CONFIG.enforceOwnership = true;  // re-enable the gate
+ */
+export const DOMAIN_VALIDATION_CONFIG: DomainValidationConfig = {
+  enforceOwnership: false,
+};
+
+/** Enforcement-aware entry point for addDomain(). When the gate is OFF (the
+ *  default) the ownership check is skipped entirely and the domain is accepted;
+ *  when ON, this delegates to the full `verifyDomainOwnership` gate and the
+ *  existing reject behaviour (different-Safe / unwrapped / unresolvable)
+ *  applies. Never throws — fails closed with a clear reason when enforced. */
+export async function maybeVerifyDomainOwnership(
+  domain: string,
+  publication: string,
+  deps: DomainOwnershipDeps,
+  config: DomainValidationConfig = DOMAIN_VALIDATION_CONFIG,
+): Promise<DomainOwnershipCheck> {
+  if (!config.enforceOwnership) {
+    // Gate OFF: skip the check — accept the domain as-is.
+    return { ok: true };
+  }
+  return verifyDomainOwnership(domain, publication, deps);
 }
