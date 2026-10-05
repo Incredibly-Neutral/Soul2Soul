@@ -15,6 +15,7 @@ import {
   encodeRemoveActionFromGroup,
   encodeSetUsageApiKey,
   generateUsageKey,
+  prettyPrintBatch,
   usageHash,
   writesFacetAbi,
 } from '../chain-secured.js';
@@ -270,5 +271,50 @@ describe('buildSafeBatch', () => {
     expect(decoded.args![1]).toBe('s2s');
     expect(decoded.args![3]).toEqual([BigInt(hashed)]);
     expect(decoded.args![4]).toEqual([getAddress(PROTOCOL_SAFE_ADDRESS)]);
+  });
+});
+
+describe('prettyPrintBatch', () => {
+  const adminHashVal = adminHash(PROTOCOL_SAFE_ADDRESS);
+  const hashed = actionHash('QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh');
+
+  it('renders nested-array args (addGroup, setUsageApiKey) without throwing', () => {
+    const writes = [
+      encodeAddGroup({
+        apiKeyHash: adminHashVal,
+        name: 's2s',
+        description: '',
+        cidHashes: [hashed],
+        pkpIds: [PROTOCOL_SAFE_ADDRESS],
+      }),
+      encodeSetUsageApiKey({
+        apiKeyHash: adminHashVal,
+        usageApiKeyHash: usageHash('lk_abc'),
+        name: 's2s usage key',
+        description: 's2s group execution key (chain-secured)',
+        manageIPFSIdsInGroups: [toHex(1n)],
+        addPkpToGroups: [toHex(2n)],
+        removePkpFromGroups: [toHex(3n)],
+        executeInGroups: [toHex(4n)],
+      }),
+    ];
+
+    const batch = buildSafeBatch(writes);
+    expect(() => prettyPrintBatch(batch)).not.toThrow();
+    const out = prettyPrintBatch(batch);
+
+    expect(out).toContain('WritesFacet.addGroup');
+    expect(out).toContain('WritesFacet.setUsageApiKey');
+
+    // decoded cidHashes is a uint256[] → each element renders as 0x-hex
+    expect(out).toContain(`[0x${BigInt(hashed).toString(16)}]`);
+    // string args are JSON.stringify'd (double-quoted)
+    expect(out).toContain('"s2s"');
+    expect(out).toContain('"s2s usage key"');
+    // decoded group-scope uint256[] arrays render as [0x..]
+    expect(out).toContain('[0x1]');
+    expect(out).toContain('[0x2]');
+    expect(out).toContain('[0x3]');
+    expect(out).toContain('[0x4]');
   });
 });
