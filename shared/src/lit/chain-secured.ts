@@ -523,15 +523,15 @@ export function prettyPrintBatch(transactions: SafeBatchEntry[]): string {
   return lines.join('\n');
 }
 
+function formatValue(a: unknown): string {
+  if (typeof a === 'bigint') return `0x${a.toString(16)}`;
+  if (Array.isArray(a)) return `[${a.map(formatValue).join(', ')}]`;
+  if (typeof a === 'string') return JSON.stringify(a);
+  return String(a);
+}
+
 function formatArgs(args: readonly unknown[]): string {
-  return args
-    .map((a) => {
-      if (typeof a === 'bigint') return `0x${a.toString(16)}`;
-      if (Array.isArray(a)) return `[${a.map(formatArgs).join(', ')}]`;
-      if (typeof a === 'string') return JSON.stringify(a);
-      return String(a);
-    })
-    .join(', ');
+  return args.map(formatValue).join(', ');
 }
 
 // ── RPC helpers ─────────────────────────────────────────────────────────────
