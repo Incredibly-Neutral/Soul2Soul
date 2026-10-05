@@ -223,10 +223,13 @@ export class LitService {
   }
 
   async removeActionFromGroup(groupId: number, actionCidHashed: string) {
-    return this.call<{ success: boolean }>('/remove_action_from_group', {
+    console.log(`[Lit API] removeActionFromGroup request group_id=${groupId} hashed_cid=${actionCidHashed}`);
+    const result = await this.call<{ success: boolean }>('/remove_action_from_group', {
       method: 'POST',
       body: { group_id: groupId, hashed_cid: actionCidHashed },
     });
+    console.log(`[Lit API] removeActionFromGroup success group_id=${groupId} hashed_cid=${actionCidHashed} response=${JSON.stringify(result)}`);
+    return result;
   }
 
   async addPkpToGroup(groupId: number, pkpId: string) {

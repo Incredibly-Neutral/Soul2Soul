@@ -23,6 +23,10 @@
     "./filecoin": {
       "types": "./dist/filecoin/index.d.ts",
       "default": "./dist/filecoin/index.js"
+    },
+    "./chain-secured": {
+      "types": "./dist/lit/chain-secured.d.ts",
+      "default": "./dist/lit/chain-secured.js"
     }
   },
   "files": [
@@ -42,6 +46,10 @@
     "@lens-chain/storage-client": "^1.0.6",
     "@lens-protocol/client": "0.0.0-canary-20250430134539",
     "@lens-protocol/metadata": "^2.1.0",
+    "@safe-global/api-kit": "^3.0.2",
+    "@safe-global/protocol-kit": "^6.1.2",
+    "@safe-global/types-kit": "^3.0.0",
+    "dotenv": "^16.6.1",
     "ethers": "^5.8.0",
     "viem": "^2.48.0",
     "zod": "^3.24.0"
@@ -51,8 +59,5 @@
     "@types/node": "^18.19.0",
     "vitest": "^4.1.9",
     "sass": "1.101.0"
-
-
-
   }
 }
