@@ -27,7 +27,7 @@
  */
 import { LitService, compactAction, S2SIPFSMethods } from '@s2s/soul2soul-shared';
 import fs from 'fs';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import path from 'path';
 import {
   ACCOUNT_CONFIG_ADDRESS,
@@ -50,87 +50,37 @@ import {
   saveLitConfig,
 } from '@s2s/soul2soul-shared/chain-secured';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+loadMonorepoEnv(__filename);
+
+const configPath = path.join(__dirname, 'config.json');
 const groupName = 's2s';
 const validActions = ['prep', 'render', 'update', 'maintain-cache', 'encrypt'];
 
-interface ActionConfigEntry {
-  name: string;
-  cid: string;
-  hashedCid: string;
+const actionName = process.argv[2];
+if (!actionName || !validActions.includes(actionName)) {
+  console.error(`Usage: pnpm actions:swap <action_name>`);
+  console.error(`Valid actions: ${validActions.join(', ')}`);
+  process.exit(1);
 }
 
-/**
- * Find the previous config entry for `actionName`, if any.
- * Exported pure helper so the swap guard is unit-testable.
- */
-export function findActionByName(
-  actions: ActionConfigEntry[] | undefined,
-  actionName: string,
-): ActionConfigEntry | undefined {
-  return actions?.find((a) => a.name === actionName);
-}
+const isDryRun = () => process.env.LIT_DRY_RUN === '1' || process.argv.includes('--dry-run');
 
-/**
- * Best-effort removal of the previous action from the group.
- * Logs the skip reason when there is no previous entry, and logs the REAL
- * error (name + message) when the removal call fails, instead of swallowing
- * it behind a constant string. Removal failure is non-fatal: the group
- * keeps the old action and the caller still adds the new one.
- * Exported so the guard/error-logging behavior is unit-testable.
- */
-export async function removePreviousAction(
-  lit: Pick<LitService, 'removeActionFromGroup'>,
-  groupId: number,
-  oldAction: ActionConfigEntry | undefined,
-  actionName: string,
-): Promise<void> {
-  if (!oldAction) {
-    console.log(
-      `removeActionFromGroup skipped: no previous '${actionName}' action in config (first deploy or post-rename) — cannot compute old hashed_cid`,
-    );
-    return;
-  }
-  try {
-    await lit.removeActionFromGroup(groupId, oldAction.hashedCid);
-  } catch (error) {
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    console.error(
-      `removeActionFromGroup FAILED for group=${groupId} hashed_cid=${oldAction.hashedCid}: ${message}`,
-    );
-  }
-}
+const actionPath = `./protocol/actions/dist/${actionName}/main.js`;
+const code = fs.readFileSync(actionPath, 'utf-8');
 
-export async function main() {
-  // Emulate __dirname in ES modules
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
+const ipfs = new S2SIPFSMethods(
+  process.env.IPFS_URL!,
+  process.env.PINATA_JWT!,
+  process.env.PINATA_GATEWAY!,
+  process.env.VITE_FILEBASE_TOKEN || '',
+);
 
-  dotenv.config({ path: '../.env' });
-
-  const configPath = path.join(__dirname, 'config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-
-  const action_name = process.argv[2];
-  if (!action_name || !validActions.includes(action_name)) {
-    console.error(`Usage: pnpm swap-action <action_name>`);
-    console.error(`Valid actions: ${validActions.join(', ')}`);
-    process.exit(1);
-  }
-
-  const actionPath = `./protocol/actions/dist/${action_name}/main.js`;
-  const code = fs.readFileSync(actionPath, 'utf-8');
-
-  const ipfs = new S2SIPFSMethods(
-    process.env.IPFS_URL!,
-    process.env.PINATA_JWT!,
-    process.env.PINATA_GATEWAY!,
-    process.env.VITE_FILEBASE_TOKEN || '',
-  );
-
-  const lit = new LitService({
-    environment: 'prod',
-    accountKey: process.env.LIT_ACCOUNT_KEY!,
-  });
+async function main(): Promise<void> {
+  const dryRun = isDryRun();
+  const lit = new LitService({ environment: 'prod' }); // only no-auth helpers used
 
   const config = loadLitConfig(configPath);
   const groupIndex = config.groups.findIndex((g) => g.name === groupName);
@@ -212,11 +162,16 @@ export async function main() {
 
   const transactions = buildSafeBatch(writes, ACCOUNT_CONFIG_ADDRESS);
 
-  const oldAction = findActionByName(config.groups[groupIndex].actions, action_name);
+  console.log(`\n=== Safe batch (${transactions.length} calls) for "${actionName}" ===`);
+  console.log(`new cid:      ${cid}`);
+  console.log(`new hashedCid: ${newHashedCid}`);
+  console.log(`group id:     ${group.id} (from ${configPath})`);
+  console.log(prettyPrintBatch(transactions));
 
-  await removePreviousAction(lit, config.groups[groupIndex].id, oldAction, action_name);
-
-  await lit.addActionToGroup(config.groups[groupIndex].id, cid);
+  if (dryRun) {
+    console.log('\ndry-run: STOPPING before proposing to Safe.');
+    return;
+  }
 
   // 3. Propose to the Safe.
   await proposeToSafe({
@@ -250,19 +205,11 @@ export async function main() {
   console.log('FINISHED');
 }
 
-// Only run the CLI entry point when this module is executed directly
-// (not when imported by tests).
-function isDirectRun(): boolean {
-  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
-}
-
-if (isDirectRun()) {
-  main()
-    .catch((error) => {
-      console.error(error);
-      process.exitCode = 1;
-    })
-    .finally(() => {
-      process.exit(0);
-    });
-}
+main()
+  .catch((error: any) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    process.exit(0);
+  });
