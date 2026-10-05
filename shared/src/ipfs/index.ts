@@ -147,7 +147,18 @@ export class S2SIPFSMethods {
   // Auth: Authorization: Bearer <access-token>
   // =========================================================================
 
-  async uploadToPinata(content: string | Blob, filename: string): Promise<string> {
+  /**
+   * Upload content to an IPFS pinning service.
+   *
+   * @param content  - The payload to upload.
+   * @param filename - Logical file name.
+   * @param provider - Which pinning backend to use ('filebase' | 'pinata'), default 'filebase'.
+   */
+  async uploadToPinata(
+    content: string | Blob,
+    filename: string,
+    provider: 'filebase' | 'pinata' = 'filebase',
+  ): Promise<string> {
     const formData = new FormData();
 
     if (typeof content === 'string') {
@@ -156,7 +167,27 @@ export class S2SIPFSMethods {
       formData.append('file', content, filename);
     }
 
-    // Filebase RPC: direct upload via /api/v0/add
+    if (provider === 'pinata') {
+      const response = await fetch(`https://api.pinata.cloud/pinning/pinFileToIPFS`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.pinataJWT}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Pinata upload failed: ${response.status} ${response.statusText} - ${errorText}`,
+        );
+      }
+
+      const data = await response.json();
+      return data.IpfsHash;
+    }
+
+    // Filebase RPC: direct upload via /api/v0/add (default)
     const response = await fetch(`https://rpc.filebase.io/api/v0/add`, {
       method: 'POST',
       headers: {
@@ -175,33 +206,6 @@ export class S2SIPFSMethods {
     const data = await response.json();
     return data.Hash;
   }
-
-  /* ── Pinata uploadToPinata (disabled — eth.link recommends Filebase) ──
-  async uploadToPinata_pinata(content: string | Blob, filename: string): Promise<string> {
-    const formData = new FormData();
-
-    if (typeof content === 'string') {
-      formData.append('file', new Blob([content]), filename);
-    } else {
-      formData.append('file', content, filename);
-    }
-
-    const response = await fetch(`https://api.pinata.cloud/pinning/pinFileToIPFS`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.pinataJWT}`,
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Pinata upload failed: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.IpfsHash;
-  }
-  */
 
   // =========================================================================
   // MFS (Mutable File System) helpers
