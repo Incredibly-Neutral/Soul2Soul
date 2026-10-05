@@ -42,6 +42,7 @@ and NO `proposeToSafe`, no receipt finalize, no config helpers). It also dropped
 `protocol/scripts/lit/safe-client.ts` and modified `shared/src/lit/index.ts`.
 
 Resolution (final, authoritative):
+
 - Restored MY `chain-secured.ts` (object-param encoders, `Hex` returns,
   full `proposeToSafe` / `readExecutedGroupId` / `predictNextGroupId` /
   `isActionInGroup` / config + env helpers) and MY test file, which the four
