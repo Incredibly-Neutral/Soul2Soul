@@ -592,6 +592,8 @@ export class S2SRecordsTab extends HTMLElement {
           `
           }
 
+          <button class="button" data-action="update">Update Config</button>
+
           <div class="domain-section">
             <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target domain</h3>
             ${
@@ -612,7 +614,7 @@ export class S2SRecordsTab extends HTMLElement {
             <p class="domain-hint">The domain must be owned by this publication Safe — ownership is verified before saving.</p>
           </div>
 
-          <button class="button" data-action="update">Update Config</button>
+       
         </div>
 
        
