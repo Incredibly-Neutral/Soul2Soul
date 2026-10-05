@@ -118,17 +118,22 @@ export async function renderCalls(
 		if (main.notice) main.notice.setMessage('5/5 Pinning ...');
 
 		if (res.cid) {
-			// Fire-and-forget both the Filebase pin and the Filecoin upload in
+			// Fire-and-forget both the IPFS pin and the Filecoin upload in
 			// parallel — neither blocks the render flow, and the two durable-
 			// storage paths run concurrently (SPEC-00 §3.2: IPFS pinning +
 			// Filecoin hot-storage). pinCidFromRemote swallows errors and
 			// returns a boolean, so this can't throw into renderCalls.
-			// Pinata disabled in favor of Filebase (eth.link recommends Filebase).
-			void pinCidFromRemote(
-				res.cid,
-				'https://ipfs.transport-union.dev',
-				main.oxo.settings.filebase_token || '',
-			).then((ok) => console.log(ok ? 'pinned on filebase' : 'filebase pin failed'));
+			// Provider selected via oxo settings pin_provider (default: filebase).
+			const pinProvider = main.oxo.settings.pin_provider || 'filebase';
+			const token =
+				pinProvider === 'pinata'
+					? main.oxo.settings.pinata_jwt || ''
+					: main.oxo.settings.filebase_token || '';
+			void pinCidFromRemote(res.cid, 'https://ipfs.transport-union.dev', token, pinProvider).then(
+				(ok) => {
+					console.log(ok ? `pinned on ${pinProvider}` : `${pinProvider} pin failed`);
+				},
+			);
 
 			if (publish) {
 				// Fire-and-forget Filecoin durability for the rendered site root
