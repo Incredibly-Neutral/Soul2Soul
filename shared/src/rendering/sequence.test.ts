@@ -25,6 +25,7 @@ import { Wallet } from 'ethers';
 
 import { getProtocolInfo } from '../protocol';
 import type { S2SProtocolInfo } from '../protocol';
+import type { LitService } from '../lit';
 import { runAction } from './helpers';
 import { runRenderActionWithRetry, renderwithLitActions } from './sequence';
 import {
@@ -707,5 +708,130 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
     // prep + render + update = 3 dispatches
     expect(runAction).toHaveBeenCalledTimes(3);
     expect(res.success).toBe(true);
+  });
+});
+
+// ============================================================================
+// Render-failure guard — when EVERY render job fails (and there is nothing to
+// remove and it is not a reset), renderwithLitActions must SKIP the EVM-update
+// action entirely and throw the REAL per-job render failures instead of the
+// cryptic validateEvmUpdateInput 'jobs must have at least one item…' error.
+// runAction is the vi.mocked spy from the top of this file.
+// ============================================================================
+
+describe('renderwithLitActions — all render jobs fail (no remove, no reset)', () => {
+  const updateCid = 'cid-update';
+  const protocolInfo: S2SProtocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    ensRegistry: '0x0',
+    ensRecords: '0x0',
+    publicationFactory: '0x0',
+    recordsFactory: '0x0',
+    pkp: '0x0',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: updateCid },
+  };
+
+  const SIGNATURE =
+    '0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
+
+  // Minimal lit mock — never called in preview mode (runAction uses fetch only).
+  const litStub = {} as LitService;
+
+  // Non-empty contentIds so this is NOT a reset-only run: prep + render run,
+  // then the guard must fire before the update stage.
+  const call = () =>
+    renderwithLitActions(
+      true, // preview
+      litStub,
+      SIGNATURE,
+      'usage',
+      protocolInfo,
+      null, // notice
+      '0x0000...0001', // authorSafeAddress
+      'test.soul2soul.eth',
+      ['0xcontent-id-1'],
+      undefined, // configCid
+      sampleEndpoints.rpcs,
+    );
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('throws the real per-job render failure and NEVER POSTs the update action (non-ok render envelope)', async () => {
+    vi.mocked(runAction).mockImplementation((_preview, _lit, cid): Promise<unknown> => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({
+          ok: true,
+          action: 'prep',
+          data: { jobs: [sampleJob], remove: undefined },
+          trace: [],
+        });
+      }
+      if (cid === 'cid-render') {
+        // non-ok render envelope → runRenderActionWithRetry exhausts (preview = 1
+        // attempt) and throws, so the render job is recorded as failed.
+        return Promise.resolve({
+          ok: false,
+          action: 'render',
+          error: 'render boom: IPFS gateway timeout',
+          trace: [],
+        });
+      }
+      if (cid === updateCid) {
+        return Promise.reject(
+          new Error('update action must NEVER be reached when all renders failed'),
+        );
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    });
+
+    const err = await call().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    // The REAL render failure, NOT the EvmUpdate validation error.
+    expect((err as Error).message).toContain('render jobs failed');
+    expect((err as Error).message).toContain('render boom');
+    expect((err as Error).message).not.toContain('jobs must have at least one item');
+    expect((err as Error).message).not.toContain('EvmUpdate action input validation failed');
+    // Update action's CID was never POSTed — only prep + 1 render (preview).
+    expect(runAction).toHaveBeenCalledTimes(2);
+    const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
+    expect(postedCids).not.toContain(updateCid);
+  });
+
+  it('throws the real per-job render failure and NEVER POSTs the update action (render throws)', async () => {
+    vi.mocked(runAction).mockImplementation((_preview, _lit, cid): Promise<unknown> => {
+      if (cid === 'cid-prep') {
+        return Promise.resolve({
+          ok: true,
+          action: 'prep',
+          data: { jobs: [sampleJob], remove: undefined },
+          trace: [],
+        });
+      }
+      if (cid === 'cid-render') {
+        return Promise.reject(new Error('render threw: boom'));
+      }
+      if (cid === updateCid) {
+        return Promise.reject(
+          new Error('update action must NEVER be reached when all renders failed'),
+        );
+      }
+      return Promise.reject(new Error('unexpected cid ' + cid));
+    });
+
+    const err = await call().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('render jobs failed');
+    expect((err as Error).message).toContain('render threw');
+    expect(runAction).toHaveBeenCalledTimes(2);
+    const postedCids = vi.mocked(runAction).mock.calls.map((c) => c[2]);
+    expect(postedCids).not.toContain(updateCid);
   });
 });
