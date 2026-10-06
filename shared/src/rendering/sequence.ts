@@ -126,11 +126,14 @@ export async function runRenderActionWithRetry(
     lastFailure instanceof Error
       ? (lastFailure.message ? lastFailure : new Error(JSON.stringify(lastFailure) || 'render action failed'))
       : new Error(
-          // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-          lastFailure?.error ||
-            lastFailure?.message ||
-            (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)) ||
-            'render action failed',
+          lastFailure?.error ??
+            lastFailure?.message ??
+            (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)) ??
+            // Runner returned a non-ok/empty envelope with no error field (e.g. an
+            // HTTP 504 whose JSON body lacked success===false, so runAction resolved
+            // to undefined). `new Error(undefined)` yields an EMPTY message that would
+            // hide the real failure from the caller — give it something actionable.
+            'render action returned no result (runner returned a non-ok/empty envelope)',
         );
   (err as any).failure = lastFailure;
   throw err;
@@ -317,6 +320,33 @@ export const renderwithLitActions = async (
 
     // Primary job path (first active rendered job = the content the user triggered)
     primaryPath = activeJobs[0]?.path ?? '';
+
+    // ── Render-failure guard ─────────────────────────────────────────────
+    // Every render job failed (activeJobs empty), there is nothing to remove,
+    // and this is not a reset-only run — the update action would be invoked
+    // with jobs:[] and no remove/reset, which validateEvmUpdateInput rejects
+    // with the cryptic 'jobs must have at least one item, or remove entries
+    // must be provided (revoke path), or reset must be true (reset path)'
+    // error. Skip the update call ENTIRELY and fail loudly with the real
+    // per-job render failures (job index + error/status) instead, so callers
+    // see what actually broke rather than an EvmUpdate validation message.
+    if (activeJobs.length === 0 && allRemove.length === 0) {
+      type RenderJobResult =
+        | { success: true; index: number; data: { ok?: boolean } | undefined }
+        | { success: false; index: number; error?: string };
+      const results = allResults as RenderJobResult[];
+      const failures: string[] = [];
+      for (const result of results) {
+        if (result.success) {
+          if (Boolean(result.data?.ok)) continue;
+          failures.push(`job ${String(result.index)}: ${JSON.stringify(result.data)}`);
+        } else {
+          failures.push(`job ${String(result.index)}: ${result.error ?? 'unknown error'}`);
+        }
+      }
+      const summary = failures.length > 0 ? failures.join('; ') : 'no render jobs succeeded';
+      throw new Error(`render jobs failed: ${summary}`);
+    }
   }
 
   // ---------------- EVM Root Update Stage ---------------------------------
