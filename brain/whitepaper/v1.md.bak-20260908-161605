@@ -1,0 +1,58 @@
+---
+tags: 
+    - Soul2Soul
+    - whitepaper
+encrypted: false
+---
+
+- [ ] buy groceries
+
+### Abstract
+
+A publication whose contributors could leave at any time, taking their work with them, would have to hold its editorial line by argument rather than by position. Cryptographic ownership of the work provides part of the solution, but the main benefits are lost if a single party still runs the site, holds the archive, and distributes the revenue. We propose a solution using an unowned generator: open code bound to a key and executed by independent nodes, which renders and signs a publication without any party being able to produce a valid rendering alone. Authors grant access under agreements recorded on-chain and revocable at any time, which also determine how per-read revenue is split before it reaches either party. The publication's name resolves to the agreements currently in force, so what it consists of is always its present state rather than an accumulated record. Writers and publications can then associate on terms that are real and temporary at once, and an editorial line held by people free to leave means something a captive one cannot.
+
+# Soul2Soul: A Publishing Protocol for Independent Authors and Collective Publications
+
+Draft introduction — 7 September 2026_
+
+## 1. Introduction
+
+Publishing on the internet has come to rely almost entirely on someone owning the press. A group of writers who want to work together can accept a platform's terms, which can change or end without them, or run their own server, which places the site, the archive, the readership and the revenue in the hands of whoever holds the credentials. Both arrangements work well enough. But they share a weakness: one party's continued participation depends on another party's goodwill, and the dependency runs in only one direction.
+
+A falling-out costs the writer their archive, their income, and their record; it costs the publication a contributor it can replace. The party with less to lose sets the terms, and everyone inside adjusts without being asked to. What accumulates is not a policy but a disposition — a publication that speaks with one voice and can point to no instance of having enforced it. Payment reinforces this. Money paid upfront buys the work, and the transfer of ownership is what the money is for.
+
+Editorial policy is not the problem. A publication's standards and judgment are its craft. The problem is that the party exercising editorial judgment is also the party running the site, holding the archive, and paying the writers. Editorial policy is then enforced by that position rather than by argument. The judgment can be separated from the position, and separating them costs the editorial function nothing.
+
+What is needed is an arrangement in which neither party can act unilaterally on the other's behalf. An author retains ownership of their work and can revoke it at any time. The publication is not a person holding credentials but a threshold no individual controls. Revenue is divided by a share agreed in advance and paid per read, arriving already split rather than passing through either party first — so nobody is bought, and both are paid for as long as the agreement holds. Departure then costs both sides: a publication that wants to keep its contributors has to persuade them, and a writer who stays is choosing the publication rather than avoiding the cost of leaving.
+
+Such an arrangement is not a static record but a changing one, since what the publication consists of is the set of agreements currently in force — the same record that determines what is published and how it pays. Each article carries permanent proof of who wrote it and under what terms; the publication's name resolves to what it consists of now. Provenance does not expire and authorization is not retroactive: a withdrawn article remains signed and attributable, and ceases to be part of the current record.
+
+We propose a publishing protocol in which the generator itself is unowned — open code bound to a key, executed by independent nodes — so that authors and publications can associate on terms that are genuine and temporary at once.
+
+### 2. Authoring
+
+Work begins where the author is. Authoring is local-first: the working copy lives on the author's own machine, and nothing in the protocol needs to be reachable for them to write, revise, or keep a draft. Publication is a later and separate act.
+
+At publication the author signs, asserting authorship of the work in a way that remains verifiable against their account wherever the work later appears. That account is what a publication's agreements record, and keys beneath it are replaceable — an identity that cannot survive a key rotation is an archive hostage to a single secret, which is the dependency this protocol exists to remove.
+
+Editing does not stop at publication. An author can revise their work and reissue it, because the work remains theirs, and each version is signed and recorded, so a publication can see that a piece has changed and how.
+
+Whether a revision appears immediately or waits for the publication's agreement is set by the agreement itself. Where the parties know each other, the publication grants standing approval and an author publishes and revises at will. Where trust is still being established, work and revisions are proposed and take effect once accepted. The protocol does not choose between these; it requires only that no change is silent and that the setting is explicit.
+
+Neither party can act unilaterally without the other seeing it. The author cannot alter what a publication presents unnoticed; the publication cannot suppress a revision, only decline to keep publishing. Editorial disagreement is settled by argument, because position is no longer available to either side.
+
+No authoring surface is canonical. What the protocol defines is the interface — hold content locally, authenticate as the author's account, sign at publication — and any tool implementing it qualifies. A shared library rather than an application, so that the surface an author writes in never becomes a chokepoint, and its maintainer never becomes an owner.
+
+### 3. Agreements
+
+An agreement is between an author and a publication, over a single work. It records who wrote it, that the publication may render it, and how revenue divides between them. It is entered by both parties and can be ended by either.
+
+Agreements are recorded on a public blockchain, so neither party operates the record, neither can rewrite it, and there is no host to pull. This is what makes ending an agreement a fact rather than a request.
+
+The set of agreements currently in force is what the publication consists of. There is no separate list of articles: a work is published because an agreement covers it, and ceases to be published when that agreement ends. Adding a work and permitting it are the same act.
+
+Neither party owns the record. An author appends a work and can retract it; a publication admits a work and can decline to continue carrying it. Each version an author publishes is recorded, so a publication can see that a piece has changed and an author can show what they published and when. Only the author of a work may revise or withdraw it; neither the publication nor another author can alter it in the record.
+
+What the record holds is not the work. Source material is stored encrypted and never becomes public: it exists in readable form only inside the generator, while a page is being produced. Anyone can see that a work was revised and when; nobody outside a current agreement can read any version of it, including earlier ones.
+
+Ending an agreement is a single act with immediate effect. The author does not ask, and the publication does not need to agree. The next rendering is produced without that work, and no signer's standing extends to it any longer. What the ledger settles is what was agreed and when, not whether either party honored it — a publication that renders a withdrawn work is not prevented from doing so, but cannot deny having done it.
