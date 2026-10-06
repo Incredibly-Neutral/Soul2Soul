@@ -174,6 +174,14 @@ export const SingleActionInputSchema = z.object({
 
 export type SingleActionInput = z.infer<typeof SingleActionInputSchema>;
 
+export const DataAvailabilityEntrySchema = z.object({
+  kind: z.enum(['config', 'template', 'data']),
+  genesis: z.string().optional(),
+  cid: z.string().optional(),
+  reason: z.string(),
+  fatal: z.boolean(),
+});
+
 export const SingleActionOutputSchema = ActionResultSchema(
   z.object({
     job: jobSchema,
@@ -182,6 +190,8 @@ export const SingleActionOutputSchema = ActionResultSchema(
     // Cache-drift signal (see SingleData.maintainCache): the orchestrator fires
     // the parallel maintain-cache action when true.
     maintainCache: z.boolean().optional(),
+    // Structured availability report: every data-fetch failure classified.
+    availability: z.array(DataAvailabilityEntrySchema).optional(),
   }),
 );
 

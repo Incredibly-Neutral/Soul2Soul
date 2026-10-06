@@ -11,7 +11,7 @@ services:
       - NODE_ENV=production
       - PORT=2002
       # Add your Alchemy API key here
-      - BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/NFOkRqUo2swIC9g5tRJ7c
+      - BASE_RPC_URL=https://lb.drpc.live/base/AouQTyDbwExLrOsOS2mMBR_2kteqUQMR8az6tiKh6MJI
     restart: unless-stopped
     healthcheck:
       test:

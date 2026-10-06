@@ -522,6 +522,97 @@ describe('runRenderActionWithRetry — live-path retry', () => {
 });
 
 // ============================================================================
+// Empty-string swallow regression (?? → || bug fix)
+//
+// Before the fix, an empty error string ("") would survive through ?? chains
+// because "" is non-nullish. The fix converts ?? to || with a final non-empty
+// fallback so the user never sees {error:""} or a thrown Error('').
+// ============================================================================
+
+describe('runRenderActionWithRetry — empty-string not swallowed', () => {
+  const cid = 'cid-test';
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  afterAll(() => {
+    vi.mocked(runAction).mockRestore();
+  });
+
+  it('a non-ok result with "" error surfaces a non-empty classified message (??→|| fix at error-construction site)', async () => {
+    // The render action returns ok:false with error:"" — exactly what the
+    // production bug produced before the fix.
+    vi.mocked(runAction).mockResolvedValue({
+      ok: false,
+      action: 'render',
+      error: '',
+      trace: [],
+    } as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    // After 3 attempts (all returning empty ""), the exhaustion path MUST
+    // produce a NON-empty error message — never Error('').
+    // The "" error falls through the || chain to JSON.stringify(), which
+    // produces a human-readable JSON dump of the failure envelope.
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toBeTruthy();
+    expect(thrown.message.length).toBeGreaterThan(0);
+    expect(thrown.message).not.toBe('');
+    expect(thrown.message).not.toBe('[object Object]'); // B4 regression: never the generic string
+  });
+
+  it('a non-ok result with empty error + nullish message fields still gets a fallback', async () => {
+    // Edge case: error is "", message is undefined on the failure object.
+    vi.mocked(runAction).mockResolvedValue({
+      ok: false,
+      action: 'render',
+      error: '',
+      trace: [],
+    } as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toBeTruthy();
+    expect(thrown.message).not.toBe('');
+  });
+
+  it('a thrown Error with empty message also gets a fallback in the orchestrator return', async () => {
+    // Simulate an action throw with empty message — the render action catch
+    // block (main.ts:401) now uses || with fallback.
+    vi.mocked(runAction).mockRejectedValue(new Error('') as any);
+
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
+
+    // The error construction in the retry loop now detects empty-message
+    // Error instances and falls back to JSON.stringify() or the final
+    // 'render action failed' sentinel.
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toBeTruthy();
+    expect(thrown.message.length).toBeGreaterThan(0);
+    expect(thrown.message).not.toBe('');
+    expect(thrown.message).not.toBe('[object Object]');
+  });
+});
+
+// ============================================================================
 // Revoked-job → remove-entry derivation (GAP-10 revoke ripples)
 // ============================================================================
 

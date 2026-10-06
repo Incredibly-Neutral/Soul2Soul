@@ -121,9 +121,10 @@ export async function runRenderActionWithRetry(
   // String(envelope) would yield '[object Object]', losing the message. Unwrap
   // the human-readable detail (error ?? message ?? toString-of-last-resort) and
   // attach the original failure object so callers/logs can still inspect it.
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional || to catch empty string
   const err =
     lastFailure instanceof Error
-      ? lastFailure
+      ? (lastFailure.message ? lastFailure : new Error(JSON.stringify(lastFailure) || 'render action failed'))
       : new Error(
           lastFailure?.error ??
             lastFailure?.message ??
@@ -202,6 +203,7 @@ export const renderwithLitActions = async (
     else console.log('preview:', preview);
 
     console.log('pub1', publication);
+    console.log('pub1', publication);
     const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
     const prepAction = await runAction(
       true,
@@ -264,11 +266,29 @@ export const renderwithLitActions = async (
     // log every job that didn't cleanly succeed — both failure kinds, full object
     for (const r of allResults) {
       const failed = !r.success || !(r.data as any)?.ok;
-      if (failed)
-        console.error(`[single ${r.index}]`, JSON.stringify(r.data ?? { error: r.error }, null, 2));
+      if (failed) {
+        const avail = (r.data as any)?.data?.availability ?? (r.data as any)?.trace?.find((t: any) => t?.availability)?.availability;
+        const availSummary =
+          avail && avail.length > 0
+            ? ` | availability: ${avail.map((a: any) => `${a.kind}${a.genesis ? ' ' + a.genesis.slice(0, 12) + '…' : ''}${a.cid ? ' ' + a.cid.slice(0, 10) + '…' : ''}`).join(', ')}`
+            : '';
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+        console.error(`[single ${r.index}]${availSummary}`, JSON.stringify(r.data ?? { error: r.error || 'render action failed' }, null, 2));
+      }
     }
 
     const successful = (allResults as any[]).filter((r: any) => r.success && r.data?.ok);
+
+    // Log availability reports from successful renders (non-fatal data-fetch skips).
+    for (const r of successful) {
+      const avail = (r.data?.data as any)?.availability;
+      if (avail && avail.length > 0) {
+        const index = (r as any).index;
+        console.log(
+          `[single ${index}] data-availability: ${avail.map((a: any) => `${a.kind} ${a.genesis ? a.genesis.slice(0, 12) + '…' : ''}${a.cid ? ' cid=' + a.cid.slice(0, 10) + '…' : ''}: ${a.reason}`).join('; ')}`,
+        );
+      }
+    }
 
     console.log({ 'rendered jobs': successful });
 
@@ -395,8 +415,10 @@ export const renderwithLitActions = async (
         litUsageKey,
       );
     } catch (err: any) {
-      console.error(`[maintain-cache] dedicated action threw: ${err?.message ?? String(err)}`);
-      maintainCacheResult = { ok: false, error: err?.message ?? String(err) };
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      console.error(`[maintain-cache] dedicated action threw: ${err?.message || String(err)}`);
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      maintainCacheResult = { ok: false, error: err?.message || String(err) || 'maintain-cache action failed' };
     }
     // Log loudly, never swallow — the pointer write must be observable, not
     // silently dropped the way the old fire-and-forget write-back was.
@@ -422,7 +444,8 @@ export const renderwithLitActions = async (
     // fall back to the raw action envelope, then a generic message.
     error: validated.ok
       ? undefined
-      : ((validated as any)?.error ?? (evmAction as any)?.error ?? 'update action failed'),
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      : ((validated as any)?.error || (evmAction as any)?.error || 'update action failed'),
     // Result of the dedicated maintain-cache action (null when not fired). Kept
     // on the envelope so callers/observers can see the cache write outcome.
     maintainCache: maintainCacheResult,
