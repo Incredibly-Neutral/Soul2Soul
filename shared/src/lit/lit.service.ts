@@ -179,11 +179,11 @@ export class LitService {
 
   async inspectGroup(id: number) {
     
-    const actions = await this.call<{ success: boolean }>(`/list_actions?[${id}]&page_number=0&page_size=50`, {
+    const actions = await this.call<{ success: boolean }>(`/list_actions?[${id}]&page_number=0&page_size=500`, {
         method: 'GET'
     });
 
-    const pkps = await this.call<{ success: boolean }>(`/list_wallets_in_group?group_id=${id}&page_number=0&page_size=20`, {
+    const pkps = await this.call<{ success: boolean }>(`/list_wallets_in_group?group_id=${id}&page_number=0&page_size=200`, {
         method: 'GET'
     });
 
@@ -193,7 +193,7 @@ export class LitService {
 
     return {
       actions,
-      pkps,
+      pkps
       // keys
     }
 

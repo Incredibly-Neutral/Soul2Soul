@@ -5,6 +5,7 @@ import {
   ActionResult,
   SingleInput,
   SingleData,
+  DataAvailabilityEntry,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { decrypt } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
@@ -75,6 +76,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   console.log(`new render @ ${new Date()}`);
   let trace: any[] = [];
   let errors: string[] = [];
+  // Structured availability report: every data-fetch failure classified by kind.
+  let availability: DataAvailabilityEntry[] = [];
   // Cache-drift signal surfaced in the success envelope: set true when the
   // write-back would fire (shouldFire). The orchestrator uses this to launch
   // the dedicated maintain-cache action in its own fresh session.
@@ -163,7 +166,19 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     if (body == undefined || body == null || body.id == undefined) throw 'Post content not found';
     trace.push(body);
 
-    let config = await getConfig(configCid, configModule, rpcs?.L2, gateway);
+    let config: any;
+    try {
+      config = await getConfig(configCid, configModule, rpcs?.L2, gateway);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      availability.push({
+        kind: 'config',
+        cid: configCid,
+        reason: `config fetch/parse failed: ${reason || 'unknown error'}`,
+        fatal: true,
+      });
+      throw `config fetch failed: ${reason || 'unknown error'}`;
+    }
     trace.push(config);
 
     let t1 = Date.now();
@@ -233,13 +248,23 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         preview,
       });
 
-      const { collections, drift } = await fetchCollections(
+      const { collections, drift, skips } = await fetchCollections(
         job.templateConfig,
         publicationModule,
         rpcs?.L2,
         gateway,
         archiveCid,
       );
+      // Record each data-fetch skip as a structured availability entry.
+      for (const s of skips) {
+        availability.push({
+          kind: 'data',
+          genesis: s.genesis,
+          cid: s.cid,
+          reason: s.reason,
+          fatal: false,
+        });
+      }
 
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
@@ -270,6 +295,13 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   const errorMsg = `Failed to decrypt item ${item.id || 'unknown'}`;
                   console.log(errorMsg);
                   errors.push(errorMsg);
+                  availability.push({
+                    kind: 'data',
+                    genesis: item.id,
+                    cid: item.cid,
+                    reason: errorMsg,
+                    fatal: false,
+                  });
                   return null;
                 }
                 const obj = mergeDecrypted(item, d);
@@ -278,6 +310,13 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                 const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
                 console.log(errorMsg);
                 errors.push(errorMsg);
+                availability.push({
+                  kind: 'data',
+                  genesis: item.id,
+                  cid: item.cid,
+                  reason: errorMsg,
+                  fatal: false,
+                });
                 return null;
               }
             } else {
@@ -302,7 +341,18 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       // immutable + CID-pinned for PKP). Any `config.helpersCid` an old deployed
       // config still carries is IGNORED — graceful no-op, built-ins only. No
       // code-gen, no helper fetch, no eval is attempted here.
-      html = await renderHTML(config, job.templateConfig, templateData, gateway);
+      try {
+        html = await renderHTML(config, job.templateConfig, templateData, gateway);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        availability.push({
+          kind: 'template',
+          genesis: job.id,
+          reason: `template render failed: ${reason || 'unknown error'}`,
+          fatal: true,
+        });
+        throw `template render failed: ${reason || 'unknown error'}`;
+      }
 
       if (typeof html === 'string') {
         console.log('HTML', html.slice(0, 400));
@@ -375,13 +425,20 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       html = '';
     }
 
-    if (errors.length > 0) {
-      return {
-        ok: false,
-        action: 'render',
-        error: errors.join('; '),
-        trace,
-      };
+    // Data-fetch failures are NON-FATAL per the availability contract: a page
+    // that rendered with some unavailable collection items still produces a
+    // valid result. Classify any remaining errors as data availability entries
+    // (non-fatal) and return ok:true. Only config/template failures (thrown
+    // above) reach the catch block as ok:false.
+    for (const err of errors) {
+      // Avoid duplicating decrypt errors already recorded above.
+      if (!availability.some((a) => a.reason === err)) {
+        availability.push({
+          kind: 'data',
+          reason: err,
+          fatal: false,
+        });
+      }
     }
 
     return {
@@ -393,13 +450,20 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         html,
         timestamp: new Date().toISOString(),
         maintainCache: maintainCachePending,
+        availability: availability.length > 0 ? availability : undefined,
       },
     };
   } catch (e) {
+    // On fatal failure, surface the availability entries collected so far in
+    // trace so callers can inspect the classified failures.
+    if (availability.length > 0) {
+      trace.push({ availability });
+    }
     return {
       ok: false,
       action: 'single',
-      error: typeof e === 'string' ? e : ((e as Error)?.message ?? String(e)),
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+      error: typeof e === 'string' ? (e || 'render action failed') : (((e as Error)?.message || String(e)) || 'render action failed'),
       trace,
     };
   }

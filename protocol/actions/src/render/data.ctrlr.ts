@@ -1,6 +1,7 @@
 import { decrypt } from '../libs/decrypt';
 import {
   fetchByPublication,
+  fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
   getDeals,
   toBody,
@@ -9,6 +10,7 @@ import {
 import { catFile } from '../libs/ipfs.factory';
 import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
+import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
 
@@ -301,7 +303,11 @@ const fetchCollectionsFromArchive = async (
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
-): Promise<{ bodies: any[]; drift: CollectionsDrift | null }> => {
+): Promise<{
+  bodies: any[];
+  drift: CollectionsDrift | null;
+  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+}> => {
   // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
   // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
   // no-archive path (today's N cats) rather than fail the render — the cache
@@ -316,7 +322,8 @@ const fetchCollectionsFromArchive = async (
     console.warn(
       `archive cat failed, falling back to no-archive: ${e instanceof Error ? e.message : String(e)}`,
     );
-    return { bodies: await fetchByPublication(publicationModule, rpcs, gateway), drift: null };
+    const fb = await fetchByPublicationWithSkips(publicationModule, rpcs, gateway);
+    return { bodies: fb.bodies, drift: null, skips: fb.skips };
   }
 
   const deals = await getDeals(publicationModule, rpcs);
@@ -326,6 +333,7 @@ const fetchCollectionsFromArchive = async (
   // by genesis — the T4 write-back merges these into the next archive
   // snapshot. The flat bodies below keep the read path byte-identical.
   const fetchedItems = new Map<string, S2SContentItem>();
+  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
   const fetched = await Promise.all(
     needsFetch.map(async (entry) => {
       try {
@@ -333,7 +341,9 @@ const fetchCollectionsFromArchive = async (
         fetchedItems.set(entry.genesis, item as S2SContentItem);
         return toBody(entry, item);
       } catch (e) {
-        console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, e);
+        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
+        console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
+        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
         return null;
       }
     }),
@@ -341,6 +351,7 @@ const fetchCollectionsFromArchive = async (
   return {
     bodies: bodiesFromReconcile(deals, fresh, needsFetch, fetched),
     drift: { deals, needsFetch, fetchedItems },
+    skips,
   };
 };
 
@@ -350,9 +361,14 @@ export const fetchCollections = async (
   rpcs?: string[],
   gateway?: string,
   archiveCid?: string,
-): Promise<{ collections: Record<string, any[]>; drift: CollectionsDrift | null }> => {
+): Promise<{
+  collections: Record<string, any[]>;
+  drift: CollectionsDrift | null;
+  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+}> => {
   const collections: any = {};
   let drift: CollectionsDrift | null = null;
+  let skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
 
   // Fetch all deals once — every collection filters the same set.
   let allDeals: any[] = [];
@@ -361,6 +377,7 @@ export const fetchCollections = async (
       const res = await fetchCollectionsFromArchive(archiveCid, publicationModule, rpcs, gateway);
       allDeals = res.bodies;
       drift = res.drift;
+      skips = res.skips;
     } else {
       // NO-ARCHIVE BOOTSTRAP path (archive pointer empty — cache never written).
       // Capture the full freshly-fetched items + the deals IN THE SAME SINGLE
@@ -382,6 +399,7 @@ export const fetchCollections = async (
         needsFetch: res.entries,
         fetchedItems: res.items,
       };
+      skips = res.skips;
     }
     allDeals = allDeals.filter((item) => item != null);
   }
@@ -393,7 +411,7 @@ export const fetchCollections = async (
     );
   }
 
-  return { collections, drift };
+  return { collections, drift, skips };
 };
 
 // export const decryptCollection = async (collection: any, publicationModule: string, authorSafeAddress: string) => {

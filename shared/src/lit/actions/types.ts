@@ -4,6 +4,26 @@ export type ActionResult<T> =
   | { ok: true; action: string; data: T; trace: any[] }
   | { ok: false; action: string; error: string; trace: any[] };
 
+/**
+ * Structured data-availability entry produced by the render action.
+ * Every data-fetch failure is classified as exactly one kind:
+ *   - "config"   — publication config fetch/parse failure (FATAL)
+ *   - "template" — render template fetch/parse failure (FATAL)
+ *   - "data"     — content/data-source fetch failure, e.g. IPFS cat of a
+ *                  content CID or a decrypt failure (NON-FATAL, skip-and-continue)
+ */
+export interface DataAvailabilityEntry {
+  kind: 'config' | 'template' | 'data';
+  /** bytes32 genesis id (present for "data" entries) */
+  genesis?: string;
+  /** IPFS CID of the unavailable resource (present when known) */
+  cid?: string;
+  /** Human-readable failure reason */
+  reason: string;
+  /** Whether this failure prevents the render from completing */
+  fatal: boolean;
+}
+
 export interface PrepInput {
   publication: string;
   contentIds: string[];
@@ -46,6 +66,8 @@ export interface SingleData {
   // the dedicated maintain-cache action in its own fresh session. Optional for
   // backward compatibility with existing render callers/envelopes.
   maintainCache?: boolean;
+  /** Structured availability report: every data-fetch failure classified by kind. */
+  availability?: DataAvailabilityEntry[];
 }
 
 // ============================================================================

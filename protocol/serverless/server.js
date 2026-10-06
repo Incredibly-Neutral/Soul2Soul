@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ─── Config ──────────────────────────────────────────────
-const IPFS_GATEWAY = process.env.IPFS_GATEWAY || "https://ipfs.transport-union.dev";
+const IPFS_GATEWAY = process.env.IPFS_GATEWAY || "https://ipfs.filebase.io";
 const ACTION_TIMEOUT_MS = parseInt(process.env.ACTION_TIMEOUT_MS || "30000", 10);
 const PORT = parseInt(process.env.PORT || "3000", 10);
 

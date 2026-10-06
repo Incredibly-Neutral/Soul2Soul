@@ -1,6 +1,9 @@
 import { evmRead } from './evm';
 import { catFile } from './ipfs.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import type {
+  S2SContentItem,
+  DataAvailabilityEntry,
+} from '@s2s/soul2soul-shared/lit-actions';
 
 // ── Module ABIs (Base) ────────────────────────────────────────────────────
 // Entry tuple returned by getLatest / getDeals / getOffers.
@@ -166,19 +169,37 @@ export const fetchByPublication = async (
   rpcs?: string[],
   gateway?: string,
 ): Promise<any[]> => {
+  const { bodies } = await fetchByPublicationWithSkips(publicationModule, rpcs, gateway);
+  return bodies;
+};
+
+/**
+ * Variant of fetchByPublication that also collects structured skip records for
+ * the data-availability report. Callers that need availability classification
+ * (render action) use this directly; callers that don't (prep) keep using
+ * fetchByPublication.
+ */
+export const fetchByPublicationWithSkips = async (
+  publicationModule: string,
+  rpcs?: string[],
+  gateway?: string,
+): Promise<{ bodies: any[]; skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] }> => {
   const entries = await getDeals(publicationModule, rpcs);
-  const bodies = await Promise.all(
+  const bodies: any[] = [];
+  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
+  await Promise.all(
     entries.map(async (entry) => {
       try {
         const item = JSON.parse(await catFile(gateway!, entry.cid));
-        return toBody(entry, item);
+        bodies.push(toBody(entry, item));
       } catch (e) {
-        console.warn(`fetchByPublication: skip ${entry.genesis} (${entry.cid})`, e);
-        return null;
+        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
+        console.warn(`fetchByPublication: skip ${entry.genesis} (${entry.cid})`, reason);
+        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
       }
     }),
   );
-  return bodies.filter((b): b is any => b != null);
+  return { bodies, skips };
 };
 
 /**
@@ -198,10 +219,16 @@ export const fetchByPublicationDetailed = async (
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
-): Promise<{ bodies: any[]; items: Map<string, S2SContentItem>; entries: Entry[] }> => {
+): Promise<{
+  bodies: any[];
+  items: Map<string, S2SContentItem>;
+  entries: Entry[];
+  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+}> => {
   const entries = await getDeals(publicationModule, rpcs);
   const bodies: any[] = [];
   const items = new Map<string, S2SContentItem>();
+  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
   await Promise.all(
     entries.map(async (entry) => {
       try {
@@ -209,11 +236,13 @@ export const fetchByPublicationDetailed = async (
         items.set(entry.genesis, item as S2SContentItem);
         bodies.push(toBody(entry, item));
       } catch (e) {
-        console.warn(`fetchByPublicationDetailed: skip ${entry.genesis} (${entry.cid})`, e);
+        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
+        console.warn(`fetchByPublicationDetailed: skip ${entry.genesis} (${entry.cid})`, reason);
+        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
       }
     }),
   );
-  return { bodies, items, entries };
+  return { bodies, items, entries, skips };
 };
 
 export interface Version {

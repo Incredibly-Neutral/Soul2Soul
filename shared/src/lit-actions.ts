@@ -12,6 +12,7 @@ export type {
 } from './protocol';
 export type {
   ActionResult,
+  DataAvailabilityEntry,
   EvmUpdateData,
   EvmUpdateInput,
   MaintainCacheData,

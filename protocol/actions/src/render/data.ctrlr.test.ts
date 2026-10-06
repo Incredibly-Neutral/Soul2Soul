@@ -8,7 +8,12 @@ import {
   type CollectionsDrift,
 } from './data.ctrlr';
 import { catFile } from '../libs/ipfs.factory';
-import { fetchByPublication, fetchByPublicationDetailed, getDeals } from '../libs/module.factory';
+import {
+  fetchByPublication,
+  fetchByPublicationWithSkips,
+  fetchByPublicationDetailed,
+  getDeals,
+} from '../libs/module.factory';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 
 // Mock the I/O boundaries so fetchCollections' archive path can be exercised
@@ -24,6 +29,7 @@ vi.mock('../libs/module.factory', async (importOriginal) => {
     ...actual,
     getDeals: vi.fn(),
     fetchByPublication: vi.fn(),
+    fetchByPublicationWithSkips: vi.fn(),
     fetchByPublicationDetailed: vi.fn(),
   };
 });
@@ -390,18 +396,18 @@ describe('fetchCollections: archive cat-failure fallback', () => {
     vi.clearAllMocks();
   });
 
-  it('falls back to fetchByPublication when the archive cat fails', async () => {
+  it('falls back to fetchByPublicationWithSkips when the archive cat fails', async () => {
     (catFile as any).mockRejectedValue(new Error('gateway down'));
     (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
     const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
-    (fetchByPublication as any).mockResolvedValue([fallbackBody]);
+    (fetchByPublicationWithSkips as any).mockResolvedValue({ bodies: [fallbackBody], skips: [] });
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
 
     // archive cat was attempted, then degraded to the exact no-archive path
     expect(catFile).toHaveBeenCalledWith('gateway', 'archiveCid');
-    expect(fetchByPublication).toHaveBeenCalledWith('module', ['rpc'], 'gateway');
+    expect(fetchByPublicationWithSkips).toHaveBeenCalledWith('module', ['rpc'], 'gateway');
     // cat-first ordering: a failed cat never wastes the getDeals RPC
     expect(getDeals).not.toHaveBeenCalled();
     // same filter/sort pipeline as the no-archive path
@@ -513,7 +519,7 @@ describe('fetchCollections: archive drift tracking', () => {
     // bodies built in the same single pass (one detailed call, no second fetch).
     expect(result.collections.posts.map((b: any) => b.id)).toEqual(['g1', 'g2']);
     expect(fetchByPublicationDetailed).toHaveBeenCalledTimes(1);
-    expect(fetchByPublication).not.toHaveBeenCalled();
+    expect(fetchByPublicationWithSkips).not.toHaveBeenCalled();
 
     // bootstrap drift: non-null, needsFetch = all entries, items keyed by genesis.
     expect(result.drift).not.toBeNull();
@@ -541,10 +547,11 @@ describe('fetchCollections: archive drift tracking', () => {
     (catFile as any).mockRejectedValue(new Error('gateway down'));
     (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
     const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
-    (fetchByPublication as any).mockResolvedValue([fallbackBody]);
+    (fetchByPublicationWithSkips as any).mockResolvedValue({ bodies: [fallbackBody], skips: [] });
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
     expect(result.drift).toBeNull();
+    expect(result.skips).toEqual([]);
     expect(result.collections.posts).toEqual([fallbackBody]);
   });
 });
