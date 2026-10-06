@@ -9,14 +9,32 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts';
 
-export const getConfig = async (configCid: string | undefined, configModule: string, rpcs?: string[], gateway?: string) => {
-  const _configCid =
-    typeof configCid !== 'undefined'
-      ? configCid
-      : await evmRead('L2', configModule, Abi_S2SRecordsModule, 'getRecord', ['config'], rpcs);
+export const getConfig = async (
+  configCid: string | undefined,
+  configModule: string,
+  rpcs?: string[],
+  gateway?: string,
+) => {
+  let _configCid: string;
+  try {
+    _configCid =
+      typeof configCid !== 'undefined'
+        ? configCid
+        : await evmRead('L2', configModule, Abi_S2SRecordsModule, 'getRecord', ['config'], rpcs);
+  } catch (e) {
+    throw new Error(
+      `config: failed to read config record from module: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 
-  let config = await catFile(gateway!, _configCid);
-  return JSON.parse(config);
+  try {
+    const config = await catFile(gateway!, _configCid);
+    return JSON.parse(config);
+  } catch (e) {
+    throw new Error(
+      `config: failed to cat/parse config CID ${_configCid}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 };
 
 export const getTaskConfig = (config: S2SPublicationConfig, body: S2SBody) => {
