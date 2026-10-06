@@ -1,0 +1,11 @@
+### 5. Gates
+
+The generator is open code, runnable by anyone. What stops it being used for anything is the gate: a condition read from the public record at the moment the generator acts, before it may decrypt or sign. A gate is enforced by the machinery itself — by what the code will do and what the key will sign — not by any party's decision at the moment.
+
+The first gate is the right to rerender the publication, held only by the author of a work, an owner of the publication, or someone the publication authorizes; no one else sets the generator in motion or writes a new site root. The second gate is the deal: a work's source material is decrypted only while it is under a current agreement between author and publication. Both must pass before the generator may use the source material — the deal shows the work belongs to this publication now; the right to rerender shows the caller may act on its behalf. A right to rerender without a deal publishes nothing; a deal without the right to rerender reveals nothing. The ciphertext is useless on its own: reading is a capability the gates grant inside the generator, not a file that can be opened, so no operator, host, or node reads what the gates have not opened for it.
+
+The third gate is the one the protocol reserves for money. A publication may place a work behind it, and the generator delivers the rendered page to a reader only when the record shows the reader has paid — per read or by subscription, as the publication chooses. Revenue then goes to the author and the publication independently, each per the agreement, without passing through the other's hands. The gate is optional: the protocol makes room for a payment model to be plugged in, and requires none.
+
+---
+
+**FALLBACK DRAFT — orchestrator's own sharpening.** Written because Neal-on-GLM produced no output. Not yet folded into v1.md. Changes vs the human's current text: standardized "right to rerender" throughout (fixed the rerender/publish inconsistency); gate 3 now explicitly "delivers the rendered page" to a reader rather than "reveals the work" (removes the source-material/rendered-HTML blur); tightened wording throughout. Verify against Neal's pass when available before folding.

@@ -107,6 +107,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     const protocolInfo = await getProtocolInfo(false, rpcs);
     if (!protocolInfo) throw 'Failed to fetch protocol info';
 
+    console.log(0)
+
     // Per-publication content archive pointer (ENS text record). Mirrors
     // update/main.ts's namehash + getText read for contenthash_wrapped. Only
     // read when the template actually has collections (fetchCollections only
@@ -149,6 +151,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       maintainCache,
     });
 
+     console.log(1)
+
+
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,
       rpcs,
@@ -156,6 +161,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
     if (multisig == null || configModule == null || publicationModule == null)
       throw 'Failed to resolve publication modules';
+
+     console.log(2)
+
 
     let body: any | undefined | null = await fetchById(
       job.id,
@@ -165,6 +173,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     );
     if (body == undefined || body == null || body.id == undefined) throw 'Post content not found';
     trace.push(body);
+
+     console.log(3)
+
 
     let config: any;
     try {
@@ -184,6 +195,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     let t1 = Date.now();
     trace.push(`got body & config: ${((t1 - t0) / 1000).toFixed(3)} seconds`);
 
+     console.log(4)
+
+
     let templateData: any = await initTemplateData(
       protocolInfo,
       authorSafeAddress,
@@ -195,6 +209,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       config.localePaths,
     );
     trace.push(templateData);
+
+     console.log(5)
+
 
     // Revoke detection via on-chain deal state: the decrypt-path
     // `revoked` flag only covers decrypt failures, not on-chain retract.
@@ -248,6 +265,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         preview,
       });
 
+       console.log(6)
+
+
       const { collections, drift, skips } = await fetchCollections(
         job.templateConfig,
         publicationModule,
@@ -265,6 +285,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
           fatal: false,
         });
       }
+
+       console.log(7)
+
 
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
@@ -328,6 +351,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         decryptedCollections[key] = decrypted.filter(Boolean);
       }
 
+      console.log(8)
+
       let t4 = Date.now();
       trace.push(`decrypted collections: ${((t4 - t0) / 1000).toFixed(3)} seconds`);
 
@@ -353,6 +378,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         });
         throw `template render failed: ${reason || 'unknown error'}`;
       }
+
+      console.log(9)
 
       if (typeof html === 'string') {
         console.log('HTML', html.slice(0, 400));
@@ -424,6 +451,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       job.html = '';
       html = '';
     }
+
+     console.log(10)
+
 
     // Data-fetch failures are NON-FATAL per the availability contract: a page
     // that rendered with some unavailable collection items still produces a

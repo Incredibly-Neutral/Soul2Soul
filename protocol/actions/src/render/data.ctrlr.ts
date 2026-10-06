@@ -13,6 +13,7 @@ import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
+import { S2SBodyEncrypted, S2SBodyPlain } from '../../../../shared/dist/protocol/types';
 
 export const createPath = (
   body: S2SBody,
