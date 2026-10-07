@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "4",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229718,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x20a47cb94d8555b63c6a993b9259247d84f469832e288dd9bc1cbbd57874a14f"
+  },
+  "objectId": "0xfc3f2f3e3d0fd30a8cb7d9a6e725597ce047a7a2d229d88cd9cf58512c3710f0",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xafbf835fa4228a4dfd587f9e0609e0c69cca7c338f149ce01cf88cfc69be15cb24bda6b3cdb5cb5546e666162efa1417c654f17f2346792f05216311595665ec1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<blockquote>\\n<p>Organisatoren kunnen deelname belonen, bijvoorbeeld met een bewijs van deelname op de anonieme sleutel van de respondent.</p>\\n</blockquote>\",\"custom\":{},\"slug\":\"beloning\",\"title\":\"Beloning\"}"
+}

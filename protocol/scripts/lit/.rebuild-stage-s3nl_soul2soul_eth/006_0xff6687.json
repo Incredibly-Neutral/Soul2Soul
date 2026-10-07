@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229833,
+    "tags": [
+      "s3nl--s2s",
+      "respondent"
+    ],
+    "plaintextHash": "0xd75ed0cfd00d592a65e3d295be4279f19552f1f1e951b9cbaa6d742dc4d3fd8c"
+  },
+  "objectId": "0xff668763e8d66fd4e3c10455a7cf88bbc2129c56f87a44b814c4c8d6476a955e",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x3b5015b21b46224d9c2de980b5de310c2c4d3afaff35525e30cee06e14acc8eb64330a81aa7640b8370df5d61ae29f82bb713e7e7d6352d55c738c10e3769f591b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>De organisator ziet totalen en samenvattingen. Losse antwoorden kunnen zichtbaar zijn, maar nooit als jouw ingevulde enquête en nooit naast je andere antwoorden. Dat profiel bestaat nergens, ook niet voor S3ntiment.</p>\",\"custom\":{},\"slug\":\"jouw-antwoorden-blijven-van-jou\",\"title\":\"Jouw antwoorden blijven van jou\"}"
+}

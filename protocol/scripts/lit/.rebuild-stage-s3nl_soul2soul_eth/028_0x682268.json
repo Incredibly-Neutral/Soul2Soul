@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "3",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229915,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xa9dbdd3214811d733c5eb590e5b41da0539702958afcf7afdffb3f37f2b00030"
+  },
+  "objectId": "0x682268c43725f41fb496c01278552827efa1ae4dd4d10450694471c56c508ef0",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa16d6d2dd6a496da9c8c11f842a2cd46724ff4c93364d7e8b96bee39e64bdefe226baeabc7a45d430b80fe840a3bb62d58273369a897b721cc306d234bb0b4a71c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Organisers can reward participation — proof of taking part, tokens, access to something, whatever fits. It lands on the respondent&#39;s anonymous key, so a reward is never a reason to know who they are.</p>\",\"custom\":{},\"slug\":\"rewards\",\"title\":\"Rewards\"}"
+}

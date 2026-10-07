@@ -46,6 +46,7 @@ export const getProtocolInfo = async (
     lit_action_render,
     lit_action_update,
     lit_action_maintainCache,
+    lit_action_repointArchive,
     pkp_ethAddress,
   ] = await getRecords(
     configModule!,
@@ -62,6 +63,9 @@ export const getProtocolInfo = async (
       // written yet this reads back an empty string → protocolInfo.litActions
       // .maintainCache is falsy and the orchestrator skips the parallel path.
       'lit_action_maintainCache',
+      // Optional: the one-shot repoint-archive action (recovery). Empty string
+      // until deployed → litActions.repointArchive is falsy.
+      'lit_action_repointArchive',
       'pkp_ethAddress',
     ],
     l2Provider
@@ -79,6 +83,7 @@ export const getProtocolInfo = async (
       render: lit_action_render,
       update: lit_action_update,
       maintainCache: lit_action_maintainCache || undefined,
+      repointArchive: lit_action_repointArchive || undefined,
     },
   };
 };

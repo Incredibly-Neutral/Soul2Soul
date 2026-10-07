@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "home_en",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791281801,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x38653a0529bfde85fa51868f28c3ec4e515759d66e0c34877baabcef351547cf"
+  },
+  "objectId": "0x43d08dd079835337630d139fe71d9fb1951547148883b04d285cf7100e9f4ea8",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa8d80565833a7a4036d49020443676766633502dec3c5a83409a383bb0fafb5d0a67689d8066f52480d0a8b97cfc6b5b0921bbb6143d7a2ee5c45cbe0898e5d31b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Start measuring what people actually think. Our privacy preserving surveys give you the patterns, never the people: individual responses are stored as fragments, unreadable by you, by us, by anyone. No exceptions. No back doors. That privacy is why people answer freely</p>\",\"custom\":{},\"slug\":\"stop-measuring-what-people-will-say-in-public\",\"title\":\"Stop measuring what people will say in public\"}"
+}

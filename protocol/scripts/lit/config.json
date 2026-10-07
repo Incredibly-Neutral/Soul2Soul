@@ -16,8 +16,8 @@
         },
         {
           "name": "render",
-          "cid": "QmUmW4a9eFoNc7Ehv7PbMeawkc8nD5xaKJDfzkqLcfUisV",
-          "hashedCid": "0x63390deadb976c0d3d905c0efebad0d56148540b28c524d4b892528ee826a21c"
+          "cid": "QmcuGaHYv6rqX56PRcwVHeMt3t4McN2KqWXZtGsF3WsLMV",
+          "hashedCid": "0x4fb45a24a83bf03addb07a07c6dc4151232699a3fc50f55b68bcf39aa2cc6ccd"
         },
         {
           "name": "update",
@@ -28,6 +28,11 @@
           "name": "maintain-cache",
           "cid": "Qmf9emwnMV7KLZE8BjqjhFLKfkUWUPvH4Q8tD43FNcDmtF",
           "hashedCid": "0x9d7bbe2a9f72e232e5cc97d811cd6d663b0d19e4375110552eba303c46f4e3f7"
+        },
+        {
+          "name": "repoint-archive",
+          "cid": "QmZr42z6rCaMAGWPFR5jR1gcwfuGyHjaEySrFGeMDnR4Hi",
+          "hashedCid": "0xb08495c95c105b63df35ebbfee427d72540080ab1b9b91255507f460f4ebcd2e"
         }
       ],
       "pkps": [

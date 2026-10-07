@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "why",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229960,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x28fbec8f96d7972aa9ae44ddf314939d4a80bbb15883cf2fb0c18940fa596cc3"
+  },
+  "objectId": "0x70992ee58c688a7b7a9068453878364e37b9fbca0df0210194a11d4d022701c3",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa756d3d281bb725ae6fd21ff82310aa30834247216dfc3abc02afdf3ba6815c03d675d14b067f146856bd8b6886d7289f424a4c4ae22a98601d0d8ee25c5e7e91b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>All data is processed without individual answers ever becoming visible, not to the organiser, not to S3ntiment, not to third parties. That isn&#39;t a policy choice but a property of the architecture.</p>\\n<p>When you think about survey risk, you think about the outside: someone breaks in, someone ends up with data that wasn&#39;t meant for them. But anyone who knows the people doesn&#39;t need any of that. An organiser knows who was invited, knows the department, recognises a writing style. Anonymity that exists only because there&#39;s no name above an answer isn&#39;t anonymity in that situation.</p>\\n<h3>The questions are fixed in advance</h3>\\n<p>When the survey is created, it&#39;s established which breakdowns and calculations are possible. Nothing can be added later. An organiser can&#39;t gradually carve the data into smaller and smaller groups until something recognisable falls out, because the questions that can be asked of the data are the same questions that were allowed to be asked of it from the start.</p>\\n<h3>The puzzle exists nowhere as a whole</h3>\\n<p>Answers don&#39;t end up in one place. They&#39;re distributed across three nodes in a decentralised network, each with its own trusted execution environment: a sealed part of the processor that can&#39;t be looked into from outside, not even by whoever runs the machine. Tracing anything back would mean getting into three nodes at once and then fitting the pieces together again.</p>\\n<h3>A single answer can&#39;t be read on its own</h3>\\n<p>For numbers, ratings and multiple choice it goes a step further, because the individual answer is itself divided across the three nodes. An answer of 2 is stored as -6, 3 and 5. Each fragment means nothing by itself, and only all three together produce the original answer. Break into one node and you find noise.</p>\\n<h3>Answers never leave the secure environment</h3>\\n<p>To produce a total, each node is asked separately for a partial total. The individual answers stay inside the TEE; only the partial totals come out, and those are added together. The result is correct to the digit, without any one system ever having seen all the answers together.</p>\\n<!-- section class=\\\"quote left\\\" -->\\n\\n<h4>Crack one machine and you find noise</h4>\\n<!-- /section -->\\n\\n<h3>Where the protection is a single layer</h3>\\n<p>For multiple choice, scales and rankings both levels apply: distribution across nodes and computation on divided values. For open text answers only the isolation of the TEE applies. That&#39;s stronger than a platform&#39;s promise, but it is one layer, and the moment a survey includes text answers that layer determines the whole.</p>\\n<h3>Rights nobody has to grant</h3>\\n<p>The GDPR asks for privacy in the system itself, not for policy that describes after the fact what happens. A privacy statement and a data processing agreement document the risk; they don&#39;t reduce it. At S3ntiment, not being able to look is not an agreement but a property of the setup, and that spares the organiser the position of having to explain why they don&#39;t do something they could.</p>\\n<p>The same goes for respondents&#39; rights. Access and deletion don&#39;t have to be requested, assessed and granted, because nobody stands between a respondent and their own answers. What is a procedure elsewhere is a button here.</p>\\n<!-- section id=\\\"summary\\\" -->\\n\\n<h3>On the matter of privacy</h3>\\n<ul>\\n<li>Answers split across three nodes, complete nowhere</li>\\n<li>Individual answers never leave the secure environment</li>\\n<li>Breakdowns are fixed in advance, not widened afterwards</li>\\n<li>Access and deletion without an intermediary</li>\\n<li>Not promised, mathematically enforced</li>\\n</ul>\\n<!-- /section -->\",\"custom\":{\"slug\":\"privacy\",\"subtitle\":\"privacy\",\"summary\":\"<h3>Not from the inside either</h3>\\n<p>Answers are distributed across three machines and exist nowhere as a whole, not even for the organiser. You can&#39;t see who answered what either, and that&#39;s one thing less to carry.</p>\"},\"slug\":\"privacy\",\"title\":\"You won't accidentally recognise your people\"}"
+}

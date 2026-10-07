@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229922,
+    "tags": [
+      "s3nl--s2s",
+      "respondent"
+    ],
+    "plaintextHash": "0xd3cd667b89b325f6b7ef6b032ba30cfb04c845b38267bb742d9ad5788ed86c76"
+  },
+  "objectId": "0xd09caff4e480b04cbf8447f4e61771f7dab591e0ddcd79c3989cd8a489fad585",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x9d77d196405f5f99e2ab924dbd4ff615709ab7d1f280c4e5e4fe67b8f9835adb180309ea235095eba82aa76712ae3465ea512e13a06a6eef4dd62bb5dd1648491b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>You get a unique code: one code, one participant. It proves you were invited without revealing who you are. After that you&#39;re in the pool, and new surveys reach you without scanning again.</p>\",\"custom\":{},\"slug\":\"scan-the-qr-code-done\",\"title\":\"Scan the QR code, done\"}"
+}

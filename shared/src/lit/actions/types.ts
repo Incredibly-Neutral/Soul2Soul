@@ -117,3 +117,28 @@ export interface MaintainCacheData {
   cid: string;
   wrote: boolean;
 }
+
+// One-shot cache-pointer repoint for a publication (recovery action). Given a
+// caller-provided prebuilt archive CID it validates the archive (cat + parse +
+// reconcile must cover every on-chain deal) then writes
+// `content_cache_<publication>` via the PKP. Gated by canReset (publication
+// Safe owner — stricter than canPublish). See
+// protocol/actions/src/repoint-archive/main.ts.
+export interface RepointArchiveInput {
+  publication: string;
+  signature: string;
+  authorSafeAddress: string;
+  // Prebuilt archive CID to point the cache at (e.g. from the off-chain
+  // rebuild — protocol/scripts/lit/rebuild-archive.ts).
+  archiveCid: string;
+  preview?: boolean;
+  endpoints: {
+    ipfsGateway?: string;
+    rpcs: { L1: string[]; L2: string[] };
+  };
+}
+
+export interface RepointArchiveData {
+  cid: string;
+  wrote: boolean;
+}

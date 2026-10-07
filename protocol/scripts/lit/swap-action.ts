@@ -13,8 +13,13 @@
  *      config.json:
  *        addAction(newHash)                     (idempotent metadata register)
  *        addActionToGroup(groupId, newHash)     (idempotent bind)
- *        removeActionFromGroup(groupId, oldHash) + removeAction(oldHash)
- *        (only when the old hash differs AND is still in the group)
+ *        removeAction(oldHash)                  ALWAYS when the old hash differs
+ *          — removes the prev action from the account registry AND every group
+ *            (idempotent, never reverts), so a superseded action can never
+ *            linger registered to the account.
+ *        removeActionFromGroup(groupId, oldHash)  only when the on-chain
+ *          membership check confirms it is still in the group (it REVERTS if
+ *          absent), placed BEFORE removeAction (which empties the group set).
  *   3. update the action entry in config.json
  *   4. remind: pnpm update-protocol afterwards (on-chain records CIDs)
  *
@@ -57,7 +62,7 @@ loadMonorepoEnv(__filename);
 
 const configPath = path.join(__dirname, 'config.json');
 const groupName = 's2s';
-const validActions = ['prep', 'render', 'update', 'maintain-cache', 'encrypt'];
+const validActions = ['prep', 'render', 'update', 'maintain-cache', 'repoint-archive', 'encrypt'];
 
 const actionName = process.argv[2];
 if (!actionName || !validActions.includes(actionName)) {
@@ -129,33 +134,44 @@ async function main(): Promise<void> {
   ];
 
   if (oldAction && oldAction.hashedCid && oldAction.hashedCid !== newHashedCid) {
-    // removeActionFromGroup REVERTS if the old hash is not in the group, so
-    // best-effort check membership first. removeAction never reverts for an
-    // absent hash (safe to include unconditionally).
+    // Correctly remove the PREVIOUS action "both ways" (account + groups):
+    //   - removeAction(old) strips it from the account registry AND every group
+    //     that references it (idempotent — only reverts for hash 0x0), so it is
+    //     included UNCONDITIONALLY: a superseded action can never linger
+    //     registered to the account.
+    //   - removeActionFromGroup(old) is redundant with removeAction and REVERTS
+    //     if the hash is not in the group, so it is only included when the
+    //     on-chain membership check confirms presence, purely so the
+    //     ActionRemovedFromGroup event fires for observability. It MUST be
+    //     placed before removeAction, because removeAction already empties the
+    //     group set.
+    const oldHashedCid = oldAction.hashedCid as `0x${string}`;
     const inGroup = await isActionInGroup({
       adminHash: adminHashVal,
       groupId: group.id,
-      actionHash: oldAction.hashedCid as `0x${string}`,
+      actionHash: oldHashedCid,
     });
     if (inGroup === true) {
       writes.push(
         encodeRemoveActionFromGroup({
           apiKeyHash: adminHashVal,
           groupId: group.id,
-          action: oldAction.hashedCid as `0x${string}`,
-        }),
-        encodeRemoveAction({
-          apiKeyHash: adminHashVal,
-          actionHash: oldAction.hashedCid as `0x${string}`,
+          action: oldHashedCid,
         }),
       );
     } else {
       console.warn(
-        `⚠️  Old hash ${oldAction.hashedCid} for "${actionName}" was NOT found in group ${group.id}` +
+        `Old hash ${oldHashedCid} for "${actionName}" is not in group ${group.id}` +
           (inGroup === null ? ' (membership read unavailable)' : '') +
-          ' — skipping removeActionFromGroup/removeAction so the batch does not revert.',
+          ' — skipping removeActionFromGroup only; removeAction still strips it from all groups.',
       );
     }
+    writes.push(
+      encodeRemoveAction({
+        apiKeyHash: adminHashVal,
+        actionHash: oldHashedCid,
+      }),
+    );
   } else if (oldAction && oldAction.hashedCid === newHashedCid) {
     console.log(`New CID for "${actionName}" is unchanged — only re-adding (idempotent).`);
   }

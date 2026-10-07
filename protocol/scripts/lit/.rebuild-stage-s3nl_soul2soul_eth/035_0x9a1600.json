@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "home_nl",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229946,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x335c5d438c2a42fc55f1ad18d4c303747cd7e9e3745725558f1cb507cb9dc67f"
+  },
+  "objectId": "0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa2bbca01565885620b10801568fe454d7daf7fa11bf1ea8efe1861a408c41cc615f5603aedacf854d4503e45dc5aea8d5d6d76bcfeceb5bdb3d1cf0038f1b53a1b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>S3ntiment is een enquêteplatform waar niemand, ook wij niet, bij individuele antwoorden kan. Geen uitzonderingen. Geen achterdeurtjes. Alleen eerlijke antwoorden en de inzichten die je nodig hebt.</p>\",\"custom\":{},\"slug\":\"waardevolle-response-begint-met-privacy\",\"title\":\"Waardevolle response begint met privacy\"}"
+}

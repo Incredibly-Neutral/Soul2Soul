@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229728,
+    "tags": [
+      "s3nl--s2s",
+      "organisator"
+    ],
+    "plaintextHash": "0x0da6b0eafa2503c04221e0e7a9c3b26b338980583662562886468538575bebd4"
+  },
+  "objectId": "0xf148df9f4e8ea17ea25d5ea6c2860b4dfcb63f348c10a3993ad541bca0aa901c",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x72eefd4456df07964f468d7080a4243e9f000e159249e13ed2d6369d7c02b0af447921af8db06484a6178230c8a61a3233fc17483e157a84ec37df24dd6a13611b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Generate a batch of single-use codes and hand them out as a printed QR, by mail, or over chat. You know who you invited, but not who redeemed. Once someone joins the pool, you can reach them again without issuing a new code.</p>\",\"custom\":{},\"slug\":\"build-your-pool\",\"title\":\"Build your pool\"}"
+}

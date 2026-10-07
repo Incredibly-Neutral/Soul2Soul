@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "contact",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229744,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x685eb8f653584624e971d7df61c466be8e80937a7a3454a209cfe3d03f9b0e90"
+  },
+  "objectId": "0x56563f85c036e678a59763a51ea8e21bb622c606aea44202f07a8b293562c07b",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x14fe100c63277a591d7ff9334ffd4354d7e464ff735385f8443358b8f461d28f34346c545199c4a31394ae020fabe4b38f075cc9451c8353b2a40f9122e0bc4e1b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>S3ntiment is in ontwikkeling. Denk je mee, wil je het ergens uitproberen, of ben je gewoon nieuwsgierig hoe het werkt — laat het weten.</p>\",\"custom\":{},\"slug\":\"contact\",\"title\":\"Contact\"}"
+}

@@ -52,19 +52,23 @@ export class LitService {
       // return withRetry<T>(
       //     async (retrySignal) => {
       const tFetch = Date.now();
-      // [RENDER-DEBUG] temporary instrumentation around the Lit POST (log-only).
-      console.log(`[RENDER-DEBUG] lit fetch begin endpoint=${endpoint} method=${method}`);
+      // Bound every Lit core-API call so a hung node/session can't hang the
+      // orchestrator (or silently drain Lit compute). An explicit signal
+      // (e.g. from runAction's callWithTimeout) wins; otherwise a default
+      // timeout applies — configurable via LIT_API_TIMEOUT_MS.
+      const effectiveSignal =
+        signal ?? AbortSignal.timeout(Number(process.env.LIT_API_TIMEOUT_MS ?? 120_000));
       let response: Response;
       try {
         response = await fetch(`${this.baseUrl}${endpoint}`, {
           method,
           headers,
           body: body ? JSON.stringify(body) : undefined,
+          signal: effectiveSignal,
         });
-        console.log(`[RENDER-DEBUG] lit fetch done endpoint=${endpoint} status=${String(response.status)} elapsed=${String(Date.now() - tFetch)}ms`);
       } catch (err: unknown) {
-        const errType = err instanceof Error ? err.name : typeof err;
-        console.log(`[RENDER-DEBUG] lit fetch THREW (network) endpoint=${endpoint} elapsed=${String(Date.now() - tFetch)}ms errType=${errType}`);
+        const aborted = err instanceof Error && err.name === 'AbortError';
+        if (aborted) throw new Error(`Lit API call to ${endpoint} timed out`);
         throw err;
       }
 
@@ -270,13 +274,10 @@ export class LitService {
   async executeAction(
     code: string,
     jsParams: Record<string, unknown> = {},
-    key: string | undefined = undefined
+    key: string | undefined = undefined,
+    signal?: AbortSignal
   ) {
     const endpoint = '/lit_action';
-    // [RENDER-DEBUG] temporary instrumentation (log-only).
-    const t0 = Date.now();
-    const beginHasKey = typeof key === 'string' && key.length > 0;
-    console.log(`[RENDER-DEBUG] executeAction POST begin endpoint=${endpoint} hasKey=${String(beginHasKey)}`);
 
     const result = await this.call<{ response: unknown; logs: string[]; has_error: boolean }>(
       endpoint,
@@ -285,10 +286,10 @@ export class LitService {
         body: { code, js_params: jsParams },
         key,
         retries: 0,
-      }
+      },
+      signal,
     );
 
-    console.log(`[RENDER-DEBUG] executeAction done endpoint=${endpoint} elapsed=${String(Date.now() - t0)}ms`);
     return result;
   }
 

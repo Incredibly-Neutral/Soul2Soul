@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229810,
+    "tags": [
+      "s3nl--s2s",
+      "respondent"
+    ],
+    "plaintextHash": "0x1d77592f7f5302bd25426ed58e9ba4e30c2b7f7afce3fe0a28b720e6d3be9471"
+  },
+  "objectId": "0x1d9525945618dae984068a79efdd9aa02d0c1ba70800556c60c6bc9831150490",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x025554615144328cf7345ae23185cbb26030a6084567bd2135b0c5067530f4616699eb1e49e842b0801ce608efb047b63c43cbc7e241d68af7887f1cf246ffcb1b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Bij het scannen krijg je een sleutel die alleen op jouw toestel staat. Daarmee kom je bij je eigen antwoorden — zonder naam, adres of wachtwoord. Je kunt die toegang later vastleggen, zodat je hem houdt als je van toestel wisselt.</p>\",\"custom\":{},\"slug\":\"geen-account-geen-registratie\",\"title\":\"Geen account, geen registratie\"}"
+}

@@ -16,23 +16,20 @@ import { S2SJob } from '../protocol/types';
 import { runAction } from './helpers';
 
 // ===========================================================================
-// Render-action retry (LIVE path only)
+// Render-action retry (LIVE path only) — DISABLED (2026-10)
 // ===========================================================================
-// A transient transport failure on the live Lit path (flaky Base RPC) makes an
-// individual render action fail. We retry the WHOLE render action execution
-// HERE, at the orchestrator level, OUTSIDE the Lit session — so the re-issued
-// eth_calls do NOT count against Lit's per-session 50-request budget. This is
-// the counterpart to the in-session fail-fast evmRead (see protocol/actions
-// src/libs/evm.ts); together they keep a multi-collection render well under the
-// 50-request cap while still tolerating a flaky transport.
+// This used to retry the whole live render action RENDER_RETRY_ATTEMPTS times
+// to tolerate a flaky Base RPC. That is now OFF (operator directive, 2026-10):
+// every retry re-fires the Lit action, re-opening a fresh session and re-
+// draining the per-session 50-request budget / compute charge. With the
+// runAction timeouts in place the correct behavior is to fail fast and let the
+// orchestrator mark the job failed — one attempt, no re-fire.
 //
-// Deliberately NOT retried here:
-//   - preview — runs on the free Bun runner (no 50-request cap) and has no
-//     need for this resilience;
-//   - the EVM-update action — it has on-chain side effects, so a retried
-//     update could double-write. Only the read-only render action is retried.
-const RENDER_RETRY_ATTEMPTS = 3;
-const RENDER_RETRY_BACKOFF_MS = 1500;
+// The deterministic session-budget fast-fail and the envelope/throw
+// normalization below are kept so a single failure still surfaces a clean,
+// actionable error.
+const RENDER_RETRY_ATTEMPTS = 1; // single attempt: live renders are NOT retried
+const RENDER_RETRY_BACKOFF_MS = 1500; // unused while attempts === 1 (kept for re-enable)
 
 const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -57,9 +54,11 @@ export function isDeterministicBudgetError(msg: string): boolean {
 }
 
 /**
- * Retry a render-action execution on the live path as described above.
+ * Execute a render action on the live path, single attempt (retries disabled
+ * 2026-10 — see RENDER_RETRY_ATTEMPTS). Kept as a wrapper so the failure
+ * envelope/throw normalization is in one place.
  *
- * Exported so the retry logic is unit-testable in isolation (mocking `runAction`);
+ * Exported so the logic is unit-testable in isolation (mocking `runAction`);
  * the orchestrator (`renderwithLitActions`) is the only other consumer.
  */
 export async function runRenderActionWithRetry(

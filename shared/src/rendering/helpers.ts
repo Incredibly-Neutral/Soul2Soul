@@ -1,4 +1,5 @@
 import { LitService } from "../lit";
+import { callWithTimeout } from "../helpers/index.js";
 
 // ===========================================================================
 // runAction — single source of truth for dev/prod transport
@@ -42,44 +43,44 @@ export async function runAction(
     if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
     return wrapped.response; // ActiedonBarResult<T>
   } else {
-    // =====================================================================
-    // [RENDER-DEBUG] TEMPORARY diagnostic instrumentation — root-causing the
-    // live 'silent stop after Jobs dispatched with no Lit charge' bug.
-    // LOG-ONLY: no behavior change, no timeout added. Remove after diagnosis
-    // by grepping for [RENDER-DEBUG]. Keys/tokens are NEVER printed — only
-    // presence/length.
-    // =====================================================================
-    const t0 = Date.now();
-    const hasKey = typeof litUsageKey === 'string' && litUsageKey.length > 0;
-    console.log(
-      `[RENDER-DEBUG] runAction live begin cid=${cid} preview=${String(preview)} t0=${String(t0)} litUsageKey=${String(hasKey)}` +
-        (typeof litUsageKey === 'string' ? ` len=${String(litUsageKey.length)}` : ''),
+    let code: string | undefined;
+    let codeErr: unknown;
+    // Fetch the action bundle from a gateway with a per-attempt timeout. The
+    // Pinata gateway has been 403ing/hanging (2026-10), so transport-union is
+    // primary with Pinata as fallback — never let a dead gateway hang the
+    // action (this was the live-publish hang: stuck on the code fetch).
+    const FETCH_TIMEOUT_MS = Number(process.env.ACTION_CODE_FETCH_TIMEOUT_MS ?? 10_000);
+    const gateways = [
+      (process.env.IPFS_URL || 'https://ipfs.transport-union.dev').replace(/\/$/, ''),
+      (process.env.PINATA_GATEWAY || 'https://neutralpress.mypinata.cloud').replace(/\/$/, ''),
+    ];
+    for (const gw of gateways) {
+      try {
+        const codeResp = await fetch(`${gw}/ipfs/${cid}`, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+        if (!codeResp.ok) {
+          continue;
+        }
+        code = await codeResp.text();
+        break;
+      } catch (err: unknown) {
+        codeErr = err;
+      }
+    }
+    if (!code) {
+      throw new Error(`action code fetch failed for ${cid}: ${codeErr instanceof Error ? codeErr.message : String(codeErr)}`);
+    }
+
+    const EXEC_TIMEOUT_MS = Number(process.env.LIT_EXEC_TIMEOUT_MS ?? 120_000);
+    // Bound the whole live execution so a hung Lit action can't hang the
+    // orchestrator (or silently drain Lit compute). The signal is threaded
+    // through executeAction → call → fetch; on timeout callWithTimeout
+    // converts the AbortError into a clear error.
+    const raw = await callWithTimeout(
+      (signal) => lit.executeAction(code, inputs, litUsageKey, signal),
+      EXEC_TIMEOUT_MS,
     );
-
-    let code: string;
-    try {
-      const codeResp = await fetch(`https://neutralpress.mypinata.cloud/ipfs/${cid}`);
-      console.log(
-        `[RENDER-DEBUG] cid code fetch done cid=${cid} status=${String(codeResp.status)} elapsed=${String(Date.now() - t0)}ms`,
-      );
-      code = await codeResp.text();
-    } catch (err: unknown) {
-      const errType = err instanceof Error ? err.name : typeof err;
-      console.log(`[RENDER-DEBUG] cid code fetch THREW cid=${cid} elapsed=${String(Date.now() - t0)}ms errType=${errType}`);
-      throw err;
-    }
-
-    console.log(`[RENDER-DEBUG] executing lit action for cid=${cid} hasKey=${String(hasKey)}`);
-    const t1 = Date.now();
-    let raw: { response: unknown; logs: string[]; has_error: boolean } | undefined;
-    try {
-      raw = await lit.executeAction(code, inputs, litUsageKey);
-      console.log(`[RENDER-DEBUG] lit executeAction returned cid=${cid} elapsed=${String(Date.now() - t1)}ms`);
-    } catch (err: unknown) {
-      const errType = err instanceof Error ? err.name : typeof err;
-      console.log(`[RENDER-DEBUG] lit executeAction THREW cid=${cid} elapsed=${String(Date.now() - t1)}ms errType=${errType}`);
-      throw err;
-    }
     // failure is logged in lit service
     return raw.response;      // ActionBarResult<T> — same shape
   }

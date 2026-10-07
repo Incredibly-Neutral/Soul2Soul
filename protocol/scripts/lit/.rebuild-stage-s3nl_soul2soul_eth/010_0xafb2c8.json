@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229710,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x19872046388054b33d2cb1c8aedfa7bc5f29fca8e803218b12e62de32324d260"
+  },
+  "objectId": "0xafb2c894949ebfb6b7368f2d996fe99caf1874296243cfed7b4bf441b20ac5b0",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x0748f6cc9955df15d4f904185e2d8b2edaf5f6c71514a3204eb72e771241a2216f7f0b4e52d2f0ae9a7d366adef83690b5e28c41e797d4cccc515be3ca2219aa1b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Respondenten beheren hun eigen antwoorden en passen die aan wanneer ze van gedachten veranderen. De resultaten laten daardoor zien hoe het er nú voor staat, niet hoe het er op één dag voor stond.</p>\",\"custom\":{},\"slug\":\"barometer\",\"title\":\"Barometer\"}"
+}

@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "4",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229671,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xc645c8625a011b6b89bd4b17d3732e4a5fd6c61aa0f133c3c9a40f6492416dd8"
+  },
+  "objectId": "0x5c0da16107e7e9b39e4b4d01a44cfa5942e23f81779eccb1b2dc481cd9a22efb",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x790708413c3ef7e9b95e198e93ec0b6cb06bc35bf7a6346916979632944594d437debe49d6cc49b3b378805d8533483007f48ab5ec86866aef6792d01ce788f11b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Several organisations can build one pool together. Participants are invited once and decide for themselves whether they stay available for later surveys.</p>\",\"custom\":{},\"slug\":\"a-pool-you-share\",\"title\":\"A pool you share\"}"
+}

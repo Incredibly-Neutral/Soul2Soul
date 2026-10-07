@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229825,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xbd286cd8d4cadb24d4480ec33e401963b2b82022ffcf848873aa9c54434319a5"
+  },
+  "objectId": "0xd4afc7d356acc89006348b757bc280819da67fa3f542d2e97427346548a9541e",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xaaddb2baf667e4f847f10e6d9aab455303da78b4938d6d0bf7b9ab8d49ed53ed7c1c708713a71c0758ff8bfe9f7f1b1ea62ec1766dba6e12b1a829e84f640abb1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Meerdere organisaties kunnen samen één pool opbouwen. Deelnemers worden eenmalig uitgenodigd en kiezen zelf of ze beschikbaar blijven voor volgende enquêtes.</p>\",\"custom\":{},\"slug\":\"gezamelijke-pool\",\"title\":\"Gezamelijke pool\"}"
+}

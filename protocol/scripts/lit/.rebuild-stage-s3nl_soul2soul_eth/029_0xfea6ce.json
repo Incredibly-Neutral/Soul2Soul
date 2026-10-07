@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229885,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x2dc290d93c76816975a920b51e0a95dfae1c6d0da1bfcaf8563e93eec13b1cc1"
+  },
+  "objectId": "0xfea6ce278af6da12bd854337679813803359bd0d934a14554977673de88c7bdd",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xeb6bed1d1b269303ddfd0d0ad807b0ab441b17d0b971603b4989ed681dc9ac5419560a46f18d20af265bb2f32b7245410e8b3a73c2dda7bbd178cf20994fc2211c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Wat vinden bewoners van het nieuwe plan in hun wijk? Niet wat ze op de inspraakavond zeggen, maar wat ze thuis denken. Een doorlopende barometer geeft gemeenten dat beeld gedurende het hele project, niet alleen op de avonden waar de hardste stem wint.</p>\",\"custom\":{},\"slug\":\"publieke-organisaties\",\"title\":\"Publieke organisaties\"}"
+}
