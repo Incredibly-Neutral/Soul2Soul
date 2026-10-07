@@ -24,6 +24,7 @@ import './s2s-table.js';
 import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 
 // Per-column sort configuration for the Offers and Deals tables.
 const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
@@ -137,20 +138,6 @@ export class S2SDealsTab extends LitElement {
         align-items: center;
         gap: 1.5rem;
         margin-bottom: 1.5rem;
-      }
-
-      .refresh-icon {
-        width: 2rem;
-        height: 2rem;
-        vertical-align: middle;
-        filter: brightness(0) invert(1);
-      }
-
-      .revoke-icon {
-        width: 2rem;
-        height: 2rem;
-        vertical-align: middle;
-        filter: brightness(0) invert(1);
       }
 
       .offer-actions {
@@ -449,7 +436,7 @@ export class S2SDealsTab extends LitElement {
                 <h2 class="section-title">Pending Offers (${this.offersCount})</h2>
                 <button class="button has-icon refresh-button" id="refresh-btn" ?disabled=${this.fetching}
                   @click=${this.handleRefresh}>
-                  <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
+                  <span>${this.fetching ? '..' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>`}</span>
                 </button>
               </div>
               <s2s-table
@@ -488,7 +475,7 @@ export class S2SDealsTab extends LitElement {
           .actionsHeaderClass=${'hide-sm'}
           .actionsContent=${html`
             <button class="button has-icon" id="refresh-btn" ?disabled=${this.fetching} @click=${this.handleRefresh}>
-              <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
+              <span>${this.fetching ? '..' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>`}</span>
             </button>`}
           emptyText=${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}
           gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
