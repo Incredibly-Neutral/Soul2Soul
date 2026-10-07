@@ -195,30 +195,8 @@ export const fonts = css`
   /* ------------------------------------------------ */
   :root {
     --font-headline-family: 'Spinnaker', sans-serif;
-    --font-body-family: 'Inter', sans-serif;
+    --font-body-family: 'Schibsted Grotesk', sans-serif;
     /* QA monospace type — Fira Code is the only mono font in the app now. */
     --font-mono-family: 'Fira Code', monospace;
   }
-
-  /* ------------------------------------------------ */
-  /* Toggle classes (devtools: add class to <html>)   */
-  /* ------------------------------------------------ */
-  /* Headline */
-  html.headline-spinnaker  { --font-headline-family: 'Spinnaker', sans-serif; }
-  html.headline-playfair   { --font-headline-family: 'Playfair Display', serif; }
-  html.headline-dm-serif   { --font-headline-family: 'DM Serif Display', serif; }
-  html.headline-caslon     { --font-headline-family: 'Libre Caslon Display', serif; }
-  html.headline-grotesk    { --font-headline-family: 'Schibsted Grotesk', sans-serif; }
-  html.headline-franklin   { --font-headline-family: 'Libre Franklin', sans-serif; }
-
-  /* Body */
-  html.body-inter          { --font-body-family: 'Inter', sans-serif; }
-  html.body-franklin       { --font-body-family: 'Libre Franklin', sans-serif; }
-  html.body-grotesk        { --font-body-family: 'Schibsted Grotesk', sans-serif; }
-  html.body-spinnaker      { --font-body-family: 'Spinnaker', sans-serif; }
-
-  /* Mono */
-  html.mono-dm-mono        { --font-mono-family: 'DM Mono', monospace; }
-  html.mono-fira-code      { --font-mono-family: 'Fira Code', monospace; }
-  html.mono-plex-mono      { --font-mono-family: 'IBM Plex Mono', monospace; }
 `;
