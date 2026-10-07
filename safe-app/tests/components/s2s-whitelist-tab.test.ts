@@ -13,13 +13,13 @@ const DEV_A = '0x3333333333333333333333333333333333333333';
  */
 function makeSafeIntegration() {
   return {
-    getWhitelistedAuthors: vi.fn(async () => []),
-    getWhitelistedDevs: vi.fn(async () => []),
-    whitelistAuthor: vi.fn(async () => {}),
-    removeWhitelistedAuthor: vi.fn(async () => {}),
-    whitelistDev: vi.fn(async () => {}),
-    removeWhitelistedDev: vi.fn(async () => {}),
-    canPublish: vi.fn(async () => true),
+    getWhitelistedAuthors: vi.fn(async (): Promise<string[]> => []),
+    getWhitelistedDevs: vi.fn(async (): Promise<string[]> => []),
+    whitelistAuthor: vi.fn(async (_a: string): Promise<void> => {}),
+    removeWhitelistedAuthor: vi.fn(async (_a: string): Promise<void> => {}),
+    whitelistDev: vi.fn(async (_d: string): Promise<void> => {}),
+    removeWhitelistedDev: vi.fn(async (_d: string): Promise<void> => {}),
+    canPublish: vi.fn(async (_a: string): Promise<boolean> => true),
   };
 }
 
