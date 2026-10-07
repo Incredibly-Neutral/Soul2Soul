@@ -19,6 +19,7 @@ import './copy-link.js';
 import './copy-hash.js';
 import './copy-module.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import { tabStyles } from '@/styles/tab-styles.js';
 import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 
@@ -245,7 +246,7 @@ export class S2SApp extends LitElement {
         ${!this.safeIntegration.hasPublicationModule() && !this.safeIntegration.hasRecordsModule()
           ? html`
               <div class="error-message">
-                ⚠️ No S2S modules found. Please install the Publication Module and/or Records Module first.
+                <ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> No S2S modules found. Please install the Publication Module and/or Records Module first.
               </div>
             `
           : ''}
