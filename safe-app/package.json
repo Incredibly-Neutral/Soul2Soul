@@ -9,12 +9,14 @@
     "serve": "vite preview --port 3000",
     "type-check": "tsc --noEmit",
     "clean": "rimraf dist",
-    "deploy": "npm run build && scp -r dist/* joera:/srv/publication-module/",
+    "qa": "node qa/qa.mjs",
+    "deploy": "./deploy.sh",
     "sass": "sass ./src/styles/main.scss ./dist/main.css"
   },
   "devDependencies": {
     "@types/node": "^20.6.0",
     "dotenv": "^17.2.2",
+    "playwright": "^1.63.0",
     "rimraf": "^5.0.1",
     "sass": "^1.100.0",
     "typescript": "^7.0.2",

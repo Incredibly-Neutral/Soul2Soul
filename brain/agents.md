@@ -19,6 +19,17 @@ s2s-prof  (orchestrator)  ──spawns──▶  s2s-builder  (leaf implementer)
 brain/handoffs/  ──────────────────▶  git worktree on feat/<slug>
 ```
 
+## Package specs — read before code work
+
+Each package has a component spec in `brain/specs/`. **Read the relevant spec before
+touching code** — they carry the invariants, sub-component maps, gotchas, and test seams:
+
+| package | spec |
+|---|---|
+| `safe-app/` | `brain/specs/SPEC-safe-app.md` — plus the QA harness (`safe-app/qa/`, `pnpm qa`) and the deploy method (`./deploy.sh`) it documents |
+| `shared/` | `brain/specs/SPEC-shared.md` |
+| contracts / protocol | `brain/specs/SPEC-00-system-contract.md` + `SPEC-contracts-publication.md` / `SPEC-contracts-ens.md` |
+
 - **s2s-prof** — the dispatcher. Reads/author handoffs, decomposes goals, spawns
   builders in worktrees, reviews branch diffs, merges (or hands to human). Future
   direction: model after **polly** (full orchestrator config — see "s2s-prof as

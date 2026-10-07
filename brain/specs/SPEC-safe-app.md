@@ -37,7 +37,7 @@ Kubo for config/asset building.
 
 | path | role |
 |---|---|
-| `components/s2s-app.ts` | root element; **4 tabs (Deals/Records/Storage/Whitelists)**; two-phase render (cache→fetch); reads site root via `getText(node,"contenthash_wrapped")` |
+| `components/s2s-app.ts` | root element; **5 tabs (Deals/Whitelists/Records/Storage/Website Tree)**; two-phase render (cache→fetch); reads site root via `getText(node,"contenthash_wrapped")` |
 | `components/s2s-deals-tab.ts` | Filecoin deals/offers via `getAllDealsAndOffers`; maps deals → list (replaces the old `s2s-licences-tab.ts`) |
 | `components/s2s-storage-tab.ts` | storage management (new tab) |
 | `components/s2s-whitelist-tab.ts` | author/dev whitelist management |
@@ -102,6 +102,20 @@ All rows are proposed as Safe transactions (multisig); none execute directly.
 
 ## Local gotchas / gaps
 
+- **`useDefineForClassFields: false` is load-bearing.** With it `true` (the
+  ES2022 default), Lit's experimental decorators (`@state`/`@property`)
+  compile to `Object.defineProperty` in the constructor, shadowing the reactive
+  accessors on the prototype — every `@state` assignment silently stops calling
+  `requestUpdate()`. This broke tab switching across all 13 components after the
+  Lit refactor. **Never re-enable it.**
+- **`//` comments inside `css` template literals break the rule they precede**
+  (the garbage token swallows the next declaration — hit on `--font-mono-family`
+  in `fonts.ts`). Use `/* */` or no comment.
+- **Monospace is Fira Code, period.** `--font-mono-family` defaults to `'Fira
+  Code'` — there is no other mono (DM Mono/IBM Plex Mono toggle classes are
+  inert). The QA type = `var(--font-mono)` + `.85rem` + `.75px` tracking +
+  uppercase. `h1.title` is DM Serif Display 2.8rem/1.2, margin 0 (the element is
+  an `<h1 class="title">`, not `<h2>`).
 - **`mapping.json` is used verbatim — the builder does NOT inject publication-specific values.**
   (`mapping = JSON.parse(mappingContent)`.) Today the author must set the correct `feedAddress`
   (collections) and page `postId` (ripples) in *their repo's* `mapping.json` — an onboarding sharp
@@ -122,6 +136,26 @@ All rows are proposed as Safe transactions (multisig); none execute directly.
   out; superseded by the assets-into-`/assets` refactor) — prune.
 - **iframe constraints:** clipboard (`copy-hash.ts`) is subject to the Safe iframe's permissions
   policy; store `connectedCallback` must avoid double-subscribe render loops (watch slice subs).
+
+## Build, deploy & QA
+
+**Preferred deploy: `./deploy.sh`** (the package.json `deploy` script delegates to it
+— it is the single source of truth): `pnpm build` (tsc type-check → vite build →
+pnpm sass) then `rsync -avz --delete dist/ joera:/srv/publication-module/`. The
+`--delete` keeps the remote identical to `dist/`; verify the remote bundle hash
+matches `dist/main.*.js` after deploying.
+
+**Verify the build headlessly with `pnpm qa`** (`qa/qa.mjs`, see `qa/README.md`):
+spawns a `--no-open` vite preview of `dist/`, mocks the Safe iframe
+`getSafeInfo` handshake (real Safe address + modules, chainId 8453), and asserts
+all 5 tabs navigate (active tab + rendered component swap) with no page errors.
+This is the regression net for the "tabs don't switch" class of bug — run it
+after any component/build-config change, before `./deploy.sh`.
+
+Reality checks:
+- `pnpm dev` is **broken** (ethers v5/v6 dedupe — see gotchas). Production build
+  is unaffected; always validate against `pnpm build` + preview/QA.
+- `vite preview` auto-opens a browser (`preview.open: true`) — use `--no-open` headless.
 
 ## Safe-to-change vs do-not-touch
 
