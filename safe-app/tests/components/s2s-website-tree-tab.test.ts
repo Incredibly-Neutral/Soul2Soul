@@ -81,13 +81,15 @@ const m = vi.hoisted(() => {
 
   const evmRead = vi.fn();
   const decodeRootCid = vi.fn();
+  // Default: a successful reset pipeline that reports a fresh root CID.
+  const renderwithLitActions = vi.fn(async () => ({ success: true, cid: 'bafyfresh' }));
 
-  return { makeStore, safeIntegration, evmRead, decodeRootCid };
+  return { makeStore, safeIntegration, evmRead, decodeRootCid, renderwithLitActions };
 });
 
 vi.mock('@s2s/soul2soul-shared', () => ({
   LitService: class {},
-  renderwithLitActions: vi.fn(async () => ({ success: true, cid: 'bafyfresh' })),
+  renderwithLitActions: m.renderwithLitActions,
 }));
 
 vi.mock('@/lib/safe-integration.js', () => ({ SafeIntegration: class {} }));
@@ -252,5 +254,40 @@ describe('s2s-website-tree-tab', () => {
 
     // Cancel never triggers the reset pipeline.
     expect(m.safeIntegration.signWithSigner).not.toHaveBeenCalled();
+  });
+
+  it('executes a reset-only through the Lit pipeline and re-syncs to the fresh root', async () => {
+    // resetTree requires config + publication + protocolInfo + safeInfo in store.
+    store.setRecord({ key: 'config', value: 'bafyconfig', type: 'content' });
+    store.setRecord({ key: 'name', value: 's3ntiment.eth', type: 'metadata' });
+    store.setProtocolInfo({ ensRecords: '0xRecords', gateway: 'https://gw' });
+    store.setSafeInfo({ safeAddress: '0xSafe', s2sPublication: '0xPub' });
+    // Seed a store root for the initial sync (evmRead/decodeRootCid return
+    // nothing here, so fetchRootCid degrades to the store root).
+    store.setRoot('bafyroot');
+    // The pipeline reports a fresh root ('bafyfresh'); the re-sync walk must
+    // serve that new root, not the old one.
+    stubKuboLs({ ...SITE_LINKS, bafyfresh: [{ Name: 'index.html', Hash: 'QmHome', Size: 10, Type: 2 }] });
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('4 entries'));
+
+    const resetBtn = [...root.querySelectorAll('button')].find((b) => b.textContent?.includes('Reset tree'))!;
+    resetBtn.click();
+    root.querySelector<HTMLButtonElement>('#reset-only-btn')!.click();
+
+    // signWithSigner -> renderwithLitActions(reset: true) -> fresh root saved.
+    await vi.waitFor(() => expect(m.safeIntegration.signWithSigner).toHaveBeenCalledWith('lit actions auth'));
+    expect(m.renderwithLitActions).toHaveBeenCalledTimes(1);
+    const resetArgs = m.renderwithLitActions.mock.calls[0];
+    // 14th positional arg is the reset flag; reset-only passes an empty contentIds list.
+    expect(resetArgs[13]).toBe(true);
+    expect(resetArgs[8]).toEqual([]);
+
+    await vi.waitFor(() => expect(store.getRoot()).toBe('bafyfresh'));
+    // Re-synced from the fresh root -> root + index.html only.
+    await vi.waitFor(() => expect(root.textContent).toContain('2 entries'));
+    expect(root.textContent).toContain('1 pages');
   });
 });
