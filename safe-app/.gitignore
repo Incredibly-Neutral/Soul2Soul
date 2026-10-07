@@ -53,3 +53,6 @@ __screenshots__/
 
 # OS generated files
 Thumbs.db
+# Vitest browser failure artifacts
+.vitest-attachments/
+tests/components/__screenshots__/
