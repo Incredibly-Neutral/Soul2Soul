@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeRootCid } from '../src/lib/contenthash';
+import { decodeRootCid } from '../../src/lib/contenthash';
 import { parseCID, encodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // The garbage contenthash written on-chain by the old CIDv0-only toHexString:
