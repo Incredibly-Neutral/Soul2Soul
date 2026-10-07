@@ -13,7 +13,7 @@
     "deploy": "npm run build && scp -r dist/* joera:/srv/publication-module/",
     "sass": "sass ./src/styles/main.scss ./dist/main.css"
   },
-  "devDependencies": {     
+  "devDependencies": {
     "@types/node": "^20.6.0",
     "dotenv": "^17.2.2",
     "rimraf": "^5.0.1",
@@ -30,14 +30,15 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@helia/unixfs": "^8.0.3",
+    "@ipld/car": "^5.4.6",
     "@s2s/soul2soul-shared": "workspace:*",
     "@safe-global/safe-apps-provider": "0.18.6",
     "@safe-global/safe-apps-sdk": "^9.1.0",
-    "filecoin-pin": "^1.0.1",
-    "@helia/unixfs": "^8.0.3",
-    "@ipld/car": "^5.4.6",
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",
+    "filecoin-pin": "^1.0.1",
+    "lit": "^3.3.3",
     "multiformats": "^13.4.1",
     "path": "^0.12.7",
     "terser": "^5.44.0",
