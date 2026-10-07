@@ -325,7 +325,7 @@ export class S2SWhitelistTab extends LitElement {
                 ${this.authors.map(
                   (author) => html`
                     <div class="table-row">
-                      <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                      <div class="table-cell" style="font-size: 0.875rem; color: var(--gray-50);">
                         ${author}
                       </div>
                       <div class="table-cell">
@@ -364,7 +364,7 @@ export class S2SWhitelistTab extends LitElement {
                 ${this.devs.map(
                   (dev) => html`
                     <div class="table-row">
-                      <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                      <div class="table-cell" style="font-size: 0.875rem; color: var(--gray-50);">
                         ${dev}
                       </div>
                       <div class="table-cell">

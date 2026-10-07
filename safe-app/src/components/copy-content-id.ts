@@ -81,7 +81,7 @@ export class CopyContentId extends LitElement {
 
   render() {
     return html`
-      <span class="text" style="font-family: ${this.display.length < 20 ? 'inherit' : 'monospace'};" title=${this.value}>
+      <span class="text" title=${this.value}>
         ${this.display}
       </span>
       <button

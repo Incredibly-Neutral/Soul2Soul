@@ -499,12 +499,12 @@ export class S2SRecordsTab extends LitElement {
 
   private valueTemplate(record: OnChainRecord) {
     if (record.key === 'config' && record.value) {
-      return html`<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+      return html`<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
     }
     if (record.key === 'repo' && record.value) {
-      return html`<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+      return html`<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
     }
-    return html`<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+    return html`<span style="font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
   }
 
   render() {
@@ -536,7 +536,7 @@ export class S2SRecordsTab extends LitElement {
                   const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
                   return html`
                     <div class="${rowClass}">
-                      <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                      <div class="table-cell" style="font-size: 0.875rem; color: var(--gray-50);">
                         ${record.key}
                       </div>
 
