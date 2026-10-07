@@ -212,10 +212,18 @@ async function main() {
       }
     }
 
-    const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--no-open'], {
+    const viteBin = path.join(appRoot, 'node_modules', '.bin', 'vite');
+    const preview = spawn(viteBin, ['preview', '--port', String(PORT), '--no-open'], {
       cwd: appRoot,
       stdio: 'ignore',
+      detached: true, // own process group so we can reap the whole tree
     });
+
+    const killPreview = () => {
+      // negative pid = the whole process group (vite may spawn children)
+      try { process.kill(-preview.pid, 'SIGTERM'); } catch {}
+      try { preview.kill('SIGTERM'); } catch {}
+    };
 
     // wait for the preview server to accept connections
     let up = false;
@@ -228,7 +236,7 @@ async function main() {
     }
     if (!up) {
       console.error('preview server did not start.');
-      preview.kill('SIGTERM');
+      killPreview();
       process.exit(2);
     }
 
@@ -240,7 +248,7 @@ async function main() {
       console.error('probe crashed:', err);
       results.push(false);
     } finally {
-      preview.kill('SIGTERM');
+      killPreview();
       await sleep(500);
     }
   }
