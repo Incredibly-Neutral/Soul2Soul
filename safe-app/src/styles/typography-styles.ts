@@ -26,14 +26,6 @@ export const typograhyStyles = css`
     font-weight: 700;
   }
 
-  *, p {
-    font-family: var(--font-body, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif);
-    font-style: normal;
-    font-weight: 400;
-    font-size: 1rem;
-    line-height: 1.55;
-  }
-
   code, pre, .mono {
     font-family: var(--font-mono, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
     font-style: normal;

@@ -13,6 +13,9 @@ const globalSheets = [theme.styleSheet, fonts.styleSheet]
   .filter((s): s is CSSStyleSheet => s !== undefined);
 document.adoptedStyleSheets = [...document.adoptedStyleSheets, ...globalSheets];
 
+// Register every ph-* Phosphor icon element before any component renders.
+import './components/icon.js';
+
 import './components/s2s-app.js';
 import './components/s2s-deals-tab.js';
 import './components/s2s-whitelist-tab.js';
