@@ -46,9 +46,10 @@ export const tableStyles = css`
   }
 
   .sort-indicator {
-    font-size: 0.7rem;
     color: var(--color-yellow);
     min-width: 0.8em;
+    display: inline-flex;
+    align-items: center;
   }
 
   .table-cell {
