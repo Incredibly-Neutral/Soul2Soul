@@ -1,5 +1,5 @@
 // s2s-deals-tab.ts
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
@@ -12,18 +12,15 @@ import { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import {
-  sortByColumn,
   toggleSort,
-  sortIndicator,
   type SortState,
   type TableColumn,
 } from '@/utils/sort.js';
 import {
-  filterByColumn,
-  uniqueValuesForColumn,
+  setFilter,
   type FilterState,
 } from '@/utils/filter.js';
-import './table-filter.js';
+import './s2s-table.js';
 import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
@@ -55,6 +52,10 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
   { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
 ];
 
+// Column keys that get a filter dropdown in each table.
+const OFFER_FILTER_KEYS = ['author', 'postType'];
+const DEAL_FILTER_KEYS = ['author', 'postType'];
+
 @customElement('s2s-deals-tab')
 export class S2SDealsTab extends LitElement {
   @property({ attribute: false }) safeIntegration!: SafeIntegration;
@@ -70,8 +71,15 @@ export class S2SDealsTab extends LitElement {
   @state() private dealsSort: SortState | null = null;
   @state() private offersFilters: FilterState = {};
   @state() private dealsFilters: FilterState = {};
+  @state() private offersCount = 0;
+  @state() private dealsCount = 0;
 
   private unsubscriber: (() => void) | null = null;
+
+  // Stable row renderers (bound once) so <s2s-table> only re-renders on real
+  // data/state changes, not on every host render.
+  private offerRowRenderer = (offer: Deal) => this.renderOfferRow(offer);
+  private dealRowRenderer = (deal: Deal) => this.renderDealRow(deal);
 
   static styles = [
     typograhyStyles,
@@ -138,10 +146,6 @@ export class S2SDealsTab extends LitElement {
         height: 2rem;
         vertical-align: middle;
         filter: brightness(0) invert(1);
-      }
-
-      .table {
-        grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr auto;
       }
 
       .offer-actions {
@@ -380,55 +384,44 @@ export class S2SDealsTab extends LitElement {
     return `${s.slice(0, 4)}...${s.slice(-4)}`;
   }
 
-  private handleSort(source: 'offers' | 'deals', key: string) {
-    if (source === 'offers') {
-      this.offersSort = toggleSort(this.offersSort, key);
-    } else {
-      this.dealsSort = toggleSort(this.dealsSort, key);
-    }
-  }
-
-  private handleFilter(source: 'offers' | 'deals', key: string, e: CustomEvent) {
-    const value = e.detail.value as string;
-    const next =
-      source === 'offers' ? { ...this.offersFilters } : { ...this.dealsFilters };
-    if (value) next[key] = value;
-    else delete next[key];
-    if (source === 'offers') this.offersFilters = next;
-    else this.dealsFilters = next;
-  }
-
-  private sortableHeader<T>(
-    col: TableColumn<T>,
-    sort: SortState | null,
-    onSort: (key: string) => void,
-  ) {
+  private renderOfferRow(offer: Deal): TemplateResult {
     return html`
-      <button
-        class="table-header sortable${col.cls ? ' ' + col.cls : ''}"
-        data-sort="${col.key}"
-        title="Sort by ${col.label}"
-        @click=${() => onSort(col.key)}
-      >
-        <span>${col.label}</span>
-        <span class="sort-indicator">${sortIndicator(sort, col.key)}</span>
-      </button>
+      <div class="offer-card table-row" data-genesis="${offer.genesis}">
+        <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
+        <div class="table-cell">${this.shortenAddress(offer.author)}</div>
+        <div class="table-cell">${offer.postType ?? ''}</div>
+        <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+        <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
+        <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
+        <div class="table-cell offer-actions">
+          <button class="button button-secondary thin" data-action="accept" data-genesis="${offer.genesis}"
+            @click=${() => this.acceptOffer(offer.genesis)}>Accept</button>
+          <button class="button button-danger thin" data-action="reject" data-genesis="${offer.genesis}" data-status="offer"
+            @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderDealRow(deal: Deal): TemplateResult {
+    return html`
+      <div class="deal-card table-row" data-genesis="${deal.genesis}">
+        <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
+        <div class="table-cell">${this.shortenAddress(deal.author)}</div>
+        <div class="table-cell">${deal.postType ?? ''}</div>
+        <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+        <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
+        <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
+        <div class="table-cell deal-actions">
+          <button class="button button-danger thin" data-action="retract" data-genesis="${deal.genesis}" data-status="deal"
+            @click=${() => this.retract(deal.genesis, 'deal')}>Revoke
+          </button>
+        </div>
+      </div>
     `;
   }
 
   render() {
-    // Filter first, then sort (filters narrow the rows, sort orders the result).
-    const offers = sortByColumn(
-      filterByColumn(store.offers, OFFER_COLUMNS, this.offersFilters),
-      OFFER_COLUMNS,
-      this.offersSort,
-    );
-    const deals = sortByColumn(
-      filterByColumn(store.deals, DEAL_COLUMNS, this.dealsFilters),
-      DEAL_COLUMNS,
-      this.dealsSort,
-    );
-
     if (this.fetching && store.deals.length === 0) {
       return html`
         <div class="loading">
@@ -448,109 +441,54 @@ export class S2SDealsTab extends LitElement {
         ? html`
             <div class="section">
               <div class="list_header">
-                <h2 class="section-title">Pending Offers (${offers.length})</h2>
+                <h2 class="section-title">Pending Offers (${this.offersCount})</h2>
                 <button class="button has-icon refresh-button" id="refresh-btn" ?disabled=${this.fetching}
                   @click=${this.handleRefresh}>
                   <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
                 </button>
               </div>
-              <div class="table-filters offers-filters">
-                <table-filter data-key="author" label="Author" .value=${this.offersFilters.author ?? ''}
-                  .options=${uniqueValuesForColumn(store.offers, OFFER_COLUMNS, 'author')}
-                  @change=${(e: CustomEvent) => this.handleFilter('offers', 'author', e)}></table-filter>
-                <table-filter data-key="postType" label="Post type" .value=${this.offersFilters.postType ?? ''}
-                  .options=${uniqueValuesForColumn(store.offers, OFFER_COLUMNS, 'postType')}
-                  @change=${(e: CustomEvent) => this.handleFilter('offers', 'postType', e)}></table-filter>
-              </div>
-              ${offers.length > 0
-                ? html`
-                    <div class="table table-offers">
-                      ${OFFER_COLUMNS.map((c) => this.sortableHeader(c, this.offersSort, (k) => this.handleSort('offers', k)))}
-                      <div class="table-header"></div>
-
-                      ${offers.map(
-                        (offer) => html`
-                          <div class="offer-card table-row" data-genesis="${offer.genesis}">
-                            <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
-                            <div class="table-cell">${this.shortenAddress(offer.author)}</div>
-                            <div class="table-cell">${offer.postType ?? ''}</div>
-                            <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                            <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
-                            <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
-                            <div class="table-cell offer-actions">
-                              <button class="button button-secondary thin" data-action="accept" data-genesis="${offer.genesis}"
-                                @click=${() => this.acceptOffer(offer.genesis)}>Accept</button>
-                              <button class="button button-danger thin" data-action="reject" data-genesis="${offer.genesis}" data-status="offer"
-                                @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</button>
-                            </div>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                  `
-                : html`
-                    <div class="empty-state">
-                      <div class="empty-icon">📄</div>
-                      <p>No offers match the current filters</p>
-                    </div>
-                  `}
+              <s2s-table
+                .columns=${OFFER_COLUMNS}
+                .rows=${store.offers}
+                .sort=${this.offersSort}
+                .filters=${this.offersFilters}
+                .filterKeys=${OFFER_FILTER_KEYS}
+                .rowRenderer=${this.offerRowRenderer}
+                .actionsHeader=${true}
+                emptyText="No offers match the current filters"
+                gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
+                @sort=${(e: CustomEvent) => { this.offersSort = toggleSort(this.offersSort, e.detail.key); }}
+                @filter=${(e: CustomEvent) => { this.offersFilters = setFilter(this.offersFilters, e.detail.key, e.detail.value); }}
+                @count=${(e: CustomEvent) => { this.offersCount = e.detail.count; }}
+              ></s2s-table>
             </div>
           `
         : ''}
 
       <div class="section">
         <div class="list_header">
-          <h2 class="section-title">Active Deals (${deals.length})</h2>
+          <h2 class="section-title">Active Deals (${this.dealsCount})</h2>
         </div>
 
-        ${store.deals.length > 0
-          ? html`
-              <div class="table-filters deals-filters">
-                <table-filter data-key="author" label="Author" .value=${this.dealsFilters.author ?? ''}
-                  .options=${uniqueValuesForColumn(store.deals, DEAL_COLUMNS, 'author')}
-                  @change=${(e: CustomEvent) => this.handleFilter('deals', 'author', e)}></table-filter>
-                <table-filter data-key="postType" label="Post type" .value=${this.dealsFilters.postType ?? ''}
-                  .options=${uniqueValuesForColumn(store.deals, DEAL_COLUMNS, 'postType')}
-                  @change=${(e: CustomEvent) => this.handleFilter('deals', 'postType', e)}></table-filter>
-              </div>
-            `
-          : ''}
-
-        ${deals.length > 0
-          ? html`
-              <div class="table table-deals">
-                ${DEAL_COLUMNS.map((c) => this.sortableHeader(c, this.dealsSort, (k) => this.handleSort('deals', k)))}
-                <div class="table-header hide-sm">
-                  <button class="button has-icon" id="refresh-btn" ?disabled=${this.fetching} @click=${this.handleRefresh}>
-                    <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
-                  </button>
-                </div>
-
-                ${deals.map(
-                  (deal) => html`
-                    <div class="deal-card table-row" data-genesis="${deal.genesis}">
-                      <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
-                      <div class="table-cell">${this.shortenAddress(deal.author)}</div>
-                      <div class="table-cell">${deal.postType ?? ''}</div>
-                      <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                      <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
-                      <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
-                      <div class="table-cell deal-actions">
-                        <button class="button button-danger thin" data-action="retract" data-genesis="${deal.genesis}" data-status="deal"
-                          @click=${() => this.retract(deal.genesis, 'deal')}>Revoke
-                        </button>
-                      </div>
-                    </div>
-                  `,
-                )}
-              </div>
-            `
-          : html`
-              <div class="empty-state">
-                <div class="empty-icon">📄</div>
-                <p>${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}</p>
-              </div>
-            `}
+        <s2s-table
+          .columns=${DEAL_COLUMNS}
+          .rows=${store.deals}
+          .sort=${this.dealsSort}
+          .filters=${this.dealsFilters}
+          .filterKeys=${store.deals.length > 0 ? DEAL_FILTER_KEYS : []}
+          .rowRenderer=${this.dealRowRenderer}
+          .actionsHeader=${true}
+          .actionsHeaderClass=${'hide-sm'}
+          .actionsContent=${html`
+            <button class="button has-icon" id="refresh-btn" ?disabled=${this.fetching} @click=${this.handleRefresh}>
+              <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
+            </button>`}
+          emptyText=${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}
+          gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
+          @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
+          @filter=${(e: CustomEvent) => { this.dealsFilters = setFilter(this.dealsFilters, e.detail.key, e.detail.value); }}
+          @count=${(e: CustomEvent) => { this.dealsCount = e.detail.count; }}
+        ></s2s-table>
       </div>
 
       <div class="section">
