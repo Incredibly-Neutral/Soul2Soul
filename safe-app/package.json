@@ -13,7 +13,7 @@
     "test": "vitest run --reporter=verbose",
     "test:watch": "vitest",
     "test:component": "vitest run --project component --reporter=verbose",
-    "test:e2e": "playwright test --pass-with-no-tests",
+    "test:e2e": "playwright test",
     "clean": "rimraf dist",
     "qa": "node qa/qa.mjs",
     "deploy": "./deploy.sh",
