@@ -32,6 +32,7 @@ import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
 import { decodeRootCid } from '@/lib/contenthash.js';
 import './copy-hash.js';
 import { tableStyles } from '@/styles/table-styles.js';
+import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -765,7 +766,7 @@ export class S2SWebsiteTreeTab extends LitElement {
       return html`
         <details class="tree-dir${isAdded ? ' added' : ''}">
           <summary style="padding-left:${String(indent)}px">
-            <span class="tree-icon">📁</span>
+            <span class="tree-icon"><ph-folder size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-folder></span>
             <span class="tree-name">${node.name}</span>
             <span class="tree-count">(${String(node.children.length)})</span>
             ${addedTag}
@@ -776,7 +777,7 @@ export class S2SWebsiteTreeTab extends LitElement {
 
     return html`
       <div class="tree-file${isAdded ? ' added' : ''}" style="padding-left:${String(indent)}px">
-        <span class="tree-icon">📄</span>
+        <span class="tree-icon"><ph-file-text size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-file-text></span>
         <span class="tree-name">${node.name}</span>
         ${isPage ? html`<span class="badge badge-page">page</span>` : ''}
         <span class="tree-size">${this.formatBytes(node.size)}</span>
@@ -789,7 +790,7 @@ export class S2SWebsiteTreeTab extends LitElement {
     const items = ([...this.removedPaths] as string[]).sort().map(
       (p) => html`
         <div class="removed-row">
-          <span class="tree-icon">🗑️</span>
+          <span class="tree-icon"><ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash></span>
           <span class="removed-name">${p}</span>
           <span class="tag tag-removed">removed</span>
         </div>`,
@@ -825,7 +826,7 @@ export class S2SWebsiteTreeTab extends LitElement {
         body = html`
           <div class="tree-root">
             <div class="tree-file">
-              <span class="tree-icon">📄</span>
+              <span class="tree-icon"><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text></span>
               <span class="tree-name">${this.tree.name || this.tree.hash}</span>
             </div>
           </div>
@@ -842,16 +843,16 @@ export class S2SWebsiteTreeTab extends LitElement {
         </div>
         <button class="button has-icon" id="sync-btn" ?disabled=${this.syncing || this.resetting}
           @click=${() => void this.sync()}>
-          ${this.syncing ? 'Syncing…' : '↻ Sync'}
+          ${this.syncing ? 'Syncing…' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync`}
         </button>
         <button class="button btn-danger" id="reset-btn" ?disabled=${this.syncing || this.resetting}
           @click=${this.showResetDialog}>
-          ${this.resetting ? 'Resetting…' : '🗑 Reset tree'}
+          ${this.resetting ? 'Resetting…' : html`<ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Reset tree`}
         </button>
         ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
       </div>
 
-      ${this.error ? html`<div class="error">⚠️ ${this.error}</div>` : ''}
+      ${this.error ? html`<div class="error"><ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> ${this.error}</div>` : ''}
 
       ${body}
 
