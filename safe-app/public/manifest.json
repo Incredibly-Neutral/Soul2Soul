@@ -3,7 +3,7 @@
   "description": "Whitelist authors and devs. Update configuration, templates and styling",
   "icons": [
     {
-      "src": "/icons/noun-contract-8409785.svg",
+      "src": "/icons/app-icon.svg",
       "type": "image/svg+xml",
       "sizes": "any"
     }
