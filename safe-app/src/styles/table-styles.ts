@@ -33,7 +33,6 @@ export const tableStyles = css`
     background: transparent;
     border: none;
     border-bottom: 1px solid var(--gray-600);
-    font: inherit;
     color: inherit;
     cursor: pointer;
     user-select: none;
