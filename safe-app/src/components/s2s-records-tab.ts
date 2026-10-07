@@ -11,6 +11,7 @@ import { LitService } from '@s2s/soul2soul-shared/safe-app';
 import { pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
+import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 import { ethers } from 'ethers';
@@ -64,6 +65,9 @@ export class S2SRecordsTab extends LitElement {
         height: 2rem;
         margin-left: .5rem;
         font-size: .875rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
       }
 
       .record-value-input {
@@ -557,14 +561,14 @@ export class S2SRecordsTab extends LitElement {
                                       `#edit-value-${record.key}`,
                                     ) as HTMLInputElement;
                                     if (input) void this.updateRecord(record.key, input.value);
-                                  }}>✓ Save</button>
-                                <button class="button button-secondary thin" @click=${this.cancelEdit}>✗ Cancel</button>
+                                  }}><ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check> Save</button>
+                                <button class="button button-secondary thin" @click=${this.cancelEdit}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Cancel</button>
                               </div>
                             `
                           : html`
                               <div style="display: flex; gap: 0.5rem;">
-                                <button class="button thin" @click=${() => this.startEdit(record.key)}>✏️ Edit</button>
-                                <button class="button button-danger thin" @click=${() => void this.deleteRecord(record.key)}>🗑️ Delete</button>
+                                <button class="button thin" @click=${() => this.startEdit(record.key)}><ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple> Edit</button>
+                                <button class="button button-danger thin" @click=${() => void this.deleteRecord(record.key)}><ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Delete</button>
                               </div>
                             `}
                       </div>
@@ -575,7 +579,7 @@ export class S2SRecordsTab extends LitElement {
             `
           : html`
               <div class="empty-state">
-                <div>📄</div>
+                <div><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text></div>
                 <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
               </div>
             `}
