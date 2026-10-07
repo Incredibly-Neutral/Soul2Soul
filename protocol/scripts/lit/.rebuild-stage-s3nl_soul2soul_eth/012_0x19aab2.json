@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229736,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x02d290af97faa17547ce9e6f9465807f4a3756d154e5af888d7418926cf68b1c"
+  },
+  "objectId": "0x19aab2d119208e1aab4339e46516d6b19c9a268efae4e442547451a811ce7f85",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x831298aab922360929cd41d2e8d988a1290b6318a5c9ae4770bc84d55dbb58793c7e03efc25429036b952ffd01e2f80fefd33c1fc2210ae3eb5b55c5d5ef61d21b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Een pool kan worden beheerd door meerdere organisatoren. Gezamenlijk bepalen jullie wie resultaten mag inzien, wie nieuwe enquêtes mag opzetten, en hoe de pool wordt bestuurd. Niemand heeft meer macht dan een ander.</p>\",\"custom\":{},\"slug\":\"collectief-bestuur\",\"title\":\"Collectief bestuur\"}"
+}

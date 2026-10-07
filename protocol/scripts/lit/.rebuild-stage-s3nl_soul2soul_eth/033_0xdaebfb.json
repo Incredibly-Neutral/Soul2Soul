@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "4",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791276356,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xc46ac4512713f079ecfc7772b98af06704cba82afa45fa88a4fb5feaa6d21b1e"
+  },
+  "objectId": "0xdaebfb9a0d5d8ae09ee1fcaf970319d3e5ffc00293ed8682836bbd59cb028d59",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xdb538335939d7b15f4de912736fb78417afcc9b1423bb99585dfede8a931aea23d5fbdf655853ee826d05cb52c7b33b65bec2e0bf3cf958f4991034ebfa75dcb1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Wie een panel opbouwt, bouwt het meestal voor iemand anders: het staat bij de leverancier, en wie weggaat begint opnieuw. Hier is het panel van de groep die het opbouwt. Beheer het samen — met collega&#39;s, met andere organisaties, als DAO — en bepaal gezamenlijk wie er enquêtes mag uitzetten en wie de resultaten ziet.</p>\",\"custom\":{},\"slug\":\"zelf-een-panel-beginnen\",\"title\":\"Zelf een panel beginnen\"}"
+}

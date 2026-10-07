@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "4",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791276119,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xe7613b9ac57a270786ccf313e37ab8ae2aeb18650ae381b6a35a38cad37beb01"
+  },
+  "objectId": "0xea63b8773ba98fdfe04f8afa64f19616a547ff37ec907b275bf307e66db231e4",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xc3d812ffc3652c1bd7bca07427a76f7eaa1c62fb4fbb5b6570fcc79dbe106d406fee5936ebd9f1bc2defff3cb209dd1ec5b7c31053f7f62e8cf5be0d216642021c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Building a panel usually means building it for someone else: it sits with the vendor, and whoever leaves starts over. Here the panel belongs to the group that builds it — with colleagues, with other organisations, as a DAO. Together you decide who can put out a survey and who sees the results</p>\",\"custom\":{},\"slug\":\"be-your-own-yougov\",\"title\":\"Be your own YouGov\"}"
+}

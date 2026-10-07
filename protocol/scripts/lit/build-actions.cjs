@@ -11,6 +11,10 @@ const entries = [
     out: './protocol/actions/dist/maintain-cache/main.js',
   },
   {
+    in: './protocol/actions/src/repoint-archive/main.ts',
+    out: './protocol/actions/dist/repoint-archive/main.js',
+  },
+  {
     in: './protocol/actions/src/render-dev/main.ts',
     out: './protocol/actions/dist/render-dev/main.js',
   },

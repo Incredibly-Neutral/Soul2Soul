@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229892,
+    "tags": [
+      "s3nl--s2s",
+      "respondent"
+    ],
+    "plaintextHash": "0xa9d86a7a57f9ab663659faa4fc70108f6b5dc02986e30aba33362c4a1cb3b256"
+  },
+  "objectId": "0xf72352455ec8eb33ea83a7d1b9a5e883db334a3332f6b473d777ec38b8f96a35",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xad0273d7b631a5276fb04c9421e2ac98a1e661976689993df14dd888efba47c072893257a760d6989cfe0f266e3db655bf7146963e5c727d5a0930a9708a85241c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Je wordt uitgenodigd via unieke QR-code: één code, één deelnemer. De code bewijst dat je bent uitgenodigd zonder te onthullen wie je bent. Zit je eenmaal in een pool, dan kun je voor nieuwe enquêtes worden uitgenodigd zonder opnieuw een code te scannen.</p>\",\"custom\":{},\"slug\":\"qr-code-scannen-klaar\",\"title\":\"QR code scannen, klaar\"}"
+}

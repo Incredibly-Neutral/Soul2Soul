@@ -32,6 +32,27 @@
       no Lit registration, dry-run support).
 - [x] 2026-10-05 — `shared/package.json` (added `@safe-global/api-kit` +
       `@safe-global/protocol-kit` deps and the `./chain-secured` subpath export).
+- [x] 2026-10-06 — Live render re-enabled: re-enabled `callWithTimeout`/timeouts
+      (all Lit calls bounded — `LIT_API_TIMEOUT_MS`, `LIT_EXEC_TIMEOUT_MS`,
+      per-gateway action-code fetch `ACTION_CODE_FETCH_TIMEOUT_MS`); render action
+      code fetch switched to transport-union primary, Pinata fallback (Pinata 403s).
+- [x] 2026-10-06 — Retries DISABLED in `shared/src/rendering/sequence.ts`
+      (`RENDER_RETRY_ATTEMPTS = 1` — fail fast, no re-fire / no double Lit charge);
+      4 retry-contract tests updated; `sequence.test.ts` back to the 7 known
+      pre-existing failures only.
+- [x] 2026-10-06 — Old prep `0xff4c3b11…` + old render `0x63390dea…` removed from
+      group 1 (`removeActionFromGroup` Safe batch) AND fully deregistered from the
+      account (`removeAction` `--full` batch). Group 1 + account = exactly the 6
+      current actions.
+- [x] 2026-10-06 — Repoint divergence CLOSED: config.json, on-chain record
+      `lit_action_repointArchive`, and group 1 all now point at
+      `QmZr42z6rCaMAGWPFR5jR1gcwfuGyHjaEySrFGeMDnR4Hi`
+      (`0xb08495c9…`). New `repoint-record.ts` (targeted single-key write).
+- [x] 2026-10-06 — `swap-action.ts` now removes the prev action BOTH ways:
+      `removeAction(old)` unconditional (account + all groups, idempotent),
+      `removeActionFromGroup(old)` only when confirmed in-group and placed BEFORE
+      it (ordering — `removeAction` empties the group set). Closes the
+      "superseded action lingers registered to the account" gap.
 
 ## Conflict note — parallel writer (IMPORTANT)
 
@@ -79,9 +100,40 @@ Resolution (final, authoritative):
 6. **Dry-run** (`LIT_DRY_RUN=1` / `--dry-run`): builds full batch, pretty-prints
    each `{to,value,data}` with decoded function+args, prints `dry-run: would mint`,
    stops before propose and before `prepare_wallet`.
-7. `swap-action.ts` only issues `removeActionFromGroup(old)` after a best-effort
-   `listActionsInGroup` membership check (it reverts if absent) and `removeAction(old)`
-   is safe unconditionally (never reverts for an absent hash).
+7. `swap-action.ts` removes the PREVIOUS action both ways: `removeAction(old)` is
+   included UNCONDITIONALLY when the old hash differs (removes from the account
+   registry AND every group — idempotent, never reverts for an absent hash, so a
+   superseded action can never linger registered to the account);
+   `removeActionFromGroup(old)` is only included when the on-chain membership
+   check confirms presence (it reverts if absent) and is placed BEFORE
+   `removeAction`, because `removeAction` already empties the group set.
+
+## Housekeeping (2026-10-06) — operational facts
+
+- **PKP needs standing Base gas.** The PKP `0x0522b95938c3a18988bf71da2f964f8a52ae4004`
+  holds 0.0025 ETH on Base (as of 2026-10-06) and is the sole authorized caller on
+  the ENS records `0x5D42f9b016B4251FC6407d5e8154DA887F394900`. If it ever runs dry,
+  PKP ENS writes (INV-10/INV-12) silently fail — top it up before expecting repoints.
+- **Pinata gateway 403s ALL reads** (2026-10). `IPFS_URL` must stay
+  `https://ipfs.transport-union.dev` (the working gateway). The live action-code
+  fetch is transport-union primary, Pinata fallback; Pinata remains broken for reads.
+- **`sequence.test.ts` has 7 PRE-EXISTING failures** unrelated to any recent change
+  (prep/render merge + error-normalization contract tests). Do not chase them.
+- **Render source now diverges from the registered `QmcuGaHY` bundle** (debug
+  `console.log(0..10)` stripped 2026-10-06). The pinned/registered bundle is
+  UNCHANGED and live; but the NEXT render change MUST go through
+  `build-actions.cjs` → `swap-action.ts` → Safe approval. NEVER update
+  `config.json`'s render CID without the swap+registration step (that process gap
+  is what caused the 2026-10-06 403).
+- **Group 1 / account / records are fully reconciled** (2026-10-06): 6 actions
+  (encrypt, prep `QmNq82o1y`, render `QmcuGaHY`, update, maintain-cache,
+  repoint-archive `QmZr42z6r…`). Registered usage key = the 67-char
+  `REDACTED`
+  (`0xdebf48bc…`, `executeInGroups:[1]`).
+- **OUTSTANDING — app usage key.** The OXO publication setting
+  `main.oxo.settings.litUsageKey` currently holds a 44-char key that is NOT the
+  registered executor; the live-render 403 will persist until it is set to the
+  67-char `lk_…` above. Operator must update OXO settings (no chain tx needed).
 
 ## Verification
 

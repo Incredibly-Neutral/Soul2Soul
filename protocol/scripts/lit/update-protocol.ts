@@ -126,7 +126,8 @@ export const updateProtocol = async (
   renderActionCid: string,
   updateActionCid: string,
   encryptActionCid: string,
-  maintainCacheActionCid?: string
+  maintainCacheActionCid?: string,
+  repointArchiveActionCid?: string
 ) => {
   const transactions = [
     // Write current values
@@ -140,6 +141,11 @@ export const updateProtocol = async (
     // protocol update before this feature's deploy stays valid.
     ...(maintainCacheActionCid
       ? [setRecord("lit_action_maintainCache", maintainCacheActionCid)]
+      : []),
+    // Optional: the one-shot repoint-archive action (recovery). Only written
+    // when it has been built + registered, same pattern as maintain-cache.
+    ...(repointArchiveActionCid
+      ? [setRecord("lit_action_repointArchive", repointArchiveActionCid)]
       : []),
     setRecord("ens_records", ENS_RECORDS_ADDRESS),
     setRecord("data_gateway", process.env.IPFS_URL || ""),
@@ -187,7 +193,7 @@ export const updateActions = async (
 
   return proposeToSafe(account, transactions);
 };
-1
+
 /**
  * One-time cleanup: delete stale keys left over from the old naming scheme.
  * Run once after the first updateProtocol with the new keys is executed on-chain.
@@ -218,6 +224,7 @@ const main = async () => {
   const render  = group.actions.find((a: any) => a.name === 'render');
   const update  = group.actions.find((a: any) => a.name === 'update');
   const maintainCache = group.actions.find((a: any) => a.name === 'maintain-cache');
+  const repointArchive = group.actions.find((a: any) => a.name === 'repoint-archive');
 
   if (!prep || !render || !update) {
     throw new Error(`Missing action CIDs. Found: ${JSON.stringify(group.actions.map((a: any) => a.name))}`);
@@ -228,6 +235,7 @@ const main = async () => {
     render: render.cid,
     update: update.cid,
     maintainCache: maintainCache?.cid ?? '(not deployed)',
+    repointArchive: repointArchive?.cid ?? '(not deployed)',
   });
 
   await updateProtocol(
@@ -238,6 +246,7 @@ const main = async () => {
     update.cid,
     encrypt.cid,
     maintainCache?.cid,
+    repointArchive?.cid,
   );
 };
 

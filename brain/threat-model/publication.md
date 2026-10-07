@@ -109,6 +109,35 @@ Two related limits on "the content survives":
   for the *current* version, not for historical copies. So old content may survive, but as a
   faithful-but-unsigned copy, not as something the name vouches for.
 
+### The cache pointer — a write-authorized content-integrity gap (2026-10-06)
+
+**Finding (from the s3nl cache-loss incident):** the per-publication content *cache* — the
+pre-built archive blob pointed to by the ENS text record `content_cache_<publication>` — is a
+content-integrity surface whose only guard is **who may write the pointer**.
+
+- `reconcile()` (`protocol/actions/src/libs/archive.factory.ts`) checks that an archive item's
+  stored `cid` **equals the on-chain deal cid** for that genesis (`entry.cid === deal.cid`),
+  and that the item passes `s2sContentItemSchema`. Mismatch → refetch from the deal cid. So
+  **"cid has a deal on-chain" is enforced.**
+- But `reconcile()` / the render path (`fetchCollectionsFromArchive`,
+  `protocol/actions/src/render/data.ctrlr.ts`) **never verifies that the stored `item` bytes
+  actually hash to its claimed cid**. When an archive entry is served as fresh, the body comes
+  from the archive blob, not from `catFile(deal.cid)`. `public.plaintextHash` is never checked
+  in the render path.
+- Consequence: anyone who can write `content_cache_<publication>` can inject a schema-valid
+  archive whose items claim real on-chain deal cids but carry **fake bodies** — rendered as-is.
+  The only current barrier is pointer-write authorization (records contract `onlyAuthorized` →
+  PKP → Lit actions `update` / `maintain-cache`, gated by `canPublish`/`canReset`). The cache
+  is therefore **as trustworthy as the signer + usage key that can invoke those actions**.
+- The cold (no-archive) path is sound: it cats `deal.cid` from `getDeals` directly
+  (content-addressed; a malicious gateway is out of scope).
+- Mitigation direction (not yet implemented): verify content-addressing on the archive read
+  path — e.g. hash each served item against its claimed cid — and/or make the archive store
+  the original item bytes rather than a re-serialized parse (re-serialization means a naive
+  `ipfsHash(item)` check false-fails honest archives today). Fixing this is a format-level
+  change to `s2s-publication-archive/2` (bump to /3) + a `reconcile`/read-path check.
+  See `brain/reviews/archive-cache-security-2026-10-06.md`.
+
 ## The infrastructure layer (third-party dependencies)
 
 - **GitHub as the repo host** (Component 4) — the publication's config/templates live there; a

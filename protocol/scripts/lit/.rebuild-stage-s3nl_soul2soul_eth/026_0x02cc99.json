@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229856,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x7943209b15b59a530067c391c9062e8abe35d6e9151038851625397178e48156"
+  },
+  "objectId": "0x02cc994322645f7ca5cf30f13307f79f1913c773a516489f8091689edb054d99",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xf9eadf1c3e36bc4e0a350c3fe32d9bcade304868b730267e295366bbf2d1cbef473856bf709561522f864075f268ed554dcb62079b59606dd99064b1648041971b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>A pool is run by a group of organisers, not by a single owner. Together you decide who can see results and who can start a survey. Nobody holds more power than anyone else.</p>\",\"custom\":{},\"slug\":\"no-single-owner\",\"title\":\"No single owner\"}"
+}

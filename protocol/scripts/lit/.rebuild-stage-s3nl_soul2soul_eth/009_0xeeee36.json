@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229899,
+    "tags": [
+      "s3nl--s2s",
+      "organisator"
+    ],
+    "plaintextHash": "0xbef20b607fadae2ed2689f9cce39dd01cf48832d3f102f9e56220160a59a8ed4"
+  },
+  "objectId": "0xeeee36b530c805e315b74ca9e08dd12efc93977877c07b58c2d73fb57561f1cf",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x28b1a117cb03ac8ce353848cdb08a7e82b1046b63b26854f069d56f93eb5971c3fe09e8b32be53a59dab63bc572c0817bc95a7473eb1edc3238812f7635bb1b41c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Je krijgt totalen, percentages en samenvattingen. Losse antwoorden kun je inzien, maar nooit als één ingevulde enquête. Dat profiel bestaat nergens, ook niet voor S3ntiment.</p>\",\"custom\":{},\"slug\":\"resultaten-zonder-profielen\",\"title\":\"Resultaten zonder profielen\"}"
+}

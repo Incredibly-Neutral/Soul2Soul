@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "contact",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229817,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xdc13e9475aa9893deb4f4a5de5e357951539d164c713a9db63803dc4dcc8632c"
+  },
+  "objectId": "0xcd117dc16c35faac694f54458d47d9aeb20e8197d5f234444e98ab72d2ea9b65",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x2692fd022c34b63ff47bb5a4d7d6745d965cc2e92c36f424a68d8c57c73d162b6ac8b13b7b8a74a0caffad330d4f04c3b19a652efb91f697f8d650d64bcb4ae91b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>S3ntiment is still being built. Whether you&#39;d like to think along, try it somewhere, or just want to know how it works — let us know.</p>\",\"custom\":{},\"slug\":\"get-in-touch\",\"title\":\"Get in touch\"}"
+}

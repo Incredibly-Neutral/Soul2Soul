@@ -355,11 +355,12 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
 // ============================================================================
 // runRenderActionWithRetry — live-path retry unit tests (no chain, no runner)
 //
-// These drive the exported retry wrapper directly, mocking `runAction` (see the
-// vi.mock('./helpers') spy at the top of this file). Each case pins the retry
-// semantics that the PR review asked to lock down: single-attempt on success,
-// retry on non-ok / throw, 3-attempt exhaustion with a preserved failure, and
-// preview never retrying.
+// These drive the exported wrapper directly, mocking `runAction` (see the
+// vi.mock('./helpers') spy at the top of this file). Each case pins the
+// single-attempt semantics: success returns immediately, and any non-ok /
+// thrown failure surfaces exactly once — retries are DISABLED (2026-10,
+// RENDER_RETRY_ATTEMPTS = 1 in sequence.ts) so a live render is never re-fired
+// (a retry would re-open a Lit session and re-drain the budget/charge).
 // ============================================================================
 
 describe('runRenderActionWithRetry — live-path retry', () => {
@@ -383,34 +384,39 @@ describe('runRenderActionWithRetry — live-path retry', () => {
     expect(runAction).toHaveBeenCalledTimes(1);
   });
 
-  it('retries on non-ok then succeeds (two calls, returns the ok)', async () => {
-    vi.mocked(runAction)
-      .mockResolvedValueOnce({
-        ok: false,
-        action: 'render',
-        error: 'flaky transport',
-        trace: [],
-      } as any)
-      .mockResolvedValueOnce(okResult as any);
+  it('non-ok does NOT retry (single attempt; the failure is thrown)', async () => {
+    const fail = { ok: false, action: 'render', error: 'flaky transport', trace: [] };
+    vi.mocked(runAction).mockResolvedValueOnce(fail as any);
 
-    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
 
-    expect(runAction).toHaveBeenCalledTimes(2);
-    expect(result).toBe(okResult);
+    // Retries disabled: one attempt, no re-fire.
+    expect(runAction).toHaveBeenCalledTimes(1);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('flaky transport');
   });
 
-  it('retries when runAction throws once then succeeds', async () => {
-    vi.mocked(runAction)
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce(okResult as any);
+  it('thrown failure does NOT retry (single attempt, re-thrown)', async () => {
+    vi.mocked(runAction).mockRejectedValueOnce(new Error('boom'));
 
-    const result = await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    let thrown: any;
+    try {
+      await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
+    } catch (e) {
+      thrown = e;
+    }
 
-    expect(runAction).toHaveBeenCalledTimes(2);
-    expect(result).toBe(okResult);
+    expect(runAction).toHaveBeenCalledTimes(1);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).toContain('boom');
   });
 
-  it('throws after 3 attempts when always non-ok, preserving the real failure detail', async () => {
+  it('throws after a single attempt (retries disabled), preserving the real failure detail', async () => {
     const fail = { ok: false, action: 'render', error: 'real failure message', trace: [] };
     vi.mocked(runAction).mockResolvedValue(fail as any);
 
@@ -421,7 +427,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
       thrown = e;
     }
 
-    expect(runAction).toHaveBeenCalledTimes(3);
+    expect(runAction).toHaveBeenCalledTimes(1);
     expect(thrown).toBeInstanceOf(Error);
     // B4 fix: the thrown message carries the unwrapped envelope error, NOT '[object Object]'
     expect(thrown.message).toContain('real failure message');
@@ -466,7 +472,7 @@ describe('runRenderActionWithRetry — live-path retry', () => {
     expect(thrown.failure).toBe(fail);
   });
 
-  it('transient non-ok still retries up to RENDER_RETRY_ATTEMPTS (no fast-fail)', async () => {
+  it('transient non-ok does NOT retry (single attempt, no fast-fail needed)', async () => {
     const fail = {
       ok: false,
       action: 'render',
@@ -478,10 +484,10 @@ describe('runRenderActionWithRetry — live-path retry', () => {
     try {
       await runRenderActionWithRetry(false, mockLit, cid, { id: 'j1' }, {});
     } catch {
-      /* expected after exhaustion */
+      /* single attempt throws the failure */
     }
 
-    expect(runAction).toHaveBeenCalledTimes(3); // RENDER_RETRY_ATTEMPTS
+    expect(runAction).toHaveBeenCalledTimes(1); // retries disabled (RENDER_RETRY_ATTEMPTS = 1)
   });
 
   it('thrown budget error (err.message match) also fast-fails with 1 call', async () => {

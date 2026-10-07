@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229784,
+    "tags": [
+      "s3nl--s2s",
+      "organisator"
+    ],
+    "plaintextHash": "0x7f670268cb889be1138d2c002cd89a609244926cf0f91ddd58a5060654aa01e4"
+  },
+  "objectId": "0xfe7d0aae58b54ea5618032b7f24ec7676cf2425996f8698320e371c92aa768ae",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x6ccdc1a8674c1b6e659be72a1af65f82146ae71ea8e82b5f7777982320224acd36a7d8961db331863c13eda7be2fb15f1e9152ccf314892384dd63c39c0f90991c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Kies je vragen, bepaal wie mag meedoen en start. Verder heb je er niets mee te maken: het invullen gebeurt buiten jou om.</p>\",\"custom\":{},\"slug\":\"enquete-opzetten-in-minuten\",\"title\":\"Enquete opzetten in minuten\"}"
+}

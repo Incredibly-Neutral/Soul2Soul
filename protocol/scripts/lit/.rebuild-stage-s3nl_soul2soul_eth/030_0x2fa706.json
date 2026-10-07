@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "3",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229802,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x54615c507c683b0126c656595d4dffc4e8071ae08d73cc36c9587db65aea00cf"
+  },
+  "objectId": "0x2fa70600adab890c58e7dda2c2a4ddd8cc6eccf807049651c629a0477015c793",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xe943628059883f2b3e28bb4ca9c645d48e08a98062d0a69d6aee8c8229b5e803213280dbf4fc0cbe7659e45df7c79c4b15cf097bf6a6d974b64e60bba97be5ea1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Feedback three days later, by an email nobody opens, gets you the opinion of whoever still cares enough to click. A code on the badge or on the table gets you the opinion of whoever was there — and anyone who changes their mind mid-event can change their answer.</p>\",\"custom\":{},\"slug\":\"events\",\"title\":\"Events\"}"
+}

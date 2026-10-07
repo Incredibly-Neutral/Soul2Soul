@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229863,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0xef48b26c1d9ec5a80990af4d1ab711238adfd4fdf433811e97cac9dc6d09e42e"
+  },
+  "objectId": "0xbbf1bb0d8effb335a6a2321a79016901be468687a470dabfcbdbc8957adda374",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x0dd987d67695b3d612c35c329c04f17b4dfc3faa7e941062eb0e649261ad011f19fbf29e893c67b08048aff0b32cfde929e71ebff78e5d45696120888527920b1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Medewerkers die twijfelen of hun antwoord echt anoniem is, zeggen niets. Niet over onveilige situaties, niet over wat er werkelijk speelt. Hier kan niemand een antwoord herleiden — HR niet, wij niet.</p>\",\"custom\":{},\"slug\":\"op-de-werkvloer\",\"title\":\"Op de werkvloer\"}"
+}

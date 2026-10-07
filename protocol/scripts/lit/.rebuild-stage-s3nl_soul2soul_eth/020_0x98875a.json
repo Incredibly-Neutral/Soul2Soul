@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "2",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229847,
+    "tags": [
+      "s3nl--s2s",
+      "respondent"
+    ],
+    "plaintextHash": "0xb81b940d9572fdde5a99f504828557cfc71467ca67485b9479a55f3157639035"
+  },
+  "objectId": "0x98875a1e7997883a748b4143574c931b1aa60aa088a44453ed45c65f1a0f5aa7",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x798277a2005b71d723db5f1c1966971a9aef3bd92c6e3febafbd3641895cd2e54d74d8deb02ef2d8382bc162c83c8ce33cdc87c8cf7878bd9f2a674254f010c01b"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Scanning gives you a key that lives only on your device. That&#39;s what gets you back to your own answers — no name, no address, no password. You can secure that access later, so you keep it when you switch devices.</p>\",\"custom\":{},\"slug\":\"no-account-no-signup\",\"title\":\"No account, no signup\"}"
+}

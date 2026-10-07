@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "3",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229906,
+    "tags": [
+      "s3nl--s2s",
+      "organisator"
+    ],
+    "plaintextHash": "0x099135f880fd81e29f88d1675c0f646f66c1de3108aaccc365211c534d4f6e90"
+  },
+  "objectId": "0xd4172b2fbb8386ebf987bc8bbda355b4563fb41be2c0e47cc235bfd735e4cc9b",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x00dab0a659cd5e5486219444b01ac02ef55d6381aa8bf031ffc7fc8b3c2b3d2235f3ed11625f55a14a8de3ffaed578bf857482bfee2b358c968c9ce49ae95ac61c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>You get totals, percentages and summaries. Individual answers can be readable, but never as one completed survey. That profile doesn&#39;t exist anywhere, and not for S3ntiment either.</p>\",\"custom\":{},\"slug\":\"results-without-profiles\",\"title\":\"Results without profiles\"}"
+}

@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229697,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x073f31ce316ca5786c22cb457069a04cb414394ab6960bb7c8778a846c8b2283"
+  },
+  "objectId": "0x7a1b3c9f623fe678f6af5b71303e70d8d512a6eaf8a10d007de92a5ea5763941",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xd88765d90cdb88a83ec83a31b21817a1bd52e8892cd75c5f99f15ec30f2c4a22238623c31b4edd101b1506fe9330c693c532149f9f7fbd3b38d22a1593133cba1c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Employees who doubt their answer is really anonymous say nothing. Not about unsafe situations, not about what&#39;s actually going on. Here nobody can trace an answer back — not HR, not us.</p>\",\"custom\":{},\"slug\":\"at-work\",\"title\":\"At work\"}"
+}

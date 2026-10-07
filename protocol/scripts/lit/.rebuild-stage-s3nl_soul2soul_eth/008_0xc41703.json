@@ -1,0 +1,26 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "how",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "0",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229871,
+    "tags": [
+      "s3nl--s2s",
+      "organisator"
+    ],
+    "plaintextHash": "0x703a89309fb35b2e8fe9ebe5b755284fef2a2311bb86bee2d4d0634bd5b40e0c"
+  },
+  "objectId": "0xc41703d11b24d6bf82eadede7931ab34beb3082578d1ffaba162fe8dda39d492",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0x64e65a1223e741cbac497bff1008d57245930af87d9afa84a520ef0bb3110ee11a6daf2f4648dbd186a7ee129886c2340492496117dcc7f74f5b9fecc63fe7681c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Genereer een reeks unieke codes, die elk één keer werken. Deel ze uit als QR-code op papier, of stuur ze per mail of chat. Je weet wie je hebt uitgenodigd, maar niet wie de code heeft gebruikt — daar houdt het spoor op. Wie eenmaal in de pool zit, bereik je voor een volgende enquête zonder nieuwe code.</p>\",\"custom\":{},\"slug\":\"pool-opbouwen\",\"title\":\"Pool opbouwen\"}"
+}

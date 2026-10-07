@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "feature",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "1",
+    "publication": "s3nl",
+    "locale": "en",
+    "createdAt": 1791229840,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x50170e508c36a6cc2e75e3fccd0852bd89be17082c1e3ef0302e338cdc3723e2"
+  },
+  "objectId": "0xa92d015418819ada3720e4868dd125618621493f5ec4096321ec1db533f1ec26",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa2608d381fa798e6aab5f9339015f4971a413f598be87569ee3f0346ab81f087672d1d1fe690b2846006ad983df09d3c7212b2562bf3bb35b4d22c81d43b6c581c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Respondents manage their own answers and change them when they change their minds. The results show where things stand now, not where they stood on one particular day.</p>\",\"custom\":{},\"slug\":\"living-results\",\"title\":\"Living results\"}"
+}

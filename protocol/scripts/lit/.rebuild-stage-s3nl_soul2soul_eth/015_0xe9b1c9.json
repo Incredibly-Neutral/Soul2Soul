@@ -1,0 +1,25 @@
+{
+  "public": {
+    "specVersion": "1",
+    "author": "did:ethr:0xF80E0B939f3FA0A48aC9A9E500bef41253Bf058E",
+    "postType": "who",
+    "mediaType": "text/markdown",
+    "parent": "0",
+    "position": "3",
+    "publication": "s3nl",
+    "locale": "nl",
+    "createdAt": 1791229792,
+    "tags": [
+      "s3nl--s2s"
+    ],
+    "plaintextHash": "0x1ceb1980d8ba4af737ab6d5e3845c71e8e76fa2dc0a255eb90bff1626657f926"
+  },
+  "objectId": "0xe9b1c94eb5491bd9c4275c99a3bc62e51f3c5abf220edbf82b64dc43449f4f3b",
+  "proof": {
+    "type": "eip712",
+    "signer": "0x4b717Acbd88e66dd11f3109999510E8aF79BD1e0",
+    "signature": "0xa7d85cbbd3c1291230fe1ae8382af7c78787f5c57ae99032d7745fe0b8f327ee44865ec9ebfcb9d2f194a9427a28a8326303ab96145ba8c91abf5bf2dacd70a81c"
+  },
+  "encryption": false,
+  "body": "{\"content\":\"<p>Feedback drie dagen later, via een mail die niemand opent, levert de mening op van wie zich nog druk genoeg maakt om te klikken. Een code op het badge of op tafel levert de mening op van wie er was — en wie tijdens het evenement van gedachten verandert, past zijn antwoord aan.</p>\",\"custom\":{},\"slug\":\"evenementen\",\"title\":\"Evenementen\"}"
+}

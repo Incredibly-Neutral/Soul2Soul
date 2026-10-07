@@ -17,6 +17,8 @@ export type {
   EvmUpdateInput,
   MaintainCacheData,
   MaintainCacheInput,
+  RepointArchiveData,
+  RepointArchiveInput,
   PrepData,
   PrepInput,
   SingleData,

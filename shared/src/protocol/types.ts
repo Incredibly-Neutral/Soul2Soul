@@ -24,6 +24,11 @@ export interface S2SProtocolInfo {
     // action only when this is non-empty (graceful — the render inline
     // write-back remains the fallback until then).
     maintainCache?: string;
+    // CID of the one-shot repoint-archive action. OPTIONAL: present only once
+    // the action is built + pinned + its lit_action_repointArchive record is
+    // written on-chain. Read by recovery tooling; the orchestrator does not
+    // fire it automatically.
+    repointArchive?: string;
   };
 }
 
