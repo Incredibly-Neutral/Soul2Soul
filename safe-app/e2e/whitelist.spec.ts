@@ -46,7 +46,11 @@ test.describe('whitelist tab', () => {
       .toBe(true);
 
     if ((await rows.count()) > 0) {
-      await expect(rows.first()).toHaveAttribute('data-address', /.+/);
+      // data-address lives on the remove button inside the row, not the row div.
+      await expect(rows.first().locator('button[data-address]')).toHaveAttribute(
+        'data-address',
+        /^0x/i,
+      );
     }
   });
 
