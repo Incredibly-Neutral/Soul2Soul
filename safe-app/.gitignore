@@ -47,6 +47,10 @@ coverage/
 test-results/
 playwright-report/
 
+# Vitest browser (component) failure artifacts
+.vitest-attachments/
+__screenshots__/
+
 # OS generated files
 Thumbs.db
 # Vitest browser failure artifacts

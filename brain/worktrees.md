@@ -96,3 +96,50 @@ non-JSON bodies in an actionable `Error('runner <status> returned non-JSON: <bod
 
 **Status:** committed f203f4f, pushed, PR #89 OPEN (https://github.com/Joera/S2S-monorepo/pull/89). Not merged.
 - 2026-09-03 | session=self (DeepSeek V4 Flash 0731) | worktree=/home/joera/code/s2s-serverless-error-handling | branch=feat/serverless-error-handling | agent=builder(self) | model=deepseek-v4-flash-0731 | task=harden protocol/serverless/server.ts error handling (JSON on all error paths) + regression test | PR=https://github.com/Joera/S2S-monorepo/pull/88
+
+## 2026-10-07 — safe-app test suite (orchestrated)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | 9cc0c5a | /home/joera/code/s2s-tests-plumbing (MERGED, worktree removed) | feat/tests-plumbing | pi | deepseek-v4-flash-0731 | wave1: plumbing+build-cycle — vite6, 2-project vitest, e2e scaffold, helpers; rev-1 APPROVED; gate fix f1429fa
+| 2026-10-07 | 5decef8 | /home/joera/code/s2s-tests-unit-lib (MERGED, worktree removed) | feat/tests-unit-lib | pi | deepseek-v4-flash-0731 | wave1: unit tests lib/utils/filecoin — 10 files/127 tests, rev-2 APPROVED, merged
+| 2026-10-07 | 67cc64a | /home/joera/code/s2s-tests-unit-state (MERGED, worktree removed) | feat/tests-unit-state | pi | deepseek-v4-flash-0731 | wave1: unit tests state layer — 11 files/94 tests, rev-3 APPROVED, merged
+
+## 2026-10-07 — safe-app s2s-table component (orchestrated)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | MERGED 19c418b | /home/joera/code/s2s-safeapp-table (MERGED, worktree removed) | feat/safeapp-table | pi | deepseek-v4-flash-0731 | extract reusable s2s-table Lit component (sort/filter chrome) + migrate deals/storage tabs + prune dead tables.scss |
+
+  Commits: c326893 (refactor), 19c418b (fix review findings: filterLabels override restores
+  "Author" dropdown label; count converged pre-paint via willUpdate). Reviewer rev-table
+  APPROVED (single-model pi reviewer — no cross-vendor available). Gate gotcha: QA fails on
+  a fresh worktree because .env doesn't carry over → DRPC "default" key 403s → module
+  detection fails → gated tabs disabled. Copy ../.env into the worktree and rebuild; then QA
+  passes 8/8. Post-merge gate on main: build (222 tests) + QA all PASS. |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-1 | feat/tests-components-1 | pi | deepseek-v4-flash-0731 | wave2: component tests shell+atoms+whitelist+storage |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-2 | feat/tests-components-2 | pi | deepseek-v4-flash-0731 | wave2: component tests records+deals+website-tree |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-e2e | feat/tests-e2e | pi | deepseek-v4-flash-0731 | wave2: playwright e2e specs on safe-mock fixture |
+
+## 2026-10-07 — safe-app phosphor icon migration (orchestrated)
+
+Migrate every icon in safe-app to Phosphor Icons (@phosphor-icons/webcomponents 2.1.5, already in the
+workspace store) with one consistent scale: ICON_SIZE=16 standard / ICON_SIZE_LARGE=48 hero (empty
+states, standalone tree file node), ICON_WEIGHT='regular'. Killed the 14/16/18/32px mishmash (inline
+lucide SVGs in copy-*, noun-refresh `<img>`, unicode emoji ✓✗✏🗑📄📁↻⚠▲▼) and deleted the dead
+noun-*.svg assets.
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | MERGED 5a2e42f | /home/joera/code/worktrees/s2s-icon-wt0 (MERGED, removed) | agent/icon-foundation | pi | deepseek-v4-flash-0731 | dep + src/components/icon.ts contract (12 ph-* registrations, ICON_SIZE/ICON_SIZE_LARGE/ICON_WEIGHT) + main.ts bootstrap + manifest app-icon.svg; rev-icon0 APPROVED; gate gotcha: fresh worktree needs shared/dist built + root .env copied for qa |
+| 2026-10-07 | MERGED dcb698b | /home/joera/code/worktrees/s2s-icon-wt1 (MERGED, removed) | agent/icon-wt1 | pi | deepseek-v4-flash-0731 | copy-* atoms: ph-copy/ph-check/ph-arrow-square-out, dead svg CSS removed; rev-icon1 APPROVED (1 low info: copy-hash white-stroke inheritance note) |
+| 2026-10-07 | MERGED 8b763b2 | /home/joera/code/worktrees/s2s-icon-wt2 (MERGED, removed) | agent/icon-wt2 | pi | deepseek-v4-flash-0731 | deals/storage: ph-arrow-clockwise x3, ph-trash, ph-x, .refresh-icon/.revoke-icon CSS removed; rev-icon2 APPROVED |
+| 2026-10-07 | MERGED 5aecc65 | /home/joera/code/worktrees/s2s-icon-wt3 (MERGED, removed) | agent/icon-wt3 | pi | deepseek-v4-flash-0731 | records/whitelist: ph-check/ph-x/ph-pencil-simple/ph-trash/ph-file-text(48 hero); rev-icon3 APPROVED (inline-flex on .button.thin) |
+| 2026-10-07 | MERGED f320e3d | /home/joera/code/worktrees/s2s-icon-wt4 (MERGED, removed) | agent/icon-wt4 | pi | deepseek-v4-flash-0731 | website-tree/table/app/sort: ph-folder/ph-file-text/ph-trash/ph-arrow-clockwise/ph-warning; sortIndicator now returns ph-caret-up/down (+ test updated); rev-icon4 APPROVED |
+
+  Lead cleanup 1effa39: git-rm'd 13 unused public/icons/noun-*.svg (only app-icon.svg remains, referenced
+  by manifest.json). Final gate on main: build exit 0 (235 tests pass incl. concurrent wave-2 component
+  tests from the other track), QA all PASS, bundle greps hit ph-copy/ph-arrow-clockwise/ph-caret-up.
+  Cross-vendor review NOT possible (only pi installed) — all reviews single-model pi, flagged.
+  Note: main advanced concurrently (wave-2 test commits b84c493/1abc6f3/e620a95 interleaved); my
+  merges integrated cleanly, no conflicts.

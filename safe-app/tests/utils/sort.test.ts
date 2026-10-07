@@ -138,9 +138,9 @@ describe('sortByColumn', () => {
 });
 
 describe('sortIndicator', () => {
-  it('returns the glyph for the active column', () => {
-    expect(sortIndicator({ key: 'cost', dir: 'asc' }, 'cost')).toBe('▲');
-    expect(sortIndicator({ key: 'cost', dir: 'desc' }, 'cost')).toBe('▼');
+  it('returns the ph-* caret tag for the active column', () => {
+    expect(sortIndicator({ key: 'cost', dir: 'asc' }, 'cost')).toBe('ph-caret-up');
+    expect(sortIndicator({ key: 'cost', dir: 'desc' }, 'cost')).toBe('ph-caret-down');
   });
 
   it('returns empty for non-active columns or no sort', () => {
@@ -158,7 +158,7 @@ describe('renderSortableHeader', () => {
     expect(html).toContain('data-sort="cost"');
     expect(html).toContain('title="Sort by Cost"');
     expect(html).toContain('>Cost</span>');
-    expect(html).toContain('▲');
+    expect(html).toContain('ph-caret-up');
   });
 
   it('includes the column extra class when present', () => {

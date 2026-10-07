@@ -606,6 +606,9 @@ importers:
       '@ipld/car':
         specifier: ^5.4.6
         version: 5.4.6
+      '@phosphor-icons/webcomponents':
+        specifier: 2.1.5
+        version: 2.1.5
       '@s2s/soul2soul-shared':
         specifier: workspace:*
         version: link:../shared
@@ -15242,7 +15245,7 @@ snapshots:
 
   '@phosphor-icons/webcomponents@2.1.5':
     dependencies:
-      lit: 3.3.0
+      lit: 3.3.3
 
   '@pinojs/redact@0.4.0': {}
 

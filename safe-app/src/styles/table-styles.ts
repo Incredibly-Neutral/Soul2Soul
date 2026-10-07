@@ -1,6 +1,12 @@
 import { css } from 'lit';
 
 export const tableStyles = css`
+  /* <s2s-table> is a custom element that renders into light DOM inside a tab's
+     shadow tree; custom elements default to display:inline, so force block. */
+  s2s-table {
+    display: block;
+  }
+
   .table {
     display: grid;
     gap: 0;
@@ -40,9 +46,10 @@ export const tableStyles = css`
   }
 
   .sort-indicator {
-    font-size: 0.7rem;
     color: var(--color-yellow);
     min-width: 0.8em;
+    display: inline-flex;
+    align-items: center;
   }
 
   .table-cell {
