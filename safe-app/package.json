@@ -4,7 +4,6 @@
   "description": "Safe app for managing S2S Records Module",
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "tsc && vite build && pnpm sass",
     "preview": "vite preview",
     "serve": "vite preview --port 3000",

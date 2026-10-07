@@ -28,9 +28,10 @@ export const filterStyles = css`
   }
 
   .table-filter__label {
-    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    letter-spacing: 0.75px;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: var(--gray-400);
     white-space: nowrap;
   }

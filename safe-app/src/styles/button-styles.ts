@@ -13,8 +13,10 @@ export const buttonStyles = css`
     padding: 0.5rem 1rem;
     border-radius: 0.5rem;
     cursor: pointer;
-    font-size: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
     font-weight: 500;
+    letter-spacing: 0.75px;
     transition: background-color 0.2s, transform 0.1s;
     display: flex;
     align-items: center;

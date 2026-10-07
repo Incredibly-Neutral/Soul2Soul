@@ -16,6 +16,10 @@ export const mainStyles = css`
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    font-size: 2.8rem;
+    font-family: 'DM Serif Display', serif;
+    line-height: 1.2;
+    margin: 0;
   }
 
   .subtitle {
@@ -32,6 +36,9 @@ export const mainStyles = css`
     border-right: 1px solid var(--gray-50);
     padding: 0.125rem 0.75rem;
     align-self: center;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    letter-spacing: 0.75px;
   }
 
   .web-status > div a {
