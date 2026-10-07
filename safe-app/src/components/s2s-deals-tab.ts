@@ -56,6 +56,11 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
 const OFFER_FILTER_KEYS = ['author', 'postType'];
 const DEAL_FILTER_KEYS = ['author', 'postType'];
 
+// The historical filter-toolbar label for the author column is "Author", while
+// the column's sortable-header label is "Author (safe)". Preserve the exact
+// pre-refactor dropdown text via <s2s-table>'s filterLabels override.
+const DEAL_FILTER_LABELS: Record<string, string> = { author: 'Author' };
+
 @customElement('s2s-deals-tab')
 export class S2SDealsTab extends LitElement {
   @property({ attribute: false }) safeIntegration!: SafeIntegration;
@@ -453,6 +458,7 @@ export class S2SDealsTab extends LitElement {
                 .sort=${this.offersSort}
                 .filters=${this.offersFilters}
                 .filterKeys=${OFFER_FILTER_KEYS}
+                .filterLabels=${DEAL_FILTER_LABELS}
                 .rowRenderer=${this.offerRowRenderer}
                 .actionsHeader=${true}
                 emptyText="No offers match the current filters"
@@ -476,6 +482,7 @@ export class S2SDealsTab extends LitElement {
           .sort=${this.dealsSort}
           .filters=${this.dealsFilters}
           .filterKeys=${store.deals.length > 0 ? DEAL_FILTER_KEYS : []}
+          .filterLabels=${DEAL_FILTER_LABELS}
           .rowRenderer=${this.dealRowRenderer}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
