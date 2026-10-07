@@ -19,6 +19,7 @@ import {
 } from '@/utils/filter.js';
 import './s2s-table.js';
 import './copy-hash.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 
 // Per-column sort configuration for the Pieces and Data Sets tables.
 const PIECE_COLUMNS: Array<TableColumn<StoragePiece>> = [
@@ -100,13 +101,6 @@ export class S2SStorageTab extends LitElement {
         align-items: center;
         gap: 1.5rem;
         margin-bottom: 1.5rem;
-      }
-
-      .refresh-icon {
-        width: 2rem;
-        height: 2rem;
-        vertical-align: middle;
-        filter: brightness(0) invert(1);
       }
 
       /* Cached (unconfirmed) rows use light text */
@@ -386,7 +380,7 @@ export class S2SStorageTab extends LitElement {
           <button class="btn-delete ${isDeleting ? 'deleting' : ''}"
             ?disabled=${isDeleting}
             @click=${() => void this.handleDelete(p.dataSetId, p.pieceId, p.pieceCid)}>
-            ${isDeleting ? '...' : '🗑️'}
+            ${isDeleting ? '...' : html`<ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash>`}
           </button>
         </div>
       </div>
@@ -412,7 +406,7 @@ export class S2SStorageTab extends LitElement {
           <button class="btn-terminate ${isTerminating ? 'terminating' : ''}"
             ?disabled=${isTerminating}
             @click=${() => void this.handleTerminate(ds.dataSetId)}>
-            ${isTerminating ? '...' : 'X'}
+            ${isTerminating ? '...' : html`<ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>`}
           </button>
         </div>
       </div>
@@ -445,7 +439,7 @@ export class S2SStorageTab extends LitElement {
         </div>
         <button class="button has-icon" id="refresh-btn"
           @click=${() => window.location.reload()}>
-          <span><img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" /></span>
+          <span><ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise></span>
         </button>
       </div>
 
