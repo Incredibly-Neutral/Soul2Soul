@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 
 @customElement('copy-content-id')
 export class CopyContentId extends LitElement {
@@ -41,11 +42,7 @@ export class CopyContentId extends LitElement {
       color: #2e7d32;
     }
 
-    svg {
-      width: 16px;
-      height: 16px;
-      stroke: var(--color-too-dark);
-    }
+
   `;
 
   connectedCallback() {
@@ -96,13 +93,8 @@ export class CopyContentId extends LitElement {
         }}
       >
         ${this.copied
-          ? html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>`
-          : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>`}
+          ? html`<ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>`
+          : html`<ph-copy size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-copy>`}
       </button>
     `;
   }
