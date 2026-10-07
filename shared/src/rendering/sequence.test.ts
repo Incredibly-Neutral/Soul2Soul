@@ -18,7 +18,7 @@
  *   TEST_CONFIG_CID          Config CID override
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { createPublicClient, http } from 'viem';
 import { mainnet, base } from 'viem/chains';
 import { Wallet } from 'ethers';
@@ -103,6 +103,20 @@ async function callAction(cid: string, inputs: Record<string, unknown>): Promise
   return runAction(true, mockLit, cid, inputs);
 }
 
+/**
+ * Orchestrator-real-shape endpoints (mirrors the `endpoints` object built in
+ * sequence.ts renderWithLitActions): the caller-supplied RPC URLs + the
+ * protocol gateway. The chain tests hit the LIVE runner, so the rpcs must be
+ * the real env RPCs (the `sampleEndpoints` fixture rpcs are placeholder drpc
+ * URLs that 403 on real calls).
+ */
+function buildChainEndpoints(ipfsGateway: string): { ipfsGateway: string; rpcs: { L1: string[]; L2: string[] } } {
+  return {
+    ipfsGateway,
+    rpcs: { L1: [MAINNET_RPC_URL!], L2: [BASE_RPC_URL!] },
+  };
+}
+
 function assertOkShape(result: unknown, action: string): void {
   expect(result).toHaveProperty('ok');
   expect(result).toHaveProperty('action', action);
@@ -183,6 +197,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
     const input: Record<string, unknown> = {
       publication: PUBLICATION,
       contentIds: CONTENT_IDS,
+      endpoints: buildChainEndpoints(protocolInfo.gateway),
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
@@ -214,6 +229,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
         authorSafeAddress: AUTHOR_SAFE,
         publication: PUBLICATION,
         preview: true,
+        endpoints: buildChainEndpoints(protocolInfo.gateway),
       };
       if (CONFIG_CID) singleInput.configCid = CONFIG_CID;
 
@@ -227,7 +243,9 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       }
 
       expect(result.ok).toBe(true);
-      expect(result.action).toBe('single');
+      // Render action success envelope is `action: 'render'` (the `'single'`
+      // name is used only on the ok:false error envelope — see render/main.ts).
+      expect(result.action).toBe('render');
       const r = result as any;
       expect(r.data.job).toHaveProperty('html');
       expect(r.data.job).toHaveProperty('path');
@@ -250,6 +268,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       signature: SIGNATURE,
       authorSafeAddress: AUTHOR_SAFE,
       preview: true,
+      endpoints: buildChainEndpoints(protocolInfo.gateway),
     };
 
     const raw = await callAction(protocolInfo.litActions.update, evmInput);
@@ -291,6 +310,7 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
     const input: Record<string, unknown> = {
       publication: PUBLICATION,
       contentIds: CONTENT_IDS,
+      endpoints: buildChainEndpoints(protocolInfo.gateway),
     };
     if (CONFIG_CID) input.configCid = CONFIG_CID;
 
@@ -305,6 +325,7 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
         authorSafeAddress: AUTHOR_SAFE,
         publication: PUBLICATION,
         preview: true,
+        endpoints: buildChainEndpoints(protocolInfo.gateway),
       };
       if (CONFIG_CID) singleInput.configCid = CONFIG_CID;
 
@@ -340,7 +361,7 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
 
   it('a publication that resolves to no modules returns ok:false', async () => {
     const badPublication = 'nonexistent-' + Date.now() + '.soul2soul.eth';
-    const input = { publication: badPublication, contentIds: ['lens-post-1'] };
+    const input = { publication: badPublication, contentIds: ['lens-post-1'], endpoints: buildChainEndpoints(protocolInfo.gateway) };
 
     const raw = await callAction(protocolInfo.litActions.prep, input);
 
@@ -366,6 +387,10 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
 describe('runRenderActionWithRetry — live-path retry', () => {
   const cid = 'cid-test';
   const okResult = { ok: true, action: 'render', data: { job: { path: '/x' } }, trace: [] };
+
+  beforeEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
 
   afterEach(() => {
     vi.mocked(runAction).mockReset();
