@@ -1,0 +1,18 @@
+{
+  // Lightweight type-check for the test toolchain only. Extends the app
+  // tsconfig (so tests resolve @/, @s2s/soul2soul-shared, filecoin-pin exactly
+  // like src) but scopes `include` to tests/, e2e/, and the test configs.
+  // The main `pnpm type-check` / build `tsc` still checks src/ + vite.config.ts
+  // only — checks on src are NOT disabled or relaxed here.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "tests/**/*.ts",
+    "e2e/**/*.ts",
+    "vitest.config.ts",
+    "vitest.setup.ts",
+    "playwright.config.ts"
+  ]
+}

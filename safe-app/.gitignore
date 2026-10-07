@@ -43,5 +43,9 @@ pids/
 coverage/
 *.lcov
 
+# Playwright (e2e)
+test-results/
+playwright-report/
+
 # OS generated files
 Thumbs.db
