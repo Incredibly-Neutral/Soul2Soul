@@ -120,3 +120,26 @@ non-JSON bodies in an actionable `Error('runner <status> returned non-JSON: <bod
 | 2026-10-07 | pending | /home/joera/code/s2s-tests-components-1 | feat/tests-components-1 | pi | deepseek-v4-flash-0731 | wave2: component tests shell+atoms+whitelist+storage |
 | 2026-10-07 | pending | /home/joera/code/s2s-tests-components-2 | feat/tests-components-2 | pi | deepseek-v4-flash-0731 | wave2: component tests records+deals+website-tree |
 | 2026-10-07 | pending | /home/joera/code/s2s-tests-e2e | feat/tests-e2e | pi | deepseek-v4-flash-0731 | wave2: playwright e2e specs on safe-mock fixture |
+
+## 2026-10-07 — safe-app phosphor icon migration (orchestrated)
+
+Migrate every icon in safe-app to Phosphor Icons (@phosphor-icons/webcomponents 2.1.5, already in the
+workspace store) with one consistent scale: ICON_SIZE=16 standard / ICON_SIZE_LARGE=48 hero (empty
+states, standalone tree file node), ICON_WEIGHT='regular'. Killed the 14/16/18/32px mishmash (inline
+lucide SVGs in copy-*, noun-refresh `<img>`, unicode emoji ✓✗✏🗑📄📁↻⚠▲▼) and deleted the dead
+noun-*.svg assets.
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | MERGED 5a2e42f | /home/joera/code/worktrees/s2s-icon-wt0 (MERGED, removed) | agent/icon-foundation | pi | deepseek-v4-flash-0731 | dep + src/components/icon.ts contract (12 ph-* registrations, ICON_SIZE/ICON_SIZE_LARGE/ICON_WEIGHT) + main.ts bootstrap + manifest app-icon.svg; rev-icon0 APPROVED; gate gotcha: fresh worktree needs shared/dist built + root .env copied for qa |
+| 2026-10-07 | MERGED dcb698b | /home/joera/code/worktrees/s2s-icon-wt1 (MERGED, removed) | agent/icon-wt1 | pi | deepseek-v4-flash-0731 | copy-* atoms: ph-copy/ph-check/ph-arrow-square-out, dead svg CSS removed; rev-icon1 APPROVED (1 low info: copy-hash white-stroke inheritance note) |
+| 2026-10-07 | MERGED 8b763b2 | /home/joera/code/worktrees/s2s-icon-wt2 (MERGED, removed) | agent/icon-wt2 | pi | deepseek-v4-flash-0731 | deals/storage: ph-arrow-clockwise x3, ph-trash, ph-x, .refresh-icon/.revoke-icon CSS removed; rev-icon2 APPROVED |
+| 2026-10-07 | MERGED 5aecc65 | /home/joera/code/worktrees/s2s-icon-wt3 (MERGED, removed) | agent/icon-wt3 | pi | deepseek-v4-flash-0731 | records/whitelist: ph-check/ph-x/ph-pencil-simple/ph-trash/ph-file-text(48 hero); rev-icon3 APPROVED (inline-flex on .button.thin) |
+| 2026-10-07 | MERGED f320e3d | /home/joera/code/worktrees/s2s-icon-wt4 (MERGED, removed) | agent/icon-wt4 | pi | deepseek-v4-flash-0731 | website-tree/table/app/sort: ph-folder/ph-file-text/ph-trash/ph-arrow-clockwise/ph-warning; sortIndicator now returns ph-caret-up/down (+ test updated); rev-icon4 APPROVED |
+
+  Lead cleanup 1effa39: git-rm'd 13 unused public/icons/noun-*.svg (only app-icon.svg remains, referenced
+  by manifest.json). Final gate on main: build exit 0 (235 tests pass incl. concurrent wave-2 component
+  tests from the other track), QA all PASS, bundle greps hit ph-copy/ph-arrow-clockwise/ph-caret-up.
+  Cross-vendor review NOT possible (only pi installed) — all reviews single-model pi, flagged.
+  Note: main advanced concurrently (wave-2 test commits b84c493/1abc6f3/e620a95 interleaved); my
+  merges integrated cleanly, no conflicts.
