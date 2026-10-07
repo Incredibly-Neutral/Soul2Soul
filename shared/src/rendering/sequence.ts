@@ -125,9 +125,9 @@ export async function runRenderActionWithRetry(
     lastFailure instanceof Error
       ? (lastFailure.message ? lastFailure : new Error(JSON.stringify(lastFailure) || 'render action failed'))
       : new Error(
-          lastFailure?.error ??
-            lastFailure?.message ??
-            (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)) ??
+          lastFailure?.error ||
+            lastFailure?.message ||
+            (typeof lastFailure === 'string' ? lastFailure : JSON.stringify(lastFailure)) ||
             // Runner returned a non-ok/empty envelope with no error field (e.g. an
             // HTTP 504 whose JSON body lacked success===false, so runAction resolved
             // to undefined). `new Error(undefined)` yields an EMPTY message that would
