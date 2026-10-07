@@ -8,7 +8,7 @@ import {
   ENS_L1_CHAIN_ID,
   type DomainOwnershipDeps,
   type EvmReadFn,
-} from '../src/lib/domain-validation';
+} from '../../src/lib/domain-validation';
 
 // Deterministic stand-in for ethers.namehash so the mock can map node → owner.
 const nodeFor = (name: string): string =>
