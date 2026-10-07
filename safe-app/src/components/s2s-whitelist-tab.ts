@@ -6,6 +6,7 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 
 @customElement('s2s-whitelist-tab')
 export class S2SWhitelistTab extends LitElement {
@@ -64,6 +65,9 @@ export class S2SWhitelistTab extends LitElement {
         height: 2rem;
         margin-left: .5rem;
         font-size: .875rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
       }
 
       .table {
@@ -327,7 +331,7 @@ export class S2SWhitelistTab extends LitElement {
                       <div class="table-cell">
                         <button class="button button-danger thin" data-address="${author}"
                           @click=${() => void this.removeAuthor(author)}>
-                          ✗ Remove
+                          <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Remove
                         </button>
                       </div>
                     </div>
@@ -366,7 +370,7 @@ export class S2SWhitelistTab extends LitElement {
                       <div class="table-cell">
                         <button class="button button-danger thin" data-address="${dev}"
                           @click=${() => void this.removeDev(dev)}>
-                          ✗ Remove
+                          <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Remove
                         </button>
                       </div>
                     </div>
