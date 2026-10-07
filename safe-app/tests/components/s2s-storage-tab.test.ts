@@ -103,6 +103,25 @@ function notificationTexts(): string {
   return document.body.textContent ?? '';
 }
 
+// Storage-tab now delegates both tables to <s2s-table>, which renders into
+// LIGHT DOM (createRenderRoot() => this — see s2s-table.ts:98). The table
+// headers, filter toolbar and host-supplied rows are direct light-DOM children
+// of the <s2s-table> elements inside the tab's shadow root (no nested shadow
+// root for the table itself; only copy-hash / table-filter / ph-* icons have
+// their own shadow roots).
+function piecesTable(el: S2SStorageTab): HTMLElement {
+  return el.shadowRoot?.querySelector('s2s-table') as HTMLElement;
+}
+
+function datasetsTable(el: S2SStorageTab): HTMLElement {
+  return el.shadowRoot?.querySelectorAll('s2s-table')[1] as HTMLElement;
+}
+
+function pieceRowCids(el: S2SStorageTab): string[] {
+  const rows = piecesTable(el).querySelectorAll('.table-row');
+  return [...rows].map((r) => (r.querySelector('copy-hash') as any).value);
+}
+
 describe('s2s-storage-tab', () => {
   let storage: ReturnType<typeof makeStorageProp>;
 
@@ -118,74 +137,126 @@ describe('s2s-storage-tab', () => {
     expect(el.shadowRoot?.textContent).toContain('Loading storage data...');
   });
 
-  it('renders pieces and data sets tables with cost summary', async () => {
+  it('delegates to <s2s-table> and renders both tables with counts, rows and cost summary', async () => {
     storeMock.setPieces(PIECES);
     storeMock.setDataSets(DATASETS);
 
     const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
-    expect(el.shadowRoot?.textContent).toContain('Filecoin Storage (2 pieces)');
-    expect(el.shadowRoot?.textContent).toContain('Data Sets (2)');
 
-    // Cost summary (confirmed piece present)
-    expect(el.shadowRoot?.textContent).toContain('$2.5000/mo');
-    expect(el.shadowRoot?.textContent).toContain('$3.5000/mo');
-    expect(fcMocks.estimateMonthlyCostFromPieces).toHaveBeenCalled();
+    // Counts converge from the <s2s-table> @count events.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('Filecoin Storage (2 pieces)');
+      expect(el.shadowRoot?.textContent).toContain('Data Sets (2)');
+    });
 
-    // Piece rows: gateway link for p1 (rootCid), '-' for p2 (no rootCid)
-    const pieceCells = [...(el.shadowRoot?.querySelectorAll('.table-pieces .table-row') ?? [])];
-    expect(pieceCells).toHaveLength(2);
-    expect(el.shadowRoot?.querySelector('.gateway-link')).toBeTruthy();
+    // Two <s2s-table> instances: [0] pieces, [1] data sets.
+    expect(el.shadowRoot?.querySelectorAll('s2s-table')).toHaveLength(2);
 
-    // Dataset rows: Active vs Terminated badges
-    const dsRows = [...(el.shadowRoot?.querySelectorAll('.table-datasets .table-row') ?? [])];
-    expect(dsRows).toHaveLength(2);
-    expect(el.shadowRoot?.textContent).toContain('Terminated');
+    // Cost summary (seeded with at least one confirmed piece) in the tab's own
+    // shadow root, driven by the mocked estimate.
+    const cost = el.shadowRoot?.querySelector('.cost-summary');
+    expect(cost?.textContent).toContain('$2.5000/mo'); // storage
+    expect(cost?.textContent).toContain('$1.0000/mo'); // proving
+    expect(cost?.textContent).toContain('$3.5000/mo'); // total
+    expect(cost?.textContent).toContain('2 KB'); // formatBytes(totalBytes)
+    expect(fcMocks.estimateMonthlyCostFromPieces).toHaveBeenCalledWith(PIECES);
+
+    // Piece rows: 2 rows; gateway link only for the piece with a rootCid.
+    expect(piecesTable(el).querySelectorAll('.table-row')).toHaveLength(2);
+    expect(piecesTable(el).querySelector('.gateway-link')).toBeTruthy();
+
+    // Dataset rows with Active vs Terminated badges.
+    expect(datasetsTable(el).querySelectorAll('.table-row')).toHaveLength(2);
+    expect(datasetsTable(el).textContent).toContain('Terminated');
+    expect(datasetsTable(el).textContent).toContain('Active');
   });
 
-  it('filters pieces by Kind via the table-filter dropdown', async () => {
+  it('renders a sortable header (with .sort-indicator) for every column key', async () => {
     storeMock.setPieces(PIECES);
     storeMock.setDataSets(DATASETS);
 
     const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
-    const filter = el.shadowRoot?.querySelector('.pieces-filters table-filter') as any;
-    const select = filter.shadowRoot.querySelector('select');
-    expect([...select.options].map((o: HTMLOptionElement) => o.value)).toEqual([
-      '',
-      'file',
-      'folder',
-    ]);
 
-    // table-filter's contract: it emits a composed, bubbling change CustomEvent
-    // with detail.value. (Dispatching on the native select also re-emits the raw
-    // change through the host, which storage-tab's handler rejects — see report.)
-    filter.dispatchEvent(
-      new CustomEvent('change', { detail: { value: 'file' }, bubbles: true, composed: true }),
+    // Pieces columns (PIECE_COLUMNS) + trailing Actions header.
+    const pieceKeys = ['pieceCid', 'rootCid', 'kind', 'size', 'dataSetId', 'provider', 'state'];
+    for (const key of pieceKeys) {
+      const hdr = piecesTable(el).querySelector(
+        `.table-header.sortable[data-sort="${key}"]`,
+      );
+      expect(hdr, `pieces sortable header [${key}]`).toBeTruthy();
+      expect(hdr?.querySelector('.sort-indicator')).toBeTruthy();
+    }
+    expect(piecesTable(el).querySelectorAll('.table-header.sortable')).toHaveLength(
+      pieceKeys.length,
     );
 
+    // Data set columns (DATASET_COLUMNS) + trailing Actions header.
+    const dsKeys = ['dataSetId', 'provider', 'pieces', 'state', 'endEpoch'];
+    for (const key of dsKeys) {
+      expect(
+        datasetsTable(el).querySelector(`.table-header.sortable[data-sort="${key}"]`),
+        `datasets sortable header [${key}]`,
+      ).toBeTruthy();
+    }
+    expect(datasetsTable(el).querySelectorAll('.table-header.sortable')).toHaveLength(dsKeys.length);
+
+    // Trailing Actions header cell is present on both tables (non-sortable).
+    const piecesActions = piecesTable(el).querySelector('.table-header:not(.sortable)');
+    const dsActions = datasetsTable(el).querySelector('.table-header:not(.sortable)');
+    expect(piecesActions?.textContent).toContain('Actions');
+    expect(dsActions?.textContent).toContain('Actions');
+  });
+
+  it('filters pieces by Kind and data sets by State through the table-filter -> s2s-table chain', async () => {
+    storeMock.setPieces(PIECES);
+    storeMock.setDataSets(DATASETS);
+
+    const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
+
+    // s2s-table renders a <table-filter data-key="kind"> with the unique kinds.
+    const piecesFilter = piecesTable(el).querySelector('.table-filters table-filter') as any;
+    expect(piecesFilter.getAttribute('data-key')).toBe('kind');
+    const options = piecesFilter.shadowRoot.querySelector('select').options;
+    expect([...options].map((o: HTMLOptionElement) => o.value)).toEqual(['', 'file', 'folder']);
+
+    // Drive table-filter's documented contract: a composed 'change' CustomEvent
+    // with detail.value (dispatching on the native select would also re-emit the
+    // raw change through the host — see report on the double-fire bug).
+    piecesFilter.dispatchEvent(
+      new CustomEvent('change', { detail: { value: 'file' }, bubbles: true, composed: true }),
+    );
     await vi.waitFor(() => {
       expect(el.shadowRoot?.textContent).toContain('Filecoin Storage (1 pieces)');
     });
-    const rows = [...(el.shadowRoot?.querySelectorAll('.table-pieces .table-row') ?? [])];
-    expect(rows).toHaveLength(1);
-    // Piece CID lives in the nested copy-hash shadow DOM → read its value property.
-    expect((rows[0].querySelector('copy-hash') as any).value).toBe('bafybeiaaa');
-  });
+    expect(piecesTable(el).querySelectorAll('.table-row')).toHaveLength(1);
+    expect(pieceRowCids(el)).toEqual(['bafybeiaaa']);
 
-  it('sorts pieces by Size ascending on header click', async () => {
-    storeMock.setPieces(PIECES);
-    storeMock.setDataSets(DATASETS);
+    // A value matching nothing shows the table's empty state.
+    piecesFilter.dispatchEvent(
+      new CustomEvent('change', { detail: { value: 'archive' }, bubbles: true, composed: true }),
+    );
+    await vi.waitFor(() => {
+      expect(piecesTable(el).querySelector('.empty-state')).toBeTruthy();
+    });
+    expect(piecesTable(el).textContent).toContain('No pieces match the current filters');
+    expect(el.shadowRoot?.textContent).toContain('Filecoin Storage (0 pieces)');
 
-    const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
-    const sizeHeader = el.shadowRoot?.querySelector(
-      '.table-pieces button[data-sort="size"]',
-    ) as HTMLButtonElement;
-    sizeHeader.click();
-    await el.updateComplete;
+    // Data set table: filter by State → only the Active data set remains.
+    const dsFilter = datasetsTable(el).querySelector('.table-filters table-filter') as any;
+    expect(dsFilter.getAttribute('data-key')).toBe('state');
+    const dsOptions = dsFilter.shadowRoot.querySelector('select').options;
+    expect([...dsOptions].map((o: HTMLOptionElement) => o.value)).toEqual(['', 'Active', 'Terminated']);
 
-    const rows = [...(el.shadowRoot?.querySelectorAll('.table-pieces .table-row') ?? [])];
-    const cids = rows.map((r) => (r.querySelector('copy-hash') as any).value);
-    expect(cids).toEqual(['bafybeibbb', 'bafybeiaaa']); // 10 first, 100 second
-    expect(sizeHeader.textContent).toContain('▲');
+    dsFilter.dispatchEvent(
+      new CustomEvent('change', { detail: { value: 'Active' }, bubbles: true, composed: true }),
+    );
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('Data Sets (1)');
+    });
+    expect(datasetsTable(el).querySelectorAll('.table-row')).toHaveLength(1);
+    // Only the Active data set remains; the Terminated one is filtered out.
+    expect(datasetsTable(el).textContent).toContain('Active');
+    expect(datasetsTable(el).textContent).not.toContain('Terminated');
   });
 
   it('deletes a piece through the storage prop and notifies', async () => {
@@ -193,7 +264,7 @@ describe('s2s-storage-tab', () => {
     storeMock.setDataSets(DATASETS);
 
     const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
-    const firstDelete = el.shadowRoot?.querySelector('.table-pieces .btn-delete') as HTMLButtonElement;
+    const firstDelete = piecesTable(el).querySelector('.btn-delete') as HTMLButtonElement;
     firstDelete.click();
 
     await vi.waitFor(() =>
@@ -209,9 +280,7 @@ describe('s2s-storage-tab', () => {
     storeMock.setDataSets(DATASETS);
 
     const el = await mountLit<S2SStorageTab>('s2s-storage-tab', { storage });
-    const firstTerminate = el.shadowRoot?.querySelector(
-      '.table-datasets .btn-terminate',
-    ) as HTMLButtonElement;
+    const firstTerminate = datasetsTable(el).querySelector('.btn-terminate') as HTMLButtonElement;
     firstTerminate.click();
 
     await vi.waitFor(() =>
