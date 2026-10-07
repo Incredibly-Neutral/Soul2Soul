@@ -205,6 +205,26 @@ describe('s2s-storage-tab', () => {
     const dsActions = datasetsTable(el).querySelector('.table-header:not(.sortable)');
     expect(piecesActions?.textContent).toContain('Actions');
     expect(dsActions?.textContent).toContain('Actions');
+
+    // REAL reordering: clicking a sortable header must actually reorder rows,
+    // not just render structural wiring. Seed order follows the PIECES array
+    // with distinct sizes (100, 10), so the order is deterministic.
+    expect(pieceRowCids(el)).toEqual(['bafybeiaaa', 'bafybeibbb']);
+    const sizeHeader = piecesTable(el).querySelector(
+      'button.table-header.sortable[data-sort="size"]',
+    ) as HTMLButtonElement;
+    sizeHeader.click();
+    // First click on a column toggles it to asc; s2s-table sorts (after
+    // filtering) by ascending size — the smaller piece moves to the front.
+    await vi.waitFor(() => {
+      expect(pieceRowCids(el)).toEqual(['bafybeibbb', 'bafybeiaaa']);
+    });
+    // The active column renders the ascending caret (bug fix: static tag).
+    expect(
+      piecesTable(el).querySelector(
+        'button.table-header.sortable[data-sort="size"] .sort-indicator ph-caret-up',
+      ),
+    ).toBeTruthy();
   });
 
   it('filters pieces by Kind and data sets by State through the table-filter -> s2s-table chain', async () => {
