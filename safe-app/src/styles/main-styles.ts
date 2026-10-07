@@ -16,10 +16,12 @@ export const mainStyles = css`
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    font-size: 2.8rem;
-    font-family: 'DM Serif Display', serif;
+    font-size: 2rem;
+    // font-family: 'DM Serif Display', serif;
     line-height: 1.2;
-    margin: 0;
+    margin: 2rem 0 0 0;
+    text-transform: uppercase;
+
   }
 
   .subtitle {
@@ -39,6 +41,14 @@ export const mainStyles = css`
     font-family: var(--font-mono);
     font-size: 0.85rem;
     letter-spacing: 0.75px;
+  }
+
+  .web-status > div:first-of-type {
+    padding-left: 0;
+  }
+
+  .web-status > div:last-of-type {
+    border: none;
   }
 
   .web-status > div a {
