@@ -36,6 +36,12 @@ vi.mock('ethers', () => ({
 
 import { getRpcUrl, evmRead, toHexString } from '../../src/lib/evm';
 
+beforeEach(() => {
+  // Keep DRPC URL assertions deterministic regardless of the local root .env
+  // (which supplies a real VITE_DRPC_API_KEY on some machines).
+  vi.stubEnv('VITE_DRPC_API_KEY', 'default');
+});
+
 describe('getRpcUrl', () => {
   beforeEach(() => {
     // The api key falls back to "default" when VITE_DRPC_API_KEY is unset.

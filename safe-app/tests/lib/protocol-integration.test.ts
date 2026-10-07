@@ -36,6 +36,8 @@ const PROTOCOL_INFO: S2SProtocolInfo = {
 
 describe('ProtocolIntegration', () => {
   beforeEach(() => {
+    // Deterministic DRPC URLs regardless of the local root .env.
+    vi.stubEnv('VITE_DRPC_API_KEY', 'default');
     mocks.opts.length = 0;
     mocks.getInfo.mockReset();
     mocks.txsSend.mockReset();
