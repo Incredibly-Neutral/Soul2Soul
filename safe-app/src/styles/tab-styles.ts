@@ -26,6 +26,9 @@ export const tabStyles = css`
   }
 
   button.tab {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    letter-spacing: 0.75px;
     text-transform: uppercase;
   }
 

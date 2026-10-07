@@ -233,7 +233,7 @@ export class S2SApp extends LitElement {
           </div>
 
           <h1>${publication}</h1>
-          <h2 class="title">Soul2Soul Publication Editor</h2>
+          <h1 class="title">Soul2Soul Publication Editor</h1>
 
           <div class="web-status">
             <div><copy-hash .value=${rootCid}></copy-hash></div>

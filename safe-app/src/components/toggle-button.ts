@@ -86,6 +86,9 @@ export class ToggleButton extends LitElement {
     }
 
     .toggle-label {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      letter-spacing: 0.75px;
       text-transform: uppercase;
       color: var(--gray-300);
     }

@@ -5,8 +5,11 @@ export const pillStyles = css`
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
     font-weight: 500;
+    letter-spacing: 0.75px;
+    text-transform: uppercase;
     padding: 0.5rem 1rem;
     border-radius: 9999px;
     border: 2px solid var(--color-yellow);
