@@ -219,8 +219,6 @@ export class S2SApp extends LitElement {
     return html`
       <div class="container">
         <div class="header">
-          ${this.fetching ? html`<div class="refreshing-badge">Refreshing…</div>` : ''}
-
           <div class="module-status">
             <div class="pill safe-status ${this.safeIntegration.isConnected() ? 'module-active' : 'module-inactive'}">
               ${this.safeIntegration.isConnected() ? 'Connected to Safe' : 'Not Connected'}
@@ -234,7 +232,6 @@ export class S2SApp extends LitElement {
           </div>
 
           <h1 class="title">${publication}</h1>
-          <h2>Soul2Soul Publication Editor</h2>
 
           <div class="web-status">
             <div><copy-hash .value=${rootCid}></copy-hash></div>

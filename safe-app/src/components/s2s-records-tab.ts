@@ -521,7 +521,6 @@ export class S2SRecordsTab extends LitElement {
       <div class="section">
         <div class="list_header">
           <h2 class="section-title">Records (${records.length})</h2>
-          ${this.fetching ? html`<span class="refreshing-badge">Refreshing…</span>` : ''}
         </div>
 
         ${records.length > 0

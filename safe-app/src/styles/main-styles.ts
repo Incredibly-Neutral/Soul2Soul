@@ -60,13 +60,6 @@ export const mainStyles = css`
     gap: 1rem;
   }
 
-  .refreshing-badge {
-    color: var(--color-yellow);
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
   .loading {
     display: flex;
     align-items: center;
