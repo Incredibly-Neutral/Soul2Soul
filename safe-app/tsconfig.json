@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "useDefineForClassFields": true,
+    // Lit's experimental (legacy) decorators require useDefineForClassFields: false.
+    // With `true` (the ES2022 default), class-field initializers define own data
+    // properties that shadow the reactive accessors installed by @property/@state,
+    // so setting them never calls requestUpdate() -> tab navigation / state changes
+    // silently stop re-rendering. See lit.dev/docs/components/decorators/.
+    "useDefineForClassFields": false,
     "experimentalDecorators": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
