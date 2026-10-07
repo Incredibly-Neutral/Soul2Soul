@@ -1,4 +1,6 @@
 // s2s-records-tab.ts
+import { LitElement, html, css } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
 import { ConfigBuilder, AssetsBuilder, S2SIPFSMethods } from '@s2s/soul2soul-shared/safe-app';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { ProtocolIntegration } from '../lib/protocol-integration.js';
@@ -18,14 +20,16 @@ import {
   DOMAIN_VALIDATION_CONFIG,
 } from '../lib/domain-validation.js';
 
-export class S2SRecordsTab extends HTMLElement {
-  public safeIntegration!: SafeIntegration;
-  public protocolIntegration!: ProtocolIntegration;
-  private lit!: LitService;
-  private storage!: FilecoinStorage;
-  private fetching = false;
-  private searchTerm = '';
-  private editingKey: string | null = null;
+@customElement('s2s-records-tab')
+export class S2SRecordsTab extends LitElement {
+  @property({ attribute: false }) safeIntegration!: SafeIntegration;
+  @property({ attribute: false }) protocolIntegration!: ProtocolIntegration;
+  @property({ attribute: false }) lit!: LitService;
+  @property({ attribute: false }) storage!: FilecoinStorage;
+
+  @state() private fetching = false;
+  @state() private searchTerm = '';
+  @state() private editingKey: string | null = null;
   /** Keys that were changed by the last updateConfig call — gets a yellow highlight. */
   private changedKeys: Set<string> = new Set();
   private storageItems: Array<{
@@ -35,39 +39,107 @@ export class S2SRecordsTab extends HTMLElement {
     provider: string;
     attributed: boolean;
   }> = [];
-  private loadingStorage = false;
+  @state() private loadingStorage = false;
   /** The publication's ENS write-target domain, read from the on-chain config.
    *  Null when no custom domain is set (default subdomain write target). */
-  private currentDomain: string | null = null;
+  @state() private currentDomain: string | null = null;
   private unsubscribers: Array<() => void> = [];
 
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot!.adoptedStyleSheets = [
-      typograhyStyles,
-      sectionStyles,
-      tableStyles,
-      buttonStyles,
-    ];
-  }
+  static styles = [
+    typograhyStyles,
+    sectionStyles,
+    tableStyles,
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+        padding: 2rem 0;
+        background: var(--gray-900);
+      }
 
-  async connectedCallback() {
+      .table { grid-template-columns: 1fr 3fr auto; }
+      .button.thin {
+        padding: 0.25rem .5rem;
+        border: none;
+        height: 2rem;
+        margin-left: .5rem;
+        font-size: .875rem;
+      }
+
+      .record-value-input {
+        width: 100%;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 0.875rem;
+        padding: 0.5rem;
+        border-radius: 0.375rem;
+        box-sizing: border-box;
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 3rem;
+        color: #6b7280;
+      }
+
+      .loading {
+        text-align: center;
+        padding: 3rem;
+        color: #6b7280;
+      }
+
+      .storage-link {
+        color: var(--blue-400);
+        text-decoration: none;
+        font-size: 0.75rem;
+      }
+
+      .storage-link:hover {
+        text-decoration: underline;
+      }
+
+      .storage-link-unattributed {
+        color: var(--gray-600);
+        font-size: 0.75rem;
+      }
+
+      .record-changed {
+        background: rgba(238, 181, 29, 0.15);
+        border-left: 3px solid var(--color-yellow);
+      }
+
+      .domain-current {
+        color: var(--gray-50);
+        font-size: 0.875rem;
+        margin: 0.5rem 0 0;
+      }
+      .domain-current code {
+        color: var(--blue-400);
+        font-family: 'Monaco', 'Menlo', monospace;
+      }
+      .domain-hint {
+        color: var(--gray-500);
+        font-size: 0.75rem;
+        margin: 0.375rem 0 0;
+      }
+    `,
+  ];
+
+  connectedCallback() {
+    super.connectedCallback();
     console.count('connect');
     this.unsubscribers.forEach((fn) => fn());
-    this.unsubscribers = [store.subscribeToRecords(() => this.render())];
-
-    this.render();
+    this.unsubscribers = [store.subscribeToRecords(() => this.requestUpdate())];
 
     // Only hit the chain if we have nothing cached.
     // On a remount the store is still populated, so we skip the
     // setAllRecords() that was re-triggering everything.
     if (!store.getAllRecords()) {
-      await this.loadRecords();
+      void this.loadRecords();
     }
   }
 
   disconnectedCallback() {
+    super.disconnectedCallback();
     this.unsubscribers.forEach((fn) => fn());
     this.unsubscribers = [];
   }
@@ -85,7 +157,6 @@ export class S2SRecordsTab extends HTMLElement {
 
   private async loadRecords() {
     this.fetching = true;
-    this.render();
 
     try {
       const [keys, values] = await this.safeIntegration.getAllRecords();
@@ -98,13 +169,13 @@ export class S2SRecordsTab extends HTMLElement {
       );
       // Fresh chain read clears changed-state highlights
       this.changedKeys.clear();
+      this.requestUpdate();
       await this.loadCurrentDomain();
     } catch (error) {
       console.error('Error loading records:', error);
     }
 
     this.fetching = false;
-    this.render();
   }
 
   private determineRecordType(key: string): 'metadata' | 'content' {
@@ -139,7 +210,6 @@ export class S2SRecordsTab extends HTMLElement {
       this.showNotification('Record updated! Transaction pending approval.', 'success');
       store.setRecord({ key, value: newValue, type: this.determineRecordType(key) });
       this.editingKey = null;
-      this.render();
     } catch (error) {
       console.error('Error updating record:', error);
       this.showNotification('Failed to update record. Please try again.', 'error');
@@ -161,12 +231,10 @@ export class S2SRecordsTab extends HTMLElement {
 
   private startEdit(key: string) {
     this.editingKey = key;
-    this.render();
   }
 
   private cancelEdit() {
     this.editingKey = null;
-    this.render();
   }
 
   /**
@@ -180,7 +248,6 @@ export class S2SRecordsTab extends HTMLElement {
       cached ?? (await this.safeIntegration.getRecord('config').catch(() => null));
     if (!configCid) {
       this.currentDomain = null;
-      this.render();
       return;
     }
     try {
@@ -189,8 +256,6 @@ export class S2SRecordsTab extends HTMLElement {
     } catch (error) {
       console.warn('[records] could not read current domain from config:', error);
       this.currentDomain = null;
-    } finally {
-      this.render();
     }
   }
 
@@ -213,7 +278,7 @@ export class S2SRecordsTab extends HTMLElement {
    * name and is rejected with a clear message (nothing saved) otherwise.
    */
   private async addDomain() {
-    const input = this.shadowRoot?.querySelector('#domain-input') as HTMLInputElement | null;
+    const input = this.renderRoot.querySelector('#domain-input') as HTMLInputElement | null;
     const domain = input?.value.trim() || '';
     if (!domain) {
       this.showNotification('Enter an ENS domain to add.', 'error');
@@ -329,11 +394,10 @@ export class S2SRecordsTab extends HTMLElement {
     if (oldRepo !== repo) {
       this.changedKeys.add('repo');
     }
+    this.requestUpdate();
 
     // Optimistic local update so the new value shows immediately
     store.setRecord({ key: 'config', value: configCid, type: 'content' });
-
-    this.render();
   }
 
   /**
@@ -392,13 +456,11 @@ export class S2SRecordsTab extends HTMLElement {
 
   private async loadStorage() {
     this.loadingStorage = true;
-    this.render();
 
     const safeAddress = this.safeIntegration.getSafeInfo().s2sPublication || '';
     if (!safeAddress) {
       console.warn('[filecoin] no publication address — skipping storage listing');
       this.loadingStorage = false;
-      this.render();
       return;
     }
 
@@ -411,12 +473,6 @@ export class S2SRecordsTab extends HTMLElement {
     }
 
     this.loadingStorage = false;
-    this.render();
-  }
-
-  private renderStorageLink(url: string | null, label: string, icon: string): string {
-    if (!url) return `<span class="storage-link-unattributed">—</span>`;
-    return `<a class="storage-link" href="${url}" target="_blank" rel="noopener" title="${label}">${icon} ${label}</a>`;
   }
 
   private showNotification(message: string, type: 'success' | 'error') {
@@ -437,237 +493,113 @@ export class S2SRecordsTab extends HTMLElement {
     );
   }
 
-  private render() {
-    if (!this.shadowRoot) return;
+  private valueTemplate(record: OnChainRecord) {
+    if (record.key === 'config' && record.value) {
+      return html`<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+    }
+    if (record.key === 'repo' && record.value) {
+      return html`<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+    }
+    return html`<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+  }
+
+  render() {
     console.count('render');
 
     const records = this.filteredRecords; // ← already an array, null-safe
     const hasCache = records.length > 0; // ← was store.getAllRecords().length which threw on null
 
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          padding: 2rem 0;
-          background: var(--gray-900);
-        }
+    if (!hasCache && this.fetching) {
+      return html`<div class="loading"><p>Loading records...</p></div>`;
+    }
 
-        .table { grid-template-columns: 1fr 3fr auto; }
-        .button.thin { 
-          padding: 0.25rem .5rem;
-          border: none;
-          height: 2rem;
-          margin-left: .5rem;
-          font-size: .875rem;
-
-        }
-
-        .record-value-input {
-          width: 100%;
-          font-family: 'Monaco', 'Menlo', monospace;
-          font-size: 0.875rem;
-          padding: 0.5rem;
-          border-radius: 0.375rem;
-          box-sizing: border-box;
-        }
-
-        .empty-state {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .loading {
-          text-align: center;
-          padding: 3rem;
-          color: #6b7280;
-        }
-
-        .storage-link {
-          color: var(--blue-400);
-          text-decoration: none;
-          font-size: 0.75rem;
-          &:hover { text-decoration: underline; }
-        }
-        .storage-link-unattributed {
-          color: var(--gray-600);
-          font-size: 0.75rem;
-        }
-
-        .record-changed {
-          background: rgba(238, 181, 29, 0.15);
-          border-left: 3px solid var(--color-yellow);
-        }
-
-        .domain-current {
-          color: var(--gray-50);
-          font-size: 0.875rem;
-          margin: 0.5rem 0 0;
-        }
-        .domain-current code {
-          color: var(--blue-400);
-          font-family: 'Monaco', 'Menlo', monospace;
-        }
-        .domain-hint {
-          color: var(--gray-500);
-          font-size: 0.75rem;
-          margin: 0.375rem 0 0;
-        }
-      </style>
-
-      ${
-        !hasCache && this.fetching
-          ? `
-        <div class="loading"><p>Loading records...</p></div>
-      `
-          : `
-        <div class="section">
-          <div class="list_header">
-            <h2 class="section-title">Records (${records.length})</h2>
-            ${this.fetching ? `<span class="refreshing-badge">Refreshing…</span>` : ''}
-          </div>
-
-          ${
-            records.length > 0
-              ? `
-            <div class="table">
-              <div class="table-header">Key</div>
-              <div class="table-header">Value</div>
-              <div class="table-header"></div>
-
-              ${records
-                .map((record) => {
-                  const isChanged = this.changedKeys.has(record.key);
-                  const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
-                  const isConfig = record.key === 'config';
-                  const isRepo = record.key === 'repo';
-                  let valueDisplay: string;
-                  if (isConfig && record.value) {
-                    valueDisplay = `<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
-                  } else if (isRepo && record.value) {
-                    valueDisplay = `<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
-                  } else {
-                    valueDisplay = `<span style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
-                  }
-                  return `
-                <div class="${rowClass}">
-                  <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
-                    ${record.key}
-                  </div>
-
-                  <div class="table-cell">
-                    ${
-                      this.editingKey === record.key
-                        ? `
-                      <input
-                        type="text"
-                        class="record-value-input"
-                        value="${record.value}"
-                        id="edit-value-${record.key}"
-                      />
-                    `
-                        : valueDisplay
-                    }
-                  </div>
-
-                  <div class="table-cell">
-                    ${
-                      this.editingKey === record.key
-                        ? `
-                      <div style="display: flex; gap: 0.5rem;">
-                        <button class="button thin" data-action="save" data-key="${record.key}">✓ Save</button>
-                        <button class="button button-secondary thin" data-action="cancel">✗ Cancel</button>
-                      </div>
-                    `
-                        : `
-                      <div style="display: flex; gap: 0.5rem;">
-                        <button class="button thin" data-action="edit" data-key="${record.key}">✏️ Edit</button>
-                        <button class="button button-danger thin" data-action="delete" data-key="${record.key}">🗑️ Delete</button>
-                      </div>
-                    `
-                    }
-                  </div>
-                </div>
-              `;
-                })
-                .join('')}
-            </div>
-          `
-              : `
-            <div class="empty-state">
-              <div>📄</div>
-              <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
-            </div>
-          `
-          }
-
-          <button class="button" data-action="update">Update Config</button>
-
-          <div class="domain-section">
-            <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target domain</h3>
-            ${
-              this.currentDomain
-                ? `<p class="domain-current">Current write-target: <code>${this.currentDomain}</code></p>`
-                : `<p class="domain-current">No custom write-target set — the contenthash is written to the default subdomain of the publication name.</p>`
-            }
-            <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
-              <input
-                id="domain-input"
-                type="text"
-                class="record-value-input"
-                style="max-width: 320px;"
-                placeholder="e.g. s3ntiment.eth"
-              />
-              <button class="button" data-action="add-domain">Add domain</button>
-            </div>
-            <p class="domain-hint">The domain must be owned by this publication Safe — ownership is verified before saving.</p>
-          </div>
-
-       
+    return html`
+      <div class="section">
+        <div class="list_header">
+          <h2 class="section-title">Records (${records.length})</h2>
+          ${this.fetching ? html`<span class="refreshing-badge">Refreshing…</span>` : ''}
         </div>
 
-       
-      `
-      }
+        ${records.length > 0
+          ? html`
+              <div class="table">
+                <div class="table-header">Key</div>
+                <div class="table-header">Value</div>
+                <div class="table-header"></div>
+
+                ${records.map((record) => {
+                  const isChanged = this.changedKeys.has(record.key);
+                  const rowClass = isChanged ? 'table-row record-changed' : 'table-row';
+                  return html`
+                    <div class="${rowClass}">
+                      <div class="table-cell" style="font-family: monospace; font-size: 0.875rem; color: var(--gray-50);">
+                        ${record.key}
+                      </div>
+
+                      <div class="table-cell">
+                        ${this.editingKey === record.key
+                          ? html`<input
+                              type="text"
+                              class="record-value-input"
+                              value="${record.value}"
+                              id="edit-value-${record.key}"
+                            />`
+                          : this.valueTemplate(record)}
+                      </div>
+
+                      <div class="table-cell">
+                        ${this.editingKey === record.key
+                          ? html`
+                              <div style="display: flex; gap: 0.5rem;">
+                                <button class="button thin"
+                                  @click=${() => {
+                                    const input = this.renderRoot.querySelector(
+                                      `#edit-value-${record.key}`,
+                                    ) as HTMLInputElement;
+                                    if (input) void this.updateRecord(record.key, input.value);
+                                  }}>✓ Save</button>
+                                <button class="button button-secondary thin" @click=${this.cancelEdit}>✗ Cancel</button>
+                              </div>
+                            `
+                          : html`
+                              <div style="display: flex; gap: 0.5rem;">
+                                <button class="button thin" @click=${() => this.startEdit(record.key)}>✏️ Edit</button>
+                                <button class="button button-danger thin" @click=${() => void this.deleteRecord(record.key)}>🗑️ Delete</button>
+                              </div>
+                            `}
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>
+            `
+          : html`
+              <div class="empty-state">
+                <div>📄</div>
+                <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
+              </div>
+            `}
+
+        <button class="button" @click=${() => void this.updateConfig()}>Update Config</button>
+
+        <div class="domain-section">
+          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target domain</h3>
+          ${this.currentDomain
+            ? html`<p class="domain-current">Current write-target: <code>${this.currentDomain}</code></p>`
+            : html`<p class="domain-current">No custom write-target set — the contenthash is written to the default subdomain of the publication name.</p>`}
+          <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
+            <input
+              id="domain-input"
+              type="text"
+              class="record-value-input"
+              style="max-width: 320px;"
+              placeholder="e.g. s3ntiment.eth"
+            />
+            <button class="button" @click=${() => void this.addDomain()}>Add domain</button>
+          </div>
+          <p class="domain-hint">The domain must be owned by this publication Safe — ownership is verified before saving.</p>
+        </div>
+      </div>
     `;
-
-    if (hasCache || !this.fetching) {
-      this.attachEventListeners();
-    }
-  }
-
-  private attachEventListeners() {
-    this.shadowRoot?.querySelectorAll('[data-action]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        const target = e.currentTarget as HTMLButtonElement;
-        const action = target.dataset.action;
-        const key = target.dataset.key;
-
-        if (action === 'edit' && key) {
-          this.startEdit(key);
-        } else if (action === 'delete' && key) {
-          this.deleteRecord(key);
-        } else if (action === 'save' && key) {
-          const input = this.shadowRoot?.querySelector(`#edit-value-${key}`) as HTMLInputElement;
-          if (input) this.updateRecord(key, input.value);
-        } else if (action === 'cancel') {
-          this.cancelEdit();
-        } else if (action === 'update') {
-          this.updateConfig();
-        } else if (action === 'add-domain') {
-          this.addDomain();
-        } else if (action === 'load-storage') {
-          this.loadStorage();
-        }
-      });
-    });
-
-    const searchInput = this.shadowRoot?.querySelector('#search-input') as HTMLInputElement;
-    searchInput?.addEventListener('input', (e) => {
-      this.searchTerm = (e.target as HTMLInputElement).value;
-      this.render();
-    });
   }
 }
-
-customElements.define('s2s-records-tab', S2SRecordsTab);

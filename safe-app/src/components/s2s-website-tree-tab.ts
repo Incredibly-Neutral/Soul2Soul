@@ -21,6 +21,8 @@
 // `0xe3 0x01 <cid bytes>`, and returns null on any value that decodes to a
 // non-plausible CID (garbage codec / malformed multihash) so the sync degrades
 // to the store root instead of walking an invalid CID.
+import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
 import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
 import { store } from '../state/index.js';
@@ -65,44 +67,304 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-const escapeHtml = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+@customElement('s2s-website-tree-tab')
+export class S2SWebsiteTreeTab extends LitElement {
+  @property({ attribute: false }) safeIntegration!: SafeIntegration;
+  @property({ attribute: false }) lit!: LitService;
 
-export class S2SWebsiteTreeTab extends HTMLElement {
-  public safeIntegration!: SafeIntegration;
-  public lit!: LitService;
-  private syncing = false;
-  private resetting = false;
-  private error: string | null = null;
-  private tree: TreeNode | null = null;
-  private lastSynced: string | null = null;
+  @state() private syncing = false;
+  @state() private resetting = false;
+  @state() private error: string | null = null;
+  @state() private tree: TreeNode | null = null;
+  @state() private lastSynced: string | null = null;
   private previousSnapshot: Set<string> | null = null;
-  private addedPaths: Set<string> = new Set<string>();
-  private removedPaths: Set<string> = new Set<string>();
+  @state() private addedPaths: Set<string> = new Set<string>();
+  @state() private removedPaths: Set<string> = new Set<string>();
   private unsubscriber: (() => void) | null = null;
   private entryCount = 0;
   /** The DECODED per-publication content-cache CID (CIDv1) read from the ENS
    *  records contract (`content_cache_<publication>`), shown in the footer as a
    *  gateway link. Null until the first successful sync (or if missing or
    *  malformed on-chain, in which case the footer renders nothing). */
-  private contentCacheCid: string | null = null;
+  @state() private contentCacheCid: string | null = null;
 
-  constructor() {
-    super();
-    const root = this.attachShadow({ mode: 'open' });
-    root.adoptedStyleSheets = [typograhyStyles, sectionStyles, tableStyles, buttonStyles];
-  }
+  static styles = [
+    typograhyStyles,
+    sectionStyles,
+    tableStyles,
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+        padding: 2rem 0;
+        background: var(--gray-900);
+      }
 
-  async connectedCallback() {
-    this.unsubscriber = store.subscribeToRoot(() => {
-      this.render();
-    });
+      .loading {
+        text-align: center;
+        padding: 3rem;
+        color: var(--gray-400);
+      }
+
+      .toolbar {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      .last-synced {
+        color: var(--gray-400);
+        font-size: 0.85rem;
+      }
+
+      .error {
+        margin: 1rem 0;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        background: rgba(239, 68, 68, 0.12);
+        color: #f87171;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+      }
+
+      .tree-root {
+        margin-top: 1rem;
+      }
+
+      .tree-children {
+        border-left: 1px solid var(--gray-700);
+        margin-left: 0.5rem;
+        padding-left: 0.5rem;
+      }
+
+      .tree-dir {
+        margin: 0;
+      }
+
+      .tree-dir summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding-top: 0.3rem;
+        padding-bottom: 0.3rem;
+        color: var(--gray-100);
+      }
+
+      .tree-dir summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .tree-dir summary::before {
+        content: "▸";
+        color: var(--gray-500);
+      }
+
+      .tree-dir[open] summary::before {
+        content: "▾";
+      }
+
+      .tree-file {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding-top: 0.3rem;
+        padding-bottom: 0.3rem;
+        color: var(--gray-100);
+      }
+
+      .tree-icon {
+        width: 1.1rem;
+        text-align: center;
+      }
+
+      .tree-name {
+        color: var(--gray-100);
+      }
+
+      .tree-count {
+        color: var(--gray-500);
+        font-size: 0.8rem;
+      }
+
+      .tree-size {
+        color: var(--gray-500);
+        font-size: 0.8rem;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 0.05rem 0.45rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .badge-page {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 0.05rem 0.45rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .tag-added {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+      }
+
+      .tag-removed {
+        background: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+      }
+
+      .tree-dir.added summary .tree-name,
+      .tree-file.added .tree-name {
+        color: #34d399;
+      }
+
+      .stats {
+        display: flex;
+        gap: 1.25rem;
+        margin-top: 1.5rem;
+        padding: 0.75rem 1rem;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--gray-700);
+        border-radius: 8px;
+      }
+
+      .stat {
+        color: var(--gray-300);
+        font-size: 0.85rem;
+      }
+
+      .stat-added {
+        color: #34d399;
+      }
+
+      .stat-removed {
+        color: #f87171;
+      }
+
+      .removed-section {
+        margin-top: 1.5rem;
+      }
+
+      .removed-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #f87171;
+        margin-bottom: 0.5rem;
+      }
+
+      .removed-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.25rem 0;
+        color: var(--gray-400);
+      }
+
+      .removed-name {
+        text-decoration: line-through;
+        color: #f87171;
+      }
+
+      .cid-footer {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--gray-700);
+      }
+
+      .cid-label {
+        color: var(--gray-400);
+        font-size: 0.85rem;
+        white-space: nowrap;
+      }
+
+      .gateway-link {
+        text-decoration: none;
+        color: inherit;
+        display: inline-flex;
+        align-items: center;
+      }
+
+      .gateway-link:hover {
+        text-decoration: underline;
+        color: var(--blue-400, #60a5fa);
+      }
+
+      .gateway-link::after {
+        content: "↗";
+        margin-left: 0.25rem;
+        font-size: 0.75rem;
+        opacity: 0.6;
+      }
+
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .modal {
+        background: var(--gray-800);
+        border: 1px solid var(--gray-600);
+        border-radius: 10px;
+        padding: 1.5rem;
+        max-width: 420px;
+        width: 90%;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+      }
+
+      .modal-title {
+        margin: 0 0 0.75rem;
+        color: #f87171;
+        font-size: 1.1rem;
+      }
+
+      .modal-text {
+        margin: 0 0 1.25rem;
+        color: var(--gray-300);
+        line-height: 1.5;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+    `,
+  ];
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.unsubscriber = store.subscribeToRoot(() => this.requestUpdate());
     this.previousSnapshot = this.loadSnapshot();
-    this.render();
-    await this.sync();
+    void this.sync();
   }
 
   disconnectedCallback() {
+    super.disconnectedCallback();
     this.unsubscriber?.();
     this.unsubscriber = null;
   }
@@ -272,7 +534,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
    *  "Reset only" (clear-only) vs "Reset & rebuild" (clear + bulk re-render of
    *  every on-chain deal). Default is "Reset only". */
   private showResetDialog(): void {
-    if (!this.shadowRoot) return;
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -290,7 +551,7 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         </div>
       </div>
     `;
-    this.shadowRoot.appendChild(overlay);
+    this.renderRoot.appendChild(overlay);
 
     const close = () => {
       overlay.remove();
@@ -320,7 +581,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     if (this.syncing || this.resetting) return;
     this.resetting = true;
     this.error = null;
-    this.render();
 
     try {
       const configCid = store.getRecord('config');
@@ -397,7 +657,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
       this.error = e instanceof Error ? e.message : 'Reset failed.';
     } finally {
       this.resetting = false;
-      this.render();
     }
   }
 
@@ -408,7 +667,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     if (this.syncing) return;
     this.syncing = true;
     this.error = null;
-    this.render();
 
     try {
       const rootCid = rootOverride ?? (await this.fetchRootCid());
@@ -445,7 +703,6 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         e instanceof Error ? e.message : 'Failed to fetch the website tree from ENS/IPFS.';
     } finally {
       this.syncing = false;
-      this.render();
     }
   }
 
@@ -465,13 +722,13 @@ export class S2SWebsiteTreeTab extends HTMLElement {
    *  ipfs.io gateway link with a copy button (reusing the <copy-hash> web
    *  component). Renders nothing when no content-cache CID is known yet
    *  (initial load / error / missing record) — never throws. */
-  private renderContentCacheFooter(): string {
-    if (!this.contentCacheCid) return '';
-    return `
+  private contentCacheFooter(): TemplateResult | typeof nothing {
+    if (!this.contentCacheCid) return nothing;
+    return html`
       <div class="cid-footer">
         <span class="cid-label">Content cache CID</span>
         <a href="${this.gatewayUrl(this.contentCacheCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link" title="Open on IPFS gateway">
-          <copy-hash>${this.shortenCid(this.contentCacheCid)}</copy-hash>
+          <copy-hash .value=${this.shortenCid(this.contentCacheCid)}></copy-hash>
         </a>
       </div>`;
   }
@@ -496,20 +753,20 @@ export class S2SWebsiteTreeTab extends HTMLElement {
     return `${String(parseFloat((bytes / Math.pow(k, i)).toFixed(1)))} ${sizes[i]}`;
   }
 
-  private renderNode(node: TreeNode, depth: number): string {
+  private renderNode(node: TreeNode, depth: number): TemplateResult {
     const isDir = node.type === 2;
     const isPage = !isDir && node.name === 'index.html';
     const isAdded = this.addedPaths.has(node.path);
     const indent = depth * 16;
-    const addedTag = isAdded ? '<span class="tag tag-added">new</span>' : '';
+    const addedTag = isAdded ? html`<span class="tag tag-added">new</span>` : '';
 
     if (isDir) {
-      const children = node.children.map((c) => this.renderNode(c, depth + 1)).join('');
-      return `
+      const children = node.children.map((c) => this.renderNode(c, depth + 1));
+      return html`
         <details class="tree-dir${isAdded ? ' added' : ''}">
           <summary style="padding-left:${String(indent)}px">
             <span class="tree-icon">📁</span>
-            <span class="tree-name">${escapeHtml(node.name)}</span>
+            <span class="tree-name">${node.name}</span>
             <span class="tree-count">(${String(node.children.length)})</span>
             ${addedTag}
           </summary>
@@ -517,370 +774,88 @@ export class S2SWebsiteTreeTab extends HTMLElement {
         </details>`;
     }
 
-    return `
+    return html`
       <div class="tree-file${isAdded ? ' added' : ''}" style="padding-left:${String(indent)}px">
         <span class="tree-icon">📄</span>
-        <span class="tree-name">${escapeHtml(node.name)}</span>
-        ${isPage ? '<span class="badge badge-page">page</span>' : ''}
-        <span class="tree-size">${escapeHtml(this.formatBytes(node.size))}</span>
+        <span class="tree-name">${node.name}</span>
+        ${isPage ? html`<span class="badge badge-page">page</span>` : ''}
+        <span class="tree-size">${this.formatBytes(node.size)}</span>
         ${addedTag}
       </div>`;
   }
 
-  private renderRemoved(): string {
-    if (this.removedPaths.size === 0) return '';
-    const items = ([...this.removedPaths] as string[])
-      .sort()
-      .map(
-        (p) => `
-      <div class="removed-row">
-        <span class="tree-icon">🗑️</span>
-        <span class="removed-name">${escapeHtml(p)}</span>
-        <span class="tag tag-removed">removed</span>
-      </div>`,
-      )
-      .join('');
-    return `
+  private renderRemoved(): TemplateResult | typeof nothing {
+    if (this.removedPaths.size === 0) return nothing;
+    const items = ([...this.removedPaths] as string[]).sort().map(
+      (p) => html`
+        <div class="removed-row">
+          <span class="tree-icon">🗑️</span>
+          <span class="removed-name">${p}</span>
+          <span class="tag tag-removed">removed</span>
+        </div>`,
+    );
+    return html`
       <div class="removed-section">
         <div class="removed-title">Removed since last sync (${String(this.removedPaths.size)})</div>
         <div class="removed-list">${items}</div>
       </div>`;
   }
 
-  private render(): void {
-    if (!this.shadowRoot) return;
-
-    let body = '';
+  render(): TemplateResult {
+    let body: TemplateResult;
     if (!this.tree && !this.syncing) {
-      body = '<div class="loading">Loading website tree…</div>';
+      body = html`<div class="loading">Loading website tree…</div>`;
     } else if (this.tree) {
       if (this.tree.type === 2) {
         const stats = this.computeStats();
-        const children = this.tree.children.map((c) => this.renderNode(c, 1)).join('');
-        body = `
+        const children = this.tree.children.map((c) => this.renderNode(c, 1));
+        body = html`
           <div class="tree-root">
             <div class="tree-children">${children}</div>
           </div>
           <div class="stats">
             <span class="stat">${String(stats.entries)} entries</span>
             <span class="stat">${String(stats.pages)} pages</span>
-            ${this.addedPaths.size > 0 ? `<span class="stat stat-added">+${String(this.addedPaths.size)} added</span>` : ''}
-            ${this.removedPaths.size > 0 ? `<span class="stat stat-removed">−${String(this.removedPaths.size)} removed</span>` : ''}
+            ${this.addedPaths.size > 0 ? html`<span class="stat stat-added">+${String(this.addedPaths.size)} added</span>` : ''}
+            ${this.removedPaths.size > 0 ? html`<span class="stat stat-removed">−${String(this.removedPaths.size)} removed</span>` : ''}
           </div>
           ${this.renderRemoved()}
         `;
       } else {
-        body = `
+        body = html`
           <div class="tree-root">
             <div class="tree-file">
               <span class="tree-icon">📄</span>
-              <span class="tree-name">${escapeHtml(this.tree.name || this.tree.hash)}</span>
+              <span class="tree-name">${this.tree.name || this.tree.hash}</span>
             </div>
           </div>
         `;
       }
+    } else {
+      body = html``;
     }
 
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          padding: 2rem 0;
-          background: var(--gray-900);
-        }
-
-        .loading {
-          text-align: center;
-          padding: 3rem;
-          color: var(--gray-400);
-        }
-
-        .toolbar {
-          display: flex;
-          flex-direction: row;
-          align-items: center;
-          gap: 1rem;
-          margin-bottom: 1rem;
-        }
-
-        .last-synced {
-          color: var(--gray-400);
-          font-size: 0.85rem;
-        }
-
-        .error {
-          margin: 1rem 0;
-          padding: 0.75rem 1rem;
-          border-radius: 6px;
-          background: rgba(239, 68, 68, 0.12);
-          color: #f87171;
-          border: 1px solid rgba(239, 68, 68, 0.3);
-        }
-
-        .tree-root {
-          margin-top: 1rem;
-        }
-
-        .tree-children {
-          border-left: 1px solid var(--gray-700);
-          margin-left: 0.5rem;
-          padding-left: 0.5rem;
-        }
-
-        .tree-dir {
-          margin: 0;
-        }
-
-        .tree-dir summary {
-          cursor: pointer;
-          list-style: none;
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-          padding-top: 0.3rem;
-          padding-bottom: 0.3rem;
-          color: var(--gray-100);
-        }
-
-        .tree-dir summary::-webkit-details-marker {
-          display: none;
-        }
-
-        .tree-dir summary::before {
-          content: "▸";
-          color: var(--gray-500);
-        }
-
-        .tree-dir[open] summary::before {
-          content: "▾";
-        }
-
-        .tree-file {
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-          padding-top: 0.3rem;
-          padding-bottom: 0.3rem;
-          color: var(--gray-100);
-        }
-
-        .tree-icon {
-          width: 1.1rem;
-          text-align: center;
-        }
-
-        .tree-name {
-          color: var(--gray-100);
-        }
-
-        .tree-count {
-          color: var(--gray-500);
-          font-size: 0.8rem;
-        }
-
-        .tree-size {
-          color: var(--gray-500);
-          font-size: 0.8rem;
-        }
-
-        .badge {
-          display: inline-block;
-          padding: 0.05rem 0.45rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .badge-page {
-          background: rgba(16, 185, 129, 0.15);
-          color: #34d399;
-        }
-
-        .tag {
-          display: inline-block;
-          padding: 0.05rem 0.45rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .tag-added {
-          background: rgba(16, 185, 129, 0.15);
-          color: #34d399;
-        }
-
-        .tag-removed {
-          background: rgba(239, 68, 68, 0.15);
-          color: #f87171;
-        }
-
-        .tree-dir.added summary .tree-name,
-        .tree-file.added .tree-name {
-          color: #34d399;
-        }
-
-        .stats {
-          display: flex;
-          gap: 1.25rem;
-          margin-top: 1.5rem;
-          padding: 0.75rem 1rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid var(--gray-700);
-          border-radius: 8px;
-        }
-
-        .stat {
-          color: var(--gray-300);
-          font-size: 0.85rem;
-        }
-
-        .stat-added {
-          color: #34d399;
-        }
-
-        .stat-removed {
-          color: #f87171;
-        }
-
-        .removed-section {
-          margin-top: 1.5rem;
-        }
-
-        .removed-title {
-          font-size: 0.85rem;
-          font-weight: 600;
-          color: #f87171;
-          margin-bottom: 0.5rem;
-        }
-
-        .removed-row {
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-          padding: 0.25rem 0;
-          color: var(--gray-400);
-        }
-
-        .removed-name {
-          text-decoration: line-through;
-          color: #f87171;
-        }
-
-        .cid-footer {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          margin-top: 1.5rem;
-          padding-top: 1rem;
-          border-top: 1px solid var(--gray-700);
-        }
-
-        .cid-label {
-          color: var(--gray-400);
-          font-size: 0.85rem;
-          white-space: nowrap;
-        }
-
-        .gateway-link {
-          text-decoration: none;
-          color: inherit;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .gateway-link:hover {
-          text-decoration: underline;
-          color: var(--blue-400, #60a5fa);
-        }
-
-        .gateway-link::after {
-          content: "↗";
-          margin-left: 0.25rem;
-          font-size: 0.75rem;
-          opacity: 0.6;
-        }
-
-        .modal-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.6);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-
-        .modal {
-          background: var(--gray-800);
-          border: 1px solid var(--gray-600);
-          border-radius: 10px;
-          padding: 1.5rem;
-          max-width: 420px;
-          width: 90%;
-          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-        }
-
-        .modal-title {
-          margin: 0 0 0.75rem;
-          color: #f87171;
-          font-size: 1.1rem;
-        }
-
-        .modal-text {
-          margin: 0 0 1.25rem;
-          color: var(--gray-300);
-          line-height: 1.5;
-        }
-
-        .modal-actions {
-          display: flex;
-          gap: 0.5rem;
-          justify-content: flex-end;
-          flex-wrap: wrap;
-        }
-      </style>
-
+    return html`
       <div class="toolbar">
         <div class="section-title">
           <h2>Website Tree</h2>
         </div>
-        <button class="button has-icon" id="sync-btn" ${this.syncing || this.resetting ? 'disabled' : ''}>
+        <button class="button has-icon" id="sync-btn" ?disabled=${this.syncing || this.resetting}
+          @click=${() => void this.sync()}>
           ${this.syncing ? 'Syncing…' : '↻ Sync'}
         </button>
-        <button class="button btn-danger" id="reset-btn" ${this.syncing || this.resetting ? 'disabled' : ''}>
+        <button class="button btn-danger" id="reset-btn" ?disabled=${this.syncing || this.resetting}
+          @click=${this.showResetDialog}>
           ${this.resetting ? 'Resetting…' : '🗑 Reset tree'}
         </button>
-        ${this.lastSynced ? `<span class="last-synced">Last synced: ${escapeHtml(this.lastSynced)}</span>` : ''}
+        ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
       </div>
 
-      ${this.error ? `<div class="error">⚠️ ${escapeHtml(this.error)}</div>` : ''}
+      ${this.error ? html`<div class="error">⚠️ ${this.error}</div>` : ''}
 
       ${body}
 
-      ${this.renderContentCacheFooter()}
+      ${this.contentCacheFooter()}
     `;
-
-    this.attachEventListeners();
-  }
-
-  private attachEventListeners(): void {
-    const syncBtn = this.shadowRoot?.querySelector('#sync-btn');
-    if (syncBtn) {
-      syncBtn.addEventListener('click', () => {
-        void this.sync();
-      });
-    }
-    const resetBtn = this.shadowRoot?.querySelector('#reset-btn');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        this.showResetDialog();
-      });
-    }
   }
 }
-
-customElements.define('s2s-website-tree-tab', S2SWebsiteTreeTab);

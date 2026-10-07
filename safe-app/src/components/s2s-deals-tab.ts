@@ -1,6 +1,7 @@
 // s2s-deals-tab.ts
-import { LitService, pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
-import { CID } from 'multiformats';
+import { LitElement, html, css } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { filterStyles } from '@/styles/filter-styles.js';
@@ -13,7 +14,7 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import {
   sortByColumn,
   toggleSort,
-  renderSortableHeader,
+  sortIndicator,
   type SortState,
   type TableColumn,
 } from '@/utils/sort.js';
@@ -22,7 +23,6 @@ import {
   uniqueValuesForColumn,
   type FilterState,
 } from '@/utils/filter.js';
-import type { TableFilter } from './table-filter.js';
 import './table-filter.js';
 import './toggle-button.js';
 import './copy-content-id.js';
@@ -55,47 +55,116 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
   { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
 ];
 
-export class S2SDealsTab extends HTMLElement {
-  public safeIntegration!: SafeIntegration;
-  public protocolIntegration!: ProtocolIntegration;
-  private lit!: LitService;
-  private loading = true;
-  private deals: Array<Deal> = [];
-  private offers: Array<Deal> = [];
-  private unsubscriber!: () => void;
-  private fetching: boolean = false;
-  private previewMode: boolean = false;
-  private offersSort: SortState | null = null;
-  private dealsSort: SortState | null = null;
-  private offersFilters: FilterState = {};
-  private dealsFilters: FilterState = {};
+@customElement('s2s-deals-tab')
+export class S2SDealsTab extends LitElement {
+  @property({ attribute: false }) safeIntegration!: SafeIntegration;
+  @property({ attribute: false }) protocolIntegration!: ProtocolIntegration;
+  @property({ attribute: false }) lit!: LitService;
 
-  constructor() {
-    super();
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot!.adoptedStyleSheets = [
-      typograhyStyles,
-      sectionStyles,
-      tableStyles,
-      buttonStyles,
-      filterStyles,
-    ];
-  }
+  @state() private loading = true;
+  @state() private deals: Array<Deal> = [];
+  @state() private offers: Array<Deal> = [];
+  @state() private fetching = false;
+  @state() private previewMode = false;
+  @state() private offersSort: SortState | null = null;
+  @state() private dealsSort: SortState | null = null;
+  @state() private offersFilters: FilterState = {};
+  @state() private dealsFilters: FilterState = {};
 
-  async connectedCallback() {
-    this.unsubscriber = store.subscribeToDeals(() => this.render());
-    this.render();
+  private unsubscriber: (() => void) | null = null;
 
-    await this.loadDeals();
+  static styles = [
+    typograhyStyles,
+    sectionStyles,
+    tableStyles,
+    buttonStyles,
+    filterStyles,
+    css`
+      :host {
+        display: block;
+        padding: 2rem 0;
+        background: var(--gray-900);
+      }
+
+      .check-deal-form {
+        display: grid;
+        gap: 1rem;
+        padding: 1.5rem 0;
+        grid-template-columns: 1fr auto;
+      }
+
+      @media (max-width: 768px) {
+        .check-deal-form {
+          grid-template-columns: 1fr;
+        }
+
+        .section-header {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 1rem;
+        }
+      }
+
+      .input {
+        padding: 0.75rem 1rem;
+        border: 1px solid var(--gray-200);
+        background: var(--gray-50);
+        border-radius: 0.5rem;
+        font-size: 1rem;
+      }
+
+      .input:focus {
+        outline: none;
+        border-color: var(--color-yellow);
+      }
+
+      .toolbar {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .refresh-icon {
+        width: 2rem;
+        height: 2rem;
+        vertical-align: middle;
+        filter: brightness(0) invert(1);
+      }
+
+      .revoke-icon {
+        width: 2rem;
+        height: 2rem;
+        vertical-align: middle;
+        filter: brightness(0) invert(1);
+      }
+
+      .table {
+        grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr auto;
+      }
+
+      .offer-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+    `,
+  ];
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
+    this.loadDeals();
   }
 
   disconnectedCallback() {
+    super.disconnectedCallback();
     this.unsubscriber?.();
+    this.unsubscriber = null;
   }
 
   private async loadDeals() {
     this.fetching = true;
-    this.render();
     try {
       const { deals, offers } = await this.safeIntegration.getAllDealsAndOffers();
 
@@ -156,7 +225,6 @@ export class S2SDealsTab extends HTMLElement {
       console.error('Error loading deals:', error);
     }
     this.fetching = false;
-    this.render();
   }
 
   // Add refresh handler
@@ -188,7 +256,7 @@ export class S2SDealsTab extends HTMLElement {
         const offer = this.offers.splice(idx, 1)[0];
         offer.status = 'deal';
         this.deals.push(offer);
-        this.render();
+        this.requestUpdate();
       }
     } catch (error: any) {
       this.showNotification(`Error accepting offer: ${error.message}`, 'error');
@@ -221,7 +289,7 @@ export class S2SDealsTab extends HTMLElement {
       }
 
       await this.loadDeals();
-      this.render();
+      this.requestUpdate();
     } catch (error: any) {
       console.error('Error retracting:', error);
       this.showNotification(`Failed: ${error.message}`, 'error');
@@ -277,7 +345,6 @@ export class S2SDealsTab extends HTMLElement {
     if (safeInfo == undefined) return;
 
     const signature = await this.safeIntegration.signWithSigner('lit actions auth');
-    // console.log(signature);
 
     const genesisIds = preview
       ? store.deals.filter((d) => d.encryption == false).map((d) => d.genesis)
@@ -307,26 +374,49 @@ export class S2SDealsTab extends HTMLElement {
     );
 
     console.log(res);
-
-    // console.log("success:", res.success);
-
-    // if(res.cid) {
-    //   await pinCidFromRemote(res.cid, "https://ipfs.tranport-union.dev", import.meta.env.VITE_PINATA_JWT)
-    //   console.log("pinned on pinata")
-
-    //   // Push the new root CID to the store — same transformation as fetchFreshData
-    //   const rootCid = CID.parse(res.cid).toV1().toString();
-    //   store.setRoot(rootCid);
-    // }
   }
 
   private shortenAddress(s: string) {
     return `${s.slice(0, 4)}...${s.slice(-4)}`;
   }
 
-  private render() {
-    if (!this.shadowRoot) return;
+  private handleSort(source: 'offers' | 'deals', key: string) {
+    if (source === 'offers') {
+      this.offersSort = toggleSort(this.offersSort, key);
+    } else {
+      this.dealsSort = toggleSort(this.dealsSort, key);
+    }
+  }
 
+  private handleFilter(source: 'offers' | 'deals', key: string, e: CustomEvent) {
+    const value = e.detail.value as string;
+    const next =
+      source === 'offers' ? { ...this.offersFilters } : { ...this.dealsFilters };
+    if (value) next[key] = value;
+    else delete next[key];
+    if (source === 'offers') this.offersFilters = next;
+    else this.dealsFilters = next;
+  }
+
+  private sortableHeader<T>(
+    col: TableColumn<T>,
+    sort: SortState | null,
+    onSort: (key: string) => void,
+  ) {
+    return html`
+      <button
+        class="table-header sortable${col.cls ? ' ' + col.cls : ''}"
+        data-sort="${col.key}"
+        title="Sort by ${col.label}"
+        @click=${() => onSort(col.key)}
+      >
+        <span>${col.label}</span>
+        <span class="sort-indicator">${sortIndicator(sort, col.key)}</span>
+      </button>
+    `;
+  }
+
+  render() {
     // Filter first, then sort (filters narrow the rows, sort orders the result).
     const offers = sortByColumn(
       filterByColumn(store.offers, OFFER_COLUMNS, this.offersFilters),
@@ -339,217 +429,128 @@ export class S2SDealsTab extends HTMLElement {
       this.dealsSort,
     );
 
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          padding: 2rem 0;
-          background: var(--gray-900);
-        }
-      
-        .check-deal-form {
-          display: grid;
-          gap: 1rem;
-          padding: 1.5rem 0;
-          grid-template-columns: 1fr auto;
-        }
-
-        @media (max-width: 768px) {
-          .check-deal-form {
-            grid-template-columns: 1fr;
-          }
-          
-          .section-header {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 1rem;
-          }
-        }
-
-        .input {
-          padding: 0.75rem 1rem;
-          border: 1px solid var(--gray-200);
-          background: var(--gray-50);
-          border-radius: 0.5rem;
-          font-size: 1rem;
-        }
-
-        .input:focus {
-          outline: none;
-          border-color: var(--color-yellow);
-        }
-        .toolbar {
-          display: flex;
-          flex-direction: row;
-          align-items: center;
-          gap: 1.5rem;
-          margin-bottom: 1.5rem;
-        }
-
-        .refresh-icon {
-          width: 2rem;
-          height: 2rem;
-          vertical-align: middle;
-          filter: brightness(0) invert(1);
-        }
-
-        .revoke-icon {
-          width: 2rem;
-          height: 2rem;
-          vertical-align: middle;
-          filter: brightness(0) invert(1);
-        }
-
-        .table {
-          grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr auto;
-        }
-
-        .offer-actions {
-          display: flex;
-          gap: 0.5rem;
-        }
-        
-      </style>
-
-      ${
-        this.fetching && store.deals.length === 0
-          ? `
-      <div class="loading">
-        <p>Loading deals...</p>
-      </div>
-    `
-          : `
-
-      <div class="toolbar">
-        <button data-action="bulkrender">Bulk Render</button>
-         <toggle-button bool="${this.previewMode}" label="preview"></toggle-button>
-      </div>
-
-     
-
-      ${
-        store.offers.length > 0
-          ? `
-        <div class="section">
-          <div class="list_header">
-            <h2 class="section-title">Pending Offers (${offers.length})</h2>
-            <button class="button has-icon refresh-button" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
-              <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
-            </button>
-          </div>
-          <div class="table-filters offers-filters">
-            <table-filter data-key="author" label="Author" value="${this.offersFilters.author ?? ''}"></table-filter>
-            <table-filter data-key="postType" label="Post type" value="${this.offersFilters.postType ?? ''}"></table-filter>
-          </div>
-          ${
-            offers.length > 0
-              ? `
-          <div class="table table-offers">
-            ${OFFER_COLUMNS.map((c) => renderSortableHeader(c, this.offersSort)).join('')}
-            <div class="table-header"></div>
-
-            ${offers
-              .map(
-                (offer) => `
-              <div class="offer-card table-row" data-genesis="${offer.genesis}">
-                <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
-                <div class="table-cell">${this.shortenAddress(offer.author)}</div>
-                <div class="table-cell">${offer.postType ?? ''}</div>
-                <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
-                <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
-                <div class="table-cell offer-actions">
-                  <button
-                    class="button button-secondary thin"
-                    data-action="accept"
-                    data-genesis="${offer.genesis}"
-                  >Accept</button>
-                  <button
-                    class="button button-danger thin"
-                    data-action="reject"
-                    data-genesis="${offer.genesis}"
-                    data-status="offer"
-                  >Refuse</button>
-                </div>
-              </div>
-            `,
-            )
-            .join('')}
-          </div>
-        `
-              : `
-          <div class="empty-state">
-            <div class="empty-icon">📄</div>
-            <p>No offers match the current filters</p>
-          </div>
-        `
-          }
+    if (this.fetching && store.deals.length === 0) {
+      return html`
+        <div class="loading">
+          <p>Loading deals...</p>
         </div>
-      `
-          : ''
-      }
+      `;
+    }
+
+    return html`
+      <div class="toolbar">
+        <button data-action="bulkrender" @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</button>
+        <toggle-button .bool=${this.previewMode} label="preview"
+          @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
+      </div>
+
+      ${store.offers.length > 0
+        ? html`
+            <div class="section">
+              <div class="list_header">
+                <h2 class="section-title">Pending Offers (${offers.length})</h2>
+                <button class="button has-icon refresh-button" id="refresh-btn" ?disabled=${this.fetching}
+                  @click=${this.handleRefresh}>
+                  <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
+                </button>
+              </div>
+              <div class="table-filters offers-filters">
+                <table-filter data-key="author" label="Author" .value=${this.offersFilters.author ?? ''}
+                  .options=${uniqueValuesForColumn(store.offers, OFFER_COLUMNS, 'author')}
+                  @change=${(e: CustomEvent) => this.handleFilter('offers', 'author', e)}></table-filter>
+                <table-filter data-key="postType" label="Post type" .value=${this.offersFilters.postType ?? ''}
+                  .options=${uniqueValuesForColumn(store.offers, OFFER_COLUMNS, 'postType')}
+                  @change=${(e: CustomEvent) => this.handleFilter('offers', 'postType', e)}></table-filter>
+              </div>
+              ${offers.length > 0
+                ? html`
+                    <div class="table table-offers">
+                      ${OFFER_COLUMNS.map((c) => this.sortableHeader(c, this.offersSort, (k) => this.handleSort('offers', k)))}
+                      <div class="table-header"></div>
+
+                      ${offers.map(
+                        (offer) => html`
+                          <div class="offer-card table-row" data-genesis="${offer.genesis}">
+                            <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
+                            <div class="table-cell">${this.shortenAddress(offer.author)}</div>
+                            <div class="table-cell">${offer.postType ?? ''}</div>
+                            <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                            <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
+                            <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
+                            <div class="table-cell offer-actions">
+                              <button class="button button-secondary thin" data-action="accept" data-genesis="${offer.genesis}"
+                                @click=${() => this.acceptOffer(offer.genesis)}>Accept</button>
+                              <button class="button button-danger thin" data-action="reject" data-genesis="${offer.genesis}" data-status="offer"
+                                @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</button>
+                            </div>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  `
+                : html`
+                    <div class="empty-state">
+                      <div class="empty-icon">📄</div>
+                      <p>No offers match the current filters</p>
+                    </div>
+                  `}
+            </div>
+          `
+        : ''}
 
       <div class="section">
         <div class="list_header">
           <h2 class="section-title">Active Deals (${deals.length})</h2>
         </div>
 
-        ${
-          store.deals.length > 0
-            ? `
-        <div class="table-filters deals-filters">
-          <table-filter data-key="author" label="Author" value="${this.dealsFilters.author ?? ''}"></table-filter>
-          <table-filter data-key="postType" label="Post type" value="${this.dealsFilters.postType ?? ''}"></table-filter>
-        </div>
-      `
-            : ''
-        }
-
-        ${
-          deals.length > 0
-            ? `
-          <div class="table table-deals">
-            ${DEAL_COLUMNS.map((c) => renderSortableHeader(c, this.dealsSort)).join('')}
-            <div class="table-header hide-sm">
-              <button class="button has-icon" id="refresh-btn" ${this.fetching ? 'disabled' : ''}>
-                <span>${this.fetching ? '..' : '<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />'}</span>
-              </button>
-            </div>
-
-            ${deals
-              .map(
-                (deal) => `
-              <div class="deal-card table-row" data-genesis="${deal.genesis}">
-                <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
-                <div class="table-cell">${this.shortenAddress(deal.author)}</div>
-                <div class="table-cell">${deal.postType ?? ''}</div>
-                <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-                <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
-                <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
-                <div class="table-cell deal-actions">
-          
-                  <button
-                    class="button button-danger thin"
-                    data-action="retract"
-                    data-genesis="${deal.genesis}"
-                    data-status="deal"
-                  >Revoke
-                    <!-- <img src="/icons/noun-revoke-3391394.svg" class="revoke-icon" alt="Revoke" /> -->
-                    </button>
-                </div>
+        ${store.deals.length > 0
+          ? html`
+              <div class="table-filters deals-filters">
+                <table-filter data-key="author" label="Author" .value=${this.dealsFilters.author ?? ''}
+                  .options=${uniqueValuesForColumn(store.deals, DEAL_COLUMNS, 'author')}
+                  @change=${(e: CustomEvent) => this.handleFilter('deals', 'author', e)}></table-filter>
+                <table-filter data-key="postType" label="Post type" .value=${this.dealsFilters.postType ?? ''}
+                  .options=${uniqueValuesForColumn(store.deals, DEAL_COLUMNS, 'postType')}
+                  @change=${(e: CustomEvent) => this.handleFilter('deals', 'postType', e)}></table-filter>
               </div>
-            `,
-              )
-              .join('')}
-          </div>
-        `
-            : `
-          <div class="empty-state">
-            <div class="empty-icon">📄</div>
-            <p>${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}</p>
-          </div>
-        `
-        }
+            `
+          : ''}
+
+        ${deals.length > 0
+          ? html`
+              <div class="table table-deals">
+                ${DEAL_COLUMNS.map((c) => this.sortableHeader(c, this.dealsSort, (k) => this.handleSort('deals', k)))}
+                <div class="table-header hide-sm">
+                  <button class="button has-icon" id="refresh-btn" ?disabled=${this.fetching} @click=${this.handleRefresh}>
+                    <span>${this.fetching ? '..' : html`<img src="/icons/noun-refresh-2073720.svg" class="refresh-icon" alt="Refresh" />`}</span>
+                  </button>
+                </div>
+
+                ${deals.map(
+                  (deal) => html`
+                    <div class="deal-card table-row" data-genesis="${deal.genesis}">
+                      <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
+                      <div class="table-cell">${this.shortenAddress(deal.author)}</div>
+                      <div class="table-cell">${deal.postType ?? ''}</div>
+                      <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+                      <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
+                      <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
+                      <div class="table-cell deal-actions">
+                        <button class="button button-danger thin" data-action="retract" data-genesis="${deal.genesis}" data-status="deal"
+                          @click=${() => this.retract(deal.genesis, 'deal')}>Revoke
+                        </button>
+                      </div>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : html`
+              <div class="empty-state">
+                <div class="empty-icon">📄</div>
+                <p>${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}</p>
+              </div>
+            `}
       </div>
 
       <div class="section">
@@ -559,116 +560,13 @@ export class S2SDealsTab extends HTMLElement {
         <p class="section-description">Check if a deal exists for a genesis</p>
         <div class="check-deal-form">
           <input type="text" class="input" placeholder="Genesis (0x...)" id="check-genesis" />
-          <button class="button" id="check-deal-btn">Check Deal</button>
+          <button class="button" id="check-deal-btn" @click=${() => {
+            const input = this.renderRoot.querySelector('#check-genesis') as HTMLInputElement;
+            const genesis = input?.value.trim();
+            if (genesis) this.checkDeal(genesis);
+          }}>Check Deal</button>
         </div>
       </div>
-      `
-      }
     `;
-
-    if (!this.fetching || store.deals.length > 0) {
-      this.attachEventListeners();
-    }
-  }
-
-  private attachEventListeners() {
-    // Column header sorting — Offers table
-    this.shadowRoot?.querySelectorAll('.table-offers .table-header.sortable').forEach((el) => {
-      el.addEventListener('click', () => {
-        const key = (el as HTMLElement).dataset.sort;
-        if (key) {
-          this.offersSort = toggleSort(this.offersSort, key);
-          this.render();
-        }
-      });
-    });
-
-    // Column header sorting — Deals table
-    this.shadowRoot?.querySelectorAll('.table-deals .table-header.sortable').forEach((el) => {
-      el.addEventListener('click', () => {
-        const key = (el as HTMLElement).dataset.sort;
-        if (key) {
-          this.dealsSort = toggleSort(this.dealsSort, key);
-          this.render();
-        }
-      });
-    });
-
-    // Filter dropdowns — Offers table
-    this.shadowRoot?.querySelectorAll('.offers-filters table-filter').forEach((el) => {
-      const filterEl = el as TableFilter;
-      const key = (el as HTMLElement).dataset.key;
-      if (!key) return;
-      filterEl.options = uniqueValuesForColumn(store.offers, OFFER_COLUMNS, key);
-      filterEl.addEventListener('change', (e) => {
-        const value = (e as CustomEvent).detail.value as string;
-        const next = { ...this.offersFilters };
-        if (value) next[key] = value;
-        else delete next[key];
-        this.offersFilters = next;
-        this.render();
-      });
-    });
-
-    // Filter dropdowns — Deals table
-    this.shadowRoot?.querySelectorAll('.deals-filters table-filter').forEach((el) => {
-      const filterEl = el as TableFilter;
-      const key = (el as HTMLElement).dataset.key;
-      if (!key) return;
-      filterEl.options = uniqueValuesForColumn(store.deals, DEAL_COLUMNS, key);
-      filterEl.addEventListener('change', (e) => {
-        const value = (e as CustomEvent).detail.value as string;
-        const next = { ...this.dealsFilters };
-        if (value) next[key] = value;
-        else delete next[key];
-        this.dealsFilters = next;
-        this.render();
-      });
-    });
-
-    // Preview toggle
-    this.shadowRoot?.querySelector('toggle-button')?.addEventListener('toggle', ((
-      e: CustomEvent,
-    ) => {
-      this.previewMode = e.detail.checked;
-    }) as EventListener);
-
-    // Refresh button
-    const refreshBtn = this.shadowRoot?.querySelector('#refresh-btn');
-    refreshBtn?.addEventListener('click', () => {
-      this.handleRefresh();
-    });
-
-    // Check deal
-    const checkBtn = this.shadowRoot?.querySelector('#check-deal-btn');
-    const checkInput = this.shadowRoot?.querySelector('#check-genesis') as HTMLInputElement;
-
-    checkBtn?.addEventListener('click', () => {
-      const genesis = checkInput?.value.trim();
-      if (genesis) {
-        this.checkDeal(genesis);
-      }
-    });
-
-    // Deal actions (accept/retract)
-    this.shadowRoot?.querySelectorAll('[data-action]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        const target = e.currentTarget as HTMLButtonElement;
-        const action = target.dataset.action;
-        const genesis = target.dataset.genesis;
-
-        if (action === 'accept') {
-          this.acceptOffer(genesis!);
-        } else if (action === 'retract') {
-          this.retract(genesis!, 'deal');
-        } else if (action === 'reject') {
-          this.retract(genesis!, 'offer');
-        } else if (action === 'bulkrender') {
-          this.bulkRender(this.previewMode);
-        }
-      });
-    });
   }
 }
-
-customElements.define('s2s-deals-tab', S2SDealsTab);

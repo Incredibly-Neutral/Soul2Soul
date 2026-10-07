@@ -1,156 +1,134 @@
+import { LitElement, html, css } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
 import { breakpoints } from '@/styles/breakpoints.js';
-import { typograhyStyles } from '@/styles/typography-styles';
+import { typograhyStyles } from '@/styles/typography-styles.js';
 
-class CopyHash extends HTMLElement {
-  private value: string = ''
-  private copied: boolean = false
-  private timeout: number | null = null
+@customElement('copy-hash')
+export class CopyHash extends LitElement {
+  @property() value = '';
 
-  constructor() {
-    super()
-    this.attachShadow({ mode: 'open' })
-    this.shadowRoot!.adoptedStyleSheets = [typograhyStyles]
-  }
+  @state() private copied = false;
+  private timeout: number | null = null;
 
-  static get observedAttributes() {
-    return ['value']
-  }
+  static styles = [
+    typograhyStyles,
+    css`
+      :host {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
 
-  attributeChangedCallback(name: string, oldValue: string, newValue: string) {
-    if (oldValue === newValue) return
+      .text {
+        margin: 0;
+        font-family: monospace;
+        user-select: all;
+      }
 
-    if (name === 'value') {
-      this.value = newValue
-    }
+      button {
+        all: unset;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.15rem;
+        border-radius: 3px;
+        color: #666;
+        transition: color 0.2s ease;
+      }
 
-    if (this.shadowRoot) {
-      this.render()
-    }
-  }
+      button:hover {
+        color: #1a1a1a;
+      }
+
+      button.copied {
+        color: #2e7d32;
+      }
+
+      svg {
+        width: 18px;
+        height: 18px;
+        stroke: var(--color-too-dark);
+      }
+    `,
+  ];
 
   connectedCallback() {
+    super.connectedCallback();
     if (!this.value) {
-      this.value = this.textContent?.trim() || ''
+      this.value = this.textContent?.trim() || '';
     }
-    this.render()
   }
 
   disconnectedCallback() {
-    if (this.timeout) clearTimeout(this.timeout)
+    super.disconnectedCallback();
+    if (this.timeout) clearTimeout(this.timeout);
   }
 
   private truncate(str: string): string {
-    if (str.length <= 4) return str
-    return window.innerWidth > breakpoints.md ? `${str.slice(0, 4)}...${str.slice(-4)}` : `..${str.slice(-3)}`
+    if (str.length <= 4) return str;
+    return window.innerWidth > breakpoints.md
+      ? `${str.slice(0, 4)}...${str.slice(-4)}`
+      : `..${str.slice(-3)}`;
   }
 
   private async copy() {
     try {
-      await this.writeToClipboard(this.value)
-      this.copied = true
-      this.render()
-      if (this.timeout) clearTimeout(this.timeout)
+      await this.writeToClipboard(this.value);
+      this.copied = true;
+      if (this.timeout) clearTimeout(this.timeout);
       this.timeout = window.setTimeout(() => {
-        this.copied = false
-        this.render()
-      }, 1500)
+        this.copied = false;
+      }, 1500);
     } catch (e) {
-      console.error('Copy failed', e)
+      console.error('Copy failed', e);
     }
   }
 
   private async writeToClipboard(text: string): Promise<void> {
     if (navigator.clipboard?.writeText) {
       try {
-        await navigator.clipboard.writeText(text)
-        return
+        await navigator.clipboard.writeText(text);
+        return;
       } catch {
         // Fall through to legacy fallback
       }
     }
 
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0'
-    document.body.appendChild(textarea)
-    textarea.focus()
-    textarea.select()
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
 
     try {
-      if (!document.execCommand('copy')) throw new Error('execCommand copy failed')
+      if (!document.execCommand('copy')) throw new Error('execCommand copy failed');
     } finally {
-      document.body.removeChild(textarea)
+      document.body.removeChild(textarea);
     }
   }
 
-  private render() {
-    if (!this.shadowRoot) return
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.4rem;
-        }
-
-        .text {
-          margin: 0;
-          font-family: monospace;
-          user-select: all;
-        }
-
-        button {
-          all: unset;
-          cursor: pointer;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 0.15rem;
-          border-radius: 3px;
-          color: #666;
-          transition: color 0.2s ease;
-        }
-
-        button:hover {
-          color: #1a1a1a;
-        }
-
-        button.copied {
-          color: #2e7d32;
-        }
-
-        svg {
-          width: 18px;
-          height: 18px;
-          stroke: var(--color-too-dark)
-        }
-
-
-      </style>
-
-      <span class="text" title="${this.value}">${this.truncate(this.value)}</span>
-      <button class="${this.copied ? 'copied' : ''}" aria-label="Copy to clipboard">
+  render() {
+    return html`
+      <span class="text" title=${this.value}>${this.truncate(this.value)}</span>
+      <button
+        class="${this.copied ? 'copied' : ''}"
+        aria-label="Copy to clipboard"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          this.copy();
+        }}
+      >
         ${this.copied
-          ? `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          ? html`<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"/>
             </svg>`
-          : `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          : html`<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>`
-        }
+            </svg>`}
       </button>
-    `
-
-    this.shadowRoot.querySelector('button')?.addEventListener('click', (e:Event) => { 
-        e.stopPropagation()
-        console.log("clivk");
-        this.copy()
-    })
+    `;
   }
 }
-
-customElements.define('copy-hash', CopyHash)
-
-export { CopyHash }

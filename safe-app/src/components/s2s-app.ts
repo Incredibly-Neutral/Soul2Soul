@@ -1,4 +1,6 @@
 // s2s-app.ts
+import { LitElement, html } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
 import './s2s-whitelist-tab.js';
@@ -25,63 +27,60 @@ const RECORDS_CONTRACT_ABI = [
   'function setText(bytes32 node, string key, string value) nonpayable',
 ];
 
-export class S2SApp extends HTMLElement {
+@customElement('s2s-app')
+export class S2SApp extends LitElement {
   private safeIntegration: SafeIntegration;
   private protocolIntegration: ProtocolIntegration;
   private lit: LitService;
   private filecoinStorage: FilecoinStorage;
   private fcInitPromise: Promise<void> | null = null;
-  private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' = 'deals';
-  private fetching = false;
+
+  @state() private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' = 'deals';
+  @state() private fetching = false;
+
   private unsubscribers: Array<() => void> = [];
+
+  static styles = [mainStyles, tabStyles, typograhyStyles, pillStyles];
 
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot!.adoptedStyleSheets = [mainStyles, tabStyles, typograhyStyles, pillStyles];
     this.safeIntegration = new SafeIntegration();
     this.protocolIntegration = new ProtocolIntegration();
     this.lit = new LitService({ environment: 'prod' });
     this.filecoinStorage = new FilecoinStorage({}, browserFilecoinBuilder);
-    this.fcInitPromise = this.initFC()
-
+    this.fcInitPromise = this.initFC();
   }
 
   async initFC() {
-    const skRes  = await fetch('/session-key.json');
+    const skRes = await fetch('/session-key.json');
     const skData = await skRes.json();
     const rpcUrl = 'https://lb.drpc.live/filecoin/REDACTED'; // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
-     await this.filecoinStorage.initWithSessionKey(
-        skData,
-        rpcUrl 
-      );
+    await this.filecoinStorage.initWithSessionKey(skData, rpcUrl);
   }
 
-  async connectedCallback() {
+  connectedCallback() {
+    super.connectedCallback();
     // Subscribe to every store slice that affects the view;
     // each setter in fetchFreshData will trigger re-renders automatically.
     this.unsubscribers = [
-      store.subscribeToSafeInfo(() => this.render()),
-      store.subscribeToProtocolInfo(() => this.render()),
-      store.subscribeToRoot(() => this.render()),
-      store.subscribeToRecords(() => this.render()), // covers publication (name record)
+      store.subscribeToSafeInfo(() => this.requestUpdate()),
+      store.subscribeToProtocolInfo(() => this.requestUpdate()),
+      store.subscribeToRoot(() => this.requestUpdate()),
+      store.subscribeToRecords(() => this.requestUpdate()), // covers publication (name record)
     ];
 
-    // Phase 1 — render immediately from whatever is cached in localStorage via the store
-    this.render();
-
     // Phase 2 — fetch fresh data; store updates drive subsequent renders
-    await this.fetchFreshData();
+    this.fetchFreshData();
   }
 
   disconnectedCallback() {
-    this.unsubscribers.forEach(unsub => unsub());
+    super.disconnectedCallback();
+    this.unsubscribers.forEach((unsub) => unsub());
     this.unsubscribers = [];
   }
 
   private async fetchFreshData() {
     this.fetching = true;
-    this.render();
 
     try {
       const safeInfo = await this.safeIntegration.initialize();
@@ -89,7 +88,7 @@ export class S2SApp extends HTMLElement {
 
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
-      console.log(protocolInfo)
+      console.log(protocolInfo);
 
       const [keys, values] = await this.safeIntegration.getAllRecords();
       store.setAllRecords(
@@ -127,7 +126,7 @@ export class S2SApp extends HTMLElement {
           const freshPieces = await this.filecoinStorage.listPublicationStorage(
             this.filecoinStorage.walletAddress.toLowerCase()
           );
-          const typed = freshPieces.map(p => ({ ...p, confirmed: true }));
+          const typed = freshPieces.map((p) => ({ ...p, confirmed: true }));
           store.setPieces(typed);
 
           // Derive datasets from pieces (one pass, no extra chain call)
@@ -162,179 +161,131 @@ export class S2SApp extends HTMLElement {
     }
 
     this.fetching = false;
-    this.render();
   }
 
   private switchTab(tab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree') {
     this.currentTab = tab;
-    this.render();
   }
 
-  private render() {
-    if (!this.shadowRoot) return;
+  private activeTabTemplate() {
+    switch (this.currentTab) {
+      case 'deals':
+        return this.safeIntegration.hasPublicationModule()
+          ? html`<s2s-deals-tab
+              .safeIntegration=${this.safeIntegration}
+              .protocolIntegration=${this.protocolIntegration}
+              .lit=${this.lit}></s2s-deals-tab>`
+          : html``;
+      case 'whitelist':
+        return this.safeIntegration.hasPublicationModule()
+          ? html`<s2s-whitelist-tab .safeIntegration=${this.safeIntegration}></s2s-whitelist-tab>`
+          : html``;
+      case 'records':
+        return this.safeIntegration.hasRecordsModule()
+          ? html`<s2s-records-tab
+              .safeIntegration=${this.safeIntegration}
+              .protocolIntegration=${this.protocolIntegration}
+              .lit=${this.lit}
+              .storage=${this.filecoinStorage}></s2s-records-tab>`
+          : html``;
+      case 'storage':
+        return html`<s2s-storage-tab .storage=${this.filecoinStorage}></s2s-storage-tab>`;
+      case 'websiteTree':
+        return this.safeIntegration.hasRecordsModule()
+          ? html`<s2s-website-tree-tab
+              .safeIntegration=${this.safeIntegration}
+              .lit=${this.lit}></s2s-website-tree-tab>`
+          : html``;
+    }
+  }
 
+  render() {
     // All view values come exclusively from the store
-    const safeInfo    = store.safeInfo;
-    const rootCid     = store.getRoot() ?? '';
+    const safeInfo = store.safeInfo;
+    const rootCid = store.getRoot() ?? '';
     const publication = store.getRecord('name') ?? '';
-    const hasCache    = !!safeInfo;
+    const hasCache = !!safeInfo;
 
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          min-height: 100vh;
-        }
-      </style>
-
-      ${!hasCache && this.fetching ? `
+    if (!hasCache && this.fetching) {
+      return html`
         <div class="loading">
           <div class="spinner"></div>
           <p>Loading Soul2Soul Safe App...</p>
         </div>
-      ` : `
-        <div class="container">
+      `;
+    }
 
-          <div class="header">
+    return html`
+      <div class="container">
+        <div class="header">
+          ${this.fetching ? html`<div class="refreshing-badge">Refreshing…</div>` : ''}
 
-            ${this.fetching ? `<div class="refreshing-badge">Refreshing…</div>` : ''}
-
-            <div class="module-status">
-              <div class="pill safe-status ${this.safeIntegration.isConnected() ? 'module-active' : 'module-inactive'}">
-                ${this.safeIntegration.isConnected() ? 'Connected to Safe' : 'Not Connected'}
-              </div>
-              <div class="pill module-badge ${this.safeIntegration.hasPublicationModule() ? 'module-active' : 'module-inactive'}">
-                <copy-module value="${safeInfo?.s2sPublication ?? ''}" label="Publication Module"></copy-module>
-              </div>
-              <div class="pill module-badge ${this.safeIntegration.hasRecordsModule() ? 'module-active' : 'module-inactive'}">
-                <copy-module value="${safeInfo?.s2sRecords ?? ''}" label="Records Module"></copy-module>
-              </div>
+          <div class="module-status">
+            <div class="pill safe-status ${this.safeIntegration.isConnected() ? 'module-active' : 'module-inactive'}">
+              ${this.safeIntegration.isConnected() ? 'Connected to Safe' : 'Not Connected'}
             </div>
-
-            <h1>${publication}</h1>
-            <h2 class="title">Soul2Soul Publication Editor</h2>
-
-            <div class="web-status">
-              <div><copy-hash>${rootCid}</copy-hash></div>
-              <div><a href="https://${rootCid}.preview.transport-union.dev" target="_blank">preview</a></div>
-              <div><a href="https://${publication}.limo" target="_blank">${publication}.limo</a></div>
+            <div class="pill module-badge ${this.safeIntegration.hasPublicationModule() ? 'module-active' : 'module-inactive'}">
+              <copy-module .value=${safeInfo?.s2sPublication ?? ''} label="Publication Module"></copy-module>
             </div>
-
+            <div class="pill module-badge ${this.safeIntegration.hasRecordsModule() ? 'module-active' : 'module-inactive'}">
+              <copy-module .value=${safeInfo?.s2sRecords ?? ''} label="Records Module"></copy-module>
+            </div>
           </div>
 
-          ${!this.safeIntegration.hasPublicationModule() && !this.safeIntegration.hasRecordsModule() ? `
-            <div class="error-message">
-              ⚠️ No S2S modules found. Please install the Publication Module and/or Records Module first.
-            </div>
-          ` : ''}
+          <h1>${publication}</h1>
+          <h2 class="title">Soul2Soul Publication Editor</h2>
 
-          <div class="tabs">
-            <button
-              class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
-              id="deals-tab"
-              ${!this.safeIntegration.hasPublicationModule() ? 'disabled' : ''}
-            >Deals</button>
-            <button
-              class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
-              id="whitelist-tab"
-              ${!this.safeIntegration.hasPublicationModule() ? 'disabled' : ''}
-            >Whitelists</button>
-            <button
-              class="tab ${this.currentTab === 'records' ? 'active' : ''}"
-              id="records-tab"
-              ${!this.safeIntegration.hasRecordsModule() ? 'disabled' : ''}
-            >Records</button>
-            <button
-              class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
-              id="storage-tab"
-            >Storage</button>
-            <button
-              class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
-              id="website-tree-tab"
-              ${!this.safeIntegration.hasRecordsModule() ? 'disabled' : ''}
-            >Tree</button>
+          <div class="web-status">
+            <div><copy-hash .value=${rootCid}></copy-hash></div>
+            <div><a href="https://${rootCid}.preview.transport-union.dev" target="_blank">preview</a></div>
+            <div><a href="https://${publication}.limo" target="_blank">${publication}.limo</a></div>
           </div>
-
-          <div class="tab-content" id="tab-content"></div>
-
         </div>
-      `}
+
+        ${!this.safeIntegration.hasPublicationModule() && !this.safeIntegration.hasRecordsModule()
+          ? html`
+              <div class="error-message">
+                ⚠️ No S2S modules found. Please install the Publication Module and/or Records Module first.
+              </div>
+            `
+          : ''}
+
+        <div class="tabs">
+          <button
+            class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
+            id="deals-tab"
+            ?disabled=${!this.safeIntegration.hasPublicationModule()}
+            @click=${() => this.switchTab('deals')}
+          >Deals</button>
+          <button
+            class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
+            id="whitelist-tab"
+            ?disabled=${!this.safeIntegration.hasPublicationModule()}
+            @click=${() => this.switchTab('whitelist')}
+          >Whitelists</button>
+          <button
+            class="tab ${this.currentTab === 'records' ? 'active' : ''}"
+            id="records-tab"
+            ?disabled=${!this.safeIntegration.hasRecordsModule()}
+            @click=${() => this.switchTab('records')}
+          >Records</button>
+          <button
+            class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
+            id="storage-tab"
+            @click=${() => this.switchTab('storage')}
+          >Storage</button>
+          <button
+            class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
+            id="website-tree-tab"
+            ?disabled=${!this.safeIntegration.hasRecordsModule()}
+            @click=${() => this.switchTab('websiteTree')}
+          >Tree</button>
+        </div>
+
+        <div class="tab-content" id="tab-content">
+          ${this.activeTabTemplate()}
+        </div>
+      </div>
     `;
-
-    if (hasCache || !this.fetching) {
-      this.attachEventListeners();
-      this.renderCurrentTab();
-    }
-  }
-
-  private attachEventListeners() {
-    this.shadowRoot?.querySelector('#deals-tab')
-      ?.addEventListener('click', () => this.switchTab('deals'));
-    this.shadowRoot?.querySelector('#whitelist-tab')
-      ?.addEventListener('click', () => this.switchTab('whitelist'));
-    this.shadowRoot?.querySelector('#records-tab')
-      ?.addEventListener('click', () => this.switchTab('records'));
-    this.shadowRoot?.querySelector('#storage-tab')
-      ?.addEventListener('click', () => this.switchTab('storage'));
-    this.shadowRoot?.querySelector('#website-tree-tab')
-      ?.addEventListener('click', () => {
-        this.switchTab('websiteTree');
-      });
-  }
-
-  private renderCurrentTab() {
-    const tabContent = this.shadowRoot?.querySelector('#tab-content');
-    if (!tabContent) return;
-    tabContent.innerHTML = '';
-
-    switch (this.currentTab) {
-      case 'deals':
-        if (this.safeIntegration.hasPublicationModule()) {
-          const el = document.createElement('s2s-deals-tab');
-          (el as any).safeIntegration = this.safeIntegration;
-          (el as any).protocolIntegration = this.protocolIntegration;
-          (el as any).lit = this.lit;
-          tabContent.appendChild(el);
-        }
-        break;
-
-      case 'whitelist':
-        if (this.safeIntegration.hasPublicationModule()) {
-          const el = document.createElement('s2s-whitelist-tab');
-          (el as any).safeIntegration = this.safeIntegration;
-          tabContent.appendChild(el);
-        }
-        break;
-
-      case 'records':
-        if (this.safeIntegration.hasRecordsModule()) {
-          const el = document.createElement('s2s-records-tab');
-          (el as any).safeIntegration = this.safeIntegration;
-          (el as any).protocolIntegration = this.protocolIntegration;
-          (el as any).lit = this.lit;
-          (el as any).storage = this.filecoinStorage;
-          tabContent.appendChild(el);
-        }
-        break;
-
-      case 'storage':
-        {
-          const el = document.createElement('s2s-storage-tab');
-          (el as any).storage = this.filecoinStorage;
-          tabContent.appendChild(el);
-        }
-        break;
-
-      case 'websiteTree':
-        if (this.safeIntegration.hasRecordsModule()) {
-          const el = document.createElement('s2s-website-tree-tab');
-          (el as any).safeIntegration = this.safeIntegration;
-          (el as any).lit = this.lit;
-          tabContent.appendChild(el);
-        }
-        break;
-    }
   }
 }
-
-customElements.define('s2s-app', S2SApp);
