@@ -112,6 +112,8 @@ let pub: ReturnType<typeof makePubStub>;
 let other: { NAME: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
+  // Deterministic DRPC URLs regardless of the local root .env.
+  vi.stubEnv('VITE_DRPC_API_KEY', 'default');
   records = makeRecordsStub();
   pub = makePubStub();
   other = { NAME: vi.fn(async () => { throw new Error('no NAME()'); }) };
