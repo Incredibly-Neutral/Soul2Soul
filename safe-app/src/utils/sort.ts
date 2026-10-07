@@ -90,16 +90,21 @@ export function sortByColumn<T>(
   return col ? sortRows(rows, col.get, sort) : [...rows];
 }
 
-/** Sort indicator glyph (▲/▼) for the active sort column, '' otherwise. */
+/** Sort indicator (ph-* element tag name) for the active sort column, '' otherwise. */
 export function sortIndicator(sort: SortState | null, key: string): string {
-  return sort?.key === key ? (sort.dir === 'asc' ? '▲' : '▼') : '';
+  return sort?.key === key ? (sort.dir === 'asc' ? 'ph-caret-up' : 'ph-caret-down') : '';
 }
 
 /** Render a clickable sortable header button for a column. */
 export function renderSortableHeader<T>(col: TableColumn<T>, sort: SortState | null): string {
+  const caret = sortIndicator(sort, col.key);
+  // Sort caret is a phosphor ph-* element; size/weight mirror the icon
+  // foundation's ICON_SIZE / ICON_WEIGHT without importing icon.js here, so
+  // this pure utility stays side-effect free for node unit tests.
+  const indicator = caret ? `<${caret} size="16" weight="regular"></${caret}>` : '';
   return `
     <button class="table-header sortable${col.cls ? ' ' + col.cls : ''}" data-sort="${col.key}" title="Sort by ${col.label}">
       <span>${col.label}</span>
-      <span class="sort-indicator">${sortIndicator(sort, col.key)}</span>
+      <span class="sort-indicator">${indicator}</span>
     </button>`;
 }

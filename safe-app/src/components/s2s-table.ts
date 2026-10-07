@@ -45,6 +45,7 @@ import {
   uniqueValuesForColumn,
 } from '@/utils/filter.js';
 import './table-filter.js';
+import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 
 @customElement('s2s-table')
 export class S2STable<T> extends LitElement {
@@ -154,9 +155,15 @@ export class S2STable<T> extends LitElement {
         @click=${() => this.handleSort(col.key)}
       >
         <span>${col.label}</span>
-        <span class="sort-indicator">${sortIndicator(this.sort, col.key)}</span>
+        <span class="sort-indicator">${this.sortIndicatorElement(col.key)}</span>
       </button>
     `;
+  }
+
+  /** Render the sort caret ph element for the active column, '' otherwise. */
+  private sortIndicatorElement(key: string) {
+    const tag = sortIndicator(this.sort, key);
+    return tag ? html`<${tag} size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></${tag}>` : '';
   }
 
   render() {
@@ -202,7 +209,7 @@ export class S2STable<T> extends LitElement {
           `
         : html`
             <div class="empty-state">
-              <div class="empty-icon">📄</div>
+              <div class="empty-icon"><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text></div>
               <p>${this.emptyText}</p>
             </div>
           `}
