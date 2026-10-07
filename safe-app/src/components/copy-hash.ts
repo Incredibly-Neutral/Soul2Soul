@@ -22,7 +22,6 @@ export class CopyHash extends LitElement {
 
       .text {
         margin: 0;
-        font-family: monospace;
         user-select: all;
       }
 
