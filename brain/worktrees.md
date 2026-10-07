@@ -117,9 +117,9 @@ non-JSON bodies in an actionable `Error('runner <status> returned non-JSON: <bod
   a fresh worktree because .env doesn't carry over → DRPC "default" key 403s → module
   detection fails → gated tabs disabled. Copy ../.env into the worktree and rebuild; then QA
   passes 8/8. Post-merge gate on main: build (222 tests) + QA all PASS. |
-| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-1 | feat/tests-components-1 | pi | deepseek-v4-flash-0731 | wave2: component tests shell+atoms+whitelist+storage |
-| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-2 | feat/tests-components-2 | pi | deepseek-v4-flash-0731 | wave2: component tests records+deals+website-tree |
-| 2026-10-07 | pending | /home/joera/code/s2s-tests-e2e | feat/tests-e2e | pi | deepseek-v4-flash-0731 | wave2: playwright e2e specs on safe-mock fixture |
+| 2026-10-07 | c7c3814 | /home/joera/code/s2s-tests-components-1 (MERGED, worktree removed) | feat/tests-components-1 | pi | deepseek-v4-flash-0731 | wave2: component tests shell+atoms+whitelist+storage; rev-4 APPROVED after <s2s-table> rewrite; merged c56110f |
+| 2026-10-07 | 2bbd231 | /home/joera/code/s2s-tests-components-2 (MERGED, worktree removed) | feat/tests-components-2 | pi | deepseek-v4-flash-0731 | wave2: component tests records/deals/website-tree; rev-2 APPROVED; merged 1abc6f3 |
+| 2026-10-07 | b84c493 | /home/joera/code/s2s-tests-e2e (MERGED, worktree removed) | feat/tests-e2e | pi | deepseek-v4-flash-0731 | wave2: playwright e2e specs; rev-3 APPROVED + blocker fix; merged e620a95 |
 
 ## 2026-10-07 — safe-app phosphor icon migration (orchestrated)
 
