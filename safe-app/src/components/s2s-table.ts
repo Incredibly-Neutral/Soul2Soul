@@ -85,21 +85,42 @@ export class S2STable<T> extends LitElement {
   /** Opaque counter; bump to force a re-render (see header note). */
   @property({ type: Number }) revision = 0;
 
+  /**
+   * Optional label overrides for the <table-filter> dropdowns, keyed by column
+   * key. Falls back to the column label. Used to keep the historical toolbar
+   * labels (e.g. "Author" for the deals/offers author column, whose column
+   * label is "Author (safe)") byte-identical to before the refactor.
+   */
+  @property({ attribute: false }) filterLabels: Record<string, string> = {};
+
   /** Renders into light DOM so host shadow styles reach the table. */
   createRenderRoot() {
     return this;
   }
 
+  /** Rows after the filter+sort pipeline; computed once per update in willUpdate(). */
+  private filteredRows: T[] = [];
   private lastEmittedCount = -1;
-  private filteredCount = 0;
 
-  /** Emit the filtered row count so hosts can show it without re-running the pipeline. */
-  protected updated(_changed: PropertyValues) {
-    if (this.filteredCount !== this.lastEmittedCount) {
-      this.lastEmittedCount = this.filteredCount;
+  /**
+   * Compute the filtered/sorted rows and emit the filtered count to the host
+   * HERE (start of the update cycle) rather than in updated(), so the host's
+   * "N results" titles converge within the same pre-paint microtask flush the
+   * component's own update runs in. Hosts still own SortState/FilterState; the
+   * count event is just a convenience so they need not re-run the pipeline.
+   */
+  protected willUpdate(_changed: PropertyValues) {
+    // Filter first, then sort — the order the tabs used before this refactor.
+    this.filteredRows = sortByColumn(
+      filterByColumn(this.rows, this.columns, this.filters),
+      this.columns,
+      this.sort,
+    );
+    if (this.filteredRows.length !== this.lastEmittedCount) {
+      this.lastEmittedCount = this.filteredRows.length;
       this.dispatchEvent(
         new CustomEvent('count', {
-          detail: { count: this.filteredCount },
+          detail: { count: this.filteredRows.length },
           bubbles: true,
           composed: true,
         }),
@@ -139,13 +160,7 @@ export class S2STable<T> extends LitElement {
   }
 
   render() {
-    // Filter first, then sort — the order the tabs used before this refactor.
-    const rows = sortByColumn(
-      filterByColumn(this.rows, this.columns, this.filters),
-      this.columns,
-      this.sort,
-    );
-    this.filteredCount = rows.length;
+    const rows = this.filteredRows;
 
     return html`
       ${this.filterKeys.length > 0
@@ -157,7 +172,7 @@ export class S2STable<T> extends LitElement {
                 return html`
                   <table-filter
                     data-key=${key}
-                    label=${col.label}
+                    label=${this.filterLabels[key] ?? col.label}
                     .value=${this.filters[key] ?? ''}
                     .options=${uniqueValuesForColumn(this.rows, this.columns, key)}
                     @change=${(e: CustomEvent) => this.handleFilter(key, e)}
