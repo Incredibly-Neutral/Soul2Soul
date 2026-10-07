@@ -96,3 +96,27 @@ non-JSON bodies in an actionable `Error('runner <status> returned non-JSON: <bod
 
 **Status:** committed f203f4f, pushed, PR #89 OPEN (https://github.com/Joera/S2S-monorepo/pull/89). Not merged.
 - 2026-09-03 | session=self (DeepSeek V4 Flash 0731) | worktree=/home/joera/code/s2s-serverless-error-handling | branch=feat/serverless-error-handling | agent=builder(self) | model=deepseek-v4-flash-0731 | task=harden protocol/serverless/server.ts error handling (JSON on all error paths) + regression test | PR=https://github.com/Joera/S2S-monorepo/pull/88
+
+## 2026-10-07 — safe-app test suite (orchestrated)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | 9cc0c5a | /home/joera/code/s2s-tests-plumbing (MERGED, worktree removed) | feat/tests-plumbing | pi | deepseek-v4-flash-0731 | wave1: plumbing+build-cycle — vite6, 2-project vitest, e2e scaffold, helpers; rev-1 APPROVED; gate fix f1429fa
+| 2026-10-07 | 5decef8 | /home/joera/code/s2s-tests-unit-lib (MERGED, worktree removed) | feat/tests-unit-lib | pi | deepseek-v4-flash-0731 | wave1: unit tests lib/utils/filecoin — 10 files/127 tests, rev-2 APPROVED, merged
+| 2026-10-07 | 67cc64a | /home/joera/code/s2s-tests-unit-state (MERGED, worktree removed) | feat/tests-unit-state | pi | deepseek-v4-flash-0731 | wave1: unit tests state layer — 11 files/94 tests, rev-3 APPROVED, merged
+
+## 2026-10-07 — safe-app s2s-table component (orchestrated)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-07 | MERGED 19c418b | /home/joera/code/s2s-safeapp-table (MERGED, worktree removed) | feat/safeapp-table | pi | deepseek-v4-flash-0731 | extract reusable s2s-table Lit component (sort/filter chrome) + migrate deals/storage tabs + prune dead tables.scss |
+
+  Commits: c326893 (refactor), 19c418b (fix review findings: filterLabels override restores
+  "Author" dropdown label; count converged pre-paint via willUpdate). Reviewer rev-table
+  APPROVED (single-model pi reviewer — no cross-vendor available). Gate gotcha: QA fails on
+  a fresh worktree because .env doesn't carry over → DRPC "default" key 403s → module
+  detection fails → gated tabs disabled. Copy ../.env into the worktree and rebuild; then QA
+  passes 8/8. Post-merge gate on main: build (222 tests) + QA all PASS. |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-1 | feat/tests-components-1 | pi | deepseek-v4-flash-0731 | wave2: component tests shell+atoms+whitelist+storage |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-components-2 | feat/tests-components-2 | pi | deepseek-v4-flash-0731 | wave2: component tests records+deals+website-tree |
+| 2026-10-07 | pending | /home/joera/code/s2s-tests-e2e | feat/tests-e2e | pi | deepseek-v4-flash-0731 | wave2: playwright e2e specs on safe-mock fixture |
