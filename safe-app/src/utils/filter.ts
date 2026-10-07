@@ -53,6 +53,19 @@ export function filterByColumn<T>(
 }
 
 /**
+ * Return a NEW filter state with `key` set to `value`. An empty `value`
+ * (All) removes the key. Never mutates the input, so the store stays the
+ * source of truth and the host can keep owning its FilterState while the
+ * <s2s-table> component reports `filter` events.
+ */
+export function setFilter(filters: FilterState, key: string, value: string): FilterState {
+  const next = { ...filters };
+  if (value) next[key] = value;
+  else delete next[key];
+  return next;
+}
+
+/**
  * Unique, sorted option values present in the rows for a column extractor.
  * Empty/null/undefined values are excluded (they would only match "All").
  */

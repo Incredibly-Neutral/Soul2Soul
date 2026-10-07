@@ -1,5 +1,5 @@
 // s2s-storage-tab.ts
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
@@ -9,19 +9,16 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import {
-  sortByColumn,
   toggleSort,
-  sortIndicator,
   type SortState,
   type TableColumn,
 } from '@/utils/sort.js';
 import {
-  filterByColumn,
-  uniqueValuesForColumn,
+  setFilter,
   type FilterState,
 } from '@/utils/filter.js';
+import './s2s-table.js';
 import './copy-hash.js';
-import './table-filter.js';
 
 // Per-column sort configuration for the Pieces and Data Sets tables.
 const PIECE_COLUMNS: Array<TableColumn<StoragePiece>> = [
@@ -50,6 +47,12 @@ const DATASET_COLUMNS: Array<TableColumn<PublicationDataSet>> = [
   },
 ];
 
+// Column keys that get a filter dropdown in each table, and the shared
+// trailing "Actions" header content.
+const PIECE_FILTER_KEYS = ['kind'];
+const DATASET_FILTER_KEYS = ['state'];
+const ACTIONS_HEADER = html`Actions`;
+
 @customElement('s2s-storage-tab')
 export class S2SStorageTab extends LitElement {
   @property({ attribute: false }) storage!: FilecoinStorage;
@@ -62,6 +65,15 @@ export class S2SStorageTab extends LitElement {
   @state() private datasetsSort: SortState | null = null;
   @state() private piecesFilters: FilterState = {};
   @state() private datasetsFilters: FilterState = {};
+  @state() private piecesCount = 0;
+  @state() private datasetsCount = 0;
+  @state() private revision = 0;
+
+  // Stable row renderers (bound once) so <s2s-table> only re-renders on real
+  // data/state changes. `revision` is bumped alongside requestUpdate() so the
+  // table reflects transient per-row state (in-flight delete/terminate).
+  private pieceRowRenderer = (p: StoragePiece) => this.renderPieceRow(p);
+  private datasetRowRenderer = (ds: PublicationDataSet) => this.renderDataSetRow(ds);
 
   static styles = [
     typograhyStyles,
@@ -95,13 +107,6 @@ export class S2SStorageTab extends LitElement {
         height: 2rem;
         vertical-align: middle;
         filter: brightness(0) invert(1);
-      }
-
-      .table {
-        grid-template-columns: 1.5fr 1.5fr 0.5fr 0.5fr 0.5fr 0.75fr 0.75fr 0.5fr;
-      }
-      .table-datasets {
-        grid-template-columns: 0.75fr 0.75fr 0.5fr 0.75fr 0.75fr 0.5fr;
       }
 
       /* Cached (unconfirmed) rows use light text */
@@ -254,6 +259,7 @@ export class S2SStorageTab extends LitElement {
     if (this.deleting.has(key)) return;
     this.deleting.add(key);
     this.requestUpdate();
+    this.revision++;
 
     try {
       await this.storage.deletePiece(BigInt(dataSetId), BigInt(pieceId));
@@ -265,12 +271,14 @@ export class S2SStorageTab extends LitElement {
 
     this.deleting.delete(key);
     this.requestUpdate();
+    this.revision++;
   }
 
   private async handleTerminate(dataSetId: string) {
     if (this.terminating.has(dataSetId)) return;
     this.terminating.add(dataSetId);
     this.requestUpdate();
+    this.revision++;
 
     console.log('ht');
     try {
@@ -288,6 +296,7 @@ export class S2SStorageTab extends LitElement {
 
     this.terminating.delete(dataSetId);
     this.requestUpdate();
+    this.revision++;
   }
 
   private epochDisplay(epoch: bigint | null): string {
@@ -344,56 +353,75 @@ export class S2SStorageTab extends LitElement {
     }, 5000);
   }
 
-  private sortableHeader<T>(
-    col: TableColumn<T>,
-    sort: SortState | null,
-    onSort: (key: string) => void,
-  ) {
+  private renderPieceRow(p: StoragePiece): TemplateResult {
+    const key = `${p.dataSetId}:${p.pieceId}`;
+    const isDeleting = this.deleting.has(key);
+    const rootCid = p.rootCid || '';
+    const kind = p.metadata?.kind || '-';
+    const className = p.confirmed ? '' : 'cached';
+
     return html`
-      <button
-        class="table-header sortable${col.cls ? ' ' + col.cls : ''}"
-        data-sort="${col.key}"
-        title="Sort by ${col.label}"
-        @click=${() => onSort(col.key)}
-      >
-        <span>${col.label}</span>
-        <span class="sort-indicator">${sortIndicator(sort, col.key)}</span>
-      </button>
+      <div class="table-row ${className}">
+        <div class="table-cell">
+          <copy-hash .value=${this.shortenCid(p.pieceCid || '-')}></copy-hash>
+        </div>
+        <div class="table-cell">
+          ${rootCid
+            ? html`<a href="${this.gatewayUrl(rootCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link"
+                title="Open on IPFS gateway">
+                <copy-hash .value=${this.shortenCid(rootCid)}></copy-hash>
+              </a>`
+            : '-'}
+        </div>
+        <div class="table-cell">${kind}</div>
+        <div class="table-cell">${this.formatBytes(Number(p.size || 0))}</div>
+        <div class="table-cell">${p.dataSetId}</div>
+        <div class="table-cell">${this.shortenCid(p.provider || '-', 6)}</div>
+        <div class="table-cell">
+          <span class="state-badge ${p.scheduledForRemoval ? 'removing' : 'active'}">
+            ${p.scheduledForRemoval ? 'Rm' : 'Active'}
+          </span>
+        </div>
+        <div class="table-cell">
+          <button class="btn-delete ${isDeleting ? 'deleting' : ''}"
+            ?disabled=${isDeleting}
+            @click=${() => void this.handleDelete(p.dataSetId, p.pieceId, p.pieceCid)}>
+            ${isDeleting ? '...' : '🗑️'}
+          </button>
+        </div>
+      </div>
     `;
   }
 
-  private handlePiecesSort(key: string) {
-    this.piecesSort = toggleSort(this.piecesSort, key);
-  }
+  private renderDataSetRow(ds: PublicationDataSet): TemplateResult {
+    const isTerminating = this.terminating.has(ds.dataSetId);
+    const isTerminated = ds.pdpEndEpoch != null && ds.pdpEndEpoch > 0n;
 
-  private handleDatasetsSort(key: string) {
-    this.datasetsSort = toggleSort(this.datasetsSort, key);
-  }
-
-  private handleFilter(source: 'pieces' | 'datasets', key: string, e: CustomEvent) {
-    const value = e.detail.value as string;
-    const next =
-      source === 'pieces' ? { ...this.piecesFilters } : { ...this.datasetsFilters };
-    if (value) next[key] = value;
-    else delete next[key];
-    if (source === 'pieces') this.piecesFilters = next;
-    else this.datasetsFilters = next;
+    return html`
+      <div class="table-row">
+        <div class="table-cell">${ds.dataSetId}</div>
+        <div class="table-cell">${this.shortenCid(ds.provider || '-', 6)}</div>
+        <div class="table-cell">${ds.pieceCount}</div>
+        <div class="table-cell">
+          <span class="state-badge ${isTerminated ? 'removing' : 'active'}">
+            ${isTerminated ? 'Terminated' : 'Active'}
+          </span>
+        </div>
+        <div class="table-cell">${this.epochDisplay(ds.pdpEndEpoch)}</div>
+        <div class="table-cell">
+          <button class="btn-terminate ${isTerminating ? 'terminating' : ''}"
+            ?disabled=${isTerminating}
+            @click=${() => void this.handleTerminate(ds.dataSetId)}>
+            ${isTerminating ? '...' : 'X'}
+          </button>
+        </div>
+      </div>
+    `;
   }
 
   render() {
     const allPieces = store.pieces;
     const allDatasets = store.dataSets;
-    // Filter first, then sort (filters narrow the rows, sort orders the result).
-    const pieces = sortByColumn(
-      filterByColumn(allPieces, PIECE_COLUMNS, this.piecesFilters),
-      PIECE_COLUMNS,
-      this.piecesSort,
-    );
-    const datasets = sortByColumn(
-      filterByColumn(allDatasets, DATASET_COLUMNS, this.datasetsFilters),
-      DATASET_COLUMNS,
-      this.datasetsSort,
-    );
 
     if (allPieces.length === 0) {
       return html`
@@ -413,7 +441,7 @@ export class S2SStorageTab extends LitElement {
     return html`
       <div class="toolbar">
         <div class="section-title">
-          <h2>Filecoin Storage (${pieces.length} pieces)</h2>
+          <h2>Filecoin Storage (${this.piecesCount} pieces)</h2>
         </div>
         <button class="button has-icon" id="refresh-btn"
           @click=${() => window.location.reload()}>
@@ -444,117 +472,45 @@ export class S2SStorageTab extends LitElement {
           `
         : ''}
 
-      <div class="table-filters pieces-filters">
-        <table-filter data-key="kind" label="Kind" .value=${this.piecesFilters.kind ?? ''}
-          .options=${uniqueValuesForColumn(allPieces, PIECE_COLUMNS, 'kind')}
-          @change=${(e: CustomEvent) => this.handleFilter('pieces', 'kind', e)}></table-filter>
-      </div>
-
-      ${pieces.length > 0
-        ? html`
-            <div class="table table-pieces">
-              ${PIECE_COLUMNS.map((c) => this.sortableHeader(c, this.piecesSort, (k) => this.handlePiecesSort(k)))}
-              <div class="table-header">Actions</div>
-
-              ${pieces.map((p: StoragePiece) => {
-                const key = `${p.dataSetId}:${p.pieceId}`;
-                const isDeleting = this.deleting.has(key);
-                const rootCid = p.rootCid || '';
-                const kind = p.metadata?.kind || '-';
-                const className = p.confirmed ? '' : 'cached';
-
-                return html`
-                  <div class="table-row ${className}">
-                    <div class="table-cell">
-                      <copy-hash .value=${this.shortenCid(p.pieceCid || '-')}></copy-hash>
-                    </div>
-                    <div class="table-cell">
-                      ${rootCid
-                        ? html`<a href="${this.gatewayUrl(rootCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link"
-                            title="Open on IPFS gateway">
-                            <copy-hash .value=${this.shortenCid(rootCid)}></copy-hash>
-                          </a>`
-                        : '-'}
-                    </div>
-                    <div class="table-cell">${kind}</div>
-                    <div class="table-cell">${this.formatBytes(Number(p.size || 0))}</div>
-                    <div class="table-cell">${p.dataSetId}</div>
-                    <div class="table-cell">${this.shortenCid(p.provider || '-', 6)}</div>
-                    <div class="table-cell">
-                      <span class="state-badge ${p.scheduledForRemoval ? 'removing' : 'active'}">
-                        ${p.scheduledForRemoval ? 'Rm' : 'Active'}
-                      </span>
-                    </div>
-                    <div class="table-cell">
-                      <button class="btn-delete ${isDeleting ? 'deleting' : ''}"
-                        ?disabled=${isDeleting}
-                        @click=${() => void this.handleDelete(p.dataSetId, p.pieceId, p.pieceCid)}>
-                        ${isDeleting ? '...' : '🗑️'}
-                      </button>
-                    </div>
-                  </div>
-                `;
-              })}
-            </div>
-          `
-        : html`
-            <div class="empty-state">
-              <div class="empty-icon">📄</div>
-              <p>No pieces match the current filters</p>
-            </div>
-          `}
+      <s2s-table
+        .columns=${PIECE_COLUMNS}
+        .rows=${allPieces}
+        .sort=${this.piecesSort}
+        .filters=${this.piecesFilters}
+        .filterKeys=${PIECE_FILTER_KEYS}
+        .rowRenderer=${this.pieceRowRenderer}
+        .revision=${this.revision}
+        .actionsHeader=${true}
+        .actionsContent=${ACTIONS_HEADER}
+        emptyText="No pieces match the current filters"
+        gridTemplate="1.5fr 1.5fr 0.5fr 0.5fr 0.5fr 0.75fr 0.75fr 0.5fr"
+        @sort=${(e: CustomEvent) => { this.piecesSort = toggleSort(this.piecesSort, e.detail.key); }}
+        @filter=${(e: CustomEvent) => { this.piecesFilters = setFilter(this.piecesFilters, e.detail.key, e.detail.value); }}
+        @count=${(e: CustomEvent) => { this.piecesCount = e.detail.count; }}
+      ></s2s-table>
 
       <div class="toolbar ds-section-title">
         <div class="section-title">
-          <h2>Data Sets (${datasets.length})</h2>
+          <h2>Data Sets (${this.datasetsCount})</h2>
         </div>
       </div>
 
-      <div class="table-filters datasets-filters">
-        <table-filter data-key="state" label="State" .value=${this.datasetsFilters.state ?? ''}
-          .options=${uniqueValuesForColumn(allDatasets, DATASET_COLUMNS, 'state')}
-          @change=${(e: CustomEvent) => this.handleFilter('datasets', 'state', e)}></table-filter>
-      </div>
-
-      ${datasets.length === 0 && allDatasets.length > 0
-        ? html`
-            <div class="empty-state">
-              <div class="empty-icon">📄</div>
-              <p>No data sets match the current filters</p>
-            </div>
-          `
-        : html`
-            <div class="table table-datasets">
-              ${DATASET_COLUMNS.map((c) => this.sortableHeader(c, this.datasetsSort, (k) => this.handleDatasetsSort(k)))}
-              <div class="table-header">Actions</div>
-
-              ${datasets.map((ds: PublicationDataSet) => {
-                const isTerminating = this.terminating.has(ds.dataSetId);
-                const isTerminated = ds.pdpEndEpoch != null && ds.pdpEndEpoch > 0n;
-
-                return html`
-                  <div class="table-row">
-                    <div class="table-cell">${ds.dataSetId}</div>
-                    <div class="table-cell">${this.shortenCid(ds.provider || '-', 6)}</div>
-                    <div class="table-cell">${ds.pieceCount}</div>
-                    <div class="table-cell">
-                      <span class="state-badge ${isTerminated ? 'removing' : 'active'}">
-                        ${isTerminated ? 'Terminated' : 'Active'}
-                      </span>
-                    </div>
-                    <div class="table-cell">${this.epochDisplay(ds.pdpEndEpoch)}</div>
-                    <div class="table-cell">
-                      <button class="btn-terminate ${isTerminating ? 'terminating' : ''}"
-                        ?disabled=${isTerminating}
-                        @click=${() => void this.handleTerminate(ds.dataSetId)}>
-                        ${isTerminating ? '...' : 'X'}
-                      </button>
-                    </div>
-                  </div>
-                `;
-              })}
-            </div>
-          `}
+      <s2s-table
+        .columns=${DATASET_COLUMNS}
+        .rows=${allDatasets}
+        .sort=${this.datasetsSort}
+        .filters=${this.datasetsFilters}
+        .filterKeys=${DATASET_FILTER_KEYS}
+        .rowRenderer=${this.datasetRowRenderer}
+        .revision=${this.revision}
+        .actionsHeader=${true}
+        .actionsContent=${ACTIONS_HEADER}
+        emptyText=${allDatasets.length > 0 ? 'No data sets match the current filters' : ''}
+        gridTemplate="0.75fr 0.75fr 0.5fr 0.75fr 0.75fr 0.5fr"
+        @sort=${(e: CustomEvent) => { this.datasetsSort = toggleSort(this.datasetsSort, e.detail.key); }}
+        @filter=${(e: CustomEvent) => { this.datasetsFilters = setFilter(this.datasetsFilters, e.detail.key, e.detail.value); }}
+        @count=${(e: CustomEvent) => { this.datasetsCount = e.detail.count; }}
+      ></s2s-table>
     `;
   }
 }
