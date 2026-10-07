@@ -163,7 +163,15 @@ export class S2STable<T> extends LitElement {
   /** Render the sort caret ph element for the active column, '' otherwise. */
   private sortIndicatorElement(key: string) {
     const tag = sortIndicator(this.sort, key);
-    return tag ? html`<${tag} size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></${tag}>` : '';
+    // lit does not support dynamic tag-name bindings in `html` templates, so
+    // use STATIC tags for each caret the util can return ('' = no active sort).
+    if (tag === 'ph-caret-up') {
+      return html`<ph-caret-up size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-caret-up>`;
+    }
+    if (tag === 'ph-caret-down') {
+      return html`<ph-caret-down size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-caret-down>`;
+    }
+    return '';
   }
 
   render() {
