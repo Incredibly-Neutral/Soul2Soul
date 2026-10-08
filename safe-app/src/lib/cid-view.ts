@@ -45,6 +45,20 @@ function toBytes32Id(ref: string): string {
 const MAX_VERSIONS = 100;
 /** Kubo ls timeout, matching s2s-website-tree-tab.ts. */
 const LS_TIMEOUT_MS = 15_000;
+/** Kubo cat timeout — the previously-missing timeout, same pattern as ls. */
+const CAT_TIMEOUT_MS = 30_000;
+/** Phase considered SLOW (>10s) — highlighted with a console.warn. */
+const SLOW_MS = 10_000;
+
+/**
+ * Per-phase timing log for the CID inventory walk. Always console.info; when a
+ * phase exceeds SLOW_MS it switches to a console.warn to visually flag a stall.
+ */
+function logPhase(label: string, ms: number, detail?: string) {
+  const suffix = detail ? ` ${detail}` : '';
+  if (ms >= SLOW_MS) console.warn(`[cid-view] SLOW ${label} ${Math.round(ms)}ms${suffix}`);
+  else console.info(`[cid-view] ${label} ${Math.round(ms)}ms${suffix}`);
+}
 
 /** Single shared Kubo client — same args as s2s-records-tab makeIPFS(). */
 function makeIPFS(): S2SIPFSMethods {
@@ -84,30 +98,45 @@ export function buildSafeAppCidViewContext(args: {
 
   return {
     async getDeals() {
+      const t0 = performance.now();
       try {
         const { deals } = await safeIntegration.getAllDealsAndOffers();
-        return deals.map((d) => toDealRead(d, 'deal'));
+        const result = deals.map((d) => toDealRead(d, 'deal'));
+        logPhase('getDeals', performance.now() - t0, `${result.length} deals`);
+        return result;
       } catch {
+        logPhase('getDeals', performance.now() - t0, 'failed');
         return [];
       }
     },
 
     async getOffers() {
+      const t0 = performance.now();
       try {
         const { offers } = await safeIntegration.getAllDealsAndOffers();
-        return offers.map((o) => toDealRead(o, 'offer'));
+        const result = offers.map((o) => toDealRead(o, 'offer'));
+        logPhase('getOffers', performance.now() - t0, `${result.length} offers`);
+        return result;
       } catch {
+        logPhase('getOffers', performance.now() - t0, 'failed');
         return [];
       }
     },
 
     async getVersions(genesis: string) {
+      const t0 = performance.now();
       try {
         const publicationModule = safeIntegration.publicationModule;
-        if (!publicationModule) return [];
+        if (!publicationModule) {
+          logPhase('getVersions', performance.now() - t0, `genesis=${genesis} no-module`);
+          return [];
+        }
         const id = toBytes32Id(genesis);
         const count = Number(await publicationModule.getVersionCount(id));
-        if (!Number.isFinite(count) || count <= 0) return [];
+        if (!Number.isFinite(count) || count <= 0) {
+          logPhase('getVersions', performance.now() - t0, `genesis=${genesis} count=0`);
+          return [];
+        }
         const limit = Math.min(count, MAX_VERSIONS);
         const versions: VersionRead[] = [];
         for (let i = 0; i < limit; i++) {
@@ -118,71 +147,111 @@ export function buildSafeAppCidViewContext(args: {
             tombstone: Boolean(v.tombstone),
           });
         }
+        logPhase('getVersions', performance.now() - t0, `genesis=${genesis} ${versions.length} versions`);
         return versions;
       } catch {
+        logPhase('getVersions', performance.now() - t0, 'failed');
         return [];
       }
     },
 
     async getConfig() {
+      const t0 = performance.now();
       const configCid = store.getRecord('config');
-      if (!configCid) return { cid: '', config: {} };
+      if (!configCid) {
+        logPhase('getConfig', performance.now() - t0, 'no-config');
+        return { cid: '', config: {} };
+      }
       try {
         const config = await ipfs.fetchFromKubo(configCid);
+        logPhase('getConfig', performance.now() - t0, `cid=${configCid}`);
         return { cid: configCid, config: config ?? {} };
       } catch {
+        logPhase('getConfig', performance.now() - t0, 'failed');
         return { cid: configCid, config: {} };
       }
     },
 
     async getEnsText(node: string, key: string) {
-      if (!protocolInfo?.ensRecords) return '';
+      const t0 = performance.now();
+      if (!protocolInfo?.ensRecords) {
+        logPhase('getEnsText', performance.now() - t0, `key=${key} no-ens-records`);
+        return '';
+      }
       try {
-        return await evmRead(8453, protocolInfo.ensRecords, RECORDS_CONTRACT_ABI, 'getText', [
+        const value = await evmRead(8453, protocolInfo.ensRecords, RECORDS_CONTRACT_ABI, 'getText', [
           node,
           key,
         ]);
+        logPhase('getEnsText', performance.now() - t0, `key=${key} len=${value.length}`);
+        return value;
       } catch {
+        logPhase('getEnsText', performance.now() - t0, 'failed');
         return '';
       }
     },
 
     async dagGet(cid: string) {
+      const t0 = performance.now();
       try {
-        return await ipfs.dagGet(cid);
+        const result = await ipfs.dagGet(cid);
+        const size = Array.isArray(result) ? `${result.length} entries` : 'ok';
+        logPhase('dagGet', performance.now() - t0, `cid=${cid} ${size}`);
+        return result;
       } catch {
+        logPhase('dagGet', performance.now() - t0, `cid=${cid} failed`);
         return null;
       }
     },
 
     async ls(cid: string) {
+      const t0 = performance.now();
       try {
         const url = `${IPFS_URL}/api/v0/ls?arg=${encodeURIComponent(cid)}`;
         const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(LS_TIMEOUT_MS) });
-        if (!res.ok) return [];
+        if (!res.ok) {
+          logPhase('ls', performance.now() - t0, `cid=${cid} http=${res.status}`);
+          return [];
+        }
         const data = (await res.json()) as {
           Objects?: { Links?: Array<{ Name: string; Hash: string; Size: number }> | null }[];
         };
         const links = data.Objects?.[0]?.Links;
         // A file/leaf returns Links: [] (or missing) → treat as a leaf.
-        if (!Array.isArray(links) || links.length === 0) return [];
-        return links.map((l) => ({
+        if (!Array.isArray(links) || links.length === 0) {
+          logPhase('ls', performance.now() - t0, `cid=${cid} 0 links`);
+          return [];
+        }
+        const result = links.map((l) => ({
           name: l.Name,
           hash: l.Hash,
           size: l.Size ?? 0,
         }));
+        logPhase('ls', performance.now() - t0, `cid=${cid} ${result.length} links`);
+        return result;
       } catch {
+        logPhase('ls', performance.now() - t0, `cid=${cid} failed`);
         return [];
       }
     },
 
     async cat(cid: string) {
+      const t0 = performance.now();
       try {
         const url = `${IPFS_URL}/api/v0/cat?arg=${encodeURIComponent(cid)}`;
-        const res = await fetch(url, { method: 'POST' });
-        if (!res.ok) return '';
-        return await res.text();
+        const res = await fetch(url, {
+          method: 'POST',
+          signal: AbortSignal.timeout(CAT_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          logPhase('cat', performance.now() - t0, `cid=${cid} http=${res.status}`);
+          return '';
+        }
+        const text = await res.text();
+        logPhase('cat', performance.now() - t0, `cid=${cid} ${text.length} bytes`);
+        return text;
       } catch {
+        logPhase('cat', performance.now() - t0, `cid=${cid} failed`);
         return '';
       }
     },
