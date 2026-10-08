@@ -384,8 +384,7 @@ export const fonts = css`
   /* ------------------------------------------------ */
   :root {
     --font-headline-family: 'Oswald', sans-serif;
-    --font-body-family: 'Schibsted Grotesk', sans-serif;
-    /* QA monospace type — Fira Code is the only mono font in the app now. */
+    --font-body-family: 'Nunito Sans', sans-serif;
     --font-mono-family: 'Azeret Mono', monospace;
   }
 

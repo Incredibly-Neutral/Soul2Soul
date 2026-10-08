@@ -15,7 +15,7 @@ export const buttonStyles = css`
     cursor: pointer;
     font-family: var(--font-mono);
     font-size: 0.85rem;
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: 0.75px;
     transition: background-color 0.2s, transform 0.1s;
     display: flex;

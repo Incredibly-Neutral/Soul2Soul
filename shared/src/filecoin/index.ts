@@ -38,7 +38,6 @@ import * as Piece from "@filoz/synapse-core/piece";
 import { privateKeyToAccount } from "viem/accounts";
 import { formatUnits, http, createWalletClient, custom } from "viem";
 import type { Hex } from "viem";
-import { findPieceIdsByCid } from "@filoz/synapse-core/pdp-verifier";
 import { uploadToSynapse } from "filecoin-pin/core/upload";
 import { CarReader } from "@ipld/car";
 import { CID } from "multiformats/cid";
@@ -128,7 +127,7 @@ export interface FilecoinCarBuilder {
  *  only needs primary usability — the SP-to-SP pull path is bypassed, so a
  *  provider's pull-endpoint health is irrelevant here.
  *  Re-run protocol/scripts/filecoin/probe-providers.ts to refresh. */
-const BROWSER_USABLE_PROVIDERS = [6n, 13n, 15n, 29n];
+const BROWSER_USABLE_PROVIDERS = [1n, 5n, 7n, 13n, 15n, 29n, 30n, 32n];
 
 /**
  * Thrown when fewer than two Filecoin copies could be committed across the
@@ -340,49 +339,6 @@ export class FilecoinStorage {
       rootCid,
       this.buildPieceMetadata(owners, kind),
     );
-  }
-
-  /**
-   * Upload CAR bytes to Filecoin, skipping if the PieceCID already exists
-   * in the given dataset. Computes the PieceCID locally (no RPC needed)
-   * and checks the PDP verifier contract before uploading.
-   *
-   * @returns Normal upload result on first upload, or skipped=true if already stored.
-   */
-  async uploadIfNew(
-    carBytes: Uint8Array,
-    dataSetId: bigint,
-    attributedTo: string,
-  ): Promise<FilecoinUploadResult & { skipped: boolean; pieceId?: bigint }> {
-    this.ensureInit();
-    const parsedCid = await Piece.calculate(carBytes);
-
-    // Check PDP verifier — does this PieceCID already exist in the dataset?
-    const existing = await findPieceIdsByCid(this.synapse.client, {
-      dataSetId,
-      pieceCid: parsedCid,
-      startPieceId: 0n,
-      limit: 1n,
-    });
-
-    if (existing && existing.length > 0) {
-      // console.log(`[filecoin] piece already stored (pieceId ${existing[0]}), skipping upload`);
-      return {
-        pieceCid: parsedCid.toString(),
-        rootCid: "",
-        size: parsedCid.size,
-        complete: true,
-        copyCount: 0,
-        failedCount: 0,
-        copies: [],
-        skipped: true,
-        pieceId: existing[0],
-      };
-    }
-
-    // Not there — upload as normal
-    const result = await this.uploadTree(carBytes, attributedTo ? [attributedTo] : []);
-    return { ...result, skipped: false };
   }
 
   /**

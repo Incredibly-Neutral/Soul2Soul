@@ -19,10 +19,11 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, fallback, http } from 'viem';
 import { mainnet, base } from 'viem/chains';
 import { Wallet } from 'ethers';
 
+import { buildFallbackRpcs } from '../rpc';
 import { getProtocolInfo } from '../protocol';
 import type { S2SProtocolInfo } from '../protocol';
 import type { LitService } from '../lit';
@@ -109,11 +110,15 @@ async function callAction(cid: string, inputs: Record<string, unknown>): Promise
  * protocol gateway. The chain tests hit the LIVE runner, so the rpcs must be
  * the real env RPCs (the `sampleEndpoints` fixture rpcs are placeholder drpc
  * URLs that 403 on real calls).
+ *
+ * The rpcs come from buildFallbackRpcs() — DRPC → public → Alchemy → Infura —
+ * so a single flaky endpoint (e.g. DRPC returning empty `0x`) never fails a
+ * live run: evmRead inside the Lit action failsover across the array.
  */
 function buildChainEndpoints(ipfsGateway: string): { ipfsGateway: string; rpcs: { L1: string[]; L2: string[] } } {
   return {
     ipfsGateway,
-    rpcs: { L1: [MAINNET_RPC_URL!], L2: [BASE_RPC_URL!] },
+    rpcs: buildFallbackRpcs(),
   };
 }
 
@@ -184,11 +189,15 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
   let renderedJobs: any[];
 
   beforeAll(async () => {
+    const rpcs = buildFallbackRpcs();
     const l1 = createPublicClient({
       chain: mainnet as any,
-      transport: http(MAINNET_RPC_URL!),
+      transport: fallback(rpcs.L1.map((url) => http(url))),
     }) as any;
-    const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
+    const l2 = createPublicClient({
+      chain: base as any,
+      transport: fallback(rpcs.L2.map((url) => http(url))),
+    }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
@@ -297,11 +306,15 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
   let SIGNATURE: string;
 
   beforeAll(async () => {
+    const rpcs = buildFallbackRpcs();
     const l1 = createPublicClient({
       chain: mainnet as any,
-      transport: http(MAINNET_RPC_URL!),
+      transport: fallback(rpcs.L1.map((url) => http(url))),
     }) as any;
-    const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
+    const l2 = createPublicClient({
+      chain: base as any,
+      transport: fallback(rpcs.L2.map((url) => http(url))),
+    }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
@@ -351,11 +364,15 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
   let protocolInfo: S2SProtocolInfo;
 
   beforeAll(async () => {
+    const rpcs = buildFallbackRpcs();
     const l1 = createPublicClient({
       chain: mainnet as any,
-      transport: http(MAINNET_RPC_URL!),
+      transport: fallback(rpcs.L1.map((url) => http(url))),
     }) as any;
-    const l2 = createPublicClient({ chain: base as any, transport: http(BASE_RPC_URL!) }) as any;
+    const l2 = createPublicClient({
+      chain: base as any,
+      transport: fallback(rpcs.L2.map((url) => http(url))),
+    }) as any;
     protocolInfo = await getProtocolInfo(false, l1, l2);
   }, 15_000);
 

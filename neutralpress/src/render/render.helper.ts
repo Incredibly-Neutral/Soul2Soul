@@ -22,6 +22,7 @@ import {
 } from '@s2s/soul2soul-shared';
 import type { IMainController } from '../main.ctrlr';
 import { filecoinUploadBackground, kuboBaseUrl } from '../publication/filecoin';
+import { subdomainOf } from '../content/ens-tags';
 
 /** A path to remove from the published tree during an EVM update. */
 export interface RemoveEntry {
@@ -137,11 +138,25 @@ export async function renderCalls(
 
 			if (publish) {
 				// Fire-and-forget Filecoin durability for the rendered site root
-				// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage).
+				// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage). Attributed
+				// to the publication multisig + author EOA — same owners as the
+				// article upload — so the root piece is attributed in storage
+				// listings (oxo filecoin view / safe-app storage tab).
 				filecoinUploadBackground(
 					main,
 					'render-root',
-					() => main.oxo.ctrlr.storage.uploadTree(res.cid, kuboBaseUrl(main)),
+					async () => {
+						const pubAddress = await main
+							.getInitializedService(subdomainOf(publication))
+							.then((s) => s.getMultiSig());
+						const authorEoa = main.oxo.ctrlr.user?.eoa;
+						return main.oxo.ctrlr.storage.uploadTree(
+							res.cid,
+							kuboBaseUrl(main),
+							[pubAddress, authorEoa].filter(Boolean),
+							'render-root',
+						);
+					},
 					res.cid,
 				);
 			}

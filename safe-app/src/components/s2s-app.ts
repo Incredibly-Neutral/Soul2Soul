@@ -55,7 +55,13 @@ export class S2SApp extends LitElement {
   async initFC() {
     const skRes = await fetch('/session-key.json');
     const skData = await skRes.json();
-    const rpcUrl = 'https://lb.drpc.live/filecoin/AouQTyDbwExLrOsOS2mMBR_2kteqUQMR8az6tiKh6MJI'; // 'https://rpc.ankr.com/filecoin' // 'https://api.node.glif.io/rpc/v1',
+    // Same RPC sourcing as the 0xobsidian plugin (settings.rpc_key → DRPC lb,
+    // glif fallback) — keeps the Filecoin RPC endpoint configurable instead of
+    // a hardcoded API key baked into the bundle.
+    const rpcKey = import.meta.env.VITE_DRPC_API_KEY as string | undefined;
+    const rpcUrl = rpcKey
+      ? `https://lb.drpc.live/filecoin/${rpcKey}`
+      : 'https://api.node.glif.io/rpc/v1';
     await this.filecoinStorage.initWithSessionKey(skData, rpcUrl);
   }
 
