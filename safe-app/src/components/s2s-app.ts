@@ -190,7 +190,10 @@ export class S2SApp extends LitElement {
               .storage=${this.filecoinStorage}></s2s-records-tab>`
           : html``;
       case 'storage':
-        return html`<s2s-storage-tab .storage=${this.filecoinStorage}></s2s-storage-tab>`;
+        return html`<s2s-storage-tab
+          .storage=${this.filecoinStorage}
+          .safeIntegration=${this.safeIntegration}
+          .protocolIntegration=${this.protocolIntegration}></s2s-storage-tab>`;
       case 'websiteTree':
         return this.safeIntegration.hasRecordsModule()
           ? html`<s2s-website-tree-tab
