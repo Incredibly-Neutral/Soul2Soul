@@ -1,0 +1,61 @@
+APPROVE — FIX ROUND applied (addresses REQUEST_CHANGES on house-style regressions)
+
+Prior round (commit 8e15ee8) functional change was approved; this round resolves
+the three confirmed house-style claims. Claims treated as hypotheses, each
+confirmed/refuted with evidence below; only confirmed items were fixed.
+
+CLAIM 1 (CONFIRMED — exact breakdown corrected): new lint errors in
+safe-app/src/lib/cid-view.ts from the added logging. Baseline on main = 19
+errors (verified: `git show main:safe-app/src/lib/cid-view.ts` → 19 errors,
+0 warnings). Branch before fix = 33 errors (+14).
+  - 11 x @typescript-eslint/restrict-template-expressions: logPhase helper
+    (2, interpolating `Math.round(ms)`) + detail strings in getDeals/getOffers/
+    getVersions/dagGet/ls(2)/cat(2)/getEnsText (numbers/any in template literals).
+  - 1 x @typescript-eslint/no-unsafe-member-access: `value.length` in getEnsText.
+  - 2 x @typescript-eslint/no-unsafe-assignment: `const value = await evmRead(...)`
+    and `const result = await ipfs.dagGet(cid)` (both await `any`-returning libs).
+  NOTE: the reviewer attributed "2 no-unsafe-argument (logPhase detail arg)" —
+  REFUTED. The only two no-unsafe-argument errors (67:5 / 69:5) are the
+  pre-existing makeIPFS `import.meta.env.*` errors shifted down 14 lines by the
+  logPhase helper insertion; they exist identically on main at 53:5 / 55:5.
+  The real 2 extra errors are the no-unsafe-assignment cases above (const
+  refactorings needed to surface result sizes).
+
+FIX (new code adds 0 errors; pre-existing errors untouched):
+  - logPhase: coerce with String() — `String(Math.round(ms))` in both branches.
+  - All call-site detail strings coerced: String(result.length) x2 (deals/offers,
+    ls links), String(versions.length), String(text.length), String(res.status) x2
+    (ls/cat), String(value.length) (getEnsText), String(result.length) (dagGet).
+  - getEnsText/dagGet: typed the awaited any results so the new const assignments
+    are clean — `(await evmRead(...)) as string` and `(await ipfs.dagGet(cid))
+    as unknown`. Collateral: the pre-existing no-unsafe-return on those two
+    `return <any>` lines is also resolved (typed returns), so the file lands at
+    17 errors, not 19 — strictly fewer, satisfies "at most 19", and the 19
+    pre-existing errors that were NOT rewritten (makeIPFS, getVersions loop,
+    getConfig, ls array-type / l.Size ?? 0, ensRecords optional chain) are all
+    still present and untouched.
+
+CLAIM 2 (CONFIRMED): 2 new prettier violations — getVersions single-line
+logPhase call and the evmRead call tipped over by the added `const value`.
+FIX: `npx prettier --write src/lib/cid-view.ts`. NOTE: prettier also normalized
+a 1-line PRE-EXISTING overflow in ls (`const res = await fetch(... AbortSignal
+.timeout(LS_TIMEOUT_MS) ...)` — 102 chars > printWidth 100, present identically
+on main) as collateral; leaving it would fail `prettier --check`, so it is kept.
+
+CLAIM 3 (CONFIRMED): SLOW_MS comment said ">10s" but code flags `ms >= SLOW_MS`
+(inclusive at 10s). FIX: comment now "(>=10s)".
+
+GATE RESULTS (safe-app/):
+- pnpm test:            36 files, 311 tests passed
+- pnpm test:component:  15 files, 71 tests passed
+- pnpm type-check:      clean
+- npx eslint src/lib/cid-view.ts: 17 errors (was 33; 19 baseline → ≤19 gate met;
+  new logging contributes 0)
+- npx prettier --check src/lib/cid-view.ts: pass
+
+Scope: only safe-app/src/lib/cid-view.ts (+ this verdict file). No shared/ edits,
+no new deps, return shapes unchanged (fail-open preserved). Note: the stray
+untracked shared/src/rpc.ts flagged by the reviewer is not touched and not
+included in this commit.
+
+Commit: on agent/cidview-instr.
