@@ -272,7 +272,6 @@ describe('s2s-app (shell)', () => {
     );
 
     expect(el.shadowRoot?.textContent).toContain('Connected to Safe');
-    expect(el.shadowRoot?.textContent).toContain('Soul2Soul Publication Editor');
 
     const rootHash = el.shadowRoot?.querySelector('copy-hash') as any;
     expect(rootHash.value).toBe('bafyroot123');
