@@ -136,7 +136,11 @@ export function buildSafeAppCidViewContext(args: {
   // Version range reads are held as a local rather than a context method so
   // getVersions can call it without going through the read-context interface,
   // whose incremental primitives are optional for the shared test fakes.
-  const getVersionsRange = async (genesis: string, fromIndex: number): Promise<VersionRead[]> => {
+  const getVersionsRange = async (
+    genesis: string,
+    fromIndex: number,
+    count?: number,
+  ): Promise<VersionRead[]> => {
     const t0 = performance.now();
     try {
       const publicationModule = safeIntegration.publicationModule as PublicationModule | null;
@@ -145,8 +149,11 @@ export function buildSafeAppCidViewContext(args: {
         return [];
       }
       const id = toBytes32Id(genesis);
-      const count = Number(await publicationModule.getVersionCount(id));
-      if (!Number.isFinite(count) || count <= 0) {
+      // count (the caller's already-fetched on-chain version count) skips the
+      // redundant internal count read; when absent we read it ourselves (cold
+      // getVersions path). The count<=0 → [] guard applies either way.
+      const total = count ?? Number(await publicationModule.getVersionCount(id));
+      if (!Number.isFinite(total) || total <= 0) {
         logPhase(
           'getVersionsRange',
           performance.now() - t0,
@@ -155,7 +162,7 @@ export function buildSafeAppCidViewContext(args: {
         return [];
       }
       const start = Math.max(0, Math.floor(fromIndex));
-      const limit = Math.min(count, MAX_VERSIONS);
+      const limit = Math.min(total, MAX_VERSIONS);
       const indices: number[] = [];
       for (let i = start; i < limit; i++) indices.push(i);
       const versions = await mapWithLimit(indices, VERSION_READ_CONCURRENCY, async (i) => {
@@ -186,9 +193,13 @@ export function buildSafeAppCidViewContext(args: {
         const result = deals.map((d) => toDealRead(d, 'deal'));
         logPhase('getDeals', performance.now() - t0, `${String(result.length)} deals`);
         return result;
-      } catch {
+      } catch (error) {
+        // Rethrow: the shared collectors are the fail-open boundary (cold
+        // collectDealCids catches → [], incremental catches → prev-derived +
+        // complete:false). Swallowing here would mask the failure from the
+        // incremental collector, which relies on the throw to flag incomplete.
         logPhase('getDeals', performance.now() - t0, 'failed');
-        return [];
+        throw error;
       }
     },
 
@@ -199,9 +210,10 @@ export function buildSafeAppCidViewContext(args: {
         const result = offers.map((o) => toDealRead(o, 'offer'));
         logPhase('getOffers', performance.now() - t0, `${String(result.length)} offers`);
         return result;
-      } catch {
+      } catch (error) {
+        // Rethrow (see getDeals above).
         logPhase('getOffers', performance.now() - t0, 'failed');
-        return [];
+        throw error;
       }
     },
 

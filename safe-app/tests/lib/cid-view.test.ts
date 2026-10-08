@@ -20,10 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { keccak256, toBytes } from 'viem';
 import { evmRead } from '../../src/lib/evm';
 import { store } from '../../src/state/index.js';
-import {
-  buildSafeAppCidViewContext,
-  fetchCidView,
-} from '../../src/lib/cid-view';
+import { buildSafeAppCidViewContext, fetchCidView } from '../../src/lib/cid-view';
 import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
 
 const ipfsMocks = vi.hoisted(() => {
@@ -58,11 +55,29 @@ vi.mock('@/lib/evm.js', () => ({ evmRead: vi.fn() }));
 // --- fixtures ---------------------------------------------------------------
 
 const DEALS = [
-  { genesis: '0xgen1', author: '0xAuthor1', cid: 'bafydeal1', timestamp: 1700000000n, status: 'deal' as const },
-  { genesis: '0xgen2', author: '0xAuthor2', cid: 'bafydeal2', timestamp: 1700001000n, status: 'deal' as const },
+  {
+    genesis: '0xgen1',
+    author: '0xAuthor1',
+    cid: 'bafydeal1',
+    timestamp: 1700000000n,
+    status: 'deal' as const,
+  },
+  {
+    genesis: '0xgen2',
+    author: '0xAuthor2',
+    cid: 'bafydeal2',
+    timestamp: 1700001000n,
+    status: 'deal' as const,
+  },
 ];
 const OFFERS = [
-  { genesis: '0xgen3', author: '0xAuthor3', cid: 'bafyoffer1', timestamp: 1700002000n, status: 'offer' as const },
+  {
+    genesis: '0xgen3',
+    author: '0xAuthor3',
+    cid: 'bafyoffer1',
+    timestamp: 1700002000n,
+    status: 'offer' as const,
+  },
 ];
 
 const PROTOCOL_INFO = { ensRecords: '0xEnsRecords' } as any;
@@ -114,8 +129,20 @@ describe('buildSafeAppCidViewContext', () => {
 
     const deals = await ctx.getDeals();
     expect(deals).toEqual([
-      { genesis: '0xgen1', author: '0xAuthor1', cid: 'bafydeal1', timestamp: 1700000000, status: 'deal' },
-      { genesis: '0xgen2', author: '0xAuthor2', cid: 'bafydeal2', timestamp: 1700001000, status: 'deal' },
+      {
+        genesis: '0xgen1',
+        author: '0xAuthor1',
+        cid: 'bafydeal1',
+        timestamp: 1700000000,
+        status: 'deal',
+      },
+      {
+        genesis: '0xgen2',
+        author: '0xAuthor2',
+        cid: 'bafydeal2',
+        timestamp: 1700001000,
+        status: 'deal',
+      },
     ]);
     expect(safe.getAllDealsAndOffers).toHaveBeenCalledTimes(1);
   });
@@ -126,7 +153,13 @@ describe('buildSafeAppCidViewContext', () => {
 
     const offers = await ctx.getOffers();
     expect(offers).toEqual([
-      { genesis: '0xgen3', author: '0xAuthor3', cid: 'bafyoffer1', timestamp: 1700002000, status: 'offer' },
+      {
+        genesis: '0xgen3',
+        author: '0xAuthor3',
+        cid: 'bafyoffer1',
+        timestamp: 1700002000,
+        status: 'offer',
+      },
     ]);
   });
 
@@ -195,13 +228,10 @@ describe('buildSafeAppCidViewContext', () => {
     const ctx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo: PROTOCOL_INFO });
 
     await expect(ctx.getEnsText('0xnode', 'contenthash_wrapped')).resolves.toBe('bafyroot');
-    expect(evmRead).toHaveBeenCalledWith(
-      8453,
-      '0xEnsRecords',
-      expect.any(Array),
-      'getText',
-      ['0xnode', 'contenthash_wrapped'],
-    );
+    expect(evmRead).toHaveBeenCalledWith(8453, '0xEnsRecords', expect.any(Array), 'getText', [
+      '0xnode',
+      'contenthash_wrapped',
+    ]);
   });
 
   it('dagGet delegates to the shared S2SIPFSMethods instance', async () => {
@@ -258,11 +288,32 @@ describe('buildSafeAppCidViewContext', () => {
 
   // --- fail-open degradation --------------------------------------------------
 
-  it('degrades getDeals/getOffers to [] when getAllDealsAndOffers throws', async () => {
+  it('rethrows getDeals/getOffers when getAllDealsAndOffers throws (collectors are the fail-open boundary)', async () => {
     const safe = makeSafe({ throwOnGetAll: true });
     const ctx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo: PROTOCOL_INFO });
-    await expect(ctx.getDeals()).resolves.toEqual([]);
-    await expect(ctx.getOffers()).resolves.toEqual([]);
+    // getDeals/getOffers rethrow so the shared incremental collector can flag
+    // complete:false; the cold collector catches these itself.
+    await expect(ctx.getDeals()).rejects.toThrow('chain down');
+    await expect(ctx.getOffers()).rejects.toThrow('chain down');
+  });
+
+  it('getVersionsRange accepts a caller-supplied count and skips its internal count read', async () => {
+    const rows = [
+      { cid: 'bafyver0', timestamp: 1700000000n, tombstone: false },
+      { cid: 'bafyver1', timestamp: 1700000100n, tombstone: true },
+    ];
+    const module = makeModule(rows);
+    const safe = makeSafe({ module });
+    const ctx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo: PROTOCOL_INFO });
+
+    const versions = await ctx.getVersionsRange('0xgen1', 0, 2);
+    expect(versions).toEqual([
+      { cid: 'bafyver0', timestamp: 1700000000, tombstone: false },
+      { cid: 'bafyver1', timestamp: 1700000100, tombstone: true },
+    ]);
+    // count was supplied → no redundant internal count read
+    expect(module.getVersionCount).not.toHaveBeenCalled();
+    expect(module.getVersion).toHaveBeenCalledTimes(2);
   });
 
   it('degrades getVersions to [] when the module call throws', async () => {
@@ -315,12 +366,20 @@ describe('buildSafeAppCidViewContext', () => {
     vi.unstubAllGlobals();
 
     // Non-ok → [].
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, json: async () => ({}) })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, json: async () => ({}) })),
+    );
     await expect(ctx.ls('bafyleaf')).resolves.toEqual([]);
     vi.unstubAllGlobals();
 
     // Thrown → [].
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('timeout'); }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('timeout');
+      }),
+    );
     await expect(ctx.ls('bafyleaf')).resolves.toEqual([]);
     vi.unstubAllGlobals();
   });
@@ -329,11 +388,19 @@ describe('buildSafeAppCidViewContext', () => {
     const safe = makeSafe({});
     const ctx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo: PROTOCOL_INFO });
 
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, text: async () => 'err' })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, text: async () => 'err' })),
+    );
     await expect(ctx.cat('bafyarchive')).resolves.toBe('');
     vi.unstubAllGlobals();
 
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('timeout'); }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('timeout');
+      }),
+    );
     await expect(ctx.cat('bafyarchive')).resolves.toBe('');
     vi.unstubAllGlobals();
   });
@@ -341,7 +408,10 @@ describe('buildSafeAppCidViewContext', () => {
   it('fetchCidView builds the context and delegates to buildPublicationCidView', async () => {
     ipfsMocks.buildPublicationCidView.mockResolvedValue({ publication: 'test.eth' } as any);
     const safe = makeSafe({ deals: DEALS });
-    const view = await fetchCidView({ safeIntegration: safe, protocolInfo: PROTOCOL_INFO }, 'test.eth');
+    const view = await fetchCidView(
+      { safeIntegration: safe, protocolInfo: PROTOCOL_INFO },
+      'test.eth',
+    );
     expect(view).toEqual({ publication: 'test.eth' });
     expect(ipfsMocks.buildPublicationCidView).toHaveBeenCalledTimes(1);
     // The ctx arg passed to buildPublicationCidView is a full context.
