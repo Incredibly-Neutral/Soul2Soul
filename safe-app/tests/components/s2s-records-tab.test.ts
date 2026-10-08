@@ -22,6 +22,12 @@
 //
 // ethers and domain-validation stay real: ethers.namehash is pure, and
 // domain-validation is a pure module with the enforcement toggle defaulting OFF.
+//
+// New DOM (Config tab restructure): the write-target aliases render as pills
+// (`.alias-pill`) inside the tab, and adding one drives the slide-open
+// `s2s-sliding-add-button` control (click Add -> open input -> set value ->
+// Enter submits, dispatching `s2s-sliding-add` with detail.value). The Update
+// button sits at the top of the tab.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LitElement } from 'lit';
@@ -169,7 +175,8 @@ vi.mock('@/state/index.js', () => ({
   OnChainRecord: {},
 }));
 
-// Component under test (registers <s2s-records-tab>).
+// Component under test (registers <s2s-records-tab> and, transitively,
+// <s2s-sliding-add-button>).
 import '../../src/components/s2s-records-tab';
 import { store } from '../../src/state/index';
 
@@ -201,20 +208,67 @@ function notificationTexts(): string[] {
     .filter((t) => t.length > 0);
 }
 
-/** The alias names currently rendered in the ENS write-target list. */
+// ---------------------------------------------------------------------------
+// Alias DOM helpers — the alias list is now a pill row inside the tab, and the
+// add control is the slide-open <s2s-sliding-add-button> (its input lives in a
+// nested shadow root).
+// ---------------------------------------------------------------------------
+
+/** The alias names currently rendered as pills. */
 function renderedAliasNames(el: LitElement): string[] {
-  return [...el.shadowRoot!.querySelectorAll('.domain-section li code')].map(
-    (c) => c.textContent?.trim() ?? '',
+  return [...el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill')].map(
+    (p) => p.textContent?.trim() ?? '',
   );
 }
 
-/** Freshly query the #alias-input (never reuse a possibly-stale node) and set it. */
-function setAliasInput(el: LitElement, value: string): void {
-  const input = el.shadowRoot!.querySelector<HTMLInputElement>('#alias-input')!;
-  input.value = value;
+/** The <s2s-sliding-add-button> host inside the tab's shadow root. */
+function addButtonHost(el: LitElement): HTMLElement & { open: boolean } {
+  const host = el.shadowRoot!.querySelector('s2s-sliding-add-button');
+  if (!host) throw new Error('s2s-sliding-add-button not found');
+  return host as HTMLElement & { open: boolean };
 }
 
-/** Freshly query and click a button whose label includes `text`. */
+/** The Add button inside the sliding-add-button's shadow root. */
+function addButton(el: LitElement): HTMLButtonElement {
+  const btn = addButtonHost(el).shadowRoot!.querySelector<HTMLButtonElement>('#add-btn');
+  if (!btn) throw new Error('Add button not found');
+  return btn;
+}
+
+/** The slide-open input inside the sliding-add-button's shadow root. */
+function addInput(el: LitElement): HTMLInputElement {
+  const input = addButtonHost(el).shadowRoot!.querySelector<HTMLInputElement>('.add__input');
+  if (!input) throw new Error('add input not found');
+  return input;
+}
+
+/** Open the slide-open input (first click on Add). No-op if already open. */
+function openAddInput(el: LitElement): void {
+  if (!addButtonHost(el).open) addButton(el).click();
+}
+
+/** Open the add input and set its value (replaces the old #alias-input setter). */
+function setAliasInput(el: LitElement, value: string): void {
+  openAddInput(el);
+  addInput(el).value = value;
+}
+
+/** Submit the open add input (Enter — the slide-open submit path). */
+function submitAddInput(el: LitElement): void {
+  addInput(el).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+}
+
+/** Click a pill's remove affordance by its alias name. */
+function clickPillRemove(el: LitElement, alias: string): void {
+  const pill = [...el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill')].find(
+    (p) => p.textContent?.trim() === alias,
+  );
+  const btn = pill?.querySelector<HTMLButtonElement>('.alias-pill__remove');
+  if (!btn) throw new Error(`remove button for alias "${alias}" not found`);
+  btn.click();
+}
+
+/** Freshly query and click a button in the tab's shadow whose label includes `text`. */
 function clickButton(el: LitElement, text: string): void {
   const btn = [...el.shadowRoot!.querySelectorAll('button')].find((b) =>
     b.textContent?.includes(text),
@@ -281,6 +335,22 @@ describe('s2s-records-tab', () => {
     expect(rowKeys).toEqual(['name', 'config']);
   });
 
+  it('renders the Update button at the top of the tab, labeled "Update"', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    // Label is 'Update', not the old 'Update Config'.
+    expect(root.textContent).toContain('Update');
+    expect(root.textContent).not.toContain('Update Config');
+    const updateBtn = [...root.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Update',
+    );
+    expect(updateBtn).toBeTruthy();
+    // It is the first control in the section (top of the tab).
+    const section = root.querySelector('.section')!;
+    expect(section.querySelector('button')).toBe(updateBtn);
+  });
+
   it('Add alias is NOT blocked by ownership when DOMAIN_VALIDATION_CONFIG.enforceOwnership is OFF (default)', async () => {
     // The real default must stay OFF (the product decision the task calls out).
     expect(DOMAIN_VALIDATION_CONFIG.enforceOwnership).toBe(false);
@@ -288,8 +358,9 @@ describe('s2s-records-tab', () => {
     seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
     const el = await mountTab();
 
+    // Slide-open add flow: click Add to open, set the value, Enter submits.
     setAliasInput(el, 'example.eth');
-    clickButton(el, 'Add alias');
+    submitAddInput(el);
 
     // Gate OFF => maybeVerifyDomainOwnership returns {ok:true} without any EVM
     // read, then the config update runs and the success notification appears.
@@ -347,7 +418,7 @@ describe('s2s-records-tab', () => {
     // First add: the list grows from ['s3ntiment.eth'] to
     // ['s3ntiment.eth','first.eth'].
     setAliasInput(el, 'first.eth');
-    clickButton(el, 'Add alias');
+    submitAddInput(el);
     await vi.waitFor(
       () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth']),
       { timeout: 5000 },
@@ -361,7 +432,7 @@ describe('s2s-records-tab', () => {
     // has landed back in component state, so the second add accumulates on top
     // of it.)
     setAliasInput(el, 'second.eth');
-    clickButton(el, 'Add alias');
+    submitAddInput(el);
     await vi.waitFor(
       () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth', 'second.eth']),
       { timeout: 5000 },
@@ -370,7 +441,7 @@ describe('s2s-records-tab', () => {
     expect(m.buildConfigCalls[1][8]).toEqual(['s3ntiment.eth', 'first.eth', 'second.eth']);
   });
 
-  it('renders the current write-target aliases with a Remove button each', async () => {
+  it('renders the current write-target aliases as pills, one remove affordance each', async () => {
     // Empty store => connectedCallback runs loadRecords => loadCurrentAliases
     // reads the config via the (mocked) IPFS client and populates the list.
     const el = await mountTab();
@@ -382,9 +453,7 @@ describe('s2s-records-tab', () => {
       },
       { timeout: 5000 },
     );
-    const removeBtns = [...el.shadowRoot!.querySelectorAll('button')].filter(
-      (b) => b.textContent?.includes('Remove'),
-    );
+    const removeBtns = [...el.shadowRoot!.querySelectorAll('.alias-pill__remove')];
     expect(removeBtns.length).toBe(1);
   });
 
@@ -404,7 +473,7 @@ describe('s2s-records-tab', () => {
       () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
       { timeout: 5000 },
     );
-    // The alias list (not the empty state) is shown.
+    // The alias pills (not the empty state) are shown.
     expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
     expect(el.shadowRoot!.textContent).not.toContain('No custom write-targets set');
     // Store was populated => loadRecords (chain read) is skipped; only the
@@ -417,12 +486,12 @@ describe('s2s-records-tab', () => {
   it('removing an alias flows the REDUCED list through buildConfig (clear-on-removal source)', async () => {
     const el = await mountTab();
 
-    // Wait for the alias list to render from the (mocked) config read.
+    // Wait for the alias pills to render from the (mocked) config read.
     await vi.waitFor(
       () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
       { timeout: 5000 },
     );
-    clickButton(el, 'Remove');
+    clickPillRemove(el, 's3ntiment.eth');
 
     // buildConfig is reached asynchronously after the optimistic notification;
     // wait for BOTH the terminal store write and the build call.
@@ -438,5 +507,62 @@ describe('s2s-records-tab', () => {
     expect(m.buildConfigCalls[0][8]).toEqual([]);
     // The list is now empty (all write-targets cleared).
     expect(renderedAliasNames(el)).toEqual([]);
+  });
+});
+
+describe('s2s-sliding-add-button', () => {
+  it('slides open on first click, submits on Enter, clears + closes on Escape, submits on second click', async () => {
+    const host = await mountLit<
+      LitElement & { open: boolean; placeholder: string; buttonLabel: string }
+    >('s2s-sliding-add-button', {
+      placeholder: 'e.g. s3ntiment.eth',
+      buttonLabel: 'Add',
+    });
+    const root = host.shadowRoot!;
+    const btn = root.querySelector<HTMLButtonElement>('#add-btn')!;
+    const input = root.querySelector<HTMLInputElement>('.add__input')!;
+    const dispatched: string[] = [];
+    host.addEventListener('s2s-sliding-add', (e: Event) => {
+      dispatched.push((e as CustomEvent).detail.value as string);
+    });
+
+    // Closed by default: input collapsed + not focusable, no `open` attribute.
+    expect(host.open).toBe(false);
+    expect(host.hasAttribute('open')).toBe(false);
+    expect(input.tabIndex).toBe(-1);
+
+    // First click opens + focuses.
+    btn.click();
+    await vi.waitFor(() => {
+      expect(host.open).toBe(true);
+      expect(host.hasAttribute('open')).toBe(true);
+    });
+    // Focus retargets through the shadow root — assert via the host's
+    // shadowRoot.activeElement, not document.activeElement (which is the host).
+    await vi.waitFor(() => expect(host.shadowRoot!.activeElement).toBe(input), { timeout: 5000 });
+    expect(input.tabIndex).toBe(0);
+
+    // Enter submits the trimmed value, clears the input, stays open.
+    input.value = '  example.eth  ';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(dispatched).toEqual(['example.eth']);
+    expect(input.value).toBe('');
+
+    // Escape clears + closes.
+    input.value = 'stale.eth';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // The property flips synchronously; the reflected attribute is removed on
+    // the next update cycle, so await it before asserting the attribute.
+    await host.updateComplete;
+    expect(host.open).toBe(false);
+    expect(host.hasAttribute('open')).toBe(false);
+    expect(input.value).toBe('');
+
+    // Second click (while open) submits the current value.
+    btn.click(); // reopen (open was false after Escape)
+    await vi.waitFor(() => expect(host.open).toBe(true));
+    input.value = 'second.eth';
+    btn.click(); // now open => second click submits
+    expect(dispatched).toEqual(['example.eth', 'second.eth']);
   });
 });

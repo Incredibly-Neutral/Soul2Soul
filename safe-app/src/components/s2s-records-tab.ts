@@ -12,6 +12,7 @@ import { pinCidFromRemote, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
+import './s2s-sliding-add-button.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
 import { ethers } from 'ethers';
@@ -126,6 +127,41 @@ export class S2SRecordsTab extends LitElement {
         color: var(--gray-500);
         font-size: 0.75rem;
         margin: 0.375rem 0 0;
+      }
+
+      .alias-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .alias-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        background: var(--gray-800);
+        border: 1px solid var(--gray-600);
+        color: var(--gray-50);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+      }
+
+      .alias-pill__remove {
+        display: inline-flex;
+        align-items: center;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        border: none;
+        color: var(--gray-400);
+        cursor: pointer;
+      }
+
+      .alias-pill__remove:hover {
+        color: var(--color-red);
       }
     `,
   ];
@@ -305,9 +341,8 @@ export class S2SRecordsTab extends LitElement {
    * publication name and is rejected with a clear message (nothing saved)
    * otherwise.
    */
-  private async addAlias() {
-    const input = this.renderRoot.querySelector('#alias-input') as HTMLInputElement | null;
-    const alias = input?.value.trim() || '';
+  private async addAlias(name: string) {
+    const alias = name.trim();
     if (!alias) {
       this.showNotification('Enter an ENS alias to add.', 'error');
       return;
@@ -328,7 +363,6 @@ export class S2SRecordsTab extends LitElement {
       return;
     }
 
-    if (input) input.value = '';
     this.showNotification(
       DOMAIN_VALIDATION_CONFIG.enforceOwnership
         ? `Alias "${alias}" verified — updating config…`
@@ -389,8 +423,7 @@ export class S2SRecordsTab extends LitElement {
     console.log('[config] configCid from builder:', configCid);
     // Keep the current write-targets in sync with what we just built. Without
     // an override the existing config's aliases (or legacy domain) are carried
-    // through, so previously-set targets survive later plain 'Update Config'
-    // runs.
+    // through, so previously-set targets survive later plain 'Update' runs.
     this.aliases = Array.isArray(publicationConfig.aliases)
       ? publicationConfig.aliases.slice()
       : publicationConfig.domain
@@ -564,7 +597,42 @@ export class S2SRecordsTab extends LitElement {
 
     return html`
       <div class="section">
-        <div class="list_header">
+        <button class="button" @click=${() => void this.updateConfig()}>Update</button>
+
+        <div class="alias-section">
+          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target aliases</h3>
+          ${this.aliases.length > 0
+            ? html`
+                <div class="alias-pills">
+                  ${this.aliases.map(
+                    (alias) => html`
+                      <span class="alias-pill">
+                        ${alias}
+                        <button
+                          class="alias-pill__remove"
+                          aria-label="Remove ${alias}"
+                          title="Remove ${alias}"
+                          @click=${() => void this.removeAlias(alias)}
+                        >
+                          <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
+                        </button>
+                      </span>
+                    `,
+                  )}
+                </div>
+              `
+            : html`<p class="domain-current">No custom write-targets set — the contenthash is written to the default subdomain of the publication name.</p>`}
+          <div style="margin-top: 0.75rem;">
+            <s2s-sliding-add-button
+              placeholder="e.g. s3ntiment.eth"
+              buttonLabel="Add"
+              @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
+            ></s2s-sliding-add-button>
+          </div>
+          <p class="domain-hint">Each alias must be owned by this publication Safe — ownership is verified per alias before saving.</p>
+        </div>
+
+        <div class="list_header" style="margin-top: 2rem;">
           <h2 class="section-title">Records (${records.length})</h2>
         </div>
 
@@ -627,39 +695,6 @@ export class S2SRecordsTab extends LitElement {
                 <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
               </div>
             `}
-
-        <button class="button" @click=${() => void this.updateConfig()}>Update Config</button>
-
-        <div class="domain-section">
-          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target aliases</h3>
-          ${this.aliases.length > 0
-            ? html`
-                <ul style="list-style: none; margin: 0.5rem 0 0; padding: 0;">
-                  ${this.aliases.map(
-                    (alias) => html`
-                      <li style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.375rem;">
-                        <code class="domain-current" style="margin: 0; flex: 1;">${alias}</code>
-                        <button class="button button-danger thin" @click=${() => void this.removeAlias(alias)}>
-                          <ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Remove
-                        </button>
-                      </li>
-                    `,
-                  )}
-                </ul>
-              `
-            : html`<p class="domain-current">No custom write-targets set — the contenthash is written to the default subdomain of the publication name.</p>`}
-          <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
-            <input
-              id="alias-input"
-              type="text"
-              class="record-value-input"
-              style="max-width: 320px;"
-              placeholder="e.g. s3ntiment.eth"
-            />
-            <button class="button" @click=${() => void this.addAlias()}>Add alias</button>
-          </div>
-          <p class="domain-hint">Each alias must be owned by this publication Safe — ownership is verified per alias before saving.</p>
-        </div>
       </div>
     `;
   }
