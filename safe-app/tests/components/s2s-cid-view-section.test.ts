@@ -21,9 +21,13 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
 import { CID } from 'multiformats';
 import { sha256 } from 'multiformats/hashes/sha2';
-import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
+import type { CidViewReadContext, PublicationCidView } from '@s2s/soul2soul-shared/safe-app';
 import { mountLit } from '../helpers/mount';
+// Side-effect import registers the element; type-only import gives the
+// mountLit generic its class type without a runtime value import (a value
+// named import of the component breaks the browser test's mock transform).
 import '../../src/components/s2s-cid-view-section';
+import type { S2SCidViewSection } from '../../src/components/s2s-cid-view-section';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — available to vi.mock factories (hoisted above all imports).
@@ -37,10 +41,15 @@ const realBuild = vi.hoisted<{
 vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // Load the REAL coordinator/collectors straight from the shared source tree
   // (relative path — bypasses the heavy safe-app barrel / Lit graph, so the
-  // browser test stays light).
+  // browser test stays light). parsePublicationCidView (the zod validator) is
+  // also real so the component's cache-load path validates exactly as in src.
   const real = await import('../../../shared/src/cid-view/coordinator.ts');
+  const validation = await import('../../../shared/src/cid-view/validation.ts');
   realBuild.fn = real.buildPublicationCidView;
-  return { buildPublicationCidView: buildSpy };
+  return {
+    buildPublicationCidView: buildSpy,
+    parsePublicationCidView: validation.parsePublicationCidView,
+  };
 });
 
 const stateMocks = vi.hoisted(() => ({
@@ -77,10 +86,22 @@ const ARCHIVE_JSON = JSON.stringify({
 function makeFullCtx(): CidViewReadContext {
   return {
     getDeals: async () => [
-      { genesis: '0xgen1', author: '0xAuthor1', cid: 'bafydeal1', timestamp: 1700000000, status: 'deal' },
+      {
+        genesis: '0xgen1',
+        author: '0xAuthor1',
+        cid: 'bafydeal1',
+        timestamp: 1700000000,
+        status: 'deal',
+      },
     ],
     getOffers: async () => [
-      { genesis: '0xgen2', author: '0xAuthor2', cid: 'bafyoffer1', timestamp: 1700002000, status: 'offer' },
+      {
+        genesis: '0xgen2',
+        author: '0xAuthor2',
+        cid: 'bafyoffer1',
+        timestamp: 1700002000,
+        status: 'offer',
+      },
     ],
     getVersions: async (genesis: string) =>
       genesis === '0xgen1'
@@ -127,6 +148,34 @@ function makeEmptyCtx(): CidViewReadContext {
   };
 }
 
+/** Small deterministic PublicationCidView used to seed localStorage caches. */
+function makeCachedView(
+  opts: { publication?: string; cid?: string; generatedAt?: string } = {},
+): PublicationCidView {
+  const publication = opts.publication ?? 'test.eth';
+  const entries = [
+    { cid: opts.cid ?? 'bafycached1', category: 'deal' as const, source: 'deals' as const },
+  ];
+  return {
+    publication,
+    generatedAt: opts.generatedAt ?? '2026-01-01T00:00:00.000Z',
+    entries,
+    sources: { deals: true, config: false, tree: false, archive: false },
+    summary: { total: entries.length, uniqueCids: 1, byCategory: { deal: 1 } },
+  };
+}
+
+function seedCache(publication: string, view: PublicationCidView, savedAt = Date.now()): void {
+  localStorage.setItem('s2s.cidview.' + publication, JSON.stringify({ savedAt, view }));
+}
+
+/** The CIDs currently rendered, read from each copy-hash's value property (shadow DOM). */
+function renderedCids(root: ShadowRoot): string[] {
+  return Array.from(root.querySelectorAll('copy-hash')).map(
+    (c) => (c as HTMLElement & { value: string }).value,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -151,10 +200,14 @@ describe('s2s-cid-view-section', () => {
     );
     stateMocks.store.getRecord.mockReset();
     stateMocks.store.getRecord.mockReturnValue(null);
+    // The component persists to localStorage (s2s.cidview.*) — clear between
+    // tests so each spec starts without a cache.
+    localStorage.clear();
   });
 
   afterEach(() => {
     buildSpy.mockReset();
+    localStorage.clear();
   });
 
   it('renders the unavailable state when no ctx is provided', async () => {
@@ -297,5 +350,184 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot?.querySelector('.error')).toBeTruthy();
     });
     expect(el.shadowRoot?.textContent).toContain('boom boom');
+  });
+
+  it('serves a cached view instantly (SWR), then replaces + persists after the fresh build', async () => {
+    const cached = makeCachedView();
+    seedCache('test.eth', cached);
+
+    // Deferred fresh build — resolves only after we've asserted the stale paint.
+    let resolveFresh!: (v: PublicationCidView) => void;
+    const freshView = makeCachedView({
+      cid: 'bafyfresh1',
+      generatedAt: '2026-01-02T00:00:00.000Z',
+    });
+    buildSpy.mockImplementation(
+      () =>
+        new Promise<PublicationCidView>((resolve) => {
+          resolveFresh = resolve;
+        }),
+    );
+
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Cached view is on screen while the fresh build is still in flight — no spinner.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    expect(renderedCids(root)).toContain('bafycached1');
+    expect(root.textContent).toContain('1 unique CIDs');
+    expect(root.textContent).toContain('cached 1 min ago'); // staleness hint
+    expect(root.querySelector('.spinner')).toBeNull();
+    expect(root.textContent).not.toContain('Loading CID inventory…');
+    // Revalidating: refresh button still reads Loading… and is disabled.
+    expect(root.querySelector('.refresh')?.textContent).toContain('Loading');
+    expect((root.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(true);
+
+    // Fresh build resolves → table replaced with the fresh view + persisted.
+    resolveFresh(freshView);
+    await vi.waitFor(() => {
+      expect(renderedCids(el.shadowRoot!)).toContain('bafyfresh1');
+    });
+    expect(renderedCids(el.shadowRoot!)).not.toContain('bafycached1');
+    expect(el.shadowRoot?.querySelector('.refresh')?.textContent).toContain('Refresh');
+    // The stale hint disappears once the fresh view is displayed.
+    expect(el.shadowRoot?.textContent).not.toContain('cached');
+    const persisted = JSON.parse(localStorage.getItem('s2s.cidview.test.eth') ?? 'null');
+    expect(persisted?.view?.entries?.[0]?.cid).toBe('bafyfresh1');
+    expect(persisted?.view?.generatedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(typeof persisted?.savedAt).toBe('number');
+  });
+
+  it('keeps the cached view (and shows no error) when the fresh build fails', async () => {
+    const cached = makeCachedView();
+    seedCache('test.eth', cached);
+    buildSpy.mockRejectedValue(new Error('kubo down'));
+
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    expect(renderedCids(root)).toContain('bafycached1');
+    // Cached data wins over the error state — fail-open.
+    expect(root.querySelector('.error')).toBeNull();
+    expect(root.textContent).not.toContain('kubo down');
+    // The stored cache is left untouched.
+    const persisted = JSON.parse(localStorage.getItem('s2s.cidview.test.eth') ?? 'null');
+    expect(persisted?.view?.entries?.[0]?.cid).toBe('bafycached1');
+  });
+
+  it('resets to the spinner (never another publication’s data) when a new publication has no cache', async () => {
+    // old.eth has a cache; test.eth does not. Defer every build so the cached
+    // view is observable until we resolve it ourselves.
+    seedCache('old.eth', makeCachedView({ publication: 'old.eth', cid: 'bafyold' }));
+    const resolvers: Array<(v: PublicationCidView) => void> = [];
+    buildSpy.mockImplementation(
+      () => new Promise<PublicationCidView>((resolve) => resolvers.push(resolve)),
+    );
+
+    const el = await mountLit<S2SCidViewSection>('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'old.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    expect(renderedCids(el.shadowRoot!)).toContain('bafyold');
+
+    // Switch publications → old.eth data must vanish while test.eth loads.
+    el.publication = 'test.eth';
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('Loading CID inventory…');
+    });
+    expect(renderedCids(el.shadowRoot!)).not.toContain('bafyold');
+
+    // Resolve the second build (test.eth) → only the new publication's view.
+    resolvers[1]?.(makeCachedView({ publication: 'test.eth', cid: 'bafytest' }));
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('test.eth');
+    });
+    expect(renderedCids(el.shadowRoot!)).toContain('bafytest');
+    expect(renderedCids(el.shadowRoot!)).not.toContain('bafyold');
+  });
+
+  it('degrades gracefully to no-cache when the stored blob is corrupt', async () => {
+    localStorage.setItem('s2s.cidview.test.eth', 'not json {{{');
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Falls back to a normal fresh build (real coordinator) — no crash, no cache.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
+    });
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+  });
+
+  it('degrades to no-cache when the cached blob is JSON-valid but schema-invalid', async () => {
+    // Valid JSON that JSON.parse accepts, but an invalid category enum value —
+    // rejected by the shared zod schema (parsePublicationCidView). A hand-rolled
+    // validator that only checks cid/category are strings would let this through.
+    localStorage.setItem(
+      's2s.cidview.test.eth',
+      JSON.stringify({
+        savedAt: Date.now(),
+        view: {
+          publication: 'test.eth',
+          generatedAt: '2026-01-01T00:00:00.000Z',
+          entries: [{ cid: 'bafycached1', category: 'not-a-real-category', source: 'deals' }],
+          sources: { deals: true, config: false, tree: false, archive: false },
+          summary: { total: 1, uniqueCids: 1, byCategory: { deal: 1 } },
+        },
+      }),
+    );
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Falls back to a normal fresh build (real coordinator) — no crash, no
+    // garbage render from the schema-invalid blob.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
+    });
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+    expect(renderedCids(el.shadowRoot!)).not.toContain('bafycached1');
+  });
+
+  it('clears the staleness ticker on disconnect (no interval leak)', async () => {
+    seedCache('test.eth', makeCachedView());
+    // Never-resolving fresh build: keeps the SWR staleness timer alive so we
+    // can observe it, exactly like the deferred-build SWR test.
+    buildSpy.mockImplementation(() => new Promise(() => {}));
+
+    const el = await mountLit<S2SCidViewSection>('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Cached view is served → staleness hint shown + ticker armed.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('cached 1 min ago');
+    });
+    const timer = (el as unknown as { staleTimer: ReturnType<typeof setInterval> | null })
+      .staleTimer;
+    expect(timer).not.toBeNull();
+
+    // Detaching fires disconnectedCallback → ticker cleared, no leak.
+    el.remove();
+    expect(
+      (el as unknown as { staleTimer: ReturnType<typeof setInterval> | null }).staleTimer,
+    ).toBeNull();
   });
 });
