@@ -141,6 +141,12 @@ export class S2SRecordsTab extends LitElement {
     // setAllRecords() that was re-triggering everything.
     if (!store.getAllRecords()) {
       void this.loadRecords();
+    } else {
+      // Store is already populated from app-boot fetchFreshData(); this tab
+      // instance is fresh (recreated per tab switch), so (re)load the current
+      // write-target aliases from the on-chain config record. This only reads
+      // (no setAllRecords), so it is safe to run on every mount.
+      void this.loadCurrentAliases();
     }
   }
 
