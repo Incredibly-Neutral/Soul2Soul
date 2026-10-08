@@ -2,7 +2,13 @@
 import { LitElement, html, css, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
+import type { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
 import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
+import type { SafeIntegration } from '../lib/safe-integration.js';
+import type { ProtocolIntegration } from '@/lib/protocol-integration.js';
+import { buildSafeAppCidViewContext } from '@/lib/cid-view.js';
+import './s2s-cid-view-section.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { filterStyles } from '@/styles/filter-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
@@ -57,6 +63,13 @@ const ACTIONS_HEADER = html`Actions`;
 @customElement('s2s-storage-tab')
 export class S2SStorageTab extends LitElement {
   @property({ attribute: false }) storage!: FilecoinStorage;
+  @property({ attribute: false }) safeIntegration?: SafeIntegration;
+  @property({ attribute: false }) protocolIntegration?: ProtocolIntegration;
+
+  // Memoized CID-inventory read context (built once when both modules are up).
+  private cidCtx: CidViewReadContext | undefined = undefined;
+  private cidCtxSafe: SafeIntegration | null = null;
+  private cidCtxProtocol: S2SProtocolInfo | null = null;
 
   private deleting = new Set<string>(); // "dataSetId:pieceId" keys
   private terminating = new Set<string>(); // dataSetIds being terminated
@@ -232,6 +245,20 @@ export class S2SStorageTab extends LitElement {
     super.disconnectedCallback();
     this.unsubscribers.forEach((fn) => fn());
     this.unsubscribers = [];
+  }
+
+  /** Build (and memoize) the CID-view context once modules + protocolInfo exist. */
+  private memoCidCtx(): CidViewReadContext | undefined {
+    const safe = this.safeIntegration;
+    const protocolInfo = this.protocolIntegration?.protocolInfo ?? store.protocolInfo;
+    if (!safe || !protocolInfo) return undefined;
+    if (this.cidCtxSafe === safe && this.cidCtxProtocol === protocolInfo) {
+      return this.cidCtx;
+    }
+    this.cidCtxSafe = safe;
+    this.cidCtxProtocol = protocolInfo;
+    this.cidCtx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo });
+    return this.cidCtx;
   }
 
   private async handleDelete(dataSetId: string, pieceId: string, pieceCid: string) {
@@ -417,8 +444,10 @@ export class S2SStorageTab extends LitElement {
     const cost = showCost
       ? FilecoinStorage.estimateMonthlyCostFromPieces(allPieces)
       : null;
+    const cidCtx = this.memoCidCtx();
 
     return html`
+      <s2s-cid-view-section .ctx=${cidCtx}></s2s-cid-view-section>
       ${cost
         ? html`
             <div class="cost-summary">
