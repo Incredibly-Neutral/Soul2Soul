@@ -335,28 +335,39 @@ describe('s2s-records-tab', () => {
       })),
     );
 
-    // First add: the list grows from [] to ['first.eth'].
+    // Populated store => the tab still preloads the write-target aliases on
+    // mount (bugfix). Wait for that read to settle first so the accumulation
+    // below is deterministic (no in-flight loadCurrentAliases overwriting the
+    // list), then each add accumulates on top of the preloaded alias.
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
+      { timeout: 5000 },
+    );
+
+    // First add: the list grows from ['s3ntiment.eth'] to
+    // ['s3ntiment.eth','first.eth'].
     setAliasInput(el, 'first.eth');
     clickButton(el, 'Add alias');
     await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['first.eth']),
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth']),
       { timeout: 5000 },
     );
     // buildConfig(owner, repo, branch, pub, addr, assetsCid, existingCid, domain, aliases)
     await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(1));
-    expect(m.buildConfigCalls[0][8]).toEqual(['first.eth']);
+    expect(m.buildConfigCalls[0][8]).toEqual(['s3ntiment.eth', 'first.eth']);
 
-    // Second add: the FULL list ['first.eth','second.eth'] flows through.
-    // (The rendered list above guarantees the echoed alias list has landed back
-    // in component state, so the second add accumulates on top of it.)
+    // Second add: the FULL list ['s3ntiment.eth','first.eth','second.eth']
+    // flows through. (The rendered list above guarantees the echoed alias list
+    // has landed back in component state, so the second add accumulates on top
+    // of it.)
     setAliasInput(el, 'second.eth');
     clickButton(el, 'Add alias');
     await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['first.eth', 'second.eth']),
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth', 'second.eth']),
       { timeout: 5000 },
     );
     await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(2));
-    expect(m.buildConfigCalls[1][8]).toEqual(['first.eth', 'second.eth']);
+    expect(m.buildConfigCalls[1][8]).toEqual(['s3ntiment.eth', 'first.eth', 'second.eth']);
   });
 
   it('renders the current write-target aliases with a Remove button each', async () => {
@@ -375,6 +386,32 @@ describe('s2s-records-tab', () => {
       (b) => b.textContent?.includes('Remove'),
     );
     expect(removeBtns.length).toBe(1);
+  });
+
+  it('loads the current write-target aliases on mount when the store is already populated (fresh tab per switch)', async () => {
+    // Pre-populated store mirrors app-boot fetchFreshData() before a tab
+    // switch recreates <s2s-records-tab>. The config record CID points at a
+    // config JSON that has aliases; loadCurrentAliases must still run on
+    // mount (bugfix) so the alias list renders instead of the empty state.
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig-aliases', type: 'content' },
+    ]);
+
+    const el = await mountTab();
+
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
+      { timeout: 5000 },
+    );
+    // The alias list (not the empty state) is shown.
+    expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
+    expect(el.shadowRoot!.textContent).not.toContain('No custom write-targets set');
+    // Store was populated => loadRecords (chain read) is skipped; only the
+    // alias read runs. loadCurrentAliases reads the cached config CID from
+    // the store, so no chain read happens either.
+    expect(m.safeIntegration.getAllRecords).not.toHaveBeenCalled();
+    expect(m.safeIntegration.getRecord).not.toHaveBeenCalled();
   });
 
   it('removing an alias flows the REDUCED list through buildConfig (clear-on-removal source)', async () => {
