@@ -2,6 +2,7 @@ export * from './helpers';
 
 export * from './protocol';
 export * from './contracts';
+export * from './cid-view';
 export * from './ipfs';
 export * from './publication';
 
