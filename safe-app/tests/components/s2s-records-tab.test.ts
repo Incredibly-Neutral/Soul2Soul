@@ -201,6 +201,28 @@ function notificationTexts(): string[] {
     .filter((t) => t.length > 0);
 }
 
+/** The alias names currently rendered in the ENS write-target list. */
+function renderedAliasNames(el: LitElement): string[] {
+  return [...el.shadowRoot!.querySelectorAll('.domain-section li code')].map(
+    (c) => c.textContent?.trim() ?? '',
+  );
+}
+
+/** Freshly query the #alias-input (never reuse a possibly-stale node) and set it. */
+function setAliasInput(el: LitElement, value: string): void {
+  const input = el.shadowRoot!.querySelector<HTMLInputElement>('#alias-input')!;
+  input.value = value;
+}
+
+/** Freshly query and click a button whose label includes `text`. */
+function clickButton(el: LitElement, text: string): void {
+  const btn = [...el.shadowRoot!.querySelectorAll('button')].find((b) =>
+    b.textContent?.includes(text),
+  );
+  if (!btn) throw new Error(`button "${text}" not found`);
+  btn.click();
+}
+
 describe('s2s-records-tab', () => {
   beforeEach(() => {
     (store as unknown as { reset: () => void }).reset();
@@ -249,12 +271,8 @@ describe('s2s-records-tab', () => {
     seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
     const el = await mountTab();
 
-    const input = el.shadowRoot!.querySelector<HTMLInputElement>('#alias-input')!;
-    input.value = 'example.eth';
-    const addBtn = [...el.shadowRoot!.querySelectorAll('button')].find(
-      (b) => b.textContent?.includes('Add alias'),
-    )!;
-    addBtn.click();
+    setAliasInput(el, 'example.eth');
+    clickButton(el, 'Add alias');
 
     // Gate OFF => maybeVerifyDomainOwnership returns {ok:true} without any EVM
     // read, then the config update runs and the success notification appears.
@@ -270,14 +288,19 @@ describe('s2s-records-tab', () => {
         text: async () => 'stubbed',
       })),
     );
-    await vi.waitFor(() => {
-      expect(notificationTexts().join(' | ')).toContain('Alias "example.eth" saved as write-target');
-    });
+    // Wait for the FULL updateConfig to settle (the terminal optimistic store
+    // write is the last step) so no in-flight work bleeds into the next test.
+    await vi.waitFor(
+      () => {
+        expect(store.getRecord('config')).toBe('config-cid');
+        expect(notificationTexts().join(' | ')).toContain('Alias "example.eth" saved as write-target');
+      },
+      { timeout: 5000 },
+    );
 
     expect(m.evmRead).not.toHaveBeenCalled();
     expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
     // Optimistic store update so the new value shows immediately.
-    expect(store.getRecord('config')).toBe('config-cid');
     expect(window.open).toHaveBeenCalled();
   });
 
@@ -295,24 +318,27 @@ describe('s2s-records-tab', () => {
       })),
     );
 
-    const input = el.shadowRoot!.querySelector<HTMLInputElement>('#alias-input')!;
-    input.value = 'first.eth';
-    const addBtn = [...el.shadowRoot!.querySelectorAll('button')].find(
-      (b) => b.textContent?.includes('Add alias'),
-    )!;
-    addBtn.click();
-    await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(1));
+    // First add: the list grows from [] to ['first.eth'].
+    setAliasInput(el, 'first.eth');
+    clickButton(el, 'Add alias');
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['first.eth']),
+      { timeout: 5000 },
+    );
     // buildConfig(owner, repo, branch, pub, addr, assetsCid, existingCid, domain, aliases)
+    await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(1));
     expect(m.buildConfigCalls[0][8]).toEqual(['first.eth']);
 
-    // Wait until the echoed alias list lands back in component state before
-    // adding the second alias (it accumulates on top of the current list).
-    await vi.waitFor(() => expect((el as any).aliases).toEqual(['first.eth']));
-
-    input.value = 'second.eth';
-    addBtn.click();
+    // Second add: the FULL list ['first.eth','second.eth'] flows through.
+    // (The rendered list above guarantees the echoed alias list has landed back
+    // in component state, so the second add accumulates on top of it.)
+    setAliasInput(el, 'second.eth');
+    clickButton(el, 'Add alias');
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['first.eth', 'second.eth']),
+      { timeout: 5000 },
+    );
     await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(2));
-    // Both aliases flow through as the config.aliases list (additive).
     expect(m.buildConfigCalls[1][8]).toEqual(['first.eth', 'second.eth']);
   });
 
@@ -321,10 +347,13 @@ describe('s2s-records-tab', () => {
     // reads the config via the (mocked) IPFS client and populates the list.
     const el = await mountTab();
 
-    await vi.waitFor(() => {
-      expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
-      expect(el.shadowRoot!.textContent).toContain('s3ntiment.eth');
-    });
+    await vi.waitFor(
+      () => {
+        expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']);
+        expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
+      },
+      { timeout: 5000 },
+    );
     const removeBtns = [...el.shadowRoot!.querySelectorAll('button')].filter(
       (b) => b.textContent?.includes('Remove'),
     );
@@ -335,20 +364,25 @@ describe('s2s-records-tab', () => {
     const el = await mountTab();
 
     // Wait for the alias list to render from the (mocked) config read.
-    await vi.waitFor(() => {
-      expect(el.shadowRoot!.textContent).toContain('s3ntiment.eth');
-    });
-    const removeBtn = [...el.shadowRoot!.querySelectorAll('button')].find(
-      (b) => b.textContent?.includes('Remove'),
-    )!;
-    removeBtn.click();
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
+      { timeout: 5000 },
+    );
+    clickButton(el, 'Remove');
 
-    await vi.waitFor(() => {
-      expect(notificationTexts().join(' | ')).toContain('Alias "s3ntiment.eth" removed');
-    });
-    // buildConfig is reached asynchronously (after the optimistic notification).
-    await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(1));
+    // buildConfig is reached asynchronously after the optimistic notification;
+    // wait for BOTH the terminal store write and the build call.
+    await vi.waitFor(
+      () => {
+        expect(m.buildConfigCalls.length).toBe(1);
+        expect(store.getRecord('config')).toBe('config-cid');
+        expect(notificationTexts().join(' | ')).toContain('Alias "s3ntiment.eth" removed');
+      },
+      { timeout: 5000 },
+    );
     // Empty aliases array clears the write targets.
     expect(m.buildConfigCalls[0][8]).toEqual([]);
+    // The list is now empty (all write-targets cleared).
+    expect(renderedAliasNames(el)).toEqual([]);
   });
 });
