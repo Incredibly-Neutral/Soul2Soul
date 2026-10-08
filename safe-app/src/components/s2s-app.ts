@@ -275,7 +275,7 @@ export class S2SApp extends LitElement {
             id="records-tab"
             ?disabled=${!this.safeIntegration.hasRecordsModule()}
             @click=${() => this.switchTab('records')}
-          >Records</button>
+          >Config</button>
           <button
             class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
             id="storage-tab"
