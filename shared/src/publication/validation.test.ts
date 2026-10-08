@@ -28,4 +28,19 @@ describe('validateConfig — optional domain field', () => {
       validateConfig({ ...baseConfig, domain: 123 as unknown as string });
     }).toThrow(/Invalid config structure/);
   });
+
+  it('accepts a config with an aliases array of strings', () => {
+    expect(() => {
+      validateConfig({ ...baseConfig, aliases: ['a.eth', 'b.eth'] });
+    }).not.toThrow();
+  });
+
+  it('rejects a non-string-array aliases field', () => {
+    expect(() => {
+      validateConfig({
+        ...baseConfig,
+        aliases: ['a.eth', 123] as unknown as string[],
+      });
+    }).toThrow(/Invalid config structure/);
+  });
 });

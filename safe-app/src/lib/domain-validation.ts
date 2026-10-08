@@ -165,7 +165,8 @@ export const DOMAIN_VALIDATION_CONFIG: DomainValidationConfig = {
   enforceOwnership: false,
 };
 
-/** Enforcement-aware entry point for addDomain(). When the gate is OFF (the
+/** Enforcement-aware entry point for addAlias() (the Records tab's per-alias
+ *  ownership gate). When the gate is OFF (the
  *  default) the ownership check is skipped entirely and the domain is accepted;
  *  when ON, this delegates to the full `verifyDomainOwnership` gate and the
  *  existing reject behaviour (different-Safe / unwrapped / unresolvable)
