@@ -62,16 +62,24 @@ vi.mock('@s2s/soul2soul-shared', () => ({
   toBytes32Id: (id: string) => id,
 }));
 
-vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
-  S2SIPFSMethods: class {},
-  buildPublicationCidView: async () => ({
-    publication: '',
-    generatedAt: '',
-    entries: [],
-    sources: { deals: false, config: false, tree: false, archive: false },
-    summary: { total: 0, uniqueCids: 0, byCategory: {} },
-  }),
-}));
+vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
+  // The cid-view section now statically imports parsePublicationCidView from
+  // this entry (its cache-load validator); vitest requires the mocked module
+  // to provide it. Import the REAL validation (zod only — no ethers/identity
+  // graph, so the browser bundle stays light) to keep the fail-closed posture.
+  const validation = await import('../../../shared/src/cid-view/validation.ts');
+  return {
+    S2SIPFSMethods: class {},
+    buildPublicationCidView: async () => ({
+      publication: '',
+      generatedAt: '',
+      entries: [],
+      sources: { deals: false, config: false, tree: false, archive: false },
+      summary: { total: 0, uniqueCids: 0, byCategory: {} },
+    }),
+    parsePublicationCidView: validation.parsePublicationCidView,
+  };
+});
 
 vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
   FilecoinStorage: class {
