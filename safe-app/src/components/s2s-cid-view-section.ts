@@ -18,7 +18,7 @@
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
-import { buildPublicationCidView } from '@s2s/soul2soul-shared/safe-app';
+import { buildPublicationCidView, parsePublicationCidView } from '@s2s/soul2soul-shared/safe-app';
 import type {
   CidCategory,
   CidEntry,
@@ -70,16 +70,16 @@ function cacheKey(publication: string): string {
   return CACHE_PREFIX + publication;
 }
 
-function isCidEntry(value: unknown): value is CidEntry {
-  if (typeof value !== 'object' || value === null) return false;
-  const e = value as Record<string, unknown>;
-  return typeof e.cid === 'string' && typeof e.category === 'string';
-}
-
 /**
  * Read the last-good view for a publication from localStorage.
- * Fail-open: privacy mode, missing key or corrupt JSON all degrade to null
- * (no cache), mirroring the component's fail-open posture.
+ * Fail-open: privacy mode, missing key, corrupt JSON or a JSON-valid but
+ * schema-invalid blob all degrade to null (no cache), mirroring the
+ * component's fail-open posture.
+ *
+ * Shape validation delegates to the shared house schema
+ * (parsePublicationCidView / publicationCidViewSchema) — the same invariant
+ * the coordinator enforces on its own output — so a blob with a bad category
+ * enum, wrong sources/summary shape etc. can never be rendered as garbage.
  */
 function loadCachedView(publication: string): CachedCidView | null {
   try {
@@ -92,11 +92,10 @@ function loadCachedView(publication: string): CachedCidView | null {
     if (typeof view !== 'object' || view === null) return null;
     const v = view as Record<string, unknown>;
     if (v.publication !== publication) return null; // key/record mismatch
-    if (typeof v.generatedAt !== 'string') return null;
-    if (typeof v.sources !== 'object' || v.sources === null) return null;
-    if (typeof v.summary !== 'object' || v.summary === null) return null;
-    if (!Array.isArray(v.entries) || !v.entries.every(isCidEntry)) return null;
-    return { savedAt, view: view as PublicationCidView };
+    // Full zod validation — throws ZodError on any structural violation, which
+    // the try/catch above converts into the fail-open no-cache result.
+    const validated = parsePublicationCidView(view);
+    return { savedAt, view: validated };
   } catch {
     return null;
   }
@@ -105,7 +104,10 @@ function loadCachedView(publication: string): CachedCidView | null {
 /** Persist a fresh view for a publication. Fail-open (storage full / privacy mode). */
 function saveCachedView(publication: string, view: PublicationCidView): void {
   try {
-    window.localStorage.setItem(cacheKey(publication), JSON.stringify({ savedAt: Date.now(), view }));
+    window.localStorage.setItem(
+      cacheKey(publication),
+      JSON.stringify({ savedAt: Date.now(), view }),
+    );
   } catch {
     // ignore — the component still works without a cache
   }
@@ -140,9 +142,9 @@ export class S2SCidViewSection extends LitElement {
   /** Mark the shown view as stale (served from cache) and start the age ticker. */
   private setStale(savedAt: number): void {
     this.staleSince = savedAt;
-    if (!this.staleTimer) {
-      this.staleTimer = setInterval(() => this.requestUpdate(), 60_000);
-    }
+    this.staleTimer ??= setInterval(() => {
+      this.requestUpdate();
+    }, 60_000);
   }
 
   /** Clear staleness (a fresh build now owns the view) and stop the ticker. */
@@ -158,7 +160,7 @@ export class S2SCidViewSection extends LitElement {
   private staleLabel(): string {
     if (this.staleSince == null) return '';
     const mins = Math.max(1, Math.round((Date.now() - this.staleSince) / 60_000));
-    return 'cached ' + mins + ' min ago';
+    return `cached ${String(mins)} min ago`;
   }
 
   static styles = [
@@ -354,7 +356,7 @@ export class S2SCidViewSection extends LitElement {
         color: var(--blue-400, #60a5fa);
       }
       .gateway-link::after {
-        content: "↗";
+        content: '↗';
         margin-left: 0.25rem;
         font-size: 0.75rem;
         opacity: 0.6;
@@ -388,8 +390,12 @@ export class S2SCidViewSection extends LitElement {
         animation: spin 1s linear infinite;
       }
       @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
       }
 
       .empty {
@@ -444,7 +450,7 @@ export class S2SCidViewSection extends LitElement {
     // shown view belongs to a different publication. loading stays true so the
     // Refresh button reads 'Loading…' while revalidating in the background.
     const cached = loadCachedView(publication);
-    if (cached && (this.view === null || this.view.publication !== publication)) {
+    if (cached && this.view?.publication !== publication) {
       console.log('[cid-view] serving cached view for ' + publication);
       this.view = cached.view;
       this.setStale(cached.savedAt);
@@ -464,10 +470,9 @@ export class S2SCidViewSection extends LitElement {
       this.view = view;
       saveCachedView(publication, view);
       this.clearStale();
+      const elapsed = Math.round(performance.now() - started);
       console.log(
-        '[cid-view] rebuild ' + publication + ' done in ' +
-          Math.round(performance.now() - started) + 'ms — ' +
-          view.summary.total + ' entries, ' + view.summary.uniqueCids + ' unique CIDs',
+        `[cid-view] rebuild ${publication} done in ${String(elapsed)}ms — ${String(view.summary.total)} entries, ${String(view.summary.uniqueCids)} unique CIDs`,
       );
       console.log('[cid-view] fresh view saved for ' + publication);
     } catch (e) {
@@ -502,7 +507,9 @@ export class S2SCidViewSection extends LitElement {
   }
 
   /** Group entries by category, preserving first-appearance (coordinator) order. */
-  private groupByCategory(entries: CidEntry[]): Array<{ category: CidCategory; items: CidEntry[] }> {
+  private groupByCategory(
+    entries: CidEntry[],
+  ): Array<{ category: CidCategory; items: CidEntry[] }> {
     const order: CidCategory[] = [];
     const map = new Map<CidCategory, CidEntry[]>();
     for (const entry of entries) {
@@ -518,21 +525,33 @@ export class S2SCidViewSection extends LitElement {
   }
 
   private renderSummary(view: PublicationCidView): TemplateResult {
-    const catCounts = Object.entries(view.summary.byCategory ?? {}) as Array<
-      [CidCategory, number]
-    >;
+    const catCounts = Object.entries(view.summary.byCategory ?? {}) as Array<[CidCategory, number]>;
     return html`
       <div class="chips">
-        <span class="chip"><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span>
+        <span class="chip"
+          ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
+        >
         <span class="chip"><span class="chip-value">${view.summary.total}</span> entries</span>
         ${catCounts.map(
           ([cat, count]) =>
-            html`<span class="chip"><span class="chip-value">${count}</span> ${categoryLabel(cat)}${count !== 1 ? 's' : ''}</span>`,
+            html`<span class="chip"
+              ><span class="chip-value">${count}</span> ${categoryLabel(cat)}${count !== 1
+                ? 's'
+                : ''}</span
+            >`,
         )}
-        <span class="chip ${view.sources.deals ? 'flag-on' : 'flag-off'}">deals ${view.sources.deals ? '✓' : '✗'}</span>
-        <span class="chip ${view.sources.config ? 'flag-on' : 'flag-off'}">config ${view.sources.config ? '✓' : '✗'}</span>
-        <span class="chip ${view.sources.tree ? 'flag-on' : 'flag-off'}">tree ${view.sources.tree ? '✓' : '✗'}</span>
-        <span class="chip ${view.sources.archive ? 'flag-on' : 'flag-off'}">archive ${view.sources.archive ? '✓' : '✗'}</span>
+        <span class="chip ${view.sources.deals ? 'flag-on' : 'flag-off'}"
+          >deals ${view.sources.deals ? '✓' : '✗'}</span
+        >
+        <span class="chip ${view.sources.config ? 'flag-on' : 'flag-off'}"
+          >config ${view.sources.config ? '✓' : '✗'}</span
+        >
+        <span class="chip ${view.sources.tree ? 'flag-on' : 'flag-off'}"
+          >tree ${view.sources.tree ? '✓' : '✗'}</span
+        >
+        <span class="chip ${view.sources.archive ? 'flag-on' : 'flag-off'}"
+          >archive ${view.sources.archive ? '✓' : '✗'}</span
+        >
       </div>
     `;
   }
@@ -542,7 +561,9 @@ export class S2SCidViewSection extends LitElement {
     return html`
       <div class="cid-row">
         <div class="cid-cell">
-          <span class="badge ${categoryClass(entry.category)}">${categoryLabel(entry.category)}</span>
+          <span class="badge ${categoryClass(entry.category)}"
+            >${categoryLabel(entry.category)}</span
+          >
         </div>
         <div class="cid-cell"><span class="badge source">${entry.source}</span></div>
         <div class="cid-cell">
@@ -556,11 +577,17 @@ export class S2SCidViewSection extends LitElement {
             <copy-hash .value=${this.shortenCid(cid)}></copy-hash>
           </a>
         </div>
-        <div class="cid-cell">${entry.role || entry.path || html`<span class="muted">-</span>`}</div>
-        <div class="cid-cell">${entry.genesis ? this.shortenCid(entry.genesis, 6) : html`<span class="muted">-</span>`}</div>
+        <div class="cid-cell">
+          ${entry.role || entry.path || html`<span class="muted">-</span>`}
+        </div>
+        <div class="cid-cell">
+          ${entry.genesis ? this.shortenCid(entry.genesis, 6) : html`<span class="muted">-</span>`}
+        </div>
         <div class="cid-cell">${this.ageDisplay(entry.timestamp)}</div>
         <div class="cid-cell">
-          ${entry.tombstoned ? html`<span class="badge tombstone">tombstone</span>` : html`<span class="muted">-</span>`}
+          ${entry.tombstoned
+            ? html`<span class="badge tombstone">tombstone</span>`
+            : html`<span class="muted">-</span>`}
         </div>
       </div>
     `;
@@ -583,7 +610,9 @@ export class S2SCidViewSection extends LitElement {
           (group) => html`
             <div class="cid-group-row">
               <div class="cid-group">
-                ${categoryLabel(group.category)}<span class="group-count">${group.items.length}</span>
+                ${categoryLabel(group.category)}<span class="group-count"
+                  >${group.items.length}</span
+                >
               </div>
             </div>
             ${group.items.map((entry) => this.renderEntryRow(entry))}
@@ -619,7 +648,9 @@ export class S2SCidViewSection extends LitElement {
     if (this.error && !this.view) {
       return html`
         <div class="cid-section">
-          <div class="error"><ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> ${this.error}</div>
+          <div class="error">
+            <ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> ${this.error}
+          </div>
         </div>
       `;
     }
@@ -649,14 +680,18 @@ export class S2SCidViewSection extends LitElement {
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>
             ${this.loading ? 'Loading…' : 'Refresh'}
           </button>
-          ${this.staleSince != null ? html`<span class="stale-hint">${this.staleLabel()}</span>` : nothing}
+          ${this.staleSince != null
+            ? html`<span class="stale-hint">${this.staleLabel()}</span>`
+            : nothing}
         </div>
         ${this.renderSummary(view)}
         ${view.entries.length === 0
           ? html`
               <div class="empty">
                 <div class="empty-title">No CIDs found</div>
-                <div>No deals, config, site tree or archive entries are available for this publication.</div>
+                <div>
+                  No deals, config, site tree or archive entries are available for this publication.
+                </div>
               </div>
             `
           : this.renderTable(view)}
