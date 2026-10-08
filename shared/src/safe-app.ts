@@ -7,6 +7,9 @@ export { ENS_NAMEWRAPPER } from './protocol/constants';
 export type { S2SPublicationConfig } from './publication';
 export { LitService } from './lit';
 
+// cid-view — the unified "all CIDs in a publication" view, built for safe-app
+export * from './cid-view';
+
 // Publication builders (used by safe-app/src/components/s2s-records-tab.ts)
 export { ConfigBuilder, parseGitHubUrl } from './publication/config-builder';
 export { AssetsBuilder } from './publication/assets-builder';
