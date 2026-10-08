@@ -1,7 +1,8 @@
-// cid-view — STAGE 1 types/contract layer + STAGE 2b config collector.
-// The remaining collectors (deals.ts / tree.ts) and the coordinator come in
-// later stages. Re-export the canonical types, the read-context interface and
-// the config collector.
+// cid-view — canonical types + read-context + collectors.
+// Collectors: deals.ts (deal/offer/version), config.ts (config/templates/assets),
+// tree.ts (site tree + archive). The coordinator (coordinator.ts) lands in stage 3.
 export * from './types';
 export * from './context';
+export * from './deals';
 export * from './config';
+export * from './tree';
