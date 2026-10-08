@@ -81,6 +81,9 @@ export const tableStyles = css`
     padding: 0.75rem;
     border-bottom: 1px solid var(--gray-600);
     color: var(--gray-50);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
 
   .table-cell:first-child {

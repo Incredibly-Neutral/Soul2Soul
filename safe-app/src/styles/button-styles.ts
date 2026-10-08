@@ -22,6 +22,7 @@ export const buttonStyles = css`
     align-items: center;
     gap: 0.5rem;
     text-transform: uppercase;
+    border: none;
   }
 
   .button:hover:not(:disabled) {
