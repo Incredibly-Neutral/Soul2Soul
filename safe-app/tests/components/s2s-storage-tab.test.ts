@@ -51,6 +51,28 @@ vi.mock('@/state/index.js', () => ({
   PublicationDataSet: {},
 }));
 
+// The CID-inventory section + adapter (added in stage 4) import the shared
+// cid-view entry points. The REAL base barrel loads identity/ethers (v5-style
+// `utils` import) which does not bundle in the browser, so stub the shared
+// modules the new graph needs: `toBytes32Id` (cid-view adapter) and
+// `S2SIPFSMethods` / `buildPublicationCidView` (safe-app adapter + section).
+// The storage-tab store mock has no protocolInfo, so the section's ctx is
+// empty and buildPublicationCidView simply yields an empty view.
+vi.mock('@s2s/soul2soul-shared', () => ({
+  toBytes32Id: (id: string) => id,
+}));
+
+vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
+  S2SIPFSMethods: class {},
+  buildPublicationCidView: async () => ({
+    publication: '',
+    generatedAt: '',
+    entries: [],
+    sources: { deals: false, config: false, tree: false, archive: false },
+    summary: { total: 0, uniqueCids: 0, byCategory: {} },
+  }),
+}));
+
 vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
   FilecoinStorage: class {
     static estimateMonthlyCostFromPieces = fcMocks.estimateMonthlyCostFromPieces;
