@@ -12,9 +12,12 @@ export class CopyContentId extends LitElement {
 
   static styles = css`
     :host {
-      display: inline-flex;
+      display: flex;
+      flex-direction: row-reverse;
+      justify-content: flex-end;
       align-items: center;
       gap: 0.4rem;
+      width: 100%;
     }
 
     .text {

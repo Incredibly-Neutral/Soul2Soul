@@ -66,8 +66,6 @@ export class S2SStorageTab extends LitElement {
   @state() private datasetsSort: SortState | null = null;
   @state() private piecesFilters: FilterState = {};
   @state() private datasetsFilters: FilterState = {};
-  @state() private piecesCount = 0;
-  @state() private datasetsCount = 0;
   @state() private revision = 0;
 
   // Stable row renderers (bound once) so <s2s-table> only re-renders on real
@@ -93,14 +91,6 @@ export class S2SStorageTab extends LitElement {
         text-align: center;
         padding: 3rem;
         color: var(--gray-400);
-      }
-
-      .toolbar {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: 1.5rem;
-        margin-bottom: 1.5rem;
       }
 
       /* Cached (unconfirmed) rows use light text */
@@ -193,10 +183,6 @@ export class S2SStorageTab extends LitElement {
       .btn-terminate:disabled {
         opacity: 0.5;
         cursor: not-allowed;
-      }
-
-      .ds-section-title {
-        margin-top: 2rem;
       }
 
       .cost-summary {
@@ -433,16 +419,6 @@ export class S2SStorageTab extends LitElement {
       : null;
 
     return html`
-      <div class="toolbar">
-        <div class="section-title">
-          <h2>Filecoin Storage (${this.piecesCount} pieces)</h2>
-        </div>
-        <button class="button has-icon" id="refresh-btn"
-          @click=${() => window.location.reload()}>
-          <span><ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise></span>
-        </button>
-      </div>
-
       ${cost
         ? html`
             <div class="cost-summary">
@@ -467,6 +443,11 @@ export class S2SStorageTab extends LitElement {
         : ''}
 
       <s2s-table
+        title="Filecoin Storage"
+        countSuffix=" pieces"
+        .titleAction=${html`<button class="button thin" @click=${() => window.location.reload()}>
+          <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
+        </button>`}
         .columns=${PIECE_COLUMNS}
         .rows=${allPieces}
         .sort=${this.piecesSort}
@@ -480,16 +461,10 @@ export class S2SStorageTab extends LitElement {
         gridTemplate="1.5fr 1.5fr 0.5fr 0.5fr 0.5fr 0.75fr 0.75fr 0.5fr"
         @sort=${(e: CustomEvent) => { this.piecesSort = toggleSort(this.piecesSort, e.detail.key); }}
         @filter=${(e: CustomEvent) => { this.piecesFilters = setFilter(this.piecesFilters, e.detail.key, e.detail.value); }}
-        @count=${(e: CustomEvent) => { this.piecesCount = e.detail.count; }}
       ></s2s-table>
 
-      <div class="toolbar ds-section-title">
-        <div class="section-title">
-          <h2>Data Sets (${this.datasetsCount})</h2>
-        </div>
-      </div>
-
       <s2s-table
+        title="Data Sets"
         .columns=${DATASET_COLUMNS}
         .rows=${allDatasets}
         .sort=${this.datasetsSort}
@@ -503,7 +478,6 @@ export class S2SStorageTab extends LitElement {
         gridTemplate="0.75fr 0.75fr 0.5fr 0.75fr 0.75fr 0.5fr"
         @sort=${(e: CustomEvent) => { this.datasetsSort = toggleSort(this.datasetsSort, e.detail.key); }}
         @filter=${(e: CustomEvent) => { this.datasetsFilters = setFilter(this.datasetsFilters, e.detail.key, e.detail.value); }}
-        @count=${(e: CustomEvent) => { this.datasetsCount = e.detail.count; }}
       ></s2s-table>
     `;
   }

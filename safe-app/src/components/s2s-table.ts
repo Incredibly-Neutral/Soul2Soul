@@ -83,6 +83,17 @@ export class S2STable<T> extends LitElement {
   /** Content of the actions header cell (refresh button, 'Actions', ...). */
   @property({ attribute: false }) actionsContent: TemplateResult = html``;
 
+  /** Section title rendered left of the toolbar; '' hides it. The count in
+   *  the parens is this.filteredRows.length (filtered rows after the pipeline). */
+  @property({ type: String }) title = '';
+
+  /** Text appended after the count inside the parens (e.g. ' pieces'). */
+  @property({ type: String }) countSuffix = '';
+
+  /** Optional markup rendered NEXT TO the title in the toolbar's left group
+   *  (e.g. the sync/refresh button). */
+  @property({ attribute: false }) titleAction: TemplateResult = html``;
+
   /** Opaque counter; bump to force a re-render (see header note). */
   @property({ type: Number }) revision = 0;
 
@@ -176,24 +187,37 @@ export class S2STable<T> extends LitElement {
 
   render() {
     const rows = this.filteredRows;
+    const showToolbar = Boolean(this.title) || this.filterKeys.length > 0;
 
     return html`
-      ${this.filterKeys.length > 0
+      ${showToolbar
         ? html`
-            <div class="table-filters">
-              ${this.filterKeys.map((key) => {
-                const col = this.columns.find((c) => c.key === key);
-                if (!col) return nothing;
-                return html`
-                  <table-filter
-                    data-key=${key}
-                    label=${this.filterLabels[key] ?? col.label}
-                    .value=${this.filters[key] ?? ''}
-                    .options=${uniqueValuesForColumn(this.rows, this.columns, key)}
-                    @change=${(e: CustomEvent) => this.handleFilter(key, e)}
-                  ></table-filter>
-                `;
-              })}
+            <div class="table-toolbar">
+              <div class="table-toolbar__title">
+                ${this.title
+                  ? html`<h2 class="section-title">${this.title} (${this.filteredRows.length}${this.countSuffix})</h2>`
+                  : nothing}
+                ${this.titleAction}
+              </div>
+              ${this.filterKeys.length > 0
+                ? html`
+                    <div class="table-filters">
+                      ${this.filterKeys.map((key) => {
+                        const col = this.columns.find((c) => c.key === key);
+                        if (!col) return nothing;
+                        return html`
+                          <table-filter
+                            data-key=${key}
+                            label=${this.filterLabels[key] ?? col.label}
+                            .value=${this.filters[key] ?? ''}
+                            .options=${uniqueValuesForColumn(this.rows, this.columns, key)}
+                            @change=${(e: CustomEvent) => this.handleFilter(key, e)}
+                          ></table-filter>
+                        `;
+                      })}
+                    </div>
+                  `
+                : ''}
             </div>
           `
         : ''}

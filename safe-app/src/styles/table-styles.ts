@@ -7,6 +7,30 @@ export const tableStyles = css`
     display: block;
   }
 
+  /* Toolbar row above the table: title+count on the left, the filter toolbar
+     (kept in its own .table-filters div) on the right. */
+  .table-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--gray-600);
+  }
+
+  .table-toolbar__title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .table-toolbar .table-filters {
+    margin-top: 0;
+    padding: 0;
+    border-bottom: none;
+  }
+
   .table {
     display: grid;
     gap: 0;
