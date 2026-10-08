@@ -20,8 +20,12 @@ export interface CidViewReadContext {
    * Versions [fromIndex, count) for one genesis — the incremental-diff
    * primitive. Optional for the same reason as getVersionCount; the
    * incremental collector treats a missing primitive as a read failure.
+   * `count` is the on-chain version count for this genesis already fetched by
+   * the caller: when provided the implementation SHOULD skip its own internal
+   * count read (still applying the count<=0 → [] guard) to avoid a redundant
+   * RPC per genesis; when absent it falls back to reading it (cold getVersions).
    */
-  getVersionsRange?(genesis: string, fromIndex: number): Promise<VersionRead[]>;
+  getVersionsRange?(genesis: string, fromIndex: number, count?: number): Promise<VersionRead[]>;
   /** Publication config: cid = configCid (from the on-chain `config` record), config = parsed S2SPublicationConfig. */
   getConfig(): Promise<{ cid: string; config: unknown }>;
   /** Read a DAG node as JSON (used for the templates DAG: array of {path,cid,body}). */

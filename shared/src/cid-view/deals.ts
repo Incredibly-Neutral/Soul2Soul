@@ -53,12 +53,15 @@ function dealEntry(deal: DealRead): CidEntry {
 
 /**
  * Map one genesis's final version array to '*-version' CidEntries. The LAST
- * entry of the array is the current version (gets the 'current version' note).
+ * entry of the array is the current version (gets the 'current version' note)
+ * unless markCurrent is false (revoked genesis — a revoked doc has no live
+ * current version).
  */
 function versionEntries(
   versions: VersionRead[],
   genesis: string,
   category: 'deal-version' | 'offer-version',
+  markCurrent = true,
 ): CidEntry[] {
   return versions.map((v, i, arr) => ({
     cid: v.cid,
@@ -67,7 +70,7 @@ function versionEntries(
     genesis,
     timestamp: v.timestamp,
     tombstoned: v.tombstone || undefined,
-    note: i === arr.length - 1 ? 'current version' : undefined,
+    note: markCurrent && i === arr.length - 1 ? 'current version' : undefined,
   }));
 }
 
@@ -133,17 +136,20 @@ export async function collectDealCids(ctx: CidViewReadContext): Promise<CidEntry
   return dedupe(entries);
 }
 
-/** Drop exact duplicates (same cid + category + genesis), preserving first-seen order. */
+/**
+ * Drop exact duplicates (same cid + category + genesis), keeping the LAST
+ * occurrence per key while preserving first-seen order (Map values iterate in
+ * first-insertion order). Keeping the last matters because versionEntries
+ * marks only the final version entry with 'current version' — when two
+ * versions of one genesis share a cid (allowed: the contract only rejects
+ * EmptyCid), the note-bearing entry must survive dedupe.
+ */
 function dedupe(entries: CidEntry[]): CidEntry[] {
-  const seen = new Set<string>();
-  const out: CidEntry[] = [];
+  const byKey = new Map<string, CidEntry>();
   for (const e of entries) {
-    const key = `${e.cid}\u0000${e.category}\u0000${e.genesis ?? ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(e);
+    byKey.set(`${e.cid}\u0000${e.category}\u0000${e.genesis ?? ''}`, e);
   }
-  return out;
+  return [...byKey.values()];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,10 +223,17 @@ export function deriveDealCidSnapshot(view: PublicationCidView): DealCidSnapshot
 
 /**
  * Canonical fingerprint of the live deal/offer state: JSON of the sorted-by-
- * genesis [genesis, cid, timestamp, status] tuples. An unchanged fingerprint is
- * a sound "no version changes anywhere" gate (contract fact 1: a version append
- * always changes the live deal/offer list or an entry's latest cid/timestamp,
- * and a revocation changes the fingerprint too).
+ * genesis [genesis, cid, timestamp, status] tuples.
+ *
+ * Soundness: an unchanged fingerprint gates "no version changes anywhere" — a
+ * version append changes the live row's cid or timestamp, a revocation removes
+ * the row, a first publish adds a row. KNOWN CORNER (accepted): two appends to
+ * ONE genesis in the SAME block where both carry an identical cid leave the
+ * live row's cid AND timestamp unchanged, so the fingerprint does not change
+ * and the incremental fast path skips the new version slot while complete
+ * stays true. The appended CID is already inventoried via the earlier version
+ * entry, so impact is limited to the version-slot count. A same-cid append in
+ * a LATER block changes the live row's timestamp and is caught.
  */
 export function dealFingerprint(deals: DealRead[], offers: DealRead[]): string {
   const tuples: [string, string, number, DealRead['status']][] = [...deals, ...offers].map((d) => [
@@ -242,7 +255,8 @@ export function dealFingerprint(deals: DealRead[], offers: DealRead[]): string {
  * Emit the deterministic incremental entry order: live deals ('deal' then its
  * version entries), live offers ('offer' then its version entries), then
  * revoked-genesis version entries (prev deals order, then prev offers order —
- * history retained, no live current entry).
+ * history retained, NO 'current version' note since a revoked doc has no live
+ * current).
  */
 function emitIncrementalEntries(
   liveDeals: DealRead[],
@@ -263,26 +277,39 @@ function emitIncrementalEntries(
     entries.push(...versionEntries(versions[offer.genesis] ?? [], offer.genesis, 'offer-version'));
   }
   // Revoked genesis (in prev, not live): keep its cached version history, no
-  // live 'deal'/'offer' entry.
+  // live 'deal'/'offer' entry and no 'current version' note (a revoked doc has
+  // no live current).
   const revokedSeen = new Set<string>();
   for (const d of prev.deals) {
     if (liveSet.has(d.genesis) || revokedSeen.has(d.genesis)) continue;
     revokedSeen.add(d.genesis);
-    entries.push(...versionEntries(versions[d.genesis] ?? [], d.genesis, 'deal-version'));
+    entries.push(...versionEntries(versions[d.genesis] ?? [], d.genesis, 'deal-version', false));
   }
   for (const o of prev.offers) {
     if (liveSet.has(o.genesis) || revokedSeen.has(o.genesis)) continue;
     revokedSeen.add(o.genesis);
-    entries.push(...versionEntries(versions[o.genesis] ?? [], o.genesis, 'offer-version'));
+    entries.push(...versionEntries(versions[o.genesis] ?? [], o.genesis, 'offer-version', false));
   }
   return dedupe(entries);
 }
 
-/** Re-emit the previous snapshot's entries verbatim (used when the live read fails). */
+/**
+ * Re-emit the previous snapshot's entries verbatim (used when a live read
+ * fails). Live deal/offer rows and their version history are retained; the
+ * 'current version' note is only emitted for genese that were live at snapshot
+ * time (a revoked genesis keeps its history without a current note).
+ */
 function snapshotToEntries(prev: DealCidSnapshot): CidEntry[] {
   const entries: CidEntry[] = [];
   for (const deal of prev.deals) entries.push(dealEntry(deal));
   for (const offer of prev.offers) entries.push(dealEntry(offer));
+  const liveSet = new Set<string>();
+  for (const d of prev.deals) liveSet.add(d.genesis);
+  for (const o of prev.offers) liveSet.add(o.genesis);
+  // Category default for a genesis present in BOTH prev.deals and prev.offers
+  // (pathological — a genesis is a deal by construction): emitted as
+  // 'deal-version'. Accepted and documented rather than tracking per-genesis
+  // category in the snapshot.
   const dealSet = new Set(prev.deals.map((d) => d.genesis));
   for (const [genesis, versions] of Object.entries(prev.versions)) {
     entries.push(
@@ -290,6 +317,7 @@ function snapshotToEntries(prev: DealCidSnapshot): CidEntry[] {
         versions ?? [],
         genesis,
         dealSet.has(genesis) ? 'deal-version' : 'offer-version',
+        liveSet.has(genesis),
       ),
     );
   }
@@ -306,11 +334,17 @@ function snapshotToEntries(prev: DealCidSnapshot): CidEntry[] {
  *     have changed → zero getVersionCount/getVersionsRange calls.
  *  3. Otherwise a bounded-parallel per-genesis diff fetches only the appended
  *     tail (or the full history when a cached genesis is incomplete / brand new).
+ *     A LIVE genesis always has >= 1 version on-chain, so a count of 0 there
+ *     means the count read failed (adapters fail-open to 0) → complete:false.
+ *     A tail fetch that returns fewer entries than count - cachedCount (the
+ *     safe-app caps a range at 100 versions; beyond the cap the note may land
+ *     on a stale version) also clears complete so the caller can rebuild cold.
  *  4. Revoked genesis (in prev, not live) keep their cached version history.
  *
  * complete is true only if every getDeals/getOffers/getVersionCount/
- * getVersionsRange call in this refresh succeeded AND no live genesis was left
- * with cachedCount 0 via the count-0 fallthrough that itself failed.
+ * getVersionsRange call in this refresh succeeded, no live genesis was left
+ * with cachedCount 0 via a count-0 fallthrough, and no live genesis ended with
+ * a truncated (short) version history.
  */
 export async function collectDealCidsIncremental(
   ctx: CidViewReadContext,
@@ -373,20 +407,34 @@ export async function collectDealCidsIncremental(
       if (matches && cc > 0) {
         // unchanged + cached complete → keep cached, no calls
       } else if (matches) {
-        // cc === 0 → the earlier fetch was incomplete; refetch FULL history
-        // (a missing incremental primitive is a read failure → catch clears complete)
+        // cc === 0 → the earlier fetch was incomplete; refetch FULL history.
+        // A live genesis always has >= 1 version on-chain, so a count of 0
+        // (adapter fail-open) means the count read failed → incomplete.
         if (!ctx.getVersionCount || !ctx.getVersionsRange)
           throw new Error('getVersionCount/getVersionsRange not implemented');
         const n = await ctx.getVersionCount(genesis);
-        versions[genesis] = n > 0 ? await ctx.getVersionsRange(genesis, 0) : [];
+        if (n > 0) {
+          const fetched = await ctx.getVersionsRange(genesis, 0, n);
+          versions[genesis] = fetched;
+          // fewer than n entries = capped (MAX_VERSIONS) or a failed/partial range read
+          if (fetched.length < n) complete = false;
+        } else {
+          // count 0 on a live genesis → read failed; keep [] cached but flag incomplete
+          complete = false;
+        }
       } else {
         // new or changed entry → fetch only the appended tail
         if (!ctx.getVersionCount || !ctx.getVersionsRange)
           throw new Error('getVersionCount/getVersionsRange not implemented');
         const n = await ctx.getVersionCount(genesis);
-        if (n > cc) {
-          const fetched = await ctx.getVersionsRange(genesis, cc);
+        if (n === 0) {
+          // live genesis with count 0 → read failed (adapter fail-open); keep cached
+          complete = false;
+        } else if (n > cc) {
+          const fetched = await ctx.getVersionsRange(genesis, cc, n);
           versions[genesis] = [...cached, ...fetched];
+          // fewer than n-cc appended = capped tail or a failed/partial range read
+          if (fetched.length < n - cc) complete = false;
         }
         // n <= cc → keep cached (the version array did not grow)
       }

@@ -18,7 +18,11 @@ const VERSION: VersionRead = { cid: 'QmVersion', timestamp: 900, tombstone: fals
 // adapter always wires them — these aliases narrow the optional members for the
 // delegation assertions.
 type VersionCountFn = (genesis: string) => Promise<number>;
-type VersionsRangeFn = (genesis: string, fromIndex: number) => Promise<VersionRead[]>;
+type VersionsRangeFn = (
+  genesis: string,
+  fromIndex: number,
+  count?: number,
+) => Promise<VersionRead[]>;
 
 function makeDeps(overrides: Partial<CidViewAdapterDeps> = {}): CidViewAdapterDeps {
   return {
@@ -66,19 +70,20 @@ describe('createCidViewContext', () => {
         calls.push(['count', g]);
         return Promise.resolve(1);
       }),
-      readVersionsRange: vi.fn((g: string, f: number) => {
-        calls.push(['range', g, f]);
+      readVersionsRange: vi.fn((g: string, f: number, c?: number) => {
+        calls.push(['range', g, f, c]);
         return Promise.resolve([VERSION]);
       }),
     });
     const ctx = createCidViewContext(deps);
 
     expect(await (ctx.getVersionCount as VersionCountFn)('0xgenesis')).toBe(1);
-    expect(await (ctx.getVersionsRange as VersionsRangeFn)('0xgenesis', 3)).toEqual([VERSION]);
+    // the optional count (already-fetched on-chain count) passes through 1:1
+    expect(await (ctx.getVersionsRange as VersionsRangeFn)('0xgenesis', 3, 7)).toEqual([VERSION]);
 
     expect(calls).toEqual([
       ['count', '0xgenesis'],
-      ['range', '0xgenesis', 3],
+      ['range', '0xgenesis', 3, 7],
     ]);
   });
 });

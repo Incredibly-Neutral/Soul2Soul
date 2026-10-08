@@ -14,7 +14,7 @@ export interface CidViewAdapterDeps {
   readOffers(): Promise<DealRead[]>;
   readVersions(genesis: string): Promise<VersionRead[]>;
   readVersionCount(genesis: string): Promise<number>;
-  readVersionsRange(genesis: string, fromIndex: number): Promise<VersionRead[]>;
+  readVersionsRange(genesis: string, fromIndex: number, count?: number): Promise<VersionRead[]>;
   readConfig(): Promise<{ cid: string; config: unknown }>;
   readEnsText(node: string, key: string): Promise<string>;
   ipfs: {
@@ -34,8 +34,8 @@ export function createCidViewContext(deps: CidViewAdapterDeps): CidViewReadConte
     getOffers: () => deps.readOffers(),
     getVersions: (genesis: string) => deps.readVersions(genesis),
     getVersionCount: (genesis: string) => deps.readVersionCount(genesis),
-    getVersionsRange: (genesis: string, fromIndex: number) =>
-      deps.readVersionsRange(genesis, fromIndex),
+    getVersionsRange: (genesis: string, fromIndex: number, count?: number) =>
+      deps.readVersionsRange(genesis, fromIndex, count),
     getConfig: () => deps.readConfig(),
     getEnsText: (node: string, key: string) => deps.readEnsText(node, key),
     dagGet: (cid: string) => deps.ipfs.dagGet(cid),

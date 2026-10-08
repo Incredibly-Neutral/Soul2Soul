@@ -216,6 +216,27 @@ describe('collectDealCids', () => {
     expect(deals.filter((e) => e.genesis === DEAL1)).toHaveLength(1);
     expect(deals.filter((e) => e.genesis === DEAL2)).toHaveLength(1);
   });
+
+  it('cold dedupe keeps the LAST duplicate so the current-version note survives a shared cid', async () => {
+    // Two versions of one genesis sharing a cid (allowed: the contract only
+    // rejects EmptyCid) — dedupe must keep the last (note-bearing) entry.
+    const ctx = fakeCtx({
+      getVersions: () =>
+        Promise.resolve([
+          { cid: 'QmShared', timestamp: 900, tombstone: false },
+          { cid: 'QmShared', timestamp: 1000, tombstone: false },
+        ]),
+    });
+
+    const entries = await collectDealCids(ctx);
+    const versions = entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      cid: 'QmShared',
+      timestamp: 1000,
+      note: 'current version',
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -591,5 +612,163 @@ describe('collectDealCidsIncremental', () => {
     expect(
       result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
     ).toHaveLength(2);
+  });
+
+  it('fail-open: a failing count read on a changed live genesis → complete false, cached retained', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: { [DEAL1]: [V0, V1] },
+    };
+    const liveDeal: DealRead = { ...DEAL_SNAP, cid: V2.cid, timestamp: V2.timestamp };
+    const calls: VersionCalls = { count: [], range: [] };
+    const ctx = fakeIncrementalCtx(
+      { deals: [liveDeal], offers: [], versions: { [DEAL1]: [V0, V1, V2] } },
+      calls,
+      { getVersionCount: () => Promise.reject(new Error('count down')) },
+    );
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    expect(result.complete).toBe(false);
+    // cached history retained despite the failed count read
+    expect(
+      result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
+    ).toHaveLength(2);
+  });
+
+  it('live genesis with count 0 (adapter fail-open) → complete false, cached retained, no range call', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: { [DEAL1]: [V0, V1] },
+    };
+    const liveDeal: DealRead = { ...DEAL_SNAP, cid: V2.cid, timestamp: V2.timestamp };
+    const calls: VersionCalls = { count: [], range: [] };
+    // chain reports 0 versions → getVersionCount fail-opens to 0
+    const ctx = fakeIncrementalCtx({ deals: [liveDeal], offers: [], versions: {} }, calls);
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    expect(result.complete).toBe(false);
+    expect(calls.count).toEqual([DEAL1]);
+    expect(calls.range).toEqual([]); // no range call when count is 0
+    // cached history retained (the live entry's cached tail is not clobbered to [])
+    expect(
+      result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
+    ).toHaveLength(2);
+  });
+
+  it('incremental dedupe keeps the LAST duplicate so the current-version note survives a shared cid', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: {
+        [DEAL1]: [
+          { cid: 'QmShared', timestamp: 900, tombstone: false },
+          { cid: 'QmShared', timestamp: 1000, tombstone: false },
+        ],
+      },
+    };
+    const calls: VersionCalls = { count: [], range: [] };
+    const ctx = fakeIncrementalCtx(
+      { deals: [DEAL_SNAP], offers: [], versions: { [DEAL1]: prev.versions[DEAL1] ?? [] } },
+      calls,
+    );
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    // fast path (unchanged fingerprint) → zero calls, but dedupe still collapses
+    // the two shared-cid version entries into one, keeping the note-bearing one
+    expect(calls.count).toEqual([]);
+    const versions = result.entries.filter(
+      (e) => e.category === 'deal-version' && e.genesis === DEAL1,
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      cid: 'QmShared',
+      timestamp: 1000,
+      note: 'current version',
+    });
+  });
+
+  it('truncated tail (range returns fewer than count-cc) → complete false, cached retained', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: { [DEAL1]: [V0, V1] },
+    };
+    const liveDeal: DealRead = { ...DEAL_SNAP, cid: V2.cid, timestamp: V2.timestamp };
+    const calls: VersionCalls = { count: [], range: [] };
+    // live chain has 5 versions, but the range read returns [] (capped/failed) → truncated
+    const ctx = fakeIncrementalCtx(
+      { deals: [liveDeal], offers: [], versions: { [DEAL1]: [V0, V1, V2, V2, V2] } },
+      calls,
+      {
+        getVersionsRange: (g: string, f: number) => {
+          calls.range.push(`${g}:${String(f)}`);
+          return Promise.resolve([]);
+        },
+      },
+    );
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    expect(result.complete).toBe(false);
+    // cached history retained (merged = cached + [] → V0, V1)
+    expect(
+      result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
+    ).toHaveLength(2);
+  });
+
+  it('revoked genesis → version history retained WITHOUT a current-version note', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: { [DEAL1]: [V0, V1] },
+    };
+    const calls: VersionCalls = { count: [], range: [] };
+    const ctx = fakeIncrementalCtx(
+      { deals: [], offers: [], versions: { [DEAL1]: [V0, V1] } },
+      calls,
+    );
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    const versions = result.entries.filter(
+      (e) => e.category === 'deal-version' && e.genesis === DEAL1,
+    );
+    expect(versions).toHaveLength(2);
+    // a revoked doc has no live current → no 'current version' note
+    expect(versions.some((e) => e.note === 'current version')).toBe(false);
+  });
+
+  it('collector passes the already-fetched count to getVersionsRange', async () => {
+    const prev: DealCidSnapshot = {
+      deals: [DEAL_SNAP],
+      offers: [],
+      versions: { [DEAL1]: [V0, V1] },
+    };
+    const liveDeal: DealRead = { ...DEAL_SNAP, cid: V2.cid, timestamp: V2.timestamp };
+    const rangeCalls: string[] = [];
+    const ctx = fakeIncrementalCtx(
+      { deals: [liveDeal], offers: [], versions: { [DEAL1]: [V0, V1, V2] } },
+      { count: [], range: [] },
+      {
+        getVersionsRange: (g: string, f: number, count?: number) => {
+          rangeCalls.push(`${g}:${String(f)}:${String(count)}`);
+          return Promise.resolve([V2]);
+        },
+      },
+    );
+
+    const result = await collectDealCidsIncremental(ctx, prev);
+
+    // the range call carries the on-chain count (3) the collector already fetched
+    expect(rangeCalls).toEqual([`${DEAL1}:2:3`]);
+    expect(result.complete).toBe(true);
+    expect(
+      result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
+    ).toHaveLength(3);
   });
 });
