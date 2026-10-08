@@ -15,7 +15,7 @@ export const filterStyles = css`
     align-items: center;
     gap: 0.75rem 1.5rem;
     padding: 0.75rem 0 0.75rem 0;
-    border-top: 1px solid var(--gray-600);
+    // border-top: 1px solid var(--gray-600);
     border-bottom: 1px solid var(--gray-600);
     margin-top: 0.75rem;
   }

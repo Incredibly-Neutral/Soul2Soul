@@ -1,3 +1,18 @@
+## 2026-10-08 — safe-app s2s-table title row + action buttons (orchestrated) — MERGED 4c5ccc3
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-08 | MERGED | /home/joera/code/s2s-safeapp-table-title | feat/safeapp-table-title | pi | deepseek-v4-flash-0731 | move section-title+count into s2s-table, flex toolbar row (title left / filters right), sync button icon+name, revoke icon, copy-content-id icon-before-text CSS |
+
+Feature commits: `2db4e60` (feature: title/countSuffix/titleAction on <s2s-table>, .table-toolbar row, Sync icon+name buttons, ph-x revoke, copy-content-id :host row-reverse flex, dead count state/refresh CSS removed) + `4c5ccc3` (review fix: border-top:none on in-toolbar .table-filters). Reviewer `rev-table-title` APPROVED (2 non-blocking: doubled-divider border-top — fixed; copy-content-id long-title overflow — declined, not a regression). In-scope tests 14/14; type-check 0; QA 7/7 PASS on merged main.
+
+GOTCHAS:
+- Shared workspace dep: fresh worktree needs `shared` built (`pnpm build` in shared/) before type-check/build — main had shared/dist prebuilt.
+- Committed main was RED at a4d7b86: commit `4974860` removed `<h2>Soul2Soul Publication Editor</h2>` from s2s-app.ts but didn't update tests/components/s2s-app.test.ts:275 → 1 failing test on clean main (281 pass). Main checkout LOOKED green only because it had an uncommitted local edit removing that assertion. Lead fixed on main as `d603a08` (drop stale assertion, test-only).
+- Main checkout had unrelated uncommitted style experiments (button-styles/filter-styles/table-styles + Azeret zip + the test assertion edit) from the font wave — stashed table-styles.ts to ff-merge, popped cleanly; NOT committed (user's in-progress work, left dirty).
+- Merge was ff from a4d7b86; after merge HEAD = 4c5ccc3, then d603a08 (test fix). Post-merge: build 0 (282/282 tests), QA 7/7.
+- Single-model review limitation (pi-only) — flagged per AGENTS.md.
+
 # s2s worktree registry
 
 Tracks active/orchestrated worktrees and their sub-agent sessions. Hybrid runs: orchestrator
