@@ -306,6 +306,116 @@ describe('ConfigBuilder', () => {
       expect(result.config.domain).toBeUndefined();
     });
 
+    // ---------------------------------------------------------------------
+    // ENS alias / multi-domain write targets
+    // ---------------------------------------------------------------------
+
+    it('sets aliases on the built config when an aliases array override is provided', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        undefined,
+        undefined,
+        ['a.eth', 'b.eth'],
+      );
+
+      expect(result.config.aliases).toEqual(['a.eth', 'b.eth']);
+      // Aliases replace the legacy domain field entirely.
+      expect(result.config.domain).toBeUndefined();
+    });
+
+    it('explicit aliases override wins over a carried existing domain', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({ domain: 'old.soul2soul.eth' });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+        undefined,
+        ['new.eth'],
+      );
+
+      expect(result.config.aliases).toEqual(['new.eth']);
+      expect(result.config.domain).toBeUndefined();
+    });
+
+    it('carries the existing config aliases when no override is provided', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({ aliases: ['a.eth', 'b.eth'] });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+      );
+
+      expect(result.config.aliases).toEqual(['a.eth', 'b.eth']);
+      expect(result.config.domain).toBeUndefined();
+    });
+
+    it('an empty aliases array clears ALL write targets (aliases AND legacy domain)', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({
+        aliases: ['old.eth'],
+        domain: 'legacy.soul2soul.eth',
+      });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+        undefined,
+        [],
+      );
+
+      expect(result.config.aliases).toBeUndefined();
+      expect(result.config.domain).toBeUndefined();
+    });
+
+    it('dedupes and drops empty alias entries from an aliases override', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        undefined,
+        undefined,
+        ['a.eth', 'a.eth', '  ', 'b.eth'],
+      );
+
+      expect(result.config.aliases).toEqual(['a.eth', 'b.eth']);
+    });
+
     it('merges templates: existing CID stays when template files unchanged', async () => {
       const ipfs = mockIPFS();
       ipfs.fetchFromKubo.mockResolvedValue({

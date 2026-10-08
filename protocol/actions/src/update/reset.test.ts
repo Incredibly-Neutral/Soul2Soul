@@ -29,6 +29,9 @@ import * as ethers from 'ethers5'; // protocol's v5 alias — the action runs ag
 
 const mocks = vi.hoisted(() => ({
   prevEncoded: '0xe30101701220' + 'ab'.repeat(32), // non-empty contenthash_wrapped
+  // Previously-tracked alias NAMES (the canonical node's auxiliary 'aliases'
+  // record). Empty by default — nothing tracked (first run after upgrade).
+  prevAliasesJson: '',
   canPublish: true,
   canReset: true,
   gatewayUrls: [] as string[],
@@ -59,7 +62,15 @@ vi.mock('../render/config.ctrl', () => ({
 }));
 
 vi.mock('../libs/evm', () => ({
-  evmRead: vi.fn(async () => mocks.prevEncoded),
+  evmRead: vi.fn(
+    async (chain: string, addr: string, abi: unknown, method: string, args: any[]) => {
+      // The auxiliary alias-tracking record read is distinguished by its key.
+      if (method === 'getText' && args?.[1] === 'aliases') {
+        return mocks.prevAliasesJson;
+      }
+      return mocks.prevEncoded;
+    },
+  ),
   evmWrite: vi.fn(async () => mocks.evmWriteResult),
   toHexString: (cid: string) => '0x' + cid,
 }));
@@ -138,6 +149,7 @@ beforeEach(() => {
   mocks.canPublish = true;
   mocks.canReset = true;
   mocks.config = { assetsCid: 'QmAssets' };
+  mocks.prevAliasesJson = '';
   mocks.evmWriteResult = { success: true };
   vi.stubGlobal(
     'fetch',
@@ -295,16 +307,34 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
   });
 });
 
-describe('evm-update — contenthash_wrapped write target (config.domain)', () => {
-  const setTextNodeOf = async (): Promise<string | undefined> => {
+describe('evm-update — contenthash_wrapped write target (config.domain / aliases)', () => {
+  /** Return the batchSetRecords evmWrite call, or undefined. */
+  const batchCallOf = async (): Promise<any[] | undefined> => {
     const { evmWrite } = await import('../libs/evm');
     const calls = (evmWrite as any).mock.calls as any[][];
-    const setText = calls.find((c) => c[4] === 'setText');
-    return setText ? setText[5][0] : undefined;
+    return calls.find((c) => c[4] === 'batchSetRecords');
+  };
+
+  /** Return the write-node array of the single batchSetRecords call. */
+  const batchNodesOf = async (): Promise<string[] | undefined> => {
+    const call = await batchCallOf();
+    return call ? call[5][0] : undefined;
+  };
+
+  /** Return the per-node key arrays of the batchSetRecords call. */
+  const batchKeysOf = async (): Promise<string[][] | undefined> => {
+    const call = await batchCallOf();
+    return call ? call[5][2] : undefined;
+  };
+
+  /** Return the per-node value arrays of the batchSetRecords call. */
+  const batchValuesOf = async (): Promise<string[][] | undefined> => {
+    const call = await batchCallOf();
+    return call ? call[5][3] : undefined;
   };
 
   it('writes to namehash(publication) when config.domain is absent (fallback)', async () => {
-    mocks.config = { assetsCid: 'QmAssets' }; // no domain
+    mocks.config = { assetsCid: 'QmAssets' }; // no domain, no aliases
     const result: any = await main({
       ...baseInput,
       preview: false,
@@ -313,10 +343,12 @@ describe('evm-update — contenthash_wrapped write target (config.domain)', () =
     });
 
     expect(result.ok).toBe(true);
-    expect(await setTextNodeOf()).toBe(ethers.utils.namehash('alice.soul2soul.eth'));
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'),
+    ]);
   });
 
-  it('writes to namehash(config.domain) when config.domain is set', async () => {
+  it('writes to namehash(config.domain) when config.domain is set (legacy single-node override)', async () => {
     mocks.config = { assetsCid: 'QmAssets', domain: 'custom.soul2soul.eth' };
     const result: any = await main({
       ...baseInput,
@@ -326,13 +358,155 @@ describe('evm-update — contenthash_wrapped write target (config.domain)', () =
     });
 
     expect(result.ok).toBe(true);
-    expect(await setTextNodeOf()).toBe(
+    expect(await batchNodesOf()).toEqual([
       ethers.utils.namehash('custom.soul2soul.eth'),
-    );
-    // The write target changed, not the publication identity
-    expect(await setTextNodeOf()).not.toBe(
+    ]);
+    // The write target changed, not the publication identity — the canonical
+    // publication node is NOT in the batch (identical to today's swap).
+    const nodes = (await batchNodesOf()) ?? [];
+    expect(nodes).not.toContain(ethers.utils.namehash('alice.soul2soul.eth'));
+  });
+
+  it('writes contenthash to namehash(publication) + EVERY alias in ONE batchSetRecords call', async () => {
+    mocks.config = { assetsCid: 'QmAssets', aliases: ['a.eth', 'b.eth'] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await batchNodesOf()).toEqual([
       ethers.utils.namehash('alice.soul2soul.eth'),
+      ethers.utils.namehash('a.eth'),
+      ethers.utils.namehash('b.eth'),
+    ]);
+    // A single batchSetRecords tx (never parallel Promise.all evmWrite calls).
+    const { evmWrite } = await import('../libs/evm');
+    const batchCalls = (evmWrite as any).mock.calls.filter(
+      (c: any[]) => c[4] === 'batchSetRecords',
     );
+    expect(batchCalls.length).toBe(1);
+    const setTextCalls = (evmWrite as any).mock.calls.filter(
+      (c: any[]) => c[4] === 'setText',
+    );
+    expect(setTextCalls.length).toBe(0);
+  });
+
+  it('writes the same encoded value to every node (per-node key arrays) + tracks the alias list on the canonical node', async () => {
+    mocks.config = { assetsCid: 'QmAssets', aliases: ['a.eth', 'b.eth'] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    const encoded = '0x' + 'QmNewRoot'; // mock toHexString(cid) === '0x' + cid
+    const keys = await batchKeysOf();
+    const values = await batchValuesOf();
+    expect(keys).toEqual([
+      ['contenthash_wrapped', 'aliases'], // canonical node also tracks the list
+      ['contenthash_wrapped'],
+      ['contenthash_wrapped'],
+    ]);
+    expect(values).toEqual([
+      [encoded, '["a.eth","b.eth"]'],
+      [encoded],
+      [encoded],
+    ]);
+  });
+
+  it('dedupes the node list when an alias duplicates the publication name or another alias', async () => {
+    mocks.config = {
+      assetsCid: 'QmAssets',
+      aliases: ['alice.soul2soul.eth', 'a.eth', 'a.eth'],
+    };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'),
+      ethers.utils.namehash('a.eth'),
+    ]);
+  });
+
+  it('clears an alias present in the previous config but not in the new list (clear-on-removal)', async () => {
+    mocks.prevAliasesJson = '["old.eth","kept.eth"]';
+    mocks.config = { assetsCid: 'QmAssets', aliases: ['kept.eth'] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    const encoded = '0x' + 'QmNewRoot';
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'), // canonical — always written
+      ethers.utils.namehash('kept.eth'), // kept alias — written
+      ethers.utils.namehash('old.eth'), // removed alias — cleared
+    ]);
+    const values = await batchValuesOf();
+    expect(values).toEqual([
+      [encoded, '["kept.eth"]'],
+      [encoded],
+      [''], // removed alias gets an empty value so it stops resolving
+    ]);
+  });
+
+  it('never clears the canonical publication node even if it was previously tracked as an alias', async () => {
+    mocks.prevAliasesJson = '["alice.soul2soul.eth","old.eth"]';
+    mocks.config = { assetsCid: 'QmAssets', aliases: [] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    // No aliases now → only the canonical node is written; old.eth (and the
+    // canonical, if it were ever tracked) is cleared, but the canonical node
+    // itself is NEVER cleared — it is always a write target.
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'),
+      ethers.utils.namehash('old.eth'),
+    ]);
+    const values = await batchValuesOf();
+    const canonicalNode = ethers.utils.namehash('alice.soul2soul.eth');
+    const canonicalIdx = (await batchNodesOf())!.indexOf(canonicalNode);
+    // The canonical node's contenthash value is the encoded root, never ''.
+    expect(values![canonicalIdx][0]).toBe('0xQmNewRoot');
+  });
+
+  it('reset clears the same node list atomically (single batchSetRecords)', async () => {
+    mocks.config = { assetsCid: 'QmAssets', aliases: ['a.eth'] };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      signature: await makeSignature(),
+      reset: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await batchNodesOf()).toEqual([
+      ethers.utils.namehash('alice.soul2soul.eth'),
+      ethers.utils.namehash('a.eth'),
+    ]);
+    const { evmWrite } = await import('../libs/evm');
+    const batchCalls = (evmWrite as any).mock.calls.filter(
+      (c: any[]) => c[4] === 'batchSetRecords',
+    );
+    expect(batchCalls.length).toBe(1);
   });
 
   it('still fails loudly on write failure when a domain is configured', async () => {
