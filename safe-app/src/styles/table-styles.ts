@@ -43,6 +43,9 @@ export const tableStyles = css`
     padding: 0.75rem;
     border-bottom: 1px solid var(--gray-600);
     text-transform: uppercase;
+    font-size: .85rem;
+    letter-spacing: .75px;
+    font-family  var(--font-mono-family);
     display: flex;
     justify-content: flex-start;
     align-items: center;

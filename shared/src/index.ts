@@ -1,5 +1,7 @@
 export * from './helpers';
 
+export * from './rpc';
+
 export * from './protocol';
 export * from './contracts';
 export * from './ipfs';

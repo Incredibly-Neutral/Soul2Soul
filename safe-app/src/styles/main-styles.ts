@@ -16,11 +16,10 @@ export const mainStyles = css`
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    font-size: 2rem;
-    // font-family: 'DM Serif Display', serif;
-    line-height: 1.2;
+    font-size: 3.2rem;
+    line-height: 1.4;
     margin: 2rem 0 0 0;
-    text-transform: uppercase;
+
 
   }
 
@@ -39,8 +38,8 @@ export const mainStyles = css`
     padding: 0.125rem 0.75rem;
     align-self: center;
     font-family: var(--font-mono);
-    font-size: 0.85rem;
-    letter-spacing: 0.75px;
+    font-size: 1rem;
+
   }
 
   .web-status > div:first-of-type {

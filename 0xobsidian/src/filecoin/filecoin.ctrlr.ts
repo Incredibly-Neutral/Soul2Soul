@@ -95,13 +95,18 @@ export class FilecoinController {
    * @param configCid - Root CID of the assets tree in Kubo
    * @param kuboUrl - Kubo RPC endpoint (e.g. "https://ipfs.transport-union.dev")
    */
-  async uploadTree(configCid: string, kuboUrl: string): Promise<FilecoinUploadResult> {
+  async uploadTree(
+    configCid: string,
+    kuboUrl: string,
+    owners: string[] = [],
+    kind: string = '',
+  ): Promise<FilecoinUploadResult> {
     const carBytes = await this.exportTreeFromKubo(configCid, kuboUrl);
     // Scope the CORS-free fetch to the Filecoin upload only (kubo export above
     // uses node https and needs native fetch untouched). restore in finally.
     installCorsFetch();
     try {
-      return await this.storage.uploadTree(carBytes);
+      return await this.storage.uploadTree(carBytes, owners, kind);
     } finally {
       restoreCorsFetch();
     }

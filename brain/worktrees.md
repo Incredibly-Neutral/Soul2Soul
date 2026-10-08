@@ -1,3 +1,11 @@
+## 2026-10-08 — safe-app hide unused 'feed' record from records tab (PR #99 open, awaiting human merge)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-08 | lead (direct, mechanical) | /home/joera/code/s2s-safeapp-records-feed | fix/records-tab-hide-feed | pi | deepseek-v4-flash-0731 | hide legacy `feed` on-chain record from records table (PR #98 already shipped the alias UI) |
+
+Feature commit: `550be07` (filter `feed` out of `filteredRecords` via `HIDDEN_RECORD_KEYS` + new test asserting exclusion from count+rows). Gates: type-check 0; vitest 34/34 files, 286/286; QA 7/7 PASS (after copying gitignored root `.env` into the fresh worktree — QA failure without it was the missing `VITE_DRPC_API_KEY`, not a code regression). PR: https://github.com/Joera/S2S-monorepo/pull/99 (single-model review limitation per AGENTS.md).
+
 ## 2026-10-08 — safe-app s2s-table title row + action buttons (orchestrated) — MERGED 4c5ccc3
 
 | date | session | worktree | branch | agent | model | task |
@@ -17,6 +25,11 @@ GOTCHAS:
 
 Tracks active/orchestrated worktrees and their sub-agent sessions. Hybrid runs: orchestrator
 dispatching to a builder sub-agent in its own worktree; human merges each PR.
+
+Convention (2026-10-08): a task == one PR the human approves; subtasks are commits on
+the feature branch that lead to that PR. After the human merges, orchestrator syncs local
+main (`git fetch origin && git merge --ff-only origin/main`), removes the worktree, deletes
+the branch, and marks this entry MERGED <sha> (see brain/agents.md → Merge & PR protocol).
 
 ## 2026-08-25 — fix/table-filter-options (PR #63 APPROVED, ready to merge)
 
@@ -158,3 +171,16 @@ noun-*.svg assets.
   Cross-vendor review NOT possible (only pi installed) — all reviews single-model pi, flagged.
   Note: main advanced concurrently (wave-2 test commits b84c493/1abc6f3/e620a95 interleaved); my
   merges integrated cleanly, no conflicts.
+
+## 2026-10-08 — shared cid-view: publication CID inventory (orchestrated)
+
+Goal: shared method `buildPublicationCidView` producing the list of ALL CIDs a publication uses (deals+prev versions, publication config templates/assets, L2 ENS site tree + archive/cache JSON) → basis for later IPFS copy monitoring/cleanup. Stages are dependency-sequenced; only stage 2 (collectors) is parallel.
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+$0
+| 2026-10-08 | 4d5a351 | /home/joera/code/worktrees/cidview-2 (stage 2a) | agent/cidview-2 | pi | deepseek-v4-flash-0731 | deals collector: deal/offer/version CIDs + tests; rev-2 APPROVE |
+| 2026-10-08 | 87a0050 | /home/joera/code/worktrees/cidview-3 (stage 2b) | agent/cidview-3 | pi | deepseek-v4-flash-0731 | config collector: config/templateDAG/templates/assets CIDs + tests; rev-3 APPROVE |
+| 2026-10-08 | c0a50a9 | /home/joera/code/worktrees/cidview-4 (stage 2c) | agent/cidview-4 | pi | deepseek-v4-flash-0731 | tree+archive collectors: site tree + content_cache CIDs + tests; rev-4 APPROVE |
+| 2026-10-08 | 7ada982 | /home/joera/code/worktrees/cidview-5 (stage 3) | agent/cidview-5 | pi | deepseek-v4-flash-0731 | coordinator: buildPublicationCidView + zod validation + adapter factory + tests; rev-5 APPROVE; PR #104 (MERGED); stuck impl-5 restarted as impl-5b |
+| 2026-10-08 | (pending) | /home/joera/code/worktrees/cidview-6 (stage 4) | agent/cidview-6 | pi | deepseek-v4-flash-0731 | safe-app CID-inventory section in Storage tab (real adapter + read-only UI); Filecoin tables kept for comparison |

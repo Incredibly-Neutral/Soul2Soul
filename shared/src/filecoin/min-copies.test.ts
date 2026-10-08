@@ -5,9 +5,9 @@ import {
   type MinCopiesAttempt,
 } from './index';
 
-// Mirrors BROWSER_USABLE_PROVIDERS after hygiene: four primary-usable
+// Mirrors BROWSER_USABLE_PROVIDERS after hygiene: eight primary-usable
 // providers, each usable as an INDEPENDENT PRIMARY (h2 + upload CORS).
-const ALL_PROVIDERS = [6n, 13n, 15n, 29n];
+const ALL_PROVIDERS = [1n, 5n, 7n, 13n, 15n, 29n, 30n, 32n];
 
 /** A successful independent primary-store attempt (one committed copy). */
 function committedCopy(id: bigint): MinCopiesAttempt {
@@ -26,35 +26,35 @@ describe('uploadWithMinCopies (two independent primary stores)', () => {
 
     // Exactly two copies, from the first two independent primaries.
     expect(res).toEqual([
-      { provider: '6', dealId: 'd6' },
-      { provider: '13', dealId: 'd13' },
+      { provider: '1', dealId: 'd1' },
+      { provider: '5', dealId: 'd5' },
     ]);
     // One call per primary; stops as soon as 2 copies are committed.
     expect(attempt).toHaveBeenCalledTimes(2);
-    expect(attempt).toHaveBeenNthCalledWith(1, 6n);
-    expect(attempt).toHaveBeenNthCalledWith(2, 13n);
+    expect(attempt).toHaveBeenNthCalledWith(1, 1n);
+    expect(attempt).toHaveBeenNthCalledWith(2, 5n);
   });
 
   it('excludes a failed primary and continues to the next until 2 copies commit', async () => {
     const attempt = vi.fn(async (p: bigint): Promise<MinCopiesAttempt> => {
-      if (p === 6n) return { committed: false, failedProviders: [6n] };
+      if (p === 1n) return { committed: false, failedProviders: [1n] };
       return committedCopy(p);
     });
 
     const res = await uploadWithMinCopies(ALL_PROVIDERS, 2, attempt);
 
     expect(res).toEqual([
-      { provider: '13', dealId: 'd13' },
-      { provider: '15', dealId: 'd15' },
+      { provider: '5', dealId: 'd5' },
+      { provider: '7', dealId: 'd7' },
     ]);
-    // 6n fails, then 13n and 15n commit — three independent stores attempted.
+    // 1n fails, then 5n and 7n commit — three independent stores attempted.
     expect(attempt).toHaveBeenCalledTimes(3);
-    expect(attempt).toHaveBeenNthCalledWith(1, 6n);
-    expect(attempt).toHaveBeenNthCalledWith(2, 13n);
-    expect(attempt).toHaveBeenNthCalledWith(3, 15n);
+    expect(attempt).toHaveBeenNthCalledWith(1, 1n);
+    expect(attempt).toHaveBeenNthCalledWith(2, 5n);
+    expect(attempt).toHaveBeenNthCalledWith(3, 7n);
     // The failed primary must never be re-attempted.
     for (const call of attempt.mock.calls.slice(1)) {
-      expect(call[0]).not.toBe(6n);
+      expect(call[0]).not.toBe(1n);
     }
   });
 
