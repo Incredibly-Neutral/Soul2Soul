@@ -9,6 +9,19 @@ export interface CidViewReadContext {
   getOffers(): Promise<DealRead[]>;
   /** Full version history (incl. tombstoned) for one genesis (getVersionCount + getVersion). */
   getVersions(genesis: string): Promise<VersionRead[]>;
+  /**
+   * Length of the append-only version array for one genesis (0 if none) — the
+   * monotonic per-genesis watermark used by incremental diffs. Optional so
+   * existing test fakes that only exercise the cold collectors keep compiling;
+   * the concrete adapter and safe-app always provide it.
+   */
+  getVersionCount?(genesis: string): Promise<number>;
+  /**
+   * Versions [fromIndex, count) for one genesis — the incremental-diff
+   * primitive. Optional for the same reason as getVersionCount; the
+   * incremental collector treats a missing primitive as a read failure.
+   */
+  getVersionsRange?(genesis: string, fromIndex: number): Promise<VersionRead[]>;
   /** Publication config: cid = configCid (from the on-chain `config` record), config = parsed S2SPublicationConfig. */
   getConfig(): Promise<{ cid: string; config: unknown }>;
   /** Read a DAG node as JSON (used for the templates DAG: array of {path,cid,body}). */
