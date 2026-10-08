@@ -20,7 +20,57 @@ const ACTION = 'evm-update';
 const RECORDS_CONTRACT_ABI = [
   'function getText(bytes32 node, string key) view returns (string)',
   'function setText(bytes32 node, string key, string value) nonpayable',
+  'function batchSetRecords(bytes32[] nodes, address[] addrs, string[][] keys, string[][] values) nonpayable',
 ];
+
+// ZERO address for batchSetRecords' `addrs` array — we only set text records
+// (the C3 contract skips the address write when addrs[i] == address(0)).
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+// Reserved auxiliary record key on the canonical publication node that tracks
+// the currently-written alias NAMES (JSON array). It is NOT part of resolution
+// (the resolver reads `contenthash_wrapped`); it only lets the next update
+// clear aliases that have been removed from the list. The canonical node is
+// never cleared by this mechanism.
+const ALIASES_TRACKING_KEY = 'aliases';
+
+/** Dedupe preserving first-seen order. */
+const dedupe = <T,>(xs: T[]): T[] => [...new Set(xs)];
+
+/**
+ * Resolve the ENS write-target node list from the publication config.
+ *
+ *   * `config.aliases` (non-empty array) → ADDITIVE: [namehash(publication),
+ *     ...aliases.map(namehash)] — the canonical publication node is ALWAYS
+ *     written; aliases are extra doors to the same contenthash.
+ *   * `config.domain` only (legacy field, backward compatible) → SWAP:
+ *     [namehash(domain)] — identical to the pre-aliases behaviour (single
+ *     write at namehash(domain), canonical node untouched).
+ *   * neither → [namehash(publication)] — the default subdomain target.
+ */
+function resolveWriteTargets(
+  config: { domain?: string; aliases?: string[] } | null | undefined,
+  publication: string,
+): { nodes: string[]; isLegacyDomain: boolean } {
+  const aliases =
+    Array.isArray(config?.aliases) && (config!.aliases as string[]).length > 0
+      ? (config!.aliases as string[]).filter(
+          (a) => typeof a === 'string' && a.trim() !== '',
+        )
+      : undefined;
+  if (aliases && aliases.length > 0) {
+    return {
+      nodes: dedupe([publication, ...aliases]).map((n) =>
+        ethers.utils.namehash(n),
+      ),
+      isLegacyDomain: false,
+    };
+  }
+  if (config && config.domain) {
+    return { nodes: [ethers.utils.namehash(config.domain)], isLegacyDomain: true };
+  }
+  return { nodes: [ethers.utils.namehash(publication)], isLegacyDomain: false };
+}
 
 // MFS ops that move content INTO the remote data_gateway Kubo node (cp-root
 // copies the whole previous tree; per-file/assets cp and pin-add fetch and
@@ -92,18 +142,23 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     const config = await getConfig(undefined, configModule, rpcs?.L2, gateway);
     trace.push(`config: ${config}`);
 
-    // The WRITE node may differ from the publication identity: when the
-    // publication config sets an optional `domain`, the contenthash is written
-    // to namehash(domain) instead of the default namehash(publication)
-    // subdomain. Only the write target changes here — ownership/discovery
-    // (getDomainOwnerAndModules(publication), canPublish/canReset) stays keyed
-    // on the original `publication` identity, not the configured domain.
-    const writeDomain =
-      config && config.domain ? config.domain : publication;
-    const node = ethers.utils.namehash(writeDomain);
-    trace.push(`node: ${node}`);
+    // The WRITE nodes may differ from the publication identity: the config can
+    // set either a legacy `domain` (single write-node override, backward
+    // compatible) or a list of `aliases` (ADDITIVE — the canonical publication
+    // node plus each alias). Only the write targets change here —
+    // ownership/discovery (getDomainOwnerAndModules(publication),
+    // canPublish/canReset) stays keyed on the original `publication` identity,
+    // not the configured domain/aliases.
+    const { nodes, isLegacyDomain } = resolveWriteTargets(config, publication);
+    const canonicalNode = ethers.utils.namehash(publication);
+    trace.push(`nodes: ${JSON.stringify(nodes)}`);
 
-    // Read previous contenthash_wrapped on-chain
+    // The primary node drives the previous-tree copy decision below. In the
+    // additive/default paths this is the canonical publication node; in the
+    // legacy `domain` path it is namehash(domain) — matching today's behaviour.
+    const node = nodes[0];
+
+    // Read previous contenthash_wrapped on-chain (primary node)
     const prevEncoded = await evmRead(
       'L2',
       protocolInfo.ensRecords,
@@ -113,6 +168,27 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       rpcs?.L2,
     );
     trace.push(`prev: ${prevEncoded}`);
+
+    // Read the previously-tracked alias names (auxiliary 'aliases' record on
+    // the canonical publication node, JSON array) so a removed alias can be
+    // cleared on the next update. Never throws — a missing/unparseable record
+    // simply means there is nothing tracked yet (first run after upgrade).
+    let prevAliases: string[] = [];
+    try {
+      const prevAliasJson = await evmRead(
+        'L2',
+        protocolInfo.ensRecords,
+        RECORDS_CONTRACT_ABI,
+        'getText',
+        [canonicalNode, ALIASES_TRACKING_KEY],
+        rpcs?.L2,
+      );
+      const parsed =
+        typeof prevAliasJson === 'string' ? JSON.parse(prevAliasJson) : null;
+      if (Array.isArray(parsed)) {
+        prevAliases = parsed.filter((a: unknown) => typeof a === 'string');
+      }
+    } catch {}
 
     const mfsPath = `/temp-${Date.now()}`;
 
@@ -320,14 +396,55 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
       if (!preview) {
         const encoded = toHexString(newRootCid);
-        trace.push(`writing ${encoded}`);
+        trace.push(`writing ${encoded} to ${nodes.length} node(s)`);
+
+        // The current alias NAMES (canonical publication name excluded) —
+        // persisted to the canonical node's auxiliary 'aliases' record so the
+        // next update can clear aliases removed from the list. The legacy
+        // `domain` path tracks nothing (keeps today's single-node behaviour).
+        const newAliases = isLegacyDomain ? [] : (config?.aliases ?? []);
+
+        // Clear-on-removal: any alias that was previously written but is no
+        // longer in the new list gets an EMPTY contenthash_wrapped so it stops
+        // resolving instead of going stale (C3 has no delete — an empty value
+        // is what getText returns for an unset record). The canonical
+        // publication node is NEVER cleared by this mechanism.
+        const clearNodes = dedupe(
+          prevAliases
+            .filter((a) => !newAliases.includes(a))
+            .map((a) => ethers.utils.namehash(a)),
+        ).filter((n) => n !== canonicalNode);
+        if (clearNodes.length > 0) {
+          trace.push(`clearing ${clearNodes.length} removed alias node(s)`);
+        }
+
+        // ONE atomic batchSetRecords tx: contenthash on every write node, '' on
+        // every removed-alias node, plus the alias-tracking record on the
+        // canonical node. Single tx → single nonce → no parallel evmWrite race
+        // (libs/evm.ts nonce race + silent-success footgun is avoided by never
+        // issuing parallel writes from the same PKP).
+        const allNodes = dedupe([...nodes, ...clearNodes]);
+        const addrs = allNodes.map(() => ZERO_ADDRESS);
+        const keys = allNodes.map(() => ['contenthash_wrapped'] as string[]);
+        const values = allNodes.map((n) =>
+          clearNodes.includes(n) ? ([''] as string[]) : ([encoded] as string[]),
+        );
+
+        // Persist the current alias list on the canonical node (only when it is
+        // a write target — the legacy `domain` path keeps today's single write).
+        const canonicalIdx = allNodes.indexOf(canonicalNode);
+        if (canonicalIdx !== -1) {
+          keys[canonicalIdx] = ['contenthash_wrapped', ALIASES_TRACKING_KEY];
+          values[canonicalIdx] = [encoded, JSON.stringify(newAliases)];
+        }
+
         const result = await evmWrite(
           'L2',
           protocolInfo.pkp,
           protocolInfo.ensRecords,
           RECORDS_CONTRACT_ABI,
-          'setText',
-          [node, 'contenthash_wrapped', encoded],
+          'batchSetRecords',
+          [allNodes, addrs, keys, values],
           true,
           rpcs?.L2?.[0],
         );

@@ -23,12 +23,24 @@ export type S2SPublicationConfig = {
     templateCid: string,
     localePaths?: Record<string, string>,  // optional locale → path-prefix map (monolingual by default)
     /**
-     * Optional ENS name the publication's on-chain contenthash is written to.
-     * When set, the EVM update action writes `contenthash_wrapped` at
-     * `namehash(domain)` instead of the default `namehash(name)` subdomain
-     * target. When absent, the default subdomain write target is used.
+     * Optional legacy ENS name the publication's on-chain contenthash is
+     * written to. When set (and `aliases` is absent), the EVM update action
+     * writes `contenthash_wrapped` at `namehash(domain)` instead of the
+     * default `namehash(name)` subdomain target — a single write-node override
+     * (identical to today's behaviour). Kept for backward compatibility: a
+     * config with only `domain` set behaves exactly as before.
      */
     domain?: string,
+    /**
+     * Optional ENS alias names the publication's on-chain contenthash is ALSO
+     * written to. Unlike the legacy `domain` override, aliases are ADDITIVE:
+     * the EVM update action writes `contenthash_wrapped` at
+     * `namehash(name)` AND `namehash(alias)` for every alias in one
+     * `batchSetRecords` call, so each alias is an additional door to the same
+     * record. When present, `domain` is ignored. Removed aliases are cleared
+     * (empty value) on the next update so they stop resolving.
+     */
+    aliases?: string[],
 }
 
 export type S2SPublication = {
