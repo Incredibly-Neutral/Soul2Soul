@@ -315,7 +315,11 @@ export class S2SCidViewSection extends LitElement {
 
   protected updated(changed: PropertyValues) {
     if (changed.has('ctx') || changed.has('publication')) {
-      void this.rebuild();
+      // Defer past the current update flush: kicking off the async load from
+      // `updated()` synchronously writes @state and re-requests an update
+      // while Lit is still inside the finished render (noisy warning + wasted
+      // render). Awaiting updateComplete schedules the next update cleanly.
+      void this.updateComplete.then(() => this.rebuild());
     }
   }
 
@@ -331,8 +335,7 @@ export class S2SCidViewSection extends LitElement {
     }
     const publication = this.publication || store.getRecord?.('name') || '';
     this.loading = true;
-    this.error = '';
-    this.requestUpdate();
+    this.error = ''; // setting @state already requests an update; no explicit requestUpdate needed
     try {
       const view = await buildPublicationCidView(ctx, publication);
       if (buildId !== this.buildId) return;
