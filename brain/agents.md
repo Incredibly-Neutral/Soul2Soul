@@ -31,7 +31,7 @@ touching code** — they carry the invariants, sub-component maps, gotchas, and 
 | contracts / protocol | `brain/specs/SPEC-00-system-contract.md` + `SPEC-contracts-publication.md` / `SPEC-contracts-ens.md` |
 
 - **s2s-prof** — the dispatcher. Reads/author handoffs, decomposes goals, spawns
-  builders in worktrees, reviews branch diffs, merges (or hands to human). Future
+  builders in worktrees, reviews branch diffs, merges via PR (human approves). Future
   direction: model after **polly** (full orchestrator config — see "s2s-prof as
   polly" below).
 - **s2s-builder** — the leaf. Implements code from handoffs. Does NOT spawn. Always
@@ -102,6 +102,24 @@ until a second implementer is added.
 Deliverable shape: `.omnigent/agent-configs/s2s-prof.yaml`, registered once,
 agent_id recorded above replacing the current ad-hoc one. This is a separate,
 larger lift — not started yet.
+
+## Merge & PR protocol (hybrid PR flow)
+
+Every COMPLETE task ends in a PR that a human approves — never a silent ff-merge
+into main.
+
+- **A task == one PR.** Subtasks are commits on the feature branch leading to that
+  PR (implementer commits per subtask; the PR shows the whole unit of work as the
+  durable visual record: diff, comments, approval, subtask commits).
+- Flow: worker worktree + branch → per-subtask commits → pi review (rev-<n>) →
+  push branch to origin → `gh pr create --base main` (title/body = task summary) →
+  HUMAN approves/merges on GitHub → orchestrator syncs local main
+  (`git fetch origin && git merge --ff-only origin/main`) → remove worktree, delete
+  branch, update `brain/worktrees.md`.
+- PRs base on `origin/main`: keep local main == origin/main before opening a PR
+  (push main first if behind).
+- Trivial/mechanical one-liners (AGENTS.md) may be merged directly by the lead
+  without a PR, but the record goes in the commit message.
 
 ## Related
 - `brain/worktrees.md` — (session → worktree → branch) tracking index.
