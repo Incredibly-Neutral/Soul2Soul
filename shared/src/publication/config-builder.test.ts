@@ -204,7 +204,7 @@ describe('ConfigBuilder', () => {
       expect(ipfs.fetchFromKubo).toHaveBeenCalledWith('existing-config-cid');
     });
 
-    it('carries the optional domain from the existing config into the built config', async () => {
+    it('migrates a legacy domain-only existing config into the aliases list', async () => {
       const ipfs = mockIPFS();
       ipfs.fetchFromKubo.mockResolvedValue({
         domain: 'custom.soul2soul.eth',
@@ -221,7 +221,29 @@ describe('ConfigBuilder', () => {
         'existing-config-cid',
       );
 
-      expect(result.config.domain).toBe('custom.soul2soul.eth');
+      // A carried domain-only existing config is promoted to the aliases model:
+      // the rebuilt config lists the name as an alias, with no `domain` field.
+      expect(result.config.aliases).toEqual(['custom.soul2soul.eth']);
+      expect(result.config.domain).toBeUndefined();
+    });
+
+    it('migrates a carried s3ntiment domain-only config to aliases (no override)', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({ domain: 's3ntiment.eth' });
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+      );
+
+      expect(result.config.aliases).toEqual(['s3ntiment.eth']);
+      expect(result.config.domain).toBeUndefined();
     });
 
     it('omits domain from the built config when the existing config has none', async () => {

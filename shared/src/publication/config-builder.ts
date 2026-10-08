@@ -205,15 +205,19 @@ export class ConfigBuilder {
     //      compatible — treated as a one-element alias list [domain]). An
     //      empty string clears the target.
     //   3. Carry from the existing config (if any): `aliases` (modern) wins
-    //      over the legacy `domain`; a domain-only existing config is treated
-    //      as a single-element alias list for compat.
+    //      over the legacy `domain`. A legacy domain-only existing config with
+    //      no explicit override is MIGRATED to the aliases model — the rebuilt
+    //      config writes `aliases: [domain]` and omits the `domain` field, so
+    //      the EVM update action writes the canonical node AND the alias
+    //      additively.
     //   4. Otherwise leave unset — the default subdomain write target stays
     //      unchanged (exactly today's behaviour).
     //
-    // Output shape: an `aliases` list is written as `config.aliases`; a
-    // domain-only override keeps writing `config.domain` (no aliases field) so
-    // the EVM update action keeps treating it as a single write-node override
-    // — identical to today.
+    // Output shape: a CARRIED domain-only existing config is MIGRATED to
+    // `aliases: [domain]` (output writes `config.aliases`, no `domain` field).
+    // An EXPLICIT `domain` override still writes `config.domain` (no aliases
+    // field) so the EVM update action keeps treating it as a single write-node
+    // override — identical to today.
     const existingConfig = config as
       | { aliases?: unknown; domain?: unknown }
       | undefined;
@@ -253,7 +257,11 @@ export class ConfigBuilder {
     } else if (loadedAliases !== undefined) {
       aliasesOut = loadedAliases;
     } else if (loadedDomain !== undefined) {
-      domainOut = loadedDomain;
+      // Migration: a legacy `domain`-only existing config (no explicit
+      // override) is promoted to the aliases model — the rebuilt config lists
+      // the name as an alias (`aliases: [domain]`, no `domain` field), so the
+      // EVM update action writes the canonical node AND the alias additively.
+      aliasesOut = [loadedDomain];
     }
 
     const finalConfig: S2SPublicationConfig = {
