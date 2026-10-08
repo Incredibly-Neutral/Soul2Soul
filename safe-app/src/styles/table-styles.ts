@@ -28,6 +28,7 @@ export const tableStyles = css`
   .table-toolbar .table-filters {
     margin-top: 0;
     padding: 0;
+    border-top: none;
     border-bottom: none;
   }
 
