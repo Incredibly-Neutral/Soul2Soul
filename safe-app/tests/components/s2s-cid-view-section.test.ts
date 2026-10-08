@@ -23,7 +23,11 @@ import { CID } from 'multiformats';
 import { sha256 } from 'multiformats/hashes/sha2';
 import type { CidViewReadContext, PublicationCidView } from '@s2s/soul2soul-shared/safe-app';
 import { mountLit } from '../helpers/mount';
+// Side-effect import registers the element; type-only import gives the
+// mountLit generic its class type without a runtime value import (a value
+// named import of the component breaks the browser test's mock transform).
 import '../../src/components/s2s-cid-view-section';
+import type { S2SCidViewSection } from '../../src/components/s2s-cid-view-section';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — available to vi.mock factories (hoisted above all imports).
@@ -37,10 +41,15 @@ const realBuild = vi.hoisted<{
 vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // Load the REAL coordinator/collectors straight from the shared source tree
   // (relative path — bypasses the heavy safe-app barrel / Lit graph, so the
-  // browser test stays light).
+  // browser test stays light). parsePublicationCidView (the zod validator) is
+  // also real so the component's cache-load path validates exactly as in src.
   const real = await import('../../../shared/src/cid-view/coordinator.ts');
+  const validation = await import('../../../shared/src/cid-view/validation.ts');
   realBuild.fn = real.buildPublicationCidView;
-  return { buildPublicationCidView: buildSpy };
+  return {
+    buildPublicationCidView: buildSpy,
+    parsePublicationCidView: validation.parsePublicationCidView,
+  };
 });
 
 const stateMocks = vi.hoisted(() => ({
@@ -77,10 +86,22 @@ const ARCHIVE_JSON = JSON.stringify({
 function makeFullCtx(): CidViewReadContext {
   return {
     getDeals: async () => [
-      { genesis: '0xgen1', author: '0xAuthor1', cid: 'bafydeal1', timestamp: 1700000000, status: 'deal' },
+      {
+        genesis: '0xgen1',
+        author: '0xAuthor1',
+        cid: 'bafydeal1',
+        timestamp: 1700000000,
+        status: 'deal',
+      },
     ],
     getOffers: async () => [
-      { genesis: '0xgen2', author: '0xAuthor2', cid: 'bafyoffer1', timestamp: 1700002000, status: 'offer' },
+      {
+        genesis: '0xgen2',
+        author: '0xAuthor2',
+        cid: 'bafyoffer1',
+        timestamp: 1700002000,
+        status: 'offer',
+      },
     ],
     getVersions: async (genesis: string) =>
       genesis === '0xgen1'
@@ -132,7 +153,9 @@ function makeCachedView(
   opts: { publication?: string; cid?: string; generatedAt?: string } = {},
 ): PublicationCidView {
   const publication = opts.publication ?? 'test.eth';
-  const entries = [{ cid: opts.cid ?? 'bafycached1', category: 'deal' as const, source: 'deals' as const }];
+  const entries = [
+    { cid: opts.cid ?? 'bafycached1', category: 'deal' as const, source: 'deals' as const },
+  ];
   return {
     publication,
     generatedAt: opts.generatedAt ?? '2026-01-01T00:00:00.000Z',
@@ -335,11 +358,15 @@ describe('s2s-cid-view-section', () => {
 
     // Deferred fresh build — resolves only after we've asserted the stale paint.
     let resolveFresh!: (v: PublicationCidView) => void;
-    const freshView = makeCachedView({ cid: 'bafyfresh1', generatedAt: '2026-01-02T00:00:00.000Z' });
+    const freshView = makeCachedView({
+      cid: 'bafyfresh1',
+      generatedAt: '2026-01-02T00:00:00.000Z',
+    });
     buildSpy.mockImplementation(
-      () => new Promise<PublicationCidView>((resolve) => {
-        resolveFresh = resolve;
-      }),
+      () =>
+        new Promise<PublicationCidView>((resolve) => {
+          resolveFresh = resolve;
+        }),
     );
 
     const el = await mountLit('s2s-cid-view-section', {
@@ -408,7 +435,7 @@ describe('s2s-cid-view-section', () => {
       () => new Promise<PublicationCidView>((resolve) => resolvers.push(resolve)),
     );
 
-    const el = await mountLit('s2s-cid-view-section', {
+    const el = await mountLit<S2SCidViewSection>('s2s-cid-view-section', {
       ctx: makeFullCtx(),
       publication: 'old.eth',
     });
@@ -445,5 +472,62 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
     });
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+  });
+
+  it('degrades to no-cache when the cached blob is JSON-valid but schema-invalid', async () => {
+    // Valid JSON that JSON.parse accepts, but an invalid category enum value —
+    // rejected by the shared zod schema (parsePublicationCidView). A hand-rolled
+    // validator that only checks cid/category are strings would let this through.
+    localStorage.setItem(
+      's2s.cidview.test.eth',
+      JSON.stringify({
+        savedAt: Date.now(),
+        view: {
+          publication: 'test.eth',
+          generatedAt: '2026-01-01T00:00:00.000Z',
+          entries: [{ cid: 'bafycached1', category: 'not-a-real-category', source: 'deals' }],
+          sources: { deals: true, config: false, tree: false, archive: false },
+          summary: { total: 1, uniqueCids: 1, byCategory: { deal: 1 } },
+        },
+      }),
+    );
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Falls back to a normal fresh build (real coordinator) — no crash, no
+    // garbage render from the schema-invalid blob.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
+    });
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+    expect(renderedCids(el.shadowRoot!)).not.toContain('bafycached1');
+  });
+
+  it('clears the staleness ticker on disconnect (no interval leak)', async () => {
+    seedCache('test.eth', makeCachedView());
+    // Never-resolving fresh build: keeps the SWR staleness timer alive so we
+    // can observe it, exactly like the deferred-build SWR test.
+    buildSpy.mockImplementation(() => new Promise(() => {}));
+
+    const el = await mountLit<S2SCidViewSection>('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // Cached view is served → staleness hint shown + ticker armed.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('cached 1 min ago');
+    });
+    const timer = (el as unknown as { staleTimer: ReturnType<typeof setInterval> | null })
+      .staleTimer;
+    expect(timer).not.toBeNull();
+
+    // Detaching fires disconnectedCallback → ticker cleared, no leak.
+    el.remove();
+    expect(
+      (el as unknown as { staleTimer: ReturnType<typeof setInterval> | null }).staleTimer,
+    ).toBeNull();
   });
 });
