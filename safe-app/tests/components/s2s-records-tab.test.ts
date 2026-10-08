@@ -264,6 +264,23 @@ describe('s2s-records-tab', () => {
     expect(link!.getAttribute('href')).toBe('https://ipfs.io/ipfs/bafyconfig123');
   });
 
+  it('hides the unused feed record from the records table', async () => {
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'feed', value: '0xfeedfeed', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+    ]);
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    // The hidden record is excluded from both the count and the rendered rows.
+    expect(root.textContent).toContain('Records (2)');
+    expect(root.textContent).not.toContain('0xfeedfeed');
+    const rowKeys = [...root.querySelectorAll('.table-row')].map((row) =>
+      row.querySelector('.table-cell')?.textContent?.trim(),
+    );
+    expect(rowKeys).toEqual(['name', 'config']);
+  });
+
   it('Add alias is NOT blocked by ownership when DOMAIN_VALIDATION_CONFIG.enforceOwnership is OFF (default)', async () => {
     // The real default must stay OFF (the product decision the task calls out).
     expect(DOMAIN_VALIDATION_CONFIG.enforceOwnership).toBe(false);

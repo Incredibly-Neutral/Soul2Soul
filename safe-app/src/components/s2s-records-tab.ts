@@ -150,10 +150,18 @@ export class S2SRecordsTab extends LitElement {
     this.unsubscribers = [];
   }
 
+  /** Record keys that are no longer used — hidden from the records table.
+   *  `feed` was written by the legacy publication-creation flow
+   *  (shared/src/publication/new.ts) and nothing reads it anymore; the feed
+   *  address now lives in the built config (mapping.json). */
+  private static readonly HIDDEN_RECORD_KEYS: ReadonlySet<string> = new Set(['feed']);
+
   // ← convert Record<string, OnChainRecord> | null to array, then filter
   private get filteredRecords(): OnChainRecord[] {
     const map = store.getAllRecords();
-    const all: OnChainRecord[] = map ? Object.values(map) : [];
+    const all: OnChainRecord[] = map
+      ? Object.values(map).filter((r) => !S2SRecordsTab.HIDDEN_RECORD_KEYS.has(r.key))
+      : [];
     if (!this.searchTerm) return all;
     const term = this.searchTerm.toLowerCase();
     return all.filter(
