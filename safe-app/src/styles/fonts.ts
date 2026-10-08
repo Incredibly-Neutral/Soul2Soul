@@ -11,10 +11,10 @@
 // Toggle fonts at runtime by adding classes to <html>, e.g.:
 //   document.documentElement.classList.add('headline-playfair','body-inter','mono-dm-mono')
 //
-// Options per slot:
-//   headline: spinnaker (default) | playfair | dm-serif | caslon | grotesk | franklin
-//   body:     inter (default)     | franklin | grotesk | spinnaker
-//   mono:     dm-mono (default)   | fira-code | plex-mono
+// Options per slot (defaults as set in :root below):
+//   headline: spinnaker (default) | playfair | dm-serif | caslon | grotesk | franklin | lora | oswald
+//   body:     grotesk (default)   | inter | franklin | spinnaker | lora
+//   mono:     fira-code (default) | dm-mono | plex-mono | azeret-mono | monaspace-neon
 
 import { css } from 'lit';
 
@@ -190,6 +190,147 @@ export const fonts = css`
     font-display: swap;
   }
 
+  /* Azeret Mono — variable (wght 100-900) */
+  @font-face {
+    font-family: 'Azeret Mono';
+    src: url('./fonts/AzeretMono/AzeretMono-VariableFont_wght.ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Azeret Mono';
+    src: url('./fonts/AzeretMono/AzeretMono-Italic-VariableFont_wght.ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* Lora — variable (wght 400-700) */
+  @font-face {
+    font-family: 'Lora';
+    src: url('./fonts/Lora/Lora-VariableFont_wght.ttf') format('truetype');
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Lora';
+    src: url('./fonts/Lora/Lora-Italic-VariableFont_wght.ttf') format('truetype');
+    font-weight: 400 700;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* Oswald — variable (wght 200-700), normal only */
+  @font-face {
+    font-family: 'Oswald';
+    src: url('./fonts/Oswald/Oswald-VariableFont_wght.ttf') format('truetype');
+    font-weight: 200 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  /* Monaspace Neon — static (wght 200-800), normal + italic */
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-200-normal.ttf') format('truetype');
+    font-weight: 200;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-200-italic.ttf') format('truetype');
+    font-weight: 200;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-300-normal.ttf') format('truetype');
+    font-weight: 300;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-300-italic.ttf') format('truetype');
+    font-weight: 300;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-400-normal.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-400-italic.ttf') format('truetype');
+    font-weight: 400;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-500-normal.ttf') format('truetype');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-500-italic.ttf') format('truetype');
+    font-weight: 500;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-600-normal.ttf') format('truetype');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-600-italic.ttf') format('truetype');
+    font-weight: 600;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-700-normal.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-700-italic.ttf') format('truetype');
+    font-weight: 700;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-800-normal.ttf') format('truetype');
+    font-weight: 800;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Monaspace Neon';
+    src: url('./fonts/MonaspaceNeon/monaspace-neon-latin-800-italic.ttf') format('truetype');
+    font-weight: 800;
+    font-style: italic;
+    font-display: swap;
+  }
+
   /* ------------------------------------------------ */
   /* Defaults                                         */
   /* ------------------------------------------------ */
@@ -199,4 +340,31 @@ export const fonts = css`
     /* QA monospace type — Fira Code is the only mono font in the app now. */
     --font-mono-family: 'Fira Code', monospace;
   }
+
+  /* ------------------------------------------------ */
+  /* Toggle classes (devtools: add class to <html>)   */
+  /* ------------------------------------------------ */
+  /* Headline */
+  html.headline-spinnaker  { --font-headline-family: 'Spinnaker', sans-serif; }
+  html.headline-playfair   { --font-headline-family: 'Playfair Display', serif; }
+  html.headline-dm-serif   { --font-headline-family: 'DM Serif Display', serif; }
+  html.headline-caslon     { --font-headline-family: 'Libre Caslon Display', serif; }
+  html.headline-grotesk    { --font-headline-family: 'Schibsted Grotesk', sans-serif; }
+  html.headline-franklin   { --font-headline-family: 'Libre Franklin', sans-serif; }
+  html.headline-lora       { --font-headline-family: 'Lora', serif; }
+  html.headline-oswald     { --font-headline-family: 'Oswald', sans-serif; }
+
+  /* Body */
+  html.body-inter          { --font-body-family: 'Inter', sans-serif; }
+  html.body-franklin       { --font-body-family: 'Libre Franklin', sans-serif; }
+  html.body-grotesk        { --font-body-family: 'Schibsted Grotesk', sans-serif; }
+  html.body-spinnaker      { --font-body-family: 'Spinnaker', sans-serif; }
+  html.body-lora           { --font-body-family: 'Lora', serif; }
+
+  /* Mono */
+  html.mono-dm-mono        { --font-mono-family: 'DM Mono', monospace; }
+  html.mono-fira-code      { --font-mono-family: 'Fira Code', monospace; }
+  html.mono-plex-mono      { --font-mono-family: 'IBM Plex Mono', monospace; }
+  html.mono-azeret-mono    { --font-mono-family: 'Azeret Mono', monospace; }
+  html.mono-monaspace-neon { --font-mono-family: 'Monaspace Neon', monospace; }
 `;
