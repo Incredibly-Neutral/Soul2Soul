@@ -141,6 +141,7 @@ export class ConfigBuilder {
     assetsCid: string,
     existingConfigCid?: string,
     domain?: string,
+    aliases?: string[],
   ): Promise<{ config: S2SPublicationConfig; cid: string }> {
     // Load existing config or create new one
     let config: any = {};
@@ -196,15 +197,64 @@ export class ConfigBuilder {
     const mapping = JSON.parse(mappingContent);
 
     // --- Build final config ---
-    // Resolve the optional ENS write-target domain. Precedence:
-    //   1. An explicit `domain` override (the safe-app 'Add domain' path).
-    //      An empty string clears the target (restores the default subdomain
-    //      write target); any other value sets config.domain.
-    //   2. Otherwise carry the domain from the existing config (if any).
-    //   3. Otherwise leave `domain` unset — exactly today's behaviour, keeping
-    //      the default subdomain write target unchanged.
-    const loadedDomain = (config as { domain?: string } | undefined)?.domain;
-    const effectiveDomain = domain !== undefined ? domain : loadedDomain;
+    // Resolve the optional ENS write-target aliases. Precedence:
+    //   1. An explicit `aliases` array override (the safe-app multi-alias path).
+    //      An empty array clears ALL write-targets (restores the default
+    //      subdomain write target).
+    //   2. An explicit `domain` override (legacy single-target path, backward
+    //      compatible — treated as a one-element alias list [domain]). An
+    //      empty string clears the target.
+    //   3. Carry from the existing config (if any): `aliases` (modern) wins
+    //      over the legacy `domain`; a domain-only existing config is treated
+    //      as a single-element alias list for compat.
+    //   4. Otherwise leave unset — the default subdomain write target stays
+    //      unchanged (exactly today's behaviour).
+    //
+    // Output shape: an `aliases` list is written as `config.aliases`; a
+    // domain-only override keeps writing `config.domain` (no aliases field) so
+    // the EVM update action keeps treating it as a single write-node override
+    // — identical to today.
+    const existingConfig = config as
+      | { aliases?: unknown; domain?: unknown }
+      | undefined;
+    const loadedAliases =
+      Array.isArray(existingConfig?.aliases) &&
+      (existingConfig!.aliases as unknown[]).length > 0
+        ? ((existingConfig!.aliases as unknown[]).filter(
+            (a) => typeof a === 'string',
+          ) as string[])
+        : undefined;
+    const loadedDomain =
+      typeof existingConfig?.domain === 'string' &&
+      (existingConfig!.domain as string) !== ''
+        ? (existingConfig!.domain as string)
+        : undefined;
+
+    let aliasesOut: string[] | undefined;
+    let domainOut: string | undefined;
+
+    if (aliases !== undefined) {
+      // Explicit aliases array (modern path). Empty → clears all targets.
+      const cleaned = aliases.filter(
+        (a) => typeof a === 'string' && a.trim() !== '',
+      );
+      aliasesOut = cleaned.length > 0 ? [...new Set(cleaned)] : undefined;
+      domainOut = undefined;
+    } else if (domain !== undefined) {
+      // Explicit legacy domain override (backward compatible single target).
+      if (domain !== '') {
+        domainOut = domain;
+        aliasesOut = undefined;
+      } else {
+        // Empty string clears the carried target.
+        domainOut = undefined;
+        aliasesOut = undefined;
+      }
+    } else if (loadedAliases !== undefined) {
+      aliasesOut = loadedAliases;
+    } else if (loadedDomain !== undefined) {
+      domainOut = loadedDomain;
+    }
 
     const finalConfig: S2SPublicationConfig = {
       assetsCid,
@@ -214,9 +264,8 @@ export class ConfigBuilder {
       name: publicationName,
       templateCid: templatesCid,
       localePaths: mapping.localePaths,
-      ...(effectiveDomain !== undefined && effectiveDomain !== ''
-        ? { domain: effectiveDomain }
-        : {}),
+      ...(domainOut !== undefined ? { domain: domainOut } : {}),
+      ...(aliasesOut !== undefined ? { aliases: aliasesOut } : {}),
     };
 
     // --- Upload final config to both Filebase + Kubo ---

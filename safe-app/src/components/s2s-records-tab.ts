@@ -41,9 +41,11 @@ export class S2SRecordsTab extends LitElement {
     attributed: boolean;
   }> = [];
   @state() private loadingStorage = false;
-  /** The publication's ENS write-target domain, read from the on-chain config.
-   *  Null when no custom domain is set (default subdomain write target). */
-  @state() private currentDomain: string | null = null;
+  /** The publication's ENS write-target aliases, read from the on-chain
+   *  config. Empty when no custom write-targets are set (default subdomain
+   *  write target). A legacy `domain`-only config is surfaced as a
+   *  single-element alias list. */
+  @state() private aliases: string[] = [];
   private unsubscribers: Array<() => void> = [];
 
   static styles = [
@@ -174,7 +176,7 @@ export class S2SRecordsTab extends LitElement {
       // Fresh chain read clears changed-state highlights
       this.changedKeys.clear();
       this.requestUpdate();
-      await this.loadCurrentDomain();
+      await this.loadCurrentAliases();
     } catch (error) {
       console.error('Error loading records:', error);
     }
@@ -242,24 +244,31 @@ export class S2SRecordsTab extends LitElement {
   }
 
   /**
-   * Read the publication's current ENS write-target domain from the `config`
-   * record (the `domain` field of the config JSON at the config CID). Null
-   * when unset (default subdomain write target).
+   * Read the publication's current ENS write-target aliases from the `config`
+   * record (the `aliases` array of the config JSON at the config CID). A legacy
+   * `domain`-only config is treated as a single-element alias list for compat.
+   * Empty when unset (default subdomain write target).
    */
-  private async loadCurrentDomain(): Promise<void> {
+  private async loadCurrentAliases(): Promise<void> {
     const cached = store.getRecord('config');
     const configCid =
       cached ?? (await this.safeIntegration.getRecord('config').catch(() => null));
     if (!configCid) {
-      this.currentDomain = null;
+      this.aliases = [];
       return;
     }
     try {
       const config = await this.makeIPFS().fetchFromKubo(configCid);
-      this.currentDomain = (config as { domain?: string } | undefined)?.domain ?? null;
+      const cfg = config as { aliases?: unknown; domain?: string } | undefined;
+      this.aliases =
+        Array.isArray(cfg?.aliases) && (cfg!.aliases as unknown[]).length > 0
+          ? (cfg!.aliases as string[]).slice()
+          : cfg?.domain
+            ? [cfg.domain]
+            : [];
     } catch (error) {
-      console.warn('[records] could not read current domain from config:', error);
-      this.currentDomain = null;
+      console.warn('[records] could not read current aliases from config:', error);
+      this.aliases = [];
     }
   }
 
@@ -274,43 +283,59 @@ export class S2SRecordsTab extends LitElement {
   }
 
   /**
-   * 'Add domain' flow: sets the ENS write-target domain via updateConfig →
-   * buildConfig, landing in the built config's `domain` field. By default the
-   * same-Safe ownership check is OFF (see DOMAIN_VALIDATION_CONFIG — the single
-   * enforcement toggle in domain-validation.ts); when it is ON, the entered
-   * domain must resolve to the SAME publication Safe as the current publication
-   * name and is rejected with a clear message (nothing saved) otherwise.
+   * 'Add alias' flow: appends the entered ENS name to the write-target alias
+   * list and persists it via updateConfig → buildConfig → config.aliases. By
+   * default the same-Safe ownership check is OFF (see DOMAIN_VALIDATION_CONFIG
+   * — the single enforcement toggle in domain-validation.ts); when it is ON,
+   * each entered alias must resolve to the SAME publication Safe as the current
+   * publication name and is rejected with a clear message (nothing saved)
+   * otherwise.
    */
-  private async addDomain() {
-    const input = this.renderRoot.querySelector('#domain-input') as HTMLInputElement | null;
-    const domain = input?.value.trim() || '';
-    if (!domain) {
-      this.showNotification('Enter an ENS domain to add.', 'error');
+  private async addAlias() {
+    const input = this.renderRoot.querySelector('#alias-input') as HTMLInputElement | null;
+    const alias = input?.value.trim() || '';
+    if (!alias) {
+      this.showNotification('Enter an ENS alias to add.', 'error');
+      return;
+    }
+    if (this.aliases.includes(alias)) {
+      this.showNotification(`"${alias}" is already a write-target alias.`, 'error');
       return;
     }
 
     const publication = await this.safeIntegration.getRecord('name').catch(() => '');
-    const check = await maybeVerifyDomainOwnership(domain, publication, {
+    const check = await maybeVerifyDomainOwnership(alias, publication, {
       namehash: (name: string) => ethers.namehash(name),
       evmRead,
     });
 
     if (!check.ok) {
-      this.showNotification(check.reason || 'Domain ownership verification failed.', 'error');
+      this.showNotification(check.reason || 'Alias ownership verification failed.', 'error');
       return;
     }
 
     if (input) input.value = '';
     this.showNotification(
       DOMAIN_VALIDATION_CONFIG.enforceOwnership
-        ? `Domain "${domain}" verified — updating config…`
-        : `Domain "${domain}" saved as write-target — updating config…`,
+        ? `Alias "${alias}" verified — updating config…`
+        : `Alias "${alias}" saved as write-target — updating config…`,
       'success',
     );
-    await this.updateConfig(domain);
+    await this.updateConfig([...this.aliases, alias]);
   }
 
-  private async updateConfig(domainOverride?: string) {
+  /**
+   * 'Remove alias' flow: drops the alias from the write-target list and
+   * persists the reduced list. The next EVM update clears the removed alias's
+   * on-chain record (empty value) so it stops resolving.
+   */
+  private async removeAlias(alias: string) {
+    const next = this.aliases.filter((a) => a !== alias);
+    this.showNotification(`Alias "${alias}" removed — updating config…`, 'success');
+    await this.updateConfig(next);
+  }
+
+  private async updateConfig(aliasesOverride?: string[]) {
     const existingCid = await this.safeIntegration.getRecord('config');
     const repo = await this.safeIntegration.getRecord('repo');
     const publicationUrl = await this.safeIntegration.getRecord('name');
@@ -342,15 +367,21 @@ export class S2SRecordsTab extends LitElement {
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
       existingCid,
-      domainOverride,
+      undefined, // legacy `domain` — the tab now manages the multi-alias list
+      aliasesOverride,
     );
 
     console.log('[config] templateCid from builder:', publicationConfig.templateCid);
     console.log('[config] configCid from builder:', configCid);
-    // Keep the current write-target in sync with what we just built. Without an
-    // override the existing config's domain (if any) is carried through, so a
-    // domain set previously survives later plain 'Update Config' runs.
-    this.currentDomain = publicationConfig.domain ?? null;
+    // Keep the current write-targets in sync with what we just built. Without
+    // an override the existing config's aliases (or legacy domain) are carried
+    // through, so previously-set targets survive later plain 'Update Config'
+    // runs.
+    this.aliases = Array.isArray(publicationConfig.aliases)
+      ? publicationConfig.aliases.slice()
+      : publicationConfig.domain
+        ? [publicationConfig.domain]
+        : [];
 
     console.log('cid from kubo', configCid);
 
@@ -586,21 +617,34 @@ export class S2SRecordsTab extends LitElement {
         <button class="button" @click=${() => void this.updateConfig()}>Update Config</button>
 
         <div class="domain-section">
-          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target domain</h3>
-          ${this.currentDomain
-            ? html`<p class="domain-current">Current write-target: <code>${this.currentDomain}</code></p>`
-            : html`<p class="domain-current">No custom write-target set — the contenthash is written to the default subdomain of the publication name.</p>`}
+          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target aliases</h3>
+          ${this.aliases.length > 0
+            ? html`
+                <ul style="list-style: none; margin: 0.5rem 0 0; padding: 0;">
+                  ${this.aliases.map(
+                    (alias) => html`
+                      <li style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.375rem;">
+                        <code class="domain-current" style="margin: 0; flex: 1;">${alias}</code>
+                        <button class="button button-danger thin" @click=${() => void this.removeAlias(alias)}>
+                          <ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Remove
+                        </button>
+                      </li>
+                    `,
+                  )}
+                </ul>
+              `
+            : html`<p class="domain-current">No custom write-targets set — the contenthash is written to the default subdomain of the publication name.</p>`}
           <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
             <input
-              id="domain-input"
+              id="alias-input"
               type="text"
               class="record-value-input"
               style="max-width: 320px;"
               placeholder="e.g. s3ntiment.eth"
             />
-            <button class="button" @click=${() => void this.addDomain()}>Add domain</button>
+            <button class="button" @click=${() => void this.addAlias()}>Add alias</button>
           </div>
-          <p class="domain-hint">The domain must be owned by this publication Safe — ownership is verified before saving.</p>
+          <p class="domain-hint">Each alias must be owned by this publication Safe — ownership is verified per alias before saving.</p>
         </div>
       </div>
     `;
