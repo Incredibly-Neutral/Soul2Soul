@@ -12,9 +12,9 @@
 //   document.documentElement.classList.add('headline-playfair','body-inter','mono-dm-mono')
 //
 // Options per slot (defaults as set in :root below):
-//   headline: spinnaker (default) | playfair | dm-serif | caslon | grotesk | franklin | lora | oswald
-//   body:     grotesk (default)   | inter | franklin | spinnaker | lora
-//   mono:     fira-code (default) | dm-mono | plex-mono | azeret-mono | monaspace-neon
+//   headline: oswald (default) | spinnaker | playfair | dm-serif | caslon | grotesk | franklin | lora | dm-sans | figtree | nunito-sans
+//   body:     grotesk (default) | inter | franklin | spinnaker | lora | dm-sans | figtree | nunito-sans
+//   mono:     azeret-mono (default) | fira-code | dm-mono | plex-mono | monaspace-neon
 
 import { css } from 'lit';
 
@@ -331,14 +331,62 @@ export const fonts = css`
     font-display: swap;
   }
 
+  /* DM Sans — variable (wght 100-1000, opsz 9-40) */
+  @font-face {
+    font-family: 'DM Sans';
+    src: url('./fonts/DMSans/DMSans-VariableFont_opsz,wght.ttf') format('truetype');
+    font-weight: 100 1000;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'DM Sans';
+    src: url('./fonts/DMSans/DMSans-Italic-VariableFont_opsz,wght.ttf') format('truetype');
+    font-weight: 100 1000;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* Figtree — variable (wght 300-900) */
+  @font-face {
+    font-family: 'Figtree';
+    src: url('./fonts/Figtree/Figtree-VariableFont_wght.ttf') format('truetype');
+    font-weight: 300 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Figtree';
+    src: url('./fonts/Figtree/Figtree-Italic-VariableFont_wght.ttf') format('truetype');
+    font-weight: 300 900;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* Nunito Sans — variable (wght 200-1000, wdth 75-125, opsz 6-12) */
+  @font-face {
+    font-family: 'Nunito Sans';
+    src: url('./fonts/NunitoSans/NunitoSans-VariableFont_YTLC,opsz,wdth,wght.ttf') format('truetype');
+    font-weight: 200 1000;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Nunito Sans';
+    src: url('./fonts/NunitoSans/NunitoSans-Italic-VariableFont_YTLC,opsz,wdth,wght.ttf') format('truetype');
+    font-weight: 200 1000;
+    font-style: italic;
+    font-display: swap;
+  }
+
   /* ------------------------------------------------ */
   /* Defaults                                         */
   /* ------------------------------------------------ */
   :root {
-    --font-headline-family: 'Spinnaker', sans-serif;
+    --font-headline-family: 'Oswald', sans-serif;
     --font-body-family: 'Schibsted Grotesk', sans-serif;
     /* QA monospace type — Fira Code is the only mono font in the app now. */
-    --font-mono-family: 'Fira Code', monospace;
+    --font-mono-family: 'Azeret Mono', monospace;
   }
 
   /* ------------------------------------------------ */
@@ -353,6 +401,9 @@ export const fonts = css`
   html.headline-franklin   { --font-headline-family: 'Libre Franklin', sans-serif; }
   html.headline-lora       { --font-headline-family: 'Lora', serif; }
   html.headline-oswald     { --font-headline-family: 'Oswald', sans-serif; }
+  html.headline-dm-sans    { --font-headline-family: 'DM Sans', sans-serif; }
+  html.headline-figtree    { --font-headline-family: 'Figtree', sans-serif; }
+  html.headline-nunito-sans { --font-headline-family: 'Nunito Sans', sans-serif; }
 
   /* Body */
   html.body-inter          { --font-body-family: 'Inter', sans-serif; }
@@ -360,6 +411,9 @@ export const fonts = css`
   html.body-grotesk        { --font-body-family: 'Schibsted Grotesk', sans-serif; }
   html.body-spinnaker      { --font-body-family: 'Spinnaker', sans-serif; }
   html.body-lora           { --font-body-family: 'Lora', serif; }
+  html.body-dm-sans        { --font-body-family: 'DM Sans', sans-serif; }
+  html.body-figtree        { --font-body-family: 'Figtree', sans-serif; }
+  html.body-nunito-sans    { --font-body-family: 'Nunito Sans', sans-serif; }
 
   /* Mono */
   html.mono-dm-mono        { --font-mono-family: 'DM Mono', monospace; }
