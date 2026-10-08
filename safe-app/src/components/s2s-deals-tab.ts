@@ -77,8 +77,6 @@ export class S2SDealsTab extends LitElement {
   @state() private dealsSort: SortState | null = null;
   @state() private offersFilters: FilterState = {};
   @state() private dealsFilters: FilterState = {};
-  @state() private offersCount = 0;
-  @state() private dealsCount = 0;
 
   private unsubscriber: (() => void) | null = null;
 
@@ -406,7 +404,7 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell deal-actions">
           <button class="button button-danger thin" data-action="retract" data-genesis="${deal.genesis}" data-status="deal"
-            @click=${() => this.retract(deal.genesis, 'deal')}>Revoke
+            @click=${() => this.retract(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </button>
         </div>
       </div>
@@ -432,14 +430,12 @@ export class S2SDealsTab extends LitElement {
       ${store.offers.length > 0
         ? html`
             <div class="section">
-              <div class="list_header">
-                <h2 class="section-title">Pending Offers (${this.offersCount})</h2>
-                <button class="button has-icon refresh-button" id="refresh-btn" ?disabled=${this.fetching}
-                  @click=${this.handleRefresh}>
-                  <span>${this.fetching ? '..' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>`}</span>
-                </button>
-              </div>
               <s2s-table
+                title="Pending Offers"
+                .titleAction=${html`<button class="button thin" ?disabled=${this.fetching}
+                  @click=${this.handleRefresh}>
+                  <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
+                </button>`}
                 .columns=${OFFER_COLUMNS}
                 .rows=${store.offers}
                 .sort=${this.offersSort}
@@ -452,18 +448,18 @@ export class S2SDealsTab extends LitElement {
                 gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
                 @sort=${(e: CustomEvent) => { this.offersSort = toggleSort(this.offersSort, e.detail.key); }}
                 @filter=${(e: CustomEvent) => { this.offersFilters = setFilter(this.offersFilters, e.detail.key, e.detail.value); }}
-                @count=${(e: CustomEvent) => { this.offersCount = e.detail.count; }}
               ></s2s-table>
             </div>
           `
         : ''}
 
       <div class="section">
-        <div class="list_header">
-          <h2 class="section-title">Active Deals (${this.dealsCount})</h2>
-        </div>
-
         <s2s-table
+          title="Active Deals"
+          .titleAction=${html`<button class="button thin" ?disabled=${this.fetching}
+            @click=${this.handleRefresh}>
+            <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
+          </button>`}
           .columns=${DEAL_COLUMNS}
           .rows=${store.deals}
           .sort=${this.dealsSort}
@@ -473,15 +469,11 @@ export class S2SDealsTab extends LitElement {
           .rowRenderer=${this.dealRowRenderer}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
-          .actionsContent=${html`
-            <button class="button has-icon" id="refresh-btn" ?disabled=${this.fetching} @click=${this.handleRefresh}>
-              <span>${this.fetching ? '..' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>`}</span>
-            </button>`}
+          .actionsContent=${html`Actions`}
           emptyText=${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}
           gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
           @filter=${(e: CustomEvent) => { this.dealsFilters = setFilter(this.dealsFilters, e.detail.key, e.detail.value); }}
-          @count=${(e: CustomEvent) => { this.dealsCount = e.detail.count; }}
         ></s2s-table>
       </div>
 
