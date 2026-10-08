@@ -43,6 +43,8 @@ function toBytes32Id(ref: string): string {
 
 /** Hard cap on versions walked per genesis (pathological-history guard). */
 const MAX_VERSIONS = 100;
+/** Max parallel getVersion reads within one genesis (worker pool). */
+const VERSION_READ_CONCURRENCY = 8;
 /** Kubo ls timeout, matching s2s-website-tree-tab.ts. */
 const LS_TIMEOUT_MS = 15_000;
 /** Kubo cat timeout — the previously-missing timeout, same pattern as ls. */
@@ -85,6 +87,41 @@ function toDealRead(
 }
 
 /**
+ * Structural type for the publication-module contract surface the version
+ * readers use. The safe-app stores the module as `any` (an ethers Contract);
+ * casting to this narrow shape keeps the unsafe reads local and typed.
+ */
+interface PublicationModule {
+  getVersionCount(id: string): Promise<bigint>;
+  getVersion(
+    id: string,
+    index: number,
+  ): Promise<{
+    cid: string;
+    timestamp: bigint;
+    tombstone: boolean;
+  }>;
+}
+
+/** Map `fn` over `items` with at most `limit` promises in flight, preserving input order. */
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+/**
  * Build a CidViewReadContext over the safe-app's SafeIntegration + protocol
  * info. The returned context is transport-complete — the shared coordinator
  * can be run against it directly.
@@ -96,6 +133,58 @@ export function buildSafeAppCidViewContext(args: {
   const { safeIntegration, protocolInfo } = args;
   const ipfs = makeIPFS();
 
+  // Version range reads are held as a local rather than a context method so
+  // getVersions can call it without going through the read-context interface,
+  // whose incremental primitives are optional for the shared test fakes.
+  const getVersionsRange = async (
+    genesis: string,
+    fromIndex: number,
+    count?: number,
+  ): Promise<VersionRead[]> => {
+    const t0 = performance.now();
+    try {
+      const publicationModule = safeIntegration.publicationModule as PublicationModule | null;
+      if (!publicationModule) {
+        logPhase('getVersionsRange', performance.now() - t0, `genesis=${genesis} no-module`);
+        return [];
+      }
+      const id = toBytes32Id(genesis);
+      // count (the caller's already-fetched on-chain version count) skips the
+      // redundant internal count read; when absent we read it ourselves (cold
+      // getVersions path). The count<=0 → [] guard applies either way.
+      const total = count ?? Number(await publicationModule.getVersionCount(id));
+      if (!Number.isFinite(total) || total <= 0) {
+        logPhase(
+          'getVersionsRange',
+          performance.now() - t0,
+          `genesis=${genesis} from=${String(fromIndex)} count=0`,
+        );
+        return [];
+      }
+      const start = Math.max(0, Math.floor(fromIndex));
+      const limit = Math.min(total, MAX_VERSIONS);
+      const indices: number[] = [];
+      for (let i = start; i < limit; i++) indices.push(i);
+      const versions = await mapWithLimit(indices, VERSION_READ_CONCURRENCY, async (i) => {
+        const v = await publicationModule.getVersion(id, i);
+        return {
+          cid: v.cid,
+          timestamp: Number(v.timestamp),
+          tombstone: v.tombstone,
+        };
+      });
+      logPhase(
+        'getVersionsRange',
+        performance.now() - t0,
+        `genesis=${genesis} from=${String(fromIndex)} count=${String(versions.length)}`,
+      );
+      return versions;
+    } catch {
+      logPhase('getVersionsRange', performance.now() - t0, 'failed');
+      return [];
+    }
+  };
+
   return {
     async getDeals() {
       const t0 = performance.now();
@@ -104,9 +193,13 @@ export function buildSafeAppCidViewContext(args: {
         const result = deals.map((d) => toDealRead(d, 'deal'));
         logPhase('getDeals', performance.now() - t0, `${String(result.length)} deals`);
         return result;
-      } catch {
+      } catch (error) {
+        // Rethrow: the shared collectors are the fail-open boundary (cold
+        // collectDealCids catches → [], incremental catches → prev-derived +
+        // complete:false). Swallowing here would mask the failure from the
+        // incremental collector, which relies on the throw to flag incomplete.
         logPhase('getDeals', performance.now() - t0, 'failed');
-        return [];
+        throw error;
       }
     },
 
@@ -117,46 +210,51 @@ export function buildSafeAppCidViewContext(args: {
         const result = offers.map((o) => toDealRead(o, 'offer'));
         logPhase('getOffers', performance.now() - t0, `${String(result.length)} offers`);
         return result;
-      } catch {
+      } catch (error) {
+        // Rethrow (see getDeals above).
         logPhase('getOffers', performance.now() - t0, 'failed');
-        return [];
+        throw error;
       }
     },
 
-    async getVersions(genesis: string) {
+    async getVersionCount(genesis: string) {
       const t0 = performance.now();
       try {
-        const publicationModule = safeIntegration.publicationModule;
+        const publicationModule = safeIntegration.publicationModule as PublicationModule | null;
         if (!publicationModule) {
-          logPhase('getVersions', performance.now() - t0, `genesis=${genesis} no-module`);
-          return [];
+          logPhase('getVersionCount', performance.now() - t0, `genesis=${genesis} no-module`);
+          return 0;
         }
         const id = toBytes32Id(genesis);
         const count = Number(await publicationModule.getVersionCount(id));
-        if (!Number.isFinite(count) || count <= 0) {
-          logPhase('getVersions', performance.now() - t0, `genesis=${genesis} count=0`);
-          return [];
-        }
-        const limit = Math.min(count, MAX_VERSIONS);
-        const versions: VersionRead[] = [];
-        for (let i = 0; i < limit; i++) {
-          const v = await publicationModule.getVersion(id, i);
-          versions.push({
-            cid: v.cid,
-            timestamp: Number(v.timestamp),
-            tombstone: Boolean(v.tombstone),
-          });
-        }
         logPhase(
-          'getVersions',
+          'getVersionCount',
           performance.now() - t0,
-          `genesis=${genesis} ${String(versions.length)} versions`,
+          `genesis=${genesis} count=${String(count)}`,
         );
-        return versions;
+        return Number.isFinite(count) && count > 0 ? count : 0;
       } catch {
-        logPhase('getVersions', performance.now() - t0, 'failed');
-        return [];
+        logPhase('getVersionCount', performance.now() - t0, 'failed');
+        return 0;
       }
+    },
+
+    getVersionsRange,
+
+    async getVersions(genesis: string) {
+      const t0 = performance.now();
+      // Reimplemented on top of the count + getVersionsRange(genesis, 0)
+      // primitives so the cold path also gets within-genesis parallelism.
+      // All-or-nothing per genesis: getVersionsRange returns [] on a missing
+      // module, count 0, or any read failure — which preserves the count-0
+      // completeness signal the incremental collector relies on.
+      const versions = await getVersionsRange(genesis, 0);
+      logPhase(
+        'getVersions',
+        performance.now() - t0,
+        `genesis=${genesis} ${String(versions.length)} versions`,
+      );
+      return versions;
     },
 
     async getConfig() {
