@@ -47,7 +47,7 @@ const MAX_VERSIONS = 100;
 const LS_TIMEOUT_MS = 15_000;
 /** Kubo cat timeout — the previously-missing timeout, same pattern as ls. */
 const CAT_TIMEOUT_MS = 30_000;
-/** Phase considered SLOW (>10s) — highlighted with a console.warn. */
+/** Phase considered SLOW (>=10s) — highlighted with a console.warn. */
 const SLOW_MS = 10_000;
 
 /**
@@ -56,8 +56,8 @@ const SLOW_MS = 10_000;
  */
 function logPhase(label: string, ms: number, detail?: string) {
   const suffix = detail ? ` ${detail}` : '';
-  if (ms >= SLOW_MS) console.warn(`[cid-view] SLOW ${label} ${Math.round(ms)}ms${suffix}`);
-  else console.info(`[cid-view] ${label} ${Math.round(ms)}ms${suffix}`);
+  if (ms >= SLOW_MS) console.warn(`[cid-view] SLOW ${label} ${String(Math.round(ms))}ms${suffix}`);
+  else console.info(`[cid-view] ${label} ${String(Math.round(ms))}ms${suffix}`);
 }
 
 /** Single shared Kubo client — same args as s2s-records-tab makeIPFS(). */
@@ -102,7 +102,7 @@ export function buildSafeAppCidViewContext(args: {
       try {
         const { deals } = await safeIntegration.getAllDealsAndOffers();
         const result = deals.map((d) => toDealRead(d, 'deal'));
-        logPhase('getDeals', performance.now() - t0, `${result.length} deals`);
+        logPhase('getDeals', performance.now() - t0, `${String(result.length)} deals`);
         return result;
       } catch {
         logPhase('getDeals', performance.now() - t0, 'failed');
@@ -115,7 +115,7 @@ export function buildSafeAppCidViewContext(args: {
       try {
         const { offers } = await safeIntegration.getAllDealsAndOffers();
         const result = offers.map((o) => toDealRead(o, 'offer'));
-        logPhase('getOffers', performance.now() - t0, `${result.length} offers`);
+        logPhase('getOffers', performance.now() - t0, `${String(result.length)} offers`);
         return result;
       } catch {
         logPhase('getOffers', performance.now() - t0, 'failed');
@@ -147,7 +147,11 @@ export function buildSafeAppCidViewContext(args: {
             tombstone: Boolean(v.tombstone),
           });
         }
-        logPhase('getVersions', performance.now() - t0, `genesis=${genesis} ${versions.length} versions`);
+        logPhase(
+          'getVersions',
+          performance.now() - t0,
+          `genesis=${genesis} ${String(versions.length)} versions`,
+        );
         return versions;
       } catch {
         logPhase('getVersions', performance.now() - t0, 'failed');
@@ -179,11 +183,14 @@ export function buildSafeAppCidViewContext(args: {
         return '';
       }
       try {
-        const value = await evmRead(8453, protocolInfo.ensRecords, RECORDS_CONTRACT_ABI, 'getText', [
-          node,
-          key,
-        ]);
-        logPhase('getEnsText', performance.now() - t0, `key=${key} len=${value.length}`);
+        const value = (await evmRead(
+          8453,
+          protocolInfo.ensRecords,
+          RECORDS_CONTRACT_ABI,
+          'getText',
+          [node, key],
+        )) as string;
+        logPhase('getEnsText', performance.now() - t0, `key=${key} len=${String(value.length)}`);
         return value;
       } catch {
         logPhase('getEnsText', performance.now() - t0, 'failed');
@@ -194,8 +201,8 @@ export function buildSafeAppCidViewContext(args: {
     async dagGet(cid: string) {
       const t0 = performance.now();
       try {
-        const result = await ipfs.dagGet(cid);
-        const size = Array.isArray(result) ? `${result.length} entries` : 'ok';
+        const result = (await ipfs.dagGet(cid)) as unknown;
+        const size = Array.isArray(result) ? `${String(result.length)} entries` : 'ok';
         logPhase('dagGet', performance.now() - t0, `cid=${cid} ${size}`);
         return result;
       } catch {
@@ -208,9 +215,12 @@ export function buildSafeAppCidViewContext(args: {
       const t0 = performance.now();
       try {
         const url = `${IPFS_URL}/api/v0/ls?arg=${encodeURIComponent(cid)}`;
-        const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(LS_TIMEOUT_MS) });
+        const res = await fetch(url, {
+          method: 'POST',
+          signal: AbortSignal.timeout(LS_TIMEOUT_MS),
+        });
         if (!res.ok) {
-          logPhase('ls', performance.now() - t0, `cid=${cid} http=${res.status}`);
+          logPhase('ls', performance.now() - t0, `cid=${cid} http=${String(res.status)}`);
           return [];
         }
         const data = (await res.json()) as {
@@ -227,7 +237,7 @@ export function buildSafeAppCidViewContext(args: {
           hash: l.Hash,
           size: l.Size ?? 0,
         }));
-        logPhase('ls', performance.now() - t0, `cid=${cid} ${result.length} links`);
+        logPhase('ls', performance.now() - t0, `cid=${cid} ${String(result.length)} links`);
         return result;
       } catch {
         logPhase('ls', performance.now() - t0, `cid=${cid} failed`);
@@ -244,11 +254,11 @@ export function buildSafeAppCidViewContext(args: {
           signal: AbortSignal.timeout(CAT_TIMEOUT_MS),
         });
         if (!res.ok) {
-          logPhase('cat', performance.now() - t0, `cid=${cid} http=${res.status}`);
+          logPhase('cat', performance.now() - t0, `cid=${cid} http=${String(res.status)}`);
           return '';
         }
         const text = await res.text();
-        logPhase('cat', performance.now() - t0, `cid=${cid} ${text.length} bytes`);
+        logPhase('cat', performance.now() - t0, `cid=${cid} ${String(text.length)} bytes`);
         return text;
       } catch {
         logPhase('cat', performance.now() - t0, `cid=${cid} failed`);
