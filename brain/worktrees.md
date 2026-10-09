@@ -1,3 +1,13 @@
+## 2026-10-09 — T2 incremental cid-view composition (orchestrated) — MERGED #115 #116 (main 74dd4e0)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-09 | MERGED #115 | /home/joera/code/worktrees/t2-layers | agent/t2-layers | impl-t2-layers | deepseek-v4-flash-0731 | extract+export readSiteRoot/readArchiveRoot (tree.ts) + readConfigRoot (config.ts) fail-open root-read helpers; collectors refactored to use them (behavior-preserving) |
+| 2026-10-09 | MERGED #116 | /home/joera/code/worktrees/t2-coord | agent/t2-coord | impl-t2-coord | deepseek-v4-flash-0731 | CidViewMeta + schema-optional meta + incremental composition in coordinator (buildPublicationCidView ctx,pub,{prev}) |
+| 2026-10-09 | lead (trivial dedupe) | main direct | main | pi | deepseek-v4-flash-0731 | coordinator adopts readSiteRoot/readArchiveRoot/readConfigRoot (inline root-read dedupe) — commit 74dd4e0 |
+
+T2 commits: `d5427a5` (layers: root-read helper extraction, 13 new tests) → PR #115 `0abd965`; `613bf6c` (coord: meta + incremental) + `61bbc79` (round-2 fix: retain revoked-genesis history across arbitrary incremental hops) → PR #116 `e8f3976`. Reviewer `rev-t2-layers` APPROVE (3 non-blocking); `rev-t2-coord` REQUEST_CHANGES round-1 (2 findings: revoked-history 1-refresh-deep = BLOCKING, fixed via DealCidSnapshot.genesisKind + prev.versions-keyed revoked branch; archive-shadow corner NOT self-correcting, documented) → round-2 APPROVE (revert-and-run confirmed 3 new tests genuinely guard the fix). Lead verified all gates independently (shared build, cid-view vitest, eslint 6 files, prettier, tsc) + empirical 3-hop revocation scratch. Post-merge main gates: shared build 0, safe-app build 0 (unit suite stable 319; browser-component count varies with user's uncommitted records-tab test edit — NOT a cid-view regression). Worktrees/panes/branches cleaned. Single-model review limitation (pi-only) flagged per AGENTS.md.
+
 ## 2026-10-08 — safe-app hide unused 'feed' record from records tab (PR #99 open, awaiting human merge)
 
 | date | session | worktree | branch | agent | model | task |
