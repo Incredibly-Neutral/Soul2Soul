@@ -11,6 +11,7 @@
 // fails loudly instead of silently propagating.
 import { z } from 'zod';
 import type { PublicationCidView } from './types';
+import type { CidRetrievabilityMap } from './retrievability';
 
 // 13 categories in the exact order of types.ts.
 export const cidCategorySchema = z.enum([
@@ -82,6 +83,34 @@ export type PublicationCidViewValidated = z.infer<typeof publicationCidViewSchem
  */
 export function parsePublicationCidView(v: unknown): PublicationCidView {
   const result = publicationCidViewSchema.safeParse(v);
+  if (!result.success) {
+    throw result.error; // ZodError, mirroring the house parse pattern in action-io.ts
+  }
+  return result.data;
+}
+
+/** Mirror of types.ts CidRetrievabilityStatus — the per-CID status block. */
+export const cidRetrievabilityStatusSchema = z.object({
+  checkedAt: z.string(),
+  copies: z.number().int().min(0).max(4),
+  sources: z.object({
+    kubo: z.boolean(),
+    pinata: z.boolean(),
+    filebase: z.boolean(),
+    filecoin: z.boolean(),
+  }),
+  error: z.string().optional(),
+});
+
+/** Map of cid → status, the persisted retrievability snapshot shape. */
+export const cidRetrievabilityMapSchema = z.record(z.string(), cidRetrievabilityStatusSchema);
+
+/**
+ * Parse and validate an unknown value as a CidRetrievabilityMap.
+ * Throws a ZodError on any structural violation.
+ */
+export function parseCidRetrievabilityMap(v: unknown): CidRetrievabilityMap {
+  const result = cidRetrievabilityMapSchema.safeParse(v);
   if (!result.success) {
     throw result.error; // ZodError, mirroring the house parse pattern in action-io.ts
   }
