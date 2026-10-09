@@ -15,6 +15,7 @@ import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
+import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 
 @customElement('s2s-sliding-add-button')
 export class S2SSlidingAddButton extends LitElement {
@@ -60,12 +61,36 @@ export class S2SSlidingAddButton extends LitElement {
       }
 
       #add-btn {
+        /* Match the .alias-pill box model (s2s-records-tab) so the Add
+           control sits flush next to the alias pills: same height (padding +
+           border + mono font), 999px radius and grey-800 pill treatment. */
         border-top-left-radius: 0;
         border-bottom-left-radius: 0;
+        border-top-right-radius: 999px;
+        border-bottom-right-radius: 999px;
+        padding: 0.25rem 0.75rem;
+        border: 1px solid var(--gray-600);
+        background: var(--gray-800);
+        color: var(--gray-50);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        letter-spacing: 0;
+        text-transform: none;
+        gap: 0.35rem;
       }
 
       :host(:not([open])) #add-btn {
-        border-radius: 6px;
+        border-radius: 999px;
+      }
+
+      :host([open]) #add-btn {
+        /* Slide-open: merge with the input — square left edge, pill right
+           edge, and drop the border so it reads as one unit with the input. */
+        border: none;
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+        border-top-right-radius: 999px;
+        border-bottom-right-radius: 999px;
       }
     `,
   ];
@@ -128,7 +153,7 @@ export class S2SSlidingAddButton extends LitElement {
           id="add-btn"
           aria-expanded=${this.open}
           @click=${this.onButtonClick}
-        >${this.buttonLabel}</button>
+        ><ph-plus size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-plus>${this.buttonLabel}</button>
       </div>
     `;
   }

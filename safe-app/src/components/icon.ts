@@ -7,6 +7,7 @@
  */
 import '@phosphor-icons/webcomponents/PhCopy';
 import '@phosphor-icons/webcomponents/PhCheck';
+import '@phosphor-icons/webcomponents/PhPlus';
 import '@phosphor-icons/webcomponents/PhArrowSquareOut';
 import '@phosphor-icons/webcomponents/PhArrowClockwise';
 import '@phosphor-icons/webcomponents/PhTrash';
