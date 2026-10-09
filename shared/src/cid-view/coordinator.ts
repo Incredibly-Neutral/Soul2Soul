@@ -20,8 +20,6 @@
 // Fail-open philosophy: collectors never throw, so this never throws for a
 // missing/failed source — the only throw is parsePublicationCidView, which
 // fires on a structural violation (a real invariant bug in the composition).
-import { namehash } from 'viem/ens';
-import { decodeContenthashWrapped } from '../ipfs/contenthash';
 import type { CidViewReadContext } from './context';
 import {
   collectDealCids,
@@ -30,8 +28,8 @@ import {
   deriveDealCidSnapshot,
 } from './deals';
 import type { DealCidSnapshot } from './deals';
-import { collectConfigCids } from './config';
-import { collectTreeCids, collectArchiveCids } from './tree';
+import { collectConfigCids, readConfigRoot } from './config';
+import { collectTreeCids, collectArchiveCids, readSiteRoot, readArchiveRoot } from './tree';
 import type { CidCategory, CidEntry, PublicationCidView } from './types';
 import { parsePublicationCidView } from './validation';
 
@@ -170,15 +168,6 @@ function coldComplete(entries: CidEntry[]): boolean {
   return true;
 }
 
-/** Read the publication config CID — ok=false only when the read itself failed. */
-async function readConfigRoot(ctx: CidViewReadContext): Promise<{ ok: boolean; cid: string }> {
-  try {
-    return { ok: true, cid: (await ctx.getConfig()).cid };
-  } catch {
-    return { ok: false, cid: '' };
-  }
-}
-
 /**
  * Restore the 'current version' entries that the cold view's cross-collector
  * dedupe folded into their deal/offer row (a version whose cid equals the live
@@ -217,32 +206,6 @@ function restoreFoldedCurrentVersions(snapshot: DealCidSnapshot): void {
         { cid: row.cid, timestamp: row.timestamp, tombstone: false },
       ];
     }
-  }
-}
-
-/**
- * Read an ENS text root (contenthash_wrapped / content_cache_<pub>) and decode
- * it — inline mirror of the tree/archive collectors' read step. ok=false only
- * when the on-chain read itself failed; an empty record OR a malformed
- * contenthash is treated as legitimately absent ({ok:true, root:''}), matching
- * the collectors.
- */
-async function readEnsRoot(
-  ctx: CidViewReadContext,
-  node: string,
-  key: string,
-): Promise<{ ok: boolean; root: string }> {
-  let onchain: string;
-  try {
-    onchain = await ctx.getEnsText(node, key);
-  } catch {
-    return { ok: false, root: '' };
-  }
-  if (!onchain) return { ok: true, root: '' };
-  try {
-    return { ok: true, root: decodeContenthashWrapped(onchain).toString() };
-  } catch {
-    return { ok: true, root: '' }; // malformed contenthash → treated as absent
   }
 }
 
@@ -287,8 +250,7 @@ async function buildIncremental(
   }
 
   // Tree layer.
-  const node = namehash(publication);
-  const treeRes = await readEnsRoot(ctx, node, 'contenthash_wrapped');
+  const treeRes = await readSiteRoot(ctx, publication);
   let treeEntries: CidEntry[];
   let treeOk: boolean;
   if (treeRes.ok && treeRes.root !== '' && treeRes.root === prev.meta?.siteRoot) {
@@ -308,7 +270,7 @@ async function buildIncremental(
   }
 
   // Archive layer.
-  const archiveRes = await readEnsRoot(ctx, node, `content_cache_${publication}`);
+  const archiveRes = await readArchiveRoot(ctx, publication);
   let archiveEntries: CidEntry[];
   let archiveOk: boolean;
   if (archiveRes.ok && archiveRes.root !== '' && archiveRes.root === prev.meta?.archiveRoot) {
