@@ -272,19 +272,6 @@ export class S2SRecordsTab extends LitElement {
     }
   }
 
-  private async deleteRecord(key: string) {
-    if (!confirm(`Delete record "${key}"?`)) return;
-
-    try {
-      await this.safeIntegration.deleteRecord(key);
-      this.showNotification('Record deleted! Transaction pending approval.', 'success');
-      store.removeRecord(key);
-    } catch (error) {
-      console.error('Error deleting record:', error);
-      this.showNotification('Failed to delete record. Please try again.', 'error');
-    }
-  }
-
   private startEdit(key: string) {
     this.editingKey = key;
   }
@@ -683,7 +670,6 @@ export class S2SRecordsTab extends LitElement {
                             : html`
                               <div style="display: flex; gap: 0.5rem;">
                                 <button class="button thin" @click=${() => this.startEdit(record.key)}><ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple> Edit</button>
-                                <button class="button button-danger thin" @click=${() => void this.deleteRecord(record.key)}><ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Delete</button>
                               </div>
                             `}
                       </div>
