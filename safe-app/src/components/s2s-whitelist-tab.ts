@@ -7,6 +7,7 @@ import { buttonStyles } from '@/styles/button-styles.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
+import './s2s-check.js';
 
 @customElement('s2s-whitelist-tab')
 export class S2SWhitelistTab extends LitElement {
@@ -16,6 +17,10 @@ export class S2SWhitelistTab extends LitElement {
   @state() private authors: string[] = [];
   @state() private devs: string[] = [];
   @state() private activeSection: 'authors' | 'devs' = 'authors';
+  @state() private pubCheck: {
+    result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
+    message: string;
+  } = { result: 'idle', message: '' };
 
   static styles = [
     typograhyStyles,
@@ -60,17 +65,6 @@ export class S2SWhitelistTab extends LitElement {
 
       .table {
         grid-template-columns: 1fr auto;
-      }
-
-      .check-form {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-      }
-
-      @media (max-width: 768px) {
-        .check-form { grid-template-columns: 1fr; }
       }
 
       .info-box {
@@ -205,28 +199,27 @@ export class S2SWhitelistTab extends LitElement {
     }
   }
 
-  private async checkCanPublish(address: string) {
-    if (!address.trim()) {
-      this.showNotification('Address cannot be empty', 'error');
-      return;
-    }
-
+  /**
+   * Parent-driven 'check if address can publish' verification (s2s-check).
+   * Validates the address, then asks SafeIntegration.canPublish and reflects
+   * the outcome back onto <s2s-check> via .result / .message.
+   */
+  private async runPubCheck(address: string) {
     if (!this.isValidAddress(address)) {
-      this.showNotification('Invalid Ethereum address', 'error');
+      this.pubCheck = { result: 'error', message: 'invalid address' };
       return;
     }
 
+    this.pubCheck = { result: 'pending', message: '' };
     try {
       const canPublish = await this.safeIntegration.canPublish(address);
-      this.showNotification(
-        canPublish
-          ? `✅ ${address} CAN publish`
-          : `❌ ${address} CANNOT publish`,
-        canPublish ? 'success' : 'error'
-      );
+      this.pubCheck = {
+        result: canPublish ? 'pass' : 'fail',
+        message: canPublish ? 'can publish' : 'cannot publish',
+      };
     } catch (error) {
       console.error('Error checking publish permission:', error);
-      this.showNotification('Failed to check permission', 'error');
+      this.pubCheck = { result: 'error', message: 'check failed' };
     }
   }
 
@@ -285,13 +278,7 @@ export class S2SWhitelistTab extends LitElement {
     }
   }
 
-  private checkFromInput() {
-    const input = this.renderRoot.querySelector('#check-address') as HTMLInputElement;
-    const address = input?.value.trim() ?? '';
-    if (address) {
-      void this.checkCanPublish(address);
-    }
-  }
+
 
   render() {
     if (this.loading) {
@@ -378,10 +365,13 @@ export class S2SWhitelistTab extends LitElement {
           <button class="button" id="add-dev-btn" @click=${this.addDevFromInput}>Add Developer</button>
         </div>
         <p class="section-description">Check if an address has permission to publish</p>
-        <div class="check-form">
-          <input type="text" class="input" placeholder="Address (0x...)" id="check-address" />
-          <button class="button" id="check-btn" @click=${this.checkFromInput}>Check</button>
-        </div>
+        <s2s-check
+          label="check if address can publish"
+          placeholder="0x… address"
+          .result=${this.pubCheck.result}
+          .message=${this.pubCheck.message}
+          @s2s-check=${(e: CustomEvent) => void this.runPubCheck(e.detail.value)}
+        ></s2s-check>
       </div>
     `;
   }
