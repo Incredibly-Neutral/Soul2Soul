@@ -8,6 +8,8 @@ import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
+import './s2s-sliding-add-button.js';
+import './copy-hash.js';
 
 @customElement('s2s-whitelist-tab')
 export class S2SWhitelistTab extends LitElement {
@@ -16,7 +18,6 @@ export class S2SWhitelistTab extends LitElement {
   @state() private loading = true;
   @state() private authors: string[] = [];
   @state() private devs: string[] = [];
-  @state() private activeSection: 'authors' | 'devs' = 'authors';
   @state() private pubCheck: {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
@@ -38,15 +39,40 @@ export class S2SWhitelistTab extends LitElement {
         margin-bottom: 3rem;
       }
 
-      .add-form {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
+      .alias-pills {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
       }
 
-      @media (max-width: 768px) {
-        .add-form { grid-template-columns: 1fr; }
+      .alias-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        background: var(--gray-800);
+        border: 1px solid var(--gray-600);
+        color: var(--gray-50);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+      }
+
+      .alias-pill__remove {
+        display: inline-flex;
+        align-items: center;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        border: none;
+        color: var(--gray-400);
+        cursor: pointer;
+      }
+
+      .alias-pill__remove:hover {
+        color: var(--color-red);
       }
 
       .input {
@@ -61,20 +87,6 @@ export class S2SWhitelistTab extends LitElement {
       .input:focus {
         outline: none;
         border-color: var(--color-yellow);
-      }
-
-      .table {
-        grid-template-columns: 1fr auto;
-      }
-
-      .info-box {
-        background: #eff6ff;
-        border: 1px solid #bfdbfe;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 2rem;
-        color: #1e40af;
-        font-size: 0.875rem;
       }
 
       .empty-state {
@@ -227,10 +239,6 @@ export class S2SWhitelistTab extends LitElement {
     return /^0x[a-fA-F0-9]{40}$/.test(address);
   }
 
-  private switchSection(section: 'authors' | 'devs') {
-    this.activeSection = section;
-  }
-
   private showNotification(message: string, type: 'success' | 'error') {
     const notification = document.createElement('div');
     notification.style.cssText = `
@@ -258,28 +266,6 @@ export class S2SWhitelistTab extends LitElement {
     }, 5000);
   }
 
-  private addAuthorFromInput() {
-    const input = this.renderRoot.querySelector('#add-author-input') as HTMLInputElement;
-    const address = input?.value.trim() ?? '';
-    if (address) {
-      void this.addAuthor(address).then(() => {
-        if (input) input.value = '';
-      });
-    }
-  }
-
-  private addDevFromInput() {
-    const input = this.renderRoot.querySelector('#add-dev-input') as HTMLInputElement;
-    const address = input?.value.trim() ?? '';
-    if (address) {
-      void this.addDev(address).then(() => {
-        if (input) input.value = '';
-      });
-    }
-  }
-
-
-
   render() {
     if (this.loading) {
       return html`<div class="loading"><p>Loading whitelists...</p></div>`;
@@ -292,38 +278,38 @@ export class S2SWhitelistTab extends LitElement {
           <h2 class="section-title">Authors (${this.authors.length})</h2>
         </div>
 
-        ${this.authors.length > 0
+        <div class="alias-pills">
+          ${this.authors.map(
+            (author) => html`
+              <span class="alias-pill">
+                <copy-hash .value=${author}></copy-hash>
+                <button
+                  class="alias-pill__remove"
+                  data-address="${author}"
+                  aria-label="Remove ${author}"
+                  title="Remove ${author}"
+                  @click=${() => void this.removeAuthor(author)}
+                >
+                  <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
+                </button>
+              </span>
+            `,
+          )}
+          <s2s-sliding-add-button
+            placeholder="Author address (0x...)"
+            buttonLabel="Add author"
+            @s2s-sliding-add=${(e: CustomEvent) => void this.addAuthor(e.detail.value)}
+          ></s2s-sliding-add-button>
+        </div>
+
+        ${this.authors.length === 0
           ? html`
-              <div class="table">
-                <div class="table-header">Address</div>
-                <div class="table-header"></div>
-                ${this.authors.map(
-                  (author) => html`
-                    <div class="table-row">
-                      <div class="table-cell" style="font-size: 0.875rem; color: var(--gray-50);">
-                        ${author}
-                      </div>
-                      <div class="table-cell">
-                        <button class="button button-danger thin" data-address="${author}"
-                          @click=${() => void this.removeAuthor(author)}>
-                          <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Remove
-                        </button>
-                      </div>
-                    </div>
-                  `,
-                )}
-              </div>
-            `
-          : html`
               <div class="empty-state">
                 <div>✍️</div>
                 <p>No authors whitelisted yet</p>
               </div>
-            `}
-        <div class="add-form">
-          <input type="text" class="input" placeholder="Author Address (0x...)" id="add-author-input" />
-          <button class="button" id="add-author-btn" @click=${this.addAuthorFromInput}>Add Author</button>
-        </div>
+            `
+          : ''}
       </div>
 
       <!-- Devs -->
@@ -331,39 +317,39 @@ export class S2SWhitelistTab extends LitElement {
         <div class="list_header">
           <h2 class="section-title">Developers (${this.devs.length})</h2>
         </div>
-        ${this.devs.length > 0
+
+        <div class="alias-pills">
+          ${this.devs.map(
+            (dev) => html`
+              <span class="alias-pill">
+                <copy-hash .value=${dev}></copy-hash>
+                <button
+                  class="alias-pill__remove"
+                  data-address="${dev}"
+                  aria-label="Remove ${dev}"
+                  title="Remove ${dev}"
+                  @click=${() => void this.removeDev(dev)}
+                >
+                  <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
+                </button>
+              </span>
+            `,
+          )}
+          <s2s-sliding-add-button
+            placeholder="Developer address (0x...)"
+            buttonLabel="Add developer"
+            @s2s-sliding-add=${(e: CustomEvent) => void this.addDev(e.detail.value)}
+          ></s2s-sliding-add-button>
+        </div>
+
+        ${this.devs.length === 0
           ? html`
-              <div class="table">
-                <div class="table-header">Address</div>
-                <div class="table-header"></div>
-                ${this.devs.map(
-                  (dev) => html`
-                    <div class="table-row">
-                      <div class="table-cell" style="font-size: 0.875rem; color: var(--gray-50);">
-                        ${dev}
-                      </div>
-                      <div class="table-cell">
-                        <button class="button button-danger thin" data-address="${dev}"
-                          @click=${() => void this.removeDev(dev)}>
-                          <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Remove
-                        </button>
-                      </div>
-                    </div>
-                  `,
-                )}
-              </div>
-            `
-          : html`
               <div class="empty-state">
                 <div>👨‍💻</div>
                 <p>No developers whitelisted yet</p>
               </div>
-            `}
-
-        <div class="add-form">
-          <input type="text" class="input" placeholder="Developer Address (0x...)" id="add-dev-input" />
-          <button class="button" id="add-dev-btn" @click=${this.addDevFromInput}>Add Developer</button>
-        </div>
+            `
+          : ''}
         <p class="section-description">Check if an address has permission to publish</p>
         <s2s-check
           label="check if address can publish"
