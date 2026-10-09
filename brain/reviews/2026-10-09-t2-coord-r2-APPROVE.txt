@@ -1,0 +1,125 @@
+VERDICT: APPROVE
+
+REVIEWER2 (Round 2 / final) — independent review of fix commit 61bbc79 on
+branch agent/t2-coord (worktree /home/joera/code/worktrees/t2-coord; base
+28f1fc8 + 613bf6c + 61bbc79). Scope: the 4 reviewed files (types, validation,
+coordinator, coordinator.test) plus the fix's changes to deals.ts/deals.test.ts.
+Model: DeepSeek V4 Flash 0731 (pi reviewing pi — single-model limitation known).
+
+=====================================================================
+GATE RESULTS (all run on the final restored state, HEAD == 61bbc79)
+=====================================================================
+- pnpm -C shared run build ........ PASS
+- npx tsc --noEmit (in shared/) ... PASS
+- npx vitest run src/cid-view ..... PASS (5 files / 64 tests)
+- npx eslint 6 cid-view files --max-warnings 0 ..... PASS (exit 0)
+- npx prettier --check 6 cid-view files ............ PASS
+git status after review: only the 3 expected untracked files
+(REVIEWER-VERDICT.txt, TASK-NOTES.txt, shared/src/rpc.ts landmine); no
+scratch tests, no staged/modified source.
+
+=====================================================================
+FINDING 1 (was BLOCKING) — RESOLVED, verified by code trace AND by
+revert-and-run AND by my own throwaway empirical test (deleted).
+=====================================================================
+Implementation matches the commit-message claims:
+- DealCidSnapshot.genesisKind added; deriveDealCidSnapshot populates it:
+  live 'deal'/'offer' rows pin the category; 'deal-version' entry sets
+  'deal' (unconditionally), 'offer-version' sets 'offer' only if unset.
+  Result: 'deal' wins over 'offer-version' regardless of entry order
+  (traced both orderings), and a revoked genesis whose live row is gone
+  still gets the right category from its retained version entries.
+- emitIncrementalEntries revoked branch now iterates prev.versions
+  (survives every hop) with prev.genesisKind, in deterministic order:
+  prev.deals-order revoked -> prev.offers-order revoked -> prev.versions-
+  only. revokedSeen guards against double-emit (incl. genese present in
+  both prev.deals and prev.versions).
+- snapshotToEntries uses genesisKind instead of the prev.deals membership
+  test. Side benefit: a deep-revoked DEAL genesis in the failed-read path
+  (prev.deals already empty on hop 2) was previously mislabeled
+  'offer-version'; now correctly 'deal-version'. (The commit message
+  frames this as an offer fix; it is actually the deal case that was wrong
+  — see Observation 3.)
+- First-hop byte-identical to pre-fix: on hop 1 prev.versions keys are a
+  subset of prev.deals/prev.offers, so the versions-only pass fires for
+  nothing and the first two passes replicate the old order exactly.
+- restoreFoldedCurrentVersions is unchanged in effect (additive append,
+  guard on last cid); it fires once per revoked genesis while the row is
+  still in the snapshot, then no-ops on later hops.
+
+Empirical confirmation (my throwaway zz-reviewer2.test.ts, now deleted):
+- Cold with G1 live -> 3 consecutive incremental hops with G1 revoked:
+  G1 version entries [QmD1V0, QmD1C, QmArchItem1] survive ALL THREE hops
+  byte-identical, meta.complete true throughout, no 'deal' row.
+- Revoked OFFER genesis O1 across 2 hops: entries stay 'offer-version'
+  (never 'deal-version'), byte-identical, complete true.
+- The retained history is stable: inc1 == inc2 == inc3 (no oscillation).
+
+Committed-test genuineness — verified by ACTUAL REVERT-AND-RUN (not
+inspection): checked out pre-fix deals.ts+coordinator.ts (613bf6c) with the
+post-fix tests (61bbc79) in place and ran:
+  - deals.test.ts "revoked DEAL history survives TWO incremental hops" ..... FAILS pre-fix
+  - coordinator.test.ts "revoked genesis version entries survive two
+    consecutive incremental refreshes" ................................... FAILS pre-fix
+  - deals.test.ts "revoked OFFER genesis keeps offer-version category
+    across two hops" ..................................................... FAILS pre-fix
+All three genuinely guard the fix. Files restored (working tree verified
+byte-identical to HEAD), full suite re-run 64/64 green, git clean.
+
+=====================================================================
+FINDINGS 2-4 — documentation confirmed present and accurate.
+=====================================================================
+- Finding 2 (archive-item shadow): mergeGroups docstring (coordinator.ts:67)
+  states the corner is ACCEPTED and NOT self-correcting — even a layer
+  re-walk re-shadows the item because the revoked genesis's retained
+  deal-version re-folds first; only a cold rebuild clears it; bounded
+  (CID still listed under source 'deals'). Matches Round-1 finding.
+- Finding 3 (complete asymmetry): coldComplete docstring (coordinator.ts:145)
+  documents the cold(true)/incremental(false) oscillation under a persistent
+  root-read failure, notes the view is never wrong and it is no worse than
+  pre-T2 all-cold. Matches Round-1 finding.
+- Finding 4 (double root read): inline comments at coordinator.ts:299/319
+  on the config/tree/archive re-walk branches. Matches Round-1 finding.
+
+=====================================================================
+NEW NON-BLOCKING OBSERVATIONS (Round 2)
+=====================================================================
+1. Intentional incremental/cold asymmetry for revoked genese: the
+   incremental path preserves revoked history (complete:true), whereas a
+   cold rebuild of the SAME revoked state drops it entirely (my scratch
+   output: incremental G1 = [QmD1V0, QmD1C, QmArchItem1] vs revoked-cold
+   G1 = [QmArchItem1]). This is the design intent of a history-preserving
+   inventory and the view is self-consistent, but note that any transient
+   complete:false that triggers a cold rebuild permanently drops the
+   revoked history from the cache. No test pins this asymmetry; consider
+   one when the per-CID retrievability checker lands.
+
+2. genesisKind docstring says "'deal' wins on a pathological deal+offer
+   collision", but deriveDealCidSnapshot's live-row pinning assigns
+   `genesisKind[e.genesis] = e.category` unconditionally, so for a genesis
+   with BOTH a live 'deal' and a live 'offer' row the last-processed row
+   wins ('offer', since offers iterate after deals in the view). Impact is
+   nil in practice (genesis is a deal by construction; the collision is
+   treated as pathological everywhere) and emitIncrementalEntries' revoked
+   path bypasses genesisKind for such genese anyway (revokedSeen), but the
+   comment overstates the guarantee. Cosmetic.
+
+3. Commit-message wording for snapshotToEntries ("deeper-revoked offer
+   genesis no longer falls through to 'deal-version'") is imprecise: the
+   old code already emitted 'offer-version' for anything not in prev.deals,
+   so offers were never wrong. The real behavior change is the deep-revoked
+   DEAL case (was 'offer-version', now 'deal-version'). Behavior is correct;
+   comment wording only.
+
+4. Pre-existing, not introduced by this fix: coldComplete validates only the
+   deal layer vs incremental complete folding in configOk/treeOk/archiveOk
+   (doc'd, Finding 3) and the re-walk double root read (doc'd, Finding 4).
+
+=====================================================================
+DISPOSITION
+=====================================================================
+Finding 1: RESOLVED (code fix + 3 genuine tests, verified by revert-and-run
+and by independent empirical 3-hop / 2-hop-offer tests). No blocking issue
+remains. Findings 2-4: documented as requested. All 5 gates green.
+
+VERDICT: APPROVE.
