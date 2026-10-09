@@ -1,0 +1,79 @@
+VERDICT: APPROVE
+
+Independent review of d5427a5 "refactor(shared): extract cid-view root-read helpers
+readSiteRoot/readArchiveRoot/readConfigRoot" (base 28f1fc8). Scope: the 4 files only.
+
+GATES (run by me in the worktree, not trusted from the author's report):
+- pnpm -C shared run build                                   PASS
+- npx vitest run src/cid-view                                PASS (5 files, 65 tests)
+- npx eslint <4 files> --max-warnings 0                      PASS (exit 0)
+- npx prettier --check <4 files>                             PASS
+- Working tree clean vs HEAD; only untracked TASK-NOTES.txt + shared/src/rpc.ts.
+
+Q1 — BEHAVIOR PRESERVATION (traced every failure mode against 28f1fc8):
+collectTreeCids: getEnsText throws -> [] (both); empty record -> [] (both);
+malformed contenthash -> [] (both, decode-throw folded into helper as ok:true/'' then
+[] via `!ok || root === ''` at tree.ts:208); walk failure -> [rootEntry] (both);
+success -> identical root entry + walk + dedupe (both). namehash throws out uncaught in
+both versions (pre-existing, unchanged).
+collectArchiveCids: same root mapping (tree.ts:239); cat throws -> [archiveEntry] (both);
+invalid JSON -> [archiveEntry] (both); non-object / missing items -> [archiveEntry] (both);
+malformed item entries omitted (both).
+collectConfigCids: getConfig deterministically throws -> [] (both — call #1 in
+readConfigRoot throws at config.ts:47); success -> identical
+[config, template-dag, templates, assets-root, assets] + dedupe (both); config non-object
+-> [config entry] (both); dagGet throws -> [config entry, template-dag] (both);
+walkAssets failure swallowed (both). The ONLY divergence is the flaky double-getConfig
+path (see Q3). All deterministic-adapter inputs produce byte-identical output.
+
+Q2 — HELPER CONTRACTS (verified against code, all correct, no conflation):
+readSiteRoot (tree.ts:140) / readArchiveRoot (tree.ts:166): thrown getEnsText ->
+{ok:false, root:''}; empty -> {ok:true, root:''}; malformed contenthash ->
+{ok:true, root:''}; success -> {ok:true, root:decoded}. readConfigRoot (config.ts:43):
+thrown -> {ok:false, cid:''}; success -> {ok:true, cid} (cid may be ''). The ok flag
+cleanly separates "read failed" (retryable) from "read succeeded but legitimately
+absent/empty" — the coordinator can distinguish them. Malformed-contenthash -> ok:true/''
+is a deliberate "treat as absent" choice, consistent with the collector's prior behavior
+and documented; it is NOT conflated with failure (ok:false is distinct). No misleading
+state.
+
+Q3 — DOUBLE getConfig (config.ts:61-72): REAL but negligible divergence.
+readConfigRoot makes call #1 (config.ts:47), then collectConfigCids re-reads getConfig
+for the body (config.ts:70); if call #1 succeeds and call #2 throws, the new code returns
+[config entry] (config.ts:72) where the original returned []. Severity: essentially
+unreachable in production — the adapter maps getConfig to deps.readConfig() (adapter.ts:39),
+a single eth_call; two back-to-back calls both succeed or both throw. It is also
+fail-open (emits the entry it successfully read, never throws, never loses data). It is
+NOT avoidable without changing the helper contract WHILE routing the collector through
+the helper (readConfigRoot exposes only {ok,cid}). Clean fixes: (a) have readConfigRoot
+return the config body as an additive field (superset of {ok,cid}, backward-compatible for
+the coordinator) and drop call #2; or (b) keep the collector on its own single inline
+getConfig and leave the helper for the coordinator alone. Option (a) is cheapest now since
+the coordinator branch is not merged. Non-blocking.
+
+Q4 — NO SCOPE CREEP: exactly 4 files vs base (git diff --name-only 28f1fc8 HEAD). walk
+logic (walkNode, mapWithLimit, MAX_DEPTH, MAX_ENTRIES, LS_CONCURRENCY, dedupe) is
+semantically byte-identical — a whitespace/comment-insensitive diff shows only prettier
+reflow + `Array<T>` -> `T[]` + type-only cast widenings (archive `item`, templates `el`)
+that keep the pre-existing runtime guards intact. index.ts already re-exports ./tree and
+./config, so the helpers surface at the module root for the coordinator.
+
+Q5 — TESTS: readSiteRoot/readArchiveRoot each cover all 4 branches genuinely; the
+malformed case uses '0xe4deadbeef' which really hits the decode-throw branch (first byte
+0xe4 != ipfs-ns 0xe3, contenthash.ts:228-233). readConfigRoot covers success + thrown;
+success-with-cid:'' not explicitly tested (minor gap). The three regression tests route
+through the helpers and assert full entry sets — they would catch a helper return-shape
+misread, wrong field name, or dropped entry, and they lock down exactly the success path
+that changed; somewhat redundant with the pre-existing tests but meaningful. A
+content-only diff of every expect() body between 28f1fc8 and HEAD shows only additions
+(counts increased); no pre-existing assertion was modified or removed.
+
+NON-BLOCKING OBSERVATIONS:
+1. config.ts:61-72 double-getConfig: theoretical second-call-throw divergence (and a
+   second-call cid/body mismatch under a non-deterministic adapter). Negligible in
+   practice; fix via option (a) above if strict conformance is wanted. Consider a test
+   pinning the documented behavior of this path either way.
+2. readConfigRoot has no explicit test for the documented "success with cid:''" state
+   (legitimately absent config). Add one.
+3. The coordinator must honor the fail-open contract precisely: ok:false = retryable read
+   failure; ok:true/'' = "no root / no config", NOT a retryable error.
