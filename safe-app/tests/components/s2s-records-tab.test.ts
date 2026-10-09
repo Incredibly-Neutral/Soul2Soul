@@ -449,7 +449,7 @@ describe('s2s-records-tab', () => {
     await vi.waitFor(
       () => {
         expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']);
-        expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
+        expect(el.shadowRoot!.textContent).toContain('Aliases');
       },
       { timeout: 5000 },
     );
@@ -474,7 +474,7 @@ describe('s2s-records-tab', () => {
       { timeout: 5000 },
     );
     // The alias pills (not the empty state) are shown.
-    expect(el.shadowRoot!.textContent).toContain('ENS write-target aliases');
+    expect(el.shadowRoot!.textContent).toContain('Aliases');
     expect(el.shadowRoot!.textContent).not.toContain('No custom write-targets set');
     // Store was populated => loadRecords (chain read) is skipped; only the
     // alias read runs. loadCurrentAliases reads the cached config CID from

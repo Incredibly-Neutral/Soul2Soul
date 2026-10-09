@@ -600,7 +600,7 @@ export class S2SRecordsTab extends LitElement {
         <button class="button" @click=${() => void this.updateConfig()}>Update</button>
 
         <div class="alias-section">
-          <h3 class="section-title" style="margin-top: 1.5rem;">ENS write-target aliases</h3>
+          <h3 class="section-title" style="margin-top: 1.5rem;">Aliases</h3>
           ${this.aliases.length > 0
             ? html`
                 <div class="alias-pills">
@@ -629,7 +629,6 @@ export class S2SRecordsTab extends LitElement {
               @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
             ></s2s-sliding-add-button>
           </div>
-          <p class="domain-hint">Each alias must be owned by this publication Safe — ownership is verified per alias before saving.</p>
         </div>
 
         <div class="list_header" style="margin-top: 2rem;">
