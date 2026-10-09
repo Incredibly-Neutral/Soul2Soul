@@ -4,43 +4,57 @@
 // config.ts / tree.ts / coordinator.ts) import these exact types.
 
 export type CidCategory =
-  | 'deal'            // latest CID of a deal (getDeals)
-  | 'deal-version'    // a historical version CID of a deal (getVersion)
-  | 'offer'           // latest CID of an offer (getOffers)
-  | 'offer-version'   // a historical version of an offer
-  | 'config'          // the publication config JSON CID (configCid)
-  | 'template-dag'    // the templates DAG node CID (templateCid)
-  | 'template'        // a single template file CID inside the templates DAG
-  | 'assets-root'     // the assets root CID (assetsCid)
-  | 'asset'           // a single asset file CID inside the assets tree
-  | 'site-root'       // the current site root CID (decoded contenthash_wrapped)
-  | 'site-file'       // a file inside the site tree (html/assets/...)
-  | 'archive'         // the archive/cache JSON CID (content_cache_<publication>)
-  | 'archive-item';   // a content item CID referenced inside the archive JSON
+  | 'deal' // latest CID of a deal (getDeals)
+  | 'deal-version' // a historical version CID of a deal (getVersion)
+  | 'offer' // latest CID of an offer (getOffers)
+  | 'offer-version' // a historical version of an offer
+  | 'config' // the publication config JSON CID (configCid)
+  | 'template-dag' // the templates DAG node CID (templateCid)
+  | 'template' // a single template file CID inside the templates DAG
+  | 'assets-root' // the assets root CID (assetsCid)
+  | 'asset' // a single asset file CID inside the assets tree
+  | 'site-root' // the current site root CID (decoded contenthash_wrapped)
+  | 'site-file' // a file inside the site tree (html/assets/...)
+  | 'archive' // the archive/cache JSON CID (content_cache_<publication>)
+  | 'archive-item'; // a content item CID referenced inside the archive JSON
 
 export interface CidEntry {
-  cid: string;                  // IPFS CID (v0 or v1)
+  cid: string; // IPFS CID (v0 or v1)
   category: CidCategory;
   source: 'deals' | 'config' | 'tree' | 'archive';
-  role?: string;                // human description, e.g. "template about/index.html"
-  genesis?: string;             // bytes32 id when the entry belongs to a deal/offer
-  author?: string;              // author address when known
-  timestamp?: number;           // unix seconds when known
-  tombstoned?: boolean;         // true for tombstoned versions
-  size?: number;                // byte size when known
-  path?: string;                // path within a tree/templates/assets
-  note?: string;                // free text
+  role?: string; // human description, e.g. "template about/index.html"
+  genesis?: string; // bytes32 id when the entry belongs to a deal/offer
+  author?: string; // author address when known
+  timestamp?: number; // unix seconds when known
+  tombstoned?: boolean; // true for tombstoned versions
+  size?: number; // byte size when known
+  path?: string; // path within a tree/templates/assets
+  note?: string; // free text
 }
 
 export interface CidViewSummary {
-  total: number;                // entries.length
-  uniqueCids: number;           // distinct cid values
+  total: number; // entries.length
+  uniqueCids: number; // distinct cid values
   byCategory: Partial<Record<CidCategory, number>>;
 }
 
+/**
+ * Meta block attached to every composed view — the incremental-refresh
+ * baseline. Only a view whose `complete` is true may be reused as the `prev`
+ * of an incremental build; a partial/failed view must be rebuilt cold.
+ */
+export interface CidViewMeta {
+  complete: boolean; // every layer fully known -> trusted as the incremental baseline
+  fingerprint: string; // deal-layer fingerprint (dealFingerprint of live deal/offer rows); '' when the deal read failed
+  configCid: string; // publication config CID ('' when absent/unreadable)
+  siteRoot: string; // decoded contenthash_wrapped root ('' when absent/unreadable)
+  archiveRoot: string; // decoded content_cache_<pub> root ('' when absent/unreadable)
+  versionCounts: Record<string, number>; // best-effort known version count per genesis (count of version entries)
+}
+
 export interface PublicationCidView {
-  publication: string;          // ENS name e.g. 's3ntiment.eth'
-  generatedAt: string;          // ISO 8601
+  publication: string; // ENS name e.g. 's3ntiment.eth'
+  generatedAt: string; // ISO 8601
   entries: CidEntry[];
   sources: {
     deals: boolean;
@@ -49,11 +63,18 @@ export interface PublicationCidView {
     archive: boolean;
   };
   summary: CidViewSummary;
+  meta?: CidViewMeta; // incremental baseline; absent on pre-meta cached blobs -> cold rebuild
 }
 
 export interface DealRead {
-  genesis: string; author: string; cid: string; timestamp: number; status: 'deal' | 'offer';
+  genesis: string;
+  author: string;
+  cid: string;
+  timestamp: number;
+  status: 'deal' | 'offer';
 }
 export interface VersionRead {
-  cid: string; timestamp: number; tombstone: boolean;
+  cid: string;
+  timestamp: number;
+  tombstone: boolean;
 }

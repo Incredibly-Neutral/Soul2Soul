@@ -10,11 +10,16 @@
 //   tree    : site-root + 2 site-files = 3
 //   archive : archive + 2 archive-items = 3
 //   TOTAL   = 20 entries, 20 unique cids.
+// Test fakes return plain values through Promise-typed context signatures; the
+// `async` keyword is required by the type but there is never a real await.
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, it, expect, vi } from 'vitest';
 import { namehash } from 'viem/ens';
 import type { CidViewReadContext } from './context';
 import type { DealRead, VersionRead } from './types';
+import type { PublicationCidView } from './types';
 import { buildPublicationCidView } from './coordinator';
+import { dealFingerprint } from './deals';
 import { parsePublicationCidView } from './validation';
 import { encodeContenthashWrapped, parseCID } from '../ipfs/contenthash';
 
@@ -59,7 +64,11 @@ const ARCH2 = 'QmArchItem2';
 const rootContenthash = encodeContenthashWrapped(parseCID(SROOT));
 const archiveContenthash = encodeContenthashWrapped(parseCID(ACID));
 
-type LsEntry = { name: string; hash: string; size: number };
+interface LsEntry {
+  name: string;
+  hash: string;
+  size: number;
+}
 
 function fakeDeals(): DealRead[] {
   return [
@@ -114,6 +123,12 @@ function makeCtx(overrides: Partial<CidViewReadContext> = {}): CidViewReadContex
     getDeals: async () => fakeDeals(),
     getOffers: async () => fakeOffers(),
     getVersions: async (genesis: string) => fakeVersions(genesis),
+    getVersionCount: async (genesis: string) => fakeVersions(genesis).length,
+    getVersionsRange: async (genesis: string, fromIndex: number, count?: number) => {
+      const all = fakeVersions(genesis);
+      const end = typeof count === 'number' ? Math.min(count, all.length) : all.length;
+      return all.slice(fromIndex, end);
+    },
     getConfig: async () => ({ cid: CCFG, config: { templateCid: TDAG, assetsCid: AROOT } }),
     dagGet: async () => [
       { path: 'templates/post.hbs', cid: TPL1 },
@@ -156,13 +171,29 @@ describe('buildPublicationCidView', () => {
 
     expect(view.entries.map((e) => e.cid)).toEqual([
       // deals block
-      D1C, D1V0, D2C, D2V0, D2V1, O1C, O1V0,
+      D1C,
+      D1V0,
+      D2C,
+      D2V0,
+      D2V1,
+      O1C,
+      O1V0,
       // config block
-      CCFG, TDAG, TPL1, TPL2, AROOT, ASSET1, ASSET2,
+      CCFG,
+      TDAG,
+      TPL1,
+      TPL2,
+      AROOT,
+      ASSET1,
+      ASSET2,
       // tree block
-      SROOT, SFILE1, SFILE2,
+      SROOT,
+      SFILE1,
+      SFILE2,
       // archive block
-      ACID, ARCH1, ARCH2,
+      ACID,
+      ARCH1,
+      ARCH2,
     ]);
 
     const deal = view.entries.find((e) => e.cid === D1C);
@@ -222,7 +253,9 @@ describe('buildPublicationCidView', () => {
     // Listed once — folded into the deal entry (first occurrence), not repeated as an archive-item.
     expect(view.entries.filter((e) => e.cid === D1C)).toHaveLength(1);
     expect(view.entries.filter((e) => e.category === 'deal' && e.genesis === G1)).toHaveLength(1);
-    expect(view.entries.filter((e) => e.category === 'archive-item' && e.genesis === G1)).toHaveLength(0);
+    expect(
+      view.entries.filter((e) => e.category === 'archive-item' && e.genesis === G1),
+    ).toHaveLength(0);
 
     // 20 entries in the base fixture − 1 folded archive-item = 19; 19 unique cids.
     expect(view.summary.total).toBe(19);
@@ -331,5 +364,282 @@ describe('buildPublicationCidView', () => {
     expect(ensText).toHaveBeenCalledWith(NODE, `content_cache_${PUBLICATION}`);
     expect(view.sources.tree).toBe(true);
     expect(view.sources.archive).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Meta block + incremental composition
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildPublicationCidView meta + incremental', () => {
+  it('cold build attaches meta: complete, fingerprint, layer roots, versionCounts', async () => {
+    const view = await buildPublicationCidView(makeCtx(), PUBLICATION);
+
+    expect(view.meta).toEqual({
+      complete: true,
+      fingerprint: dealFingerprint(fakeDeals(), fakeOffers()),
+      configCid: CCFG,
+      siteRoot: SROOT,
+      archiveRoot: ACID,
+      versionCounts: { [G1]: 2, [G2]: 3, [O1]: 2 },
+    });
+  });
+
+  it('cold build with a failed version read for one live genesis → meta.complete false', async () => {
+    const ctx = makeCtx({
+      getVersions: async (genesis: string) => {
+        if (genesis === G2) throw new Error('version read failed');
+        return fakeVersions(genesis);
+      },
+    });
+
+    const view = await buildPublicationCidView(ctx, PUBLICATION);
+
+    expect(view.meta?.complete).toBe(false);
+    // the surviving genesis version counts are still recorded; G2 has none
+    expect(view.meta?.versionCounts).toEqual({ [G1]: 2, [O1]: 2 });
+  });
+
+  it('incremental with unchanged everything: zero version/dagGet/ls/cat calls, entries equal cold, complete true', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+
+    const getVersionCount = vi.fn(async (genesis: string) => fakeVersions(genesis).length);
+    const getVersionsRange = vi.fn(async (genesis: string, fromIndex: number, count?: number) => {
+      const all = fakeVersions(genesis);
+      const end = typeof count === 'number' ? Math.min(count, all.length) : all.length;
+      return all.slice(fromIndex, end);
+    });
+    const getVersions = vi.fn(async (genesis: string) => fakeVersions(genesis));
+    const dagGet = vi.fn(async () => []);
+    const ls = vi.fn(async () => []);
+    const cat = vi.fn(async () => '');
+
+    const ctx = makeCtx({ getVersionCount, getVersionsRange, getVersions, dagGet, ls, cat });
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: cold });
+
+    expect(getVersionCount).not.toHaveBeenCalled();
+    expect(getVersionsRange).not.toHaveBeenCalled();
+    expect(getVersions).not.toHaveBeenCalled();
+    expect(dagGet).not.toHaveBeenCalled();
+    expect(ls).not.toHaveBeenCalled();
+    expect(cat).not.toHaveBeenCalled();
+
+    // the incremental view is byte-for-byte the cold view's entries
+    expect(view.entries).toEqual(cold.entries);
+    expect(view.meta?.complete).toBe(true);
+    expect(view.meta?.fingerprint).toBe(cold.meta?.fingerprint);
+    expect(view.meta?.versionCounts).toEqual(cold.meta?.versionCounts);
+    expect(view.meta?.configCid).toBe(cold.meta?.configCid);
+    expect(view.meta?.siteRoot).toBe(cold.meta?.siteRoot);
+    expect(view.meta?.archiveRoot).toBe(cold.meta?.archiveRoot);
+  });
+
+  it('incremental with a new deal: fetches only the new genesis history, complete true', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+
+    const G3 = '0x4444444444444444444444444444444444444444444444444444444444444444';
+    const D3C = 'QmD3C';
+    const D3V0 = 'QmD3V0';
+    const newDeals: DealRead[] = [
+      ...fakeDeals(),
+      { genesis: G3, author: '0xddd', cid: D3C, timestamp: 4000, status: 'deal' },
+    ];
+
+    const getVersionCount = vi.fn(async (genesis: string) => {
+      if (genesis === G3) return 2;
+      return fakeVersions(genesis).length;
+    });
+    const getVersionsRange = vi.fn(async (genesis: string, fromIndex: number, count?: number) => {
+      if (genesis === G3) {
+        const all: VersionRead[] = [
+          { cid: D3V0, timestamp: 3900, tombstone: false },
+          { cid: D3C, timestamp: 4000, tombstone: false },
+        ];
+        const end = typeof count === 'number' ? Math.min(count, all.length) : all.length;
+        return all.slice(fromIndex, end);
+      }
+      const all = fakeVersions(genesis);
+      const end = typeof count === 'number' ? Math.min(count, all.length) : all.length;
+      return all.slice(fromIndex, end);
+    });
+
+    const ctx = makeCtx({
+      getDeals: async () => newDeals,
+      getVersionCount,
+      getVersionsRange,
+    });
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: cold });
+
+    // version reads touch ONLY the new genesis — existing genesis histories are
+    // kept from the cache (the fast-path fingerprint diff gates this).
+    expect(getVersionCount).toHaveBeenCalledTimes(1);
+    expect(getVersionCount).toHaveBeenCalledWith(G3);
+    expect(getVersionsRange).toHaveBeenCalledTimes(1);
+    expect(getVersionsRange).toHaveBeenCalledWith(G3, 0, 2);
+
+    // the new genesis is inventoried (deal + its versions); others unchanged
+    const g3Entries = view.entries.filter((e) => e.genesis === G3);
+    expect(g3Entries.some((e) => e.category === 'deal')).toBe(true);
+    expect(g3Entries.some((e) => e.category === 'deal-version' && e.cid === D3V0)).toBe(true);
+    expect(view.entries.filter((e) => e.genesis === G1)).toEqual(
+      cold.entries.filter((e) => e.genesis === G1),
+    );
+    expect(view.entries.filter((e) => e.genesis === G2)).toEqual(
+      cold.entries.filter((e) => e.genesis === G2),
+    );
+    expect(view.entries.filter((e) => e.genesis === O1)).toEqual(
+      cold.entries.filter((e) => e.genesis === O1),
+    );
+    expect(view.meta?.complete).toBe(true);
+  });
+
+  it('incremental with a changed site root: tree re-walked (ls called), config/archive reused, complete true', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+
+    const NEW_SROOT = 'QmNewSiteRoot';
+    const NEW_SFILE = 'QmNewIndexHtml';
+    const newRootContenthash = encodeContenthashWrapped(parseCID(NEW_SROOT));
+
+    const ls = vi.fn(async (cid: string) => {
+      if (cid === NEW_SROOT) return [{ name: 'index.html', hash: NEW_SFILE, size: 100 }];
+      return [];
+    });
+    const cat = vi.fn(async () => '');
+    const dagGet = vi.fn(async () => []);
+
+    const ctx = makeCtx({
+      getEnsText: async (node: string, key: string) => {
+        if (node !== NODE) return '';
+        if (key === 'contenthash_wrapped') return newRootContenthash;
+        if (key === `content_cache_${PUBLICATION}`) return archiveContenthash;
+        return '';
+      },
+      ls,
+      cat,
+      dagGet,
+    });
+
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: cold });
+
+    expect(ls).toHaveBeenCalled();
+    expect(cat).not.toHaveBeenCalled();
+    expect(dagGet).not.toHaveBeenCalled();
+    expect(view.meta?.complete).toBe(true);
+    expect(view.meta?.siteRoot).toBe(NEW_SROOT);
+    // the tree layer was re-walked: new root + new file present, old root gone
+    expect(view.entries.some((e) => e.cid === NEW_SROOT && e.category === 'site-root')).toBe(true);
+    expect(view.entries.some((e) => e.cid === NEW_SFILE && e.category === 'site-file')).toBe(true);
+    expect(view.entries.some((e) => e.cid === SROOT)).toBe(false);
+    // config + archive were reused verbatim
+    expect(view.entries.some((e) => e.cid === CCFG)).toBe(true);
+    expect(view.entries.some((e) => e.cid === ACID)).toBe(true);
+  });
+
+  it('incremental with prev.meta.complete=false falls back to a cold rebuild', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+    const incompletePrev: PublicationCidView = {
+      ...cold,
+      meta: {
+        complete: false,
+        fingerprint: cold.meta?.fingerprint ?? '',
+        configCid: cold.meta?.configCid ?? '',
+        siteRoot: cold.meta?.siteRoot ?? '',
+        archiveRoot: cold.meta?.archiveRoot ?? '',
+        versionCounts: cold.meta?.versionCounts ?? {},
+      },
+    };
+
+    const dagGet = vi.fn(async () => []);
+    const ls = vi.fn(async () => []);
+    const cat = vi.fn(async () => '');
+
+    const ctx = makeCtx({ dagGet, ls, cat });
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: incompletePrev });
+
+    // cold rebuild → dagGet/ls/cat all exercised again (in the incremental
+    // unchanged path they would have been skipped entirely)
+    expect(dagGet).toHaveBeenCalled();
+    expect(ls).toHaveBeenCalled();
+    expect(cat).toHaveBeenCalled();
+    // a fresh cold rebuild is complete
+    expect(view.meta?.complete).toBe(true);
+  });
+
+  it('incremental with a prev that has no meta field falls back to a cold rebuild', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+    // simulate an old cached blob: a view object without the meta field
+    const prevWithoutMeta: PublicationCidView = {
+      publication: cold.publication,
+      generatedAt: cold.generatedAt,
+      entries: cold.entries,
+      sources: cold.sources,
+      summary: cold.summary,
+    };
+
+    const dagGet = vi.fn(async () => []);
+    const ls = vi.fn(async () => []);
+    const cat = vi.fn(async () => '');
+
+    const ctx = makeCtx({ dagGet, ls, cat });
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: prevWithoutMeta });
+
+    expect(dagGet).toHaveBeenCalled();
+    expect(ls).toHaveBeenCalled();
+    expect(cat).toHaveBeenCalled();
+    expect(view.meta?.complete).toBe(true);
+  });
+
+  it('parsePublicationCidView round-trips a view WITH meta and parses one WITHOUT meta', async () => {
+    const view = await buildPublicationCidView(makeCtx(), PUBLICATION);
+    expect(view.meta).toBeDefined();
+
+    const parsed = parsePublicationCidView(view);
+    expect(parsed.meta).toEqual(view.meta);
+    expect(parsed).toEqual(view);
+
+    // a view without meta (old cached blob) still parses without throwing
+    const noMeta: PublicationCidView = {
+      publication: view.publication,
+      generatedAt: view.generatedAt,
+      entries: view.entries,
+      sources: view.sources,
+      summary: view.summary,
+    };
+    const parsedNoMeta = parsePublicationCidView(noMeta);
+    expect(parsedNoMeta.meta).toBeUndefined();
+  });
+
+  it('incremental when a layer root read fails: meta.complete false, other layers still reused', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+
+    const dagGet = vi.fn(async () => []);
+    const ls = vi.fn(async () => []);
+    const cat = vi.fn(async () => '');
+
+    const ctx = makeCtx({
+      getEnsText: async (node: string, key: string) => {
+        if (node !== NODE) return '';
+        if (key === 'contenthash_wrapped') throw new Error('ens down');
+        if (key === `content_cache_${PUBLICATION}`) return archiveContenthash;
+        return '';
+      },
+      dagGet,
+      ls,
+      cat,
+    });
+
+    const view = await buildPublicationCidView(ctx, PUBLICATION, { prev: cold });
+
+    expect(view.meta?.complete).toBe(false);
+    expect(view.meta?.siteRoot).toBe('');
+    // the tree layer is dropped (root unreadable) — its old entries must not
+    // linger, and no tree walk happened
+    expect(view.entries.some((e) => e.source === 'tree')).toBe(false);
+    expect(ls).not.toHaveBeenCalled();
+    // config + archive layers were reused verbatim
+    expect(dagGet).not.toHaveBeenCalled();
+    expect(cat).not.toHaveBeenCalled();
+    expect(view.entries.some((e) => e.cid === CCFG)).toBe(true);
+    expect(view.entries.some((e) => e.cid === ACID)).toBe(true);
   });
 });
