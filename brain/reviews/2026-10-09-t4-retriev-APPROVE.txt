@@ -1,0 +1,78 @@
+VERDICT: APPROVE
+
+Independent review of branch `agent/t4-retriev` (worktree /home/joera/code/worktrees/t4-retriev,
+HEAD 5a496c7 "feat(shared): per-CID retrievability status core + tests"). All claims verified
+directly; TASK-NOTES.txt not relied on (cross-checked after independent verification and found
+accurate).
+
+1. PASS — Scope: `git show --stat HEAD` and `git diff --name-status main..HEAD` show exactly the 4
+   allowed files: shared/src/cid-view/retrievability.ts (A), retrievability.test.ts (A),
+   validation.ts (M, +29), index.ts (M, +1). No other files.
+
+2. PASS — Diff review / contract shapes (retrievability.ts):
+   - `RETRIEVABILITY_SOURCES = ['kubo','pinata','filebase','filecoin'] as const` and
+     `type RetrievabilitySource` (lines 20–21) — exact.
+   - `CidRetrievabilityStatus { checkedAt: string; copies: number;
+     sources: Record<RetrievabilitySource, boolean>; error?: string }` (23–32) and
+     `type CidRetrievabilityMap = Record<string, CidRetrievabilityStatus>` (34) — exact.
+   - `interface RetrievabilityReadContext { hasCopy(source, cid): Promise<boolean> }` (37–40) — exact.
+   - `cidsFromView` (46): unique/non-empty/trimmed, first-appearance order, `[]` on empty view,
+     no throw path.
+   - `filecoinBackedCidsFromView` (63): filters `deal` + `deal-version` ONLY, returns Set, deduped.
+   - `checkCidRetrievability` (95): re-checks passed CIDs fresh; merges into `prev` via `{ ...prev }`
+     clone (never mutates caller); fail-open per source — throwing `hasCopy` caught in
+     `checkOneCid`, flags that source false, records `error`, `copies` counts only confirmed trues;
+     per-source probes sequential within a CID and CID-level `mapWithLimit` (204) with
+     `Math.min(limit, items.length)` workers means in-flight `hasCopy` calls never exceed
+     `concurrency`; cannot reject for network reasons (only `checkOneCid` can reject, and it only
+     throws on `now().toISOString()`, not on probe errors).
+   - Unchecked sources initialized `false` (flags block) and not counted in `copies` — verified.
+   - `orderByCopiesAscending` (216) / `orderByStaleness` (241): pure (no mutation), never-checked
+     first via `lookup()` (cid in map), stable exact ties via input index.
+   - Transport-agnostic: grep for fetch/axios/viem/ipfs/http/net in retrievability.ts returns only
+     the design comment; no hidden network calls.
+
+3. PASS — Test quality (retrievability.test.ts, 16 tests): genuinely exercises each claimed
+   behavior with independent assertions, not tautologies —
+   fresh probes assert 8 calls / 4 per cid / correct source set / copies / checkedAt; prev
+   preservation asserts same-reference untouched; empty cids returns prev / {}; concurrency cap
+   asserts maxInFlight <= 3 AND > 1 (real parallelism); fail-open asserts throwing pinata → source
+   false, copies 3, error contains 'pinata'; subset sources asserts unchecked false + not counted
+   + call count; no-prev-mutation asserts JSON snapshot unchanged + replaced entry is a new object;
+   cidsFromView dedupe/order/empty/trim; filecoinBacked deal+deal-version-only + deduped + empty;
+   both ordering helpers with never-checked-first and stable-tie cases. The `now` clock override is
+   used (first check test passes `now: () => new Date(checkedAt)` and asserts the exact ISO string),
+   so checkedAt is deterministic.
+
+4. PASS — Gates (all run by me, not from TASK-NOTES):
+   - `pnpm -C shared run build` (tsc) → exit 0.
+   - `pnpm -C shared exec vitest run src/cid-view/retrievability` → 1 file, 16/16 pass.
+   - `pnpm -C shared exec vitest run src/cid-view` (whole subset) → 6 files, 93/93 pass
+     (index.ts + validation.ts edits cause no import/export regressions).
+   - `pnpm -C shared exec eslint src/cid-view/{retrievability.ts,retrievability.test.ts,validation.ts,index.ts} --max-warnings 0` → exit 0.
+   - eslint-disable in the test file verified justified: removing the header and re-running eslint
+     produces exactly 12 `@typescript-eslint/dot-notation` errors (bracket access on hash map
+     keys); the inline justification ("CID map keys are hashes; bracket access mirrors map
+     semantics") is real, not sweeping a genuine problem, and mirrors the coordinator.test.ts
+     targeted-disable precedent.
+
+5. PASS — Contract stability: index.ts has `export * from './retrievability';` (line 13);
+   all module exports compile (build/tsc exit 0 covers it).
+
+6. PASS — Commit hygiene: single commit on `agent/t4-retriev` (5a496c7, `git log main..HEAD` = 1);
+   `TASK-NOTES.txt` and `shared/src/rpc.ts` confirmed untracked (`git status --porcelain` shows
+   only those two `??` entries); I left the worktree clean (temporary review files removed).
+
+Non-blocking notes:
+- N1. `CheckCidRetrievabilityOptions` adds `now?: () => Date` beyond the contract's
+  { prev?, sources?, concurrency? }. Purely additive and required for deterministic checkedAt
+  testing; mirrors `BuildCidViewOptions.now` in coordinator.ts. Contract shape otherwise intact.
+- N2. The input CID list to `checkCidRetrievability` is deduped (order-preserving) before
+  checking — a sensible additive behavior, documented in code and tests.
+- N3. `validation.ts` schemas intentionally omit `.strict()` to match the file's existing
+  `parsePublicationCidView` style; consistent, not a defect.
+
+Blocking findings: NONE.
+
+Conclusion: branch matches the hard contract exactly, tests are real, all four gates pass with my
+own runs, scope and commit hygiene are clean. APPROVE for merge.
