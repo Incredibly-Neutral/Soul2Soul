@@ -10,4 +10,5 @@ export * from './config';
 export * from './tree';
 export * from './adapter';
 export * from './validation';
+export * from './retrievability';
 export * from './coordinator';
