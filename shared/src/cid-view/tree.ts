@@ -38,19 +38,16 @@ async function mapWithLimit<T>(
   fn: (item: T) => Promise<void>,
 ): Promise<void> {
   let next = 0;
-  const workers = Array.from(
-    { length: Math.max(0, Math.min(limit, items.length)) },
-    async () => {
-      while (next < items.length) {
-        const index = next++;
-        try {
-          await fn(items[index]);
-        } catch {
-          // swallow per-item failures — the walk is fail-open
-        }
+  const workers = Array.from({ length: Math.max(0, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        await fn(items[index]);
+      } catch {
+        // swallow per-item failures — the walk is fail-open
       }
-    },
-  );
+    }
+  });
   await Promise.all(workers);
 }
 
@@ -88,7 +85,7 @@ async function walkNode(
 ): Promise<void> {
   if (depth > MAX_DEPTH || entries.length >= MAX_ENTRIES) return;
 
-  let children: Array<{ name: string; hash: string; size: number }>;
+  let children: { name: string; hash: string; size: number }[];
   try {
     children = await ctx.ls(cid);
   } catch {
@@ -100,7 +97,7 @@ async function walkNode(
     if (entries.length >= MAX_ENTRIES) return;
     const childPath = path ? `${path}/${child.name}` : child.name;
 
-    let grand: Array<{ name: string; hash: string; size: number }> | null = null;
+    let grand: { name: string; hash: string; size: number }[] | null = null;
     try {
       grand = await ctx.ls(child.hash);
     } catch {
@@ -124,6 +121,70 @@ async function walkNode(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Root-read helpers
+//
+// Single-purpose "what is the current root CID" primitives, shared with the
+// incremental coordinator: they own the ENS read + contenthash decode and
+// collapse every failure mode into a small fail-open shape.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Read + decode the publication's ENS `contenthash_wrapped` record (INV-6).
+ *
+ * Fail-open contract used by the collector (and the incremental coordinator):
+ *   - a THROWN getEnsText            → `{ ok: false, root: '' }`
+ *   - empty/absent record            → `{ ok: true,  root: '' }`
+ *   - malformed contenthash (decode) → `{ ok: true,  root: '' }` (treated as absent)
+ *   - success                        → `{ ok: true,  root: <decoded CID> }`
+ */
+export async function readSiteRoot(
+  ctx: CidViewReadContext,
+  publication: string,
+): Promise<{ ok: boolean; root: string }> {
+  const node = namehash(publication);
+
+  let onchain = '';
+  try {
+    onchain = await ctx.getEnsText(node, SITE_ROOT_KEY);
+  } catch {
+    return { ok: false, root: '' }; // ENS read failed → no root available
+  }
+  if (!onchain) return { ok: true, root: '' }; // empty record → no site published
+
+  try {
+    return { ok: true, root: decodeContenthashWrapped(onchain).toString() };
+  } catch {
+    return { ok: true, root: '' }; // malformed contenthash → treat as absent
+  }
+}
+
+/**
+ * Read + decode the publication's `content_cache_<publication>` record.
+ * Same fail-open contract as {@link readSiteRoot} (a throwing ENS read →
+ * `ok:false`; empty/absent/malformed → `ok:true` with an empty root).
+ */
+export async function readArchiveRoot(
+  ctx: CidViewReadContext,
+  publication: string,
+): Promise<{ ok: boolean; root: string }> {
+  const node = namehash(publication);
+
+  let onchain = '';
+  try {
+    onchain = await ctx.getEnsText(node, `content_cache_${publication}`);
+  } catch {
+    return { ok: false, root: '' }; // ENS read failed → no cache pointer
+  }
+  if (!onchain) return { ok: true, root: '' }; // empty record → no archive
+
+  try {
+    return { ok: true, root: decodeContenthashWrapped(onchain).toString() };
+  } catch {
+    return { ok: true, root: '' }; // malformed contenthash → treat as absent
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Public collectors
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -143,28 +204,14 @@ export async function collectTreeCids(
   ctx: CidViewReadContext,
   publication: string,
 ): Promise<CidEntry[]> {
-  const node = namehash(publication);
+  const { ok, root } = await readSiteRoot(ctx, publication);
+  if (!ok || root === '') return []; // no usable root → no site inventory
 
-  let onchain = '';
-  try {
-    onchain = await ctx.getEnsText(node, SITE_ROOT_KEY);
-  } catch {
-    return []; // ENS read failed → no root available
-  }
-  if (!onchain) return []; // empty record → no site published
-
-  let rootLabel: string;
-  try {
-    rootLabel = decodeContenthashWrapped(onchain).toString();
-  } catch {
-    return []; // malformed contenthash → treat as absent
-  }
-
-  const rootEntry: CidEntry = { cid: rootLabel, category: 'site-root', source: 'tree' };
+  const rootEntry: CidEntry = { cid: root, category: 'site-root', source: 'tree' };
   const entries: CidEntry[] = [rootEntry];
 
   try {
-    await walkNode(ctx, rootLabel, '', 0, entries);
+    await walkNode(ctx, root, '', 0, entries);
   } catch {
     return [rootEntry]; // walk failed → root entry alone, never throw
   }
@@ -188,29 +235,15 @@ export async function collectArchiveCids(
   ctx: CidViewReadContext,
   publication: string,
 ): Promise<CidEntry[]> {
-  const node = namehash(publication);
+  const { ok, root } = await readArchiveRoot(ctx, publication);
+  if (!ok || root === '') return []; // no usable archive pointer → no inventory
 
-  let onchain = '';
-  try {
-    onchain = await ctx.getEnsText(node, `content_cache_${publication}`);
-  } catch {
-    return []; // ENS read failed → no cache pointer
-  }
-  if (!onchain) return []; // empty record → no archive
-
-  let archiveLabel: string;
-  try {
-    archiveLabel = decodeContenthashWrapped(onchain).toString();
-  } catch {
-    return []; // malformed contenthash → treat as absent
-  }
-
-  const archiveEntry: CidEntry = { cid: archiveLabel, category: 'archive', source: 'archive' };
+  const archiveEntry: CidEntry = { cid: root, category: 'archive', source: 'archive' };
   const entries: CidEntry[] = [archiveEntry];
 
   let raw: string;
   try {
-    raw = await ctx.cat(archiveLabel);
+    raw = await ctx.cat(root);
   } catch {
     return entries; // unreadable archive → pointer alone
   }
@@ -227,7 +260,10 @@ export async function collectArchiveCids(
   if (!items || typeof items !== 'object' || Array.isArray(items)) return entries;
 
   for (const [genesis, entry] of Object.entries(items as Record<string, unknown>)) {
-    const item = entry as { cid?: unknown; item?: { public?: { title?: unknown }; title?: unknown } };
+    const item = entry as
+      | { cid?: unknown; item?: { public?: { title?: unknown }; title?: unknown } }
+      | null
+      | undefined;
     if (!item || typeof item !== 'object' || typeof item.cid !== 'string' || item.cid === '') {
       continue; // malformed entry → omit
     }

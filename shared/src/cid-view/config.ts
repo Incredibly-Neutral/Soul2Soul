@@ -9,9 +9,9 @@
 import type { CidEntry } from './types';
 import type { CidViewReadContext } from './context';
 
-const MAX_DEPTH = 12;      // recursion-depth cap for the assets tree walk
-const MAX_ENTRIES = 5000;  // total-entry cap (pathological DAG guard)
-const CONCURRENCY = 8;     // mapWithLimit concurrency for the assets walk
+const MAX_DEPTH = 12; // recursion-depth cap for the assets tree walk
+const MAX_ENTRIES = 5000; // total-entry cap (pathological DAG guard)
+const CONCURRENCY = 8; // mapWithLimit concurrency for the assets walk
 
 /** Minimal local shape — only the fields this collector reads. */
 interface ConfigLike {
@@ -25,7 +25,30 @@ interface TemplateLike {
   body?: string;
 }
 
-type LsEntry = { name: string; hash: string; size: number };
+interface LsEntry {
+  name: string;
+  hash: string;
+  size: number;
+}
+
+/**
+ * Read the publication's on-chain config record and expose its CID — the
+ * "config root" primitive shared with the incremental coordinator.
+ *
+ * Fail-open contract:
+ *   - a THROWN getConfig → `{ ok: false, cid: '' }`
+ *   - success            → `{ ok: true,  cid: configResult.cid }`
+ *     (cid may legitimately be '' when there is no config record)
+ */
+export async function readConfigRoot(
+  ctx: CidViewReadContext,
+): Promise<{ ok: boolean; cid: string }> {
+  try {
+    return { ok: true, cid: (await ctx.getConfig()).cid };
+  } catch {
+    return { ok: false, cid: '' }; // config read failed → no root available
+  }
+}
 
 /**
  * Collect every CID a publication's config references. Best-effort: failures
@@ -35,13 +58,19 @@ export async function collectConfigCids(ctx: CidViewReadContext): Promise<CidEnt
   const entries: CidEntry[] = [];
 
   // 1. configCid — a config read failure yields an empty view, never a throw.
+  const root = await readConfigRoot(ctx);
+  if (!root.ok) return [];
+  entries.push({ cid: root.cid, category: 'config', source: 'config' });
+
+  // readConfigRoot exposes only the cid; the template/assets pass below needs
+  // the parsed config body, so re-read it here. The read just succeeded, so a
+  // second throw is not expected — but stay fail-open regardless.
   let configResult: { cid: string; config: unknown };
   try {
     configResult = await ctx.getConfig();
   } catch {
-    return [];
+    return entries;
   }
-  entries.push({ cid: configResult.cid, category: 'config', source: 'config' });
 
   // Parse the S2SPublicationConfig shape with a local assertion (don't
   // over-validate). A non-object config contributes nothing further.
@@ -95,7 +124,7 @@ async function collectTemplates(
     return; // not an array and no `templates` array → treat as empty
   }
 
-  for (const el of templates as TemplateLike[]) {
+  for (const el of templates as (TemplateLike | null | undefined)[]) {
     if (el === null || typeof el !== 'object') continue;
     const elCid = typeof el.cid === 'string' ? el.cid : '';
     if (elCid === '') continue;
