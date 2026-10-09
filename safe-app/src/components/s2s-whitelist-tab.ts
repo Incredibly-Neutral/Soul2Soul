@@ -58,18 +58,6 @@ export class S2SWhitelistTab extends LitElement {
         border-color: var(--color-yellow);
       }
 
-      .button.thin {
-        padding: 0.25rem .5rem;
-        padding: 0.125rem .5rem;
-        border: none;
-        height: 2rem;
-        margin-left: .5rem;
-        font-size: .875rem;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-      }
-
       .table {
         grid-template-columns: 1fr auto;
       }

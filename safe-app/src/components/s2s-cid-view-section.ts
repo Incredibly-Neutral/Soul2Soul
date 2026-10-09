@@ -172,13 +172,7 @@ export class S2SCidViewSection extends LitElement {
         display: block;
         margin-bottom: 2rem;
       }
-
-      .cid-section {
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid var(--gray-700, #374151);
-        border-radius: 8px;
-        padding: 1.25rem;
-      }
+h
 
       .cid-header {
         display: flex;
@@ -190,13 +184,11 @@ export class S2SCidViewSection extends LitElement {
       }
 
       .cid-title {
-        font-size: 1.1rem;
-        font-weight: 600;
+
         color: var(--gray-100, #f3f4f6);
         margin: 0;
         display: flex;
         align-items: center;
-        gap: 0.6rem;
       }
 
       .refresh {
@@ -671,11 +663,10 @@ export class S2SCidViewSection extends LitElement {
     return html`
       <div class="cid-section">
         <div class="cid-header">
-          <h3 class="cid-title">
+          <h2 class="cid-title">
             <ph-tree-structure size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-tree-structure>
             CID Inventory
-            <span class="muted">${view.publication}</span>
-          </h3>
+          </h2>
           <button class="refresh" ?disabled=${this.loading} @click=${() => void this.rebuild()}>
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>
             ${this.loading ? 'Loading…' : 'Refresh'}

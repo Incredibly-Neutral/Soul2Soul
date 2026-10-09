@@ -62,16 +62,6 @@ export class S2SRecordsTab extends LitElement {
       }
 
       .table { grid-template-columns: 1fr 3fr auto; }
-      .button.thin {
-        padding: 0.25rem .5rem;
-        border: none;
-        height: 2rem;
-        margin-left: .5rem;
-        font-size: .875rem;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-      }
 
       .record-value-input {
         width: 100%;
@@ -585,7 +575,7 @@ export class S2SRecordsTab extends LitElement {
     return html`
       <div class="section">
         <div class="alias-section">
-          <h3 class="section-title" style="margin-top: 1.5rem;">Aliases</h3>
+          <h2 class="section-title" style="margin-top: 1.5rem;">Aliases</h2>
           ${this.aliases.length > 0
             ? html`
                 <div class="alias-pills">
@@ -604,16 +594,22 @@ export class S2SRecordsTab extends LitElement {
                       </span>
                     `,
                   )}
+                  <s2s-sliding-add-button
+                    placeholder="e.g. s3ntiment.eth"
+                    buttonLabel="Add"
+                    @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
+                  ></s2s-sliding-add-button>
                 </div>
               `
-            : html`<p class="domain-current">No custom write-targets set — the contenthash is written to the default subdomain of the publication name.</p>`}
-          <div style="margin-top: 0.75rem;">
-            <s2s-sliding-add-button
-              placeholder="e.g. s3ntiment.eth"
-              buttonLabel="Add"
-              @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
-            ></s2s-sliding-add-button>
-          </div>
+            : html`
+                  <div class="alias-pills">      
+                      <s2s-sliding-add-button
+                      placeholder="e.g. s3ntiment.eth"
+                      buttonLabel="Add"
+                      @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
+                    ></s2s-sliding-add-button>
+                  </div>
+            `}
         </div>
 
         <div class="list_header" style="margin-top: 2rem;">

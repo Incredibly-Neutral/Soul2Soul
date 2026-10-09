@@ -13,8 +13,8 @@ export const sectionStyles = css`
   }
 
   .section-title {
-    font-size: 1.6rem;
-    font-weight: 500;
+    font-size: 1.4rem;
+    font-weight: 700;
     color: var(--gray-50);
     margin: 0;
     display: flex;

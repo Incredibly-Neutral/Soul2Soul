@@ -40,16 +40,19 @@ export const tableStyles = css`
   }
 
   .table-header {
-    padding: 0.75rem;
-    border-bottom: 1px solid var(--gray-600);
-    text-transform: uppercase;
-    font-size: .85rem;
+
+    font-size: .875rem;
     letter-spacing: .75px;
     font-family  var(--font-mono-family);
     display: flex;
     justify-content: flex-start;
     align-items: center;
     border-radius: 0;
+    padding: 0.55rem 0.6rem;
+    border-bottom: 1px solid var(--gray-600, #4b5563);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--gray-400, #9ca3af);
   }
 
   .table-header:first-child {

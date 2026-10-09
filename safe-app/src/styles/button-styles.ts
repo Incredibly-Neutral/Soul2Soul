@@ -26,28 +26,16 @@ export const buttonStyles = css`
     text-transform: uppercase;
   }
 
-  button:hover {
+  button:hover:not(:disabled) {
   
     border-color: var(--color-yellow)
   }
 
-  .button:hover:not(:disabled) {
-    background: var(--color-yellow);
-    transform: translateY(-1px);
-  }
 
   .button:disabled {
     cursor: not-allowed;
     transform: none;
   }
-
-  // .button.thin {
-  //   padding: 0.125rem 0.5rem;
-  //   border: none;
-  //   height: 2rem;
-  //   margin-left: 0.5rem;
-  //   font-size: 0.875rem;
-  // }
 
   .btn-primary {
     background: var(--color-yellow);
