@@ -15,7 +15,7 @@ export const typograhyStyles = css`
   }
 
   h2 {
-    font-family: var(--font-headline, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+    font-family: var(--font-body, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
     font-style: normal;
     font-weight: 700;
   }
