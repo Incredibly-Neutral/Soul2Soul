@@ -21,13 +21,13 @@ test.describe('whitelist tab', () => {
     await expect(tab.locator('.section-title').filter({ hasText: 'Developers' })).toBeVisible();
   });
 
-  test('renders the add/check forms (address inputs + buttons)', async ({ page }) => {
+  test('renders the add/check forms (address inputs + buttons + s2s-check)', async ({ page }) => {
     const tab = page.locator('s2s-app').locator('s2s-whitelist-tab');
     await expect(tab.locator('#add-author-input')).toBeVisible();
     await expect(tab.locator('#add-author-btn')).toBeVisible();
     await expect(tab.locator('#add-dev-input')).toBeVisible();
     await expect(tab.locator('#add-dev-btn')).toBeVisible();
-    await expect(tab.locator('#check-address')).toBeVisible();
+    await expect(tab.locator('s2s-check')).toBeVisible();
   });
 
   test('author table renders rows with data-address, or the empty state', async ({ page }) => {
@@ -50,11 +50,12 @@ test.describe('whitelist tab', () => {
     }
   });
 
-  test('check-address input accepts typed text (read-only UI)', async ({ page }) => {
+  test('s2s-check input accepts typed text (read-only UI)', async ({ page }) => {
     const input = page
       .locator('s2s-app')
       .locator('s2s-whitelist-tab')
-      .locator('#check-address');
+      .locator('s2s-check')
+      .getByRole('textbox');
     await input.fill('0xabc');
     await expect(input).toHaveValue('0xabc');
   });

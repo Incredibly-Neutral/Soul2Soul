@@ -1,7 +1,7 @@
 // s2s-deals-tab.ts
 import { LitElement, html, css, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
+import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { filterStyles } from '@/styles/filter-styles.js';
@@ -25,6 +25,7 @@ import './toggle-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
+import './s2s-check.js';
 
 // Per-column sort configuration for the Offers and Deals tables.
 const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
@@ -77,6 +78,10 @@ export class S2SDealsTab extends LitElement {
   @state() private dealsSort: SortState | null = null;
   @state() private offersFilters: FilterState = {};
   @state() private dealsFilters: FilterState = {};
+  @state() private dealCheck: {
+    result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
+    message: string;
+  } = { result: 'idle', message: '' };
 
   private unsubscriber: (() => void) | null = null;
 
@@ -96,38 +101,6 @@ export class S2SDealsTab extends LitElement {
         display: block;
         padding: 2rem 0;
         background: var(--gray-900);
-      }
-
-      .check-deal-form {
-        display: grid;
-        gap: 1rem;
-        padding: 1.5rem 0;
-        grid-template-columns: 1fr auto;
-      }
-
-      @media (max-width: 768px) {
-        .check-deal-form {
-          grid-template-columns: 1fr;
-        }
-
-        .section-header {
-          flex-direction: column;
-          align-items: flex-start;
-          gap: 1rem;
-        }
-      }
-
-      .input {
-        padding: 0.75rem 1rem;
-        border: 1px solid var(--gray-200);
-        background: var(--gray-50);
-        border-radius: 0.5rem;
-        font-size: 1rem;
-      }
-
-      .input:focus {
-        outline: none;
-        border-color: var(--color-yellow);
       }
 
       .toolbar {
@@ -226,16 +199,24 @@ export class S2SDealsTab extends LitElement {
     await this.loadDeals();
   }
 
-  private async checkDeal(genesis: string) {
+  /**
+   * Parent-driven 'check if genesis id has a deal' verification (s2s-check).
+   * Normalises the genesis ref to bytes32, then asks SafeIntegration.hasDeal
+   * and reflects the outcome back onto <s2s-check> via .result / .message.
+   * An offer does NOT count — hasDeal is the deal-only (_isDeal) view.
+   */
+  private async runDealCheck(genesis: string) {
+    this.dealCheck = { result: 'pending', message: '' };
     try {
-      const isDeal = await this.safeIntegration.hasDeal(genesis);
-      this.showNotification(
-        isDeal ? `✅ Active deal for ${genesis}` : `❌ No active deal for ${genesis}`,
-        isDeal ? 'success' : 'error',
-      );
+      const g = toBytes32Id(genesis);
+      const ok = await this.safeIntegration.hasDeal(g);
+      this.dealCheck = {
+        result: ok ? 'pass' : 'fail',
+        message: ok ? 'has a deal' : 'no deal',
+      };
     } catch (error) {
       console.error('Error checking deal:', error);
-      this.showNotification('Failed to check deal', 'error');
+      this.dealCheck = { result: 'error', message: 'check failed' };
     }
   }
 
@@ -482,14 +463,13 @@ export class S2SDealsTab extends LitElement {
           <h2 class="section-title">Check Deal Status</h2>
         </div>
         <p class="section-description">Check if a deal exists for a genesis</p>
-        <div class="check-deal-form">
-          <input type="text" class="input" placeholder="Genesis (0x...)" id="check-genesis" />
-          <button class="button" id="check-deal-btn" @click=${() => {
-            const input = this.renderRoot.querySelector('#check-genesis') as HTMLInputElement;
-            const genesis = input?.value.trim();
-            if (genesis) this.checkDeal(genesis);
-          }}>Check Deal</button>
-        </div>
+        <s2s-check
+          label="check if genesis id has a deal"
+          placeholder="0x… genesis"
+          .result=${this.dealCheck.result}
+          .message=${this.dealCheck.message}
+          @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
+        ></s2s-check>
       </div>
     `;
   }

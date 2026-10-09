@@ -16,6 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LitElement } from 'lit';
+import type { S2SCheck } from '../../src/components/s2s-check';
 import { mountLit } from '../helpers/mount';
 
 const m = vi.hoisted(() => {
@@ -103,6 +104,13 @@ const m = vi.hoisted(() => {
 
   const fetchFromIPFS = vi.fn();
 
+  // Mirrors shared/src/identity/contract-id.ts (pass-through for 0x + 64 hex,
+  // otherwise a synthetic hash) so runDealCheck's normalisation is testable
+  // without a real keccak256.
+  const toBytes32Id = vi.fn((ref: string) =>
+    /^0x[0-9a-fA-F]{64}$/.test(ref.trim()) ? ref.trim().toLowerCase() : `0xhash-${ref}`,
+  );
+
   const protocolIntegration = {
     getInfo: vi.fn(async () => ({ gateway: 'https://ipfs.transport-union.dev' })),
   };
@@ -112,6 +120,7 @@ const m = vi.hoisted(() => {
     contentFor,
     safeIntegration,
     fetchFromIPFS,
+    toBytes32Id,
     protocolIntegration,
   };
 });
@@ -119,6 +128,7 @@ const m = vi.hoisted(() => {
 vi.mock('@s2s/soul2soul-shared', () => ({
   LitService: class {},
   renderwithLitActions: vi.fn(),
+  toBytes32Id: m.toBytes32Id,
 }));
 
 vi.mock('@/lib/safe-integration.js', () => ({ SafeIntegration: class {} }));
@@ -224,7 +234,7 @@ describe('s2s-deals-tab', () => {
     expect(root.querySelector('button[data-action="retract"]')).not.toBeNull();
   });
 
-  it('checks deal status and reports an active deal via notification', async () => {
+  it('checks deal status via the s2s-check flow and reports an active deal', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({ deals: [], offers: [] });
     m.safeIntegration.hasDeal.mockResolvedValue(true);
 
@@ -233,14 +243,40 @@ describe('s2s-deals-tab', () => {
       expect(el.shadowRoot!.textContent).toContain('No active deals yet');
     });
 
-    const input = el.shadowRoot!.querySelector<HTMLInputElement>('#check-genesis')!;
+    const check = el.shadowRoot!.querySelector('s2s-check') as unknown as S2SCheck;
+    const input = check.shadowRoot!.querySelector('input') as HTMLInputElement;
     input.value = '0xGenesis1';
-    (el.shadowRoot!.querySelector('#check-deal-btn') as HTMLButtonElement).click();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
 
+    // hasDeal is called with the toBytes32Id-normalised genesis id.
+    await vi.waitFor(() =>
+      expect(m.safeIntegration.hasDeal).toHaveBeenCalledWith('0xhash-0xGenesis1'),
+    );
+    await vi.waitFor(() => expect(check.result).toBe('pass'));
+    expect(check.message).toBe('has a deal');
+  });
+
+  it('reports no deal via the s2s-check flow when hasDeal is false', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({ deals: [], offers: [] });
+    m.safeIntegration.hasDeal.mockResolvedValue(false);
+
+    const el = await mountTab();
     await vi.waitFor(() => {
-      expect(notificationTexts().join(' | ')).toContain('Active deal for 0xGenesis1');
+      expect(el.shadowRoot!.textContent).toContain('No active deals yet');
     });
-    expect(m.safeIntegration.hasDeal).toHaveBeenCalledWith('0xGenesis1');
+
+    const check = el.shadowRoot!.querySelector('s2s-check') as unknown as S2SCheck;
+    const input = check.shadowRoot!.querySelector('input') as HTMLInputElement;
+    input.value = '0xGenesis2';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
+
+    await vi.waitFor(() =>
+      expect(m.safeIntegration.hasDeal).toHaveBeenCalledWith('0xhash-0xGenesis2'),
+    );
+    await vi.waitFor(() => expect(check.result).toBe('fail'));
+    expect(check.message).toBe('no deal');
   });
 
   it('accepts an offer and shows the pending-approval notification', async () => {
