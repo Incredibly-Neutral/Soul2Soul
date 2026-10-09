@@ -272,6 +272,16 @@ export class S2SWhitelistTab extends LitElement {
     }
 
     return html`
+    
+      <div class="section">
+        <s2s-check
+            label="check if address can publish"
+            placeholder="0x… address"
+            .result=${this.pubCheck.result}
+            .message=${this.pubCheck.message}
+            @s2s-check=${(e: CustomEvent) => void this.runPubCheck(e.detail.value)}
+          ></s2s-check>
+      </div>
       <!-- Authors -->
       <div class="section">
         <div class="list_header">
@@ -342,22 +352,9 @@ export class S2SWhitelistTab extends LitElement {
           ></s2s-sliding-add-button>
         </div>
 
-        ${this.devs.length === 0
-          ? html`
-              <div class="empty-state">
-                <div>👨‍💻</div>
-                <p>No developers whitelisted yet</p>
-              </div>
-            `
-          : ''}
-        <p class="section-description">Check if an address has permission to publish</p>
-        <s2s-check
-          label="check if address can publish"
-          placeholder="0x… address"
-          .result=${this.pubCheck.result}
-          .message=${this.pubCheck.message}
-          @s2s-check=${(e: CustomEvent) => void this.runPubCheck(e.detail.value)}
-        ></s2s-check>
+        }
+      
+        
       </div>
     `;
   }
