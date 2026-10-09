@@ -169,6 +169,50 @@ function seedCache(publication: string, view: PublicationCidView, savedAt = Date
   localStorage.setItem('s2s.cidview.' + publication, JSON.stringify({ savedAt, view }));
 }
 
+/**
+ * makeFullCtx + a version for the offer genesis, so the coordinator's cold
+ * completeness check (every live deal/offer genesis has ≥1 version) passes and
+ * the built view carries meta.complete:true — a valid incremental baseline.
+ */
+function makeCompleteCtx(): CidViewReadContext {
+  return {
+    ...makeFullCtx(),
+    getVersions: async (genesis: string) => {
+      if (genesis === '0xgen1') {
+        return [
+          { cid: 'bafyver0', timestamp: 1699999000, tombstone: false },
+          { cid: 'bafyver1', timestamp: 1700000000, tombstone: true },
+        ];
+      }
+      if (genesis === '0xgen2') {
+        return [{ cid: 'bafyver2', timestamp: 1700002000, tombstone: false }];
+      }
+      return [];
+    },
+  };
+}
+
+/**
+ * Build a genuine (schema-valid) view through the REAL coordinator for seeding
+ * the localStorage cache, so the seeded `meta` block is exactly what the
+ * coordinator would persist — not a hand-rolled approximation.
+ */
+async function buildSeededView(
+  ctx: CidViewReadContext,
+  publication = 'test.eth',
+): Promise<PublicationCidView> {
+  const view = realBuild.fn ? await realBuild.fn(ctx, publication) : null;
+  if (!view) throw new Error('real coordinator unavailable for seeding');
+  return view as PublicationCidView;
+}
+
+/** The build options arg of the latest recorded buildPublicationCidView call. */
+function latestBuildOpts(): { prev?: PublicationCidView } | undefined {
+  const call = buildSpy.mock.calls.at(-1);
+  if (!call) return undefined;
+  return call[2] as { prev?: PublicationCidView } | undefined;
+}
+
 /** The CIDs currently rendered, read from each copy-hash's value property (shadow DOM). */
 function renderedCids(root: ShadowRoot): string[] {
   return Array.from(root.querySelectorAll('copy-hash')).map(
@@ -503,6 +547,135 @@ describe('s2s-cid-view-section', () => {
     });
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
     expect(renderedCids(el.shadowRoot!)).not.toContain('bafycached1');
+  });
+
+  it('persists meta in the SWR cache and round-trips it through loadCachedView', async () => {
+    // First mount: fresh cold build via the real coordinator → the view carries
+    // a meta block (complete) and saveCachedView persists it verbatim.
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeCompleteCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    // Wait for the fresh build to finish persisting (button re-enabled).
+    await vi.waitFor(() => {
+      expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // The persisted blob's view includes the optional meta block, intact.
+    const persisted = JSON.parse(localStorage.getItem('s2s.cidview.test.eth') ?? 'null') as {
+      savedAt?: number;
+      view?: PublicationCidView;
+    };
+    expect(persisted.savedAt).toBeTypeOf('number');
+    expect(persisted.view?.meta?.complete).toBe(true);
+    expect(persisted.view?.meta?.fingerprint).toBeTypeOf('string');
+
+    // A second mount re-hydrates that cached view (meta intact) and passes it
+    // as prev on the auto-revalidate build — proving loadCachedView round-trips
+    // meta so the incremental path has its baseline.
+    buildSpy.mockClear();
+    await mountLit('s2s-cid-view-section', {
+      ctx: makeCompleteCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+    });
+    expect(latestBuildOpts()?.prev?.meta?.complete).toBe(true);
+    expect(latestBuildOpts()?.prev?.publication).toBe('test.eth');
+  });
+
+  it('passes the cached view as prev on auto-revalidate (incremental)', async () => {
+    // Seed a genuine complete view (meta.complete:true) via the real coordinator.
+    const seeded = await buildSeededView(makeCompleteCtx());
+    expect(seeded.meta?.complete).toBe(true);
+    seedCache('test.eth', seeded);
+
+    await mountLit('s2s-cid-view-section', {
+      ctx: makeCompleteCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+    });
+    // The auto-revalidate (mount) diffed against the cached view.
+    expect(latestBuildOpts()).toEqual({ prev: seeded });
+  });
+
+  it('passes no prev on auto-revalidate when there is no cache (cold)', async () => {
+    // beforeEach clears localStorage, so no cache exists for this publication.
+    await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+    });
+    expect(latestBuildOpts()).toEqual({});
+  });
+
+  it('manual Refresh forces a cold rebuild even when a cache exists', async () => {
+    const seeded = await buildSeededView(makeCompleteCtx());
+    seedCache('test.eth', seeded);
+
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeCompleteCtx(),
+      publication: 'test.eth',
+    });
+    // The mount's auto-revalidate is incremental (prev passed).
+    await vi.waitFor(() => {
+      expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+    });
+    expect(buildSpy.mock.calls[0]?.[2]).toHaveProperty('prev');
+
+    // Wait for the auto-revalidate build to finish so the button is enabled,
+    // then click Refresh → the rebuild must be cold (no prev), ignoring the
+    // cache entirely. The button's disabled/loading state stays unchanged.
+    await vi.waitFor(() => {
+      expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
+    });
+    (el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(buildSpy.mock.calls.length).toBeGreaterThan(1);
+    });
+    expect(latestBuildOpts()).toEqual({});
+    // The cold rebuild still paints the table (ground truth) and re-enables.
+    await vi.waitFor(() => {
+      expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+  });
+
+  it('renders and rebuilds cold when the cached view has meta.complete:false', async () => {
+    // makeFullCtx's offer genesis has no version → the coordinator's cold
+    // completeness check fails → meta.complete:false (an incomplete baseline).
+    const incomplete = await buildSeededView(makeFullCtx());
+    expect(incomplete.meta?.complete).toBe(false);
+    seedCache('test.eth', incomplete);
+
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+
+    // The cached (incomplete) view paints instantly, and the revalidate build
+    // — which passes prev but is self-degraded to cold by the coordinator —
+    // still succeeds and renders. No error state either way.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+    await vi.waitFor(() => {
+      expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('.error')).toBeNull();
+    // prev was still passed (incremental request) — the coordinator degraded it.
+    expect(latestBuildOpts()?.prev?.meta?.complete).toBe(false);
   });
 
   it('clears the staleness ticker on disconnect (no interval leak)', async () => {
