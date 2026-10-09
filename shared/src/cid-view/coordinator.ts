@@ -63,6 +63,15 @@ const COLLECTORS: readonly ((
  * category/source are roles (a content cid legitimately appears as a deal AND
  * an archive-item) so they are excluded — the same content referenced from
  * multiple collectors is listed once, keeping the first (richest) occurrence.
+ *
+ * ACCEPTED KNOWN CORNER (NOT self-correcting): an archive-item whose dedupe key
+ * (cid+genesis) equals a live deal row is folded into the deal entry, hiding its
+ * archive role. Even a layer re-walk does not reveal it: the incremental path
+ * re-emits the revoked genesis's retained deal-version (source 'deals', merged
+ * first), which re-shadows the freshly collected archive-item in the same merge.
+ * Only an independent cold rebuild (fresh merge) clears it. Bounded — the CID is
+ * still listed under source 'deals', so the future per-CID retrievability checker
+ * still sees it; the effect is a role label, not data loss. Accepted by design.
  */
 function mergeGroups(groups: CidEntry[][]): CidEntry[] {
   const merged: CidEntry[] = [];
@@ -132,6 +141,16 @@ function deriveVersionCounts(entries: CidEntry[]): Record<string, number> {
  * complete. A genesis with a single version whose cid equals its deal cid
  * (folded out of the final view by cross-collector dedupe) still counts via
  * the pre-dedupe merged entries.
+ *
+ * ACCEPTED ASYMMETRY: coldComplete validates ONLY the deal layer, so a cold
+ * build with a failed config/tree/archive root read yields complete:true, while
+ * the incremental path folds configOk/treeOk/archiveOk into `complete` and flips
+ * to false on the same failure. Under a persistently failing root read this
+ * oscillates (cold:true → inc:false → cold:true …) with a full cold rebuild
+ * every other refresh. The view is never wrong (it matches cold's fail-open
+ * output) and it is strictly no worse than pre-T2 (all-cold); the incremental
+ * path's root-read-failure → complete:false is exactly what guarantees the data
+ * is eventually re-read correctly.
  */
 function coldComplete(entries: CidEntry[]): boolean {
   const versionGenesis = new Set<string>();
@@ -171,6 +190,14 @@ async function readConfigRoot(ctx: CidViewReadContext): Promise<{ ok: boolean; c
  * under-count versionCounts. Appending the live deal/offer row's cid (which IS
  * the current version) reconstructs the exact full history the cold collector
  * would have produced.
+ *
+ * This runs exactly ONCE per revoked genesis: the row is present in the snapshot
+ * on the first refresh after revocation (the previous view still carries the
+ * 'deal'/'offer' row), so the current version is appended into the retained
+ * history there; on every later hop the row is gone (snapshot.deals/offers do
+ * not list it) and the `cached[last]?.cid !== row.cid` guard would no-op anyway.
+ * Additive with DealCidSnapshot.genesisKind (which carries the category for the
+ * now-row-less revoked genesis).
  */
 function restoreFoldedCurrentVersions(snapshot: DealCidSnapshot): void {
   for (const row of snapshot.deals) {
@@ -247,6 +274,8 @@ async function buildIncremental(
     configEntries = prev.entries.filter((e) => e.source === 'config');
     configOk = true;
   } else if (configRes.ok && configRes.cid !== '') {
+    // Re-walk: the root is read twice here (readConfigRoot above + the
+    // collector's own internal read) — extra RPCs only on the changed-root path.
     configEntries = await collectConfigCids(ctx);
     configOk = true;
   } else if (configRes.ok) {
@@ -266,6 +295,8 @@ async function buildIncremental(
     treeEntries = prev.entries.filter((e) => e.source === 'tree');
     treeOk = true;
   } else if (treeRes.ok && treeRes.root !== '') {
+    // Re-walk: readEnsRoot above + the collector's internal getEnsText — the
+    // double read happens only on the changed-root path (extra RPCs, no correctness impact).
     treeEntries = await collectTreeCids(ctx, publication);
     treeOk = true;
   } else if (treeRes.ok) {
@@ -284,6 +315,8 @@ async function buildIncremental(
     archiveEntries = prev.entries.filter((e) => e.source === 'archive');
     archiveOk = true;
   } else if (archiveRes.ok && archiveRes.root !== '') {
+    // Re-walk: readEnsRoot above + the collector's internal getEnsText — the
+    // double read happens only on the changed-root path (extra RPCs, no correctness impact).
     archiveEntries = await collectArchiveCids(ctx, publication);
     archiveOk = true;
   } else if (archiveRes.ok) {

@@ -642,4 +642,37 @@ describe('buildPublicationCidView meta + incremental', () => {
     expect(view.entries.some((e) => e.cid === CCFG)).toBe(true);
     expect(view.entries.some((e) => e.cid === ACID)).toBe(true);
   });
+
+  it('revoked genesis version entries survive two consecutive incremental refreshes, views identical, complete true', async () => {
+    const cold = await buildPublicationCidView(makeCtx(), PUBLICATION);
+    // sanity: G1 is live in cold (a 'deal' row exists)
+    expect(cold.entries.some((e) => e.category === 'deal' && e.genesis === G1)).toBe(true);
+
+    // live state now has G1 revoked (dropped from getDeals)
+    const revokedCtx = makeCtx({
+      getDeals: async () => fakeDeals().filter((d) => d.genesis !== G1),
+    });
+
+    const inc1 = await buildPublicationCidView(revokedCtx, PUBLICATION, { prev: cold });
+    const inc2 = await buildPublicationCidView(revokedCtx, PUBLICATION, { prev: inc1 });
+
+    expect(inc1.meta?.complete).toBe(true);
+    expect(inc2.meta?.complete).toBe(true);
+
+    // G1's version history survives BOTH refreshes, byte-identically — the
+    // retained-history branch keys off prev.versions (which survives every hop)
+    // plus prev.genesisKind, not the live row (which is gone after inc1).
+    const g1inc1 = inc1.entries.filter((e) => e.genesis === G1);
+    const g1inc2 = inc2.entries.filter((e) => e.genesis === G1);
+    expect(g1inc1.length).toBeGreaterThan(0);
+    expect(g1inc2.length).toBeGreaterThan(0);
+    expect(g1inc2).toEqual(g1inc1);
+    // no live 'deal' row for the revoked genesis in either hop
+    expect(g1inc1.some((e) => e.category === 'deal')).toBe(false);
+    expect(g1inc2.some((e) => e.category === 'deal')).toBe(false);
+
+    // the two incremental views are byte-for-byte identical
+    expect(inc2.entries).toEqual(inc1.entries);
+    expect(inc2.meta?.versionCounts).toEqual(inc1.meta?.versionCounts);
+  });
 });

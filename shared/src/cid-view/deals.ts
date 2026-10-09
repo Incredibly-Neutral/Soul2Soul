@@ -175,8 +175,20 @@ function dedupe(entries: CidEntry[]): CidEntry[] {
 export interface DealCidSnapshot {
   deals: DealRead[];
   offers: DealRead[];
-  /** genesis → full known version history (cached from a prior complete refresh). */
+  /**
+   * genesis → full known version history (cached from a prior complete refresh).
+   * A revoked genesis stays here across hops — this is what lets the revoked
+   * branch of emitIncrementalEntries retain its history even after the live row
+   * (and therefore the 'deal'/'offer' entry) is gone from the view.
+   */
   versions: Partial<Record<string, VersionRead[]>>;
+  /**
+   * genesis → category, carried across hops so a revoked genesis whose live row
+   * has been dropped from the view can still be emitted with the correct
+   * 'deal-version' vs 'offer-version' category. 'deal' wins on a pathological
+   * deal+offer collision (a genesis is a deal by construction).
+   */
+  genesisKind: Record<string, 'deal' | 'offer'>;
 }
 
 /** Result of an incremental deal-layer refresh. */
@@ -199,6 +211,7 @@ export function deriveDealCidSnapshot(view: PublicationCidView): DealCidSnapshot
   const deals: DealRead[] = [];
   const offers: DealRead[] = [];
   const versions: Record<string, VersionRead[]> = {};
+  const genesisKind: Record<string, 'deal' | 'offer'> = {};
   for (const e of view.entries) {
     if (e.category === 'deal' || e.category === 'offer') {
       if (!e.genesis || !e.cid) continue;
@@ -209,6 +222,8 @@ export function deriveDealCidSnapshot(view: PublicationCidView): DealCidSnapshot
         timestamp: e.timestamp ?? 0,
         status: e.category,
       });
+      // a live row always pins the category ('deal' wins on a pathological collision)
+      genesisKind[e.genesis] = e.category;
     } else if (e.category === 'deal-version' || e.category === 'offer-version') {
       if (!e.genesis) continue;
       (versions[e.genesis] ??= []).push({
@@ -216,9 +231,16 @@ export function deriveDealCidSnapshot(view: PublicationCidView): DealCidSnapshot
         timestamp: e.timestamp ?? 0,
         tombstone: Boolean(e.tombstoned),
       });
+      // version entries are the source of truth for a revoked genesis (whose row
+      // is gone); 'deal-version' wins over 'offer-version' on a collision.
+      if (e.category === 'deal-version') {
+        genesisKind[e.genesis] = 'deal';
+      } else if (!(e.genesis in genesisKind)) {
+        genesisKind[e.genesis] = 'offer';
+      }
     }
   }
-  return { deals, offers, versions };
+  return { deals, offers, versions, genesisKind };
 }
 
 /**
@@ -278,17 +300,26 @@ function emitIncrementalEntries(
   }
   // Revoked genesis (in prev, not live): keep its cached version history, no
   // live 'deal'/'offer' entry and no 'current version' note (a revoked doc has
-  // no live current).
+  // no live current). Retention is keyed off prev.versions (which survives every
+  // hop) — NOT prev.deals/prev.offers (whose rows vanish from the view after the
+  // first revoked refresh) — so a revoked genesis's history is retained across an
+  // ARBITRARY number of consecutive refreshes, byte-identical each time.
+  // Deterministic order: prev.deals-order revoked, then prev.offers-order
+  // revoked, then any remaining prev.versions-only genese (their category comes
+  // from prev.genesisKind, falling back to 'deal').
   const revokedSeen = new Set<string>();
-  for (const d of prev.deals) {
-    if (liveSet.has(d.genesis) || revokedSeen.has(d.genesis)) continue;
-    revokedSeen.add(d.genesis);
-    entries.push(...versionEntries(versions[d.genesis] ?? [], d.genesis, 'deal-version', false));
-  }
-  for (const o of prev.offers) {
-    if (liveSet.has(o.genesis) || revokedSeen.has(o.genesis)) continue;
-    revokedSeen.add(o.genesis);
-    entries.push(...versionEntries(versions[o.genesis] ?? [], o.genesis, 'offer-version', false));
+  const emitRevoked = (genesis: string, category: 'deal-version' | 'offer-version'): void => {
+    if (liveSet.has(genesis) || revokedSeen.has(genesis)) return;
+    revokedSeen.add(genesis);
+    entries.push(...versionEntries(versions[genesis] ?? [], genesis, category, false));
+  };
+  for (const d of prev.deals) emitRevoked(d.genesis, 'deal-version');
+  for (const o of prev.offers) emitRevoked(o.genesis, 'offer-version');
+  for (const genesis of Object.keys(prev.versions)) {
+    if (liveSet.has(genesis) || revokedSeen.has(genesis)) continue;
+    revokedSeen.add(genesis);
+    const category = prev.genesisKind[genesis] === 'offer' ? 'offer-version' : 'deal-version';
+    entries.push(...versionEntries(versions[genesis] ?? [], genesis, category, false));
   }
   return dedupe(entries);
 }
@@ -306,17 +337,12 @@ function snapshotToEntries(prev: DealCidSnapshot): CidEntry[] {
   const liveSet = new Set<string>();
   for (const d of prev.deals) liveSet.add(d.genesis);
   for (const o of prev.offers) liveSet.add(o.genesis);
-  // Category default for a genesis present in BOTH prev.deals and prev.offers
-  // (pathological — a genesis is a deal by construction): emitted as
-  // 'deal-version'. Accepted and documented rather than tracking per-genesis
-  // category in the snapshot.
-  const dealSet = new Set(prev.deals.map((d) => d.genesis));
   for (const [genesis, versions] of Object.entries(prev.versions)) {
     entries.push(
       ...versionEntries(
         versions ?? [],
         genesis,
-        dealSet.has(genesis) ? 'deal-version' : 'offer-version',
+        prev.genesisKind[genesis] === 'offer' ? 'offer-version' : 'deal-version',
         liveSet.has(genesis),
       ),
     );
