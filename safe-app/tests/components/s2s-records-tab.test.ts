@@ -34,9 +34,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LitElement } from 'lit';
 import { mountLit } from '../helpers/mount';
+import { theme } from '../../src/styles/theme';
 import {
   DOMAIN_VALIDATION_CONFIG,
 } from '../../src/lib/domain-validation';
+
+// Adopt the design tokens the way main.ts does so var(--gray-*) resolve in the
+// test document exactly like in the real app. Without this the alias-pill's
+// `border: 1px solid var(--gray-600)` collapses to 0, so any layout assertion
+// that compares the pill's height to the Add button's would measure a
+// border-less pill. theme is pure CSS-variable definitions (no layout rules),
+// so adopting it is additive and cannot disturb behavioral assertions.
+document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme.styleSheet];
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — available to vi.mock factories (hoisted above all imports).
@@ -369,6 +378,72 @@ describe('s2s-records-tab', () => {
     expect(configRow!.querySelector('.button-danger')).toBeNull();
   });
 
+  it('shows NO Delete affordance on ANY records-table row — config keeps Update, other rows get Edit only', async () => {
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'repo', value: 'https://github.com/acme/site', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+    ]);
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    const rows = [...root.querySelectorAll<HTMLElement>('.table-row')];
+    expect(rows.length).toBe(3);
+
+    // No records-table row has any delete affordance (text, danger class, or
+    // trash icon) — the delete affordance was removed from the table entirely.
+    for (const row of rows) {
+      expect(row.textContent).not.toContain('Delete');
+      expect(row.querySelector('.button-danger')).toBeNull();
+      expect(row.querySelector('ph-trash')).toBeNull();
+    }
+
+    const rowFor = (key: string) =>
+      rows.find((row) => row.querySelector('.table-cell')?.textContent?.trim() === key)!;
+
+    // Config row: single arrow-clockwise Update action — no Edit, no Delete.
+    const configRow = rowFor('config');
+    const configBtns = [...configRow.querySelectorAll<HTMLButtonElement>('button')];
+    expect(configBtns.length).toBe(1);
+    expect(configBtns[0].textContent?.trim()).toBe('Update');
+    expect(configBtns[0].querySelector('ph-arrow-clockwise')).not.toBeNull();
+    expect(configRow.textContent).not.toContain('Edit');
+
+    // Every other row: Edit only (pencil icon), no Delete.
+    for (const key of ['name', 'repo']) {
+      const row = rowFor(key);
+      const btns = [...row.querySelectorAll<HTMLButtonElement>('button')];
+      expect(btns.length).toBe(1);
+      expect(btns[0].textContent?.trim()).toBe('Edit');
+      expect(btns[0].querySelector('ph-pencil-simple')).not.toBeNull();
+    }
+  });
+
+  it('sliding Add button matches the alias-pill HEIGHT only — normal button look, not a pill', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    // Wait for the alias pills to render from the (mocked) config read.
+    await vi.waitFor(
+      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
+      { timeout: 5000 },
+    );
+
+    const pill = el.shadowRoot!.querySelector<HTMLElement>('.alias-pill')!;
+    const btn = addButton(el);
+    const pillH = pill.getBoundingClientRect().height;
+    const btnH = btn.getBoundingClientRect().height;
+    // Height matches the pill (within sub-pixel rounding)…
+    expect(Math.abs(btnH - pillH)).toBeLessThan(1);
+
+    // …but the button keeps its normal button look: closed-state 6px radius,
+    // no pill border/fill, and the shared button text-transform.
+    const style = getComputedStyle(btn);
+    expect(style.borderRadius).toBe('6px');
+    expect(style.borderTopWidth).toBe('0px');
+    // Pill fill is gray-800 (#2e2925); the button keeps its own gray-500 fill.
+    expect(style.backgroundColor).not.toBe('rgb(46, 41, 37)');
+    expect(style.textTransform).toBe('uppercase');
+  });
+
   it('config row Update runs the same updateConfig flow the top button used to', async () => {
     seedRecords([
       { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
@@ -569,7 +644,7 @@ describe('s2s-records-tab', () => {
 });
 
 describe('s2s-sliding-add-button', () => {
-  it('renders a + icon before the Add label in the closed (pill) state', async () => {
+  it('renders a + icon before the Add label in the closed state', async () => {
     const host = await mountLit<LitElement & { open: boolean }>('s2s-sliding-add-button', {
       buttonLabel: 'Add',
     });
@@ -582,6 +657,25 @@ describe('s2s-sliding-add-button', () => {
     expect(btn.children[0]?.tagName.toLowerCase()).toBe('ph-plus');
     const labelNode = [...btn.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
     expect(labelNode?.textContent?.trim()).toBe('Add');
+  });
+
+  it('matches the alias-pill HEIGHT (2×0.25rem padding + 2×1px border + 0.85rem×1.55 mono line box) while keeping a normal button look', async () => {
+    const host = await mountLit<LitElement & { open: boolean }>('s2s-sliding-add-button', {
+      buttonLabel: 'Add',
+    });
+    const btn = host.shadowRoot!.querySelector<HTMLButtonElement>('#add-btn')!;
+
+    // At a 16px root, calc(0.25rem*2 + 1px*2 + 0.85rem*1.55) = 31.08px — the
+    // same computed height as the records-tab .alias-pill box.
+    expect(btn.getBoundingClientRect().height).toBeCloseTo(31.08, 1);
+
+    // Still a normal button: closed-state 6px radius, no pill border/fill,
+    // and the shared button uppercase treatment.
+    const style = getComputedStyle(btn);
+    expect(style.borderRadius).toBe('6px');
+    expect(style.borderTopWidth).toBe('0px');
+    expect(style.backgroundColor).toBe('rgb(124, 113, 99)'); // gray-500 (button), not gray-800 (pill)
+    expect(style.textTransform).toBe('uppercase');
   });
 
   it('slides open on first click, submits on Enter, clears + closes on Escape, submits on second click', async () => {
