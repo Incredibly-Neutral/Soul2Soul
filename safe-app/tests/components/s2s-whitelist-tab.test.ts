@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SWhitelistTab } from '../../src/components/s2s-whitelist-tab';
+import type { S2SCheck } from '../../src/components/s2s-check';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/s2s-whitelist-tab';
 
@@ -169,31 +170,61 @@ describe('s2s-whitelist-tab', () => {
   it('reports CAN publish when the address has permission', async () => {
     safeIntegration.canPublish.mockResolvedValue(true);
     const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
-    await vi.waitFor(() => el.shadowRoot?.querySelector('#check-address'));
+    const check = await vi.waitFor(() => {
+      const host = el.shadowRoot?.querySelector('s2s-check') as S2SCheck | null;
+      if (!host) throw new Error('s2s-check not rendered');
+      return host;
+    });
 
-    const input = el.shadowRoot?.querySelector('#check-address') as HTMLInputElement;
+    // Drive the flow through <s2s-check>: type → click check → handler → canPublish.
+    const input = check.shadowRoot!.querySelector('input') as HTMLInputElement;
     input.value = AUTHOR_A;
-    (el.shadowRoot?.querySelector('#check-btn') as HTMLButtonElement).click();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
 
     await vi.waitFor(() =>
       expect(safeIntegration.canPublish).toHaveBeenCalledWith(AUTHOR_A),
     );
-    await vi.waitFor(() =>
-      expect(notificationTexts()).toContain(`${AUTHOR_A} CAN publish`),
-    );
+    await vi.waitFor(() => expect(check.result).toBe('pass'));
+    expect(check.message).toBe('can publish');
   });
 
   it('reports CANNOT publish when the address lacks permission', async () => {
     safeIntegration.canPublish.mockResolvedValue(false);
     const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
-    await vi.waitFor(() => el.shadowRoot?.querySelector('#check-address'));
+    const check = await vi.waitFor(() => {
+      const host = el.shadowRoot?.querySelector('s2s-check') as S2SCheck | null;
+      if (!host) throw new Error('s2s-check not rendered');
+      return host;
+    });
 
-    const input = el.shadowRoot?.querySelector('#check-address') as HTMLInputElement;
+    const input = check.shadowRoot!.querySelector('input') as HTMLInputElement;
     input.value = DEV_A;
-    (el.shadowRoot?.querySelector('#check-btn') as HTMLButtonElement).click();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
 
     await vi.waitFor(() =>
-      expect(notificationTexts()).toContain(`${DEV_A} CANNOT publish`),
+      expect(safeIntegration.canPublish).toHaveBeenCalledWith(DEV_A),
     );
+    await vi.waitFor(() => expect(check.result).toBe('fail'));
+    expect(check.message).toBe('cannot publish');
+  });
+
+  it('flags an invalid address as an error result without calling canPublish', async () => {
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    const check = await vi.waitFor(() => {
+      const host = el.shadowRoot?.querySelector('s2s-check') as S2SCheck | null;
+      if (!host) throw new Error('s2s-check not rendered');
+      return host;
+    });
+
+    const input = check.shadowRoot!.querySelector('input') as HTMLInputElement;
+    input.value = '0xnotanaddress';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(check.result).toBe('error'));
+    expect(check.message).toBe('invalid address');
+    expect(safeIntegration.canPublish).not.toHaveBeenCalled();
   });
 });

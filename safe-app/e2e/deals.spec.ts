@@ -23,8 +23,7 @@ test.describe('deals tab', () => {
     await expect(
       tab.locator('.section-title').filter({ hasText: 'Check Deal Status' }),
     ).toBeVisible();
-    await expect(tab.locator('#check-genesis')).toBeVisible();
-    await expect(tab.locator('#check-deal-btn')).toBeVisible();
+    await expect(tab.locator('s2s-check')).toBeVisible();
   });
 
   test('offers/deals tables render rows with data-genesis, or the empty state', async ({ page }) => {
@@ -47,11 +46,12 @@ test.describe('deals tab', () => {
     }
   });
 
-  test('check-genesis input accepts typed text (read-only UI)', async ({ page }) => {
+  test('s2s-check input accepts typed text (read-only UI)', async ({ page }) => {
     const input = page
       .locator('s2s-app')
       .locator('s2s-deals-tab')
-      .locator('#check-genesis');
+      .locator('s2s-check')
+      .getByRole('textbox');
     await input.fill('0xdeadbeef');
     await expect(input).toHaveValue('0xdeadbeef');
   });
