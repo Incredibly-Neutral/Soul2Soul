@@ -43,6 +43,16 @@ export const cidEntrySchema = z.object({
   note: z.string().optional(),
 });
 
+/** Mirror of types.ts CidViewMeta — the incremental-refresh baseline block. */
+export const cidViewMetaSchema = z.object({
+  complete: z.boolean(),
+  fingerprint: z.string(),
+  configCid: z.string(),
+  siteRoot: z.string(),
+  archiveRoot: z.string(),
+  versionCounts: z.record(z.string(), z.number()),
+});
+
 export const publicationCidViewSchema = z.object({
   publication: z.string(),
   generatedAt: z.string(),
@@ -58,6 +68,9 @@ export const publicationCidViewSchema = z.object({
     uniqueCids: z.number(),
     byCategory: z.record(cidCategorySchema, z.number()),
   }),
+  // Optional so cached blobs from before the meta block (no `meta` field) still
+  // parse and degrade to a cold rebuild.
+  meta: cidViewMetaSchema.optional(),
 });
 
 export type CidEntryValidated = z.infer<typeof cidEntrySchema>;
