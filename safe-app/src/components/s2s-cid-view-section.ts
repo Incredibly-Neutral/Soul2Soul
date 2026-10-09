@@ -431,7 +431,18 @@ export class S2SCidViewSection extends LitElement {
     }
   }
 
-  private async rebuild() {
+  /**
+   * Rebuild the CID view for the current publication.
+   *
+   * Default (auto-revalidate from mount / publication change) is INCREMENTAL:
+   * when a last-good cached view exists for this publication it is passed as
+   * `prev` so the shared coordinator diffs against it (the coordinator only
+   * enters the incremental path when prev.meta?.complete === true and
+   * otherwise self-degrades to a cold build — so a stale/partial cache is
+   * safe). forceCold (manual Refresh) passes no prev → a full cold rebuild,
+   * i.e. ground truth regardless of what is cached.
+   */
+  private async rebuild(forceCold = false) {
     const buildId = ++this.buildId;
     const ctx = this.ctx;
     if (!ctx) {
@@ -464,15 +475,20 @@ export class S2SCidViewSection extends LitElement {
     this.loading = true;
     this.error = ''; // setting @state already requests an update; no explicit requestUpdate needed
     const started = performance.now();
+    // Incremental by default: the last-good cached view (zod-validated by
+    // loadCachedView) is the `prev` baseline for the coordinator's incremental
+    // diff path. forceCold omits it so the build is a full cold ground-truth
+    // rebuild even when a cache exists.
+    const prev = cached && !forceCold ? cached.view : undefined;
     try {
-      const view = await buildPublicationCidView(ctx, publication);
+      const view = await buildPublicationCidView(ctx, publication, prev ? { prev } : {});
       if (buildId !== this.buildId) return;
       this.view = view;
       saveCachedView(publication, view);
       this.clearStale();
       const elapsed = Math.round(performance.now() - started);
       console.log(
-        `[cid-view] rebuild ${publication} done in ${String(elapsed)}ms — ${String(view.summary.total)} entries, ${String(view.summary.uniqueCids)} unique CIDs`,
+        `[cid-view] rebuild ${publication} done in ${String(elapsed)}ms${prev ? ' (incremental)' : ' (cold)'} — ${String(view.summary.total)} entries, ${String(view.summary.uniqueCids)} unique CIDs`,
       );
       console.log('[cid-view] fresh view saved for ' + publication);
     } catch (e) {
@@ -676,7 +692,7 @@ export class S2SCidViewSection extends LitElement {
             CID Inventory
             <span class="muted">${view.publication}</span>
           </h3>
-          <button class="refresh" ?disabled=${this.loading} @click=${() => void this.rebuild()}>
+          <button class="refresh" ?disabled=${this.loading} @click=${() => void this.rebuild(true)}>
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>
             ${this.loading ? 'Loading…' : 'Refresh'}
           </button>
