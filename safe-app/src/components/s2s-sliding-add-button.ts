@@ -61,36 +61,19 @@ export class S2SSlidingAddButton extends LitElement {
       }
 
       #add-btn {
-        /* Match the .alias-pill box model (s2s-records-tab) so the Add
-           control sits flush next to the alias pills: same height (padding +
-           border + mono font), 999px radius and grey-800 pill treatment. */
         border-top-left-radius: 0;
         border-bottom-left-radius: 0;
-        border-top-right-radius: 999px;
-        border-bottom-right-radius: 999px;
-        padding: 0.25rem 0.75rem;
-        border: 1px solid var(--gray-600);
-        background: var(--gray-800);
-        color: var(--gray-50);
-        font-family: var(--font-mono);
-        font-size: 0.85rem;
-        letter-spacing: 0;
-        text-transform: none;
-        gap: 0.35rem;
+        /* Height-only match to the .alias-pill (s2s-records-tab): the pill's
+           computed height is 2×0.25rem vertical padding + 2×1px border + the
+           0.85rem mono line box (0.85rem × 1.55 inherited line-height). Only
+           the height is matched — the button keeps its normal button look
+           (buttonStyles: hover/uppercase/gap/etc. behave like other buttons). */
+        box-sizing: border-box;
+        height: calc(0.25rem * 2 + 1px * 2 + 0.85rem * 1.55);
       }
 
       :host(:not([open])) #add-btn {
-        border-radius: 999px;
-      }
-
-      :host([open]) #add-btn {
-        /* Slide-open: merge with the input — square left edge, pill right
-           edge, and drop the border so it reads as one unit with the input. */
-        border: none;
-        border-top-left-radius: 0;
-        border-bottom-left-radius: 0;
-        border-top-right-radius: 999px;
-        border-bottom-right-radius: 999px;
+        border-radius: 6px;
       }
     `,
   ];
