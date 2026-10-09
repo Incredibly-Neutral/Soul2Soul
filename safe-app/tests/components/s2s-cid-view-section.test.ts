@@ -276,9 +276,8 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
 
-    // Title + publication.
+    // Title.
     expect(text).toContain('CID Inventory');
-    expect(text).toContain('test.eth');
 
     // Summary chips — totals + unique CIDs.
     expect(text).toContain('13 unique CIDs');
@@ -367,7 +366,10 @@ describe('s2s-cid-view-section', () => {
     await vi.waitFor(() => {
       expect(el.shadowRoot?.textContent).toContain('No CIDs found');
     });
-    expect(el.shadowRoot?.textContent).toContain('store-name.eth');
+    // The header no longer renders the publication text; the fallback's
+    // observable effect is that the store-name record is the publication
+    // actually passed to the build.
+    expect(buildSpy.mock.calls.some((c) => c[1] === 'store-name.eth')).toBe(true);
   });
 
   it('renders the loading state while the build is in flight', async () => {
@@ -498,9 +500,8 @@ describe('s2s-cid-view-section', () => {
     // Resolve the second build (test.eth) → only the new publication's view.
     resolvers[1]?.(makeCachedView({ publication: 'test.eth', cid: 'bafytest' }));
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.textContent).toContain('test.eth');
+      expect(renderedCids(el.shadowRoot!)).toContain('bafytest');
     });
-    expect(renderedCids(el.shadowRoot!)).toContain('bafytest');
     expect(renderedCids(el.shadowRoot!)).not.toContain('bafyold');
   });
 
