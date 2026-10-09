@@ -27,7 +27,9 @@
 // (`.alias-pill`) inside the tab, and adding one drives the slide-open
 // `s2s-sliding-add-button` control (click Add -> open input -> set value ->
 // Enter submits, dispatching `s2s-sliding-add` with detail.value). The Update
-// button sits at the top of the tab.
+// action now lives on the `config` row in the records table (its own button
+// with an arrow-clockwise icon, no delete affordance) — the standalone
+// top-of-tab Update button was removed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LitElement } from 'lit';
@@ -335,20 +337,76 @@ describe('s2s-records-tab', () => {
     expect(rowKeys).toEqual(['name', 'config']);
   });
 
-  it('renders the Update button at the top of the tab, labeled "Update"', async () => {
-    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+  it('moves the Update action onto the config row: no top-of-tab Update button, config row shows an icon update action and no delete', async () => {
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+    ]);
     const el = await mountTab();
     const root = el.shadowRoot!;
-    // Label is 'Update', not the old 'Update Config'.
-    expect(root.textContent).toContain('Update');
+    const section = root.querySelector('.section')!;
+
+    // The standalone top-of-tab Update button is gone — the first element in
+    // the section is the alias section, not a button.
+    expect(section.firstElementChild?.classList.contains('alias-section')).toBe(true);
+    expect(section.firstElementChild?.tagName.toLowerCase()).toBe('div');
     expect(root.textContent).not.toContain('Update Config');
-    const updateBtn = [...root.querySelectorAll('button')].find(
+
+    // The config row carries the update action, with an icon…
+    const configRow = [...root.querySelectorAll<HTMLElement>('.table-row')].find(
+      (row) => row.querySelector('.table-cell')?.textContent?.trim() === 'config',
+    );
+    expect(configRow).toBeTruthy();
+    const updateBtn = [...configRow!.querySelectorAll<HTMLButtonElement>('button')].find(
       (b) => b.textContent?.trim() === 'Update',
     );
     expect(updateBtn).toBeTruthy();
-    // It is the first control in the section (top of the tab).
-    const section = root.querySelector('.section')!;
-    expect(section.querySelector('button')).toBe(updateBtn);
+    expect(updateBtn!.querySelector('ph-arrow-clockwise')).not.toBeNull();
+
+    // …and no edit or delete affordance on the config row.
+    expect(configRow!.textContent).not.toContain('Edit');
+    expect(configRow!.textContent).not.toContain('Delete');
+    expect(configRow!.querySelector('.button-danger')).toBeNull();
+  });
+
+  it('config row Update runs the same updateConfig flow the top button used to', async () => {
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig-prev', type: 'content' },
+    ]);
+    const el = await mountTab();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'stubbed',
+        text: async () => 'stubbed',
+      })),
+    );
+
+    const configRow = [...el.shadowRoot!.querySelectorAll<HTMLElement>('.table-row')].find(
+      (row) => row.querySelector('.table-cell')?.textContent?.trim() === 'config',
+    );
+    const updateBtn = [...configRow!.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === 'Update',
+    );
+    expect(updateBtn).toBeTruthy();
+    updateBtn!.click();
+
+    // The full updateConfig flow settles with the optimistic store write of
+    // the new config CID (the same terminal step the old top button reached).
+    await vi.waitFor(
+      () => {
+        expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
+        expect(store.getRecord('config')).toBe('config-cid');
+      },
+      { timeout: 5000 },
+    );
+    // Ownership gate stays OFF — no EVM reads during a plain update.
+    expect(m.evmRead).not.toHaveBeenCalled();
+    expect(window.open).toHaveBeenCalled();
   });
 
   it('Add alias is NOT blocked by ownership when DOMAIN_VALIDATION_CONFIG.enforceOwnership is OFF (default)', async () => {
@@ -511,6 +569,21 @@ describe('s2s-records-tab', () => {
 });
 
 describe('s2s-sliding-add-button', () => {
+  it('renders a + icon before the Add label in the closed (pill) state', async () => {
+    const host = await mountLit<LitElement & { open: boolean }>('s2s-sliding-add-button', {
+      buttonLabel: 'Add',
+    });
+    const btn = host.shadowRoot!.querySelector<HTMLButtonElement>('#add-btn')!;
+    expect(host.open).toBe(false);
+    // A ph-plus icon is rendered inside the button…
+    const plus = btn.querySelector('ph-plus');
+    expect(plus).not.toBeNull();
+    // …and it sits before the Add label text.
+    expect(btn.children[0]?.tagName.toLowerCase()).toBe('ph-plus');
+    const labelNode = [...btn.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+    expect(labelNode?.textContent?.trim()).toBe('Add');
+  });
+
   it('slides open on first click, submits on Enter, clears + closes on Escape, submits on second click', async () => {
     const host = await mountLit<
       LitElement & { open: boolean; placeholder: string; buttonLabel: string }
