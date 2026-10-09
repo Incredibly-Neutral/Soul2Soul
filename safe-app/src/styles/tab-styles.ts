@@ -21,7 +21,7 @@ export const tabStyles = css`
     font-weight: 400;
     color: var(--gray-50);
     transition: all 0.2s;
-    border-bottom: 2px solid var(--gray-50);
+    border-bottom: 1px solid var(--gray-500);
     border-radius: 0;
   }
 
@@ -39,10 +39,10 @@ export const tabStyles = css`
   .tab.active {
     color: var(--gray-50);
     border-bottom-color: white;
-    border-left: 2px solid var(--gray-50);
-    border-top: 2px solid var(--gray-50);
-    border-right: 2px solid var(--gray-50);
-    border-bottom: 2px solid var(--gray-900);
+    border-left: 1px solid var(--gray-500);
+    border-top: 1px solid var(--gray-500);
+    border-right: 1px solid var(--gray-500);
+    border-bottom: 1px solid var(--gray-900);
   }
 
   .tab:last-of-type {
