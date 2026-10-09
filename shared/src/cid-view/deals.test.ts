@@ -56,9 +56,9 @@ function fakeVersions(genesis: string): VersionRead[] {
 /** Build a fake context; overrides let a test inject failures/dupes. */
 function fakeCtx(overrides: Partial<CidViewReadContext> = {}): CidViewReadContext {
   return {
-    getDeals: async () => fakeDeals(),
-    getOffers: async () => fakeOffers(),
-    getVersions: async (genesis: string) => fakeVersions(genesis),
+    getDeals: () => Promise.resolve(fakeDeals()),
+    getOffers: () => Promise.resolve(fakeOffers()),
+    getVersions: (genesis: string) => Promise.resolve(fakeVersions(genesis)),
     ...overrides,
   } as CidViewReadContext;
 }
@@ -139,9 +139,9 @@ describe('collectDealCids', () => {
 
   it('does not throw when a sub-call fails — returns the successful entries', async () => {
     const ctx = fakeCtx({
-      getVersions: async (genesis: string) => {
-        if (genesis === DEAL2) throw new Error('boom: version read failed');
-        return fakeVersions(genesis);
+      getVersions: (genesis: string) => {
+        if (genesis === DEAL2) return Promise.reject(new Error('boom: version read failed'));
+        return Promise.resolve(fakeVersions(genesis));
       },
     });
 
@@ -164,18 +164,14 @@ describe('collectDealCids', () => {
 
   it('does not throw when getDeals or getOffers fails', async () => {
     const noDeals = fakeCtx({
-      getDeals: async () => {
-        throw new Error('deals down');
-      },
+      getDeals: () => Promise.reject(new Error('deals down')),
     });
     const entriesNoDeals = await collectDealCids(noDeals);
     expect(entriesNoDeals.filter((e) => e.category === 'deal')).toHaveLength(0);
     expect(entriesNoDeals.filter((e) => e.category === 'offer')).toHaveLength(1);
 
     const noOffers = fakeCtx({
-      getOffers: async () => {
-        throw new Error('offers down');
-      },
+      getOffers: () => Promise.reject(new Error('offers down')),
     });
     const entriesNoOffers = await collectDealCids(noOffers);
     expect(entriesNoOffers.filter((e) => e.category === 'offer')).toHaveLength(0);
@@ -184,30 +180,31 @@ describe('collectDealCids', () => {
 
   it('dedupes exact duplicates (same cid + category + genesis)', async () => {
     const ctx = fakeCtx({
-      getDeals: async () => [
-        {
-          genesis: DEAL1,
-          author: '0xaaa',
-          cid: DEAL1_CID,
-          timestamp: 1000,
-          status: 'deal' as const,
-        },
-        // exact duplicate: same cid + category + genesis
-        {
-          genesis: DEAL1,
-          author: '0xaaa',
-          cid: DEAL1_CID,
-          timestamp: 1000,
-          status: 'deal' as const,
-        },
-        {
-          genesis: DEAL2,
-          author: '0xbbb',
-          cid: DEAL2_CID,
-          timestamp: 2000,
-          status: 'deal' as const,
-        },
-      ],
+      getDeals: () =>
+        Promise.resolve([
+          {
+            genesis: DEAL1,
+            author: '0xaaa',
+            cid: DEAL1_CID,
+            timestamp: 1000,
+            status: 'deal' as const,
+          },
+          // exact duplicate: same cid + category + genesis
+          {
+            genesis: DEAL1,
+            author: '0xaaa',
+            cid: DEAL1_CID,
+            timestamp: 1000,
+            status: 'deal' as const,
+          },
+          {
+            genesis: DEAL2,
+            author: '0xbbb',
+            cid: DEAL2_CID,
+            timestamp: 2000,
+            status: 'deal' as const,
+          },
+        ]),
     });
 
     const entries = await collectDealCids(ctx);
@@ -330,17 +327,18 @@ describe('dealFingerprint', () => {
   });
 });
 
-describe('deriveDealCidSnapshot', () => {
-  function makeView(entries: Partial<CidEntry>[]): PublicationCidView {
-    return {
-      publication: 'pub.eth',
-      generatedAt: '2026-10-08T00:00:00.000Z',
-      entries: entries as CidEntry[],
-      sources: { deals: true, config: false, tree: false, archive: false },
-      summary: { total: entries.length, uniqueCids: entries.length, byCategory: {} },
-    };
-  }
+/** Build a minimal view from entries (used by deriveDealCidSnapshot + incremental tests). */
+function makeView(entries: Partial<CidEntry>[]): PublicationCidView {
+  return {
+    publication: 'pub.eth',
+    generatedAt: '2026-10-08T00:00:00.000Z',
+    entries: entries as CidEntry[],
+    sources: { deals: true, config: false, tree: false, archive: false },
+    summary: { total: entries.length, uniqueCids: entries.length, byCategory: {} },
+  };
+}
 
+describe('deriveDealCidSnapshot', () => {
   it('round-trips deal/offer/version entries into a snapshot', () => {
     const view = makeView([
       {
@@ -421,6 +419,7 @@ describe('deriveDealCidSnapshot', () => {
 describe('collectDealCidsIncremental', () => {
   it('unchanged fingerprint → zero version calls; emits live deal + prev version entries', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -467,6 +466,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('new version appended → only getVersionsRange(g, N) fetches the merged tail', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [{ ...DEAL_SNAP, cid: V1.cid, timestamp: V1.timestamp }],
       offers: [],
       versions: { [DEAL1]: [V0, V1] }, // N = 2 cached
@@ -496,7 +496,7 @@ describe('collectDealCidsIncremental', () => {
   });
 
   it('brand-new deal → full history fetched from index 0', async () => {
-    const prev: DealCidSnapshot = { deals: [], offers: [], versions: {} };
+    const prev: DealCidSnapshot = { deals: [], offers: [], versions: {}, genesisKind: {} };
     const liveDeal: DealRead = { ...DEAL_SNAP, cid: V2.cid, timestamp: V2.timestamp };
     const calls: VersionCalls = { count: [], range: [] };
     const ctx = fakeIncrementalCtx(
@@ -516,6 +516,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('revoked deal (in prev, not live) → version entries retained, no deal entry', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -540,6 +541,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('count-0 guard: unchanged fingerprint + 0 cached versions → full history refetched, complete recovers', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: {}, // cachedCount 0 for DEAL1 — an earlier incomplete fetch
@@ -562,6 +564,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('fail-open: getDeals throws → prev-derived entries, complete false, no throw', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -593,6 +596,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('fail-open: a failing range read keeps cached history and reports complete false', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -616,6 +620,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('fail-open: a failing count read on a changed live genesis → complete false, cached retained', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -639,6 +644,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('live genesis with count 0 (adapter fail-open) → complete false, cached retained, no range call', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -661,6 +667,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('incremental dedupe keeps the LAST duplicate so the current-version note survives a shared cid', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: {
@@ -694,6 +701,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('truncated tail (range returns fewer than count-cc) → complete false, cached retained', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -723,6 +731,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('revoked genesis → version history retained WITHOUT a current-version note', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -745,6 +754,7 @@ describe('collectDealCidsIncremental', () => {
 
   it('collector passes the already-fetched count to getVersionsRange', async () => {
     const prev: DealCidSnapshot = {
+      genesisKind: {},
       deals: [DEAL_SNAP],
       offers: [],
       versions: { [DEAL1]: [V0, V1] },
@@ -770,5 +780,85 @@ describe('collectDealCidsIncremental', () => {
     expect(
       result.entries.filter((e) => e.category === 'deal-version' && e.genesis === DEAL1),
     ).toHaveLength(3);
+  });
+
+  it('revoked DEAL history survives TWO incremental hops, byte-identical each hop', async () => {
+    // cold: DEAL1 live (getVersions returns the full history V0,V1)
+    const coldCtx = fakeCtx({
+      getDeals: () => Promise.resolve([DEAL_SNAP]),
+      getOffers: () => Promise.resolve([]),
+      getVersions: (g: string) => Promise.resolve(g === DEAL1 ? [V0, V1] : []),
+    });
+    const coldView = makeView(await collectDealCids(coldCtx));
+    const snap1 = deriveDealCidSnapshot(coldView);
+
+    // inc #1: DEAL1 revoked (live list no longer contains it)
+    const r1 = await collectDealCidsIncremental(
+      fakeIncrementalCtx({ deals: [], offers: [], versions: {} }),
+      snap1,
+    );
+
+    // inc #2: DEAL1 still revoked — the live fingerprint is now "[] == []" on
+    // both sides, so the fast path runs; the retained history must key off
+    // prev.versions (which survives) + prev.genesisKind, not prev.deals (whose
+    // row is gone after inc #1).
+    const snap2 = deriveDealCidSnapshot(makeView(r1.entries));
+    const r2 = await collectDealCidsIncremental(
+      fakeIncrementalCtx({ deals: [], offers: [], versions: {} }),
+      snap2,
+    );
+
+    const g1r1 = r1.entries.filter((e) => e.genesis === DEAL1);
+    const g1r2 = r2.entries.filter((e) => e.genesis === DEAL1);
+    expect(g1r1).toHaveLength(2);
+    expect(g1r2).toHaveLength(2);
+    expect(g1r2).toEqual(g1r1);
+    // no live 'deal' row for a revoked genesis in either hop
+    expect(g1r1.some((e) => e.category === 'deal')).toBe(false);
+    expect(g1r2.some((e) => e.category === 'deal')).toBe(false);
+    // no current-version note (a revoked doc has no live current)
+    expect(g1r2.some((e) => e.note === 'current version')).toBe(false);
+    expect(r1.complete).toBe(true);
+    expect(r2.complete).toBe(true);
+  });
+
+  it('revoked OFFER genesis keeps offer-version category across two hops', async () => {
+    const OFFER_SNAP: DealRead = {
+      genesis: OFFER1,
+      author: '0xccc',
+      cid: V1.cid,
+      timestamp: 3000,
+      status: 'offer',
+    };
+    // cold: OFFER1 live
+    const coldCtx = fakeCtx({
+      getDeals: () => Promise.resolve([]),
+      getOffers: () => Promise.resolve([OFFER_SNAP]),
+      getVersions: (g: string) => Promise.resolve(g === OFFER1 ? [V0, V1] : []),
+    });
+    const coldView = makeView(await collectDealCids(coldCtx));
+    const snap1 = deriveDealCidSnapshot(coldView);
+
+    const r1 = await collectDealCidsIncremental(
+      fakeIncrementalCtx({ deals: [], offers: [], versions: {} }),
+      snap1,
+    );
+
+    // inc #2: prev.versions-only genesis (no row anywhere in the view) — the
+    // category must come from prev.genesisKind ('offer'), not a prev.deals lookup.
+    const snap2 = deriveDealCidSnapshot(makeView(r1.entries));
+    const r2 = await collectDealCidsIncremental(
+      fakeIncrementalCtx({ deals: [], offers: [], versions: {} }),
+      snap2,
+    );
+
+    const o1r1 = r1.entries.filter((e) => e.genesis === OFFER1);
+    const o1r2 = r2.entries.filter((e) => e.genesis === OFFER1);
+    expect(o1r1.length).toBeGreaterThan(0);
+    expect(o1r2.length).toBeGreaterThan(0);
+    expect(o1r1.every((e) => e.category === 'offer-version')).toBe(true);
+    expect(o1r2.every((e) => e.category === 'offer-version')).toBe(true);
+    expect(o1r2).toEqual(o1r1);
+    expect(r2.complete).toBe(true);
   });
 });
