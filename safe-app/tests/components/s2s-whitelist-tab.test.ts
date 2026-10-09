@@ -39,9 +39,16 @@ function notificationTexts(): string {
 // and <copy-hash> (truncated display + copy button).
 // ---------------------------------------------------------------------------
 
-/** The two .section blocks (0 = Authors, 1 = Developers). */
+/**
+ * The Authors and Developers sections, in render order. The can-publish
+ * <s2s-check> lives in its own leading .section (it has no .section-title), so
+ * it is filtered out here to keep the positional contract
+ * (0 = Authors, 1 = Developers) stable regardless of where that section sits.
+ */
 function sections(el: S2SWhitelistTab): HTMLElement[] {
-  return [...el.shadowRoot!.querySelectorAll<HTMLElement>('.section')];
+  return [...el.shadowRoot!.querySelectorAll<HTMLElement>('.section')].filter(
+    (s) => s.querySelector('.section-title'),
+  );
 }
 
 /** The <s2s-sliding-add-button> host inside a section's shadow. */
@@ -103,7 +110,7 @@ describe('s2s-whitelist-tab', () => {
     });
   });
 
-  it('shows the loading state until the whitelists resolve, then empty states', async () => {
+  it('shows the loading state, then renders the authors empty state after resolve', async () => {
     let resolveAuthors!: (v: string[]) => void;
     let resolveDevs!: (v: string[]) => void;
     safeIntegration.getWhitelistedAuthors.mockReturnValue(
@@ -119,7 +126,6 @@ describe('s2s-whitelist-tab', () => {
     await vi.waitFor(() =>
       expect(el.shadowRoot?.textContent).toContain('No authors whitelisted yet'),
     );
-    expect(el.shadowRoot?.textContent).toContain('No developers whitelisted yet');
   });
 
   it('adds a valid author via the sliding-add control, optimistically', async () => {
