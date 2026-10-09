@@ -1,28 +1,57 @@
 import { describe, it, expect, vi } from 'vitest';
-import { collectConfigCids } from './config';
+import { collectConfigCids, readConfigRoot } from './config';
 import type { CidViewReadContext } from './context';
 
-type LsEntry = { name: string; hash: string; size: number };
+interface LsEntry {
+  name: string;
+  hash: string;
+  size: number;
+}
 
 /** In-memory fake read context. Only the members a test exercises need values. */
 function makeCtx(overrides: Partial<CidViewReadContext> = {}): CidViewReadContext {
   return {
-    getDeals: vi.fn(async () => []),
-    getOffers: vi.fn(async () => []),
-    getVersions: vi.fn(async () => []),
-    getConfig: overrides.getConfig ?? (async () => ({ cid: 'config-cid', config: {} })),
-    dagGet: overrides.dagGet ?? (async () => []),
-    ls: overrides.ls ?? (async () => []),
-    cat: vi.fn(async () => ''),
-    getEnsText: vi.fn(async () => ''),
+    getDeals: vi.fn(() => Promise.resolve([])),
+    getOffers: vi.fn(() => Promise.resolve([])),
+    getVersions: vi.fn(() => Promise.resolve([])),
+    getConfig: overrides.getConfig ?? (() => Promise.resolve({ cid: 'config-cid', config: {} })),
+    dagGet: overrides.dagGet ?? (() => Promise.resolve([])),
+    ls: overrides.ls ?? (() => Promise.resolve([])),
+    cat: vi.fn(() => Promise.resolve('')),
+    getEnsText: vi.fn(() => Promise.resolve('')),
     ...overrides,
   };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// readConfigRoot
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('readConfigRoot', () => {
+  it('successful getConfig → { ok: true, cid }', async () => {
+    const ctx = makeCtx({
+      getConfig: () => Promise.resolve({ cid: 'QmConfig', config: { name: 'pub.eth' } }),
+    });
+    await expect(readConfigRoot(ctx)).resolves.toEqual({
+      ok: true,
+      cid: 'QmConfig',
+    });
+  });
+
+  it('getConfig throws → { ok: false, cid: "" }', async () => {
+    const ctx = makeCtx({
+      getConfig: () => {
+        throw new Error('no config');
+      },
+    });
+    await expect(readConfigRoot(ctx)).resolves.toEqual({ ok: false, cid: '' });
+  });
+});
+
 describe('collectConfigCids', () => {
   it('emits the configCid as category "config"', async () => {
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { name: 'pub.eth' } }),
+      getConfig: () => Promise.resolve({ cid: 'QmConfig', config: { name: 'pub.eth' } }),
     });
     const result = await collectConfigCids(ctx);
     expect(result).toContainEqual({ cid: 'QmConfig', category: 'config', source: 'config' });
@@ -35,8 +64,9 @@ describe('collectConfigCids', () => {
       { path: 'templates/about/index.hbs', cid: 'QmT2' },
     ];
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
-      dagGet: async () => templates,
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
+      dagGet: () => Promise.resolve(templates),
     });
     const result = await collectConfigCids(ctx);
     expect(result).toContainEqual({ cid: 'QmDag', category: 'template-dag', source: 'config' });
@@ -65,8 +95,9 @@ describe('collectConfigCids', () => {
       QmDirImages: [{ name: 'logo.png', hash: 'QmLogo', size: 456 }],
     };
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: '', assetsCid: 'QmAssets' } }),
-      ls: async (cid: string) => tree[cid] ?? [],
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: '', assetsCid: 'QmAssets' } }),
+      ls: (cid: string) => Promise.resolve(tree[cid] ?? []),
     });
     const result = await collectConfigCids(ctx);
     expect(result).toContainEqual({ cid: 'QmAssets', category: 'assets-root', source: 'config' });
@@ -88,11 +119,12 @@ describe('collectConfigCids', () => {
 
   it('emits no template/asset entries for empty templateCid/assetsCid strings (no throw)', async () => {
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: '', assetsCid: '' } }),
-      dagGet: vi.fn(async () => {
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: '', assetsCid: '' } }),
+      dagGet: vi.fn(() => {
         throw new Error('should not be called');
       }),
-      ls: vi.fn(async () => {
+      ls: vi.fn(() => {
         throw new Error('should not be called');
       }),
     });
@@ -102,8 +134,9 @@ describe('collectConfigCids', () => {
 
   it('still emits template-dag when dagGet throws (no template entries, no throw)', async () => {
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
-      dagGet: async () => {
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
+      dagGet: () => {
         throw new Error('dag unavailable');
       },
     });
@@ -114,7 +147,7 @@ describe('collectConfigCids', () => {
 
   it('returns [] when getConfig throws', async () => {
     const ctx = makeCtx({
-      getConfig: async () => {
+      getConfig: () => {
         throw new Error('no config');
       },
     });
@@ -124,8 +157,9 @@ describe('collectConfigCids', () => {
 
   it('uses a legacy dagGet object wrapping the array under `templates`', async () => {
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
-      dagGet: async () => ({ templates: [{ path: 'templates/a.hbs', cid: 'QmTA' }] }),
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: 'QmDag', assetsCid: '' } }),
+      dagGet: () => Promise.resolve({ templates: [{ path: 'templates/a.hbs', cid: 'QmTA' }] }),
     });
     const result = await collectConfigCids(ctx);
     expect(result).toContainEqual({
@@ -139,7 +173,7 @@ describe('collectConfigCids', () => {
 
   it('keeps the config entry (and prior entries) when the config is not an object', async () => {
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: 'not-an-object' }),
+      getConfig: () => Promise.resolve({ cid: 'QmConfig', config: 'not-an-object' }),
     });
     const result = await collectConfigCids(ctx);
     expect(result).toEqual([{ cid: 'QmConfig', category: 'config', source: 'config' }]);
@@ -153,10 +187,11 @@ describe('collectConfigCids', () => {
       ],
     };
     const ctx = makeCtx({
-      getConfig: async () => ({ cid: 'QmConfig', config: { templateCid: '', assetsCid: 'QmAssets' } }),
-      ls: async (cid: string) => {
+      getConfig: () =>
+        Promise.resolve({ cid: 'QmConfig', config: { templateCid: '', assetsCid: 'QmAssets' } }),
+      ls: (cid: string) => {
         if (cid === 'QmBroken') throw new Error('read failed');
-        return tree[cid] ?? [];
+        return Promise.resolve(tree[cid] ?? []);
       },
     });
     const result = await collectConfigCids(ctx);
@@ -176,6 +211,39 @@ describe('collectConfigCids', () => {
       source: 'config',
       path: 'ok.txt',
       size: 7,
+    });
+  });
+
+  it('refactor regression: still emits config + template-dag + assets-root via readConfigRoot', async () => {
+    const tree: Record<string, LsEntry[]> = {
+      QmAssets: [{ name: 'style.css', hash: 'QmStyle', size: 123 }],
+    };
+    const ctx = makeCtx({
+      getConfig: () =>
+        Promise.resolve({
+          cid: 'QmConfig',
+          config: { templateCid: 'QmDag', assetsCid: 'QmAssets' },
+        }),
+      dagGet: () => Promise.resolve([{ path: 'templates/post.hbs', cid: 'QmT1' }]),
+      ls: (cid: string) => Promise.resolve(tree[cid] ?? []),
+    });
+    const result = await collectConfigCids(ctx);
+    expect(result).toContainEqual({ cid: 'QmConfig', category: 'config', source: 'config' });
+    expect(result).toContainEqual({ cid: 'QmDag', category: 'template-dag', source: 'config' });
+    expect(result).toContainEqual({
+      cid: 'QmT1',
+      category: 'template',
+      source: 'config',
+      path: 'templates/post.hbs',
+      role: 'templates/post.hbs',
+    });
+    expect(result).toContainEqual({ cid: 'QmAssets', category: 'assets-root', source: 'config' });
+    expect(result).toContainEqual({
+      cid: 'QmStyle',
+      category: 'asset',
+      source: 'config',
+      path: 'style.css',
+      size: 123,
     });
   });
 });

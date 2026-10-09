@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { namehash } from 'viem/ens';
-import { collectTreeCids, collectArchiveCids } from './tree';
+import { collectTreeCids, collectArchiveCids, readSiteRoot, readArchiveRoot } from './tree';
 import type { CidViewReadContext } from './context';
 import { encodeContenthashWrapped, parseCID } from '../ipfs/contenthash';
 
@@ -16,32 +16,36 @@ const FILE_B = 'QmYwAPJzv5CZsnAzt8auVZRnS5YxM5kR4JxmG5N4tWkLxN';
 const rootContenthash = encodeContenthashWrapped(parseCID(ROOT_CID));
 const archiveContenthash = encodeContenthashWrapped(parseCID(FILE_A));
 
-type LsEntry = { name: string; hash: string; size: number };
+interface LsEntry {
+  name: string;
+  hash: string;
+  size: number;
+}
 
 function makeCtx(overrides: Partial<CidViewReadContext> = {}): CidViewReadContext {
   return {
-    getDeals: async () => {
+    getDeals: () => {
       throw new Error('no getDeals stub');
     },
-    getOffers: async () => {
+    getOffers: () => {
       throw new Error('no getOffers stub');
     },
-    getVersions: async () => {
+    getVersions: () => {
       throw new Error('no getVersions stub');
     },
-    getConfig: async () => {
+    getConfig: () => {
       throw new Error('no getConfig stub');
     },
-    dagGet: async () => {
+    dagGet: () => {
       throw new Error('no dagGet stub');
     },
-    ls: async () => {
+    ls: () => {
       throw new Error('no ls stub');
     },
-    cat: async () => {
+    cat: () => {
       throw new Error('no cat stub');
     },
-    getEnsText: async () => {
+    getEnsText: () => {
       throw new Error('no getEnsText stub');
     },
     ...overrides,
@@ -49,26 +53,118 @@ function makeCtx(overrides: Partial<CidViewReadContext> = {}): CidViewReadContex
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// readSiteRoot
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('readSiteRoot', () => {
+  it('valid contenthash_wrapped → { ok: true, root }', async () => {
+    const ctx = makeCtx({
+      getEnsText: (node, key) =>
+        Promise.resolve(node === NODE && key === 'contenthash_wrapped' ? rootContenthash : ''),
+    });
+    await expect(readSiteRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: ROOT_CID,
+    });
+  });
+
+  it('empty contenthash_wrapped → { ok: true, root: "" }', async () => {
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('') });
+    await expect(readSiteRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: '',
+    });
+  });
+
+  it('malformed contenthash → { ok: true, root: "" } (treated as absent)', async () => {
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('0xe4deadbeef') });
+    await expect(readSiteRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: '',
+    });
+  });
+
+  it('getEnsText throws → { ok: false, root: "" }', async () => {
+    const ctx = makeCtx({
+      getEnsText: () => {
+        throw new Error('ens down');
+      },
+    });
+    await expect(readSiteRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: false,
+      root: '',
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// readArchiveRoot
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('readArchiveRoot', () => {
+  it('valid content_cache_<pub> → { ok: true, root }', async () => {
+    const ctx = makeCtx({
+      getEnsText: (node, key) =>
+        Promise.resolve(
+          node === NODE && key === `content_cache_${PUBLICATION}` ? archiveContenthash : '',
+        ),
+    });
+    await expect(readArchiveRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: FILE_A,
+    });
+  });
+
+  it('empty content_cache_<pub> → { ok: true, root: "" }', async () => {
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('') });
+    await expect(readArchiveRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: '',
+    });
+  });
+
+  it('malformed contenthash → { ok: true, root: "" } (treated as absent)', async () => {
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('0xe4deadbeef') });
+    await expect(readArchiveRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: true,
+      root: '',
+    });
+  });
+
+  it('getEnsText throws → { ok: false, root: "" }', async () => {
+    const ctx = makeCtx({
+      getEnsText: () => {
+        throw new Error('ens down');
+      },
+    });
+    await expect(readArchiveRoot(ctx, PUBLICATION)).resolves.toEqual({
+      ok: false,
+      root: '',
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // collectTreeCids
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('collectTreeCids', () => {
   it('decodes contenthash_wrapped → site-root + walks tree → site-file entries with paths/sizes', async () => {
-    const ls = vi.fn(async (cid: string): Promise<LsEntry[]> => {
+    const ls = vi.fn((cid: string): Promise<LsEntry[]> => {
       if (cid === ROOT_CID) {
-        return [
+        return Promise.resolve([
           { name: 'index.html', hash: FILE_A, size: 1234 },
           { name: 'assets', hash: DIR_CID, size: 0 },
-        ];
+        ]);
       }
       if (cid === DIR_CID) {
-        return [{ name: 'logo.png', hash: FILE_B, size: 5678 }];
+        return Promise.resolve([{ name: 'logo.png', hash: FILE_B, size: 5678 }]);
       }
-      return []; // files / leaves → treated as site files
+      return Promise.resolve([]); // files / leaves → treated as site files
     });
     const ctx = makeCtx({
-      getEnsText: async (node, key) =>
-        node === NODE && key === 'contenthash_wrapped' ? rootContenthash : '',
+      getEnsText: (node, key) =>
+        Promise.resolve(node === NODE && key === 'contenthash_wrapped' ? rootContenthash : ''),
       ls,
     });
 
@@ -94,21 +190,21 @@ describe('collectTreeCids', () => {
   });
 
   it('empty contenthash_wrapped → [] (no throw)', async () => {
-    const ctx = makeCtx({ getEnsText: async () => '' });
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('') });
     await expect(collectTreeCids(ctx, PUBLICATION)).resolves.toEqual([]);
   });
 
   it('malformed contenthash → [] (no throw)', async () => {
     // wrong ipfs-ns first byte (0xe4) → decodeContenthashWrapped throws → absent
-    const ctx = makeCtx({ getEnsText: async () => '0xe4deadbeef' });
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('0xe4deadbeef') });
     await expect(collectTreeCids(ctx, PUBLICATION)).resolves.toEqual([]);
   });
 
   it('walk failure → site-root still returned, no throw', async () => {
-    const ls = vi.fn(async () => {
+    const ls = vi.fn(() => {
       throw new Error('ipfs down');
     });
-    const ctx = makeCtx({ getEnsText: async () => rootContenthash, ls });
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve(rootContenthash), ls });
 
     const entries = await collectTreeCids(ctx, PUBLICATION);
 
@@ -117,14 +213,52 @@ describe('collectTreeCids', () => {
 
   it('dedupes exact duplicate entries', async () => {
     const child: LsEntry = { name: 'a.txt', hash: FILE_A, size: 10 };
-    const ls = vi.fn(async (cid: string): Promise<LsEntry[]> =>
-      cid === ROOT_CID ? [child, child] : [],
+    const ls = vi.fn(
+      (cid: string): Promise<LsEntry[]> => Promise.resolve(cid === ROOT_CID ? [child, child] : []),
     );
-    const ctx = makeCtx({ getEnsText: async () => rootContenthash, ls });
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve(rootContenthash), ls });
 
     const entries = await collectTreeCids(ctx, PUBLICATION);
 
     expect(entries.filter((e) => e.category === 'site-file')).toHaveLength(1);
+  });
+
+  it('refactor regression: still emits site-root + site-files via readSiteRoot', async () => {
+    const ls = vi.fn((cid: string): Promise<LsEntry[]> => {
+      if (cid === ROOT_CID) {
+        return Promise.resolve([
+          { name: 'index.html', hash: FILE_A, size: 1234 },
+          { name: 'assets', hash: DIR_CID, size: 0 },
+        ]);
+      }
+      if (cid === DIR_CID) {
+        return Promise.resolve([{ name: 'logo.png', hash: FILE_B, size: 5678 }]);
+      }
+      return Promise.resolve([]);
+    });
+    const ctx = makeCtx({
+      getEnsText: (node, key) =>
+        Promise.resolve(node === NODE && key === 'contenthash_wrapped' ? rootContenthash : ''),
+      ls,
+    });
+
+    const entries = await collectTreeCids(ctx, PUBLICATION);
+
+    expect(entries).toContainEqual({ cid: ROOT_CID, category: 'site-root', source: 'tree' });
+    expect(entries).toContainEqual({
+      cid: FILE_A,
+      category: 'site-file',
+      source: 'tree',
+      path: 'index.html',
+      size: 1234,
+    });
+    expect(entries).toContainEqual({
+      cid: FILE_B,
+      category: 'site-file',
+      source: 'tree',
+      path: 'assets/logo.png',
+      size: 5678,
+    });
   });
 });
 
@@ -133,10 +267,8 @@ describe('collectTreeCids', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('collectArchiveCids', () => {
-  const GEN_A =
-    '0x1111111111111111111111111111111111111111111111111111111111111111';
-  const GEN_B =
-    '0x2222222222222222222222222222222222222222222222222222222222222222';
+  const GEN_A = '0x1111111111111111111111111111111111111111111111111111111111111111';
+  const GEN_B = '0x2222222222222222222222222222222222222222222222222222222222222222';
 
   it('decodes content_cache_<pub> → archive + parses Archive → archive-item entries keyed by genesis', async () => {
     const archive = {
@@ -162,14 +294,14 @@ describe('collectArchiveCids', () => {
         [GEN_B]: { cid: DIR_CID, item: { objectId: 'b' } },
       },
     };
-    const cat = vi.fn(async (cid: string) =>
-      cid === FILE_A ? JSON.stringify(archive) : '',
+    const cat = vi.fn((cid: string) =>
+      Promise.resolve(cid === FILE_A ? JSON.stringify(archive) : ''),
     );
     const ctx = makeCtx({
-      getEnsText: async (node, key) =>
-        node === NODE && key === `content_cache_${PUBLICATION}`
-          ? archiveContenthash
-          : '',
+      getEnsText: (node, key) =>
+        Promise.resolve(
+          node === NODE && key === `content_cache_${PUBLICATION}` ? archiveContenthash : '',
+        ),
       cat,
     });
 
@@ -197,8 +329,8 @@ describe('collectArchiveCids', () => {
 
   it('archive cat is invalid JSON → only the archive entry, no throw', async () => {
     const ctx = makeCtx({
-      getEnsText: async () => archiveContenthash,
-      cat: async () => 'not json {{{',
+      getEnsText: () => Promise.resolve(archiveContenthash),
+      cat: () => Promise.resolve('not json {{{'),
     });
 
     const entries = await collectArchiveCids(ctx, PUBLICATION);
@@ -208,8 +340,8 @@ describe('collectArchiveCids', () => {
 
   it('archive cat fails → only the archive entry, no throw', async () => {
     const ctx = makeCtx({
-      getEnsText: async () => archiveContenthash,
-      cat: async () => {
+      getEnsText: () => Promise.resolve(archiveContenthash),
+      cat: () => {
         throw new Error('ipfs down');
       },
     });
@@ -220,7 +352,31 @@ describe('collectArchiveCids', () => {
   });
 
   it('missing content_cache record → []', async () => {
-    const ctx = makeCtx({ getEnsText: async () => '' });
+    const ctx = makeCtx({ getEnsText: () => Promise.resolve('') });
     await expect(collectArchiveCids(ctx, PUBLICATION)).resolves.toEqual([]);
+  });
+
+  it('refactor regression: still emits archive + archive-items via readArchiveRoot', async () => {
+    const archive = { items: { [GEN_A]: { cid: ROOT_CID, item: { objectId: 'a' } } } };
+    const cat = vi.fn((cid: string) =>
+      Promise.resolve(cid === FILE_A ? JSON.stringify(archive) : ''),
+    );
+    const ctx = makeCtx({
+      getEnsText: (node, key) =>
+        Promise.resolve(
+          node === NODE && key === `content_cache_${PUBLICATION}` ? archiveContenthash : '',
+        ),
+      cat,
+    });
+
+    const entries = await collectArchiveCids(ctx, PUBLICATION);
+
+    expect(entries).toContainEqual({ cid: FILE_A, category: 'archive', source: 'archive' });
+    expect(entries).toContainEqual({
+      cid: ROOT_CID,
+      category: 'archive-item',
+      source: 'archive',
+      genesis: GEN_A,
+    });
   });
 });
