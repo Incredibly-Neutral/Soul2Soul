@@ -1,3 +1,9 @@
+## 2026-10-09 — T4a shared per-CID retrievability core (orchestrated) — MERGED #120 (main 02ceb8a)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-09 | MERGED #120 | /home/joera/code/worktrees/t4-retriev (removed) | agent/t4-retriev | impl-t4-retriev | deepseek-v4-flash-0731 | shared/src/cid-view/retrievability.ts — transport-agnostic per-CID copy/retrievability core: RETRIEVABILITY_SOURCES (kubo/pinata/filebase/filecoin), CidRetrievabilityStatus {checkedAt, copies, sources, error?}, RetrievabilityReadContext {hasCopy}, cidsFromView, filecoinBackedCidsFromView (deal+deal-version only), checkCidRetrievability (fail-open per source, capped concurrency, clone-merge into prev), orderByCopiesAscending + orderByStaleness (never-checked-first, stable); zod schemas + parseCidRetrievabilityMap in validation.ts; index.ts export. Reviewer rev-t4-retriev APPROVE (0 blocking; 3 non-blocking: now?() clock override is additive+matching BuildCidViewOptions.now; input dedupe additive+documented; no .strict() matches file style). Lead independently verified all 3 gates. Post-merge gate on 02ceb8a: shared build 0, cid-view subset 93/93 (16 new). wt/branch/remote deleted + panes closed 2026-10-09. Single-model review limitation (pi-only) flagged per AGENTS.md.
+
 ## 2026-10-09 — T2 incremental cid-view composition (orchestrated) — MERGED #115 #116 (main 74dd4e0)
 
 | date | session | worktree | branch | agent | model | task |
