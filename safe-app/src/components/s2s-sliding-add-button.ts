@@ -46,12 +46,16 @@ export class S2SSlidingAddButton extends LitElement {
         width: 0;
         opacity: 0;
         padding: 0;
-        border: none;
+        border: 1px solid var(--gray-500);
+        border-right: none;
         outline: none;
         transition: width 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
         margin: 0;
         border-top-right-radius: 0;
         border-bottom-right-radius: 0;
+        background: var(--gray-800);
+        color: var(--gray-50);
+        
       }
 
       :host([open]) .add__input {
