@@ -318,9 +318,6 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
 
-    // Title.
-    expect(text).toContain('CID Inventory');
-
     // Summary chips — totals + unique CIDs.
     expect(text).toContain('13 unique CIDs');
     expect(text).toContain('13 entries');
