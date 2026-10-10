@@ -9,9 +9,10 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  * clipped to border-box with a solid fill layer clipped to padding-box on
  * top, so the visible outline is a gradient while the face stays opaque.
  *
- * The gradient runs top→bottom from the accent color down to the original
- * button border color (--gray-600). On hover/focus the two stops switch, so
- * the border slowly cross-fades (500ms) as the accent moves to the bottom.
+ * The gradient runs top→bottom from the original button border color
+ * (--gray-600) down to the accent color — the accent sits on the bottom.
+ * On hover/focus the two stops switch, so the border slowly cross-fades
+ * (500ms) as the accent moves to the top.
  *
  * Button types: the accent color is the differentiator. `type` selects a
  * CID-palette accent; consumers can also override --gb-accent from outside.
@@ -54,12 +55,12 @@ export class S2SButton extends LitElement {
     @property --gb-c1 {
       syntax: '<color>';
       inherits: false;
-      initial-value: #fcd34d;
+      initial-value: #5f564b;
     }
     @property --gb-c2 {
       syntax: '<color>';
       inherits: false;
-      initial-value: #5f564b;
+      initial-value: #fcd34d;
     }
     @property --gb-angle {
       syntax: '<angle>';
@@ -86,9 +87,10 @@ export class S2SButton extends LitElement {
     }
 
     button {
-      --gb-c1: var(--gb-accent);
-      /* Bottom stop — the original button border color. */
-      --gb-c2: var(--gray-600, #5f564b);
+      /* Top stop — the original button border color. */
+      --gb-c1: var(--gray-600, #5f564b);
+      /* Bottom stop — the accent (per-type differentiator). */
+      --gb-c2: var(--gb-accent);
       --gb-fill: var(--gray-900, #1a1714);
 
       font-family: var(--font-mono);
@@ -116,8 +118,8 @@ export class S2SButton extends LitElement {
 
     button:hover:not(:disabled),
     button:focus-visible {
-      --gb-c1: var(--gray-600, #5f564b);
-      --gb-c2: var(--gb-accent);
+      --gb-c1: var(--gb-accent);
+      --gb-c2: var(--gray-600, #5f564b);
     }
 
     button:disabled {
@@ -126,6 +128,11 @@ export class S2SButton extends LitElement {
     }
 
     button.spin {
+      /* Set explicitly: a registered inherits:false angle that is never set on
+         the element resolves to guaranteed-invalid inside a gradient in some
+         Chromium versions (background computes to none). With an explicit
+         value the conic renders and the keyframes interpolate 0deg → 360deg. */
+      --gb-angle: 0deg;
       background:
         linear-gradient(var(--gb-fill), var(--gb-fill)) padding-box,
         conic-gradient(
