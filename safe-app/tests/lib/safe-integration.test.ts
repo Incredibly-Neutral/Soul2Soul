@@ -113,7 +113,7 @@ let other: { NAME: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   // Deterministic DRPC URLs regardless of the local root .env.
-  vi.stubEnv('VITE_DRPC_API_KEY', 'default');
+  vi.stubEnv('VITE_DRPC_API_KEY', 'testkey');
   records = makeRecordsStub();
   pub = makePubStub();
   other = { NAME: vi.fn(async () => { throw new Error('no NAME()'); }) };
@@ -164,7 +164,7 @@ describe('initialize — module discovery by NAME()', () => {
 
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {
     await initInstance();
-    expect(eth.rpcUrls).toEqual(['https://lb.drpc.live/base/default']);
+    expect(eth.rpcUrls).toEqual(['https://lb.drpc.live/base/testkey']);
   });
 
   it('skips modules that throw on NAME() (no NAME function)', async () => {
@@ -351,7 +351,7 @@ describe('evmSetup / evmRead / signWithSigner', () => {
   it('evmSetup returns a provider + contract for a known chainId', () => {
     const si = new SafeIntegration();
     const { provider, contract } = si.evmSetup('0xContract', [], 8453);
-    expect(provider.url).toBe('https://lb.drpc.live/base/default');
+    expect(provider.url).toBe('https://lb.drpc.live/base/testkey');
     expect(contract).toBeDefined();
   });
 

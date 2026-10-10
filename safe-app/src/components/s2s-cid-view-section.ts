@@ -20,6 +20,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
 import { buildPublicationCidView, parsePublicationCidView } from '@s2s/soul2soul-shared/safe-app';
 import {
+  cidsFromView,
   orderByCopiesAscending,
   orderByStaleness,
   RETRIEVABILITY_SOURCES,
@@ -118,14 +119,6 @@ const RETRIEVABILITY_BATCH = 50;
  * a full pass over every CID regardless of age.
  */
 const RETRIEVABILITY_AUTO_FRESH_MS = 15 * 60_000; // 15 minutes
-
-/**
- * Version-history categories excluded from the reliable retrievability
- * inventory "for time being". Historical snapshots are the noisy bulk (mostly
- * 0-copy, not currently retrievable from ipfs.tu / Pinata), so the smaller
- * group focuses on the current, fresher CIDs. Set to an empty set to re-enable.
- */
-const VERSION_CATEGORIES = new Set<CidCategory>(['deal-version', 'offer-version']);
 
 // --- localStorage stale-while-revalidate cache ---
 
@@ -287,12 +280,7 @@ export class S2SCidViewSection extends LitElement {
     if (this.checking) return nothing;
     const map = this.retrievability;
     if (!map) return nothing;
-    // Count only statuses for the reliable (non-version) set so the hint
-    // matches the visible list size.
-    const passCids = new Set(
-      this.view ? this.nonVersionEntries(this.view).map((entry) => entry.cid) : [],
-    );
-    const count = Object.keys(map).filter((cid) => passCids.has(cid)).length;
+    const count = Object.keys(map).length;
     if (count === 0) return nothing;
     let newest = 0;
     for (const status of Object.values(map)) {
@@ -365,7 +353,6 @@ export class S2SCidViewSection extends LitElement {
         gap: 0.5rem;
         margin-bottom: 0.75rem;
       }
-        
       .chips-row {
         display: flex;
         align-items: flex-start;
@@ -770,19 +757,6 @@ export class S2SCidViewSection extends LitElement {
   }
 
   /**
-   * First-occurrence unique entries, minus the version-history categories
-   * (deal-version / offer-version). The historical snapshots are the noisy
-   * bulk — mostly 0-copy, not currently retrievable from ipfs.tu / Pinata — so
-   * "for time being" the reliable inventory focuses on the current, fresher
-   * CIDs. Easy to re-enable by widening VERSION_CATEGORIES to an empty set.
-   */
-  private nonVersionEntries(view: PublicationCidView): CidEntry[] {
-    return this.firstOccurrenceEntries(view).filter(
-      (entry) => !VERSION_CATEGORIES.has(entry.category),
-    );
-  }
-
-  /**
    * Is a CID "fresh" (skip it in the auto pass)? Fresh = checked within
    * `freshnessMs`. Never-checked or unknown-age CIDs are never fresh.
    * `freshnessMs <= 0` forces a full pass (manual Recheck).
@@ -811,7 +785,7 @@ export class S2SCidViewSection extends LitElement {
     this.checking = true;
     this.checkedCount = 0;
     try {
-      const all = this.nonVersionEntries(this.view).map((entry) => entry.cid);
+      const all = cidsFromView(this.view);
       const map = this.retrievability ?? {};
       // Unfresh set is fixed for the whole pass: never-checked first, then
       // stalest-first (orderByStaleness is a pure SORT over all cids, so we
@@ -914,7 +888,7 @@ export class S2SCidViewSection extends LitElement {
     return html`
       <div class="chips-top">
         <span class="chip"
-          ><span class="chip-value">${this.nonVersionEntries(view).length}</span> unique CIDs</span
+          ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
         >
         ${hasFilter
           ? html`<button type="button" class="chip" @click=${() => {
@@ -938,7 +912,7 @@ export class S2SCidViewSection extends LitElement {
   } {
     const typeCounts = new Map<string, number>();
     const healthCounts = new Map<CidHealth, number>();
-    for (const entry of this.nonVersionEntries(view)) {
+    for (const entry of this.firstOccurrenceEntries(view)) {
       const label = typeLabel(entry.category);
       typeCounts.set(label, (typeCounts.get(label) ?? 0) + 1);
       const status = this.retrievabilityStatus(entry.cid);
@@ -1025,7 +999,7 @@ export class S2SCidViewSection extends LitElement {
           >
         </div>
         <div class="cid-cell">
-          <copy-hash .value=${this.shortenCid(cid)} href=${this.gatewayUrl(cid)}></copy-hash>
+          <copy-hash .value=${cid} display=${this.shortenCid(cid)} href=${this.gatewayUrl(cid)}></copy-hash>
         </div>
         <div class="cid-cell">
           ${entry.role || entry.path || html`<span class="muted">-</span>`}
@@ -1050,12 +1024,11 @@ export class S2SCidViewSection extends LitElement {
     // Flat risk-sorted table: one row per unique cid, fewest copies first
     // (unchecked statuses sort to the top so the riskiest rows surface first).
     const byCid = new Map<string, CidEntry>();
-    for (const entry of this.nonVersionEntries(view)) {
+    for (const entry of this.firstOccurrenceEntries(view)) {
       byCid.set(entry.cid, entry);
     }
     const rows: CidEntry[] = [];
-    const nonVersionCids = this.nonVersionEntries(view).map((entry) => entry.cid);
-    for (const cid of orderByCopiesAscending(nonVersionCids, this.retrievability ?? {})) {
+    for (const cid of orderByCopiesAscending(cidsFromView(view), this.retrievability ?? {})) {
       const entry = byCid.get(cid);
       if (entry) rows.push(entry);
     }

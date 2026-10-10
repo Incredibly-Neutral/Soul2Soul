@@ -37,7 +37,7 @@ const PROTOCOL_INFO: S2SProtocolInfo = {
 describe('ProtocolIntegration', () => {
   beforeEach(() => {
     // Deterministic DRPC URLs regardless of the local root .env.
-    vi.stubEnv('VITE_DRPC_API_KEY', 'default');
+    vi.stubEnv('VITE_DRPC_API_KEY', 'testkey');
     mocks.opts.length = 0;
     mocks.getInfo.mockReset();
     mocks.txsSend.mockReset();
@@ -75,8 +75,8 @@ describe('ProtocolIntegration', () => {
     expect(mocks.createPublicClient).toHaveBeenCalledTimes(2);
     const l1Cfg = mocks.createPublicClient.mock.calls[0][0];
     const l2Cfg = mocks.createPublicClient.mock.calls[1][0];
-    expect((l1Cfg.transport as { url: string }).url).toBe('https://lb.drpc.live/ethereum/default');
-    expect((l2Cfg.transport as { url: string }).url).toBe('https://lb.drpc.live/base/default');
+    expect((l1Cfg.transport as { url: string }).url).toBe('https://lb.drpc.live/ethereum/testkey');
+    expect((l2Cfg.transport as { url: string }).url).toBe('https://lb.drpc.live/base/testkey');
     expect(l1Cfg.chain).toBeUndefined();
     expect(l2Cfg.chain).toBeUndefined();
 

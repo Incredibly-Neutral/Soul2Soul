@@ -353,11 +353,11 @@ export class S2SStorageTab extends LitElement {
     return html`
       <div class="table-row ${className}">
         <div class="table-cell">
-          <copy-hash .value=${this.shortenCid(p.pieceCid || '-')}></copy-hash>
+          <copy-hash .value=${p.pieceCid || '-'} display=${this.shortenCid(p.pieceCid || '-')}></copy-hash>
         </div>
         <div class="table-cell">
           ${rootCid
-            ? html`<copy-hash .value=${this.shortenCid(rootCid)} href=${this.gatewayUrl(rootCid)}></copy-hash>`
+            ? html`<copy-hash .value=${rootCid} display=${this.shortenCid(rootCid)} href=${this.gatewayUrl(rootCid)}></copy-hash>`
             : '-'}
         </div>
         <div class="table-cell">${kind}</div>

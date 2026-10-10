@@ -279,3 +279,12 @@ $0
 - Lead-direct (single coherent change; orchestrate skill scopes out single-agent). Worktree `wt-persist`, branch `feat/cid-persist-resume` → PR #130, merged by lead via squash → `c8b99d8`.
 - Gate: 37/37 files, **358/358 tests** (3 new: all-fresh resume skips recheck; auto re-checks only unfresh; manual Recheck forces full). Lint zero-new vs baseline (component 7 + lib 7 pre-existing). tsc clean. QA passed (5 tabs, no errors) → deployed. Live bundle `main.CVyFwl-p.js` verified: `CIDs stored`, `browser storage unavailable`, `full pass, ignores cache`, `retrievability cache SAVED/HIT` all present. **LIVE**.
 - Cleanup: removed `wt-persist` worktree; deleted `feat/cid-persist-resume` (local+remote).
+
+## 2026-10-10 — feat/exclude-version-cids (#131) — MERGED + LIVE
+- Change: exclude deal-version/offer-version CIDs from the reliable retrievability inventory (table rows, chips, unique-CIDs counter, check-pass input, stored-CIDs hint). VERSION_CATEGORIES gates it (empty set re-enables).
+- Evidence (live): ~415 version CIDs genuinely 0-provider from ipfs-check (/batch IPNI + /check Amino DHT at 30s) + gateway timeouts on ipfs.tu/Pinata → the exclusion shrinks the list to the reliable current set. All 37 deal CIDs findable (kubo/0.43.1). Filecoin + Pinata copies are INVISIBLE to ipfs-check discovery (0 filecoin agents returned for any publication CID) — real follow-up gap, not a recognition fix here.
+- Worktree: s2s-wt-excludever (removed). Branch feat/exclude-version-cids (deleted local+remote). Squash → origin/main 07e7466.
+- Gate: tsc clean; 37/37 files, 358/358 tests (full suite, isolated worktree); lint 7 pre-existing, 0 new.
+- Deploy: from isolated worktree at merged commit (main tree had user's in-flight copy-hash refactor — NOT shipped). pnpm qa PASS, ./deploy.sh OK. Live bundle main.S4iNzCpP.js verified (new Set(["deal-version","offer-version"])).
+- Main-tree cleanup: restored user's concurrent uncommitted cid-view-section copy-hash refactor (had been overwritten during work) — main tree back to baseline + user's 3 edits + test links-query.
+- NOTE: user's concurrent storage-tab/website-tree-tab gateway-link→copy-hash refactor + copy-hash.ts are still uncommitted in main tree; their 2 tests fail on that refactor (pre-existing to #131, not mine). origin/main has clean baseline there.

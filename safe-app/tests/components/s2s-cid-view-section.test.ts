@@ -321,10 +321,10 @@ describe('s2s-cid-view-section', () => {
     // Summary chips — the unique-CIDs counter lives in a full-width top row;
     // the type/health filter chips sit in two equal containers below. The
     // entries counter chip was removed.
-    expect(text).toContain('11 unique CIDs');
+    expect(text).toContain('13 unique CIDs');
     expect(text).not.toContain('13 entries');
     const topRow = root.querySelector('.chips-top');
-    expect(topRow?.textContent).toContain('11 unique CIDs');
+    expect(topRow?.textContent).toContain('13 unique CIDs');
     // No filters active → no clear-filters chip.
     expect(topRow?.textContent).not.toContain('clear filters');
     // Chip section is one row with two containers: type chips | health chips.
@@ -334,7 +334,7 @@ describe('s2s-cid-view-section', () => {
     // the same unique-cid rows the table renders.
     const typeGroup = groups[0]!.textContent ?? '';
     expect(typeGroup).toContain('1 source');
-    expect(typeGroup).not.toContain('version');
+    expect(typeGroup).toContain('2 version');
     expect(typeGroup).toContain('1 offer');
     expect(typeGroup).toContain('3 config');
     expect(typeGroup).toContain('2 asset');
@@ -343,7 +343,7 @@ describe('s2s-cid-view-section', () => {
     expect(typeGroup).toContain('1 cache item');
     // Type chips are filter buttons (same pill design); none active initially.
     const filterChips = Array.from(root.querySelectorAll('button.chip'));
-    expect(filterChips.length).toBeGreaterThanOrEqual(7);
+    expect(filterChips.length).toBeGreaterThanOrEqual(8);
     expect(filterChips.some((b) => b.textContent?.trim().endsWith('config'))).toBe(true);
     expect(root.querySelectorAll('button.chip.active').length).toBe(0);
     // Copies/health chips are empty until a retrievability pass fills the map
@@ -351,12 +351,12 @@ describe('s2s-cid-view-section', () => {
     // deterministically in the dedicated filter tests below).
 
     // Entry rows: one per unique cid (flat risk-sorted table, no group rows).
-    expect(root.querySelectorAll('.cid-row').length).toBe(11);
+    expect(root.querySelectorAll('.cid-row').length).toBe(13);
 
     // Type badges (collapsed Category+Source): one per row, labels grouped by
     // the TYPE_META mapping, badge class keeps the fine-grained category color.
     expect(root.querySelectorAll('.badge.deal').length).toBe(1);
-    expect(root.querySelectorAll('.badge.deal-version').length).toBe(0);
+    expect(root.querySelectorAll('.badge.deal-version').length).toBe(2);
     expect(root.querySelectorAll('.badge.offer').length).toBe(1);
     expect(root.querySelectorAll('.badge.config').length).toBe(3); // config + template DAG + template
     expect(root.querySelectorAll('.badge.asset').length).toBe(2); // assets root + asset
@@ -365,7 +365,7 @@ describe('s2s-cid-view-section', () => {
     const badgeText = (sel: string) =>
       Array.from(root.querySelectorAll(sel)).map((b) => b.textContent);
     expect(badgeText('.cid-row .badge.deal')).toEqual(['source']);
-    expect(badgeText('.cid-row .badge.deal-version')).toEqual([]);
+    expect(badgeText('.cid-row .badge.deal-version')).toEqual(['version', 'version']);
     expect(badgeText('.cid-row .badge.offer')).toEqual(['offer']);
     expect(badgeText('.cid-row .badge.config')).toEqual(['config', 'config', 'config']);
     expect(badgeText('.cid-row .badge.asset')).toEqual(['asset', 'asset']);
@@ -377,14 +377,14 @@ describe('s2s-cid-view-section', () => {
     const dealBadge = root.querySelector('.cid-row .badge.deal') as HTMLElement | null;
     expect(dealBadge?.getAttribute('title')).toBe('deal');
 
-    // Versions are excluded from the reliable inventory, so no tombstone badges.
-    expect(root.querySelectorAll('.badge.tombstone').length).toBe(0);
+    // Tombstone badge on the last version only.
+    expect(root.querySelectorAll('.badge.tombstone').length).toBe(1);
 
     // Gateway links — one per row, pointing at the ipfs.io gateway (via copy-hash href).
     const links = Array.from(root.querySelectorAll('copy-hash')).map(
       (c) => (c as HTMLElement & { href: string }).href,
     );
-    expect(links).toHaveLength(11);
+    expect(links).toHaveLength(13);
     expect(links).toContain('https://ipfs.io/ipfs/bafydeal1');
     expect(links).toContain(`https://ipfs.io/ipfs/${ROOT_CID}`);
 
@@ -392,7 +392,7 @@ describe('s2s-cid-view-section', () => {
     const hashValues = Array.from(root.querySelectorAll('copy-hash')).map(
       (c) => (c as HTMLElement & { value: string }).value,
     );
-    expect(hashValues).toHaveLength(11);
+    expect(hashValues).toHaveLength(13);
     expect(hashValues).toContain('bafydeal1');
     expect(hashValues).toContain(ROOT_CID.slice(0, 10) + '...' + ROOT_CID.slice(-10));
   });
@@ -568,7 +568,7 @@ describe('s2s-cid-view-section', () => {
 
     // Falls back to a normal fresh build (real coordinator) — no crash, no cache.
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.textContent).toContain('11 unique CIDs');
+      expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
     });
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
   });
@@ -598,7 +598,7 @@ describe('s2s-cid-view-section', () => {
     // Falls back to a normal fresh build (real coordinator) — no crash, no
     // garbage render from the schema-invalid blob.
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.textContent).toContain('11 unique CIDs');
+      expect(el.shadowRoot?.textContent).toContain('13 unique CIDs');
     });
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
     expect(renderedCids(el.shadowRoot!)).not.toContain('bafycached1');
@@ -774,7 +774,7 @@ describe('s2s-cid-view-section', () => {
   }
 
   function seededRetrievability(): CidRetrievabilityMap {
-    // bafydeal1: fully available (3 copies); bafyasset: single (1, risky);
+    // bafydeal1: fully available (3 copies); bafyver1: single (1, risky);
     // ROOT_CID / bafyconfig: unchecked. Deterministic for dot/risk assertions.
     return {
       bafydeal1: {
@@ -782,7 +782,7 @@ describe('s2s-cid-view-section', () => {
         copies: 3,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
       },
-      bafyasset: {
+      bafyver1: {
         checkedAt: RECENT(),
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
@@ -831,7 +831,7 @@ describe('s2s-cid-view-section', () => {
     });
     const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
     // Unchecked (config, site root...) come first (never-checked on top),
-    // then copies 1 (bafyasset), then copies 3 (bafydeal1) last. CIDs live in
+    // then copies 1 (bafyver1), then copies 3 (bafydeal1) last. CIDs live in
     // copy-hash values, not text — match on the copies labels instead.
     const order = rows.map((r) => r.textContent ?? '');
     const configIdx = order.findIndex((t) => t.includes('config'));
@@ -857,8 +857,8 @@ describe('s2s-cid-view-section', () => {
     expect(view.publication).toBe('test.eth');
     expect(cids).toContain('bafydeal1');
     expect(cids).toContain(ROOT_CID);
-    // The whole non-version unique-cid set is the pass input (11 unique < batch 50).
-    expect(cids.length).toBe(11);
+    // The whole unique-cid set is the pass input (13 unique < batch 50).
+    expect(cids.length).toBe(13);
     // The pass paints a 'checking copies…' indicator while in flight.
     await vi.waitFor(() => {
       expect(el.shadowRoot?.textContent).toContain('checking');
@@ -897,7 +897,7 @@ describe('s2s-cid-view-section', () => {
     });
     await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
     const all = [...(cidViewMocks.checkRetrievability.mock.calls[0][2] as readonly string[])];
-    expect(all.length).toBe(11);
+    expect(all.length).toBe(13);
     el0.remove();
     cidViewMocks.checkRetrievability.mockClear();
 
@@ -920,7 +920,7 @@ describe('s2s-cid-view-section', () => {
     await new Promise((r) => setTimeout(r, 50)); // let any (wrong) async pass surface
     expect(cidViewMocks.checkRetrievability).not.toHaveBeenCalled();
     // Dots render from the persisted map + the stored-hint makes persistence observable.
-    expect(el.shadowRoot!.textContent).toContain('11 CIDs stored');
+    expect(el.shadowRoot!.textContent).toContain('13 CIDs stored');
     const dealRow = Array.from(el.shadowRoot!.querySelectorAll('.cid-row')).find((r) =>
       r.querySelector('.badge.deal'),
     );
@@ -1057,7 +1057,7 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
-    expect(root.querySelectorAll('.cid-row').length).toBe(11);
+    expect(root.querySelectorAll('.cid-row').length).toBe(13);
 
     const configChip = Array.from(root.querySelectorAll('button.chip')).find((b) =>
       b.textContent?.trim().endsWith('config'),
@@ -1082,22 +1082,22 @@ describe('s2s-cid-view-section', () => {
     // Toggle the active chip off → all 13 rows return.
     (activeChip as HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(11);
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
     });
     expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
   });
 
   it('health chips filter the table by copy buckets and combine with type chips (AND)', async () => {
     // Deterministic mixed retrievability covering every bucket: deal 5 copies
-    // (healthy), template 3 copies (needs healing), config 1 copy (danger),
-    // assets 0 copies (lost); everything else unchecked.
+    // (healthy), ver1 3 copies (needs healing), config 1 copy (danger), assets
+    // 0 copies (lost); everything else unchecked.
     const seed: CidRetrievabilityMap = {
       bafydeal1: {
         checkedAt: RECENT(),
         copies: 5,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
       },
-      bafytemplate: {
+      bafyver1: {
         checkedAt: RECENT(),
         copies: 3,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
@@ -1123,7 +1123,7 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
-    expect(root.querySelectorAll('.cid-row').length).toBe(11);
+    expect(root.querySelectorAll('.cid-row').length).toBe(13);
 
     // Container 2 chips: healthy / needs healing / danger / lost.
     const group2 = root.querySelectorAll('.chips-group')[1]!.textContent ?? '';
@@ -1150,7 +1150,7 @@ describe('s2s-cid-view-section', () => {
     ).find((b) => b.textContent?.includes('healthy'));
     (healthyChipActive as HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(11);
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
     });
 
     // 'lost' → only the assets root row (0/4).
@@ -1183,7 +1183,7 @@ describe('s2s-cid-view-section', () => {
     expect(clearChip).toBeTruthy();
     (clearChip as HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(11);
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
     });
     expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
   });

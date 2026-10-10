@@ -9,6 +9,8 @@ export class CopyHash extends LitElement {
   @property() value = '';
   /** Optional gateway URL — when set, renders an open-in-new-tab icon button. */
   @property() href = '';
+  /** Optional display text — when set, shown instead of the auto-truncated value. */
+  @property() display = '';
 
   @state() private copied = false;
   private timeout: number | null = null;
@@ -40,7 +42,7 @@ export class CopyHash extends LitElement {
       }
 
       button:hover {
-        color: #1a1a1a;
+        color: var(--color-yellow);
       }
 
       button.copied {
@@ -114,7 +116,7 @@ export class CopyHash extends LitElement {
 
   render() {
     return html`
-      <span class="text" title=${this.value}>${this.truncate(this.value)}</span>
+      <span class="text" title=${this.value}>${this.display || this.truncate(this.value)}</span>
       <button
         class="${this.copied ? 'copied' : ''}"
         aria-label="Copy to clipboard"

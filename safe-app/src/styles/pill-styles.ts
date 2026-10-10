@@ -6,13 +6,13 @@ export const pillStyles = css`
     align-items: center;
     gap: 0.5rem;
     font-family: var(--font-mono);
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-size: 0.82rem;
+    font-weight: 400;
     letter-spacing: 0.75px;
     text-transform: uppercase;
-    padding: 0.5rem 1rem;
+    padding: 0.25rem .75rem;
     border-radius: 9999px;
-    border: 2px solid var(--color-yellow);
+    border: 1px solid var(--color-yellow);
     background: var(--gray-700);
     color: var(--gray-50);
   }

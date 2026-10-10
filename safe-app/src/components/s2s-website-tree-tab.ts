@@ -27,7 +27,7 @@ import { LitService, renderwithLitActions } from '@s2s/soul2soul-shared';
 import { ethers } from 'ethers';
 import { store } from '../state/index.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
-import { evmRead } from '@/lib/evm.js';
+import { evmRead, getRpcUrl } from '@/lib/evm.js';
 import { IPFS_URL } from '@/lib/ipfs-fs.factory.js';
 import { decodeRootCid } from '@/lib/contenthash.js';
 import './copy-hash.js';
@@ -586,12 +586,13 @@ export class S2SWebsiteTreeTab extends LitElement {
 
       const contentIds = rebuild ? store.deals.map((d) => d.genesis) : [];
 
-      // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base). Mirrors
-      // s2s-deals-tab.ts bulkRender / getRpcUrl in lib/evm.ts — no hardcoded keys.
-      const apiKey = String(import.meta.env.VITE_DRPC_API_KEY ?? 'default');
+      // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base). Single
+      // source of truth is getRpcUrl in lib/evm.ts — no hardcoded keys, and a
+      // keyless build falls back to public RPCs (never the retired
+      // lb.drpc.live/.../default endpoint).
       const rpcs = {
-        L1: [`https://lb.drpc.live/ethereum/${apiKey}`],
-        L2: [`https://lb.drpc.live/base/${apiKey}`],
+        L1: [getRpcUrl(1)],
+        L2: [getRpcUrl(8453)],
       };
 
       const res = await renderwithLitActions(
@@ -712,7 +713,7 @@ export class S2SWebsiteTreeTab extends LitElement {
     return html`
       <div class="cid-footer">
         <span class="cid-label">Content cache CID</span>
-        <copy-hash .value=${this.shortenCid(this.contentCacheCid)} href=${this.gatewayUrl(this.contentCacheCid)}></copy-hash>
+        <copy-hash .value=${this.contentCacheCid} display=${this.shortenCid(this.contentCacheCid)} href=${this.gatewayUrl(this.contentCacheCid)}></copy-hash>
       </div>`;
   }
 
