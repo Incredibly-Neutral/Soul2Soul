@@ -33,7 +33,7 @@ async function checkCid(cid: string, signal: AbortSignal): Promise<CheckResult> 
   const start = performance.now();
   try {
     if (signal.aborted) return { cid, ms: 0, error: "aborted" };
-    const url = `${CHECK_URL}/check?cid=${encodeURIComponent(cid)}&timeoutSeconds=${CHECK_TIMEOUT_S}`;
+    const url = `${CHECK_URL}/check?cid=${encodeURIComponent(cid)}&timeoutSeconds=${CHECK_TIMEOUT_S}&httpRetrieval=on`;
     const res = await fetch(url, { signal });
     const ms = Math.round(performance.now() - start);
     if (!res.ok) return { cid, ms, error: `${res.status}: ${(await res.text()).trim()}` };
