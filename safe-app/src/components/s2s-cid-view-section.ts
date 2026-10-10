@@ -19,14 +19,24 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
 import { buildPublicationCidView, parsePublicationCidView } from '@s2s/soul2soul-shared/safe-app';
+import {
+  cidsFromView,
+  orderByCopiesAscending,
+  orderByStaleness,
+  RETRIEVABILITY_SOURCES,
+} from '@s2s/soul2soul-shared/safe-app';
 import type {
   CidCategory,
   CidEntry,
+  CidRetrievabilityMap,
+  CidRetrievabilityStatus,
   CidViewReadContext,
   PublicationCidView,
+  RetrievabilitySource,
 } from '@s2s/soul2soul-shared/safe-app';
 import { store } from '../state/index.js';
 import './copy-hash.js';
+import { checkRetrievability, loadRetrievabilityMap } from '@/lib/cid-view.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -55,6 +65,9 @@ function categoryLabel(cat: CidCategory): string {
 function categoryClass(cat: CidCategory): string {
   return CATEGORY_META[cat]?.cls ?? 'deal';
 }
+
+/** CIDs per retrievability batch POST (streaming keeps the UI incremental regardless). */
+const RETRIEVABILITY_BATCH = 50;
 
 // --- localStorage stale-while-revalidate cache ---
 
@@ -125,9 +138,19 @@ export class S2SCidViewSection extends LitElement {
   @state() private error = '';
   /** Epoch ms when the currently displayed (cached) view was persisted — null when fresh. */
   @state() private staleSince: number | null = null;
+  /** Per-cid retrievability snapshot (Kubo/Pinata/Filebase/Filecoin copies). */
+  @state() private retrievability: CidRetrievabilityMap | null = null;
+  /** True while a retrievability recheck pass is running. */
+  @state() private checking = false;
+  /** Statuses applied this pass — for the checking X/Y indicator. */
+  @state() private checkedCount = 0;
 
   /** Monotonic build id — stale async builds never overwrite a newer one. */
   private buildId = 0;
+  /** Aborts the in-flight retrievability pass (disconnect / recheck / publication change). */
+  private retrievabilityAbort: AbortController | null = null;
+  /** Monotonic guard — a stale retrievability pass must not clobber a newer map. */
+  private retrievabilityEpoch = 0;
   /** One-minute ticker that keeps the staleness label honest while stale. */
   private staleTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -137,6 +160,9 @@ export class S2SCidViewSection extends LitElement {
       clearInterval(this.staleTimer);
       this.staleTimer = null;
     }
+    this.retrievabilityAbort?.abort();
+    this.retrievabilityAbort = null;
+    this.retrievabilityEpoch++;
   }
 
   /** Mark the shown view as stale (served from cache) and start the age ticker. */
@@ -245,10 +271,10 @@ h
         opacity: 0.55;
       }
 
-      /* Grouped inventory table (simple grid, read-only). */
+      /* Flat risk-sorted inventory table (simple grid, read-only). */
       .cid-table {
         display: grid;
-        grid-template-columns: 0.95fr 0.7fr 1.9fr 1.6fr 1.2fr 0.85fr 0.55fr;
+        grid-template-columns: 0.9fr 0.6fr 1.7fr 2fr 1.1fr 0.7fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr;
         width: 100%;
         overflow-x: auto;
       }
@@ -264,6 +290,45 @@ h
         color: var(--gray-300, #d1d5db);
         min-width: 0;
         overflow-wrap: anywhere;
+      }
+      .cell-sub {
+        margin-top: 0.18rem;
+        font-size: 0.72rem;
+        color: var(--gray-500, #6b7280);
+        overflow-wrap: anywhere;
+      }
+      /* Per-source availability dots. */
+      .dot {
+        display: inline-block;
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 9999px;
+        vertical-align: middle;
+      }
+      .dot.on {
+        background: #10b981;
+        box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4);
+      }
+      .dot.off {
+        background: #ef4444;
+        box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.4);
+      }
+      .dot.unknown {
+        background: #4b5563;
+      }
+      /* Copies n/4 risk colouring. */
+      .copies {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      .copies.copies-ok {
+        color: #6ee7b7;
+      }
+      .copies.copies-low {
+        color: #fcd34d;
+      }
+      .copies.copies-none {
+        color: #f87171;
       }
       .cid-head {
         padding: 0.55rem 0.6rem;
@@ -447,6 +512,18 @@ h
     }
     const publication = this.publication || store.getRecord?.('name') || '';
 
+    // Publication switch: abort any in-flight retrievability pass and drop the
+    // old publication's statuses so a stale pass can't write back into a map
+    // that now belongs to a different publication.
+    if (this.view !== null && this.view.publication !== publication) {
+      this.retrievabilityAbort?.abort();
+      this.retrievabilityAbort = null;
+      this.retrievabilityEpoch++;
+      this.retrievability = null;
+      this.checking = false;
+      this.checkedCount = 0;
+    }
+
     // Stale-while-revalidate: hydrate the last-known view from localStorage
     // BEFORE the async fresh build so the table renders instantly instead of
     // the infinite spinner. Only hydrate when nothing is displayed yet or the
@@ -478,6 +555,7 @@ h
       this.view = view;
       saveCachedView(publication, view);
       this.clearStale();
+      this.startRetrievabilityCheck();
       const elapsed = Math.round(performance.now() - started);
       console.log(
         `[cid-view] rebuild ${publication} done in ${String(elapsed)}ms${prev ? ' (incremental)' : ' (cold)'} — ${String(view.summary.total)} entries, ${String(view.summary.uniqueCids)} unique CIDs`,
@@ -514,22 +592,112 @@ h
     });
   }
 
-  /** Group entries by category, preserving first-appearance (coordinator) order. */
-  private groupByCategory(
-    entries: CidEntry[],
-  ): Array<{ category: CidCategory; items: CidEntry[] }> {
-    const order: CidCategory[] = [];
-    const map = new Map<CidCategory, CidEntry[]>();
-    for (const entry of entries) {
-      let group = map.get(entry.category);
-      if (!group) {
-        group = [];
-        map.set(entry.category, group);
-        order.push(entry.category);
-      }
-      group.push(entry);
+  /** Status for a cid, or undefined when never checked (gray dots). */
+  private retrievabilityStatus(cid: string): CidRetrievabilityStatus | undefined {
+    const map = this.retrievability;
+    if (!map) return undefined;
+    return cid in map ? map[cid] : undefined;
+  }
+
+  /** Human relative label for a checkedAt ISO string. */
+  private relativeTime(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '-';
+    const diffMs = Date.now() - then;
+    if (diffMs < 60_000) return 'just now';
+    const mins = Math.floor(diffMs / 60_000);
+    if (mins < 60) return `${String(mins)}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 48) return `${String(hours)}h ago`;
+    return new Date(iso).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  /**
+   * First-occurrence entry per unique cid, preserving coordinator order — the
+   * flat risk-sorted table renders one row per cid.
+   */
+  private firstOccurrenceEntries(view: PublicationCidView): CidEntry[] {
+    const seen = new Set<string>();
+    const entries: CidEntry[] = [];
+    for (const entry of view.entries) {
+      if (seen.has(entry.cid)) continue;
+      seen.add(entry.cid);
+      entries.push(entry);
     }
-    return order.map((category) => ({ category, items: map.get(category) ?? [] }));
+    return entries;
+  }
+
+  /**
+   * Self-pacing retrievability pass: stalest-first batches over the batch
+   * endpoint until the whole list is checked. Incremental per-line updates
+   * arrive as results stream; the pass restarts until aborted or exhausted.
+   */
+  private async runRetrievabilityPass(): Promise<void> {
+    if (!this.view || this.checking) return;
+    const epoch = this.retrievabilityEpoch;
+    this.checking = true;
+    this.checkedCount = 0;
+    try {
+      const all = cidsFromView(this.view);
+      // Cids already (re)checked by THIS pass. orderByStaleness is a pure SORT
+      // (returns every cid, never fewer) — so the next batch is the stalest
+      // order minus what this pass already covered; the loop terminates when
+      // every cid has been touched this pass.
+      const doneThisPass = new Set<string>();
+      for (;;) {
+        const next = orderByStaleness(all, this.retrievability ?? {})
+          .filter((cid) => !doneThisPass.has(cid))
+          .slice(0, RETRIEVABILITY_BATCH);
+        if (next.length === 0) break;
+        for (const cid of next) doneThisPass.add(cid);
+        try {
+          const map = await checkRetrievability(this.publication, this.view, next, {
+            prev: this.retrievability ?? undefined,
+            onResult: (cid, status) => {
+              if (epoch === this.retrievabilityEpoch) {
+                this.retrievability = { ...this.retrievability, [cid]: status };
+                this.checkedCount++;
+              }
+            },
+            signal: this.retrievabilityAbort?.signal,
+          });
+          if (epoch === this.retrievabilityEpoch) this.retrievability = map;
+        } catch {
+          // Aborted (disconnect / recheck / publication switch) → stop now.
+          break;
+        }
+        if (this.retrievabilityAbort?.signal.aborted) break;
+      }
+    } finally {
+      // Only the current owner of the pass resets checking — a stale pass
+      // (epoch changed via recheck / publication switch) must not clobber a
+      // newer pass that is already running.
+      if (epoch === this.retrievabilityEpoch) this.checking = false;
+    }
+  }
+
+  /** Manually restart the retrievability pass (abort any in-flight one). */
+  private recheck(): void {
+    this.retrievabilityAbort?.abort();
+    this.retrievabilityAbort = new AbortController();
+    this.retrievabilityEpoch++;
+    this.checking = false;
+    void this.runRetrievabilityPass();
+  }
+
+  /**
+   * Kick off the retrievability pass after a fresh build: paint the cached
+   * dots instantly, arm a fresh abort controller, then start the stalest-first
+   * background loop over the batch endpoint.
+   */
+  private startRetrievabilityCheck(): void {
+    this.retrievability = loadRetrievabilityMap(this.publication);
+    this.retrievabilityAbort = new AbortController();
+    void this.runRetrievabilityPass();
   }
 
   private renderSummary(view: PublicationCidView): TemplateResult {
@@ -564,8 +732,36 @@ h
     `;
   }
 
+  /** Availability dot cell for one source. Gray while unchecked, green/red when checked. */
+  private renderSourceDot(
+    source: RetrievabilitySource,
+    status: CidRetrievabilityStatus | undefined,
+  ): TemplateResult {
+    let cls = 'dot unknown';
+    let label = `${source}: not checked yet`;
+    if (status !== undefined) {
+      const present = status.sources[source];
+      cls = present ? 'dot on' : 'dot off';
+      label = `${source}: ${present ? 'copy found' : 'no copy'}`;
+      if (status.error) label += ` — ${status.error}`;
+    }
+    return html`<div class="cid-cell"><span class="${cls}" title="${label}"></span></div>`;
+  }
+
   private renderEntryRow(entry: CidEntry): TemplateResult {
     const cid = entry.cid;
+    const status = this.retrievabilityStatus(cid);
+    const copies = status === undefined ? null : status.copies;
+    const copiesCls =
+      copies === null
+        ? ''
+        : copies >= 2
+          ? 'copies-ok'
+          : copies === 1
+            ? 'copies-low'
+            : 'copies-none';
+    const copiesLabel = copies === null ? '—' : `${String(copies)}/4`;
+    const lastCheck = status === undefined ? '—' : this.relativeTime(status.checkedAt);
     return html`
       <div class="cid-row">
         <div class="cid-cell">
@@ -587,9 +783,9 @@ h
         </div>
         <div class="cid-cell">
           ${entry.role || entry.path || html`<span class="muted">-</span>`}
-        </div>
-        <div class="cid-cell">
-          ${entry.genesis ? this.shortenCid(entry.genesis, 6) : html`<span class="muted">-</span>`}
+          ${entry.genesis
+            ? html`<div class="cell-sub">${this.shortenCid(entry.genesis, 6)}</div>`
+            : nothing}
         </div>
         <div class="cid-cell">${this.ageDisplay(entry.timestamp)}</div>
         <div class="cid-cell">
@@ -597,12 +793,25 @@ h
             ? html`<span class="badge tombstone">tombstone</span>`
             : html`<span class="muted">-</span>`}
         </div>
+        ${RETRIEVABILITY_SOURCES.map((source) => this.renderSourceDot(source, status))}
+        <div class="cid-cell"><span class="copies ${copiesCls}">${copiesLabel}</span></div>
+        <div class="cid-cell">${lastCheck}</div>
       </div>
     `;
   }
 
   private renderTable(view: PublicationCidView): TemplateResult {
-    const groups = this.groupByCategory(view.entries);
+    // Flat risk-sorted table: one row per unique cid, fewest copies first
+    // (unchecked statuses sort to the top so the riskiest rows surface first).
+    const byCid = new Map<string, CidEntry>();
+    for (const entry of this.firstOccurrenceEntries(view)) {
+      byCid.set(entry.cid, entry);
+    }
+    const rows: CidEntry[] = [];
+    for (const cid of orderByCopiesAscending(cidsFromView(view), this.retrievability ?? {})) {
+      const entry = byCid.get(cid);
+      if (entry) rows.push(entry);
+    }
     return html`
       <div class="cid-table">
         <div class="cid-header-row">
@@ -610,22 +819,16 @@ h
           <div class="cid-head">Source</div>
           <div class="cid-head">CID</div>
           <div class="cid-head">Role / Path</div>
-          <div class="cid-head">Genesis</div>
           <div class="cid-head">Age</div>
           <div class="cid-head">Tombstone</div>
+          <div class="cid-head">Kubo</div>
+          <div class="cid-head">Pinata</div>
+          <div class="cid-head">Filebase</div>
+          <div class="cid-head">Filecoin</div>
+          <div class="cid-head">Copies</div>
+          <div class="cid-head">Last check</div>
         </div>
-        ${groups.map(
-          (group) => html`
-            <div class="cid-group-row">
-              <div class="cid-group">
-                ${categoryLabel(group.category)}<span class="group-count"
-                  >${group.items.length}</span
-                >
-              </div>
-            </div>
-            ${group.items.map((entry) => this.renderEntryRow(entry))}
-          `,
-        )}
+        ${rows.map((entry) => this.renderEntryRow(entry))}
       </div>
     `;
   }
@@ -687,6 +890,22 @@ h
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>
             ${this.loading ? 'Loading…' : 'Refresh'}
           </button>
+          <button
+            class="refresh"
+            ?disabled=${this.checking}
+            title="Re-check every CID against the ipfs-check service (stalest first)"
+            @click=${() => {
+              this.recheck();
+            }}
+          >
+            <ph-arrow-counter-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-counter-clockwise>
+            ${this.checking ? 'Checking…' : 'Recheck'}
+          </button>
+          ${this.checking
+            ? html`<span class="stale-hint"
+                >checking copies… (${this.checkedCount}/${cidsFromView(view).length})</span
+              >`
+            : nothing}
           ${this.staleSince != null
             ? html`<span class="stale-hint">${this.staleLabel()}</span>`
             : nothing}
