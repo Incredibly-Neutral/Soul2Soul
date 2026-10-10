@@ -10,6 +10,8 @@ import { describe, it, expect } from 'vitest';
 import type { CidEntry, PublicationCidView } from './types';
 import type { CidRetrievabilityStatus, RetrievabilitySource } from './retrievability';
 import {
+  FILECOIN_AGENT_RE,
+  FILECOIN_SP_HOSTS,
   aggregateRetrievability,
   classifyProvider,
   parseBatchNdjson,
@@ -139,6 +141,40 @@ describe('classifyProvider (pure, hand-built providers)', () => {
       AgentVersion: '',
     });
     expect(p.platforms).toEqual(['filecoin']);
+  });
+
+  it('filecoin by SP host: every in-use SP host is recognised (AgentVersion absent)', () => {
+    // HTTP-only SPs have no AgentVersion (identify is skipped over HTTP) — the
+    // host match is what lights the filecoin dot. FILECOIN_SP_HOSTS must mirror
+    // BROWSER_USABLE_PROVIDERS in shared/src/filecoin/index.ts.
+    expect(FILECOIN_SP_HOSTS).toHaveLength(8);
+    for (const host of FILECOIN_SP_HOSTS) {
+      const p = classifyProvider({
+        ID: 'peer-sp',
+        Addrs: [`/dns/${host}/tcp/443/https`],
+        DataAvailableOverHTTP: { Found: true },
+        AgentVersion: '',
+      });
+      expect(p.platforms).toEqual(['filecoin']);
+    }
+  });
+
+  it('filecoin NOT by an active-but-unused SP host (only in-use SPs count)', () => {
+    // pdp.tigerteches.org is an active registry provider but not in the
+    // BROWSER_USABLE_PROVIDERS set the app stores to — must NOT be filecoin.
+    const p = classifyProvider({
+      ID: 'peer-sp',
+      Addrs: ['/dns/pdp.tigerteches.org/tcp/5521/https'],
+      DataAvailableOverHTTP: { Found: true },
+      AgentVersion: '',
+    });
+    expect(p.platforms).toEqual([]);
+  });
+
+  it('filecoin agent regex: curio (SP engine) counts, fvm (Filecoin VM) does not', () => {
+    expect(FILECOIN_AGENT_RE.test('curio/24.0.0')).toBe(true);
+    expect(FILECOIN_AGENT_RE.test('boost-v2023.11.28')).toBe(true);
+    expect(FILECOIN_AGENT_RE.test('fvm/4.0.0')).toBe(false);
   });
 
   it('filecoin by agent (boost) even without an SP host', () => {

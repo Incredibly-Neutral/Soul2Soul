@@ -14,6 +14,7 @@
 import {
   S2SIPFSMethods,
   buildPublicationCidView,
+  hostIsFilecoinSp,
   parseCidRetrievabilityMap,
 } from '@s2s/soul2soul-shared/safe-app';
 import type {
@@ -409,6 +410,61 @@ const RETRIEVABILITY_CACHE_PREFIX = 's2s.cidview.';
 /** CIDs per batch POST. Streaming keeps the UI incremental regardless. */
 const RETRIEVABILITY_BATCH_SIZE = 50;
 
+/** Raw /batch response log — a bounded debug aid to distinguish "the response
+ *  really was empty" from "the parser misread it". Recent batches only, each
+ *  entry truncated to RAW_BATCH_LOG_MAX_RAW chars. */
+const RAW_BATCH_LOG_MAX_ENTRIES = 8;
+const RAW_BATCH_LOG_MAX_RAW = 200_000;
+
+interface RawBatchEntry {
+  at: string; // ISO timestamp of the batch POST
+  cids: number; // cids requested in this /batch call
+  bytes: number; // raw chars stored (after truncation)
+  raw: string; // full NDJSON response body
+}
+
+function rawBatchLogKey(publication: string): string {
+  return RETRIEVABILITY_CACHE_PREFIX + publication + '.rawbatch';
+}
+
+/**
+ * Append one raw /batch response body to the per-publication raw log in
+ * localStorage (bounded ring buffer). Fail-open: quota errors and corrupt
+ * blobs degrade to a console.warn, never throw.
+ */
+export function appendRawBatchLog(publication: string, cids: number, raw: string): void {
+  try {
+    const key = rawBatchLogKey(publication);
+    let log: RawBatchEntry[] = [];
+    const existing = window.localStorage.getItem(key);
+    if (existing) {
+      try {
+        const parsed = JSON.parse(existing) as unknown;
+        if (Array.isArray(parsed)) log = parsed as RawBatchEntry[];
+      } catch {
+        log = [];
+      }
+    }
+    const truncated =
+      raw.length > RAW_BATCH_LOG_MAX_RAW
+        ? `${raw.slice(0, RAW_BATCH_LOG_MAX_RAW)}\n…[truncated ${String(raw.length - RAW_BATCH_LOG_MAX_RAW)} chars]`
+        : raw;
+    log.push({ at: new Date().toISOString(), cids, bytes: truncated.length, raw: truncated });
+    if (log.length > RAW_BATCH_LOG_MAX_ENTRIES) log = log.slice(-RAW_BATCH_LOG_MAX_ENTRIES);
+    const blob = JSON.stringify(log);
+    try {
+      window.localStorage.setItem(key, blob);
+    } catch {
+      // Quota exceeded (large batches): drop the oldest half and retry once.
+      log = log.slice(-Math.ceil(RAW_BATCH_LOG_MAX_ENTRIES / 2));
+      window.localStorage.setItem(key, JSON.stringify(log));
+    }
+    console.info(`[cid-view] raw /batch logged: ${String(cids)} cids, ${String(truncated.length)} bytes (${key})`);
+  } catch (err) {
+    console.warn('[cid-view] raw /batch log skipped', err instanceof Error ? err.message : String(err));
+  }
+}
+
 function retrievabilityCacheKey(publication: string): string {
   return RETRIEVABILITY_CACHE_PREFIX + publication + '.retrievability';
 }
@@ -486,8 +542,17 @@ export function classifyProviderPlatforms(provider: IpfsCheckProvider): Retrieva
   if (hay.includes('pinata')) platforms.push('pinata');
   // Kubo: agent reports the reference go-ipfs/kubo stack (kubo or its old name go-ipfs).
   if (agent.startsWith('kubo') || agent.startsWith('go-ipfs')) platforms.push('kubo');
-  // Filecoin: agent reports a Filecoin SP retrieval stack.
-  if (/boost|lotus|venus|fvm|spade/.test(agent)) platforms.push('filecoin');
+  // Filecoin: agent reports a Filecoin SP retrieval stack, or an Addr host is
+  // one of our in-use SP gateways (FILECOIN_SP_HOSTS, shared with the parser
+  // and mirroring BROWSER_USABLE_PROVIDERS). The host match is what catches
+  // HTTP-only SPs: AgentVersion comes from libp2p identify, which is skipped
+  // when the SP only serves over HTTP, so they arrive with no agent at all.
+  if (
+    /boost|lotus|venus|curio|spade/.test(agent) ||
+    (provider.Addrs ?? []).some(hostIsFilecoinSp)
+  ) {
+    platforms.push('filecoin');
+  }
   return platforms;
 }
 
@@ -503,11 +568,14 @@ export interface IpfsCheckLine {
  * POST one batch of cids to the ipfs-check /batch endpoint and stream the
  * NDJSON response, invoking `onResult` once per line as each cid finishes
  * (the server checks the batch in parallel and streams results incrementally).
+ * `onRaw` (when given) receives the FULL raw response body once the stream
+ * completes (or errors) — used for the raw /batch debug log.
  */
 export async function checkBatch(
   cids: string[],
   onResult: (r: IpfsCheckLine) => void,
   signal?: AbortSignal,
+  onRaw?: (raw: string) => void,
 ): Promise<void> {
   const res = await fetch(`${IPFS_CHECK_ENDPOINT}/batch`, {
     method: 'POST',
@@ -518,16 +586,23 @@ export async function checkBatch(
   if (!res.ok || !res.body) throw new Error(`ipfs-check batch HTTP ${String(res.status)}`);
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i);
-      buf = buf.slice(i + 1);
-      if (line) onResult(JSON.parse(line) as IpfsCheckLine);
+  let raw = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      raw += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        if (line) onResult(JSON.parse(line) as IpfsCheckLine);
+      }
     }
+  } finally {
+    // Deliver whatever made it across (a partial body on error is still useful).
+    onRaw?.(raw);
   }
 }
 
@@ -628,6 +703,9 @@ export async function checkRetrievability(
           opts?.onResult?.(line.cid, status);
         },
         opts?.signal,
+        (raw) => {
+          appendRawBatchLog(publication, chunk.length, raw);
+        },
       );
     } catch (err) {
       // An aborted pass (disconnect / recheck / publication switch) must NOT be

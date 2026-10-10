@@ -288,3 +288,10 @@ $0
 - Deploy: from isolated worktree at merged commit (main tree had user's in-flight copy-hash refactor — NOT shipped). pnpm qa PASS, ./deploy.sh OK. Live bundle main.S4iNzCpP.js verified (new Set(["deal-version","offer-version"])).
 - Main-tree cleanup: restored user's concurrent uncommitted cid-view-section copy-hash refactor (had been overwritten during work) — main tree back to baseline + user's 3 edits + test links-query.
 - NOTE: user's concurrent storage-tab/website-tree-tab gateway-link→copy-hash refactor + copy-hash.ts are still uncommitted in main tree; their 2 tests fail on that refactor (pre-existing to #131, not mine). origin/main has clean baseline there.
+
+## 2026-10-10 — Stray-branch/worktree cleanup (lead-direct, no code change)
+- Removed 20 dead worktrees (branches whose PR was MERGED or whose content was confirmed in main).
+- Deleted 30+ local branches + 23 remote branches on origin (all PR-MERGED or content-verified in main).
+- Preserved before deletion: `brain/research/2026-09-18-lit-action-registry-proxy.md` + `2026-09-18-lit-adoption-analysis.md` (from remove-action-logging worktree), `brain/specs/RFC-reset-tree-button.md` (from feat/reset-tree-button) — all previously not tracked in main.
+- NOT touched (real unmerged/in-flight work): worktrees+branches `feat/lit-chain-secured-provisioning`, `feat/lit-chain-secured-reprovision` (has uncommitted chain-secured edits), `feat/whitepaper-v1`, `fix/render-cid-fetch-timeout`, plus `feat/publication-archive-cache`. `deploy-main` and `publish/website-starter` kept (deploy marker / pub-remote branch).
+- Also preserved: the 8 unpushed commits on local main (user's in-flight copy-hash refactor) — not pushed, left for user.
