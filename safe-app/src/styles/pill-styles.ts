@@ -8,7 +8,7 @@ export const pillStyles = css`
     font-family: var(--font-mono);
     font-size: 0.82rem;
     font-weight: 400;
-    letter-spacing: 0.75px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     padding: 0.25rem .75rem;
     border-radius: 9999px;
