@@ -112,6 +112,9 @@ export class CopyHash extends LitElement {
         class="${this.copied ? 'copied' : ''}"
         aria-label="Copy to clipboard"
         @click=${(e: Event) => {
+          // A copy-hash may be rendered inside a gateway <a> link — stop the
+          // anchor from navigating while still letting the click copy.
+          e.preventDefault();
           e.stopPropagation();
           this.copy();
         }}
