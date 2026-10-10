@@ -52,7 +52,7 @@ export const tableStyles = css`
     border-bottom: 1px solid var(--gray-600, #4b5563);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--gray-400, #9ca3af);
+    color: inherit;
   }
 
   .table-header:first-child {
@@ -64,7 +64,6 @@ export const tableStyles = css`
     background: transparent;
     border: none;
     border-bottom: 1px solid var(--gray-600);
-    color: inherit;
     cursor: pointer;
     user-select: none;
     text-align: left;

@@ -14,11 +14,14 @@ export const theme = css`
   :root {
     /* ------------------------------------------------------------------ */
     /* Brand / accent colors                                               */
+    /*   Recolored to the CID-inventory palette (see s2s-cid-view-section) */
+    /*   so the app shares one hue family: yellow=config, green=tree,      */
+    /*   blue=deal, purple=offer. Red is left as the existing error color. */
     /* ------------------------------------------------------------------ */
-    --color-yellow: #eeb51d;
-    --color-green:  #5ba82f;
-    --color-blue:   #2d8fc4;
-    --color-purple: #8e54b8;
+    --color-yellow: #fcd34d;
+    --color-green:  #6ee7b7;
+    --color-blue:   #93c5fd;
+    --color-purple: #d8b4fe;
     --color-red:    #db4233;
 
     /* ------------------------------------------------------------------ */
