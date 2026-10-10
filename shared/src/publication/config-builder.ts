@@ -276,11 +276,24 @@ export class ConfigBuilder {
       ...(aliasesOut !== undefined ? { aliases: aliasesOut } : {}),
     };
 
-    // --- Upload final config to both Filebase + Kubo ---
-    // (Dual-write preserves both CDNs; return the kubo CID for on-chain records)
-    // Pinata disabled in favor of Filebase (eth.link recommends Filebase)
-    await this.ipfs.uploadToPinata(JSON.stringify(finalConfig), 'config.json');
-    const kuboConfigCid = await this.ipfs.addToKubo(JSON.stringify(finalConfig), 'config.json');
+    // --- Upload final config to Filebase + Pinata (fire-and-forget) + Kubo (primary) ---
+    // The kubo add below is the awaited primary (its CID is what we record
+    // on-chain). The pinning-service mirrors never block the publish flow —
+    // they only add copies so the same CID is retrievable from more providers.
+    // All three upload the identical bytes, so (content-addressed) they share
+    // the same CID.
+    const configJson = JSON.stringify(finalConfig);
+    void this.ipfs
+      .uploadToPinata(configJson, 'config.json', 'filebase')
+      .catch((err: unknown) => {
+        console.warn('[config-builder] Filebase mirror upload failed (non-fatal):', err);
+      });
+    void this.ipfs
+      .uploadToPinata(configJson, 'config.json', 'pinata')
+      .catch((err: unknown) => {
+        console.warn('[config-builder] Pinata mirror upload failed (non-fatal):', err);
+      });
+    const kuboConfigCid = await this.ipfs.addToKubo(configJson, 'config.json');
 
     console.log(`✅ Config uploaded: ${kuboConfigCid}`);
 
