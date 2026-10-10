@@ -71,7 +71,6 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     S2SIPFSMethods: ipfsMocks.ipfsClass,
     buildPublicationCidView: ipfsMocks.buildPublicationCidView,
     cidsFromView: retrievability.cidsFromView,
-    filecoinBackedCidsFromView: retrievability.filecoinBackedCidsFromView,
     orderByCopiesAscending: retrievability.orderByCopiesAscending,
     orderByStaleness: retrievability.orderByStaleness,
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
@@ -465,7 +464,7 @@ function retrievabilityView(entries: CidEntry[] = []): PublicationCidView {
   };
 }
 
-/** Two distinct cids: one on-chain deal (filecoin-backed), one config. */
+/** Two distinct cids: one s2s deal, one config. */
 function validView(): PublicationCidView {
   return retrievabilityView([
     { cid: 'bafydeal1', category: 'deal', source: 'deals' },
@@ -542,7 +541,6 @@ describe('retrievability adapter', () => {
   it('statusFromCheckLine: error line → all-false + error, checkedAt recorded', () => {
     const status = statusFromCheckLine(
       { cid: 'bafyconfig', error: 'boom' },
-      validView(),
       () => '2026-01-01T00:00:00.000Z',
     );
     expect(status).toEqual({
@@ -556,7 +554,6 @@ describe('retrievability adapter', () => {
   it('statusFromCheckLine: non-array result (MutableResolution) → all-false, no error', () => {
     const status = statusFromCheckLine(
       { cid: 'bafyconfig', result: { MutableResolution: { Path: '/ipns/foo' } } },
-      validView(),
       () => '2026-01-01T00:00:00.000Z',
     );
     expect(status.copies).toBe(0);
@@ -574,7 +571,6 @@ describe('retrievability adapter', () => {
           provider({ AgentVersion: 'boost-v2.3.0', DataAvailableOverBitswap: { Enabled: true, Found: false } }),
         ],
       },
-      validView(),
       () => '2026-01-01T00:00:00.000Z',
     );
     expect(status.sources.filebase).toBe(true);
@@ -590,19 +586,45 @@ describe('retrievability adapter', () => {
         cid: 'bafyconfig',
         result: [provider({ DataAvailableOverBitswap: { Enabled: true, Found: false } })],
       },
-      validView(),
       () => '2026-01-01T00:00:00.000Z',
     );
     expect(status.copies).toBe(0);
     expect(status.sources).toEqual(SOURCES_FALSE);
   });
 
-  it('statusFromCheckLine: on-chain deal cids are filecoin copies even with no providers', () => {
-    const status = statusFromCheckLine({ cid: 'bafydeal1', result: [] }, validView(), () =>
+  it('statusFromCheckLine: real ipfs-check provider (filebase megaphone node) → filebase only', () => {
+    // Observed live from https://ipfs-check.transport-union.dev/batch for the
+    // s3nl.soul2soul.eth site root — a Filebase node serving the cid over
+    // Bitswap (agent "megaphone", /dnsaddr/bitswap.filebase.io, source IPNI).
+    const filebaseMegaphone: IpfsCheckProvider = {
+      ID: '12D3KooWGtYkBAaqJMJEmywMxaCiNP7LCEFUAFiLEBASe232c2VH',
+      Addrs: ['/dnsaddr/bitswap.filebase.io'],
+      AgentVersion: 'megaphone',
+      Source: 'IPNI',
+      DataAvailableOverBitswap: { Enabled: true, Found: true },
+      DataAvailableOverHTTP: { Enabled: false, Found: false },
+    };
+    const status = statusFromCheckLine(
+      { cid: 'bafyroot', result: [filebaseMegaphone] },
+      () => '2026-01-01T00:00:00.000Z',
+    );
+    expect(status.sources.filebase).toBe(true);
+    expect(status.sources.kubo).toBe(false);
+    expect(status.sources.pinata).toBe(false);
+    expect(status.sources.filecoin).toBe(false);
+    expect(status.copies).toBe(1);
+  });
+
+  it('statusFromCheckLine: s2s deal cids do NOT imply a filecoin copy (no providers → all-false)', () => {
+    // bafydeal1 is an s2s publication deal (author + publication), NOT a
+    // Filecoin storage deal — with no serving provider in the report it must
+    // NOT light the filecoin dot.
+    const status = statusFromCheckLine({ cid: 'bafydeal1', result: [] }, () =>
       '2026-01-01T00:00:00.000Z',
     );
-    expect(status.sources.filecoin).toBe(true);
-    expect(status.copies).toBe(1);
+    expect(status.sources.filecoin).toBe(false);
+    expect(status.copies).toBe(0);
+    expect(status.sources).toEqual(SOURCES_FALSE);
   });
 
   it('checkRetrievability: 120 cids @50 → 3 batched POSTs, streams results, merges prev, persists', async () => {

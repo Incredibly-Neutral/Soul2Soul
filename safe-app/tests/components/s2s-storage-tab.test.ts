@@ -89,7 +89,6 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     orderByCopiesAscending: retrievability.orderByCopiesAscending,
     orderByStaleness: retrievability.orderByStaleness,
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
-    filecoinBackedCidsFromView: retrievability.filecoinBackedCidsFromView,
   };
 });
 
