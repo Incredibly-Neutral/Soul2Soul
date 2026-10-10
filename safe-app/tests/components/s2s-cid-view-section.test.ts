@@ -338,7 +338,8 @@ describe('s2s-cid-view-section', () => {
     // Entry rows: one per unique cid (flat risk-sorted table, no group rows).
     expect(root.querySelectorAll('.cid-row').length).toBe(13);
 
-    // Category badges.
+    // Type badges (collapsed Category+Source): one per row, labels grouped by
+    // the TYPE_META mapping, badge class keeps the fine-grained category color.
     expect(root.querySelectorAll('.badge.deal').length).toBe(1);
     expect(root.querySelectorAll('.badge.deal-version').length).toBe(2);
     expect(root.querySelectorAll('.badge.offer').length).toBe(1);
@@ -346,9 +347,22 @@ describe('s2s-cid-view-section', () => {
     expect(root.querySelectorAll('.badge.asset').length).toBe(2); // assets root + asset
     expect(root.querySelectorAll('.badge.tree').length).toBe(2); // site root + site file
     expect(root.querySelectorAll('.badge.archive').length).toBe(2); // archive + archive item
+    const badgeText = (sel: string) =>
+      Array.from(root.querySelectorAll(sel)).map((b) => b.textContent);
+    expect(badgeText('.cid-row .badge.deal')).toEqual(['source']);
+    expect(badgeText('.cid-row .badge.deal-version')).toEqual(['version', 'version']);
+    expect(badgeText('.cid-row .badge.offer')).toEqual(['offer']);
+    expect(badgeText('.cid-row .badge.config')).toEqual(['config', 'config', 'config']);
+    expect(badgeText('.cid-row .badge.asset')).toEqual(['asset', 'asset']);
+    expect(badgeText('.cid-row .badge.tree')).toEqual(['html', 'html']);
+    expect(badgeText('.cid-row .badge.archive')).toEqual(['cache', 'cache item']);
+    // No separate source column anymore — single Type column per row.
+    expect(root.querySelectorAll('.badge.source').length).toBe(0);
+    // Fine-grained category is preserved as the badge title for hover detail.
+    const dealBadge = root.querySelector('.cid-row .badge.deal') as HTMLElement | null;
+    expect(dealBadge?.getAttribute('title')).toBe('deal');
 
-    // Source badges: deals/config/tree/archive present, one per row.
-    expect(root.querySelectorAll('.badge.source').length).toBe(13);
+    // Per-source availability chips (header) still render.
     expect(text).toContain('deals ✓');
     expect(text).toContain('config ✓');
     expect(text).toContain('tree ✓');
