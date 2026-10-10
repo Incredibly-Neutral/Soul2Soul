@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 import type { CidEntry, PublicationCidView } from './types';
 import type { CidRetrievabilityStatus, RetrievabilitySource } from './retrievability';
 import {
-  FILECOIN_AGENT_RE,
   FILECOIN_SP_HOSTS,
   aggregateRetrievability,
   classifyProvider,
@@ -171,20 +170,17 @@ describe('classifyProvider (pure, hand-built providers)', () => {
     expect(p.platforms).toEqual([]);
   });
 
-  it('filecoin agent regex: curio (SP engine) counts, fvm (Filecoin VM) does not', () => {
-    expect(FILECOIN_AGENT_RE.test('curio/24.0.0')).toBe(true);
-    expect(FILECOIN_AGENT_RE.test('boost-v2023.11.28')).toBe(true);
-    expect(FILECOIN_AGENT_RE.test('fvm/4.0.0')).toBe(false);
-  });
-
-  it('filecoin by agent (boost) even without an SP host', () => {
+  it('filecoin NOT by agent alone (boost) when no Addr is an in-use SP host', () => {
+    // AgentVersion is deliberately ignored for filecoin: HTTP-only SPs carry
+    // no agent (identify is skipped over HTTP), so an agent match would only
+    // ever be accidental (e.g. the substring "lotus" inside a hostname).
     const p = classifyProvider({
       ID: 'peer-e',
       Addrs: ['/ip4/1.2.3.4/tcp/4001'],
       DataAvailableOverBitswap: { Found: true },
       AgentVersion: 'boost-v2023.11.28',
     });
-    expect(p.platforms).toEqual(['filecoin']);
+    expect(p.platforms).toEqual([]);
   });
 
   it('unserved provider: served false and contributes nothing to a verdict', () => {

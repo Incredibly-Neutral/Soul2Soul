@@ -408,7 +408,7 @@ export const IPFS_CHECK_ENDPOINT = 'https://ipfs-check.transport-union.dev';
 const RETRIEVABILITY_CACHE_PREFIX = 's2s.cidview.';
 
 /** CIDs per batch POST. Streaming keeps the UI incremental regardless. */
-const RETRIEVABILITY_BATCH_SIZE = 50;
+const RETRIEVABILITY_BATCH_SIZE = 3;
 
 /** Raw /batch response log — a bounded debug aid to distinguish "the response
  *  really was empty" from "the parser misread it". Recent batches only, each
@@ -542,15 +542,12 @@ export function classifyProviderPlatforms(provider: IpfsCheckProvider): Retrieva
   if (hay.includes('pinata')) platforms.push('pinata');
   // Kubo: agent reports the reference go-ipfs/kubo stack (kubo or its old name go-ipfs).
   if (agent.startsWith('kubo') || agent.startsWith('go-ipfs')) platforms.push('kubo');
-  // Filecoin: agent reports a Filecoin SP retrieval stack, or an Addr host is
-  // one of our in-use SP gateways (FILECOIN_SP_HOSTS, shared with the parser
-  // and mirroring BROWSER_USABLE_PROVIDERS). The host match is what catches
-  // HTTP-only SPs: AgentVersion comes from libp2p identify, which is skipped
-  // when the SP only serves over HTTP, so they arrive with no agent at all.
-  if (
-    /boost|lotus|venus|curio|spade/.test(agent) ||
-    (provider.Addrs ?? []).some(hostIsFilecoinSp)
-  ) {
+  // Filecoin: an Addr host is one of our in-use SP gateways (FILECOIN_SP_HOSTS,
+  // shared with the parser and mirroring BROWSER_USABLE_PROVIDERS). This is
+  // host-only, deliberately: HTTP-only SPs skip libp2p identify, so they carry
+  // no AgentVersion — an agent match would only ever be accidental (e.g. the
+  // substring "lotus" inside a hostname) and brittle.
+  if ((provider.Addrs ?? []).some(hostIsFilecoinSp)) {
     platforms.push('filecoin');
   }
   return platforms;

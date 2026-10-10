@@ -530,9 +530,9 @@ describe('retrievability adapter', () => {
     expect(classifyProviderPlatforms(provider({ AgentVersion: 'go-ipfs/0.22.0/' }))).toEqual([
       'kubo',
     ]);
-    expect(classifyProviderPlatforms(provider({ AgentVersion: 'boost-v2.3.0' }))).toEqual([
-      'filecoin',
-    ]);
+    // Agent alone no longer implies filecoin: HTTP-only SPs carry no
+    // AgentVersion, so only an in-use SP host (below) lights the dot.
+    expect(classifyProviderPlatforms(provider({ AgentVersion: 'boost-v2.3.0' }))).toEqual([]);
     // A provider may match multiple platforms (pinata runs kubo → both).
     expect(
       classifyProviderPlatforms(provider({ ID: 'pinata-1', AgentVersion: 'kubo/0.29.0/' })),
@@ -661,7 +661,7 @@ describe('retrievability adapter', () => {
     expect(status.sources).toEqual(SOURCES_FALSE);
   });
 
-  it('checkRetrievability: 120 cids @50 → 3 batched POSTs, streams results, merges prev, persists', async () => {
+  it('checkRetrievability: 120 cids @3 → 40 batched POSTs, streams results, merges prev, persists', async () => {
     const cids = Array.from({ length: 120 }, (_, i) => `bafychunk${String(i).padStart(3, '0')}`);
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { cids: string[] };
@@ -680,10 +680,10 @@ describe('retrievability adapter', () => {
     const onResult = vi.fn();
     const map = await checkRetrievability('test.eth', validView(), cids, { prev, onResult });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]!.body)).cids).toHaveLength(50);
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]!.body)).cids).toHaveLength(50);
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1]!.body)).cids).toHaveLength(20);
+    expect(fetchMock).toHaveBeenCalledTimes(40);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]!.body)).cids).toHaveLength(3);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]!.body)).cids).toHaveLength(3);
+    expect(JSON.parse(String(fetchMock.mock.calls[39][1]!.body)).cids).toHaveLength(3);
     expect(onResult).toHaveBeenCalledTimes(120);
     // merged with prev; every posted cid got a status
     expect(map.bafyprev).toEqual(prev.bafyprev);

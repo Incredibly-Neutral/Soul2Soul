@@ -24,7 +24,7 @@
 //      ConnectionMaddrs.join(' ') + ' ' + AgentVersion. NOT Source.
 //   3. Platforms: kubo (hay matches /kubo|go-ipfs/), pinata (hay has
 //      "pinata"), filebase (hay has "filebase"), filecoin (an Addr host is one
-//      of FILECOIN_SP_HOSTS, or AgentVersion matches FILECOIN_AGENT_RE).
+//      of FILECOIN_SP_HOSTS).
 //   4. One provider may set multiple platform flags; per CID each platform
 //      flag is set at most once (OR across all SERVING providers).
 //   5. copies = number of true sources values (0..4).
@@ -52,10 +52,6 @@ export const FILECOIN_SP_HOSTS: readonly string[] = [
   'foc.dealbot.site', // foc-mainnet (SP 30)
   'main2.ezpdpz.net', // ezpdpz-main2 (SP 32)
 ];
-
-/** Filecoin storage-provider client agents (boost/lotus/venus/curio/spade).
- *  NOTE: `fvm` is the Filecoin VM, not an SP engine — deliberately absent. */
-export const FILECOIN_AGENT_RE = /boost|lotus|venus|curio|spade/i;
 
 /** One provider probe object from an ipfs-check row. All fields optional + loose. */
 export interface IpfsCheckProvider {
@@ -191,7 +187,7 @@ export function classifyProvider(provider: IpfsCheckProvider): ParsedProvider {
   if (/kubo|go-ipfs/.test(hay)) platforms.add('kubo');
   if (hay.includes('pinata')) platforms.add('pinata');
   if (hay.includes('filebase')) platforms.add('filebase');
-  if (addrs.some(hostIsFilecoinSp) || FILECOIN_AGENT_RE.test(agent)) {
+  if (addrs.some(hostIsFilecoinSp)) {
     platforms.add('filecoin');
   }
 
