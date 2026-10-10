@@ -40,10 +40,10 @@ export const tableStyles = css`
   }
 
   .table-header {
-
-    font-size: .875rem;
-    letter-spacing: .75px;
-    font-family  var(--font-mono-family);
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    font-family: var(--font-mono);
     display: flex;
     justify-content: flex-start;
     align-items: center;
@@ -51,7 +51,6 @@ export const tableStyles = css`
     padding: 0.55rem 0.6rem;
     border-bottom: 1px solid var(--gray-600, #4b5563);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: inherit;
   }
 
