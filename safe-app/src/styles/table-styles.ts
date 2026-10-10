@@ -40,7 +40,7 @@ export const tableStyles = css`
   }
 
   .table-header {
-    font-size: 0.875rem;
+    font-size: 0.82rem;
     font-weight: 500;
     letter-spacing: 0.06em;
     font-family: var(--font-mono);
@@ -49,9 +49,9 @@ export const tableStyles = css`
     align-items: center;
     border-radius: 0;
     padding: 0.55rem 0.6rem;
-    border-bottom: 1px solid var(--gray-600, #4b5563);
+    border-bottom: 1px solid var(--gray-600);
     text-transform: uppercase;
-    color: inherit;
+    color: var(--gray-600);
   }
 
   .table-header:first-child {
@@ -88,6 +88,7 @@ export const tableStyles = css`
     display: flex;
     flex-direction: column;
     justify-content: center;
+    font-size: 0.82rem;
   }
 
   .table-cell:first-child {
