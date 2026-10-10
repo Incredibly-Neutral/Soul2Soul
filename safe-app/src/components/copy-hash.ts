@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { breakpoints } from '@/styles/breakpoints.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
@@ -7,6 +7,8 @@ import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 @customElement('copy-hash')
 export class CopyHash extends LitElement {
   @property() value = '';
+  /** Optional gateway URL — when set, renders an open-in-new-tab icon button. */
+  @property() href = '';
 
   @state() private copied = false;
   private timeout: number | null = null;
@@ -105,6 +107,11 @@ export class CopyHash extends LitElement {
     }
   }
 
+  private openGateway() {
+    if (!this.href) return;
+    window.open(this.href, '_blank', 'noopener,noreferrer');
+  }
+
   render() {
     return html`
       <span class="text" title=${this.value}>${this.truncate(this.value)}</span>
@@ -112,8 +119,6 @@ export class CopyHash extends LitElement {
         class="${this.copied ? 'copied' : ''}"
         aria-label="Copy to clipboard"
         @click=${(e: Event) => {
-          // A copy-hash may be rendered inside a gateway <a> link — stop the
-          // anchor from navigating while still letting the click copy.
           e.preventDefault();
           e.stopPropagation();
           this.copy();
@@ -123,6 +128,20 @@ export class CopyHash extends LitElement {
           ? html`<ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>`
           : html`<ph-copy size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-copy>`}
       </button>
+      ${this.href
+        ? html`<button
+            class="btn-open"
+            aria-label="Open on IPFS gateway"
+            title="Open on IPFS gateway"
+            @click=${(e: Event) => {
+              e.preventDefault();
+              e.stopPropagation();
+              this.openGateway();
+            }}
+          >
+            <ph-arrow-square-out size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-square-out>
+          </button>`
+        : nothing}
     `;
   }
 }

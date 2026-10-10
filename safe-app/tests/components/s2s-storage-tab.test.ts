@@ -202,9 +202,9 @@ describe('s2s-storage-tab', () => {
     expect(cost?.textContent).toContain('2 KB'); // formatBytes(totalBytes)
     expect(fcMocks.estimateMonthlyCostFromPieces).toHaveBeenCalledWith(PIECES);
 
-    // Piece rows: 2 rows; gateway link only for the piece with a rootCid.
+    // Piece rows: 2 rows; gateway link (copy-hash with href) only for the piece with a rootCid.
     expect(piecesTable(el).querySelectorAll('.table-row')).toHaveLength(2);
-    expect(piecesTable(el).querySelector('.gateway-link')).toBeTruthy();
+    expect(piecesTable(el).querySelector('copy-hash[href]')).toBeTruthy();
 
     // Dataset rows with Active vs Terminated badges.
     expect(datasetsTable(el).querySelectorAll('.table-row')).toHaveLength(2);

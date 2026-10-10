@@ -141,23 +141,6 @@ export class S2SStorageTab extends LitElement {
         color: #f87171;
       }
 
-      .gateway-link {
-        text-decoration: none;
-        color: inherit;
-        display: inline-flex;
-        align-items: center;
-      }
-      .gateway-link:hover {
-        text-decoration: underline;
-        color: var(--blue-400, #60a5fa);
-      }
-      .gateway-link::after {
-        content: "↗";
-        margin-left: 0.25rem;
-        font-size: 0.75rem;
-        opacity: 0.6;
-      }
-
       .btn-delete {
         all: unset;
         cursor: pointer;
@@ -374,10 +357,7 @@ export class S2SStorageTab extends LitElement {
         </div>
         <div class="table-cell">
           ${rootCid
-            ? html`<a href="${this.gatewayUrl(rootCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link"
-                title="Open on IPFS gateway">
-                <copy-hash .value=${this.shortenCid(rootCid)}></copy-hash>
-              </a>`
+            ? html`<copy-hash .value=${this.shortenCid(rootCid)} href=${this.gatewayUrl(rootCid)}></copy-hash>`
             : '-'}
         </div>
         <div class="table-cell">${kind}</div>
