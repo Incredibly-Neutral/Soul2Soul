@@ -1,66 +1,142 @@
-import { LitService, encryptAction, compactAction, S2SIPFSMethods } from '@s2s/soul2soul-shared';
-import * as dotenv from 'dotenv';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import path from 'path';
+import {
+  actionHash,
+  adminHash,
+  buildAddActionBatch,
+  printBatch,
+  S2SIPFSMethods,
+} from '@s2s/soul2soul-shared';
+import {
+  configPath,
+  diamondAddress,
+  findGroup,
+  isDryRun,
+  loadConfig,
+  printRunbookReminder,
+  requirePrivateKey,
+  resolveRpcUrl,
+  SAFE_ADDRESS,
+  writeConfig,
+} from './chain-secured-common.js';
+import {
+  assertValidAction,
+  buildAction,
+  compact,
+  computeActionCid,
+} from './chain-secured-action.js';
+import { proposeToSafe } from './chain-secured-safe.js';
 
-// Emulate __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: '../.env' });
-
-const configPath = path.join(__dirname, 'config.json');
-
-console.log(configPath);
-const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+// ── Constants ───────────────────────────────────────────────────────────────
 
 const groupName = 's2s';
-const action_name = 'updateEvm';
-const actionPath = `/home/joera/code/s2s/protocol/actions/dist/${action_name}/main.js`;
-const code = fs.readFileSync(actionPath, 'utf-8');
+const rpcUrl = resolveRpcUrl();
 
-const ipfs = new S2SIPFSMethods(
-  process.env.IPFS_URL!,
-  process.env.PINATA_JWT!,
-  process.env.PINATA_GATEWAY!,
-  process.env.VITE_FILEBASE_TOKEN || '',
-);
+// ── CLI ─────────────────────────────────────────────────────────────────────
 
-async function main(action_name: string, code: string) {
-  const lit = new LitService({
-    environment: 'prod',
-    accountKey: process.env.LIT_ACCOUNT_KEY!,
+const args = process.argv.slice(2);
+const dryRun = isDryRun(args);
+
+const action_name = args[0];
+if (!action_name) {
+  console.error('Usage: pnpm add-action <action_name> [--dry-run]');
+  console.error('Valid actions: prep, render, update, maintain-cache, encrypt');
+  process.exit(1);
+}
+assertValidAction(action_name);
+
+// ── Main ────────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const group = findGroup(config, groupName);
+  const accountApiKeyHash = adminHash(SAFE_ADDRESS);
+
+  const existing = group.actions.find((a) => a.name === action_name);
+  if (existing) {
+    console.warn(
+      `WARN: action "${action_name}" already exists in config.json (cid ${existing.cid}).`,
+    );
+    console.warn('Use swap-action instead to replace it.');
+  }
+
+  console.log(`ChainSecured add-action for "${action_name}" (group ${group.id})`);
+  console.log(
+    `safe ${SAFE_ADDRESS} · diamond ${diamondAddress} · accountApiKeyHash 0x${accountApiKeyHash.toString(16)}`,
+  );
+  if (dryRun) console.log('\n=== DRY RUN (no pin, no proposal) ===');
+
+  // 1) Build + compact the action, compute its CID locally (== server IpfsHasher).
+  console.log(`\n→ building action "${action_name}" (esbuild)...`);
+  const code = await buildAction(action_name);
+  const _action = compact(code);
+  const cid = await computeActionCid(_action);
+  const hashedCid = actionHash(cid);
+  console.log(`  cid        : ${cid}`);
+  console.log(`  hashedCid  : 0x${hashedCid.toString(16)}`);
+
+  // 2) Real mode: pin the new code so it is fetchable by its CID.
+  if (!dryRun) {
+    console.log('\n→ pinning to Pinata...');
+    const ipfs = new S2SIPFSMethods(
+      process.env.IPFS_URL!,
+      process.env.PINATA_JWT!,
+      process.env.PINATA_GATEWAY!,
+      process.env.VITE_FILEBASE_TOKEN || '',
+    );
+    const pinnedCid = await ipfs.uploadToPinata(_action, action_name);
+    if (pinnedCid !== cid) {
+      console.warn(`WARN: pinned CID (${pinnedCid}) != locally computed CID (${cid})`);
+    } else {
+      console.log(`  pinned : ${pinnedCid}`);
+    }
+  } else {
+    console.log('\ndry-run: would pin the compacted code to Pinata.');
+  }
+
+  // 3) Build + print the Safe batch.
+  const batch = buildAddActionBatch({
+    accountApiKeyHash,
+    groupId: BigInt(group.id),
+    action: { name: action_name, cid, hashedCid, description: action_name },
   });
+  printBatch(batch);
 
-  const groupIndex = config.groups.findIndex((g: any) => g.name === groupName);
+  if (dryRun) {
+    console.log('\ndry-run: would propose the above batch to the Safe.');
+    console.log('dry-run: STOPPING here — nothing was pinned, nothing was proposed.');
+    console.log('\nFINISHED (dry-run)');
+    return;
+  }
 
-  const _action = compactAction(code);
-
-  const [cid] = await Promise.all([lit.getActionCid(_action)]);
-
-  const pinnedCid = await ipfs.uploadToPinata(_action, action_name);
-  let check = cid == pinnedCid;
-  if (!check) console.log(cid, pinnedCid);
-
-  const [result] = await Promise.all([lit.registerAction(cid, action_name)]);
-
-  const r = await lit.addActionToGroup(config.groups[groupIndex].id, cid);
-
-  console.log('registered', r);
-
-  config.groups[groupIndex].actions.push({
-    name: action_name,
-    cid,
-    hashedCid: result.hashedCid,
+  // 4) Propose the batch to the Safe.
+  console.log('\n→ proposing Safe batch...');
+  const safeTxHash = await proposeToSafe({
+    transactions: batch,
+    safeAddress: SAFE_ADDRESS,
+    signerPrivateKey: requirePrivateKey(),
+    rpcUrl: rpcUrl ?? 'https://mainnet.base.org',
   });
+  console.log('Safe Tx Hash:', safeTxHash);
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  // 5) Update config.json actions map (append; dedupe on name).
+  const actionIndex = group.actions.findIndex((a) => a.name === action_name);
+  const entry = { name: action_name, cid, hashedCid: `0x${hashedCid.toString(16)}` };
+  if (actionIndex !== -1) {
+    group.actions[actionIndex] = entry;
+  } else {
+    group.actions.push(entry);
+  }
+  writeConfig(config);
+  console.log(`\n✓ Updated ${configPath} with "${action_name}"`);
+  console.log(
+    `  NOTE: config.json reflects the PROPOSED (not yet executed) state — confirm the Safe`,
+  );
+  console.log(`  transaction, then the on-chain records are updated by update-protocol.ts.`);
 
+  printRunbookReminder();
   console.log('FINISHED');
 }
 
-main(action_name, code)
+main()
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

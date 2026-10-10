@@ -242,7 +242,11 @@ describe('AssetsBuilder', () => {
 
     // GitHub returns assets/static-assets/ (a single file inside)
     fetchMock.mockImplementation((url: string) => {
-      if (url.includes('contents/assets/static-assets') || url.includes('contents/assets')) {
+      // Only the TOP-LEVEL contents/assets listing returns the dir entry.
+      // The recursive contents/assets/static-assets listing must return the
+      // files inside it — otherwise getAllFilesRecursive re-descends into
+      // 'assets/static-assets' forever (self-recursion → OOM).
+      if (url.includes('contents/assets?ref')) {
         return Promise.resolve(
           new Response(
             JSON.stringify([

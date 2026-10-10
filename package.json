@@ -9,6 +9,7 @@
     "actions:add": "tsx --require dotenv/config protocol/scripts/lit/add-action.ts",
     "actions:add-dev": "tsx --require dotenv/config protocol/scripts/lit/add-dev-action.ts",
     "actions:swap": "tsx --require dotenv/config protocol/scripts/lit/swap-action.ts",
+    "actions:remove": "tsx --require dotenv/config protocol/scripts/lit/remove-action.ts",
     "refresh-key": "tsx --require dotenv/config protocol/scripts/lit/refresh-key.ts",
     "update-protocol": "tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts",
     "deploy-action": "bash -c 'pnpm actions:build && tsx --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
