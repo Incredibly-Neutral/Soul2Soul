@@ -141,12 +141,6 @@ export class S2SWebsiteTreeTab extends LitElement {
         margin-top: 1rem;
       }
 
-      .tree-children {
-        border-left: 1px solid var(--gray-700);
-        margin-left: 0.5rem;
-        padding-left: 0.5rem;
-      }
-
       .tree-dir {
         margin: 0;
       }
