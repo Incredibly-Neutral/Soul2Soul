@@ -68,6 +68,10 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // to provide it. Import the REAL validation (zod only — no ethers/identity
   // graph, so the browser bundle stays light) to keep the fail-closed posture.
   const validation = await import('../../../shared/src/cid-view/validation.ts');
+  // T4b: the batch retrievability adapter (src/lib/cid-view.ts) also imports
+  // these from the safe-app entry — provide the real (pure, browser-safe)
+  // implementations so the named imports resolve.
+  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
   return {
     S2SIPFSMethods: class {},
     buildPublicationCidView: async () => ({
@@ -78,6 +82,14 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
       summary: { total: 0, uniqueCids: 0, byCategory: {} },
     }),
     parsePublicationCidView: validation.parsePublicationCidView,
+    parseCidRetrievabilityMap: validation.parseCidRetrievabilityMap,
+    // The CID-inventory section (s2s-cid-view-section) imports these pure view
+    // helpers + source list from the safe-app entry as well.
+    cidsFromView: retrievability.cidsFromView,
+    orderByCopiesAscending: retrievability.orderByCopiesAscending,
+    orderByStaleness: retrievability.orderByStaleness,
+    RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
+    filecoinBackedCidsFromView: retrievability.filecoinBackedCidsFromView,
   };
 });
 
