@@ -62,8 +62,33 @@ const CATEGORY_META: Record<CidCategory, { label: string; cls: string }> = {
 function categoryLabel(cat: CidCategory): string {
   return CATEGORY_META[cat]?.label ?? cat.replace(/-/g, ' ');
 }
-function categoryClass(cat: CidCategory): string {
-  return CATEGORY_META[cat]?.cls ?? 'deal';
+
+/**
+ * Collapsed source+category type column. The type is a coarser, human label
+ * that groups categories (deal/version/config/html/asset/cache); the badge
+ * still carries the fine-grained category class + title for color/detail.
+ */
+const TYPE_META: Record<CidCategory, { label: string; cls: string }> = {
+  deal: { label: 'source', cls: 'deal' },
+  'deal-version': { label: 'version', cls: 'deal-version' },
+  offer: { label: 'offer', cls: 'offer' },
+  'offer-version': { label: 'offer version', cls: 'offer-version' },
+  config: { label: 'config', cls: 'config' },
+  'template-dag': { label: 'config', cls: 'config' },
+  template: { label: 'config', cls: 'config' },
+  'assets-root': { label: 'asset', cls: 'asset' },
+  asset: { label: 'asset', cls: 'asset' },
+  'site-root': { label: 'html', cls: 'tree' },
+  'site-file': { label: 'html', cls: 'tree' },
+  archive: { label: 'cache', cls: 'archive' },
+  'archive-item': { label: 'cache item', cls: 'archive' },
+};
+
+function typeLabel(cat: CidCategory): string {
+  return TYPE_META[cat].label;
+}
+function typeClass(cat: CidCategory): string {
+  return TYPE_META[cat].cls;
 }
 
 /** CIDs per retrievability batch POST (streaming keeps the UI incremental regardless). */
@@ -274,7 +299,7 @@ export class S2SCidViewSection extends LitElement {
       /* Flat risk-sorted inventory table (simple grid, read-only). */
       .cid-table {
         display: grid;
-        grid-template-columns: 0.9fr 0.6fr 1.7fr 2fr 1.1fr 0.7fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr;
+        grid-template-columns: 0.9fr 1.7fr 2fr 1.1fr 0.7fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr;
         width: 100%;
         overflow-x: auto;
       }
@@ -392,10 +417,6 @@ export class S2SCidViewSection extends LitElement {
       .badge.archive {
         background: rgba(244, 63, 94, 0.15);
         color: #fda4af;
-      }
-      .badge.source {
-        background: rgba(148, 163, 184, 0.15);
-        color: #cbd5e1;
       }
       .badge.tombstone {
         background: rgba(239, 68, 68, 0.2);
@@ -773,11 +794,12 @@ export class S2SCidViewSection extends LitElement {
     return html`
       <div class="cid-row">
         <div class="cid-cell">
-          <span class="badge ${categoryClass(entry.category)}"
-            >${categoryLabel(entry.category)}</span
+          <span
+            class="badge ${typeClass(entry.category)}"
+            title="${categoryLabel(entry.category)}"
+            >${typeLabel(entry.category)}</span
           >
         </div>
-        <div class="cid-cell"><span class="badge source">${entry.source}</span></div>
         <div class="cid-cell">
           <a
             href="${this.gatewayUrl(cid)}"
@@ -823,8 +845,7 @@ export class S2SCidViewSection extends LitElement {
     return html`
       <div class="cid-table">
         <div class="cid-header-row">
-          <div class="cid-head">Category</div>
-          <div class="cid-head">Source</div>
+          <div class="cid-head">Type</div>
           <div class="cid-head">CID</div>
           <div class="cid-head">Role / Path</div>
           <div class="cid-head">Age</div>
