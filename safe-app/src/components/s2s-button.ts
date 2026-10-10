@@ -146,7 +146,7 @@ export class S2SButton extends LitElement {
 
     button.spin:hover:not(:disabled),
     button.spin:focus-visible {
-      animation: gb-spin 3s linear infinite;
+      animation: gb-spin 2s linear infinite;
     }
 
     @keyframes gb-spin {

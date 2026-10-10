@@ -11,6 +11,32 @@
 import { css } from 'lit';
 
 export const theme = css`
+  /* ------------------------------------------------------------------ */
+  /* Registered custom properties (must be at document level)             */
+  /* ------------------------------------------------------------------ */
+  /* @property inside a shadow root's adopted constructable stylesheet    */
+  /* does NOT drive custom-property keyframe interpolation in Chromium —  */
+  /* the spin border would stay frozen at its base angle. Registering     */
+  /* here (global sheet, adopted in main.ts) makes --gb-angle, --gb-c1    */
+  /* and --gb-c2 animatable app-wide. s2s-button also declares them in    */
+  /* its shadow stylesheet for self-containment; the document-level       */
+  /* registration is what actually interpolates.                          */
+  @property --gb-angle {
+    syntax: '<angle>';
+    inherits: false;
+    initial-value: 0deg;
+  }
+  @property --gb-c1 {
+    syntax: '<color>';
+    inherits: false;
+    initial-value: #5f564b;
+  }
+  @property --gb-c2 {
+    syntax: '<color>';
+    inherits: false;
+    initial-value: #fcd34d;
+  }
+
   :root {
     /* ------------------------------------------------------------------ */
     /* Brand / accent colors                                               */
