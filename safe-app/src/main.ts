@@ -17,6 +17,7 @@ document.adoptedStyleSheets = [...document.adoptedStyleSheets, ...globalSheets];
 import './components/icon.js';
 
 import './components/s2s-app.js';
+import './components/s2s-button.js';
 import './components/s2s-deals-tab.js';
 import './components/s2s-whitelist-tab.js';
 import './components/s2s-records-tab.js';
