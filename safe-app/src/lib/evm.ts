@@ -4,21 +4,29 @@ declare global {
   const Lit: any;
 }
 
+// Keyless fallbacks. We must NOT fall back to `lb.drpc.live/.../default`:
+// DRPC retired that keyless endpoint and now rejects it with "Your token is
+// invalid or expired" (error code 4), which kills every RPC read (Safe SDK
+// init, module discovery, records) in a build made without VITE_DRPC_API_KEY.
+// Use working public RPCs instead so a keyless build degrades, not dies.
+const PUBLIC_RPCS: Record<number, string> = {
+  1: 'https://ethereum-rpc.publicnode.com',
+  8453: 'https://mainnet.base.org',
+};
+
 export const getRpcUrl = (chainId: number): string  => {
-    let rpc = '';
+    const apiKey = import.meta.env.VITE_DRPC_API_KEY;
 
-    const apiKey = import.meta.env.VITE_DRPC_API_KEY || "default";
-
-    switch (chainId) {
-      case 1:
-        rpc = `https://lb.drpc.live/ethereum/${apiKey}`;
-        break;
-      case 8453:
-        rpc = `https://lb.drpc.live/base/${apiKey}`;
-        break;
+    if (apiKey) {
+      switch (chainId) {
+        case 1:
+          return `https://lb.drpc.live/ethereum/${apiKey}`;
+        case 8453:
+          return `https://lb.drpc.live/base/${apiKey}`;
+      }
     }
 
-    return rpc;
+    return PUBLIC_RPCS[chainId] ?? '';
   }
 
 const evmSetup = (contractAddress: string, abi: any, chainId: number) => {

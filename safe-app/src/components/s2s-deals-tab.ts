@@ -25,6 +25,7 @@ import './toggle-button.js';
 import './s2s-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
+import { getRpcUrl } from '@/lib/evm.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
 
@@ -327,11 +328,12 @@ export class S2SDealsTab extends LitElement {
       : store.deals.map((d) => d.genesis);
 
     // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base).
-    // Key mirrors getRpcUrl in lib/evm.ts — no hardcoded keys in the bundle.
-    const apiKey = String(import.meta.env.VITE_DRPC_API_KEY ?? 'default');
+    // Single source of truth is getRpcUrl in lib/evm.ts — no hardcoded keys
+    // in the bundle, and a keyless build falls back to public RPCs (never the
+    // retired lb.drpc.live/.../default endpoint).
     const rpcs = {
-      L1: [`https://lb.drpc.live/ethereum/${apiKey}`],
-      L2: [`https://lb.drpc.live/base/${apiKey}`],
+      L1: [getRpcUrl(1)],
+      L2: [getRpcUrl(8453)],
     };
 
     const res = await renderwithLitActions(
