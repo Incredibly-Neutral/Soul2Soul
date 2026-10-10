@@ -296,6 +296,7 @@ export class S2SCidViewSection extends LitElement {
         gap: 0.5rem;
         margin-bottom: 0.75rem;
       }
+        
       .chips-row {
         display: flex;
         align-items: flex-start;
