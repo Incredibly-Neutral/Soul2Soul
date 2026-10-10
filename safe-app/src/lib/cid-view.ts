@@ -11,11 +11,19 @@
 // Fail-open by design (mirrors the shared collectors): every method degrades
 // to []/''/{}/null on a missing module, record or network failure so the CID
 // inventory never throws and never sinks the Storage tab.
-import { S2SIPFSMethods, buildPublicationCidView } from '@s2s/soul2soul-shared/safe-app';
+import {
+  S2SIPFSMethods,
+  buildPublicationCidView,
+  filecoinBackedCidsFromView,
+  parseCidRetrievabilityMap,
+} from '@s2s/soul2soul-shared/safe-app';
 import type {
+  CidRetrievabilityMap,
+  CidRetrievabilityStatus,
   CidViewReadContext,
   DealRead,
   PublicationCidView,
+  RetrievabilitySource,
   VersionRead,
 } from '@s2s/soul2soul-shared/safe-app';
 import type { S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
@@ -375,4 +383,253 @@ export async function fetchCidView(
   publication: string,
 ): Promise<PublicationCidView> {
   return buildPublicationCidView(buildSafeAppCidViewContext(args), publication);
+}
+
+// ===========================================================================
+// Retrievability adapter — ipfs-check BATCH endpoint + localStorage cache.
+//
+// The user's self-hosted ipfs-check instance (`https://ipfs-check.transport-union.dev`)
+// gained a streaming NDJSON batch endpoint: POST /batch with { cids: [...] }
+// returns one line per checked cid as it finishes (deduped + checked in
+// parallel server-side). This adapter owns the pass and produces the SAME
+// CidRetrievabilityMap shape as the shared core (see shared/src/cid-view/
+// retrievability.ts) directly from the per-cid ipfs-check report — the shared
+// per-source `hasCopy` runner is intentionally NOT used here, because a single
+// batch request already returns the full report per cid.
+//
+// Fail-open by design (mirrors the shared core): a failed batch POST marks the
+// chunk's cids with an error status (checkedAt + error, all sources false) and
+// the wrapper never throws; localStorage reads/writes degrade to null/no-op.
+
+/** Base URL of the user's self-hosted ipfs-check instance. */
+export const IPFS_CHECK_ENDPOINT = 'https://ipfs-check.transport-union.dev';
+
+/** localStorage prefix for the per-publication retrievability snapshot. */
+const RETRIEVABILITY_CACHE_PREFIX = 's2s.cidview.';
+
+/** CIDs per batch POST. Streaming keeps the UI incremental regardless. */
+const RETRIEVABILITY_BATCH_SIZE = 50;
+
+function retrievabilityCacheKey(publication: string): string {
+  return RETRIEVABILITY_CACHE_PREFIX + publication + '.retrievability';
+}
+
+/**
+ * Read the last-known retrievability map for a publication from localStorage.
+ * Fail-open: missing key, corrupt JSON or a JSON-valid but schema-invalid blob
+ * (rejected by the shared parseCidRetrievabilityMap) all degrade to null,
+ * mirroring loadCachedView.
+ */
+export function loadRetrievabilityMap(publication: string): CidRetrievabilityMap | null {
+  try {
+    const raw = window.localStorage.getItem(retrievabilityCacheKey(publication));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    return parseCidRetrievabilityMap(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a retrievability map for a publication. Fail-open (storage full / privacy mode). */
+export function saveRetrievabilityMap(publication: string, map: CidRetrievabilityMap): void {
+  try {
+    window.localStorage.setItem(retrievabilityCacheKey(publication), JSON.stringify(map));
+  } catch {
+    // ignore — the component still works without a cache
+  }
+}
+
+/**
+ * Structural slice of an ipfs-check provider report — just the fields the
+ * classifier needs. Kept loose on purpose: the live endpoint may add fields.
+ */
+export interface IpfsCheckProvider {
+  ID?: string;
+  Addrs?: string[];
+  AgentVersion?: string;
+  Source?: string;
+  DataAvailableOverBitswap?: { Enabled?: boolean; Found?: boolean };
+  DataAvailableOverHTTP?: { Enabled?: boolean; Found?: boolean };
+}
+
+/**
+ * Classify which of our retrievability platforms a provider self-identifies
+ * as. Best-effort heuristics over the provider's self-reported fields; a
+ * provider may match multiple platforms (pinata runs kubo → both).
+ */
+export function classifyProviderPlatforms(provider: IpfsCheckProvider): RetrievabilitySource[] {
+  const hay =
+    `${provider.ID ?? ''} ${(provider.Addrs ?? []).join(' ')} ${provider.AgentVersion ?? ''} ${provider.Source ?? ''}`.toLowerCase();
+  const agent = (provider.AgentVersion ?? '').toLowerCase();
+  const platforms: RetrievabilitySource[] = [];
+  // Filebase: advertises on the bitswap.filebase.io hostname (or otherwise names filebase).
+  if (hay.includes('filebase')) platforms.push('filebase');
+  // Pinata: self-identifies as pinata (hostname / pinned-by metadata).
+  if (hay.includes('pinata')) platforms.push('pinata');
+  // Kubo: agent reports the reference go-ipfs/kubo stack (kubo or its old name go-ipfs).
+  if (agent.startsWith('kubo') || agent.startsWith('go-ipfs')) platforms.push('kubo');
+  // Filecoin: agent reports a Filecoin SP retrieval stack.
+  if (/boost|lotus|venus|fvm|spade/.test(agent)) platforms.push('filecoin');
+  return platforms;
+}
+
+/** One NDJSON line from the ipfs-check batch endpoint. */
+export interface IpfsCheckLine {
+  cid: string;
+  ms?: number;
+  result?: unknown;
+  error?: string;
+}
+
+/**
+ * POST one batch of cids to the ipfs-check /batch endpoint and stream the
+ * NDJSON response, invoking `onResult` once per line as each cid finishes
+ * (the server checks the batch in parallel and streams results incrementally).
+ */
+export async function checkBatch(
+  cids: string[],
+  onResult: (r: IpfsCheckLine) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${IPFS_CHECK_ENDPOINT}/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cids }),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`ipfs-check batch HTTP ${String(res.status)}`);
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (line) onResult(JSON.parse(line) as IpfsCheckLine);
+    }
+  }
+}
+
+/** All-false sources block — the shape every status carries. */
+function allSourcesFalse(): Record<RetrievabilitySource, boolean> {
+  return { kubo: false, pinata: false, filebase: false, filecoin: false };
+}
+
+/**
+ * Build a CidRetrievabilityStatus from one ipfs-check batch line.
+ *
+ * - A line with `error` → that cid failed: error status, all sources false.
+ * - A non-array `result` (e.g. MutableResolution for a non-CID input) → no
+ *   providers (not an error): all sources false.
+ * - An array → providers that `Found` the cid (over Bitswap and/or HTTP) are
+ *   classified into our platforms; `filecoin` additionally reports true for
+ *   on-chain deal-backed cids (instant, derived from the view — no network).
+ *
+ * `now` is injectable for deterministic tests.
+ */
+export function statusFromCheckLine(
+  line: IpfsCheckLine,
+  view: PublicationCidView,
+  now?: () => string,
+): CidRetrievabilityStatus {
+  const checkedAt = (now ?? (() => new Date().toISOString()))();
+  if (line.error) {
+    return { checkedAt, copies: 0, sources: allSourcesFalse(), error: line.error };
+  }
+  const result = line.result;
+  if (!Array.isArray(result)) {
+    return { checkedAt, copies: 0, sources: allSourcesFalse() };
+  }
+  const sources = allSourcesFalse();
+  for (const provider of result as IpfsCheckProvider[]) {
+    // A provider "serves" the cid iff it Found it over Bitswap and/or HTTP.
+    const serves =
+      provider.DataAvailableOverBitswap?.Found === true ||
+      provider.DataAvailableOverHTTP?.Found === true;
+    if (!serves) continue;
+    for (const source of classifyProviderPlatforms(provider)) {
+      sources[source] = true;
+    }
+  }
+  // On-chain deal-backed cids are Filecoin-copy by construction (instant, no network).
+  if (filecoinBackedCidsFromView(view).has(line.cid)) {
+    sources.filecoin = true;
+  }
+  let copies = 0;
+  for (const present of Object.values(sources)) {
+    if (present) copies += 1;
+  }
+  return { checkedAt, copies, sources };
+}
+
+/**
+ * Check retrievability for the given cids via the ipfs-check batch endpoint,
+ * chunked + streamed, merging into `prev` (default: the localStorage cache).
+ * Unchecked cids in `prev` are preserved. Persists to localStorage after each
+ * chunk. Never throws — a failed chunk marks its cids with an error status.
+ */
+export async function checkRetrievability(
+  publication: string,
+  view: PublicationCidView,
+  cids: readonly string[],
+  opts?: {
+    prev?: CidRetrievabilityMap;
+    onResult?: (cid: string, status: CidRetrievabilityStatus) => void;
+    batchSize?: number;
+    signal?: AbortSignal;
+  },
+): Promise<CidRetrievabilityMap> {
+  const prev = opts?.prev ?? loadRetrievabilityMap(publication) ?? {};
+  const result: CidRetrievabilityMap = { ...prev };
+  const batchSize = opts?.batchSize ?? RETRIEVABILITY_BATCH_SIZE;
+  const now = () => new Date().toISOString();
+
+  if (cids.length === 0) {
+    saveRetrievabilityMap(publication, result);
+    return result;
+  }
+
+  for (let i = 0; i < cids.length; i += batchSize) {
+    const chunk = cids.slice(i, i + batchSize);
+    // Cids in this chunk that never produced a line (failed before streaming
+    // them, or the request errored) get an error status so they still record
+    // checkedAt + error — fail-open.
+    const failed = new Set(chunk);
+    console.info(`[cid-view] retrievability batch ${String(chunk.length)} cids`);
+    try {
+      await checkBatch(
+        chunk,
+        (line) => {
+          failed.delete(line.cid);
+          const status = statusFromCheckLine(line, view);
+          result[line.cid] = status;
+          opts?.onResult?.(line.cid, status);
+        },
+        opts?.signal,
+      );
+    } catch (err) {
+      // An aborted pass (disconnect / recheck / publication switch) must NOT be
+      // recorded as a per-cid error — rethrow so the caller's loop stops.
+      if (opts?.signal?.aborted) throw err;
+      const message = err instanceof Error && err.message !== '' ? err.message : String(err);
+      for (const cid of failed) {
+        const status: CidRetrievabilityStatus = {
+          checkedAt: now(),
+          copies: 0,
+          sources: allSourcesFalse(),
+          error: message,
+        };
+        result[cid] = status;
+        opts?.onResult?.(cid, status);
+      }
+    } finally {
+      saveRetrievabilityMap(publication, result);
+    }
+  }
+  return result;
 }
