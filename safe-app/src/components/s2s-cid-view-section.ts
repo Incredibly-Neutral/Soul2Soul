@@ -198,14 +198,14 @@ export class S2SCidViewSection extends LitElement {
         display: block;
         margin-bottom: 2rem;
       }
-h
+
 
       .cid-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 2rem;
         flex-wrap: wrap;
       }
 
@@ -890,10 +890,6 @@ h
     return html`
       <div class="cid-section">
         <div class="cid-header">
-          <h2 class="cid-title">
-            <ph-tree-structure size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-tree-structure>
-            CID Inventory
-          </h2>
           <button class="refresh" ?disabled=${this.loading} @click=${() => void this.rebuild(true)}>
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise>
             ${this.loading ? 'Loading…' : 'Refresh'}
