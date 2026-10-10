@@ -91,6 +91,21 @@ function typeClass(cat: CidCategory): string {
   return TYPE_META[cat].cls;
 }
 
+/** Health bucket for a checked status — drives the copies/health filter chips. */
+type CidHealth = 'healthy' | 'healing' | 'no-copies';
+
+const HEALTH_LABELS: Record<CidHealth, string> = {
+  healthy: 'healthy',
+  healing: 'need healing',
+  'no-copies': 'no copies',
+};
+
+/** ≥2 copies healthy, exactly 1 needs healing, 0 copies is critical. */
+function healthBucket(status: CidRetrievabilityStatus): CidHealth {
+  if (status.copies >= 2) return 'healthy';
+  return status.copies === 1 ? 'healing' : 'no-copies';
+}
+
 /** CIDs per retrievability batch POST (streaming keeps the UI incremental regardless). */
 const RETRIEVABILITY_BATCH = 50;
 
@@ -169,6 +184,13 @@ export class S2SCidViewSection extends LitElement {
   @state() private checking = false;
   /** Statuses applied this pass — for the checking X/Y indicator. */
   @state() private checkedCount = 0;
+
+  /** Active Type filter (type labels, empty = all types shown). */
+  @state() private typeFilter = new Set<string>();
+  /** Active copies-count filter (0..4, empty = all copy counts shown). */
+  @state() private copiesFilter = new Set<number>();
+  /** Active health-bucket filter (empty = all health states shown). */
+  @state() private healthFilter = new Set<CidHealth>();
 
   /** Monotonic build id — stale async builds never overwrite a newer one. */
   private buildId = 0;
@@ -266,11 +288,22 @@ export class S2SCidViewSection extends LitElement {
         cursor: not-allowed;
       }
 
-      .chips {
+      .chips-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.5rem;
+        align-items: flex-start;
+        gap: 0.75rem 1.5rem;
         margin-bottom: 1rem;
+      }
+      .chips-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .chips-group + .chips-group {
+        border-left: 1px solid var(--gray-700, #374151);
+        padding-left: 1.5rem;
       }
       .chip {
         display: inline-flex;
@@ -284,9 +317,25 @@ export class S2SCidViewSection extends LitElement {
         font-size: 0.75rem;
         white-space: nowrap;
       }
+      button.chip {
+        font: inherit;
+        cursor: pointer;
+        transition: border-color 120ms ease, background 120ms ease;
+      }
+      button.chip:hover:not(.active) {
+        border-color: var(--gray-500, #6b7280);
+      }
+      .chip.active {
+        border-color: rgba(59, 130, 246, 0.65);
+        background: rgba(59, 130, 246, 0.12);
+        color: var(--blue-300, #93c5fd);
+      }
       .chip .chip-value {
         font-weight: 700;
         color: var(--gray-50, #f9fafb);
+      }
+      .chip.active .chip-value {
+        color: #bfdbfe;
       }
       .chip.flag-on {
         border-color: rgba(16, 185, 129, 0.4);
@@ -500,6 +549,11 @@ export class S2SCidViewSection extends LitElement {
   ];
 
   protected updated(changed: PropertyValues) {
+    if (changed.has('view')) {
+      // A new inventory replaced the table — drop stale filters so they never
+      // hide rows of the fresh view (publication switch / refresh / revalidate).
+      this.clearFilters();
+    }
     if (changed.has('ctx') || changed.has('publication')) {
       // Defer past the current update flush: kicking off the async load from
       // `updated()` synchronously writes @state and re-requests an update
@@ -729,36 +783,146 @@ export class S2SCidViewSection extends LitElement {
     void this.runRetrievabilityPass();
   }
 
+  /**
+   * Chip section: one row, two containers. Left = inventory counters + Type
+   * chips (a filter button per type — clicking toggles which types the table
+   * shows). Right = copies-count + health chips (same toggle behaviour) and
+   * the per-source availability flags. Type/copies/health chips use the same
+   * classification as the table's Type badges.
+   */
   private renderSummary(view: PublicationCidView): TemplateResult {
-    const catCounts = Object.entries(view.summary.byCategory ?? {}) as Array<[CidCategory, number]>;
+    const { typeCounts, copiesCounts, healthCounts } = this.chipCounts(view);
+    const hasFilter =
+      this.typeFilter.size > 0 || this.copiesFilter.size > 0 || this.healthFilter.size > 0;
+    const typeChips = Array.from(typeCounts.entries()).map(([label, count]) =>
+      this.renderFilterChip(label, count, this.typeFilter.has(label), () => {
+        this.toggleType(label);
+      }),
+    );
+    const copiesChips = Array.from(copiesCounts.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([n, count]) =>
+        this.renderFilterChip(
+          n === 1 ? '1 copy' : `${String(n)} copies`,
+          count,
+          this.copiesFilter.has(n),
+          () => {
+            this.toggleCopies(n);
+          },
+        ),
+      );
+    const healthChips = (['healthy', 'healing', 'no-copies'] as const).map((bucket) => {
+      const count = healthCounts.get(bucket) ?? 0;
+      if (count === 0) return nothing;
+      return this.renderFilterChip(
+        HEALTH_LABELS[bucket],
+        count,
+        this.healthFilter.has(bucket),
+        () => {
+          this.toggleHealth(bucket);
+        },
+      );
+    });
     return html`
-      <div class="chips">
-        <span class="chip"
-          ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
-        >
-        <span class="chip"><span class="chip-value">${view.summary.total}</span> entries</span>
-        ${catCounts.map(
-          ([cat, count]) =>
-            html`<span class="chip"
-              ><span class="chip-value">${count}</span> ${categoryLabel(cat)}${count !== 1
-                ? 's'
-                : ''}</span
-            >`,
-        )}
-        <span class="chip ${view.sources.deals ? 'flag-on' : 'flag-off'}"
-          >deals ${view.sources.deals ? '✓' : '✗'}</span
-        >
-        <span class="chip ${view.sources.config ? 'flag-on' : 'flag-off'}"
-          >config ${view.sources.config ? '✓' : '✗'}</span
-        >
-        <span class="chip ${view.sources.tree ? 'flag-on' : 'flag-off'}"
-          >tree ${view.sources.tree ? '✓' : '✗'}</span
-        >
-        <span class="chip ${view.sources.archive ? 'flag-on' : 'flag-off'}"
-          >archive ${view.sources.archive ? '✓' : '✗'}</span
-        >
+      <div class="chips-row">
+        <div class="chips-group">
+          <span class="chip"
+            ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
+          >
+          <span class="chip"><span class="chip-value">${view.summary.total}</span> entries</span>
+          ${typeChips}
+        </div>
+        <div class="chips-group">
+          ${copiesChips}
+          ${healthChips}
+          ${hasFilter
+            ? html`<button type="button" class="chip" @click=${() => {
+                this.clearFilters();
+              }}>
+                × clear filters
+              </button>`
+            : nothing}
+          <span class="chip ${view.sources.deals ? 'flag-on' : 'flag-off'}"
+            >deals ${view.sources.deals ? '✓' : '✗'}</span
+          >
+          <span class="chip ${view.sources.config ? 'flag-on' : 'flag-off'}"
+            >config ${view.sources.config ? '✓' : '✗'}</span
+          >
+          <span class="chip ${view.sources.tree ? 'flag-on' : 'flag-off'}"
+            >tree ${view.sources.tree ? '✓' : '✗'}</span
+          >
+          <span class="chip ${view.sources.archive ? 'flag-on' : 'flag-off'}"
+            >archive ${view.sources.archive ? '✓' : '✗'}</span
+          >
+        </div>
       </div>
     `;
+  }
+
+  /** Per-filter-bucket counts over the same unique-cid rows the table renders. */
+  private chipCounts(view: PublicationCidView): {
+    typeCounts: Map<string, number>;
+    copiesCounts: Map<number, number>;
+    healthCounts: Map<CidHealth, number>;
+  } {
+    const typeCounts = new Map<string, number>();
+    const copiesCounts = new Map<number, number>();
+    const healthCounts = new Map<CidHealth, number>();
+    for (const entry of this.firstOccurrenceEntries(view)) {
+      const label = typeLabel(entry.category);
+      typeCounts.set(label, (typeCounts.get(label) ?? 0) + 1);
+      const status = this.retrievabilityStatus(entry.cid);
+      if (status !== undefined) {
+        copiesCounts.set(status.copies, (copiesCounts.get(status.copies) ?? 0) + 1);
+        const bucket = healthBucket(status);
+        healthCounts.set(bucket, (healthCounts.get(bucket) ?? 0) + 1);
+      }
+    }
+    return { typeCounts, copiesCounts, healthCounts };
+  }
+
+  /** One pill chip that toggles as a table filter. Count + label, same chip design. */
+  private renderFilterChip(
+    label: string,
+    count: number,
+    active: boolean,
+    onClick: () => void,
+  ): TemplateResult {
+    return html`
+      <button type="button" class="chip ${active ? 'active' : ''}" @click=${onClick}>
+        <span class="chip-value">${count}</span> ${label}
+      </button>
+    `;
+  }
+
+  /** Toggle a type filter; empty set = show every type. */
+  private toggleType(label: string): void {
+    const next = new Set(this.typeFilter);
+    if (next.has(label)) next.delete(label);
+    else next.add(label);
+    this.typeFilter = next;
+  }
+
+  /** Toggle a copies-count filter; empty set = show every copy count. */
+  private toggleCopies(n: number): void {
+    const next = new Set(this.copiesFilter);
+    if (next.has(n)) next.delete(n);
+    else next.add(n);
+    this.copiesFilter = next;
+  }
+
+  /** Toggle a health-bucket filter; empty set = show every health state. */
+  private toggleHealth(bucket: CidHealth): void {
+    const next = new Set(this.healthFilter);
+    if (next.has(bucket)) next.delete(bucket);
+    else next.add(bucket);
+    this.healthFilter = next;
+  }
+
+  private clearFilters(): void {
+    this.typeFilter = new Set();
+    this.copiesFilter = new Set();
+    this.healthFilter = new Set();
   }
 
   /** Availability dot cell for one source. Gray while unchecked, green/red when checked. */
@@ -842,6 +1006,17 @@ export class S2SCidViewSection extends LitElement {
       const entry = byCid.get(cid);
       if (entry) rows.push(entry);
     }
+    // Apply the chip filters (type / copies / health). Empty set in a group = no
+    // constraint; groups combine with AND so filters narrow the table.
+    const visible = rows.filter((entry) => this.matchesFilters(entry));
+    if (visible.length === 0 && rows.length > 0) {
+      return html`
+        <div class="empty">
+          <div class="empty-title">No rows match the active filters</div>
+          <div>Clear or widen the type / copies / health filters to see CIDs again.</div>
+        </div>
+      `;
+    }
     return html`
       <div class="cid-table">
         <div class="cid-header-row">
@@ -857,9 +1032,28 @@ export class S2SCidViewSection extends LitElement {
           <div class="cid-head">Copies</div>
           <div class="cid-head">Last check</div>
         </div>
-        ${rows.map((entry) => this.renderEntryRow(entry))}
+        ${visible.map((entry) => this.renderEntryRow(entry))}
       </div>
     `;
+  }
+
+  /** Row-level filter: type (AND) copies (AND) health; empty set = no constraint. */
+  private matchesFilters(entry: CidEntry): boolean {
+    if (this.typeFilter.size > 0 && !this.typeFilter.has(typeLabel(entry.category))) return false;
+    const status = this.retrievabilityStatus(entry.cid);
+    if (
+      this.copiesFilter.size > 0 &&
+      (status === undefined || !this.copiesFilter.has(status.copies))
+    ) {
+      return false;
+    }
+    if (
+      this.healthFilter.size > 0 &&
+      (status === undefined || !this.healthFilter.has(healthBucket(status)))
+    ) {
+      return false;
+    }
+    return true;
   }
 
   render() {
