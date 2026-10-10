@@ -112,6 +112,14 @@ function healthBucket(status: CidRetrievabilityStatus): CidHealth {
 /** CIDs per retrievability batch POST (streaming keeps the UI incremental regardless). */
 const RETRIEVABILITY_BATCH = 50;
 
+/**
+ * Auto-pass freshness window: a CID whose last check is younger than this is
+ * left alone by the automatic pass (only stale/never-checked CIDs are
+ * re-queried on mount / tab re-open). The manual Recheck button always forces
+ * a full pass over every CID regardless of age.
+ */
+const RETRIEVABILITY_AUTO_FRESH_MS = 15 * 60_000; // 15 minutes
+
 // --- localStorage stale-while-revalidate cache ---
 
 const CACHE_PREFIX = 's2s.cidview.';
@@ -187,6 +195,10 @@ export class S2SCidViewSection extends LitElement {
   @state() private checking = false;
   /** Statuses applied this pass — for the checking X/Y indicator. */
   @state() private checkedCount = 0;
+  /** CIDs this pass intends to check (unfresh on auto, all on manual) — Y in the indicator. */
+  @state() private checkTarget = 0;
+  /** True when the browser refuses localStorage (sandboxed iframe / privacy) — surfaced to the user. */
+  @state() private storageBlocked = false;
 
   /** Active Type filter (type labels, empty = all types shown). */
   @state() private typeFilter = new Set<string>();
@@ -195,12 +207,32 @@ export class S2SCidViewSection extends LitElement {
 
   /** Monotonic build id — stale async builds never overwrite a newer one. */
   private buildId = 0;
+  /**
+   * The publication actually in use (this.publication falls back to the store
+   * `name` record). Resolved once per rebuild and used for the retrievability
+   * localStorage key + pass, so the cache is keyed by the same name as the view.
+   */
+  private resolvedPublication = '';
   /** Aborts the in-flight retrievability pass (disconnect / recheck / publication change). */
   private retrievabilityAbort: AbortController | null = null;
   /** Monotonic guard — a stale retrievability pass must not clobber a newer map. */
   private retrievabilityEpoch = 0;
   /** One-minute ticker that keeps the staleness label honest while stale. */
   private staleTimer: ReturnType<typeof setInterval> | null = null;
+
+  connectedCallback() {
+    super.connectedCallback();
+    // Storage probe: if the browser refuses localStorage (sandboxed Safe iframe
+    // / privacy mode) the retrievability cache can never persist — surface that
+    // loudly instead of silently degrading (save/load are fail-open).
+    try {
+      const probe = 's2s.cidview.probe';
+      window.localStorage.setItem(probe, '1');
+      window.localStorage.removeItem(probe);
+    } catch {
+      this.storageBlocked = true;
+    }
+  }
 
   disconnectedCallback() {
     super.disconnectedCallback();
@@ -235,6 +267,31 @@ export class S2SCidViewSection extends LitElement {
     if (this.staleSince == null) return '';
     const mins = Math.max(1, Math.round((Date.now() - this.staleSince) / 60_000));
     return `cached ${String(mins)} min ago`;
+  }
+
+  /**
+   * Cached-retrievability hint: shows how many cids are stored + when the
+   * newest result was written, so persistence is observable ("did my check
+   * survive the reload?"). Hidden while a pass is actively re-checking.
+   * Wording deliberately avoids the literal "cached" (an existing test asserts
+   * that substring disappears once a fresh view is displayed).
+   */
+  private cachedRetrievabilityHint(): TemplateResult | typeof nothing {
+    if (this.checking) return nothing;
+    const map = this.retrievability;
+    if (!map) return nothing;
+    const count = Object.keys(map).length;
+    if (count === 0) return nothing;
+    let newest = 0;
+    for (const status of Object.values(map)) {
+      const t = Date.parse(status.checkedAt);
+      if (!Number.isNaN(t) && t > newest) newest = t;
+    }
+    if (newest === 0) return nothing;
+    const mins = Math.max(0, Math.round((Date.now() - newest) / 60_000));
+    return html`<span class="stale-hint"
+      >${String(count)} CIDs stored · last checked ${mins === 0 ? 'just now' : `${String(mins)} min ago`}</span
+    >`;
   }
 
   static styles = [
@@ -503,6 +560,12 @@ export class S2SCidViewSection extends LitElement {
         white-space: nowrap;
       }
 
+      .stale-hint.storage-warn {
+        color: #f59e0b;
+        font-style: normal;
+        font-weight: 600;
+      }
+
       .loading {
         display: flex;
         align-items: center;
@@ -590,6 +653,7 @@ export class S2SCidViewSection extends LitElement {
       return;
     }
     const publication = this.publication || store.getRecord?.('name') || '';
+    this.resolvedPublication = publication;
 
     // Publication switch: abort any in-flight retrievability pass and drop the
     // old publication's statuses so a stale pass can't write back into a map
@@ -711,30 +775,50 @@ export class S2SCidViewSection extends LitElement {
   }
 
   /**
-   * Self-pacing retrievability pass: stalest-first batches over the batch
-   * endpoint until the whole list is checked. Incremental per-line updates
-   * arrive as results stream; the pass restarts until aborted or exhausted.
+   * Is a CID "fresh" (skip it in the auto pass)? Fresh = checked within
+   * `freshnessMs`. Never-checked or unknown-age CIDs are never fresh.
+   * `freshnessMs <= 0` forces a full pass (manual Recheck).
    */
-  private async runRetrievabilityPass(): Promise<void> {
+  private isFresh(cid: string, freshnessMs: number, map: Partial<CidRetrievabilityMap>): boolean {
+    if (freshnessMs <= 0) return false;
+    const status = map[cid];
+    if (!status) return false;
+    // A malformed checkedAt parses to NaN → `NaN <= freshnessMs` is false →
+    // treated as not-fresh, i.e. re-checked. Correct fail-open behaviour.
+    return Date.now() - Date.parse(status.checkedAt) <= freshnessMs;
+  }
+
+  /**
+   * Self-pacing retrievability pass: stalest-first batches over the batch
+   * endpoint until the list is exhausted. The auto pass (freshnessMs > 0) only
+   * covers UNFRESH cids — never-checked first, then checked longer ago than the
+   * freshness window — so a reload / tab re-open resumes from the localStorage
+   * cache instead of re-running a full check. The manual Recheck passes 0 to
+   * force every cid through the endpoint. Incremental per-line updates arrive
+   * as results stream; the pass restarts until aborted or exhausted.
+   */
+  private async runRetrievabilityPass(freshnessMs = RETRIEVABILITY_AUTO_FRESH_MS): Promise<void> {
     if (!this.view || this.checking) return;
     const epoch = this.retrievabilityEpoch;
     this.checking = true;
     this.checkedCount = 0;
     try {
       const all = cidsFromView(this.view);
-      // Cids already (re)checked by THIS pass. orderByStaleness is a pure SORT
-      // (returns every cid, never fewer) — so the next batch is the stalest
-      // order minus what this pass already covered; the loop terminates when
-      // every cid has been touched this pass.
+      const map = this.retrievability ?? {};
+      // Unfresh set is fixed for the whole pass: never-checked first, then
+      // stalest-first (orderByStaleness is a pure SORT over all cids, so we
+      // filter to the unfresh ones AFTER sorting — never fewer of them).
+      const unfresh = orderByStaleness(all, map).filter((cid) => !this.isFresh(cid, freshnessMs, map));
+      this.checkTarget = unfresh.length;
       const doneThisPass = new Set<string>();
       for (;;) {
-        const next = orderByStaleness(all, this.retrievability ?? {})
+        const next = unfresh
           .filter((cid) => !doneThisPass.has(cid))
           .slice(0, RETRIEVABILITY_BATCH);
         if (next.length === 0) break;
         for (const cid of next) doneThisPass.add(cid);
         try {
-          const map = await checkRetrievability(this.publication, this.view, next, {
+          const result = await checkRetrievability(this.resolvedPublication, this.view, next, {
             prev: this.retrievability ?? undefined,
             onResult: (cid, status) => {
               if (epoch === this.retrievabilityEpoch) {
@@ -744,7 +828,7 @@ export class S2SCidViewSection extends LitElement {
             },
             signal: this.retrievabilityAbort?.signal,
           });
-          if (epoch === this.retrievabilityEpoch) this.retrievability = map;
+          if (epoch === this.retrievabilityEpoch) this.retrievability = result;
         } catch {
           // Aborted (disconnect / recheck / publication switch) → stop now.
           break;
@@ -759,19 +843,21 @@ export class S2SCidViewSection extends LitElement {
     }
   }
 
-  /** Manually restart the retrievability pass (abort any in-flight one). */
+  /** Manually restart the retrievability pass (abort any in-flight one) — forces a full check. */
   private recheck(): void {
     this.retrievabilityAbort?.abort();
     this.retrievabilityAbort = new AbortController();
     this.retrievabilityEpoch++;
     this.checking = false;
-    void this.runRetrievabilityPass();
+    void this.runRetrievabilityPass(0);
   }
 
   /**
    * Kick off the retrievability pass after a fresh build: paint the cached
    * dots instantly, arm a fresh abort controller, then start the stalest-first
-   * background loop over the batch endpoint.
+   * background loop over the batch endpoint. Auto mode is FRESHNESS-GATED —
+   * only unfresh (never-checked / older than the window) cids are re-queried,
+   * so a reload resumes from the cache instead of re-checking everything.
    */
   private startRetrievabilityCheck(): void {
     // A same-publication refresh can land while the previous pass is still
@@ -782,7 +868,9 @@ export class S2SCidViewSection extends LitElement {
     this.retrievabilityAbort?.abort();
     this.retrievabilityEpoch++;
     this.checking = false;
-    this.retrievability = loadRetrievabilityMap(this.publication);
+    this.checkedCount = 0;
+    this.checkTarget = 0;
+    this.retrievability = loadRetrievabilityMap(this.resolvedPublication);
     this.retrievabilityAbort = new AbortController();
     void this.runRetrievabilityPass();
   }
@@ -1070,7 +1158,7 @@ export class S2SCidViewSection extends LitElement {
           <button
             class="refresh"
             ?disabled=${this.checking}
-            title="Re-check every CID against the ipfs-check service (stalest first)"
+            title="Re-check every CID against the ipfs-check service (full pass, ignores cache)"
             @click=${() => {
               this.recheck();
             }}
@@ -1078,12 +1166,17 @@ export class S2SCidViewSection extends LitElement {
             <ph-arrow-counter-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-counter-clockwise>
             ${this.checking ? 'Checking…' : 'Recheck'}
           </button>
-          ${this.checking
-            ? html`<span class="stale-hint"
-                >checking copies… (${this.checkedCount}/${cidsFromView(view).length})</span
+          ${this.storageBlocked
+            ? html`<span class="stale-hint storage-warn"
+                >⚠ browser storage unavailable — check results won't persist across reloads</span
               >`
             : nothing}
-          ${this.staleSince != null
+          ${this.checking
+            ? html`<span class="stale-hint"
+                >checking copies… (${this.checkedCount}/${this.checkTarget})</span
+              >`
+            : nothing}
+          ${this.cachedRetrievabilityHint()}${this.staleSince != null
             ? html`<span class="stale-hint">${this.staleLabel()}</span>`
             : nothing}
         </div>
