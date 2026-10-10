@@ -324,6 +324,34 @@ describe('parseRow — synthetic rows (rule 7 + robustness)', () => {
     expect(row.copies).toBe(1);
   });
 
+  it('non-object provider element ([null]) does not crash and contributes nothing', () => {
+    const row = parseRow({ cid: 'QmNullElement', result: [null] });
+    expect(row.totalProviders).toBe(1);
+    expect(row.servingProviders).toBe(0);
+    expect(row.sources).toEqual(ALL_FALSE);
+    expect(row.copies).toBe(0);
+  });
+
+  it('malformed provider element next to a valid one is skipped, valid still serves', () => {
+    const row = parseRow({
+      cid: 'QmMixedElements',
+      result: [
+        null,
+        0,
+        {
+          ID: 'peer',
+          Addrs: ['/ip4/62.166.178.42/tcp/4001'],
+          DataAvailableOverBitswap: { Found: true },
+          AgentVersion: 'kubo/0.43.1/acc53c0/docker',
+        },
+      ],
+    });
+    expect(row.totalProviders).toBe(3);
+    expect(row.servingProviders).toBe(1);
+    expect(row.sources).toEqual(KUBO_ONLY);
+    expect(row.copies).toBe(1);
+  });
+
   it('non-array result without a row error gets a synthesized description', () => {
     const row = parseRow({ cid: 'QmBad', result: { MutableResolution: {} } });
     expect(row.copies).toBe(0);

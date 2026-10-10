@@ -153,8 +153,22 @@ function describeBadResult(result: unknown): string {
  * Classify a single provider probe. Pure — never throws. `platforms` are the
  * platforms this provider belongs to regardless of whether it served; the
  * per-CID verdict only ORs platforms of providers that actually served.
+ * A non-object provider (null / number / string / array) degrades to a
+ * zeroed, non-serving provider instead of throwing.
  */
 export function classifyProvider(provider: IpfsCheckProvider): ParsedProvider {
+  if (!isRecord(provider)) {
+    return {
+      id: '',
+      addrs: [],
+      agent: '',
+      source: '',
+      servedBitswap: false,
+      servedHttp: false,
+      served: false,
+      platforms: [],
+    };
+  }
   const addrs = Array.isArray(provider.Addrs) ? provider.Addrs : [];
   const maddrs = Array.isArray(provider.ConnectionMaddrs) ? provider.ConnectionMaddrs : [];
   const id = provider.ID ?? '';
