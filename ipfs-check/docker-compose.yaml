@@ -1,0 +1,25 @@
+services:
+  ipfs-check:
+    container_name: ipfs-check.transport-union.dev
+    image: ghcr.io/ipfs/ipfs-check:main-latest
+    network_mode: host
+    environment:
+      IPFS_CHECK_ACCELERATED_DHT: "false"
+    restart: unless-stopped
+
+  ipfs-check-batch:
+    container_name: ipfs-check-batch
+    image: oven/bun:1
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ./server.ts:/app/server.ts:ro
+    command: ["bun", "run", "server.ts"]
+    environment:
+      CHECK_URL: "http://127.0.0.1:3333"
+      PORT: "3334"
+      MAX_CONCURRENT: "6"
+      CHECK_TIMEOUT_S: "30"
+    depends_on:
+      - ipfs-check
+    restart: unless-stopped
