@@ -218,3 +218,45 @@ $0
 - Reviewer: rev-filecoin-fp (pi, pane wJ:p16) → APPROVE; verdict archived `brain/reviews/2026-10-10-filecoin-fp-APPROVE.txt`.
 - PR #124 open for user merge. Post-merge gate + worktree/cleanup TODO after user merges.
 - Pane wJ:p16 closed; agent rev-filecoin-fp released.
+
+## 2026-10-10 — config mirror to Filebase + Pinata (PR #125) — MERGED + CLEANED
+- Worktree `/home/joera/code/wt-config-mirror`, branch `fix/config-mirror-filebase-pinata`, commit `97939db`.
+- ConfigBuilder.buildConfig now also fires-and-forget mirrors to Filebase + Pinata (kubo stays awaited primary); content-addressed CID premise verified (identical CIDs across kubo/filebase/pinata).
+- Lead-done directly (small single-file change, flagged deviation); PR #125 user rebase-merged as `8f9cf13`.
+- **CLEANUP DONE 2026-10-10:** worktree removed, local+remote branch deleted (tree verified identical to merged commit).
+
+## 2026-10-10 — filecoin false-positive fix (PR #124) — MERGED + CLEANED
+- Worktree `/home/joera/code/wt-filecoin-fp`, branch `fix/filecoin-false-positive`, commit `51c6ed5`.
+- PR #124 user rebase-merged as `d8ebb9f`. Verdict archived `brain/reviews/2026-10-10-filecoin-fp-APPROVE.txt`.
+- **CLEANUP DONE 2026-10-10:** worktree removed, local+remote branch deleted (only tree delta vs merged = user's own ipfs-check/docker-compose.yaml).
+
+## 2026-10-10 — shared retrievability parser (PR #126) — OPEN
+- Goal: pure module `shared/src/cid-view/retrieval-parser.ts` — ipfs-check `/batch` NDJSON → per-CID verdict (kubo/pinata/filebase/filecoin flags, copies, provider totals) + category aggregates + actionable lists; single source of truth to replace safe-app's inline classifier (wiring = follow-up).
+- Classifier (empirically validated): served = Bitswap.Found || HTTP.Found; kubo by agent; pinata/filebase by host; filecoin by Addr-host ↔ Synapse SP map (`curio.akave.xyz`, `main.ezpdpz.net`, `main2.ezpdpz.net`, `foc.dealbot.site`, `pdp-main.topblocks.io`, `pdp.lotus.dedyn.io`) or agent `boost|lotus|venus|fvm|spade`; per-platform flag once per CID.
+- Worktree: `/home/joera/code/wt-parser` on branch `feat/cid-retrieval-parser` (rebased onto origin/main `c5b5d51`). Commits: `1fe0251` feat + `1be47b0` fix (malformed provider robustness).
+- Worker: impl-parser (pi, pane wJ:p17); reviewer: rev-parser (pi, pane wJ:p18) R1 REQUEST_CHANGES (1 blocking: `result:[null]` crashed whole batch parse — fixed, 2 new tests) → R2 APPROVE (independent reproduction). Verdict archived `brain/reviews/2026-10-10-parser-APPROVE.txt`. Panes closed.
+- Gate: shared retrieval-parser 29/29, eslint 0, build green. Single-model limitation (only pi) flagged.
+- **PR #126 open** for user merge. After merge: remove `wt-parser` + branch + remote, then wire safe-app `statusFromCheckLine` to the shared parser (follow-up).
+
+## 2026-10-10 — CID table Type column (PR #127) — OPEN
+- Short intermezzo: collapse the CID inventory table's Category + Source columns into one **Type** column.
+- Mapping (done directly by lead — small single-component change, flagged deviation): deal→source, deal-version→version, config/template-dag/template→config, assets-root/asset→asset, site-root/site-file→html, archive→cache, offer→offer, offer-version→offer version, archive-item→cache item. Badge keeps category color class; exact category in `title`.
+- Worktree `/home/joera/code/wt-cidtype`, branch `feat/cid-type-column`, commit `9279cbe`. Base origin/main `c3b6edb` (includes #126 parser).
+- Gate (lead-verified): full `pnpm -C safe-app test` 37/37 files, 353/353 pass; component lint 9 (baseline 11, zero new — removed dead categoryClass); type-check:tests 79 pre-existing, zero new.
+- **PR #127 open** for user merge. After merge: remove `wt-cidtype` + branch + remote.
+### 2026-10-10 update — chips become filter buttons (PR #127)
+- Follow-up commit `264d3c0` on the same branch (one coherent feature): chips now use the Type classification and become table filters.
+- Layout: one `.chips-row`, two containers — container 1 = counters + Type chips; container 2 = copies-count + health chips (healthy/need healing/no copies) + source flags. Same pill design; `.active` state + "× clear filters".
+- Filters AND-combine type/copies/health; reset on view change. Counts from the same unique-cid rows the table renders. Unchecked rows excluded from copies/health filters.
+- Gate (lead-verified): full safe-app 37/37 files, 355/355 pass (2 new filter tests); component lint 7 (zero new, down from 9 baseline); type-check:tests 79 pre-existing.
+- PR #127 body updated to cover both commits. After user merge: remove `wt-cidtype` + branch.
+### 2026-10-10 — filter chips re-packaged as PR #128 (originally #127)
+- **Root cause discovered**: user merged PR #127 at 15:56 with head `9279cbe` (Type column ONLY). The filter-chips commit `264d3c0` was pushed after the merge → orphaned on the merged branch, never entered the merge → deployed bundle had Type column but no filter chips ("no changes").
+- Re-packaged: worktree `/home/joera/code/wt-filterchips`, branch `feat/cid-filter-chips` from origin/main `7ab20e7`, cherry-picked `264d3c0` (clean — same tree) → commit `2c08a1f`. Gate green (355/355, lint 7 zero-new). **PR #128 opened**.
+- `wt-cidtype` + `feat/cid-type-column` cleanup due (branch merged, Type column live).
+### 2026-10-10 — PR #128 layout rework (commit `16ce594`)
+- New `.chips-top` full-width row above the chips row: unique-CIDs counter + × clear filters (only when a filter is active).
+- `.chips-row` no longer wraps; `.chips-group` containers get `flex: 1` (two equal columns).
+- `button.chip` explicit `font-size: .75rem` + `text-transform: none`.
+- Removed per-source availability chips (`.flag-on`/`.flag-off` + markup + CSS) — source still visible via Type badges + retrievability columns.
+- Tests: dropped deals/config/tree/archive ✓/✗ assertions; added `.chips-top` assertions (unique CIDs present, no clear-filters when idle). Gate: 37/37, 355/355; lint 7 zero-new.
