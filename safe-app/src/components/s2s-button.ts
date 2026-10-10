@@ -9,13 +9,20 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  * clipped to border-box with a solid fill layer clipped to padding-box on
  * top, so the visible outline is a gradient while the face stays opaque.
  *
- * The gradient uses the CID-inventory base colors, running top→bottom:
- *   default: yellow on top → purple at the bottom
- *   hover:   the two stops switch (purple on top → yellow at the bottom)
- *   transition: 300ms
+ * The gradient runs top→bottom from the accent color down to the original
+ * button border color (--gray-600). On hover/focus the two stops switch, so
+ * the border slowly cross-fades (500ms) as the accent moves to the bottom.
+ *
+ * Button types: the accent color is the differentiator. `type` selects a
+ * CID-palette accent; consumers can also override --gb-accent from outside.
+ *   default  → yellow  (--color-yellow)
+ *   offer    → purple  (--color-purple)
+ *   deal     → blue    (--color-blue)
+ *   success  → green   (--color-green)
+ *   danger   → red     (--color-red)
  *
  * Variants:
- *   fade (default) — the vertical yellow→purple border switches on hover
+ *   fade (default) — the vertical accent→gray border switches on hover
  *   spin           — the border is a conic gradient that rotates while hovered
  *
  * `@property` registers the animated custom props so the border actually
@@ -40,6 +47,8 @@ export class S2SButton extends LitElement {
   @property({ type: Boolean }) disabled = false;
   /** 'fade' (default) or 'spin' border animation. */
   @property() variant: 'fade' | 'spin' = 'fade';
+  /** Accent color selector — the gradient color is the differentiator. */
+  @property() type: 'default' | 'offer' | 'deal' | 'success' | 'danger' = 'default';
 
   static styles = css`
     @property --gb-c1 {
@@ -50,7 +59,7 @@ export class S2SButton extends LitElement {
     @property --gb-c2 {
       syntax: '<color>';
       inherits: false;
-      initial-value: #d8b4fe;
+      initial-value: #5f564b;
     }
     @property --gb-angle {
       syntax: '<angle>';
@@ -60,11 +69,26 @@ export class S2SButton extends LitElement {
 
     :host {
       display: inline-flex;
+      /* Accent (top stop) — the per-type differentiator. */
+      --gb-accent: var(--color-yellow, #fcd34d);
+    }
+    :host([type='offer']) {
+      --gb-accent: var(--color-purple, #d8b4fe);
+    }
+    :host([type='deal']) {
+      --gb-accent: var(--color-blue, #93c5fd);
+    }
+    :host([type='success']) {
+      --gb-accent: var(--color-green, #6ee7b7);
+    }
+    :host([type='danger']) {
+      --gb-accent: var(--color-red, #db4233);
     }
 
     button {
-      --gb-c1: var(--color-yellow, #fcd34d);
-      --gb-c2: var(--color-purple, #d8b4fe);
+      --gb-c1: var(--gb-accent);
+      /* Bottom stop — the original button border color. */
+      --gb-c2: var(--gray-600, #5f564b);
       --gb-fill: var(--gray-900, #1a1714);
 
       font-family: var(--font-mono);
@@ -87,13 +111,13 @@ export class S2SButton extends LitElement {
         linear-gradient(var(--gb-fill), var(--gb-fill)) padding-box,
         linear-gradient(180deg, var(--gb-c1), var(--gb-c2)) border-box;
 
-      transition: --gb-c1 0.3s ease, --gb-c2 0.3s ease;
+      transition: --gb-c1 0.5s ease, --gb-c2 0.5s ease;
     }
 
     button:hover:not(:disabled),
     button:focus-visible {
-      --gb-c1: var(--color-purple, #d8b4fe);
-      --gb-c2: var(--color-yellow, #fcd34d);
+      --gb-c1: var(--gray-600, #5f564b);
+      --gb-c2: var(--gb-accent);
     }
 
     button:disabled {
@@ -108,7 +132,7 @@ export class S2SButton extends LitElement {
           from var(--gb-angle),
           var(--gb-c1),
           var(--gb-c2),
-          var(--color-blue, #93c5fd),
+          var(--gb-accent),
           var(--gb-c1)
         ) border-box;
     }
