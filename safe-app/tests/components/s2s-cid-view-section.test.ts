@@ -321,19 +321,28 @@ describe('s2s-cid-view-section', () => {
     // Summary chips — totals + unique CIDs.
     expect(text).toContain('13 unique CIDs');
     expect(text).toContain('13 entries');
-    // Per-category chips.
-    expect(text).toContain('1 deal');
-    expect(text).toContain('2 deal versions');
-    expect(text).toContain('1 offer');
-    expect(text).toContain('1 config');
-    expect(text).toContain('1 template DAG');
-    expect(text).toContain('1 template');
-    expect(text).toContain('1 assets root');
-    expect(text).toContain('1 asset');
-    expect(text).toContain('1 site root');
-    expect(text).toContain('1 site file');
-    expect(text).toContain('1 archive');
-    expect(text).toContain('1 archive item');
+    // Chip section is one row with two containers: type chips | copies/health.
+    const groups = root.querySelectorAll('.chips-group');
+    expect(groups.length).toBe(2);
+    // Type chips (collapsed classification) live in container 1, counted over
+    // the same unique-cid rows the table renders.
+    const typeGroup = groups[0]!.textContent ?? '';
+    expect(typeGroup).toContain('1 source');
+    expect(typeGroup).toContain('2 version');
+    expect(typeGroup).toContain('1 offer');
+    expect(typeGroup).toContain('3 config');
+    expect(typeGroup).toContain('2 asset');
+    expect(typeGroup).toContain('2 html');
+    expect(typeGroup).toContain('1 cache');
+    expect(typeGroup).toContain('1 cache item');
+    // Type chips are filter buttons (same pill design); none active initially.
+    const filterChips = Array.from(root.querySelectorAll('button.chip'));
+    expect(filterChips.length).toBeGreaterThanOrEqual(8);
+    expect(filterChips.some((b) => b.textContent?.trim().endsWith('config'))).toBe(true);
+    expect(root.querySelectorAll('button.chip.active').length).toBe(0);
+    // Copies/health chips are empty until a retrievability pass fills the map
+    // (the default all-false pass may or may not have landed here — asserted
+    // deterministically in the dedicated filter tests below).
 
     // Entry rows: one per unique cid (flat risk-sorted table, no group rows).
     expect(root.querySelectorAll('.cid-row').length).toBe(13);
@@ -922,5 +931,157 @@ describe('s2s-cid-view-section', () => {
     expect(dealRow!.textContent).toMatch(/ago/);
     const configRow = rows.find((r) => r.querySelector('.badge.config'));
     expect(configRow!.textContent).toContain('—');
+  });
+
+  // --- chip filters (type / copies / health) ---
+
+  it('type chips filter the table and toggle back off', async () => {
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('.cid-row').length).toBe(13);
+
+    const configChip = Array.from(root.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.trim().endsWith('config'),
+    );
+    expect(configChip).toBeTruthy();
+    (configChip as HTMLButtonElement).click();
+
+    // Only the 3 config-type rows remain (config + template DAG + template).
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(3);
+    });
+    const badges = Array.from(el.shadowRoot!.querySelectorAll('.cid-row .badge'));
+    expect(badges.length).toBe(3);
+    expect(badges.every((b) => b.textContent === 'config')).toBe(true);
+    // Chip shows the active state and a clear-filters affordance appears.
+    const activeChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip.active')).find(
+      (b) => b.textContent?.includes('config'),
+    );
+    expect(activeChip).toBeTruthy();
+    expect(el.shadowRoot!.textContent).toContain('clear filters');
+
+    // Toggle the active chip off → all 13 rows return.
+    (activeChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
+    });
+    expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
+  });
+
+  it('copies + health chips filter the table and combine with type chips (AND)', async () => {
+    // Deterministic mixed retrievability: deal 3 copies (healthy), ver1 1 copy
+    // (healing), config 0 copies (no copies); everything else unchecked.
+    const seed: CidRetrievabilityMap = {
+      bafydeal1: {
+        checkedAt: RECENT(),
+        copies: 3,
+        sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
+      },
+      bafyver1: {
+        checkedAt: RECENT(),
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+      },
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+      },
+    };
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('.cid-row').length).toBe(13);
+
+    // Container 2 chips: copies (0/1/3) + health (healthy/healing/no copies).
+    const group2 = root.querySelectorAll('.chips-group')[1]!.textContent ?? '';
+    expect(group2).toContain('0 copies');
+    expect(group2).toContain('1 copy');
+    expect(group2).toContain('3 copies');
+    expect(group2).toContain('1 healthy');
+    expect(group2).toContain('1 need healing');
+    expect(group2).toContain('1 no copies');
+
+    // Copies chip: click '3 copies' → only the deal row (3/4) remains.
+    const copies3 = Array.from(root.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.includes('3 copies'),
+    );
+    expect(copies3).toBeTruthy();
+    (copies3 as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
+    });
+    expect(el.shadowRoot!.querySelector('.cid-row .badge.deal')).toBeTruthy();
+    expect(el.shadowRoot!.textContent).toContain('3/4');
+
+    // Toggle it back off → all rows return.
+    const copies3b = Array.from(el.shadowRoot!.querySelectorAll('button.chip.active')).find((b) =>
+      b.textContent?.includes('3 copies'),
+    );
+    (copies3b as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
+    });
+
+    // Health chip: click 'no copies' → only the config row (0/4) remains.
+    const noCopiesChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.includes('no copies'),
+    );
+    expect(noCopiesChip).toBeTruthy();
+    (noCopiesChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
+    });
+    const cfgBadge = el.shadowRoot!.querySelector('.cid-row .badge.config');
+    expect(cfgBadge).toBeTruthy();
+    expect(el.shadowRoot!.textContent).toContain('0/4');
+
+    // Combine with a type chip: type 'config' AND health 'no copies' → still 1.
+    const configChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.trim().endsWith('config'),
+    );
+    (configChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
+    });
+
+    // Swap type config→html (still health no-copies): html rows are unchecked,
+    // so nothing matches → the empty-filter message shows.
+    const configActive = Array.from(el.shadowRoot!.querySelectorAll('button.chip.active')).find(
+      (b) => b.textContent?.includes('config'),
+    );
+    (configActive as HTMLButtonElement).click();
+    const htmlChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.trim().endsWith('html'),
+    );
+    (htmlChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('No rows match the active filters');
+    });
+    expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(0);
+
+    // Clear filters → all 13 rows return.
+    const clearChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.includes('clear filters'),
+    );
+    expect(clearChip).toBeTruthy();
+    (clearChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
+    });
+    expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
   });
 });
