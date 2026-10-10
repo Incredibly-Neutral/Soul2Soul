@@ -16,12 +16,28 @@
 // fake publicationModule with getVersionCount/getVersion and a fake
 // getAllDealsAndOffers.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
 import { keccak256, toBytes } from 'viem';
 import { evmRead } from '../../src/lib/evm';
 import { store } from '../../src/state/index.js';
-import { buildSafeAppCidViewContext, fetchCidView } from '../../src/lib/cid-view';
-import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
+import {
+  buildSafeAppCidViewContext,
+  checkRetrievability,
+  classifyProviderPlatforms,
+  fetchCidView,
+  loadRetrievabilityMap,
+  saveRetrievabilityMap,
+  statusFromCheckLine,
+  type IpfsCheckLine,
+  type IpfsCheckProvider,
+} from '../../src/lib/cid-view';
+import type {
+  CidEntry,
+  CidRetrievabilityMap,
+  CidViewReadContext,
+  PublicationCidView,
+  RetrievabilitySource,
+} from '@s2s/soul2soul-shared/safe-app';
 
 const ipfsMocks = vi.hoisted(() => {
   const instances: Array<{
@@ -45,10 +61,23 @@ const ipfsMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
-  S2SIPFSMethods: ipfsMocks.ipfsClass,
-  buildPublicationCidView: ipfsMocks.buildPublicationCidView,
-}));
+vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
+  // The lib now ALSO imports the shared retrievability core (real symbols) —
+  // provide them from the shared source tree (relative path, mirroring the
+  // component test's coordinator load) rather than the heavy root barrel.
+  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
+  const validation = await import('../../../shared/src/cid-view/validation.ts');
+  return {
+    S2SIPFSMethods: ipfsMocks.ipfsClass,
+    buildPublicationCidView: ipfsMocks.buildPublicationCidView,
+    cidsFromView: retrievability.cidsFromView,
+    filecoinBackedCidsFromView: retrievability.filecoinBackedCidsFromView,
+    orderByCopiesAscending: retrievability.orderByCopiesAscending,
+    orderByStaleness: retrievability.orderByStaleness,
+    RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
+    parseCidRetrievabilityMap: validation.parseCidRetrievabilityMap,
+  };
+});
 
 vi.mock('@/lib/evm.js', () => ({ evmRead: vi.fn() }));
 
@@ -418,5 +447,257 @@ describe('buildSafeAppCidViewContext', () => {
     const ctxArg = ipfsMocks.buildPublicationCidView.mock.calls[0][0] as CidViewReadContext;
     expect(typeof ctxArg.getDeals).toBe('function');
     expect(typeof ctxArg.getVersions).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retrievability adapter — ipfs-check batch endpoint
+// ---------------------------------------------------------------------------
+
+/** Minimal schema-valid view for the pure retrievability functions. */
+function retrievabilityView(entries: CidEntry[] = []): PublicationCidView {
+  return {
+    publication: 'test.eth',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    entries,
+    sources: { deals: false, config: false, tree: false, archive: false },
+    summary: { total: entries.length, uniqueCids: entries.length, byCategory: {} },
+  };
+}
+
+/** Two distinct cids: one on-chain deal (filecoin-backed), one config. */
+function validView(): PublicationCidView {
+  return retrievabilityView([
+    { cid: 'bafydeal1', category: 'deal', source: 'deals' },
+    { cid: 'bafyconfig', category: 'config', source: 'config' },
+  ]);
+}
+
+/** Build a Response whose body is a streaming NDJSON document (as the real endpoint). */
+function ndjsonResponse(lines: string[]): Response {
+  return new Response(lines.join('\n') + '\n', {
+    headers: { 'Content-Type': 'application/x-ndjson' },
+  });
+}
+
+/** Default provider: a kubo peer that found the cid over Bitswap. */
+function provider(over: Partial<IpfsCheckProvider> = {}): IpfsCheckProvider {
+  return {
+    ID: '12D3KooWTest',
+    Addrs: [],
+    AgentVersion: 'unknown-agent/1.0',
+    Source: 'ipni',
+    DataAvailableOverBitswap: { Enabled: true, Found: true },
+    ...over,
+  };
+}
+
+const SOURCES_FALSE = { kubo: false, pinata: false, filebase: false, filecoin: false };
+
+describe('retrievability adapter', () => {
+  // node-env unit tests have no window.localStorage — provide a tiny stub so
+  // the lib's cache path (load/save, fail-open) is exercised for real.
+  const storage = new Map<string, string>();
+  beforeAll(() => {
+    Object.defineProperty(globalThis, 'window', {
+      value: {
+        localStorage: {
+          getItem: (k: string) => storage.get(k) ?? null,
+          setItem: (k: string, v: string) => void storage.set(k, v),
+        },
+      },
+      configurable: true,
+    });
+  });
+  beforeEach(() => {
+    storage.clear();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('classifyProviderPlatforms maps self-identified providers to platforms', () => {
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/dns4/bitswap.filebase.io/tcp/4001/p2p/12D3KooWTest'] }),
+      ),
+    ).toEqual(['filebase']);
+    expect(classifyProviderPlatforms(provider({ ID: 'pinata-peer', Addrs: ['/dns4/pinata.cloud'] })))
+      .toEqual(['pinata']);
+    expect(classifyProviderPlatforms(provider({ AgentVersion: 'kubo/0.29.0/' }))).toEqual(['kubo']);
+    expect(classifyProviderPlatforms(provider({ AgentVersion: 'go-ipfs/0.22.0/' }))).toEqual([
+      'kubo',
+    ]);
+    expect(classifyProviderPlatforms(provider({ AgentVersion: 'boost-v2.3.0' }))).toEqual([
+      'filecoin',
+    ]);
+    // A provider may match multiple platforms (pinata runs kubo → both).
+    expect(
+      classifyProviderPlatforms(provider({ ID: 'pinata-1', AgentVersion: 'kubo/0.29.0/' })),
+    ).toEqual(['pinata', 'kubo']);
+    expect(classifyProviderPlatforms(provider({ AgentVersion: 'megaphone/1.0' }))).toEqual([]);
+  });
+
+  it('statusFromCheckLine: error line → all-false + error, checkedAt recorded', () => {
+    const status = statusFromCheckLine(
+      { cid: 'bafyconfig', error: 'boom' },
+      validView(),
+      () => '2026-01-01T00:00:00.000Z',
+    );
+    expect(status).toEqual({
+      checkedAt: '2026-01-01T00:00:00.000Z',
+      copies: 0,
+      sources: SOURCES_FALSE,
+      error: 'boom',
+    });
+  });
+
+  it('statusFromCheckLine: non-array result (MutableResolution) → all-false, no error', () => {
+    const status = statusFromCheckLine(
+      { cid: 'bafyconfig', result: { MutableResolution: { Path: '/ipns/foo' } } },
+      validView(),
+      () => '2026-01-01T00:00:00.000Z',
+    );
+    expect(status.copies).toBe(0);
+    expect(status.sources).toEqual(SOURCES_FALSE);
+    expect(status.error).toBeUndefined();
+  });
+
+  it('statusFromCheckLine: serving providers classified into platforms', () => {
+    const status = statusFromCheckLine(
+      {
+        cid: 'bafyconfig',
+        result: [
+          provider({ Addrs: ['/dns4/bitswap.filebase.io/tcp/4001'] }),
+          provider({ AgentVersion: 'kubo/0.29.0/' }),
+          provider({ AgentVersion: 'boost-v2.3.0', DataAvailableOverBitswap: { Enabled: true, Found: false } }),
+        ],
+      },
+      validView(),
+      () => '2026-01-01T00:00:00.000Z',
+    );
+    expect(status.sources.filebase).toBe(true);
+    expect(status.sources.kubo).toBe(true);
+    expect(status.sources.filecoin).toBe(false); // not found → not counted
+    expect(status.sources.pinata).toBe(false);
+    expect(status.copies).toBe(2);
+  });
+
+  it('statusFromCheckLine: providers that did NOT find the cid are ignored', () => {
+    const status = statusFromCheckLine(
+      {
+        cid: 'bafyconfig',
+        result: [provider({ DataAvailableOverBitswap: { Enabled: true, Found: false } })],
+      },
+      validView(),
+      () => '2026-01-01T00:00:00.000Z',
+    );
+    expect(status.copies).toBe(0);
+    expect(status.sources).toEqual(SOURCES_FALSE);
+  });
+
+  it('statusFromCheckLine: on-chain deal cids are filecoin copies even with no providers', () => {
+    const status = statusFromCheckLine({ cid: 'bafydeal1', result: [] }, validView(), () =>
+      '2026-01-01T00:00:00.000Z',
+    );
+    expect(status.sources.filecoin).toBe(true);
+    expect(status.copies).toBe(1);
+  });
+
+  it('checkRetrievability: 120 cids @50 → 3 batched POSTs, streams results, merges prev, persists', async () => {
+    const cids = Array.from({ length: 120 }, (_, i) => `bafychunk${String(i).padStart(3, '0')}`);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { cids: string[] };
+      const lines = body.cids.map((cid) => JSON.stringify({ cid, ms: 1, result: [] }));
+      return ndjsonResponse(lines);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const prev: CidRetrievabilityMap = {
+      bafyprev: {
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+      },
+    };
+    const onResult = vi.fn();
+    const map = await checkRetrievability('test.eth', validView(), cids, { prev, onResult });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]!.body)).cids).toHaveLength(50);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]!.body)).cids).toHaveLength(50);
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]!.body)).cids).toHaveLength(20);
+    expect(onResult).toHaveBeenCalledTimes(120);
+    // merged with prev; every posted cid got a status
+    expect(map.bafyprev).toEqual(prev.bafyprev);
+    expect(Object.keys(map).length).toBe(121);
+    // persisted to localStorage under the publication key
+    const saved = JSON.parse(window.localStorage.getItem('s2s.cidview.test.eth.retrievability')!);
+    expect(Object.keys(saved).length).toBe(121);
+    expect(saved.bafychunk000).toBeDefined();
+  });
+
+  it('checkRetrievability: empty cids → no fetch, empty map', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const map = await checkRetrievability('test.eth', validView(), [], {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(map).toEqual({});
+  });
+
+  it('checkRetrievability: throwing fetch marks every chunk cid with an error status (fail-open)', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const map = await checkRetrievability('test.eth', validView(), ['bafya', 'bafyb'], {});
+    expect(map.bafya.error).toBe('network down');
+    expect(map.bafya.copies).toBe(0);
+    expect(map.bafya.sources).toEqual(SOURCES_FALSE);
+    expect(map.bafyb.error).toBe('network down');
+  });
+
+  it('checkRetrievability: abort rethrows and does NOT record error statuses', async () => {
+    const prev: CidRetrievabilityMap = {
+      bafya: {
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+      },
+    };
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      throw new Error('AbortError');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      checkRetrievability('test.eth', validView(), ['bafya'], { prev, signal: controller.signal }),
+    ).rejects.toThrow();
+    // The previous cache is preserved — the aborted cid is not marked as an error.
+    const saved = JSON.parse(window.localStorage.getItem('s2s.cidview.test.eth.retrievability')!);
+    expect(saved).toEqual(prev);
+  });
+
+  it('loadRetrievabilityMap / saveRetrievabilityMap round-trip, fail-open on corrupt/schema-invalid', () => {
+    const map: CidRetrievabilityMap = {
+      bafydeal1: {
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        copies: 1,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: true },
+      },
+    };
+    saveRetrievabilityMap('test.eth', map);
+    expect(loadRetrievabilityMap('test.eth')).toEqual(map);
+    // corrupt JSON → null
+    window.localStorage.setItem('s2s.cidview.test.eth.retrievability', 'not json');
+    expect(loadRetrievabilityMap('test.eth')).toBeNull();
+    // schema-invalid (zod reject) → null
+    window.localStorage.setItem(
+      's2s.cidview.test.eth.retrievability',
+      JSON.stringify({ bafydeal1: { nope: true } }),
+    );
+    expect(loadRetrievabilityMap('test.eth')).toBeNull();
   });
 });

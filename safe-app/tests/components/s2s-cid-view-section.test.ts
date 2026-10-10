@@ -21,7 +21,12 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
 import { CID } from 'multiformats';
 import { sha256 } from 'multiformats/hashes/sha2';
-import type { CidViewReadContext, PublicationCidView } from '@s2s/soul2soul-shared/safe-app';
+import type {
+  CidRetrievabilityMap,
+  CidRetrievabilityStatus,
+  CidViewReadContext,
+  PublicationCidView,
+} from '@s2s/soul2soul-shared/safe-app';
 import { mountLit } from '../helpers/mount';
 // Side-effect import registers the element; type-only import gives the
 // mountLit generic its class type without a runtime value import (a value
@@ -43,14 +48,33 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // (relative path — bypasses the heavy safe-app barrel / Lit graph, so the
   // browser test stays light). parsePublicationCidView (the zod validator) is
   // also real so the component's cache-load path validates exactly as in src.
+  // The retrievability helpers are real too — the section's risk-sorted flat
+  // table + stalest-first recheck loop depend on them.
   const real = await import('../../../shared/src/cid-view/coordinator.ts');
   const validation = await import('../../../shared/src/cid-view/validation.ts');
+  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
   realBuild.fn = real.buildPublicationCidView;
   return {
     buildPublicationCidView: buildSpy,
     parsePublicationCidView: validation.parsePublicationCidView,
+    cidsFromView: retrievability.cidsFromView,
+    orderByCopiesAscending: retrievability.orderByCopiesAscending,
+    orderByStaleness: retrievability.orderByStaleness,
+    RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
   };
 });
+
+// The section's retrievability adapter (`@/lib/cid-view`) is mocked so the
+// browser tests never hit the real ipfs-check endpoint. loadRetrievabilityMap
+// seeds the dots; checkRetrievability's default impl marks every passed cid
+// checked (all-false) so the self-pacing pass terminates after one batch.
+const cidViewMocks = vi.hoisted(() => ({
+  loadRetrievabilityMap: vi.fn<() => CidRetrievabilityMap | null>(() => null),
+  saveRetrievabilityMap: vi.fn(),
+  checkRetrievability: vi.fn(),
+}));
+
+vi.mock('@/lib/cid-view.js', () => cidViewMocks);
 
 const stateMocks = vi.hoisted(() => ({
   store: { getRecord: vi.fn<(key: string) => string | null>(() => null) },
@@ -247,10 +271,28 @@ describe('s2s-cid-view-section', () => {
     // The component persists to localStorage (s2s.cidview.*) — clear between
     // tests so each spec starts without a cache.
     localStorage.clear();
+    // Retrievability mocks: no cache + a terminating pass (every passed cid
+    // becomes checked all-false) by default.
+    cidViewMocks.loadRetrievabilityMap.mockReset().mockReturnValue(null);
+    cidViewMocks.saveRetrievabilityMap.mockReset();
+    cidViewMocks.checkRetrievability.mockReset().mockImplementation(
+      async (_publication: string, _view: PublicationCidView, cids: readonly string[]) => {
+        const map: CidRetrievabilityMap = {};
+        for (const cid of cids) {
+          map[cid] = {
+            checkedAt: '2026-01-01T00:00:00.000Z',
+            copies: 0,
+            sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+          };
+        }
+        return map;
+      },
+    );
   });
 
   afterEach(() => {
     buildSpy.mockReset();
+    cidViewMocks.checkRetrievability.mockReset();
     localStorage.clear();
   });
 
@@ -296,10 +338,8 @@ describe('s2s-cid-view-section', () => {
     expect(text).toContain('1 archive');
     expect(text).toContain('1 archive item');
 
-    // Entry rows: one per entry.
+    // Entry rows: one per unique cid (flat risk-sorted table, no group rows).
     expect(root.querySelectorAll('.cid-row').length).toBe(13);
-    // Group headers: 12 distinct categories.
-    expect(root.querySelectorAll('.cid-group').length).toBe(12);
 
     // Category badges.
     expect(root.querySelectorAll('.badge.deal').length).toBe(1);
@@ -703,5 +743,173 @@ describe('s2s-cid-view-section', () => {
     expect(
       (el as unknown as { staleTimer: ReturnType<typeof setInterval> | null }).staleTimer,
     ).toBeNull();
+  });
+
+  // --- retrievability (ipfs-check batch) ---
+
+  /** recent checkedAt so relativeTime yields a friendly "Nm ago" label. */
+  const RECENT = () => new Date(Date.now() - 5 * 60_000).toISOString();
+
+  /**
+   * checkRetrievability mock that never resolves — the self-pacing pass hangs
+   * forever, so the seeded map loaded from localStorage stays authoritative and
+   * the "unchecked" rows (gray dots + dash) remain deterministic to assert on.
+   */
+  function hangRetrievability(): Promise<CidRetrievabilityMap> {
+    return new Promise<CidRetrievabilityMap>(() => {});
+  }
+
+  function seededRetrievability(): CidRetrievabilityMap {
+    // bafydeal1: fully available (3 copies); bafyver1: single (1, risky);
+    // ROOT_CID / bafyconfig: unchecked. Deterministic for dot/risk assertions.
+    return {
+      bafydeal1: {
+        checkedAt: RECENT(),
+        copies: 3,
+        sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
+      },
+      bafyver1: {
+        checkedAt: RECENT(),
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+      },
+    };
+  }
+
+  it('renders per-source dots from the loaded retrievability map', async () => {
+    const seed = seededRetrievability();
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    const rows = Array.from(root.querySelectorAll('.cid-row'));
+    const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
+    expect(dealRow).toBeTruthy();
+    // bafydeal1 → 3 green + 1 red among the four source dots.
+    const dots = dealRow!.querySelectorAll('.dot');
+    expect(dots.length).toBe(4);
+    expect(dealRow!.querySelectorAll('.dot.on').length).toBe(3);
+    expect(dealRow!.querySelectorAll('.dot.off').length).toBe(1);
+    // Copies cell reads 3/4.
+    expect(dealRow!.textContent).toContain('3/4');
+    // Unchecked rows show gray dots + a dash for copies.
+    const unknownRow = rows.find((r) => r.querySelector('.badge.config'));
+    expect(unknownRow!.querySelectorAll('.dot.unknown').length).toBe(4);
+    expect(unknownRow!.textContent).toContain('—');
+  });
+
+  it('sorts the flat table fewest-copies-first (unchecked on top)', async () => {
+    const seed = seededRetrievability();
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
+    // Unchecked (config, site root...) come first (never-checked on top),
+    // then copies 1 (bafyver1), then copies 3 (bafydeal1) last. CIDs live in
+    // copy-hash values, not text — match on the copies labels instead.
+    const order = rows.map((r) => r.textContent ?? '');
+    const configIdx = order.findIndex((t) => t.includes('config'));
+    const dealIdx = order.findIndex((t) => t.includes('3/4'));
+    const verIdx = order.findIndex((t) => t.includes('1/4'));
+    expect(dealIdx).toBeGreaterThan(verIdx);
+    expect(configIdx).toBeLessThan(verIdx);
+  });
+
+  it('kicks off a retrievability pass after a fresh build with the view cids', async () => {
+    // Never-resolving pass keeps the checking indicator visible long enough to
+    // assert on it; the component's disconnectedCallback aborts it on unmount.
+    cidViewMocks.checkRetrievability.mockImplementation(() => new Promise(() => {}));
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(cidViewMocks.checkRetrievability).toHaveBeenCalled();
+    });
+    const [publication, view, cids] = cidViewMocks.checkRetrievability.mock.calls[0];
+    expect(publication).toBe('test.eth');
+    expect(view.publication).toBe('test.eth');
+    expect(cids).toContain('bafydeal1');
+    expect(cids).toContain(ROOT_CID);
+    // The whole unique-cid set is the pass input (13 unique < batch 50).
+    expect(cids.length).toBe(13);
+    // The pass paints a 'checking copies…' indicator while in flight.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.textContent).toContain('checking');
+    });
+  });
+
+  it('Recheck button aborts any in-flight pass and starts a fresh one', async () => {
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    // Wait for the first (default terminating) pass to finish so the Recheck
+    // button is enabled.
+    await vi.waitFor(() => {
+      const recheck = Array.from(el.shadowRoot!.querySelectorAll('.refresh')).find((b) =>
+        b.textContent?.includes('Recheck'),
+      ) as HTMLButtonElement | undefined;
+      expect(recheck && !recheck.disabled).toBe(true);
+    });
+    const buttons = Array.from(el.shadowRoot!.querySelectorAll('.refresh'));
+    const recheck = buttons.find((b) => b.textContent?.includes('Recheck'));
+    expect(recheck).toBeTruthy();
+    recheck!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    await vi.waitFor(() => {
+      expect(cidViewMocks.checkRetrievability.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('folds Role/Path and Genesis into one cell (genesis as muted sub-line)', async () => {
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    // Header no longer has a standalone Genesis column.
+    expect(root.textContent).not.toContain('Genesis');
+    // Deal rows show the role in the first line and genesis in .cell-sub.
+    const rows = Array.from(root.querySelectorAll('.cid-row'));
+    const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
+    const sub = dealRow!.querySelector('.cell-sub');
+    expect(sub).toBeTruthy();
+    expect(sub!.textContent).toContain('0xgen');
+  });
+
+
+
+  it('shows a relative last-check label for checked cids and a dash for unchecked', async () => {
+    const seed = seededRetrievability();
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    });
+    const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
+    const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
+    // recent checkedAt → relative label (e.g. '5m ago').
+    expect(dealRow!.textContent).toMatch(/ago/);
+    const configRow = rows.find((r) => r.querySelector('.badge.config'));
+    expect(configRow!.textContent).toContain('—');
   });
 });
