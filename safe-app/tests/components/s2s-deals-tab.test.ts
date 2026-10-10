@@ -146,6 +146,7 @@ vi.mock('@/state/index.js', () => ({
 // Component under test — registers <s2s-deals-tab> and its children
 // (toggle-button, table-filter, copy-content-id).
 import '../../src/components/s2s-deals-tab';
+import '../../src/components/s2s-button';
 import { store } from '../../src/state/index';
 
 type DealsTab = LitElement & {
@@ -172,6 +173,22 @@ function notificationTexts(): string[] {
 /** A fully-shaped deal as returned by getAllDealsAndOffers. */
 function rawDeal(genesis: string, author: string) {
   return { genesis, author, cid: `cid-${genesis}`, timestamp: '1700000000' };
+}
+
+/**
+ * Finds a row-action <button> that may live inside an <s2s-button> shadow
+ * root (s2s-button renders the real button in its own shadow DOM and
+ * forwards data-action/data-genesis/data-status onto it). Queries the
+ * deals-tab shadow root and descends one level into each s2s-button.
+ */
+function findRowButton(root: ShadowRoot, selector: string): HTMLButtonElement | null {
+  const direct = root.querySelector<HTMLButtonElement>(selector);
+  if (direct) return direct;
+  for (const host of root.querySelectorAll('s2s-button')) {
+    const found = host.shadowRoot?.querySelector<HTMLButtonElement>(selector);
+    if (found) return found;
+  }
+  return null;
 }
 
 describe('s2s-deals-tab', () => {
@@ -228,10 +245,10 @@ describe('s2s-deals-tab', () => {
     expect(store.offers).toHaveLength(1);
 
 
-    const acceptBtn = root.querySelector<HTMLButtonElement>('button[data-action="accept"]');
+    const acceptBtn = findRowButton(root, 'button[data-action="accept"]');
     expect(acceptBtn).not.toBeNull();
     expect(acceptBtn!.getAttribute('data-genesis')).toBe('0xOffer1');
-    expect(root.querySelector('button[data-action="retract"]')).not.toBeNull();
+    expect(findRowButton(root, 'button[data-action="retract"]')).not.toBeNull();
   });
 
   it('checks deal status via the s2s-check flow and reports an active deal', async () => {
@@ -297,7 +314,7 @@ describe('s2s-deals-tab', () => {
     );
     expect(displays).toContain('Offer Title');
 
-    const acceptBtn = root.querySelector<HTMLButtonElement>('button[data-action="accept"]')!;
+    const acceptBtn = findRowButton(root, 'button[data-action="accept"]')!;
     acceptBtn.click();
 
     await vi.waitFor(() => {

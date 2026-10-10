@@ -365,10 +365,10 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell offer-actions">
-          <button class="button button-secondary thin" data-action="accept" data-genesis="${offer.genesis}"
-            @click=${() => this.acceptOffer(offer.genesis)}>Accept</button>
-          <button class="button button-danger thin" data-action="reject" data-genesis="${offer.genesis}" data-status="offer"
-            @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</button>
+          <s2s-button action="accept" genesis="${offer.genesis}"
+            @click=${() => this.acceptOffer(offer.genesis)}>Accept</s2s-button>
+          <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
+            @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</s2s-button>
         </div>
       </div>
     `;
@@ -384,9 +384,9 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell deal-actions">
-          <button class="button button-danger thin" data-action="retract" data-genesis="${deal.genesis}" data-status="deal"
+          <s2s-button action="retract" genesis="${deal.genesis}" status="deal"
             @click=${() => this.retract(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
-          </button>
+          </s2s-button>
         </div>
       </div>
     `;
