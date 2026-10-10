@@ -14,7 +14,6 @@
 import {
   S2SIPFSMethods,
   buildPublicationCidView,
-  filecoinBackedCidsFromView,
   parseCidRetrievabilityMap,
 } from '@s2s/soul2soul-shared/safe-app';
 import type {
@@ -527,14 +526,15 @@ function allSourcesFalse(): Record<RetrievabilitySource, boolean> {
  * - A non-array `result` (e.g. MutableResolution for a non-CID input) → no
  *   providers (not an error): all sources false.
  * - An array → providers that `Found` the cid (over Bitswap and/or HTTP) are
- *   classified into our platforms; `filecoin` additionally reports true for
- *   on-chain deal-backed cids (instant, derived from the view — no network).
+ *   classified into our platforms. `filecoin` is true ONLY when a Filecoin
+ *   storage-provider stack (boost/lotus/venus/fvm/spade) actually served the
+ *   cid — s2s publication deals (author+publication) are NOT Filecoin storage,
+ *   so a deal/version entry never implies a Filecoin copy.
  *
  * `now` is injectable for deterministic tests.
  */
 export function statusFromCheckLine(
   line: IpfsCheckLine,
-  view: PublicationCidView,
   now?: () => string,
 ): CidRetrievabilityStatus {
   const checkedAt = (now ?? (() => new Date().toISOString()))();
@@ -555,10 +555,6 @@ export function statusFromCheckLine(
     for (const source of classifyProviderPlatforms(provider)) {
       sources[source] = true;
     }
-  }
-  // On-chain deal-backed cids are Filecoin-copy by construction (instant, no network).
-  if (filecoinBackedCidsFromView(view).has(line.cid)) {
-    sources.filecoin = true;
   }
   let copies = 0;
   for (const present of Object.values(sources)) {
@@ -585,6 +581,10 @@ export async function checkRetrievability(
   },
 ): Promise<CidRetrievabilityMap> {
   const prev = opts?.prev ?? loadRetrievabilityMap(publication) ?? {};
+  // `view` is part of the public signature (the component passes its current
+  // view) but the batch adapter no longer derives anything from it — ipfs-check
+  // reports the serving providers directly.
+  void view;
   const result: CidRetrievabilityMap = { ...prev };
   const batchSize = opts?.batchSize ?? RETRIEVABILITY_BATCH_SIZE;
   const now = () => new Date().toISOString();
@@ -606,7 +606,7 @@ export async function checkRetrievability(
         chunk,
         (line) => {
           failed.delete(line.cid);
-          const status = statusFromCheckLine(line, view);
+          const status = statusFromCheckLine(line);
           result[line.cid] = status;
           opts?.onResult?.(line.cid, status);
         },
