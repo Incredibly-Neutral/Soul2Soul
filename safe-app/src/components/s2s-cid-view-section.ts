@@ -292,7 +292,7 @@ export class S2SCidViewSection extends LitElement {
       .chips-top {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 0.5rem;
         margin-bottom: 0.75rem;
       }

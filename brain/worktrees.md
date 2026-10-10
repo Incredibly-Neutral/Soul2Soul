@@ -260,3 +260,22 @@ $0
 - `button.chip` explicit `font-size: .75rem` + `text-transform: none`.
 - Removed per-source availability chips (`.flag-on`/`.flag-off` + markup + CSS) — source still visible via Type badges + retrievability columns.
 - Tests: dropped deals/config/tree/archive ✓/✗ assertions; added `.chips-top` assertions (unique CIDs present, no clear-filters when idle). Gate: 37/37, 355/355; lint 7 zero-new.
+### 2026-10-10 — PR #128 health-bucket rework (commit `f2c2f3e`)
+- Removed the `N entries` counter chip; container 1 = Type chips only.
+- Removed the copies-count chips; container 2 = health chips only: healthy ≥5 / needs healing 2–4 / danger 1 / lost 0 (each a filter toggle).
+- Dropped `copiesFilter` state + `toggleCopies`; health filter alone covers copy state.
+- Tests updated (seed covers all 4 buckets; asserts per-bucket filtering, AND w/ type, empty-filter, clear). Gate: 37/37, 355/355; lint 7 zero-new.
+### 2026-10-10 — PR #129 merged + DEPLOYED (chip layout + health buckets)
+- #128 was merged by user at 17:01 with head `2c08a1f` (original filter chips) — my two refinement rounds (`16ce594` layout, `f2c2f3e` health buckets) were orphaned again.
+- Re-packaged both onto origin/main as PR #129 (branch `feat/cid-chip-refine`, commits `3c07232`+`35f7f0a`), **merged by lead** (user authorized) via squash → `9d80681`.
+- QA passed (5 tabs, no errors) → `./deploy.sh` rsynced. Live bundle `main.C8Jdw_2H.js` verified: `chips-top`, `needs healing`, `danger`, `unique CIDs` present; `flag-on`/`no copies`/`1 copy`/`13 entries` absent. **LIVE**.
+- Cleanup: removed `wt-chip-refine` + `wt-filterchips` worktrees and `feat/cid-chip-refine` + `feat/cid-filter-chips` (local+remote); also removed pending `wt-parser` worktree + `feat/cid-retrieval-parser` (#126, verified identical on main).
+
+### 2026-10-10 — PR #130 merged + DEPLOYED (retrievability resume + reload data-loss fix)
+- Root cause of "reload loses all data": the auto pass re-ran a FULL check over every CID on every mount — `orderByStaleness` is a pure sort returning every cid, so after reload it *looked* like data loss (and the indicator restarted 0/N). localStorage was actually fine.
+- Fix: `runRetrievabilityPass(freshnessMs)` — auto pass filters to UNFRESH cids only (never-checked first, then older than `RETRIEVABILITY_AUTO_FRESH_MS` = 15 min); manual Recheck forces full (freshnessMs 0). `checkTarget` state makes indicator `checkedCount/checkTarget` (unfresh set, not whole inventory).
+- Also fixed latent key bug: retrievability map was keyed `s2s.cidview..retrievability` (publication prop '' — never bound by storage tab) while view cache used the ENS name; resolved once in rebuild, both keyed by same name now.
+- Added storage probe (`⚠ browser storage unavailable` when localStorage blocked) + save/load console HIT/MISS/SAVED/FAILED + "N CIDs stored · last checked X min ago" hint (wording avoids literal 'cached' — existing test asserts that substring gone after fresh view).
+- Lead-direct (single coherent change; orchestrate skill scopes out single-agent). Worktree `wt-persist`, branch `feat/cid-persist-resume` → PR #130, merged by lead via squash → `c8b99d8`.
+- Gate: 37/37 files, **358/358 tests** (3 new: all-fresh resume skips recheck; auto re-checks only unfresh; manual Recheck forces full). Lint zero-new vs baseline (component 7 + lib 7 pre-existing). tsc clean. QA passed (5 tabs, no errors) → deployed. Live bundle `main.CVyFwl-p.js` verified: `CIDs stored`, `browser storage unavailable`, `full pass, ignores cache`, `retrievability cache SAVED/HIT` all present. **LIVE**.
+- Cleanup: removed `wt-persist` worktree; deleted `feat/cid-persist-resume` (local+remote).
