@@ -24,8 +24,12 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  *
  * Variants:
  *   fade (default) — the vertical accent→gray border switches on hover
- *   spin           — the border is a conic gradient with the accent arc
- *                    concentrated on one side; it rotates while hovered
+ *   spin           — the border is an asymmetric 2-stop linear gradient
+ *                    whose angle animates 0deg → 360deg, so the accent
+ *                    wedge visibly sweeps the full circle while hovered
+ *                    (asymmetric pattern → every angle looks different,
+ *                    unlike a symmetric gray→accent→gray which repeats
+ *                    at 180° and reads as a half-swing)
  *
  * `@property` registers the animated custom props so the border actually
  * interpolates; browsers without it still render the gradient (hover just
@@ -72,21 +76,21 @@ export class S2SButton extends LitElement {
     :host {
       display: inline-flex;
       /* Accent (gradient color) — the per-type differentiator.
-         primary = yellow, kept semi-transparent so the bright stop reads
-         as a soft glow instead of full-strength #fcd34d. */
-      --gb-accent: rgba(252, 211, 77, 0.6);
+         All accents sit at 50% opacity so the bright stops read as soft
+         glows instead of full-strength colors. */
+      --gb-accent: rgba(252, 211, 77, 0.5);
     }
     :host([type='secondary']) {
-      --gb-accent: var(--color-purple, #d8b4fe);
+      --gb-accent: rgba(216, 180, 254, 0.5);
     }
     :host([type='warning']) {
-      --gb-accent: var(--color-red, #db4233);
+      --gb-accent: rgba(219, 66, 51, 0.5);
     }
     :host([type='deal']) {
-      --gb-accent: var(--color-blue, #93c5fd);
+      --gb-accent: rgba(147, 197, 253, 0.5);
     }
     :host([type='success']) {
-      --gb-accent: var(--color-green, #6ee7b7);
+      --gb-accent: rgba(110, 231, 183, 0.5);
     }
 
     button {
@@ -134,19 +138,16 @@ export class S2SButton extends LitElement {
       /* Set explicitly: a registered inherits:false angle that is never set on
          the element resolves to guaranteed-invalid inside a gradient in some
          Chromium versions (background computes to none). With an explicit
-         value the conic renders and the keyframes interpolate 0deg → 360deg. */
+         value the gradient renders and the keyframes interpolate 0deg → 360deg.
+
+         The gradient is a 2-stop LINEAR (not conic, not symmetric). The accent
+         fills roughly half the border, and because the pattern is asymmetric
+         (accent→gray, not gray→accent→gray) every angle looks different — the
+         accent wedge visibly sweeps the full 360° instead of repeating at 180°. */
       --gb-angle: 0deg;
       background:
         linear-gradient(var(--gb-fill), var(--gb-fill)) padding-box,
-        conic-gradient(
-          from var(--gb-angle),
-          var(--gb-c1) 0%,
-          var(--gb-c1) 20%,
-          var(--gb-accent) 28%,
-          var(--gb-accent) 46%,
-          var(--gb-c1) 54%,
-          var(--gb-c1) 100%
-        ) border-box;
+        linear-gradient(var(--gb-angle), var(--gb-accent), var(--gb-c1)) border-box;
     }
 
     button.spin:hover:not(:disabled),
