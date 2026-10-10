@@ -1,0 +1,90 @@
+REVIEWER-VERDICT
+===============
+Verdict: APPROVE
+
+Reviewed: commit 51c6ed5 ("fix(safe-app): filecoin dot reflects only Filecoin
+storage-provider serving") vs dd4ec1b, on branch fix/filecoin-false-positive.
+
+Findings
+--------
+1. [CORRECTNESS — PASS] The filecoin false positive is fully eliminated.
+   `sources.filecoin` is only ever written inside `classifyProviderPlatforms`
+   (safe-app/src/lib/cid-view.ts:473, `if (/boost|lotus|venus|fvm|spade/.test(agent))`),
+   which is only reached from `statusFromCheckLine` after the `serves` guard
+   (`DataAvailableOverBitswap?.Found === true || DataAvailableOverHTTP?.Found === true`,
+   cid-view.ts:549-553). The old view-derived block (`filecoinBackedCidsFromView(view)`)
+   was removed (cid-view.ts, no remaining reference). grep confirms no other
+   assignment to `sources.filecoin` in safe-app/src. The T4b UI dot reads
+   `status.sources[source]` (s2s-cid-view-section.ts:751), and the section only
+   ever obtains statuses from the batch adapter `checkRetrievability`
+   (s2s-cid-view-section.ts:658), never from the shared `checkCidRetrievability`
+   / `hasCopy` path (that path is used only in shared's own tests). So filecoin
+   is reachable ONLY via a serving provider whose AgentVersion matches the
+   filecoin-stack regex.
+
+2. [SIGNATURE — PASS] `statusFromCheckLine(line, now?)` — every call site is
+   consistent: the single src caller (cid-view.ts:609) and all six test call
+   sites (tests/lib/cid-view.test.ts:542,555,565,584,607,622) use the 2-arg
+   form; no call passes a view anymore. `checkRetrievability` keeps `view` with
+   a documented `void view;` (cid-view.ts:585-588) — eslint clean (see finding 6)
+   and the comment explains the intent; acceptable, non-blocking. The
+   `no-unused-vars` config (`argsIgnorePattern: '^_'`, eslint.config.js) is
+   satisfied by `void view;` since `view` is read.
+
+3. [TESTS — PASS]
+   (a) Inverted deal test (tests/lib/cid-view.test.ts:618-626): `bafydeal1` with
+       `result: []` → asserts filecoin false, copies 0, SOURCES_FALSE. Correct
+       for the new semantics.
+   (b) Real-data regression test (tests/lib/cid-view.test.ts:595-616): the
+       Filebase megaphone provider (ID 12D3KooWGtYkBAaqJMJEmywMxaCiNP7LCEFUAFiLEBASe232c2VH,
+       /dnsaddr/bitswap.filebase.io, agent "megaphone", Source IPNI, Bitswap
+       Found=true, HTTP Found=false) is faithful to the observed report and
+       classifies correctly: filebase=true (hay matches "filebase"), kubo/pinata
+       false, filecoin false (agent "megaphone" matches no SP-stack token),
+       copies=1. Asserts exactly the right result.
+   (c) No other test expects the old hybrid behavior. Grep for `filecoin: true`
+       in safe-app/tests hits only the load/save round-trip persistence test
+       (tests/lib/cid-view.test.ts:710), which just round-trips arbitrary cached
+       data — not a derivation assertion. The component test seeds a deal cid
+       with filecoin:false (s2s-cid-view-section.test.ts:769), consistent with
+       the new semantics.
+
+4. [MOCKS — PASS] No leftover `filecoinBackedCidsFromView` export anywhere in
+   safe-app (src or tests); both `vi.mock('@s2s/soul2soul-shared/safe-app')`
+   blocks had the export removed. `shared/src/cid-view/retrievability.ts` keeps
+   its own definition, and `git diff dd4ec1b..HEAD -- shared/` is empty — shared
+   is untouched as required.
+
+5. [SEMANTIC EDGE — NOT A BUG] The item's premise ("the same peer ID appears
+   twice, so `copies` counts 2") does not hold for this code. `statusFromCheckLine`
+   computes `copies` by counting TRUE platform sources, i.e.
+   `Object.values(sources)` over the four kubo/pinata/filebase/filecoin flags
+   (cid-view.ts:561-564) — a 0..4 count, not a provider-row count. A duplicate
+   megaphone peer (Source IPNI + Source Amino DHT) classifies to filebase in both
+   rows, leaving `sources.filebase` true and `copies` at 1. The same 0..4
+   platform-count semantics hold in the shared core (`checkOneCid`, retrievability.ts).
+   Position: no fix needed; not even a known limitation in this adapter. (Optional
+   non-blocking nit: a test documenting that a duplicated peer across sources
+   still yields copies=1 would lock this in.)
+
+6. [GATES — PASS]
+   - pnpm -C safe-app exec vitest run tests/lib/cid-view.test.ts --project unit
+     → 1 file, 32 tests passed.
+   - pnpm -C safe-app exec vitest run tests/components/s2s-storage-tab.test.ts
+     tests/components/s2s-cid-view-section.test.ts --project component
+     → 2 files, 29 tests passed.
+   - pnpm -C safe-app exec tsc --noEmit → exit 0.
+   - pnpm -C safe-app exec eslint src/lib/cid-view.ts → exactly the 7
+     pre-existing errors (76:5, 78:5, 78:41, 275:15, 286:24, 332:31, 343:17);
+     no new errors in the touched src file. (Touched test files report only the
+     pre-existing project-service parse error, not a lint regression.)
+
+Non-blocking nits
+-----------------
+- `void view;` is a mild smell; keeping the unused `view` param for a stable
+  public signature is acceptable and documented.
+- The filecoin classifier regex tests `agent` (AgentVersion) only, not the full
+  `hay` — pre-existing (classifyProviderPlatforms was not touched by this PR),
+  conservative, and consistent with the new doc comment. Out of scope.
+
+No blocking issues found. APPROVE.
