@@ -318,9 +318,14 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
 
-    // Summary chips — totals + unique CIDs.
+    // Summary chips — totals + unique CIDs live in a full-width top row; the
+    // type/copies/health filter chips sit in two equal containers below.
     expect(text).toContain('13 unique CIDs');
     expect(text).toContain('13 entries');
+    const topRow = root.querySelector('.chips-top');
+    expect(topRow?.textContent).toContain('13 unique CIDs');
+    // No filters active → no clear-filters chip.
+    expect(topRow?.textContent).not.toContain('clear filters');
     // Chip section is one row with two containers: type chips | copies/health.
     const groups = root.querySelectorAll('.chips-group');
     expect(groups.length).toBe(2);
@@ -371,12 +376,6 @@ describe('s2s-cid-view-section', () => {
     const dealBadge = root.querySelector('.cid-row .badge.deal') as HTMLElement | null;
     expect(dealBadge?.getAttribute('title')).toBe('deal');
 
-    // Per-source availability chips (header) still render.
-    expect(text).toContain('deals ✓');
-    expect(text).toContain('config ✓');
-    expect(text).toContain('tree ✓');
-    expect(text).toContain('archive ✓');
-
     // Tombstone badge on the last version only.
     expect(root.querySelectorAll('.badge.tombstone').length).toBe(1);
 
@@ -411,11 +410,6 @@ describe('s2s-cid-view-section', () => {
     const text = root.textContent ?? '';
     expect(text).toContain('0 unique CIDs');
     expect(text).toContain('0 entries');
-    // All sources flagged off.
-    expect(text).toContain('deals ✗');
-    expect(text).toContain('config ✗');
-    expect(text).toContain('tree ✗');
-    expect(text).toContain('archive ✗');
     expect(root.querySelectorAll('.cid-row').length).toBe(0);
   });
 

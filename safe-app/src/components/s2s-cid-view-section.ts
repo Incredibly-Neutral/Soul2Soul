@@ -288,14 +288,21 @@ export class S2SCidViewSection extends LitElement {
         cursor: not-allowed;
       }
 
+      .chips-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
       .chips-row {
         display: flex;
-        flex-wrap: wrap;
         align-items: flex-start;
-        gap: 0.75rem 1.5rem;
+        gap: 1.5rem;
         margin-bottom: 1rem;
       }
       .chips-group {
+        flex: 1;
         display: flex;
         flex-wrap: wrap;
         align-items: center;
@@ -320,7 +327,9 @@ export class S2SCidViewSection extends LitElement {
       button.chip {
         font: inherit;
         cursor: pointer;
-        transition: border-color 120ms ease, background 120ms ease;
+        transition: border-color 120ms, background 120ms;
+        font-size: 0.75rem;
+        text-transform: none;
       }
       button.chip:hover:not(.active) {
         border-color: var(--gray-500, #6b7280);
@@ -336,13 +345,6 @@ export class S2SCidViewSection extends LitElement {
       }
       .chip.active .chip-value {
         color: #bfdbfe;
-      }
-      .chip.flag-on {
-        border-color: rgba(16, 185, 129, 0.4);
-        color: #6ee7b7;
-      }
-      .chip.flag-off {
-        opacity: 0.55;
       }
 
       /* Flat risk-sorted inventory table (simple grid, read-only). */
@@ -784,11 +786,12 @@ export class S2SCidViewSection extends LitElement {
   }
 
   /**
-   * Chip section: one row, two containers. Left = inventory counters + Type
+   * Chip section: a full-width top row (unique-CIDs counter + clear-filters)
+   * above one row with two equal containers. Left = entries counter + Type
    * chips (a filter button per type — clicking toggles which types the table
-   * shows). Right = copies-count + health chips (same toggle behaviour) and
-   * the per-source availability flags. Type/copies/health chips use the same
-   * classification as the table's Type badges.
+   * shows). Right = copies-count + health chips (same toggle behaviour).
+   * Type/copies/health chips use the same classification as the table's Type
+   * badges.
    */
   private renderSummary(view: PublicationCidView): TemplateResult {
     const { typeCounts, copiesCounts, healthCounts } = this.chipCounts(view);
@@ -824,36 +827,26 @@ export class S2SCidViewSection extends LitElement {
       );
     });
     return html`
+      <div class="chips-top">
+        <span class="chip"
+          ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
+        >
+        ${hasFilter
+          ? html`<button type="button" class="chip" @click=${() => {
+              this.clearFilters();
+            }}>
+              × clear filters
+            </button>`
+          : nothing}
+      </div>
       <div class="chips-row">
         <div class="chips-group">
-          <span class="chip"
-            ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
-          >
           <span class="chip"><span class="chip-value">${view.summary.total}</span> entries</span>
           ${typeChips}
         </div>
         <div class="chips-group">
           ${copiesChips}
           ${healthChips}
-          ${hasFilter
-            ? html`<button type="button" class="chip" @click=${() => {
-                this.clearFilters();
-              }}>
-                × clear filters
-              </button>`
-            : nothing}
-          <span class="chip ${view.sources.deals ? 'flag-on' : 'flag-off'}"
-            >deals ${view.sources.deals ? '✓' : '✗'}</span
-          >
-          <span class="chip ${view.sources.config ? 'flag-on' : 'flag-off'}"
-            >config ${view.sources.config ? '✓' : '✗'}</span
-          >
-          <span class="chip ${view.sources.tree ? 'flag-on' : 'flag-off'}"
-            >tree ${view.sources.tree ? '✓' : '✗'}</span
-          >
-          <span class="chip ${view.sources.archive ? 'flag-on' : 'flag-off'}"
-            >archive ${view.sources.archive ? '✓' : '✗'}</span
-          >
         </div>
       </div>
     `;
