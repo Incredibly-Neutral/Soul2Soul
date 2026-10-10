@@ -72,6 +72,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // these from the safe-app entry — provide the real (pure, browser-safe)
   // implementations so the named imports resolve.
   const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
+  const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
   return {
     S2SIPFSMethods: class {},
     buildPublicationCidView: async () => ({
@@ -89,6 +90,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     orderByCopiesAscending: retrievability.orderByCopiesAscending,
     orderByStaleness: retrievability.orderByStaleness,
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
+    hostIsFilecoinSp: parser.hostIsFilecoinSp,
   };
 });
 

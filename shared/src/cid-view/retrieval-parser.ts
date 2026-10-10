@@ -36,18 +36,26 @@
 import { RETRIEVABILITY_SOURCES, type CidRetrievabilityStatus, type RetrievabilitySource } from './retrievability';
 import type { CidCategory, PublicationCidView } from './types';
 
-/** Hostnames of our known Filecoin storage-provider gateways (SP -> platform). */
+/**
+ * Hostnames of our known Filecoin storage-provider gateways (SP -> platform).
+ * Mirrors BROWSER_USABLE_PROVIDERS in shared/src/filecoin/index.ts — these are
+ * the SPs the app actually stores to (verified against the on-chain service
+ * provider registry). Keep the two lists in sync; order follows provider IDs.
+ */
 export const FILECOIN_SP_HOSTS: readonly string[] = [
-  'curio.akave.xyz', // Angelo (Synapse SP 13)
   'main.ezpdpz.net', // ezpdpz-main (SP 1)
-  'main2.ezpdpz.net', // ezpdpz-main2 (SP 32)
-  'foc.dealbot.site', // foc-mainnet (SP 30)
+  'pdp.lotus.dedyn.io', // Mongo2Stor Mainnet (SP 5)
+  'mainnet-pdp.infrafolio.com', // infrafolio-mainnet-pdp (SP 7)
+  'curio.akave.xyz', // Angelo (SP 13)
   'pdp-main.topblocks.io', // TopBlocks (SP 15)
-  'pdp.lotus.dedyn.io', // Mongo2Stor (SP 5)
+  'sp.reiers.io', // TSE Reiersen (SP 29)
+  'foc.dealbot.site', // foc-mainnet (SP 30)
+  'main2.ezpdpz.net', // ezpdpz-main2 (SP 32)
 ];
 
-/** Filecoin client agents (boost/lotus/venus/fvm/spade). */
-export const FILECOIN_AGENT_RE = /boost|lotus|venus|fvm|spade/i;
+/** Filecoin storage-provider client agents (boost/lotus/venus/curio/spade).
+ *  NOTE: `fvm` is the Filecoin VM, not an SP engine — deliberately absent. */
+export const FILECOIN_AGENT_RE = /boost|lotus|venus|curio|spade/i;
 
 /** One provider probe object from an ipfs-check row. All fields optional + loose. */
 export interface IpfsCheckProvider {
@@ -133,7 +141,7 @@ function hostOf(addr: string): string {
 }
 
 /** True when an addr's host is one of our known Filecoin SP gateways. */
-function hostIsFilecoinSp(addr: string): boolean {
+export function hostIsFilecoinSp(addr: string): boolean {
   const host = hostOf(addr);
   return host !== '' && FILECOIN_SP_HOSTS.includes(host);
 }

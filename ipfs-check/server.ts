@@ -5,7 +5,7 @@
 const CHECK_URL = process.env.CHECK_URL ?? "http://127.0.0.1:3333";
 const PORT = Number(process.env.PORT ?? 3334);
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 20); // across ALL requests
-const CHECK_TIMEOUT_S = Number(process.env.CHECK_TIMEOUT_S ?? 20);
+const CHECK_TIMEOUT_S = Number(process.env.CHECK_TIMEOUT_S ?? 40);
 const MAX_CIDS_PER_REQUEST = 50;
 
 // ---- global semaphore: caps load on ipfs-check no matter how many clients/batches ----

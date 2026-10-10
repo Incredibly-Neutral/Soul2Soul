@@ -67,6 +67,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // component test's coordinator load) rather than the heavy root barrel.
   const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
   const validation = await import('../../../shared/src/cid-view/validation.ts');
+  const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
   return {
     S2SIPFSMethods: ipfsMocks.ipfsClass,
     buildPublicationCidView: ipfsMocks.buildPublicationCidView,
@@ -75,6 +76,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     orderByStaleness: retrievability.orderByStaleness,
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
     parseCidRetrievabilityMap: validation.parseCidRetrievabilityMap,
+    hostIsFilecoinSp: parser.hostIsFilecoinSp,
   };
 });
 
@@ -538,6 +540,38 @@ describe('retrievability adapter', () => {
     expect(classifyProviderPlatforms(provider({ AgentVersion: 'megaphone/1.0' }))).toEqual([]);
   });
 
+  it('classifyProviderPlatforms: filecoin detected by in-use SP host (HTTP-only, no agent)', () => {
+    // HTTP-only SPs carry no AgentVersion (identify is skipped over HTTP); the
+    // Addr host match against FILECOIN_SP_HOSTS is what lights the filecoin dot.
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/dns/sp.reiers.io/tcp/443/https'], AgentVersion: '' }),
+      ),
+    ).toEqual(['filecoin']);
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/dns/mainnet-pdp.infrafolio.com/tcp/443/https'], AgentVersion: '' }),
+      ),
+    ).toEqual(['filecoin']);
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/dns/main.ezpdpz.net/tcp/443/https'], AgentVersion: '' }),
+      ),
+    ).toEqual(['filecoin']);
+    // An active registry SP the app does NOT store to must not be filecoin.
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/dns/pdp.tigerteches.org/tcp/5521/https'], AgentVersion: '' }),
+      ),
+    ).toEqual([]);
+    // A bare IP addr can never be a named SP gateway.
+    expect(
+      classifyProviderPlatforms(
+        provider({ Addrs: ['/ip4/116.182.20.74/tcp/12310'], AgentVersion: '' }),
+      ),
+    ).toEqual([]);
+  });
+
   it('statusFromCheckLine: error line → all-false + error, checkedAt recorded', () => {
     const status = statusFromCheckLine(
       { cid: 'bafyconfig', error: 'boom' },
@@ -658,6 +692,43 @@ describe('retrievability adapter', () => {
     const saved = JSON.parse(window.localStorage.getItem('s2s.cidview.test.eth.retrievability')!);
     expect(Object.keys(saved).length).toBe(121);
     expect(saved.bafychunk000).toBeDefined();
+  });
+
+  it('checkRetrievability: raw /batch response body captured to localStorage', async () => {
+    const fetchMock = vi.fn(async () =>
+      ndjsonResponse([
+        JSON.stringify({ cid: 'bafyraw', ms: 1, result: [] }),
+        JSON.stringify({ cid: 'bafyraw2', ms: 1, result: [] }),
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const map = await checkRetrievability('test.eth', validView(), ['bafyraw', 'bafyraw2'], {});
+    const rawLog = JSON.parse(
+      window.localStorage.getItem('s2s.cidview.test.eth.rawbatch')!,
+    ) as Array<{ cids: number; raw: string }>;
+    expect(rawLog).toHaveLength(1);
+    expect(rawLog[0].cids).toBe(2);
+    expect(rawLog[0].raw).toContain('"cid":"bafyraw"');
+    expect(map.bafyraw).toBeDefined();
+    expect(map.bafyraw2).toBeDefined();
+  });
+
+  it('checkRetrievability: raw /batch log is a bounded ring (drops oldest)', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { cids: string[] };
+      const lines = body.cids.map((cid) => JSON.stringify({ cid, ms: 1, result: [] }));
+      return ndjsonResponse(lines);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    for (let i = 0; i < 10; i += 1) {
+      await checkRetrievability('test.eth', validView(), [`bafyring${i}`], {});
+    }
+    const rawLog = JSON.parse(
+      window.localStorage.getItem('s2s.cidview.test.eth.rawbatch')!,
+    ) as Array<{ raw: string }>;
+    expect(rawLog).toHaveLength(8); // RAW_BATCH_LOG_MAX_ENTRIES
+    expect(rawLog[rawLog.length - 1].raw).toContain('"cid":"bafyring9"');
+    expect(rawLog[0].raw).not.toContain('"cid":"bafyring0"');
   });
 
   it('checkRetrievability: empty cids → no fetch, empty map', async () => {

@@ -7,6 +7,12 @@
 // the publication archive. Read-only by design — no mutation/delete controls;
 // unpin/cleanup ships in a later iteration.
 //
+// SCOPE: offers + version history (deal/offer versions) are intentionally
+// HIDDEN from this view and from the retrievability check — storage operators
+// care about the live deal rows, config/tree/archive CIDs, not the offer
+// ledger or historical versions. The full view still powers the incremental
+// cache baseline; only the displayed/checked view is filtered.
+//
 // Fail-open: no ctx (no modules) renders an "unavailable" empty state, a build
 // failure renders the error state, and a successful empty build renders
 // "No CIDs found". It never throws and never mutates the store.
@@ -89,6 +95,49 @@ function typeLabel(cat: CidCategory): string {
 }
 function typeClass(cat: CidCategory): string {
   return TYPE_META[cat].cls;
+}
+
+/**
+ * Categories hidden from the Storage CID inventory: offers + version history
+ * (deal versions and offer versions). They're chain-ledger noise for storage
+ * operators — the live deal row is what matters. Hidden both from the rendered
+ * table AND from the retrievability (ipfs-check) pass.
+ */
+const HIDDEN_CATEGORIES: ReadonlySet<CidCategory> = new Set([
+  'offer',
+  'offer-version',
+  'deal-version',
+]);
+
+/**
+ * Display copy of a view with offer + version entries removed (deals kept).
+ * Recomputes sources + summary so the chips/counters stay honest. `meta` is
+ * preserved untouched — the FULL view is what gets cached and passed as the
+ * incremental baseline (see rebuild), so the incremental fast path keeps its
+ * version history even though the table/check never see it.
+ */
+function withoutOffersAndVersions(view: PublicationCidView): PublicationCidView {
+  const entries = view.entries.filter((e) => !HIDDEN_CATEGORIES.has(e.category));
+  const sources = {
+    deals: entries.some((e) => e.source === 'deals'),
+    config: entries.some((e) => e.source === 'config'),
+    tree: entries.some((e) => e.source === 'tree'),
+    archive: entries.some((e) => e.source === 'archive'),
+  };
+  const byCategory: Partial<Record<CidCategory, number>> = {};
+  for (const entry of entries) {
+    byCategory[entry.category] = (byCategory[entry.category] ?? 0) + 1;
+  }
+  return {
+    ...view,
+    entries,
+    sources,
+    summary: {
+      total: entries.length,
+      uniqueCids: new Set(entries.map((e) => e.cid)).size,
+      byCategory,
+    },
+  };
 }
 
 /** Health bucket for a checked status — drives the health filter chips. */
@@ -657,7 +706,9 @@ export class S2SCidViewSection extends LitElement {
     const cached = loadCachedView(publication);
     if (cached && this.view?.publication !== publication) {
       console.log('[cid-view] serving cached view for ' + publication);
-      this.view = cached.view;
+      // Offers/versions are hidden on display too (the full view is what gets
+      // reused as the incremental `prev` below).
+      this.view = withoutOffersAndVersions(cached.view);
       this.setStale(cached.savedAt);
     } else if (!cached && this.view !== null && this.view.publication !== publication) {
       // Publication changed and the new one has no cache → never show another
@@ -677,7 +728,10 @@ export class S2SCidViewSection extends LitElement {
     try {
       const view = await buildPublicationCidView(ctx, publication, prev ? { prev } : {});
       if (buildId !== this.buildId) return;
-      this.view = view;
+      // The table + retrievability pass run over the filtered view (offers +
+      // versions hidden); the FULL view is persisted as the cache so the
+      // incremental baseline keeps its version history.
+      this.view = withoutOffersAndVersions(view);
       saveCachedView(publication, view);
       this.clearStale();
       this.startRetrievabilityCheck();
