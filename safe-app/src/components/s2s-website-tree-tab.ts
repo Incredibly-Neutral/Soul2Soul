@@ -111,9 +111,16 @@ export class S2SWebsiteTreeTab extends LitElement {
         display: flex;
         flex-direction: row;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: space-between;
         gap: 1rem;
         margin-bottom: 1rem;
+      }
+
+      .toolbar-left {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 1rem;
       }
 
       .last-synced {
@@ -839,11 +846,13 @@ export class S2SWebsiteTreeTab extends LitElement {
 
     return html`
       <div class="toolbar">
-        <button class="button" id="sync-btn" ?disabled=${this.syncing || this.resetting}
-          @click=${() => void this.sync()}>
-          ${this.syncing ? 'Syncing…' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync`}
-        </button>
-        ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
+        <div class="toolbar-left">
+          <button class="button" id="sync-btn" ?disabled=${this.syncing || this.resetting}
+            @click=${() => void this.sync()}>
+            ${this.syncing ? 'Syncing…' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync`}
+          </button>
+          ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
+        </div>
         <button class="button" id="reset-btn" ?disabled=${this.syncing || this.resetting}
           @click=${this.showResetDialog}>
           ${this.resetting ? 'Resetting…' : html`<ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Reset tree`}
