@@ -9,12 +9,13 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  * clipped to border-box with a solid fill layer clipped to padding-box on
  * top, so the visible outline is a gradient while the face stays opaque.
  *
- * The gradient uses the CID-inventory base colors:
- *   default: yellow → purple  (--color-yellow → --color-purple)
- *   hover:   fades to blue → green (--color-blue → --color-green)
+ * The gradient uses the CID-inventory base colors, running top→bottom:
+ *   default: yellow on top → purple at the bottom
+ *   hover:   the two stops switch (purple on top → yellow at the bottom)
+ *   transition: 300ms
  *
  * Variants:
- *   fade (default) — the two border stops fade to blue/green on hover
+ *   fade (default) — the vertical yellow→purple border switches on hover
  *   spin           — the border is a conic gradient that rotates while hovered
  *
  * `@property` registers the animated custom props so the border actually
@@ -84,15 +85,15 @@ export class S2SButton extends LitElement {
 
       background:
         linear-gradient(var(--gb-fill), var(--gb-fill)) padding-box,
-        linear-gradient(90deg, var(--gb-c1), var(--gb-c2)) border-box;
+        linear-gradient(180deg, var(--gb-c1), var(--gb-c2)) border-box;
 
-      transition: --gb-c1 0.4s ease, --gb-c2 0.4s ease;
+      transition: --gb-c1 0.3s ease, --gb-c2 0.3s ease;
     }
 
     button:hover:not(:disabled),
     button:focus-visible {
-      --gb-c1: var(--color-blue, #93c5fd);
-      --gb-c2: var(--color-green, #6ee7b7);
+      --gb-c1: var(--color-purple, #d8b4fe);
+      --gb-c2: var(--color-yellow, #fcd34d);
     }
 
     button:disabled {
