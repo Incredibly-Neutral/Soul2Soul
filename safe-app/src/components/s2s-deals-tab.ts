@@ -22,6 +22,7 @@ import {
 } from '@/utils/filter.js';
 import './s2s-table.js';
 import './toggle-button.js';
+import './s2s-button.js';
 import './copy-content-id.js';
 import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
@@ -384,7 +385,7 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell deal-actions">
-          <s2s-button action="retract" genesis="${deal.genesis}" status="deal"
+          <s2s-button action="retract" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.retract(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
         </div>
@@ -409,7 +410,8 @@ export class S2SDealsTab extends LitElement {
           .message=${this.dealCheck.message}
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
-        <button data-action="bulkrender" @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</button>
+        <s2s-button action="bulkrender" type="secondary"
+          @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</s2s-button>
         <toggle-button .bool=${this.previewMode} label="preview"
           @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
       </div>
@@ -419,10 +421,10 @@ export class S2SDealsTab extends LitElement {
             <div class="section">
               <s2s-table
                 title="Pending Offers"
-                .titleAction=${html`<button class="button thin" ?disabled=${this.fetching}
+                .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
                   @click=${this.handleRefresh} style="margin-right: 1rem">
                   <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
-                </button>`}
+                </s2s-button>`}
                 .columns=${OFFER_COLUMNS}
                 .rows=${store.offers}
                 .sort=${this.offersSort}
@@ -443,10 +445,10 @@ export class S2SDealsTab extends LitElement {
       <div class="section">
         <s2s-table
           title="Active Deals"
-          .titleAction=${html`<button class="button thin" ?disabled=${this.fetching}
+          .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
             @click=${this.handleRefresh} style="margin-right: 1rem">
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
-          </button>`}
+          </s2s-button>`}
           .columns=${DEAL_COLUMNS}
           .rows=${store.deals}
           .sort=${this.dealsSort}
