@@ -318,15 +318,16 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
 
-    // Summary chips — totals + unique CIDs live in a full-width top row; the
-    // type/copies/health filter chips sit in two equal containers below.
+    // Summary chips — the unique-CIDs counter lives in a full-width top row;
+    // the type/health filter chips sit in two equal containers below. The
+    // entries counter chip was removed.
     expect(text).toContain('13 unique CIDs');
-    expect(text).toContain('13 entries');
+    expect(text).not.toContain('13 entries');
     const topRow = root.querySelector('.chips-top');
     expect(topRow?.textContent).toContain('13 unique CIDs');
     // No filters active → no clear-filters chip.
     expect(topRow?.textContent).not.toContain('clear filters');
-    // Chip section is one row with two containers: type chips | copies/health.
+    // Chip section is one row with two containers: type chips | health chips.
     const groups = root.querySelectorAll('.chips-group');
     expect(groups.length).toBe(2);
     // Type chips (collapsed classification) live in container 1, counted over
@@ -409,7 +410,6 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
     expect(text).toContain('0 unique CIDs');
-    expect(text).toContain('0 entries');
     expect(root.querySelectorAll('.cid-row').length).toBe(0);
   });
 
@@ -968,21 +968,27 @@ describe('s2s-cid-view-section', () => {
     expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
   });
 
-  it('copies + health chips filter the table and combine with type chips (AND)', async () => {
-    // Deterministic mixed retrievability: deal 3 copies (healthy), ver1 1 copy
-    // (healing), config 0 copies (no copies); everything else unchecked.
+  it('health chips filter the table by copy buckets and combine with type chips (AND)', async () => {
+    // Deterministic mixed retrievability covering every bucket: deal 5 copies
+    // (healthy), ver1 3 copies (needs healing), config 1 copy (danger), assets
+    // 0 copies (lost); everything else unchecked.
     const seed: CidRetrievabilityMap = {
       bafydeal1: {
+        checkedAt: RECENT(),
+        copies: 5,
+        sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
+      },
+      bafyver1: {
         checkedAt: RECENT(),
         copies: 3,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
       },
-      bafyver1: {
+      bafyconfig: {
         checkedAt: RECENT(),
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
       },
-      bafyconfig: {
+      bafyassets: {
         checkedAt: RECENT(),
         copies: 0,
         sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
@@ -1000,68 +1006,52 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     expect(root.querySelectorAll('.cid-row').length).toBe(13);
 
-    // Container 2 chips: copies (0/1/3) + health (healthy/healing/no copies).
+    // Container 2 chips: healthy / needs healing / danger / lost.
     const group2 = root.querySelectorAll('.chips-group')[1]!.textContent ?? '';
-    expect(group2).toContain('0 copies');
-    expect(group2).toContain('1 copy');
-    expect(group2).toContain('3 copies');
     expect(group2).toContain('1 healthy');
-    expect(group2).toContain('1 need healing');
-    expect(group2).toContain('1 no copies');
+    expect(group2).toContain('1 needs healing');
+    expect(group2).toContain('1 danger');
+    expect(group2).toContain('1 lost');
 
-    // Copies chip: click '3 copies' → only the deal row (3/4) remains.
-    const copies3 = Array.from(root.querySelectorAll('button.chip')).find((b) =>
-      b.textContent?.includes('3 copies'),
+    // Health chip 'healthy' → only the deal row (5/4) remains.
+    const healthyChip = Array.from(root.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.includes('healthy'),
     );
-    expect(copies3).toBeTruthy();
-    (copies3 as HTMLButtonElement).click();
+    expect(healthyChip).toBeTruthy();
+    (healthyChip as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
     });
     expect(el.shadowRoot!.querySelector('.cid-row .badge.deal')).toBeTruthy();
-    expect(el.shadowRoot!.textContent).toContain('3/4');
+    expect(el.shadowRoot!.textContent).toContain('5/4');
 
     // Toggle it back off → all rows return.
-    const copies3b = Array.from(el.shadowRoot!.querySelectorAll('button.chip.active')).find((b) =>
-      b.textContent?.includes('3 copies'),
-    );
-    (copies3b as HTMLButtonElement).click();
+    const healthyChipActive = Array.from(
+      el.shadowRoot!.querySelectorAll('button.chip.active'),
+    ).find((b) => b.textContent?.includes('healthy'));
+    (healthyChipActive as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(13);
     });
 
-    // Health chip: click 'no copies' → only the config row (0/4) remains.
-    const noCopiesChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
-      b.textContent?.includes('no copies'),
+    // 'lost' → only the assets root row (0/4).
+    const lostChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.includes('lost'),
     );
-    expect(noCopiesChip).toBeTruthy();
-    (noCopiesChip as HTMLButtonElement).click();
+    expect(lostChip).toBeTruthy();
+    (lostChip as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
     });
-    const cfgBadge = el.shadowRoot!.querySelector('.cid-row .badge.config');
-    expect(cfgBadge).toBeTruthy();
+    expect(el.shadowRoot!.querySelector('.cid-row .badge.asset')).toBeTruthy();
     expect(el.shadowRoot!.textContent).toContain('0/4');
 
-    // Combine with a type chip: type 'config' AND health 'no copies' → still 1.
+    // Combine with type 'config' (danger, not lost): nothing matches → the
+    // empty-filter message shows.
     const configChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
       b.textContent?.trim().endsWith('config'),
     );
     (configChip as HTMLButtonElement).click();
-    await vi.waitFor(() => {
-      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
-    });
-
-    // Swap type config→html (still health no-copies): html rows are unchecked,
-    // so nothing matches → the empty-filter message shows.
-    const configActive = Array.from(el.shadowRoot!.querySelectorAll('button.chip.active')).find(
-      (b) => b.textContent?.includes('config'),
-    );
-    (configActive as HTMLButtonElement).click();
-    const htmlChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
-      b.textContent?.trim().endsWith('html'),
-    );
-    (htmlChip as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(el.shadowRoot?.textContent).toContain('No rows match the active filters');
     });
