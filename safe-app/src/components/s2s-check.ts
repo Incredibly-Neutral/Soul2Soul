@@ -2,8 +2,8 @@
 //
 // Ports the crude inline check forms (whitelist "can publish", deals "genesis
 // has a deal") into a reusable LitElement: a border-only pill that blends in,
-// holding a muted descriptive label, a mono value input and a check icon
-// button. Clicking the button (or pressing Enter in the input) trims the value
+// holding a mono value input and a check icon button. Clicking the button (or
+// pressing Enter in the input) trims the value
 // and dispatches a composed bubbling CustomEvent `s2s-check` with
 // detail { value }. 100% presentational + input handling — no store/contract/
 // Safe knowledge lives here. The consumer runs the async verification and
@@ -20,7 +20,7 @@ export type S2SCheckResult = 'idle' | 'pending' | 'pass' | 'fail' | 'error';
 
 @customElement('s2s-check')
 export class S2SCheck extends LitElement {
-  /** Muted descriptive label rendered inside the pill (the 'what' of the check). */
+  /** Descriptive label used as the input's aria-label fallback (no longer rendered). */
   @property({ type: String }) label = '';
 
   /** Placeholder hint for the value input, e.g. '0x… address'. */
@@ -66,12 +66,6 @@ export class S2SCheck extends LitElement {
         border-radius: 999px;
         border: 1px solid var(--gray-600);
         background: transparent;
-      }
-
-      .check__label {
-        color: var(--gray-400);
-        white-space: nowrap;
-        user-select: none;
       }
 
       .check__input {
@@ -206,7 +200,6 @@ export class S2SCheck extends LitElement {
     const busy = this.result === 'pending' || this.submitting;
     return html`
       <div class="check">
-        <span class="check__label">${this.label}</span>
         <input
           class="check__input"
           type="text"

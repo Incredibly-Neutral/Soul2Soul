@@ -25,9 +25,15 @@ export class ToggleButton extends LitElement {
       --accent: var(--color-yellow, #facc15);
 
       display: flex;
+      align-items: center;
       width: 3.4rem;
-      height: 1.7rem;
-      padding: 0.35rem;
+      /* Height-only match to the buttons and the .check pill (s2s-check): the
+         pill's computed height is 2×0.25rem vertical padding + 2×1px border +
+         the 0.85rem mono line box (0.85rem × 1.55). Box-sizing + reduced
+         padding keep the knob inside and the switch same-height as the row. */
+      height: calc(0.25rem * 2 + 1px * 2 + 0.85rem * 1.55);
+      box-sizing: border-box;
+      padding: 0.2rem;
       background: var(--track-bg);
       border-radius: 2.4rem;
       cursor: pointer;
@@ -39,8 +45,8 @@ export class ToggleButton extends LitElement {
       display: flex;
       justify-content: center;
       align-items: center;
-      width: 1.7rem;
-      height: 1.7rem;
+      width: 1.4rem;
+      height: 1.4rem;
       position: relative;
       background: var(--lid-bg);
       border-radius: 50%;

@@ -403,6 +403,12 @@ export class S2SDealsTab extends LitElement {
 
     return html`
       <div class="toolbar">
+        <s2s-check
+          placeholder="0x… genesis"
+          .result=${this.dealCheck.result}
+          .message=${this.dealCheck.message}
+          @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
+        ></s2s-check>
         <button data-action="bulkrender" @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</button>
         <toggle-button .bool=${this.previewMode} label="preview"
           @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
@@ -456,20 +462,6 @@ export class S2SDealsTab extends LitElement {
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
           @filter=${(e: CustomEvent) => { this.dealsFilters = setFilter(this.dealsFilters, e.detail.key, e.detail.value); }}
         ></s2s-table>
-      </div>
-
-      <div class="section">
-        <div class="section-header">
-          <h2 class="section-title">Check Deal Status</h2>
-        </div>
-        <p class="section-description">Check if a deal exists for a genesis</p>
-        <s2s-check
-          label="check if genesis id has a deal"
-          placeholder="0x… genesis"
-          .result=${this.dealCheck.result}
-          .message=${this.dealCheck.message}
-          @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
-        ></s2s-check>
       </div>
     `;
   }

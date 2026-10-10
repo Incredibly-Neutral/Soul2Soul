@@ -90,8 +90,8 @@ export class S2STable<T> extends LitElement {
   /** Text appended after the count inside the parens (e.g. ' pieces'). */
   @property({ type: String }) countSuffix = '';
 
-  /** Optional markup rendered NEXT TO the title in the toolbar's left group
-   *  (e.g. the sync/refresh button). */
+  /** Optional markup rendered as the LAST item in the toolbar row, after the
+   *  filters (e.g. the sync/refresh button). */
   @property({ attribute: false }) titleAction: TemplateResult = html``;
 
   /** Opaque counter; bump to force a re-render (see header note). */
@@ -197,7 +197,6 @@ export class S2STable<T> extends LitElement {
                 ${this.title
                   ? html`<h2 class="section-title">${this.title} (${this.filteredRows.length}${this.countSuffix})</h2>`
                   : nothing}
-                ${this.titleAction}
               </div>
               ${this.filterKeys.length > 0
                 ? html`
@@ -218,6 +217,7 @@ export class S2STable<T> extends LitElement {
                     </div>
                   `
                 : ''}
+              ${this.titleAction}
             </div>
           `
         : ''}
