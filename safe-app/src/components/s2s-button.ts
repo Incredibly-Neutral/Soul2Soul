@@ -16,15 +16,16 @@ import { ifDefined } from 'lit/directives/if-defined.js';
  *
  * Button types: the accent color is the differentiator. `type` selects a
  * CID-palette accent; consumers can also override --gb-accent from outside.
- *   default  → yellow  (--color-yellow)
- *   offer    → purple  (--color-purple)
- *   deal     → blue    (--color-blue)
- *   success  → green   (--color-green)
- *   danger   → red     (--color-red)
+ *   primary   → yellow  (default; semi-transparent #fcd34d)
+ *   secondary → purple  (--color-purple)
+ *   warning   → red     (--color-red)
+ *   deal      → blue    (--color-blue)
+ *   success   → green   (--color-green)
  *
  * Variants:
  *   fade (default) — the vertical accent→gray border switches on hover
- *   spin           — the border is a conic gradient that rotates while hovered
+ *   spin           — the border is a conic gradient with the accent arc
+ *                    concentrated on one side; it rotates while hovered
  *
  * `@property` registers the animated custom props so the border actually
  * interpolates; browsers without it still render the gradient (hover just
@@ -49,7 +50,7 @@ export class S2SButton extends LitElement {
   /** 'fade' (default) or 'spin' border animation. */
   @property() variant: 'fade' | 'spin' = 'fade';
   /** Accent color selector — the gradient color is the differentiator. */
-  @property() type: 'default' | 'offer' | 'deal' | 'success' | 'danger' = 'default';
+  @property() type: 'primary' | 'secondary' | 'warning' | 'deal' | 'success' = 'primary';
 
   static styles = css`
     @property --gb-c1 {
@@ -70,20 +71,22 @@ export class S2SButton extends LitElement {
 
     :host {
       display: inline-flex;
-      /* Accent (top stop) — the per-type differentiator. */
-      --gb-accent: var(--color-yellow, #fcd34d);
+      /* Accent (gradient color) — the per-type differentiator.
+         primary = yellow, kept semi-transparent so the bright stop reads
+         as a soft glow instead of full-strength #fcd34d. */
+      --gb-accent: rgba(252, 211, 77, 0.6);
     }
-    :host([type='offer']) {
+    :host([type='secondary']) {
       --gb-accent: var(--color-purple, #d8b4fe);
+    }
+    :host([type='warning']) {
+      --gb-accent: var(--color-red, #db4233);
     }
     :host([type='deal']) {
       --gb-accent: var(--color-blue, #93c5fd);
     }
     :host([type='success']) {
       --gb-accent: var(--color-green, #6ee7b7);
-    }
-    :host([type='danger']) {
-      --gb-accent: var(--color-red, #db4233);
     }
 
     button {
@@ -116,8 +119,8 @@ export class S2SButton extends LitElement {
       transition: --gb-c1 0.5s ease, --gb-c2 0.5s ease;
     }
 
-    button:hover:not(:disabled),
-    button:focus-visible {
+    button:not(.spin):hover:not(:disabled),
+    button:not(.spin):focus-visible {
       --gb-c1: var(--gb-accent);
       --gb-c2: var(--gray-600, #5f564b);
     }
@@ -137,16 +140,18 @@ export class S2SButton extends LitElement {
         linear-gradient(var(--gb-fill), var(--gb-fill)) padding-box,
         conic-gradient(
           from var(--gb-angle),
-          var(--gb-c1),
-          var(--gb-c2),
-          var(--gb-accent),
-          var(--gb-c1)
+          var(--gb-c1) 0%,
+          var(--gb-c1) 26%,
+          var(--gb-accent) 34%,
+          var(--gb-accent) 42%,
+          var(--gb-c1) 50%,
+          var(--gb-c1) 100%
         ) border-box;
     }
 
     button.spin:hover:not(:disabled),
     button.spin:focus-visible {
-      animation: gb-spin 2s linear infinite;
+      animation: gb-spin 2800ms linear infinite;
     }
 
     @keyframes gb-spin {
