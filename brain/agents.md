@@ -52,6 +52,9 @@ touching code** — they carry the invariants, sub-component maps, gotchas, and 
 - **Spawn contract:** every spawn uses the worktree-session skill
   (`.omnigent/skills/worktree-session/`) — make worktree, bake path into message,
   verify `pwd`+`branch` first, track in `brain/worktrees.md`.
+- **Thinking levels:** when orchestrating subtasks, spawned builders run with
+  reasoning OFF (`-- --thinking off` on `agent start`); the main/orchestrator pane
+  keeps `medium`. Reasoning is the lead's job — workers implement from handoffs.
 
 ### s2s-prof
 - **agent_id:** `cc3c9d2b9d9e49269d52d7c0860fe071` (registered once, reused — the
@@ -120,6 +123,11 @@ into main.
   (push main first if behind).
 - Trivial/mechanical one-liners (AGENTS.md) may be merged directly by the lead
   without a PR, but the record goes in the commit message.
+- **Update specs after every PR.** Once a PR merges, update the affected package
+  spec(s) in `brain/specs/` (`SPEC-safe-app.md`, `SPEC-shared.md`, `SPEC-contracts-*.md`)
+  to match what shipped — changed API surface, invariants, sub-component maps, test
+  seams, gotchas. Specs are the read-before-code contract; a PR that drifts from its
+  spec is how specs rot.
 
 ## Related
 - `brain/worktrees.md` — (session → worktree → branch) tracking index.
