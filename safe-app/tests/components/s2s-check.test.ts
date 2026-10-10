@@ -24,13 +24,14 @@ function clickCheck(el: S2SCheck) {
 }
 
 describe('s2s-check', () => {
-  it('renders the descriptive label and the input placeholder hint', async () => {
+  it('renders the input with its placeholder hint (no label) and the check button', async () => {
     const el = await mountLit<S2SCheck>('s2s-check', {
       label: 'check if genesis id has a deal',
       placeholder: '0x… genesis',
     });
 
-    expect(el.shadowRoot?.textContent).toContain('check if genesis id has a deal');
+    // The label is deliberately not rendered — only the input + check button.
+    expect(el.shadowRoot?.textContent).not.toContain('check if genesis id has a deal');
     const input = el.shadowRoot!.querySelector('input') as HTMLInputElement;
     expect(input.getAttribute('placeholder')).toBe('0x… genesis');
     // The only action affordance is a check-icon button at the end.

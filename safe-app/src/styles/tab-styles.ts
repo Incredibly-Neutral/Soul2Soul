@@ -19,7 +19,7 @@ export const tabStyles = css`
     cursor: pointer;
     font-size: 1rem;
     font-weight: 400;
-    color: var(--gray-50);
+    color: var(--gray-400);
     transition: all 0.2s;
     border-bottom: 1px solid var(--gray-500);
     border-radius: 0;
