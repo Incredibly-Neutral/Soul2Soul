@@ -141,10 +141,10 @@ export class S2SButton extends LitElement {
         conic-gradient(
           from var(--gb-angle),
           var(--gb-c1) 0%,
-          var(--gb-c1) 26%,
-          var(--gb-accent) 34%,
-          var(--gb-accent) 42%,
-          var(--gb-c1) 50%,
+          var(--gb-c1) 20%,
+          var(--gb-accent) 28%,
+          var(--gb-accent) 46%,
+          var(--gb-c1) 54%,
           var(--gb-c1) 100%
         ) border-box;
     }

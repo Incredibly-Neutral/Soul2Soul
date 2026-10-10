@@ -36,6 +36,7 @@ import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
+import './s2s-button.js';
 
 // NOTE: human-readable fragments only. ethers v6 rejects a trailing
 // state-mutability token on a named-parameter fragment ("Invalid Fragment"),
@@ -841,10 +842,10 @@ export class S2SWebsiteTreeTab extends LitElement {
     return html`
       <div class="toolbar">
         <div class="toolbar-left">
-          <button class="button" id="sync-btn" ?disabled=${this.syncing || this.resetting}
+          <s2s-button type="primary" id="sync-btn" ?disabled=${this.syncing || this.resetting}
             @click=${() => void this.sync()}>
             ${this.syncing ? 'Syncing…' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync`}
-          </button>
+          </s2s-button>
           ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
         </div>
         <button class="button" id="reset-btn" ?disabled=${this.syncing || this.resetting}
