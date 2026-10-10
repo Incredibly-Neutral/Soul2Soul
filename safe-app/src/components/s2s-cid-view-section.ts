@@ -695,6 +695,14 @@ h
    * background loop over the batch endpoint.
    */
   private startRetrievabilityCheck(): void {
+    // A same-publication refresh can land while the previous pass is still
+    // running over the OLD view's cids. Invalidate it exactly like recheck()
+    // (abort + bump the epoch + unset checking) so the fresh view gets a
+    // stalest-first pass over ITS cids, and a stale pass can never write back
+    // into the new state or leave `checking` stuck.
+    this.retrievabilityAbort?.abort();
+    this.retrievabilityEpoch++;
+    this.checking = false;
     this.retrievability = loadRetrievabilityMap(this.publication);
     this.retrievabilityAbort = new AbortController();
     void this.runRetrievabilityPass();
