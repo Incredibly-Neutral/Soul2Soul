@@ -202,7 +202,7 @@ export class S2SCidViewSection extends LitElement {
 
       .cid-header {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-start;
         align-items: center;
         gap: 1rem;
         margin-bottom: 2rem;
