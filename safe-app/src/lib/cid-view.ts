@@ -421,11 +421,22 @@ function retrievabilityCacheKey(publication: string): string {
  */
 export function loadRetrievabilityMap(publication: string): CidRetrievabilityMap | null {
   try {
-    const raw = window.localStorage.getItem(retrievabilityCacheKey(publication));
-    if (!raw) return null;
+    const key = retrievabilityCacheKey(publication);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      console.info(`[cid-view] retrievability cache MISS (${key})`);
+      return null;
+    }
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    return parseCidRetrievabilityMap(parsed);
+    if (typeof parsed !== 'object' || parsed === null) {
+      console.info(`[cid-view] retrievability cache miss: non-object blob (${key})`);
+      return null;
+    }
+    const map = parseCidRetrievabilityMap(parsed);
+    console.info(
+      `[cid-view] retrievability cache HIT: ${String(Object.keys(map).length)} statuses, ${String(raw.length)} bytes (${key})`,
+    );
+    return map;
   } catch {
     return null;
   }
@@ -434,9 +445,15 @@ export function loadRetrievabilityMap(publication: string): CidRetrievabilityMap
 /** Persist a retrievability map for a publication. Fail-open (storage full / privacy mode). */
 export function saveRetrievabilityMap(publication: string, map: CidRetrievabilityMap): void {
   try {
-    window.localStorage.setItem(retrievabilityCacheKey(publication), JSON.stringify(map));
-  } catch {
-    // ignore — the component still works without a cache
+    const raw = JSON.stringify(map);
+    window.localStorage.setItem(retrievabilityCacheKey(publication), raw);
+    console.info(
+      `[cid-view] retrievability cache SAVED ${String(Object.keys(map).length)} statuses, ${String(raw.length)} bytes`,
+    );
+  } catch (err) {
+    // The cache is best-effort — but surface a console warning so a storage
+    // failure (sandboxed iframe / quota) is diagnosable rather than silent.
+    console.warn('[cid-view] retrievability cache save FAILED:', err instanceof Error ? err.message : String(err));
   }
 }
 

@@ -887,6 +887,125 @@ describe('s2s-cid-view-section', () => {
     });
   });
 
+  it('resumes from the cache — all-fresh cids are NOT re-checked on (re)mount', async () => {
+    // First mount with no cache → the terminating pass runs once; the cids it
+    // was handed are the view's real unique set (13, incl. site-root/archive
+    // CIDs that render as wrapped hashes in the table).
+    const el0 = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
+    const all = [...(cidViewMocks.checkRetrievability.mock.calls[0][2] as readonly string[])];
+    expect(all.length).toBe(13);
+    el0.remove();
+    cidViewMocks.checkRetrievability.mockClear();
+
+    // Reload: a cache exists with every cid checked within the freshness
+    // window → the auto pass must NOT re-query anything.
+    const seed: CidRetrievabilityMap = {};
+    for (const cid of all) {
+      seed[cid] = {
+        checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), // 5 min ago < 15 min window
+        copies: 2,
+        sources: { kubo: true, pinata: true, filebase: false, filecoin: false },
+      };
+    }
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 50)); // let any (wrong) async pass surface
+    expect(cidViewMocks.checkRetrievability).not.toHaveBeenCalled();
+    // Dots render from the persisted map + the stored-hint makes persistence observable.
+    expect(el.shadowRoot!.textContent).toContain('13 CIDs stored');
+    const dealRow = Array.from(el.shadowRoot!.querySelectorAll('.cid-row')).find((r) =>
+      r.querySelector('.badge.deal'),
+    );
+    expect(dealRow!.querySelectorAll('.dot.on').length).toBe(2);
+  });
+
+  it('auto pass only re-checks UNFRESH cids (never-checked/stale), not the fresh ones', async () => {
+    const el0 = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
+    const all = [...(cidViewMocks.checkRetrievability.mock.calls[0][2] as readonly string[])];
+    el0.remove();
+    cidViewMocks.checkRetrievability.mockClear();
+
+    // 10 cids checked recently (fresh), 3 checked long ago (stale) → only the
+    // 3 stale ones may be re-queried by the auto pass.
+    const stale = all.slice(0, 3);
+    const seed: CidRetrievabilityMap = {};
+    for (const cid of all) {
+      seed[cid] = {
+        checkedAt: stale.includes(cid)
+          ? new Date(Date.now() - 2 * 60 * 60_000).toISOString() // 2h old → stale
+          : new Date(Date.now() - 5 * 60_000).toISOString(),
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+      };
+    }
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
+    const [, , rechecked] = cidViewMocks.checkRetrievability.mock.calls[0] as [
+      string,
+      PublicationCidView,
+      readonly string[],
+    ];
+    expect([...rechecked].sort()).toEqual([...stale].sort());
+    // The other 10 (fresh) are untouched by the pass.
+    expect(cidViewMocks.checkRetrievability.mock.calls.length).toBe(1);
+  });
+
+  it('manual Recheck ignores the freshness window and forces a full pass', async () => {
+    const el0 = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
+    const all = [...(cidViewMocks.checkRetrievability.mock.calls[0][2] as readonly string[])];
+    el0.remove();
+    cidViewMocks.checkRetrievability.mockClear();
+
+    const seed: CidRetrievabilityMap = {};
+    for (const cid of all) {
+      seed[cid] = {
+        checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), // all fresh
+        copies: 2,
+        sources: { kubo: true, pinata: true, filebase: false, filecoin: false },
+      };
+    }
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy());
+    // Auto pass is a no-op (all fresh) → Recheck must still force every cid.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cidViewMocks.checkRetrievability).not.toHaveBeenCalled();
+    const recheck = Array.from(el.shadowRoot!.querySelectorAll('.refresh')).find((b) =>
+      b.textContent?.includes('Recheck'),
+    ) as HTMLButtonElement;
+    recheck.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(cidViewMocks.checkRetrievability).toHaveBeenCalled());
+    const [, , forced] = cidViewMocks.checkRetrievability.mock.calls[0] as [
+      string,
+      PublicationCidView,
+      readonly string[],
+    ];
+    expect([...forced].sort()).toEqual([...all].sort());
+  });
+
   it('folds Role/Path and Genesis into one cell (genesis as muted sub-line)', async () => {
     const el = await mountLit('s2s-cid-view-section', {
       ctx: makeFullCtx(),
