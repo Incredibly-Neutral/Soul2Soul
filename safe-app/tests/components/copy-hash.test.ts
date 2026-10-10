@@ -59,4 +59,30 @@ describe('copy-hash', () => {
       execCommand.mockRestore();
     }
   });
+
+  it('does not wrap the text in an anchor — no link, no text-decoration', async () => {
+    const el = await mountLit<CopyHash>('copy-hash', { value: '0xab', href: 'https://ipfs.io/ipfs/x' });
+    expect(el.shadowRoot?.querySelector('.text')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('a')).toBeNull();
+    const text = el.shadowRoot?.querySelector('.text') as HTMLElement;
+    expect(getComputedStyle(text).textDecorationLine).not.toContain('underline');
+  });
+
+  it('renders an open-in-new-tab icon button when href is set and opens it on click', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      const el = await mountLit<CopyHash>('copy-hash', { value: '0xab', href: 'https://ipfs.io/ipfs/abc' });
+      const openBtn = el.shadowRoot?.querySelector('.btn-open') as HTMLButtonElement;
+      expect(openBtn).toBeTruthy();
+      openBtn.click();
+      expect(open).toHaveBeenCalledWith('https://ipfs.io/ipfs/abc', '_blank', 'noopener,noreferrer');
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('renders no open button when href is empty', async () => {
+    const el = await mountLit<CopyHash>('copy-hash', { value: '0xab' });
+    expect(el.shadowRoot?.querySelector('.btn-open')).toBeNull();
+  });
 });

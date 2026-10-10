@@ -210,10 +210,10 @@ describe('s2s-website-tree-tab', () => {
       'getText',
       expect.arrayContaining([expect.any(String), 'content_cache_s3ntiment.eth']),
     );
-    // Footer shows the decoded content-cache CID as a gateway link.
-    const footerLink = root.querySelector<HTMLAnchorElement>('.cid-footer a');
-    expect(footerLink).not.toBeNull();
-    expect(footerLink!.getAttribute('href')).toBe('https://ipfs.io/ipfs/bafycache');
+    // Footer shows the decoded content-cache CID with a gateway open icon.
+    const footerCopy = root.querySelector<HTMLElement & { href: string }>('.cid-footer copy-hash');
+    expect(footerCopy).not.toBeNull();
+    expect(footerCopy!.href).toBe('https://ipfs.io/ipfs/bafycache');
   });
 
   it('diffs the new tree against the previous localStorage snapshot and lists removals', async () => {

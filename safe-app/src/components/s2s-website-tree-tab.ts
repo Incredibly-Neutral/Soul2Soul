@@ -300,25 +300,6 @@ export class S2SWebsiteTreeTab extends LitElement {
         white-space: nowrap;
       }
 
-      .gateway-link {
-        text-decoration: none;
-        color: inherit;
-        display: inline-flex;
-        align-items: center;
-      }
-
-      .gateway-link:hover {
-        text-decoration: underline;
-        color: var(--blue-400, #60a5fa);
-      }
-
-      .gateway-link::after {
-        content: "↗";
-        margin-left: 0.25rem;
-        font-size: 0.75rem;
-        opacity: 0.6;
-      }
-
       .modal-overlay {
         position: fixed;
         inset: 0;
@@ -731,9 +712,7 @@ export class S2SWebsiteTreeTab extends LitElement {
     return html`
       <div class="cid-footer">
         <span class="cid-label">Content cache CID</span>
-        <a href="${this.gatewayUrl(this.contentCacheCid)}" target="_blank" rel="noopener noreferrer" class="gateway-link" title="Open on IPFS gateway">
-          <copy-hash .value=${this.shortenCid(this.contentCacheCid)}></copy-hash>
-        </a>
+        <copy-hash .value=${this.shortenCid(this.contentCacheCid)} href=${this.gatewayUrl(this.contentCacheCid)}></copy-hash>
       </div>`;
   }
 
