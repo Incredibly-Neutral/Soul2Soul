@@ -24,6 +24,7 @@ export const buttonStyles = css`
     font-weight: 500;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    line-height: 1rem;
   }
 
   button:hover:not(:disabled) {
