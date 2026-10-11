@@ -36,12 +36,11 @@ const rowRenderer = (row: Row) =>
   html`<div class="table-row" data-id=${row.id}>${row.id}</div>`;
 
 /** Column-backed chips group over the `kind` column (chips derive from rows). */
-const kindGroup: ChipsGroup<Row> = { key: 'kind', label: 'Kind', get: (r) => r.kind };
+const kindGroup: ChipsGroup<Row> = { key: 'kind', get: (r) => r.kind };
 
 /** Bucket-style (matches) group: healthy = copies >= 3, otherwise at-risk. */
 const healthGroup: ChipsGroup<Row> = {
   key: 'health',
-  label: 'Health',
   matches: (r, v) => (v === 'healthy' ? r.copies >= 3 : r.copies < 3),
   values: [
     { value: 'healthy', label: 'Healthy' },
@@ -73,9 +72,8 @@ describe('s2s-table chips mode', () => {
     expect(el.querySelector('.chips-group[data-group="kind"]')).toBeTruthy();
     expect(el.querySelector('.chips-group[data-group="health"]')).toBeTruthy();
 
-    // Column-backed group: label + chips derive from distinct kind values.
+    // Column-backed group: chips derive from distinct kind values.
     const kindGroupEl = el.querySelector('.chips-group[data-group="kind"]')!;
-    expect(kindGroupEl.querySelector('.chips-group-label')!.textContent).toBe('Kind');
     const kindChips = [...kindGroupEl.querySelectorAll('button.chip')];
     expect(kindChips.map((c) => c.getAttribute('data-value'))).toEqual(['file', 'folder']);
     // Count + label in the cid-view order: bold count then label text.

@@ -269,14 +269,11 @@ export class S2STable<T> extends LitElement {
     return html`<div class="chips-top">${this.chipsTop}</div>`;
   }
 
-  /** One chips group: optional label, then a toggle chip per value with count. */
+  /** One chips group: a toggle chip per value with count. */
   private renderChipsGroup(group: ChipsGroup<T>) {
     const active = this.chips[group.key] ?? [];
     return html`
       <div class="chips-group" data-group=${group.key}>
-        ${group.label
-          ? html`<span class="chips-group-label">${group.label}</span>`
-          : ''}
         ${chipValuesForGroup(this.rows, group).map(({ value, label }) => {
           const isActive = active.includes(value);
           return html`
