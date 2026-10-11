@@ -4,6 +4,7 @@
 
 import type { S2SIPFSMethods } from '../ipfs';
 import type { S2SPublicationConfig } from './types';
+import { CID } from 'multiformats/cid';
 
 export interface GitHubFile {
   path: string;
@@ -187,7 +188,31 @@ export class ConfigBuilder {
     }
 
     // --- Upload templates DAG ---
-    const templatesCid = await this.ipfs.dagPut(JSON.stringify(config.templates), 'templates.json');
+    // Normalize the templates array into a dag-json payload whose entries carry
+    // REAL IPLD links (`{ '/': <cid> }`) derived from each entry's cid, so the
+    // templates DAG traverses to the actual template files — consumed by the
+    // recursive Filebase pin of templateCid (records-tab change) and by the
+    // Filecoin CAR export path (dagExport of templateCid). The link is derived
+    // from cid at this single point so it can never drift — including entries
+    // carried forward through the existing-config merge path (where an entry's
+    // cid/body may be updated in place, and any stale link from a previously
+    // built config is overwritten here). An entry whose cid is NOT a valid CID
+    // string gets no link: Kubo's dag-json decoder validates the link target
+    // and would reject the whole payload, turning a corrupt/legacy
+    // carried-forward entry into a hard publish failure. The original array is
+    // left untouched (path/cid/body exactly as before).
+    const templatesPayload = config.templates.map((t: any) => {
+      let link: { '/': string } | undefined;
+      try {
+        CID.parse(t.cid);
+        link = { '/': t.cid };
+      } catch {
+        // Invalid CID string → no link (JSON.stringify drops the undefined key).
+        link = undefined;
+      }
+      return { ...t, link };
+    });
+    const templatesCid = await this.ipfs.dagPut(JSON.stringify(templatesPayload), 'templates.json');
     console.log('[config-builder] templates dagPut CID:', templatesCid);
 
     // --- Fetch mapping.json at the pinned commit SHA ---

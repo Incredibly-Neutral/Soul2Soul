@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CID } from 'multiformats/cid';
+import { sha256 } from 'multiformats/hashes/sha2';
 import { ConfigBuilder, parseGitHubUrl } from './config-builder';
 
 // =============================================================================
@@ -141,6 +143,95 @@ describe('ConfigBuilder', () => {
         nl: '',
         en: '/en',
       });
+    });
+
+    it('writes a real IPLD link per template entry on the fresh-build path', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes('/commits/')) {
+          return Promise.resolve(makeResponse({ sha: 'abc123def' }));
+        }
+        // GitHub templates dir → two template files
+        if (url.includes('/contents/templates')) {
+          return Promise.resolve(
+            makeResponse([
+              {
+                path: 'templates/post.hbs',
+                download_url:
+                  'https://raw.githubusercontent.com/owner/repo/main/templates/post.hbs',
+                type: 'file',
+              },
+              {
+                path: 'templates/layout.hbs',
+                download_url:
+                  'https://raw.githubusercontent.com/owner/repo/main/templates/layout.hbs',
+                type: 'file',
+              },
+            ]),
+          );
+        }
+        // GitHub API contents — no assets
+        if (url.includes('api.github.com/repos')) {
+          return Promise.resolve(makeResponse([]));
+        }
+        // Template file body
+        if (url.includes('raw.githubusercontent.com') && url.endsWith('.hbs')) {
+          return Promise.resolve(makeResponse('Hello {{name}}'));
+        }
+        // raw.githubusercontent.com for mapping.json
+        if (url.includes('raw.githubusercontent.com')) {
+          return Promise.resolve(
+            makeResponse(
+              JSON.stringify({
+                templateConfig: [{ template: 'post', selector: '.post' }],
+                ripples: [],
+                localePaths: { default: '', nl: '', en: '/en' },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(makeResponse(''));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      // Real (valid) CID per template file so the dag-json payload decodes to
+      // genuine IPLD links — the exact strings Kubo's dag/put link decoder
+      // accepts (and the same CID.parse that decodes them).
+      ipfs.addToKubo.mockImplementation(async (_content: string, name: string) => {
+        const hash = await sha256.digest(new TextEncoder().encode(name));
+        return CID.create(1, 0x55, hash).toString();
+      });
+      const builder = makeBuilder(ipfs);
+
+      await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'testpub.soul2soul.eth',
+        '0x1234',
+        'mock-assets-cid',
+      );
+
+      const dagPutCall = (ipfs.dagPut as any).mock.calls[0];
+      const templatesPayload = JSON.parse(dagPutCall[0]);
+      expect(templatesPayload).toHaveLength(2);
+      for (const entry of templatesPayload) {
+        // Every entry keeps path/cid/body and gains a REAL IPLD link derived
+        // from its own cid (`{ '/': <cid> }` — the dag-json link form).
+        expect(entry.path).toBeDefined();
+        expect(entry.body).toBeDefined();
+        expect(entry.link).toEqual({ '/': entry.cid });
+        // The link target must be a valid CID (CID.parse throws otherwise — the
+        // same validation Kubo's dag-json decoder applies when it materialises
+        // the link), and it must equal the entry's cid.
+        const linkCid = CID.parse(entry.link['/']);
+        expect(linkCid.equals(CID.parse(entry.cid))).toBe(true);
+        expect(linkCid.toString()).toBe(entry.cid);
+      }
+      // Sanity: the two cids are distinct, so each link is derived from the
+      // entry that carries it (not a shared/static value).
+      expect(templatesPayload[0].link['/']).not.toBe(templatesPayload[1].link['/']);
     });
 
     it('fetches mapping.json at commit SHA not branch ref', async () => {
@@ -440,8 +531,10 @@ describe('ConfigBuilder', () => {
 
     it('merges templates: existing CID stays when template files unchanged', async () => {
       const ipfs = mockIPFS();
+      // A real (valid) CIDv0 string so the carried-forward entry keeps its link.
+      const carriedCid = 'QmV9aLxGaJKFkcBiyAtDWVnLoHZy2eeUNdCxyLeFk4CEY6';
       ipfs.fetchFromKubo.mockResolvedValue({
-        templates: [{ path: 'templates/post.hbs', cid: 'existing-cid', body: 'old' }],
+        templates: [{ path: 'templates/post.hbs', cid: carriedCid, body: 'old' }],
       });
       const builder = makeBuilder(ipfs);
 
@@ -464,6 +557,42 @@ describe('ConfigBuilder', () => {
       // so the existing one is kept from the fetched config
       expect(templatesPayload).toHaveLength(1);
       expect(templatesPayload[0].path).toBe('templates/post.hbs');
+      // Carried-forward entry (from the fetched existing config) also gets a
+      // REAL IPLD link derived from its cid — it must not be skipped on the
+      // existing-config merge path.
+      expect(templatesPayload[0].cid).toBe(carriedCid);
+      expect(templatesPayload[0].link).toEqual({ '/': carriedCid });
+      expect(CID.parse(templatesPayload[0].link['/']).toString()).toBe(carriedCid);
+    });
+
+    it('omits the IPLD link for a carried-forward entry whose cid is not a valid CID', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockResolvedValue({
+        templates: [{ path: 'templates/post.hbs', cid: 'not-a-real-cid', body: 'old' }],
+      });
+      const builder = makeBuilder(ipfs);
+
+      // GitHub returns empty template dir → the corrupt carried entry is kept
+      await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'test.soul2soul.eth',
+        '0x1234',
+        'cid',
+        'existing-config-cid',
+      );
+
+      const dagPutCall = (ipfs.dagPut as any).mock.calls[0];
+      const templatesPayload = JSON.parse(dagPutCall[0]);
+      expect(templatesPayload).toHaveLength(1);
+      expect(templatesPayload[0].path).toBe('templates/post.hbs');
+      // A corrupt/legacy cid gets NO link — otherwise Kubo's dag-json decoder
+      // would reject the entire payload and break the publish (degrades like
+      // the pre-link plain-string node instead).
+      expect(templatesPayload[0].cid).toBe('not-a-real-cid');
+      expect('link' in templatesPayload[0]).toBe(false);
+      expect(templatesPayload[0].link).toBeUndefined();
     });
   });
 });
