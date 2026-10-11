@@ -4,7 +4,6 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import { tableStyles } from '../styles/table-styles.js';
-import { filterStyles } from '@/styles/filter-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { store } from '../state/index.js';
 import { Deal } from '../types/index.js';
@@ -17,8 +16,7 @@ import {
   type TableColumn,
 } from '@/utils/sort.js';
 import {
-  setFilter,
-  type FilterState,
+  type ChipsGroup,
 } from '@/utils/filter.js';
 import './s2s-table.js';
 import './toggle-button.js';
@@ -56,14 +54,30 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
   { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
 ];
 
-// Column keys that get a filter dropdown in each table.
-const OFFER_FILTER_KEYS = ['author', 'postType'];
-const DEAL_FILTER_KEYS = ['author', 'postType'];
+// Chips filter groups for the Offers and Deals tables (both DEAL-typed). Same
+// two groups, in the same order the dropdowns filtered before: author, then
+// postType. Labels keep the historical toolbar text ("Author", "Post type").
+const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
+  { key: 'author', label: 'Author', get: (d) => d.author ?? '' },
+  { key: 'postType', label: 'Post type', get: (d) => d.postType ?? '' },
+];
 
-// The historical filter-toolbar label for the author column is "Author", while
-// the column's sortable-header label is "Author (safe)". Preserve the exact
-// pre-refactor dropdown text via <s2s-table>'s filterLabels override.
-const DEAL_FILTER_LABELS: Record<string, string> = { author: 'Author' };
+/**
+ * Immutable chips-state update: copy, set `key` to `values`, delete the key
+ * when `values` is empty (matches <s2s-table>'s clear-filters chip, which
+ * emits values: []). The host owns the chips state, mirroring the chip-filter
+ * event back, so filtering stays immutable like setFilter before it.
+ */
+function setChips(
+  chips: Record<string, string[]>,
+  key: string,
+  values: string[],
+): Record<string, string[]> {
+  const next = { ...chips };
+  if (values.length > 0) next[key] = [...values];
+  else delete next[key];
+  return next;
+}
 
 @customElement('s2s-deals-tab')
 export class S2SDealsTab extends LitElement {
@@ -78,8 +92,8 @@ export class S2SDealsTab extends LitElement {
   @state() private previewMode = false;
   @state() private offersSort: SortState | null = null;
   @state() private dealsSort: SortState | null = null;
-  @state() private offersFilters: FilterState = {};
-  @state() private dealsFilters: FilterState = {};
+  @state() private offersChips: Record<string, string[]> = {};
+  @state() private dealsChips: Record<string, string[]> = {};
   @state() private dealCheck: {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
@@ -97,7 +111,6 @@ export class S2SDealsTab extends LitElement {
     sectionStyles,
     tableStyles,
     buttonStyles,
-    filterStyles,
     css`
       :host {
         display: block;
@@ -430,15 +443,14 @@ export class S2SDealsTab extends LitElement {
                 .columns=${OFFER_COLUMNS}
                 .rows=${store.offers}
                 .sort=${this.offersSort}
-                .filters=${this.offersFilters}
-                .filterKeys=${OFFER_FILTER_KEYS}
-                .filterLabels=${DEAL_FILTER_LABELS}
+                .chipsGroups=${DEAL_CHIPS_GROUPS}
+                .chips=${this.offersChips}
                 .rowRenderer=${this.offerRowRenderer}
                 .actionsHeader=${true}
                 emptyText="No offers match the current filters"
                 gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
                 @sort=${(e: CustomEvent) => { this.offersSort = toggleSort(this.offersSort, e.detail.key); }}
-                @filter=${(e: CustomEvent) => { this.offersFilters = setFilter(this.offersFilters, e.detail.key, e.detail.value); }}
+                @chip-filter=${(e: CustomEvent) => { this.offersChips = setChips(this.offersChips, e.detail.key, e.detail.values); }}
               ></s2s-table>
             </div>
           `
@@ -454,9 +466,8 @@ export class S2SDealsTab extends LitElement {
           .columns=${DEAL_COLUMNS}
           .rows=${store.deals}
           .sort=${this.dealsSort}
-          .filters=${this.dealsFilters}
-          .filterKeys=${store.deals.length > 0 ? DEAL_FILTER_KEYS : []}
-          .filterLabels=${DEAL_FILTER_LABELS}
+          .chipsGroups=${store.deals.length > 0 ? DEAL_CHIPS_GROUPS : []}
+          .chips=${this.dealsChips}
           .rowRenderer=${this.dealRowRenderer}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
@@ -464,7 +475,7 @@ export class S2SDealsTab extends LitElement {
           emptyText=${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}
           gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
-          @filter=${(e: CustomEvent) => { this.dealsFilters = setFilter(this.dealsFilters, e.detail.key, e.detail.value); }}
+          @chip-filter=${(e: CustomEvent) => { this.dealsChips = setChips(this.dealsChips, e.detail.key, e.detail.values); }}
         ></s2s-table>
       </div>
     `;

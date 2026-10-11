@@ -153,6 +153,8 @@ type DealsTab = LitElement & {
   safeIntegration: unknown;
   protocolIntegration: unknown;
   lit: unknown;
+  offersChips: Record<string, string[]>;
+  dealsChips: Record<string, string[]>;
 };
 
 function mountTab(overrides: Partial<DealsTab> = {}) {
@@ -294,6 +296,65 @@ describe('s2s-deals-tab', () => {
     );
     await vi.waitFor(() => expect(check.result).toBe('fail'));
     expect(check.message).toBe('no deal');
+  });
+
+  it('filters Active Deals by postType chips (chip-filter event + row filtering)', async () => {
+    // Two deals with distinct postTypes so the chips row has a value to pick.
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal'), rawDeal('0xDeal2', '0xAuthorDeal')],
+      offers: [],
+    });
+    // contentFor's trailing `...extra` replaces `public` wholesale, so set the
+    // postType AFTER building the content to keep author/createdAt/tags intact.
+    m.fetchFromIPFS.mockImplementation((_gw: string, cid: string) => {
+      const content = m.contentFor(cid === 'cid-0xDeal1' ? 'Article Deal' : 'Note Deal');
+      content.public.postType = cid === 'cid-0xDeal1' ? 'article' : 'note';
+      return Promise.resolve(content);
+    });
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain('Active Deals (2)');
+    });
+
+    // Both chips groups render (author, then postType), keyed by their group key.
+    const groups = [...root.querySelectorAll('.chips-group')].map(
+      (g) => g.getAttribute('data-group'),
+    );
+    expect(groups).toContain('author');
+    expect(groups).toContain('postType');
+
+    // Clicking the 'article' postType chip emits a composed chip-filter event.
+    const articleChip = root.querySelector<HTMLButtonElement>(
+      '.chips-group[data-group="postType"] button.chip[data-value="article"]',
+    );
+    expect(articleChip).not.toBeNull();
+    expect(articleChip!.querySelector('.chip-value')!.textContent).toBe('1');
+
+    const reported = new Promise<CustomEvent<{ key: string; values: string[] }>>(
+      (resolve) =>
+        el.addEventListener(
+          'chip-filter',
+          (e) => resolve(e as CustomEvent<{ key: string; values: string[] }>),
+          { once: true },
+        ),
+    );
+    articleChip!.click();
+    const evt = await reported;
+    expect(evt.detail).toEqual({ key: 'postType', values: ['article'] });
+
+    // The host owns the chips state: mirror the reported value and re-render.
+    el.dealsChips = { ...el.dealsChips, [evt.detail.key]: evt.detail.values };
+    await el.updateComplete;
+
+    // Only the matching row remains in the table.
+    await vi.waitFor(() => {
+      const rows = [...root.querySelectorAll('.deal-card.table-row')].map(
+        (r) => r.getAttribute('data-genesis'),
+      );
+      expect(rows).toEqual(['0xDeal1']);
+    });
   });
 
   it('accepts an offer and shows the pending-approval notification', async () => {
