@@ -14,6 +14,7 @@ function mockIPFS(): any {
     addToKubo: vi.fn().mockResolvedValue('mock-cid'),
     dagPut: vi.fn().mockResolvedValue('mock-dag-cid'),
     uploadToPinata: vi.fn().mockResolvedValue('mock-filebase-hash'),
+    pinCidRemote: vi.fn().mockResolvedValue(true),
     dagGet: vi.fn(),
     kuboPost: vi.fn(),
     mfsCp: vi.fn(),
@@ -143,6 +144,27 @@ describe('ConfigBuilder', () => {
         nl: '',
         en: '/en',
       });
+    });
+
+    it('mirrors templateCid to Filebase and Pinata via pinCidRemote (fresh build)', async () => {
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      const builder = makeBuilder(ipfs);
+
+      await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'testpub.soul2soul.eth',
+        '0x1234',
+        'mock-assets-cid',
+      );
+
+      // templateCid (the dagPut CID) is mirrored to BOTH pinning services
+      // fire-and-forget: once to filebase, once to pinata.
+      expect(ipfs.pinCidRemote).toHaveBeenCalledWith('mock-dag-cid', 'filebase');
+      expect(ipfs.pinCidRemote).toHaveBeenCalledWith('mock-dag-cid', 'pinata');
+      expect(ipfs.pinCidRemote).toHaveBeenCalledTimes(2);
     });
 
     it('writes a real IPLD link per template entry on the fresh-build path', async () => {

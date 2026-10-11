@@ -42,6 +42,18 @@ export class S2SIPFSMethods {
     return this.kuboGateway;
   }
 
+  /**
+   * Pin (repin) an existing CID recursively to Filebase or Pinata, pulling the
+   * blocks from our own kubo node — same remote-pin path neutralpress's render
+   * uses for the rendered site root (SPEC-00 §3.2). Never throws; returns whether
+   * the pin request was accepted. Used by ConfigBuilder to mirror templateCid.
+   */
+  async pinCidRemote(cid: string, provider: 'filebase' | 'pinata' = 'filebase'): Promise<boolean> {
+    const { pinCidFromRemote } = await import('../pin/index.js');
+    const token = provider === 'pinata' ? this.pinataJWT : this.filebaseToken;
+    return pinCidFromRemote(cid, this.kuboGateway, token, provider);
+  }
+
   // =========================================================================
   // Low-level kubo POST (internal; all MFS + dag helpers route through this)
   // =========================================================================

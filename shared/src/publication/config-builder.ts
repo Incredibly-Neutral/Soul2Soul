@@ -215,6 +215,21 @@ export class ConfigBuilder {
     const templatesCid = await this.ipfs.dagPut(JSON.stringify(templatesPayload), 'templates.json');
     console.log('[config-builder] templates dagPut CID:', templatesCid);
 
+    // --- Mirror templates DAG to Filebase + Pinata (fire-and-forget) ---
+    // templateCid is a dag-cbor node; re-uploading its JSON bytes would create a
+    // DIFFERENT CID, so the only way to make it (and its real IPLD links from the
+    // templatesPayload above) durable on the pinning services is a recursive
+    // pin-by-CID that pulls the blocks from our own kubo node — the same remote-pin
+    // path neutralpress uses for the rendered site root. Mirrors the config.json
+    // mirror block below. Non-blocking: pinCidRemote never throws, so a pin failure
+    // can never break the publish.
+    void this.ipfs.pinCidRemote(templatesCid, 'filebase').then((ok) => {
+      console.log(`[config-builder] templateCid ${templatesCid} pinned on filebase: ${ok}`);
+    });
+    void this.ipfs.pinCidRemote(templatesCid, 'pinata').then((ok) => {
+      console.log(`[config-builder] templateCid ${templatesCid} pinned on pinata: ${ok}`);
+    });
+
     // --- Fetch mapping.json at the pinned commit SHA ---
     const commitSHA = await this.getLatestCommitSHA(github_account, repo, branch);
     const mappingUrl = `https://raw.githubusercontent.com/${github_account}/${repo}/${commitSHA}/mapping.json`;
