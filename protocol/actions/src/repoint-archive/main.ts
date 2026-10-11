@@ -12,7 +12,7 @@ import { catFile } from '../libs/ipfs.factory';
 import { getDeals } from '../libs/module.factory';
 import { parseArchive, reconcile } from '../libs/archive.factory';
 import { canReset, extractSignerAddress } from '../libs/gates';
-import { requireFields } from '../libs/helpers';
+import { requireFields, setRpcAuth } from '../libs/helpers';
 
 const ACTION = 'repoint-archive';
 
@@ -64,6 +64,8 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     const { publication, signature, preview, endpoints, archiveCid } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
+    setRpcAuth(endpoints.ipfsGatewayAuth);
 
     const signerAddress = extractSignerAddress(
       ethers.utils.hashMessage('lit actions auth'),

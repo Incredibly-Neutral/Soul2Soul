@@ -19,6 +19,24 @@ const fixEndpoint = (endpoint: string) => {
     .replace(/\/+$/, ""); // Remove trailing slashes
 };
 
+// ── Kubo RPC auth (gateway write token) ───────────────────────────
+let kuboAuthHeader: string | undefined;
+
+/**
+ * Set (or clear) the Authorization header attached to Kubo RPC WRITE calls
+ * (/api/v0/add, /api/v0/dag/put, ...). Reads (cat, dag/get, get, dag/export)
+ * are public and intentionally left unauthenticated.
+ *
+ * Wire this from plugin settings (kubo_token) — see main.ts / settings.ts.
+ */
+export const setRpcAuth = (auth?: string): void => {
+  kuboAuthHeader = auth;
+};
+
+/** Merge the auth header into an outgoing headers object (no-op if unset). */
+const withAuth = (headers: Record<string, string>): Record<string, string> =>
+  kuboAuthHeader ? { ...headers, Authorization: kuboAuthHeader } : headers;
+
 export const addRecursive = async (
   sourcePath: string,
   ipfs_endpoint: string,
@@ -29,9 +47,9 @@ export const addRecursive = async (
 
     const { formData, boundary } = await directoryFormData(sourcePath);
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const path = onlyHash ? "api/v0/add?onlyHash=true" : "api/v0/add";
 
@@ -77,9 +95,9 @@ export const addAsFolder = async (
 
     const { formData, boundary } = await assembleFormData(assets);
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const path = onlyHash ? "api/v0/add?onlyHash=true" : "api/v0/add";
 
@@ -219,9 +237,9 @@ export const add = async (
       noteBuffer,
     );
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const apiPath = onlyHash ? "api/v0/add?onlyHash=true" : "api/v0/add";
 
@@ -267,9 +285,9 @@ export const addFile = async (
   return new Promise(async (resolve, reject) => {
     const formData = await singleFileFormDataFromPath(path);
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${formData.getBoundary()}`,
-    };
+    });
 
     const request = net.request({
       method: "POST",
@@ -313,9 +331,9 @@ export const addFileFromUrl = async (
 
     const { formData, boundary } = await singleFileFormData(filename, content);
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const apiPath = onlyHash ? "api/v0/add?onlyHash=true" : "api/v0/add";
 
@@ -355,9 +373,9 @@ export const pinFile = async (
   return new Promise(async (resolve, reject) => {
     const formData = await singleFileFormDataFromPath(path);
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${formData.getBoundary()}`,
-    };
+    });
 
     const request = net.request({
       method: "POST",
@@ -397,9 +415,9 @@ export const dagPut = async (
       noteBuffer,
     );
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const request = net.request({
       method: "POST",
@@ -621,10 +639,10 @@ export const addFormData = async (
   const body = await multipart.buffer();
   const boundary = multipart.getBoundary();
 
-  const headers = {
+  const headers = withAuth({
     "Content-Type": `multipart/form-data; boundary=${boundary}`,
     "Content-Length": body.length.toString(),
-  };
+  });
 
   let res = await _genericCall(
     "/api/v0/add?recursive=true&wrap-with-directory=true",
@@ -654,9 +672,9 @@ export const addFilesInDir = async (
     const formData = await form.buffer();
     const boundary = form.getBoundary();
 
-    const headers = {
+    const headers = withAuth({
       "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
+    });
 
     const request = net.request({
       method: "POST",
@@ -825,9 +843,9 @@ export const addJson = async (
       hostname,
       port: 443,
       path: "/api/v0/add",
-      headers: {
+      headers: withAuth({
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
+      }),
     });
     request.on("response", (response) => {
       response.on("data", (chunk) => {

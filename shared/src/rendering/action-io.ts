@@ -93,6 +93,7 @@ export const PrepActionInputSchema = z.object({
   prevRootCid: z.string().optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
+    ipfsGatewayAuth: z.string().optional(),
     rpcs: z.object({
       L1: z.array(z.string()).min(1, 'L1 rpcs required'),
       L2: z.array(z.string()).min(1, 'L2 rpcs required'),
@@ -165,6 +166,7 @@ export const SingleActionInputSchema = z.object({
   triggeredContentIds: z.array(z.string()).optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
+    ipfsGatewayAuth: z.string().optional(),
     rpcs: z.object({
       L1: z.array(z.string()).min(1, 'L1 rpcs required'),
       L2: z.array(z.string()).min(1, 'L2 rpcs required'),
@@ -258,6 +260,7 @@ export const EvmUpdateActionInputSchema = z
       .optional(),
     endpoints: z.object({
       ipfsGateway: z.string().optional(),
+      ipfsGatewayAuth: z.string().optional(),
       rpcs: z.object({
         L1: z.array(z.string()).min(1, 'L1 rpcs required'),
         L2: z.array(z.string()).min(1, 'L2 rpcs required'),
@@ -329,6 +332,7 @@ export const MaintainCacheActionInputSchema = z.object({
   preview: z.boolean().optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
+    ipfsGatewayAuth: z.string().optional(),
     rpcs: z.object({
       L1: z.array(z.string()).min(1, 'L1 rpcs required'),
       L2: z.array(z.string()).min(1, 'L2 rpcs required'),

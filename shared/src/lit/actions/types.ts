@@ -31,6 +31,7 @@ export interface PrepInput {
   prevRootCid?: string;
   endpoints: {
     ipfsGateway?: string;
+    ipfsGatewayAuth?: string;
     rpcs: { L1: string[]; L2: string[] };
   };
 }
@@ -54,6 +55,7 @@ export interface SingleInput {
   triggeredContentIds?: string[];
   endpoints: {
     ipfsGateway?: string;
+    ipfsGatewayAuth?: string;
     rpcs: { L1: string[]; L2: string[] };
   };
 }
@@ -85,6 +87,7 @@ export interface EvmUpdateInput {
   remove?: { path: string; replacedBy?: string }[];
   endpoints: {
     ipfsGateway?: string;
+    ipfsGatewayAuth?: string;
     rpcs: { L1: string[]; L2: string[] };
   };
 }
@@ -109,6 +112,7 @@ export interface MaintainCacheInput {
   preview?: boolean;
   endpoints: {
     ipfsGateway?: string;
+    ipfsGatewayAuth?: string;
     rpcs: { L1: string[]; L2: string[] };
   };
 }
@@ -134,6 +138,7 @@ export interface RepointArchiveInput {
   preview?: boolean;
   endpoints: {
     ipfsGateway?: string;
+    ipfsGatewayAuth?: string;
     rpcs: { L1: string[]; L2: string[] };
   };
 }

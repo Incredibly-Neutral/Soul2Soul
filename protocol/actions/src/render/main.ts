@@ -26,7 +26,7 @@ import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
 
 import { extractSignerAddress } from '../libs/gates';
-import { requireFields } from '../libs/helpers';
+import { requireFields, setRpcAuth } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
@@ -98,6 +98,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
+    setRpcAuth(endpoints.ipfsGatewayAuth);
 
     const signerAddress = extractSignerAddress(
       ethers.utils.hashMessage('lit actions auth'),

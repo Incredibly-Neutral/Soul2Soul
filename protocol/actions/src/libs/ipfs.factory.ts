@@ -20,9 +20,11 @@ export interface DagNode {
 
 export const getPublicationConfig = async (gateway: string, configCid: string) => {
   try {
-    const response = await fetch(`${gateway}/api/v0/cat?arg=${configCid}`, {
-      method: 'POST',
-    });
+    const response = await fetchWithTimeout(
+      `${gateway}/api/v0/cat?arg=${configCid}`,
+      { method: 'POST' },
+      30_000,
+    );
     if (!response.ok) {
       throw new Error(`Failed to fetch config from IPFS: ${response.statusText}`);
     }
@@ -43,10 +45,11 @@ export const uploadFile = async (gateway: string, output: string) => {
   const formData = new FormData();
   formData.append('file', output);
 
-  const response = await fetch(ipfsApiUrl, {
-    method: 'POST',
-    body: formData,
-  });
+  const response = await fetchWithTimeout(
+    ipfsApiUrl,
+    { method: 'POST', body: formData },
+    60_000,
+  );
 
   if (!response.ok) {
     throw new Error(`IPFS upload failed: ${response.status} ${response.statusText}`);
@@ -59,9 +62,7 @@ export const uploadFile = async (gateway: string, output: string) => {
 export const catFile = async (gateway: string, cid: string) => {
   const ipfsApiUrl = `${gateway}/api/v0/cat?arg=${cid}`;
 
-  const response = await fetch(ipfsApiUrl, {
-    method: 'POST',
-  });
+  const response = await fetchWithTimeout(ipfsApiUrl, { method: 'POST' }, 30_000);
 
   if (!response.ok) {
     console.log(response);
@@ -75,9 +76,7 @@ export const catFile = async (gateway: string, cid: string) => {
 
 export const getDag = async (gateway: string, cid: string) => {
   const ipfsApiUrl = `${gateway}/api/v0/dag/get?arg=${cid}`;
-  const response = await fetch(ipfsApiUrl, {
-    method: 'POST',
-  });
+  const response = await fetchWithTimeout(ipfsApiUrl, { method: 'POST' }, 30_000);
 
   if (!response.ok) {
     throw new Error(`IPFS request failed: ${response.status} ${response.statusText}`);
@@ -140,10 +139,11 @@ export const putDag = async (gateway: string, dag: DagNode): Promise<string> => 
   const formData = new FormData();
   formData.append('file', blob, 'dag.json');
 
-  const response = await fetch(ipfsApiUrl, {
-    method: 'POST',
-    body: formData,
-  });
+  const response = await fetchWithTimeout(
+    ipfsApiUrl,
+    { method: 'POST', body: formData },
+    60_000,
+  );
 
   if (!response.ok) {
     const errorText = await response.text();

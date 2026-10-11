@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, IOxOSettings, OxOAuthorsTab } from "./settings.js";
 import { IMainController, MainController } from "./main.ctrlr.js";
 import { IOXOUser } from "./user/user.js";
 import { probeKeystore, KeystoreProbe } from "./keystore/keystore.js";
+import { setRpcAuth } from "./ipfs/remotekubo.service.js";
 import { FilecoinStorageView, FILECOIN_VIEW_TYPE } from "./filecoin/filecoin.view.js";
 
 // Use Node.js require to access native modules
@@ -38,6 +39,10 @@ export default class OxO extends Plugin {
     }
 
     await this.loadSettings();
+    // Sync the Kubo RPC write token into remotekubo (settings holds the raw
+    // hex; code prepends "Bearer "). Covers publish/config/ipld upload paths.
+    const kuboToken = (this.settings.kubo_token || "").trim();
+    setRpcAuth(kuboToken ? `Bearer ${kuboToken}` : undefined);
     this.authorsTab = new OxOAuthorsTab(this.app, this);
     this.addSettingTab(this.authorsTab);
     this.ctrlr = new MainController(this);
