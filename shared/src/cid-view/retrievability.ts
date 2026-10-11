@@ -20,15 +20,44 @@ import type { PublicationCidView } from './types';
 export const RETRIEVABILITY_SOURCES = ['kubo', 'pinata', 'filebase', 'filecoin'] as const;
 export type RetrievabilitySource = (typeof RETRIEVABILITY_SOURCES)[number];
 
+/**
+ * How the last check of a cid resolved — distinguishes “confirmed no copy”
+ * from “couldn’t tell”, so an overloaded check node never looks like lost data.
+ *   - ok           : at least one provider served the block
+ *   - no-providers : lookup completed, nobody announces the cid
+ *   - inconclusive : providers exist, but none could be reached (no signal)
+ *   - not-served   : providers reached, none had the block
+ *   - failed       : the check itself errored or was aborted
+ */
+export type CheckState = 'ok' | 'no-providers' | 'inconclusive' | 'not-served' | 'failed';
+
 export interface CidRetrievabilityStatus {
-  /** ISO 8601 — time of THIS cid's last check. */
+  /** ISO 8601 — time of THIS cid's last CONCLUSIVE check ('' = never checked). */
   checkedAt: string;
-  /** Count of sources present (0..4). */
+  /** Count of sources present (0..4). Reflects last-known data when the
+   *  latest pass was inconclusive/failed and a previous result exists. */
   copies: number;
   /** Per-platform copy presence. All four keys always present. */
   sources: Record<RetrievabilitySource, boolean>;
-  /** Set when a source probe threw (retryable). */
-  error?: string;
+  /** How the last check resolved — see CheckState. */
+  state: CheckState;
+  /** Providers announced for this cid in the last check (0 when none). */
+  providersFound?: number;
+  /** ipfs-check probe latency in ms (absent when the check failed). */
+  ms?: number;
+  /** Last failure detail + when it happened. Kept alongside the last-known
+   *  result (the check errored / all providers unreachable). */
+  lastError?: string;
+  lastErrorAt?: string;
+}
+
+/** Baseline “never checked” status — copies 0, all sources false. */
+export function emptyStatus(): CidRetrievabilityStatus {
+  const sources = {} as Record<RetrievabilitySource, boolean>;
+  for (const source of RETRIEVABILITY_SOURCES) {
+    sources[source] = false;
+  }
+  return { checkedAt: '', copies: 0, sources, state: 'no-providers' };
 }
 
 export type CidRetrievabilityMap = Record<string, CidRetrievabilityStatus>;
@@ -156,13 +185,16 @@ async function checkOneCid(
     if (present) copies += 1;
   }
 
+  const state: CheckState = copies > 0 ? 'ok' : failures.length > 0 ? 'inconclusive' : 'not-served';
   const status: CidRetrievabilityStatus = {
     checkedAt: now().toISOString(),
     copies,
     sources: flags,
+    state,
   };
   if (failures.length > 0) {
-    status.error = failures.join('; ');
+    status.lastError = failures.join('; ');
+    status.lastErrorAt = status.checkedAt;
   }
   return [cid, status];
 }

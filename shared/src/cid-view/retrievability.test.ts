@@ -10,6 +10,7 @@ import {
   orderByCopiesAscending,
   orderByStaleness,
   RETRIEVABILITY_SOURCES,
+  type CheckState,
 } from './retrievability';
 import type { CidRetrievabilityMap, CidRetrievabilityStatus } from './retrievability';
 
@@ -42,8 +43,9 @@ function status(
   checkedAt: string,
   copies: number,
   sources: Record<RetrievabilitySource, boolean> = ALL_FALSE,
+  state: CheckState = copies > 0 ? 'ok' : 'no-providers',
 ): CidRetrievabilityStatus {
-  return { checkedAt, copies, sources };
+  return { checkedAt, copies, sources, state };
 }
 
 interface FakeCall {
@@ -132,6 +134,7 @@ describe('checkCidRetrievability', () => {
       checkedAt,
       copies: 3, // filebase absent
       sources: { kubo: true, pinata: true, filebase: false, filecoin: true },
+      state: 'ok',
     };
     expect(result['QmA']).toEqual(expected);
     expect(result['QmB']).toEqual(expected);
@@ -194,8 +197,9 @@ describe('checkCidRetrievability', () => {
     expect(s.sources.pinata).toBe(false);
     expect(s.sources.kubo).toBe(true);
     expect(s.copies).toBe(3); // 4 sources − 1 failed probe
-    expect(s.error).toBeTruthy();
-    expect(s.error).toContain('pinata');
+    expect(s.state).toBe('ok'); // still has copies — the failure is flagged, not fatal
+    expect(s.lastError).toBeTruthy();
+    expect(s.lastError).toContain('pinata');
   });
 
   it('subset sources option → unchecked sources false and not counted', async () => {

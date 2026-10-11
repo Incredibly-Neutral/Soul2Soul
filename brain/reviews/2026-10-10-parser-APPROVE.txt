@@ -1,0 +1,79 @@
+# Review verdict — feat/cid-retrieval-parser (round 2)
+
+**Verdict: APPROVE (Ready to merge)**
+**Reviewer:** pi (rev-parser) — single-model limitation (only pi installed; cross-vendor not available)
+**Date:** 2026-10-10
+**Branch:** feat/cid-retrieval-parser, commits 1fe0251 + 1be47b0
+
+ Finding 1 resolution — confirmed    │
+ fixed                               │
+ - retrieval-parser.ts:157-171 —     │
+   classifyProvider now              │
+   short-circuits with if            │
+   (!isRecord(provider)) and returns │
+   a zeroed, non-serving             │
+   ParsedProvider (served:false,     │
+   empty platforms) before any       │
+   property access. Since isRecord   │
+   excludes arrays, this covers null,│
+   numbers, strings, and array       │
+   elements — the previously-crashing│
+   cases (TypeError: Cannot read     │
+   properties of null (reading       │
+   'Addrs') at the old line 158).    │
+ - Guard is a strict no-op for valid │
+   record providers (the isRecord    │
+   check only diverts non-objects),  │
+   so no regression to               │
+   classification, rule 7, dedup, or │
+   the real-fixture verdicts.        │
+                                     │
+ New tests assert the right things   │
+ - [null] → totalProviders 1,        │
+   servingProviders 0, sources all   │
+   false, copies 0 — no throw,
+   malformed contributes nothing to
+   serving/copies.
+ - [null, 0, <valid kubo>] →
+   totalProviders 3, servingProviders
+   1, KUBO_ONLY, copies 1 — malformed
+   entries are skipped, the valid
+   provider still classifies and
+   serves.
+ Independent reproduction (ran
+ against the module, not just reading
+ it)
+ - parseBatchNdjson('{"cid":"QmX","re
+   sult":[null]}') → no throw; one
+   row, totalProviders 1, copies 0,
+   no error.
+ - parseRow with [undefined, "str",
+   [1], null, <valid kubo>] → no
+   throw; totalProviders 5,
+   servingProviders 1, copies 1.
+   Valid still classifies.
+ Gate evidence re-verified
+ - pnpm -C shared test
+   retrieval-parser → 29/29 pass (27
+   prior + 2 new).
+ - npx eslint ... --max-warnings 0 →
+   exit 0.
+ - pnpm -C shared run build → exit 0.
+ - Branch diff still touches only the
+   3 allowed files (2 commits: feat +
+   fix).
+ No regressions to any
+ previously-passed area (classifier
+ matrix, real-fixture verdicts, rule
+ 7, aggregateRetrievability,
+ toCidRetrievabilityStatus). The
+ totalProviders count including
+ malformed entries is a defensible
+ semantic (the row did return that
+ many provider entries; malformed
+ ones just never serve) and doesn't
+ affect copies/serving/missing
+ classification.
+ Ready to merge.
+~/code/wt-parser (feat/cid-retrieva...
+↑112k ↓19k R954k CH99.0% 47.4%/128k...

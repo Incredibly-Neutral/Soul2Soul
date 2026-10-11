@@ -99,7 +99,11 @@ export const cidRetrievabilityStatusSchema = z.object({
     filebase: z.boolean(),
     filecoin: z.boolean(),
   }),
-  error: z.string().optional(),
+  state: z.enum(['ok', 'no-providers', 'inconclusive', 'not-served', 'failed']),
+  providersFound: z.number().int().min(0).optional(),
+  ms: z.number().optional(),
+  lastError: z.string().optional(),
+  lastErrorAt: z.string().optional(),
 });
 
 /** Map of cid → status, the persisted retrievability snapshot shape. */

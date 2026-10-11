@@ -79,7 +79,7 @@ const cidViewMocks = vi.hoisted(() => ({
   checkRetrievability: vi.fn(),
 }));
 
-vi.mock('@/lib/cid-view.js', () => cidViewMocks);
+vi.mock('@/lib/cid-view/index.js', () => cidViewMocks);
 
 const stateMocks = vi.hoisted(() => ({
   store: { getRecord: vi.fn<(key: string) => string | null>(() => null) },
@@ -288,6 +288,7 @@ describe('s2s-cid-view-section', () => {
             checkedAt: '2026-01-01T00:00:00.000Z',
             copies: 0,
             sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+            state: 'no-providers',
           };
         }
         return map;
@@ -792,11 +793,13 @@ describe('s2s-cid-view-section', () => {
         checkedAt: RECENT(),
         copies: 3,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
+        state: 'ok',
       },
       bafyver1: {
         checkedAt: RECENT(),
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
       },
     };
   }
@@ -926,6 +929,7 @@ describe('s2s-cid-view-section', () => {
         checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), // 5 min ago < 15 min window
         copies: 2,
         sources: { kubo: true, pinata: true, filebase: false, filecoin: false },
+        state: 'ok',
       };
     }
     cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
@@ -965,6 +969,7 @@ describe('s2s-cid-view-section', () => {
           : new Date(Date.now() - 5 * 60_000).toISOString(),
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
       };
     }
     cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
@@ -999,6 +1004,7 @@ describe('s2s-cid-view-section', () => {
         checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), // all fresh
         copies: 2,
         sources: { kubo: true, pinata: true, filebase: false, filecoin: false },
+        state: 'ok',
       };
     }
     cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
@@ -1114,21 +1120,25 @@ describe('s2s-cid-view-section', () => {
         checkedAt: RECENT(),
         copies: 5,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
+        state: 'ok',
       },
       bafyver1: {
         checkedAt: RECENT(),
         copies: 3,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
+        state: 'ok',
       },
       bafyconfig: {
         checkedAt: RECENT(),
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
       },
       bafyassets: {
         checkedAt: RECENT(),
         copies: 0,
         sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
       },
     };
     cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
