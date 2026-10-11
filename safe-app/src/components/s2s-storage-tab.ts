@@ -8,6 +8,8 @@ import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
 import type { SafeIntegration } from '../lib/safe-integration.js';
 import type { ProtocolIntegration } from '@/lib/protocol-integration.js';
 import { buildSafeAppCidViewContext } from '@/lib/cid-view/index.js';
+import { buildHealConfig } from '@/lib/cid-view/heal.js';
+import type { HealConfig } from '@/lib/cid-view/heal.js';
 import './s2s-cid-view-section.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { filterStyles } from '@/styles/filter-styles.js';
@@ -70,6 +72,10 @@ export class S2SStorageTab extends LitElement {
   private cidCtx: CidViewReadContext | undefined = undefined;
   private cidCtxSafe: SafeIntegration | null = null;
   private cidCtxProtocol: S2SProtocolInfo | null = null;
+
+  // Memoized heal config (rebuilt when the storage identity changes).
+  private healConfig: HealConfig | undefined = undefined;
+  private healConfigStorage: FilecoinStorage | null = null;
 
   private deleting = new Set<string>(); // "dataSetId:pieceId" keys
   private terminating = new Set<string>(); // dataSetIds being terminated
@@ -242,6 +248,15 @@ export class S2SStorageTab extends LitElement {
     this.cidCtxProtocol = protocolInfo;
     this.cidCtx = buildSafeAppCidViewContext({ safeIntegration: safe, protocolInfo });
     return this.cidCtx;
+  }
+
+  /** Build (and memoize) the heal config once per storage instance. */
+  private memoHealConfig(): HealConfig | undefined {
+    if (!this.storage) return undefined;
+    if (this.healConfigStorage === this.storage) return this.healConfig;
+    this.healConfigStorage = this.storage;
+    this.healConfig = buildHealConfig(this.storage);
+    return this.healConfig;
   }
 
   private async handleDelete(dataSetId: string, pieceId: string, pieceCid: string) {
@@ -425,9 +440,10 @@ export class S2SStorageTab extends LitElement {
       ? FilecoinStorage.estimateMonthlyCostFromPieces(allPieces)
       : null;
     const cidCtx = this.memoCidCtx();
+    const healConfig = this.memoHealConfig();
 
     return html`
-      <s2s-cid-view-section .ctx=${cidCtx}></s2s-cid-view-section>
+      <s2s-cid-view-section .ctx=${cidCtx} .healConfig=${healConfig}></s2s-cid-view-section>
       ${cost
         ? html`
             <div class="cost-summary">

@@ -81,6 +81,19 @@ const cidViewMocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/cid-view/index.js', () => cidViewMocks);
 
+// The section's heal adapter (`@/lib/cid-view/heal.js`) is mocked so the
+// browser tests never hit the network (kubo/pinata/filebase/filecoin) and
+// never construct a real FilecoinStorage. healCid's default resolves a
+// fully-successful outcome; individual specs override it to drive running /
+// failed states.
+const healMocks = vi.hoisted(() => ({
+  healCid: vi.fn(),
+  buildHealConfig: vi.fn(),
+  HEAL_PROVIDERS: ['kubo', 'pinata', 'filebase', 'filecoin'],
+}));
+
+vi.mock('@/lib/cid-view/heal.js', () => healMocks);
+
 const stateMocks = vi.hoisted(() => ({
   store: { getRecord: vi.fn<(key: string) => string | null>(() => null) },
 }));
@@ -297,11 +310,21 @@ describe('s2s-cid-view-section', () => {
         return map;
       },
     );
+    // Heal mocks: default a fully-successful outcome (all providers ok).
+    healMocks.healCid.mockReset().mockImplementation(async (cid: string) => ({
+      cid,
+      results: [],
+      ok: true,
+      partial: false,
+      sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
+    }));
+    healMocks.buildHealConfig.mockReset();
   });
 
   afterEach(() => {
     buildSpy.mockReset();
     cidViewMocks.checkRetrievability.mockReset();
+    healMocks.healCid.mockReset();
     localStorage.clear();
   });
 
@@ -1438,5 +1461,184 @@ describe('s2s-cid-view-section', () => {
     // bafyconfig row sorts before the two unchecked (0-copy) config rows.
     const cids = renderedCids(el.shadowRoot!);
     expect(cids[0]).toBe('bafyconfig');
+  });
+
+  // -------------------------------------------------------------------------
+  // Heal (heart) — per-row heal button on the CID inventory table.
+  // -------------------------------------------------------------------------
+
+  /** Heal config the host would pass down (tokens are env-driven at runtime;
+   *  the mocked healCid never hits the network, so a bare source suffices). */
+  const HEAL_CONFIG = { source: 'https://ipfs.transport-union.dev' };
+
+  /** The row that renders `cid` as its primary copy-hash (the one with an
+   *  href — genesis ids on deal rows have no href). */
+  function rowForCid(el: HTMLElement, cid: string): HTMLElement {
+    const row = Array.from(el.shadowRoot!.querySelectorAll('.cid-row')).find((r) =>
+      Array.from(r.querySelectorAll('copy-hash')).some(
+        (c) =>
+          (c as HTMLElement & { href: string }).href &&
+          (c as HTMLElement & { value: string }).value === cid,
+      ),
+    );
+    expect(row).toBeTruthy();
+    return row as HTMLElement;
+  }
+
+  /** Seed a deterministic retrievability map + hang the auto pass so the
+   *  seeded statuses stay authoritative through the heal interactions. */
+  function mountHealFixture(seed: CidRetrievabilityMap) {
+    cidViewMocks.loadRetrievabilityMap.mockReset().mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    return mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+      healConfig: HEAL_CONFIG,
+    });
+  }
+
+  it('shows a heal heart ONLY on red-spot rows (lost/danger/inconclusive), never on healthy or never-checked rows', async () => {
+    const seed: CidRetrievabilityMap = {
+      bafydeal1: {
+        checkedAt: RECENT(),
+        copies: 5,
+        sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
+        state: 'ok',
+      },
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
+      },
+      bafyassets: {
+        checkedAt: RECENT(),
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
+      },
+      bafyasset: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'inconclusive',
+      },
+    };
+    const el = await mountHealFixture(seed);
+    await vi.waitFor(() => expect(el.shadowRoot!.querySelector('.table')).toBeTruthy());
+    expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(10);
+
+    // Red-spot rows carry a heal button.
+    for (const cid of ['bafyconfig', 'bafyassets', 'bafyasset']) {
+      expect(rowForCid(el, cid).querySelector('button.heal')).toBeTruthy();
+    }
+    // Healthy + never-checked rows carry NO heal button (empty cell only).
+    for (const cid of [
+      'bafydeal1',
+      'bafytemplatedag',
+      'bafytemplate',
+      ROOT_CID,
+      'bafysitefile',
+      CACHE_CID,
+      'bafyarchiveitem',
+    ]) {
+      expect(rowForCid(el, cid).querySelector('button.heal')).toBeNull();
+    }
+  });
+
+  it('clicking the heart heals the CID (healCid with cid+config) and disables the button while running', async () => {
+    const seed: CidRetrievabilityMap = {
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
+      },
+    };
+    // Never resolves — lets us observe the running (disabled) state.
+    healMocks.healCid.mockReset().mockImplementation(() => new Promise(() => {}));
+    const el = await mountHealFixture(seed);
+    await vi.waitFor(() => expect(el.shadowRoot!.querySelector('.table')).toBeTruthy());
+
+    const heart = rowForCid(el, 'bafyconfig').querySelector('button.heal') as HTMLButtonElement;
+    expect(heart).toBeTruthy();
+    heart.click();
+    await vi.waitFor(() =>
+      expect(healMocks.healCid).toHaveBeenCalledWith('bafyconfig', HEAL_CONFIG),
+    );
+    // Wait for the lit re-render to flush the running state into the DOM.
+    await vi.waitFor(() => {
+      const running = rowForCid(el, 'bafyconfig').querySelector('button.heal') as HTMLButtonElement;
+      expect(running.disabled).toBe(true);
+      expect(running.textContent).toContain('…');
+    });
+  });
+
+  it('a successful heal flips the row’s 4 source dots on and persists the updated map', async () => {
+    const seed: CidRetrievabilityMap = {
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
+      },
+    };
+    const el = await mountHealFixture(seed);
+    await vi.waitFor(() => expect(el.shadowRoot!.querySelector('.table')).toBeTruthy());
+
+    const heart = rowForCid(el, 'bafyconfig').querySelector('button.heal') as HTMLButtonElement;
+    heart.click();
+    await vi.waitFor(() => expect(cidViewMocks.saveRetrievabilityMap).toHaveBeenCalled());
+    expect(healMocks.healCid).toHaveBeenCalledWith('bafyconfig', HEAL_CONFIG);
+
+    const row = rowForCid(el, 'bafyconfig');
+    // 4 of 4 source dots flipped on.
+    expect(row.querySelectorAll('.dot.on').length).toBe(4);
+    // Heart flipped to the green "healed" check.
+    expect(row.querySelector('button.heal.ok')).toBeTruthy();
+    // Persisted map reflects the optimistic update.
+    const [, map] = cidViewMocks.saveRetrievabilityMap.mock.calls.at(-1);
+    const status = map['bafyconfig'];
+    expect(status.copies).toBe(4);
+    expect(status.sources).toEqual({
+      kubo: true,
+      pinata: true,
+      filebase: true,
+      filecoin: true,
+    });
+    expect(status.state).toBe('ok');
+  });
+
+  it('a failed heal keeps the row healable and does NOT mark its sources', async () => {
+    const seed: CidRetrievabilityMap = {
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
+      },
+    };
+    healMocks.healCid.mockReset().mockImplementation(async (cid: string) => ({
+      cid,
+      results: [{ provider: 'kubo', ok: false, error: 'boom' }],
+      ok: false,
+      partial: false,
+      sources: {},
+    }));
+    const el = await mountHealFixture(seed);
+    await vi.waitFor(() => expect(el.shadowRoot!.querySelector('.table')).toBeTruthy());
+
+    const heart = rowForCid(el, 'bafyconfig').querySelector('button.heal') as HTMLButtonElement;
+    heart.click();
+    await vi.waitFor(() => expect(healMocks.healCid).toHaveBeenCalled());
+
+    const row = rowForCid(el, 'bafyconfig');
+    // Row stays healable: idle red heart (not .ok, not disabled, re-runnable).
+    const again = row.querySelector('button.heal') as HTMLButtonElement;
+    expect(again).toBeTruthy();
+    expect(again.classList.contains('ok')).toBe(false);
+    expect(again.disabled).toBe(false);
+    // No source marked.
+    expect(row.querySelectorAll('.dot.on').length).toBe(0);
   });
 });
