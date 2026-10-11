@@ -11,13 +11,26 @@
 //   such as .offer-actions / .state-badge / .cached — keep applying to the
 //   rendered rows unchanged. No style migration is needed; `s2s-table` gets
 //   `display:block` from table-styles.ts (the single source of table CSS).
-// - The HOST owns SortState/FilterState (passed down as properties); the
-//   component is stateless about sorting/filtering and reports user intent via
-//   composed, bubbling CustomEvents:
-//     * `sort`   -> detail { key }
-//     * `filter` -> detail { key, value }   ('' = All)
-//     * `count`  -> detail { count }        (filtered row count; hosts render
-//                   "N results" in titles without re-running the pipeline)
+// - The HOST owns SortState/FilterState plus the chips state (passed down as
+//   properties); the component is stateless about sorting/filtering and
+//   reports user intent via composed, bubbling CustomEvents:
+//     * `sort`        -> detail { key }
+//     * `filter`      -> detail { key, value }   ('' = All)
+//     * `chip-filter` -> detail { key, values }  (toggle on/off; values: []
+//                       from the clear-filters chip, per active group)
+//     * `count`       -> detail { count }        (filtered row count; hosts
+//                       render "N results" in titles without re-running the
+//                       pipeline)
+// - CHIPS MODE: when `chipsGroups` is non-empty a chips row (multi-select
+//   pill chips with counts) renders above the table, alongside or instead of
+//   the <table-filter> dropdowns. Active chips live in the host-owned `chips`
+//   property (Record<groupKey, string[]>; empty/missing = none). Within a
+//   group active values are OR'd; across groups they are AND'd with the
+//   dropdown `filters`. Chip counts are computed over the FULL rows so they
+//   stay stable while filtering. <s2s-table> never mutates `chips` itself —
+//   it only emits `chip-filter` events. The chips CSS is injected into light
+//   DOM (scoped to the host's shadow tree) so chips render styled inside
+//   whatever host uses the table.
 // - Pipeline order is filter-then-sort (filterByColumn -> sortByColumn), the
 //   order the tabs used before this refactor.
 // - `emptyText` non-empty renders the empty state when there are no rows;
@@ -41,9 +54,14 @@ import {
 } from '@/utils/sort.js';
 import {
   type FilterState,
+  type ChipsGroup,
   filterByColumn,
   uniqueValuesForColumn,
+  chipCount,
+  chipValuesForGroup,
+  filterRowsByChips,
 } from '@/utils/filter.js';
+import { chipStyles } from '@/styles/chip-styles.js';
 import './table-filter.js';
 import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 
@@ -63,6 +81,21 @@ export class S2STable<T> extends LitElement {
 
   /** Column keys that get a <table-filter> dropdown in the toolbar. */
   @property({ attribute: false }) filterKeys: readonly string[] = [];
+
+  /** Chips filter groups; when non-empty renders a chips row above the table
+   *  (alongside or instead of the dropdown filters). */
+  @property({ attribute: false }) chipsGroups: readonly ChipsGroup<T>[] = [];
+
+  /** ACTIVE chip values per group key (host-owned, like SortState/FilterState).
+   *  Empty array or missing key = no active chips for that group. Multiple
+   *  values within one group = OR; across groups = AND (also AND with the
+   *  dropdown `filters`). The component never mutates this — it only emits
+   *  `chip-filter` events. */
+  @property({ attribute: false }) chips: Record<string, string[]> = {};
+
+  /** Optional markup rendered as the top chips row (e.g. a unique-CID counter
+   *  chip). Rendered only when chipsGroups.length > 0. */
+  @property({ attribute: false }) chipsTop: TemplateResult = html``;
 
   /** Renders one row's cells; receives (row, index). */
   @property({ attribute: false }) rowRenderer: (row: T, index: number) => TemplateResult =
@@ -123,21 +156,30 @@ export class S2STable<T> extends LitElement {
    */
   protected willUpdate(_changed: PropertyValues) {
     // Filter first, then sort — the order the tabs used before this refactor.
+    // The chips filter (AND across groups, OR within a group) combines with the
+    // single-value dropdown filters (AND) before sorting.
     this.filteredRows = sortByColumn(
-      filterByColumn(this.rows, this.columns, this.filters),
+      filterRowsByChips(
+        filterByColumn(this.rows, this.columns, this.filters),
+        this.chipsGroups,
+        this.chips,
+      ),
       this.columns,
       this.sort,
     );
-    if (this.filteredRows.length !== this.lastEmittedCount) {
-      this.lastEmittedCount = this.filteredRows.length;
-      this.dispatchEvent(
-        new CustomEvent('count', {
-          detail: { count: this.filteredRows.length },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-    }
+    this.emitCountIfChanged();
+  }
+
+  private emitCountIfChanged() {
+    if (this.filteredRows.length === this.lastEmittedCount) return;
+    this.lastEmittedCount = this.filteredRows.length;
+    this.dispatchEvent(
+      new CustomEvent('count', {
+        detail: { count: this.filteredRows.length },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private handleSort(key: string) {
@@ -155,6 +197,37 @@ export class S2STable<T> extends LitElement {
         composed: true,
       }),
     );
+  }
+
+  /** Toggle a chip value in a group and report the NEW active set to the host
+   *  (never mutate `chips` here — the host owns it). */
+  private handleChip(key: string, value: string) {
+    const active = this.chips[key] ?? [];
+    const values = active.includes(value)
+      ? active.filter((v) => v !== value)
+      : [...active, value];
+    this.dispatchEvent(
+      new CustomEvent('chip-filter', {
+        detail: { key, values },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** Clear-filters chip: emit one `chip-filter` per active group, values: []. */
+  private handleClearFilters() {
+    for (const group of this.chipsGroups) {
+      const active = this.chips[group.key];
+      if (!active || active.length === 0) continue;
+      this.dispatchEvent(
+        new CustomEvent('chip-filter', {
+          detail: { key: group.key, values: [] },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    }
   }
 
   private sortableHeader(col: TableColumn<T>) {
@@ -185,9 +258,78 @@ export class S2STable<T> extends LitElement {
     return '';
   }
 
+  /** True when a TemplateResult is the empty default (html``, no markup). */
+  private isEmptyTemplate(t: TemplateResult): boolean {
+    return t.strings.length === 1 && t.strings[0] === '' && t.values.length === 0;
+  }
+
+  /** Top chips row (e.g. a unique-CID counter chip); '' when not provided. */
+  private renderChipsTop() {
+    if (this.isEmptyTemplate(this.chipsTop)) return '';
+    return html`<div class="chips-top">${this.chipsTop}</div>`;
+  }
+
+  /** One chips group: optional label, then a toggle chip per value with count. */
+  private renderChipsGroup(group: ChipsGroup<T>) {
+    const active = this.chips[group.key] ?? [];
+    return html`
+      <div class="chips-group" data-group=${group.key}>
+        ${group.label
+          ? html`<span class="chips-group-label">${group.label}</span>`
+          : ''}
+        ${chipValuesForGroup(this.rows, group).map(({ value, label }) => {
+          const isActive = active.includes(value);
+          return html`
+            <button
+              type="button"
+              class="chip${isActive ? ' active' : ''}"
+              data-group=${group.key}
+              data-value=${value}
+              @click=${() => this.handleChip(group.key, value)}
+            >
+              <span class="chip-value">${chipCount(this.rows, group, value)}</span>
+              ${label ?? value}
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  /**
+   * The chips section: injects the shared chip CSS into light DOM (scoped to
+   * the host's shadow tree), renders the optional chipsTop, then the chips
+   * row with one group per chipsGroup plus a trailing clear-filters chip when
+   * any group has active values.
+   */
+  private renderChipsRow() {
+    const anyActive = this.chipsGroups.some(
+      (group) => (this.chips[group.key]?.length ?? 0) > 0,
+    );
+    return html`
+      <style>${chipStyles}</style>
+      ${this.renderChipsTop()}
+      <div class="chips-row">
+        ${this.chipsGroups.map((group) => this.renderChipsGroup(group))}
+        ${anyActive
+          ? html`
+              <button
+                type="button"
+                class="chip clear-filters"
+                @click=${this.handleClearFilters}
+              >
+                clear filters
+              </button>
+            `
+          : ''}
+      </div>
+    `;
+  }
+
   render() {
     const rows = this.filteredRows;
     const showToolbar = Boolean(this.title) || this.filterKeys.length > 0;
+    const showChips = this.chipsGroups.length > 0;
 
     return html`
       ${showToolbar
@@ -221,6 +363,8 @@ export class S2STable<T> extends LitElement {
             </div>
           `
         : ''}
+
+      ${showChips ? this.renderChipsRow() : ''}
 
       ${rows.length > 0 || this.emptyText === ''
         ? html`

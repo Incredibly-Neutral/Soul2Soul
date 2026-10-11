@@ -91,3 +91,100 @@ export function uniqueValuesForColumn<T>(
   const col = columns.find((c) => c.key === key);
   return col ? uniqueValues(rows, col.get) : [];
 }
+
+// ---------------------------------------------------------------------------
+// Chips filter mode (multi-select pill chips with counts) for <s2s-table>.
+//
+// A chips filter is a set of groups; within a group the active values are OR'd
+// (a row passes if it matches ANY active value), and across groups they are
+// AND'd (a row must pass every group that has active values) — the chips filter
+// also ANDs with any single-value dropdown `filters`. Chip counts are meant to
+// be computed over the FULL (unfiltered) rows so they stay stable while the
+// host filters, so the helpers below always take the row set they should count
+// over explicitly and never touch component state.
+
+/**
+ * A chips filter group: either column-backed (`get`, chips derive from the
+ * distinct extracted values) or a custom bucket predicate (`matches`, e.g.
+ * health buckets over a copies count). When `matches` is used the chip
+ * `values` must be listed explicitly.
+ */
+export interface ChipsGroup<T> {
+  /** Stable key, also used in the chips filter state (`chips[key]`). */
+  key: string;
+  /** Optional group label shown before the chips. */
+  label?: string;
+  /** Column-backed values: extract the value(s) from a row; counts + chips derive from distinct values. */
+  get?: (row: T) => string | readonly string[];
+  /** Custom membership predicate — use instead of `get` when chips are buckets. */
+  matches?: (row: T, value: string) => boolean;
+  /** Explicit chip values (required when `matches` is used; optional otherwise). */
+  values?: readonly { value: string; label?: string }[];
+}
+
+/** True when a row matches a chip value (via `matches` or extracted `get` values). */
+function chipMatchesValue<T>(group: ChipsGroup<T>, row: T, value: string): boolean {
+  if (group.matches) return group.matches(row, value);
+  const extracted = group.get ? group.get(row) : [];
+  const list = Array.isArray(extracted) ? extracted : [extracted];
+  return list.includes(value);
+}
+
+/**
+ * Count rows (usually the FULL unfiltered set, so counts stay stable while
+ * filtering) where a chip value matches: for `get`-based groups the extracted
+ * value(s) include the value; for `matches`-based groups `matches(row, value)`.
+ */
+export function chipCount<T>(
+  rows: readonly T[],
+  group: ChipsGroup<T>,
+  value: string,
+): number {
+  let n = 0;
+  for (const row of rows) if (chipMatchesValue(group, row, value)) n++;
+  return n;
+}
+
+/**
+ * The chip values a group should render, derived over `rows`: the explicit
+ * `values` when provided, otherwise the distinct values extracted by `get`
+ * (sorted). Empty/null/undefined extracted values are excluded. Returns a NEW
+ * array and never mutates the input.
+ */
+export function chipValuesForGroup<T>(
+  rows: readonly T[],
+  group: ChipsGroup<T>,
+): Array<{ value: string; label?: string }> {
+  if (group.values) return [...group.values];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const extracted = group.get ? group.get(row) : [];
+    const list = Array.isArray(extracted) ? extracted : [extracted];
+    for (const v of list) {
+      const s = v == null ? '' : String(v);
+      if (s !== '') seen.add(s);
+    }
+  }
+  return [...seen].sort(compareValues).map((value) => ({ value }));
+}
+
+/**
+ * Return a NEW filtered copy of rows applying the active chips filter:
+ * AND across groups, OR within a group. Groups with no active values are
+ * ignored. Never mutates the input, so the store stays the source of truth.
+ */
+export function filterRowsByChips<T>(
+  rows: readonly T[],
+  chipsGroups: readonly ChipsGroup<T>[],
+  chips: Record<string, string[]>,
+): T[] {
+  let result = [...rows];
+  for (const group of chipsGroups) {
+    const active = chips[group.key];
+    if (!active || active.length === 0) continue;
+    result = result.filter((row) =>
+      active.some((value) => chipMatchesValue(group, row, value)),
+    );
+  }
+  return result;
+}
