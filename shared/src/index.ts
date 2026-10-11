@@ -17,6 +17,9 @@ export * from './lit';
 // pin
 export * from './pin';
 
+// heal — pin a remote CID across providers
+export * from './heal';
+
 // metadata (provenance for rendered HTML, separate from content-item)
 export type { S2SContentInfo } from './metadata';
 
