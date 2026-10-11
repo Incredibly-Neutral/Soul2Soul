@@ -306,6 +306,8 @@ export class S2SRecordsTab extends LitElement {
       import.meta.env.VITE_PINATA_JWT,
       'https://neutralpress.mypinata.cloud',
       import.meta.env.VITE_FILEBASE_TOKEN || '',
+      // Kubo RPC write token (raw hex — shared injects `Authorization: Bearer`).
+      import.meta.env.VITE_KUBO_TOKEN || '',
     );
   }
 

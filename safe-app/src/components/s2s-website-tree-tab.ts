@@ -610,6 +610,9 @@ export class S2SWebsiteTreeTab extends LitElement {
         undefined, // ipfsGateway — fall back to protocolInfo.gateway
         undefined, // remove
         true, // reset — 14th positional arg
+        // ipfsGatewayAuth — 15th positional arg: FULL header (`Bearer <token>`),
+        // passed straight through to the update action's setRpcAuth.
+        import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
       );
 
       if (!res.success) {
