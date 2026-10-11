@@ -40,6 +40,9 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
 	minifyIdentifiers: true,
+	// Resolve conditional exports under the "import" condition (needed for
+	// `multiformats/cid` from @s2s/soul2soul-shared/dist; mirrors 0xobsidian).
+	conditions: ['import'],
 	outfile: "/home/joera/dist/neutralpress/main.js",
 });
 
