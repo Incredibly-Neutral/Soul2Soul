@@ -473,11 +473,9 @@ export class S2SCidViewSection extends LitElement {
         min-width: 0;
         overflow-wrap: anywhere;
       }
-      .cell-sub {
-        margin-top: 0.18rem;
-        font-size: 0.72rem;
-        color: var(--gray-500, #6b7280);
-        overflow-wrap: anywhere;
+      /* First cell (Type badge) sits flush against the table's left edge. */
+      .cid-cell:first-child {
+        padding-left: 0;
       }
       /* Per-source availability dots. */
       .dot {
@@ -576,10 +574,6 @@ export class S2SCidViewSection extends LitElement {
       .badge.archive {
         background: rgba(244, 63, 94, 0.15);
         color: #fda4af;
-      }
-      .badge.tombstone {
-        background: rgba(239, 68, 68, 0.2);
-        color: #fca5a5;
       }
 
       .muted {
@@ -978,10 +972,10 @@ export class S2SCidViewSection extends LitElement {
   }
 
   /**
-   * The 11 sortable columns of the inventory grid, matching the historical
-   * header labels (Type / CID / Role / Path / Age / Tombstone / Kubo / Pinata /
-   * Filebase / Filecoin / Copies / Last check). Source + copies columns read
-   * the live retrievability status.
+   * The 10 sortable columns of the inventory grid, matching the historical
+   * header labels (Type / CID / Role / Path / Age / Kubo / Pinata / Filebase /
+   * Filecoin / Copies / Last check). Source + copies columns read the live
+   * retrievability status.
    */
   private tableColumns(): readonly TableColumn<CidEntry>[] {
     return [
@@ -989,7 +983,6 @@ export class S2SCidViewSection extends LitElement {
       { key: 'cid', label: 'CID', get: (e) => e.cid },
       { key: 'role-path', label: 'Role / Path', get: entryName },
       { key: 'age', label: 'Age', get: (e) => e.timestamp ?? 0 },
-      { key: 'tombstone', label: 'Tombstone', get: (e) => Boolean(e.tombstoned) },
       ...RETRIEVABILITY_SOURCES.map((source) => ({
         key: source,
         label: source[0].toUpperCase() + source.slice(1),
@@ -1084,17 +1077,11 @@ export class S2SCidViewSection extends LitElement {
           <copy-hash .value=${cid} display=${this.shortenCid(cid)} href=${this.gatewayUrl(cid)}></copy-hash>
         </div>
         <div class="cid-cell">
-          ${entryName(entry)}
-          ${entry.genesis
-            ? html`<div class="cell-sub">${this.shortenCid(entry.genesis, 6)}</div>`
-            : nothing}
+          ${entry.genesis && !entry.role && !entry.path
+            ? html`<copy-hash .value=${entry.genesis} display=${this.shortenCid(entry.genesis, 6)}></copy-hash>`
+            : entryName(entry)}
         </div>
         <div class="cid-cell">${this.ageDisplay(entry.timestamp)}</div>
-        <div class="cid-cell">
-          ${entry.tombstoned
-            ? html`<span class="badge tombstone">tombstone</span>`
-            : html`<span class="muted">-</span>`}
-        </div>
         ${RETRIEVABILITY_SOURCES.map((source) => this.renderSourceDot(source, status))}
         <div class="cid-cell">
           <span class="copies ${cr.cls}">${cr.label}</span>
@@ -1208,7 +1195,7 @@ export class S2SCidViewSection extends LitElement {
                 .chipsTop=${this.renderChipsTop(view)}
                 .rowRenderer=${this.entryRowRenderer}
                 emptyText="No rows match the active filters"
-                gridTemplate="0.9fr 1.7fr 2fr 1.1fr 0.7fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr"
+                gridTemplate="0.9fr 2.2fr 2fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr"
                 @sort=${(e: CustomEvent) => {
                   this.sort = toggleSort(this.sort, e.detail.key as string);
                 }}
