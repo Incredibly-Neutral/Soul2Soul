@@ -362,6 +362,11 @@ export class S2SDealsTab extends LitElement {
       configCid,
       rpcs,
       undefined, // ipfsGateway — fall back to protocolInfo.gateway
+      undefined, // remove
+      undefined, // reset
+      // ipfsGatewayAuth — 15th positional arg: FULL header (`Bearer <token>`),
+      // so the render action's writes (add/dag/put to compute CIDs) pass the gate.
+      import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
     );
 
     console.log(res);
