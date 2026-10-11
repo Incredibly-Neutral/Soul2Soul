@@ -1053,6 +1053,44 @@ describe('s2s-cid-view-section', () => {
     expect(sub!.textContent).toContain('0xgen');
   });
 
+  it('shows the path when an entry has one, else a per-category name — never a bare "-"', async () => {
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    const rows = Array.from(root.querySelectorAll('.cid-row'));
+    // Role/Path is the 3rd .cid-cell of each row (badge, cid, role/path, ...).
+    const rolePathOf = (row: Element) =>
+      (Array.from(row.querySelectorAll('.cid-cell'))[2]?.textContent ?? '').trim();
+
+    // templates DAG root has no path → its descriptive name, not '-'.
+    const templateDagRow = rows.find(
+      (r) => r.querySelector('.badge.config')?.getAttribute('title') === 'template DAG',
+    );
+    expect(templateDagRow).toBeTruthy();
+    expect(rolePathOf(templateDagRow!)).toContain('templates DAG');
+
+    // config root has no path → its descriptive name.
+    const configRow = rows.find(
+      (r) => r.querySelector('.badge.config')?.getAttribute('title') === 'config',
+    );
+    expect(rolePathOf(configRow!)).toContain('publication config');
+
+    // A template entry WITH a path shows the path, not a name / dash.
+    const templateRow = rows.find(
+      (r) => r.querySelector('.badge.config')?.getAttribute('title') === 'template',
+    );
+    expect(rolePathOf(templateRow!)).toContain('about/index.html');
+
+    // No Role/Path cell is left as a bare '-' placeholder.
+    const rolePathTexts = rows.map(rolePathOf);
+    expect(rolePathTexts.some((t) => t === '-')).toBe(false);
+  });
+
 
 
   it('shows a relative last-check label for checked cids and a dash for unchecked', async () => {

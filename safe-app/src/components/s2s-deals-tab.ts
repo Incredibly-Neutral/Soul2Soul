@@ -56,10 +56,10 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
 
 // Chips filter groups for the Offers and Deals tables (both DEAL-typed). Same
 // two groups, in the same order the dropdowns filtered before: author, then
-// postType. Labels keep the historical toolbar text ("Author", "Post type").
+// postType.
 const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
-  { key: 'author', label: 'Author', get: (d) => d.author ?? '' },
-  { key: 'postType', label: 'Post type', get: (d) => d.postType ?? '' },
+  { key: 'author', get: (d) => d.author ?? '' },
+  { key: 'postType', get: (d) => d.postType ?? '' },
 ];
 
 /**

@@ -112,8 +112,6 @@ export function uniqueValuesForColumn<T>(
 export interface ChipsGroup<T> {
   /** Stable key, also used in the chips filter state (`chips[key]`). */
   key: string;
-  /** Optional group label shown before the chips. */
-  label?: string;
   /** Column-backed values: extract the value(s) from a row; counts + chips derive from distinct values. */
   get?: (row: T) => string | readonly string[];
   /** Custom membership predicate — use instead of `get` when chips are buckets. */
