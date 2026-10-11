@@ -43,7 +43,8 @@ import type {
 } from '@s2s/soul2soul-shared/safe-app';
 import { store } from '../state/index.js';
 import './copy-hash.js';
-import { checkRetrievability, loadRetrievabilityMap } from '@/lib/cid-view/index.js';
+import { checkRetrievability, loadRetrievabilityMap, saveRetrievabilityMap } from '@/lib/cid-view/index.js';
+import { healCid, type HealConfig, type HealOutcome } from '@/lib/cid-view/heal.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -294,6 +295,9 @@ export class S2SCidViewSection extends LitElement {
   @property({ attribute: false }) ctx?: CidViewReadContext;
   /** Publication ENS name; falls back to the store `name` record when empty. */
   @property() publication = '';
+  /** Heal config from the host (kubo/pinata/filebase tokens + filecoin
+   *  uploader). Undefined → the heal button is inert (fail-open). */
+  @property({ attribute: false }) healConfig?: HealConfig;
 
   @state() private view: PublicationCidView | null = null;
   @state() private loading = false;
@@ -308,6 +312,8 @@ export class S2SCidViewSection extends LitElement {
   @state() private checkedCount = 0;
   /** CIDs this pass intends to check (unfresh on auto, all on manual) — Y in the indicator. */
   @state() private checkTarget = 0;
+  /** Per-cid heal state: 'running' or the last HealOutcome. */
+  @state() private healing: Record<string, 'running' | HealOutcome> = {};
   /** True when the browser refuses localStorage (sandboxed iframe / privacy) — surfaced to the user. */
   @state() private storageBlocked = false;
 
@@ -354,6 +360,7 @@ export class S2SCidViewSection extends LitElement {
     this.retrievabilityAbort?.abort();
     this.retrievabilityAbort = null;
     this.retrievabilityEpoch++;
+    this.healing = {};
   }
 
   /** Mark the shown view as stale (served from cache) and start the age ticker. */
@@ -456,6 +463,35 @@ export class S2SCidViewSection extends LitElement {
       .refresh:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+      }
+
+      /* Heal (heart) button — idle red heart, disabled '…' while running, a
+         green check once a heal succeeded. Fail-open: never throws. */
+      .heal {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid var(--gray-600, #4b5563);
+        color: #f87171;
+        padding: 0.2rem 0.45rem;
+        border-radius: 6px;
+        cursor: pointer;
+        line-height: 1;
+        font-size: 0.78rem;
+      }
+      .heal:hover:not(:disabled) {
+        border-color: #f87171;
+        background: rgba(239, 68, 68, 0.12);
+      }
+      .heal:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .heal.ok {
+        border-color: rgba(16, 185, 129, 0.5);
+        color: #34d399;
+        cursor: default;
       }
 
       /* Flat risk-sorted inventory grid (via <s2s-table> + tableStyles): the
@@ -702,6 +738,7 @@ export class S2SCidViewSection extends LitElement {
       this.retrievability = null;
       this.checking = false;
       this.checkedCount = 0;
+      this.healing = {};
     }
 
     // Stale-while-revalidate: hydrate the last-known view from localStorage
@@ -782,6 +819,12 @@ export class S2SCidViewSection extends LitElement {
     const map = this.retrievability;
     if (!map) return undefined;
     return cid in map ? map[cid] : undefined;
+  }
+
+  /** Is this row healable? Red-spot rows only (lost/danger/needs-healing,
+   *  incl. inconclusive/failed) — never healthy or never-checked rows. */
+  private healable(status?: CidRetrievabilityStatus): boolean {
+    return status !== undefined && healthBucket(status) !== 'healthy';
   }
 
   /** Human relative label for a checkedAt ISO string. */
@@ -998,6 +1041,7 @@ export class S2SCidViewSection extends LitElement {
         label: 'Last check',
         get: (e) => this.retrievabilityStatus(e.cid)?.checkedAt ?? '',
       },
+      { key: 'heal', label: 'Heal', get: () => '' },
     ];
   }
 
@@ -1049,6 +1093,42 @@ export class S2SCidViewSection extends LitElement {
     return html`<div class="cid-cell"><span class="${cls}" title="${label}"></span></div>`;
   }
 
+  /** Heal cell — the heart button, rendered LAST in each row. Idle = red heart
+   *  (#f87171); running = disabled '…'; a successful last outcome flips to a
+   *  green check with a per-provider summary title (e.g. '2/4 ok'); a failed
+   *  last outcome keeps the red heart (row stays healable). Empty cell on
+   *  healthy / never-checked rows so the grid stays aligned. */
+  private renderHealCell(
+    cid: string,
+    status: CidRetrievabilityStatus | undefined,
+  ): TemplateResult {
+    const healState = this.healing[cid];
+    const running = healState === 'running';
+    let inner: TemplateResult | typeof nothing = nothing;
+    if (this.healable(status)) {
+      if (running) {
+        inner = html`<button class="heal" disabled title="Healing ${this.shortenCid(cid)}…">…</button>`;
+      } else if (healState !== undefined && healState.ok) {
+        const okCount = healState.results.filter((r) => r.ok).length;
+        const total = healState.results.length;
+        inner = html`<button
+            class="heal ok"
+            disabled
+            title="Healed · ${String(okCount)}/${String(total)} providers ok"
+          ><ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check
+        ></button>`;
+      } else {
+        inner = html`<button
+            class="heal"
+            title="Heal: pin to kubo, pinata, filebase + 2× filecoin"
+            @click=${() => void this.handleHeal(cid)}
+          ><ph-heart size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-heart
+        ></button>`;
+      }
+    }
+    return html`<div class="cid-cell">${inner}</div>`;
+  }
+
   /** Stable row renderer (bound once) so <s2s-table> only re-renders on real
    *  data/state changes, not on every host render — like the deals tab. */
   private entryRowRenderer = (entry: CidEntry) => this.renderEntryRow(entry);
@@ -1094,8 +1174,70 @@ export class S2SCidViewSection extends LitElement {
             : nothing}
         </div>
         <div class="cid-cell">${lastCheck}</div>
+        ${this.renderHealCell(cid, status)}
       </div>
     `;
+  }
+
+  /**
+   * Heal a CID across all providers (kubo/pinata/filebase + 2x filecoin) via
+   * the shared healCid primitive, then fold the outcome's confirmed sources
+   * into the retrievability map OPTIMISTICALLY (dots flip on without waiting
+   * for the next ipfs-check pass) and persist it. Fail-open: never throws —
+   * a throwing healCid records a failed outcome and keeps the row healable.
+   */
+  private async handleHeal(cid: string): Promise<void> {
+    if (this.healing[cid] === 'running') return;
+    const config = this.healConfig;
+    if (!config) return; // no heal config (host didn't provide one) → fail-open no-op
+    this.healing = { ...this.healing, [cid]: 'running' };
+    let outcome: HealOutcome;
+    try {
+      outcome = await healCid(cid, config);
+    } catch (err) {
+      console.warn(
+        '[cid-view] heal failed',
+        err instanceof Error ? err.message : String(err),
+      );
+      this.healing = {
+        ...this.healing,
+        [cid]: { cid, results: [], ok: false, partial: false, sources: {} },
+      };
+      return;
+    }
+    this.healing = { ...this.healing, [cid]: outcome };
+    console.info(
+      `[cid-view] healed ${cid}: ${outcome.ok ? 'ok' : outcome.partial ? 'partial' : 'failed'} (${outcome.results
+        .map((r) => `${r.provider}:${r.ok ? 'ok' : 'fail'}`)
+        .join(', ')})`,
+    );
+    this.applyHealOutcome(cid, outcome);
+  }
+
+  /**
+   * Fold a heal outcome into the retrievability map: confirmed sources flip
+   * that row's availability dots on, copies are recomputed, and the status is
+   * persisted (mirroring the recheck path's saveRetrievabilityMap). Fail-open:
+   * a missing/absent map entry is a no-op.
+   */
+  private applyHealOutcome(cid: string, outcome: HealOutcome): void {
+    const map = this.retrievability;
+    const status = map?.[cid];
+    if (!map || !status) return;
+    const sources = { ...status.sources };
+    for (const source of Object.keys(outcome.sources) as RetrievabilitySource[]) {
+      if (outcome.sources[source]) sources[source] = true;
+    }
+    const copies = RETRIEVABILITY_SOURCES.filter((s) => sources[s]).length;
+    const next: CidRetrievabilityStatus = {
+      ...status,
+      sources,
+      copies,
+      checkedAt: new Date().toISOString(),
+      state: copies > 0 ? 'ok' : status.state,
+    };
+    this.retrievability = { ...map, [cid]: next };
+    saveRetrievabilityMap(this.resolvedPublication, this.retrievability);
   }
 
   render() {
@@ -1195,7 +1337,7 @@ export class S2SCidViewSection extends LitElement {
                 .chipsTop=${this.renderChipsTop(view)}
                 .rowRenderer=${this.entryRowRenderer}
                 emptyText="No rows match the active filters"
-                gridTemplate="0.9fr 2.2fr 2fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr"
+                gridTemplate="0.9fr 2.2fr 2fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr 0.7fr"
                 @sort=${(e: CustomEvent) => {
                   this.sort = toggleSort(this.sort, e.detail.key as string);
                 }}
