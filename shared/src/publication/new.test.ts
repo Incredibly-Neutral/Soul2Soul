@@ -122,6 +122,7 @@ function makeMockIPFS(): any {
     addToKubo: vi.fn().mockResolvedValue('mock-kubo-cid'),
     dagPut: vi.fn().mockResolvedValue('mock-dag-cid'),
     uploadToPinata: vi.fn().mockResolvedValue('mock-filebase-cid'),
+    pinCidRemote: vi.fn().mockResolvedValue(true),
     prepareTempMfs: vi.fn().mockResolvedValue('/tmp/mock'),
     kuboPost: vi.fn().mockResolvedValue({
       ok: true,
