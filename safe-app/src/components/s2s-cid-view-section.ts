@@ -1337,7 +1337,7 @@ export class S2SCidViewSection extends LitElement {
                 .chipsTop=${this.renderChipsTop(view)}
                 .rowRenderer=${this.entryRowRenderer}
                 emptyText="No rows match the active filters"
-                gridTemplate="0.9fr 2.2fr 1.6fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr"
+                gridTemplate="0.8fr 2.6fr 1.6fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr .5fr"
                 @sort=${(e: CustomEvent) => {
                   this.sort = toggleSort(this.sort, e.detail.key as string);
                 }}
