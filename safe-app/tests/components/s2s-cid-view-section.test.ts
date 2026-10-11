@@ -318,7 +318,7 @@ describe('s2s-cid-view-section', () => {
     });
 
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
 
     const root = el.shadowRoot!;
@@ -338,8 +338,10 @@ describe('s2s-cid-view-section', () => {
     const groups = root.querySelectorAll('.chips-group');
     expect(groups.length).toBe(2);
     // Type chips (collapsed classification) live in container 1, counted over
-    // the same unique-cid rows the table renders.
-    const typeGroup = groups[0]!.textContent ?? '';
+    // the same unique-cid rows the table renders. (Whitespace-normalized:
+    // <s2s-table> puts the chip label on its own line, so the raw textContent
+    // has a newline between the count and the label.)
+    const typeGroup = (groups[0]!.textContent ?? '').replace(/\s+/g, ' ').trim();
     expect(typeGroup).toContain('1 source');
     // Versions + offers are hidden — no version/offer chips at all.
     expect(typeGroup).not.toContain('version');
@@ -420,7 +422,10 @@ describe('s2s-cid-view-section', () => {
 
     const root = el.shadowRoot!;
     const text = root.textContent ?? '';
-    expect(text).toContain('0 unique CIDs');
+    // The unique-CIDs counter chip is now part of <s2s-table> (chipsTop); a
+    // zero-entry view renders the section's "No CIDs found" empty state
+    // INSTEAD of the table, so the counter chip is absent here.
+    expect(text).not.toContain('unique CIDs');
     expect(root.querySelectorAll('.cid-row').length).toBe(0);
   });
 
@@ -487,7 +492,7 @@ describe('s2s-cid-view-section', () => {
 
     // Cached view is on screen while the fresh build is still in flight — no spinner.
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     expect(renderedCids(root)).toContain('bafycached1');
@@ -525,7 +530,7 @@ describe('s2s-cid-view-section', () => {
     });
 
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     expect(renderedCids(root)).toContain('bafycached1');
@@ -551,7 +556,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'old.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     expect(renderedCids(el.shadowRoot!)).toContain('bafyold');
 
@@ -623,7 +628,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     // Wait for the fresh build to finish persisting (button re-enabled).
     await vi.waitFor(() => {
@@ -712,7 +717,7 @@ describe('s2s-cid-view-section', () => {
     await vi.waitFor(() => {
       expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
     });
-    expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
   });
 
@@ -732,13 +737,13 @@ describe('s2s-cid-view-section', () => {
     // — which passes prev but is self-degraded to cold by the coordinator —
     // still succeeds and renders. No error state either way.
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
     await vi.waitFor(() => {
       expect((el.shadowRoot?.querySelector('.refresh') as HTMLButtonElement).disabled).toBe(false);
     });
-    expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     expect(el.shadowRoot?.querySelector('.error')).toBeNull();
     // prev was still passed (incremental request) — the coordinator degraded it.
     expect(latestBuildOpts()?.prev?.meta?.complete).toBe(false);
@@ -813,7 +818,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     const rows = Array.from(root.querySelectorAll('.cid-row'));
@@ -841,7 +846,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
     // Unchecked (config, site root...) come first (never-checked on top), then
@@ -937,7 +942,7 @@ describe('s2s-cid-view-section', () => {
       ctx: makeFullCtx(),
       publication: 'test.eth',
     });
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy());
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.table')).toBeTruthy());
     await new Promise((r) => setTimeout(r, 50)); // let any (wrong) async pass surface
     expect(cidViewMocks.checkRetrievability).not.toHaveBeenCalled();
     // Dots render from the persisted map + the stored-hint makes persistence observable.
@@ -1012,7 +1017,7 @@ describe('s2s-cid-view-section', () => {
       ctx: makeFullCtx(),
       publication: 'test.eth',
     });
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy());
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('.table')).toBeTruthy());
     // Auto pass is a no-op (all fresh) → Recheck must still force every cid.
     await new Promise((r) => setTimeout(r, 50));
     expect(cidViewMocks.checkRetrievability).not.toHaveBeenCalled();
@@ -1035,7 +1040,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     // Header no longer has a standalone Genesis column.
@@ -1059,7 +1064,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
     const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
@@ -1077,7 +1082,7 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     expect(root.querySelectorAll('.cid-row').length).toBe(10);
@@ -1148,14 +1153,17 @@ describe('s2s-cid-view-section', () => {
       publication: 'test.eth',
     });
     await vi.waitFor(() => {
-      expect(el.shadowRoot?.querySelector('.cid-table')).toBeTruthy();
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
     });
     const root = el.shadowRoot!;
     expect(root.querySelectorAll('.cid-row').length).toBe(10);
 
     // Container 2 chips: healthy / needs healing / danger / lost. The
     // needs-healing bucket is empty — its only occupant (bafyver1) is hidden.
-    const group2 = root.querySelectorAll('.chips-group')[1]!.textContent ?? '';
+    // (Whitespace-normalized: <s2s-table> puts the chip label on its own line.)
+    const group2 = (root.querySelectorAll('.chips-group')[1]!.textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
     expect(group2).toContain('1 healthy');
     expect(group2).not.toContain('needs healing');
     expect(group2).toContain('1 danger');
@@ -1215,5 +1223,170 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(10);
     });
     expect(el.shadowRoot!.querySelectorAll('button.chip.active').length).toBe(0);
+  });
+
+  // --- sortable columns (s2s-table) ---
+
+  /**
+   * Deterministic retrievability for the sort tests: three checked CIDs with
+   * distinct copy counts (bafyassets 0 / bafyconfig 1 / bafydeal1 3) plus the
+   * other 7 rows unchecked. Default risk order puts the unchecked rows first,
+   * then the checked ones fewest-copies-first; a user sort overrides it.
+   */
+  function sortSeed(): CidRetrievabilityMap {
+    return {
+      bafydeal1: {
+        checkedAt: RECENT(),
+        copies: 3,
+        sources: { kubo: true, pinata: true, filebase: true, filecoin: false },
+        state: 'ok',
+      },
+      bafyconfig: {
+        checkedAt: RECENT(),
+        copies: 1,
+        sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
+      },
+      bafyassets: {
+        checkedAt: RECENT(),
+        copies: 0,
+        sources: { kubo: false, pinata: false, filebase: false, filecoin: false },
+        state: 'no-providers',
+      },
+    };
+  }
+
+  async function mountSortedFixture() {
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(sortSeed());
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
+    });
+    return el;
+  }
+
+  /** The sortable header button for a column key inside the section's shadow root. */
+  function headerButton(el: HTMLElement, key: string): HTMLButtonElement {
+    const btn = el.shadowRoot?.querySelector<HTMLButtonElement>(
+      `.table-header[data-sort="${key}"]`,
+    );
+    expect(btn).toBeTruthy();
+    return btn!;
+  }
+
+  it('default row order is the risk-sort (fewest copies first, unchecked on top)', async () => {
+    const el = await mountSortedFixture();
+    const cids = renderedCids(el.shadowRoot!);
+    expect(cids).toHaveLength(10);
+    // Unchecked rows first, then the three checked rows fewest-copies-first.
+    expect(cids.slice(-3)).toEqual(['bafyassets', 'bafyconfig', 'bafydeal1']);
+    // No sort indicator yet (sort starts null).
+    expect(
+      el.shadowRoot!.querySelector('.table-header.sortable .sort-indicator ph-caret-up'),
+    ).toBeNull();
+    expect(
+      el.shadowRoot!.querySelector('.table-header.sortable .sort-indicator ph-caret-down'),
+    ).toBeNull();
+  });
+
+  it('clicking the Copies header emits a sort event and sorts rows by copies ascending', async () => {
+    const el = await mountSortedFixture();
+    const events: Array<{ key: string }> = [];
+    el.addEventListener('sort', (e) => events.push((e as CustomEvent).detail));
+
+    headerButton(el, 'copies').click();
+    await vi.waitFor(() => {
+      expect(events).toEqual([{ key: 'copies' }]);
+      expect(
+        el.shadowRoot!.querySelector('.table-header[data-sort="copies"] .sort-indicator ph-caret-up'),
+      ).toBeTruthy();
+    });
+    // Ascending by copies: the checked rows sort last, fewest first (unchecked
+    // rows read as 0 copies, so they lead).
+    const cids = renderedCids(el.shadowRoot!);
+    expect(cids.slice(-3)).toEqual(['bafyassets', 'bafyconfig', 'bafydeal1']);
+  });
+
+  it('clicking the same header again toggles to descending', async () => {
+    const el = await mountSortedFixture();
+    const copies = headerButton(el, 'copies');
+    copies.click(); // asc
+    copies.click(); // desc
+    await vi.waitFor(() => {
+      expect(
+        el.shadowRoot!.querySelector('.table-header[data-sort="copies"] .sort-indicator ph-caret-down'),
+      ).toBeTruthy();
+    });
+    // Descending: the 3-copy deal row first, the 1-copy config second, then the
+    // 0-value rows (unchecked + the 0-copy assets root) last.
+    const cids = renderedCids(el.shadowRoot!);
+    expect(cids[0]).toBe('bafydeal1');
+    expect(cids[1]).toBe('bafyconfig');
+    expect(cids[cids.length - 1]).toBe('bafyassets');
+  });
+
+  it('clicking a different header (Type) resets to that column ascending', async () => {
+    const el = await mountSortedFixture();
+    headerButton(el, 'copies').click(); // copies asc
+    headerButton(el, 'type').click(); // resets to type asc
+    await vi.waitFor(() => {
+      expect(
+        el.shadowRoot!.querySelector('.table-header[data-sort="type"] .sort-indicator ph-caret-up'),
+      ).toBeTruthy();
+      expect(
+        el.shadowRoot!.querySelector('.table-header[data-sort="copies"] .sort-indicator ph-caret-up'),
+      ).toBeNull();
+    });
+    // Type asc (locale/numeric): asset < cache < cache item < config < html < source.
+    const badges = Array.from(el.shadowRoot!.querySelectorAll('.cid-row .badge')).map(
+      (b) => b.textContent,
+    );
+    expect(badges).toEqual([
+      'asset',
+      'asset',
+      'cache',
+      'cache item',
+      'config',
+      'config',
+      'config',
+      'html',
+      'html',
+      'source',
+    ]);
+  });
+
+  it('after sorting, chips filtering still works (AND composition preserved)', async () => {
+    const el = await mountSortedFixture();
+    // Sort by copies descending first.
+    const copies = headerButton(el, 'copies');
+    copies.click(); // asc
+    copies.click(); // desc
+    await vi.waitFor(() => {
+      expect(
+        el.shadowRoot!.querySelector('.table-header[data-sort="copies"] .sort-indicator ph-caret-down'),
+      ).toBeTruthy();
+    });
+
+    // Filter to the 'config' type (3 rows: bafyconfig + 2 unchecked configs).
+    const configChip = Array.from(el.shadowRoot!.querySelectorAll('button.chip')).find((b) =>
+      b.textContent?.trim().endsWith('config'),
+    );
+    expect(configChip).toBeTruthy();
+    (configChip as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(3);
+    });
+    const badges = Array.from(el.shadowRoot!.querySelectorAll('.cid-row .badge')).map(
+      (b) => b.textContent,
+    );
+    expect(badges).toEqual(['config', 'config', 'config']);
+    // Descending copies still applies within the filtered set: the 1-copy
+    // bafyconfig row sorts before the two unchecked (0-copy) config rows.
+    const cids = renderedCids(el.shadowRoot!);
+    expect(cids[0]).toBe('bafyconfig');
   });
 });
