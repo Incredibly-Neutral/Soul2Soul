@@ -49,9 +49,20 @@ export class S2SIPFSMethods {
    * the pin request was accepted. Used by ConfigBuilder to mirror templateCid.
    */
   async pinCidRemote(cid: string, provider: 'filebase' | 'pinata' = 'filebase'): Promise<boolean> {
-    const { pinCidFromRemote } = await import('../pin/index.js');
-    const token = provider === 'pinata' ? this.pinataJWT : this.filebaseToken;
-    return pinCidFromRemote(cid, this.kuboGateway, token, provider);
+    try {
+      const { pinCidFromRemote } = await import('../pin/index.js');
+      const token = provider === 'pinata' ? this.pinataJWT : this.filebaseToken;
+      // Normalize the kubo gateway the same way every other method here does
+      // (https:// + fixEndpoint) so a scheme-less stored gateway cannot produce
+      // a hostless Pinata sourceIpfs.apiUrl (which would silently fail the pin).
+      const remote = `https://${this.fixEndpoint(this.kuboGateway)}`;
+      return pinCidFromRemote(cid, remote, token, provider);
+    } catch (error) {
+      // Defensive: the dynamic import (the only path that can reject here) must
+      // never surface — make "never throws" literally true.
+      console.warn('[ipfs] pinCidRemote failed (non-fatal):', error);
+      return false;
+    }
   }
 
   // =========================================================================

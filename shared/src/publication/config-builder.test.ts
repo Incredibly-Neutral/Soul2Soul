@@ -148,7 +148,6 @@ describe('ConfigBuilder', () => {
 
     it('mirrors templateCid to Filebase and Pinata via pinCidRemote (fresh build)', async () => {
       const ipfs = mockIPFS();
-      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
       const builder = makeBuilder(ipfs);
 
       await builder.buildConfig(
@@ -164,6 +163,46 @@ describe('ConfigBuilder', () => {
       // fire-and-forget: once to filebase, once to pinata.
       expect(ipfs.pinCidRemote).toHaveBeenCalledWith('mock-dag-cid', 'filebase');
       expect(ipfs.pinCidRemote).toHaveBeenCalledWith('mock-dag-cid', 'pinata');
+      expect(ipfs.pinCidRemote).toHaveBeenCalledTimes(2);
+    });
+
+    it('a pinCidRemote rejection does not break buildConfig (fire-and-forget)', async () => {
+      const ipfs = mockIPFS();
+      // Worst case: the mirror path itself rejects (e.g. the dynamic import of
+      // pinCidFromRemote fails). The defensive .catch on the mirror chains must
+      // swallow it so the publish still resolves with the kubo CID.
+      ipfs.pinCidRemote.mockRejectedValue(new Error('pin service unreachable'));
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'testpub.soul2soul.eth',
+        '0x1234',
+        'mock-assets-cid',
+      );
+
+      expect(result.cid).toBe('mock-cid');
+      expect(ipfs.pinCidRemote).toHaveBeenCalledTimes(2);
+    });
+
+    it('a pinCidRemote false return does not break buildConfig (fire-and-forget)', async () => {
+      const ipfs = mockIPFS();
+      // Nominal pin failure: pinCidFromRemote swallows errors and returns false.
+      ipfs.pinCidRemote.mockResolvedValue(false);
+      const builder = makeBuilder(ipfs);
+
+      const result = await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'testpub.soul2soul.eth',
+        '0x1234',
+        'mock-assets-cid',
+      );
+
+      expect(result.cid).toBe('mock-cid');
       expect(ipfs.pinCidRemote).toHaveBeenCalledTimes(2);
     });
 

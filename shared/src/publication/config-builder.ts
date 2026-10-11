@@ -223,12 +223,20 @@ export class ConfigBuilder {
     // path neutralpress uses for the rendered site root. Mirrors the config.json
     // mirror block below. Non-blocking: pinCidRemote never throws, so a pin failure
     // can never break the publish.
-    void this.ipfs.pinCidRemote(templatesCid, 'filebase').then((ok) => {
-      console.log(`[config-builder] templateCid ${templatesCid} pinned on filebase: ${ok}`);
-    });
-    void this.ipfs.pinCidRemote(templatesCid, 'pinata').then((ok) => {
-      console.log(`[config-builder] templateCid ${templatesCid} pinned on pinata: ${ok}`);
-    });
+    void this.ipfs.pinCidRemote(templatesCid, 'filebase')
+      .then((ok) => {
+        console.log(`[config-builder] templateCid ${templatesCid} pinned on filebase: ${ok}`);
+      })
+      .catch((err: unknown) => {
+        console.warn('[config-builder] Filebase templateCid pin failed (non-fatal):', err);
+      });
+    void this.ipfs.pinCidRemote(templatesCid, 'pinata')
+      .then((ok) => {
+        console.log(`[config-builder] templateCid ${templatesCid} pinned on pinata: ${ok}`);
+      })
+      .catch((err: unknown) => {
+        console.warn('[config-builder] Pinata templateCid pin failed (non-fatal):', err);
+      });
 
     // --- Fetch mapping.json at the pinned commit SHA ---
     const commitSHA = await this.getLatestCommitSHA(github_account, repo, branch);
