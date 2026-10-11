@@ -18,6 +18,7 @@ import '@phosphor-icons/webcomponents/PhFolder';
 import '@phosphor-icons/webcomponents/PhWarning';
 import '@phosphor-icons/webcomponents/PhCaretUp';
 import '@phosphor-icons/webcomponents/PhCaretDown';
+import '@phosphor-icons/webcomponents/PhHeart';
 
 /** Standard icon size (px) for every inline/action/button icon. */
 export const ICON_SIZE = 16;

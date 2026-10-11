@@ -104,6 +104,15 @@ vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
   },
 }));
 
+// The CID-inventory section's heal adapter (`@/lib/cid-view/heal.js`) is
+// stubbed so the storage tab's section never resolves healCid/HEAL_PROVIDERS
+// against the (heal-less) safe-app mock above and never hits the network.
+vi.mock('@/lib/cid-view/heal.js', () => ({
+  buildHealConfig: () => ({ source: 'https://ipfs.transport-union.dev' }),
+  healCid: vi.fn(),
+  HEAL_PROVIDERS: ['kubo', 'pinata', 'filebase', 'filecoin'],
+}));
+
 // ---- fixtures ----
 const PIECES = [
   {
