@@ -75,6 +75,35 @@ function categoryLabel(cat: CidCategory): string {
 }
 
 /**
+ * Human name shown in the Role/Path cell for entries WITHOUT a path (roots and
+ * ledger rows: config, templates DAG, assets root, site root, archive, deals).
+ * When an entry has a path, the path is the identifier — no name is shown.
+ */
+const ROOT_NAME: Partial<Record<CidCategory, string>> = {
+  deal: 'deal',
+  'deal-version': 'version',
+  offer: 'offer',
+  'offer-version': 'offer version',
+  config: 'publication config',
+  'template-dag': 'templates DAG',
+  'assets-root': 'assets root',
+  'site-root': 'site root',
+  archive: 'publication archive',
+  'archive-item': 'archive item',
+};
+
+/**
+ * Display name for the Role/Path cell: the path when one exists, else the
+ * role, else a per-category description. Never renders a bare '-'
+ * (the templates DAG row, e.g., reads 'templates DAG' instead of '-').
+ */
+function entryName(entry: CidEntry): string {
+  if (entry.path) return entry.path;
+  if (entry.role) return entry.role;
+  return ROOT_NAME[entry.category] ?? categoryLabel(entry.category);
+}
+
+/**
  * Collapsed source+category type column. The type is a coarser, human label
  * that groups categories (deal/version/config/html/asset/cache); the badge
  * still carries the fine-grained category class + title for color/detail.
@@ -958,7 +987,7 @@ export class S2SCidViewSection extends LitElement {
     return [
       { key: 'type', label: 'Type', get: (e) => typeLabel(e.category) },
       { key: 'cid', label: 'CID', get: (e) => e.cid },
-      { key: 'role-path', label: 'Role / Path', get: (e) => e.role || e.path || '' },
+      { key: 'role-path', label: 'Role / Path', get: entryName },
       { key: 'age', label: 'Age', get: (e) => e.timestamp ?? 0 },
       { key: 'tombstone', label: 'Tombstone', get: (e) => Boolean(e.tombstoned) },
       ...RETRIEVABILITY_SOURCES.map((source) => ({
@@ -1055,7 +1084,7 @@ export class S2SCidViewSection extends LitElement {
           <copy-hash .value=${cid} display=${this.shortenCid(cid)} href=${this.gatewayUrl(cid)}></copy-hash>
         </div>
         <div class="cid-cell">
-          ${entry.role || entry.path || html`<span class="muted">-</span>`}
+          ${entryName(entry)}
           ${entry.genesis
             ? html`<div class="cell-sub">${this.shortenCid(entry.genesis, 6)}</div>`
             : nothing}
