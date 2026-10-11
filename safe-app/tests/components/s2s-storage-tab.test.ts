@@ -73,6 +73,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // implementations so the named imports resolve.
   const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
   const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
+  const client = await import('../../../shared/src/cid-view/ipfs-check-client.ts');
   return {
     S2SIPFSMethods: class {},
     buildPublicationCidView: async () => ({
@@ -91,6 +92,9 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     orderByStaleness: retrievability.orderByStaleness,
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
     hostIsFilecoinSp: parser.hostIsFilecoinSp,
+    // The batch retrievability adapter (src/lib/cid-view/ipfs-check.ts) wraps
+    // the shared client from this entry too.
+    checkRetrievability: client.checkRetrievability,
   };
 });
 

@@ -85,8 +85,16 @@ function status(
   sources: Record<RetrievabilitySource, boolean> = ALL_FALSE,
   error?: string,
 ): CidRetrievabilityStatus {
-  const st: CidRetrievabilityStatus = { checkedAt, copies, sources };
-  if (error !== undefined) st.error = error;
+  const st: CidRetrievabilityStatus = {
+    checkedAt,
+    copies,
+    sources,
+    state: error !== undefined ? 'failed' : copies > 0 ? 'ok' : 'no-providers',
+  };
+  if (error !== undefined) {
+    st.lastError = error;
+    st.lastErrorAt = checkedAt;
+  }
   return st;
 }
 
@@ -416,7 +424,9 @@ describe('toCidRetrievabilityStatus', () => {
       checkedAt: '2026-10-09T12:00:00.000Z',
       copies: 2,
       sources: KUBO_PINATA,
-      error: 'partial',
+      state: 'failed',
+      lastError: 'partial',
+      lastErrorAt: '2026-10-09T12:00:00.000Z',
     });
   });
 
@@ -429,7 +439,8 @@ describe('toCidRetrievabilityStatus', () => {
       copies: 1,
     };
     const st = toCidRetrievabilityStatus(parsed, clock);
-    expect(st.error).toBeUndefined();
+    expect(st.state).toBe('ok');
+    expect(st.lastError).toBeUndefined();
     expect(st.sources).toEqual(KUBO_ONLY);
     expect(st.sources).not.toBe(parsed.sources);
   });

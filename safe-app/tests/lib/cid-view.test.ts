@@ -23,13 +23,9 @@ import { store } from '../../src/state/index.js';
 import {
   buildSafeAppCidViewContext,
   checkRetrievability,
-  classifyProviderPlatforms,
   fetchCidView,
   loadRetrievabilityMap,
   saveRetrievabilityMap,
-  statusFromCheckLine,
-  type IpfsCheckLine,
-  type IpfsCheckProvider,
 } from '../../src/lib/cid-view';
 import type {
   CidEntry,
@@ -68,6 +64,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
   const validation = await import('../../../shared/src/cid-view/validation.ts');
   const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
+  const client = await import('../../../shared/src/cid-view/ipfs-check-client.ts');
   return {
     S2SIPFSMethods: ipfsMocks.ipfsClass,
     buildPublicationCidView: ipfsMocks.buildPublicationCidView,
@@ -77,6 +74,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
     RETRIEVABILITY_SOURCES: retrievability.RETRIEVABILITY_SOURCES,
     parseCidRetrievabilityMap: validation.parseCidRetrievabilityMap,
     hostIsFilecoinSp: parser.hostIsFilecoinSp,
+    checkRetrievability: client.checkRetrievability,
   };
 });
 
@@ -481,18 +479,6 @@ function ndjsonResponse(lines: string[]): Response {
   });
 }
 
-/** Default provider: a kubo peer that found the cid over Bitswap. */
-function provider(over: Partial<IpfsCheckProvider> = {}): IpfsCheckProvider {
-  return {
-    ID: '12D3KooWTest',
-    Addrs: [],
-    AgentVersion: 'unknown-agent/1.0',
-    Source: 'ipni',
-    DataAvailableOverBitswap: { Enabled: true, Found: true },
-    ...over,
-  };
-}
-
 const SOURCES_FALSE = { kubo: false, pinata: false, filebase: false, filecoin: false };
 
 describe('retrievability adapter', () => {
@@ -518,148 +504,6 @@ describe('retrievability adapter', () => {
     vi.unstubAllGlobals();
   });
 
-  it('classifyProviderPlatforms maps self-identified providers to platforms', () => {
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/dns4/bitswap.filebase.io/tcp/4001/p2p/12D3KooWTest'] }),
-      ),
-    ).toEqual(['filebase']);
-    expect(classifyProviderPlatforms(provider({ ID: 'pinata-peer', Addrs: ['/dns4/pinata.cloud'] })))
-      .toEqual(['pinata']);
-    expect(classifyProviderPlatforms(provider({ AgentVersion: 'kubo/0.29.0/' }))).toEqual(['kubo']);
-    expect(classifyProviderPlatforms(provider({ AgentVersion: 'go-ipfs/0.22.0/' }))).toEqual([
-      'kubo',
-    ]);
-    // Agent alone no longer implies filecoin: HTTP-only SPs carry no
-    // AgentVersion, so only an in-use SP host (below) lights the dot.
-    expect(classifyProviderPlatforms(provider({ AgentVersion: 'boost-v2.3.0' }))).toEqual([]);
-    // A provider may match multiple platforms (pinata runs kubo → both).
-    expect(
-      classifyProviderPlatforms(provider({ ID: 'pinata-1', AgentVersion: 'kubo/0.29.0/' })),
-    ).toEqual(['pinata', 'kubo']);
-    expect(classifyProviderPlatforms(provider({ AgentVersion: 'megaphone/1.0' }))).toEqual([]);
-  });
-
-  it('classifyProviderPlatforms: filecoin detected by in-use SP host (HTTP-only, no agent)', () => {
-    // HTTP-only SPs carry no AgentVersion (identify is skipped over HTTP); the
-    // Addr host match against FILECOIN_SP_HOSTS is what lights the filecoin dot.
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/dns/sp.reiers.io/tcp/443/https'], AgentVersion: '' }),
-      ),
-    ).toEqual(['filecoin']);
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/dns/mainnet-pdp.infrafolio.com/tcp/443/https'], AgentVersion: '' }),
-      ),
-    ).toEqual(['filecoin']);
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/dns/main.ezpdpz.net/tcp/443/https'], AgentVersion: '' }),
-      ),
-    ).toEqual(['filecoin']);
-    // An active registry SP the app does NOT store to must not be filecoin.
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/dns/pdp.tigerteches.org/tcp/5521/https'], AgentVersion: '' }),
-      ),
-    ).toEqual([]);
-    // A bare IP addr can never be a named SP gateway.
-    expect(
-      classifyProviderPlatforms(
-        provider({ Addrs: ['/ip4/116.182.20.74/tcp/12310'], AgentVersion: '' }),
-      ),
-    ).toEqual([]);
-  });
-
-  it('statusFromCheckLine: error line → all-false + error, checkedAt recorded', () => {
-    const status = statusFromCheckLine(
-      { cid: 'bafyconfig', error: 'boom' },
-      () => '2026-01-01T00:00:00.000Z',
-    );
-    expect(status).toEqual({
-      checkedAt: '2026-01-01T00:00:00.000Z',
-      copies: 0,
-      sources: SOURCES_FALSE,
-      error: 'boom',
-    });
-  });
-
-  it('statusFromCheckLine: non-array result (MutableResolution) → all-false, no error', () => {
-    const status = statusFromCheckLine(
-      { cid: 'bafyconfig', result: { MutableResolution: { Path: '/ipns/foo' } } },
-      () => '2026-01-01T00:00:00.000Z',
-    );
-    expect(status.copies).toBe(0);
-    expect(status.sources).toEqual(SOURCES_FALSE);
-    expect(status.error).toBeUndefined();
-  });
-
-  it('statusFromCheckLine: serving providers classified into platforms', () => {
-    const status = statusFromCheckLine(
-      {
-        cid: 'bafyconfig',
-        result: [
-          provider({ Addrs: ['/dns4/bitswap.filebase.io/tcp/4001'] }),
-          provider({ AgentVersion: 'kubo/0.29.0/' }),
-          provider({ AgentVersion: 'boost-v2.3.0', DataAvailableOverBitswap: { Enabled: true, Found: false } }),
-        ],
-      },
-      () => '2026-01-01T00:00:00.000Z',
-    );
-    expect(status.sources.filebase).toBe(true);
-    expect(status.sources.kubo).toBe(true);
-    expect(status.sources.filecoin).toBe(false); // not found → not counted
-    expect(status.sources.pinata).toBe(false);
-    expect(status.copies).toBe(2);
-  });
-
-  it('statusFromCheckLine: providers that did NOT find the cid are ignored', () => {
-    const status = statusFromCheckLine(
-      {
-        cid: 'bafyconfig',
-        result: [provider({ DataAvailableOverBitswap: { Enabled: true, Found: false } })],
-      },
-      () => '2026-01-01T00:00:00.000Z',
-    );
-    expect(status.copies).toBe(0);
-    expect(status.sources).toEqual(SOURCES_FALSE);
-  });
-
-  it('statusFromCheckLine: real ipfs-check provider (filebase megaphone node) → filebase only', () => {
-    // Observed live from https://ipfs-check.transport-union.dev/batch for the
-    // s3nl.soul2soul.eth site root — a Filebase node serving the cid over
-    // Bitswap (agent "megaphone", /dnsaddr/bitswap.filebase.io, source IPNI).
-    const filebaseMegaphone: IpfsCheckProvider = {
-      ID: '12D3KooWGtYkBAaqJMJEmywMxaCiNP7LCEFUAFiLEBASe232c2VH',
-      Addrs: ['/dnsaddr/bitswap.filebase.io'],
-      AgentVersion: 'megaphone',
-      Source: 'IPNI',
-      DataAvailableOverBitswap: { Enabled: true, Found: true },
-      DataAvailableOverHTTP: { Enabled: false, Found: false },
-    };
-    const status = statusFromCheckLine(
-      { cid: 'bafyroot', result: [filebaseMegaphone] },
-      () => '2026-01-01T00:00:00.000Z',
-    );
-    expect(status.sources.filebase).toBe(true);
-    expect(status.sources.kubo).toBe(false);
-    expect(status.sources.pinata).toBe(false);
-    expect(status.sources.filecoin).toBe(false);
-    expect(status.copies).toBe(1);
-  });
-
-  it('statusFromCheckLine: s2s deal cids do NOT imply a filecoin copy (no providers → all-false)', () => {
-    // bafydeal1 is an s2s publication deal (author + publication), NOT a
-    // Filecoin storage deal — with no serving provider in the report it must
-    // NOT light the filecoin dot.
-    const status = statusFromCheckLine({ cid: 'bafydeal1', result: [] }, () =>
-      '2026-01-01T00:00:00.000Z',
-    );
-    expect(status.sources.filecoin).toBe(false);
-    expect(status.copies).toBe(0);
-    expect(status.sources).toEqual(SOURCES_FALSE);
-  });
 
   it('checkRetrievability: 120 cids @3 → 40 batched POSTs, streams results, merges prev, persists', async () => {
     const cids = Array.from({ length: 120 }, (_, i) => `bafychunk${String(i).padStart(3, '0')}`);
@@ -675,6 +519,7 @@ describe('retrievability adapter', () => {
         checkedAt: '2026-01-01T00:00:00.000Z',
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
       },
     };
     const onResult = vi.fn();
@@ -745,10 +590,12 @@ describe('retrievability adapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const map = await checkRetrievability('test.eth', validView(), ['bafya', 'bafyb'], {});
-    expect(map.bafya.error).toBe('network down');
+    expect(map.bafya.state).toBe('failed');
+    expect(map.bafya.lastError).toBe('network down');
     expect(map.bafya.copies).toBe(0);
     expect(map.bafya.sources).toEqual(SOURCES_FALSE);
-    expect(map.bafyb.error).toBe('network down');
+    expect(map.bafyb.state).toBe('failed');
+    expect(map.bafyb.lastError).toBe('network down');
   });
 
   it('checkRetrievability: abort rethrows and does NOT record error statuses', async () => {
@@ -757,6 +604,7 @@ describe('retrievability adapter', () => {
         checkedAt: '2026-01-01T00:00:00.000Z',
         copies: 1,
         sources: { kubo: true, pinata: false, filebase: false, filecoin: false },
+        state: 'ok',
       },
     };
     const controller = new AbortController();
@@ -779,6 +627,7 @@ describe('retrievability adapter', () => {
         checkedAt: '2026-01-01T00:00:00.000Z',
         copies: 1,
         sources: { kubo: false, pinata: false, filebase: false, filecoin: true },
+        state: 'ok',
       },
     };
     saveRetrievabilityMap('test.eth', map);

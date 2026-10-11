@@ -7,7 +7,7 @@ import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
 import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
 import type { SafeIntegration } from '../lib/safe-integration.js';
 import type { ProtocolIntegration } from '@/lib/protocol-integration.js';
-import { buildSafeAppCidViewContext } from '@/lib/cid-view.js';
+import { buildSafeAppCidViewContext } from '@/lib/cid-view/index.js';
 import './s2s-cid-view-section.js';
 import { tableStyles } from '../styles/table-styles.js';
 import { filterStyles } from '@/styles/filter-styles.js';

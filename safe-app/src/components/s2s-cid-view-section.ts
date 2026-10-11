@@ -37,12 +37,13 @@ import type {
   CidRetrievabilityMap,
   CidRetrievabilityStatus,
   CidViewReadContext,
+  CheckState,
   PublicationCidView,
   RetrievabilitySource,
 } from '@s2s/soul2soul-shared/safe-app';
 import { store } from '../state/index.js';
 import './copy-hash.js';
-import { checkRetrievability, loadRetrievabilityMap } from '@/lib/cid-view.js';
+import { checkRetrievability, loadRetrievabilityMap } from '@/lib/cid-view/index.js';
 import { sectionStyles } from '@/styles/section-styles.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -152,10 +153,38 @@ const HEALTH_LABELS: Record<CidHealth, string> = {
 
 /** 0 copies lost, 1 danger, 2–4 needs healing, ≥5 healthy. */
 function healthBucket(status: CidRetrievabilityStatus): CidHealth {
+  // 'inconclusive' (no provider reachable) and 'failed' (the check errored) are
+  // NOT confirmed zero-copy — an overloaded check node must never read as
+  // "lost". They surface as 'needs-healing' instead.
+  if (status.state === 'inconclusive' || status.state === 'failed') return 'needs-healing';
   if (status.copies === 0) return 'lost';
   if (status.copies < 2) return 'danger';
   if (status.copies < 5) return 'needs-healing';
   return 'healthy';
+}
+
+/** Badge shown in the copies cell for every state except 'ok'. */
+const STATE_BADGE: Partial<Record<CheckState, { label: string; cls: string }>> = {
+  'no-providers': { label: 'no providers', cls: 'state-none' },
+  inconclusive: { label: 'unreachable', cls: 'state-warn' },
+  'not-served': { label: 'not served', cls: 'state-bad' },
+  failed: { label: 'check failed', cls: 'state-error' },
+};
+
+/**
+ * How to render the copies cell for a status. 'inconclusive' / 'failed' are
+ * “could not verify this pass” — show last-known copies when we have them
+ * (flagged by the state badge) or '?' when we don't, instead of a confident 0.
+ */
+function copiesRender(status: CidRetrievabilityStatus): { label: string; cls: string } {
+  const unknown = status.state === 'inconclusive' || (status.state === 'failed' && status.checkedAt === '');
+  if (unknown) {
+    return status.copies > 0
+      ? { label: `${String(status.copies)}/4`, cls: 'copies-unknown' }
+      : { label: '?', cls: 'copies-unknown' };
+  }
+  const cls = status.copies >= 2 ? 'copies-ok' : status.copies === 1 ? 'copies-low' : 'copies-none';
+  return { label: `${String(status.copies)}/4`, cls };
 }
 
 /** CIDs per retrievability batch POST (streaming keeps the UI incremental regardless). */
@@ -512,6 +541,32 @@ export class S2SCidViewSection extends LitElement {
       }
       .copies.copies-none {
         color: #f87171;
+      }
+      .copies.copies-unknown {
+        color: var(--gray-400, #9ca3af);
+      }
+      .state-badge {
+        display: inline-block;
+        margin-left: 0.4rem;
+        padding: 0.08rem 0.42rem;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .state-badge.state-warn {
+        background: rgba(245, 158, 11, 0.16);
+        color: #fcd34d;
+      }
+      .state-badge.state-bad,
+      .state-badge.state-error {
+        background: rgba(239, 68, 68, 0.16);
+        color: #fca5a5;
+      }
+      .state-badge.state-none {
+        background: rgba(148, 163, 184, 0.16);
+        color: #cbd5e1;
       }
       .cid-head {
         padding: 0.55rem 0.6rem;
@@ -1021,10 +1076,17 @@ export class S2SCidViewSection extends LitElement {
     let cls = 'dot unknown';
     let label = `${source}: not checked yet`;
     if (status !== undefined) {
-      const present = status.sources[source];
-      cls = present ? 'dot on' : 'dot off';
-      label = `${source}: ${present ? 'copy found' : 'no copy'}`;
-      if (status.error) label += ` — ${status.error}`;
+      if (status.state === 'inconclusive' && status.copies === 0) {
+        // All providers unreachable and no last-known data — unknown, not absent.
+        cls = 'dot unknown';
+        label = `${source}: providers unreachable — could not verify`;
+      } else {
+        const present = status.sources[source];
+        cls = present ? 'dot on' : 'dot off';
+        label = `${source}: ${present ? 'copy found' : 'no copy'}`;
+        if (status.state === 'inconclusive') label += ' — providers unreachable this pass (last-known)';
+        if (status.lastError) label += ` — ${status.lastError}`;
+      }
     }
     return html`<div class="cid-cell"><span class="${cls}" title="${label}"></span></div>`;
   }
@@ -1032,16 +1094,13 @@ export class S2SCidViewSection extends LitElement {
   private renderEntryRow(entry: CidEntry): TemplateResult {
     const cid = entry.cid;
     const status = this.retrievabilityStatus(cid);
-    const copies = status === undefined ? null : status.copies;
-    const copiesCls =
-      copies === null
-        ? ''
-        : copies >= 2
-          ? 'copies-ok'
-          : copies === 1
-            ? 'copies-low'
-            : 'copies-none';
-    const copiesLabel = copies === null ? '—' : `${String(copies)}/4`;
+    const cr = status === undefined ? { label: '—', cls: '' } : copiesRender(status);
+    const stateBadge =
+      status === undefined || status.state === 'ok' ? null : STATE_BADGE[status.state] ?? null;
+    const stateTitle =
+      status === undefined || status.state === 'ok'
+        ? null
+        : `${STATE_BADGE[status.state]?.label ?? status.state}${status.lastError ? ` — ${status.lastError}` : ''}`;
     const lastCheck = status === undefined ? '—' : this.relativeTime(status.checkedAt);
     return html`
       <div class="cid-row">
@@ -1068,7 +1127,16 @@ export class S2SCidViewSection extends LitElement {
             : html`<span class="muted">-</span>`}
         </div>
         ${RETRIEVABILITY_SOURCES.map((source) => this.renderSourceDot(source, status))}
-        <div class="cid-cell"><span class="copies ${copiesCls}">${copiesLabel}</span></div>
+        <div class="cid-cell">
+          <span class="copies ${cr.cls}">${cr.label}</span>
+          ${stateBadge
+            ? html`<span
+                class="state-badge ${stateBadge.cls}"
+                title="${stateTitle}"
+                >${stateBadge.label}</span
+              >`
+            : nothing}
+        </div>
         <div class="cid-cell">${lastCheck}</div>
       </div>
     `;

@@ -12,4 +12,5 @@ export * from './adapter';
 export * from './validation';
 export * from './retrievability';
 export * from './retrieval-parser';
+export * from './ipfs-check-client';
 export * from './coordinator';

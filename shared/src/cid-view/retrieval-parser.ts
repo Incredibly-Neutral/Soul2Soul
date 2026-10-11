@@ -71,7 +71,8 @@ export interface IpfsCheckProvider {
 export interface IpfsCheckRow {
   cid: string;
   ms?: number;
-  result: unknown;
+  /** Present on success rows; absent on row-level error lines (real endpoint omits it). */
+  result?: unknown;
   error?: string;
 }
 
@@ -288,20 +289,27 @@ export function parseBatchNdjson(text: string): ParsedCidRetrievability[] {
 }
 
 /**
- * Bridge a parsed verdict to the T4a CidRetrievabilityStatus contract (imported
+ * Bridge a parsed verdict to the CidRetrievabilityStatus contract (imported
  * from ./retrievability). checkedAt = now().toISOString() (clock injectable for
- * tests), copies and sources copied, error carried when set.
+ * tests), copies and sources copied. A parsed error maps to state 'failed'
+ * with lastError/lastErrorAt; otherwise state is 'ok' (copies > 0) or
+ * 'no-providers'.
  */
 export function toCidRetrievabilityStatus(
   parsed: ParsedCidRetrievability,
   now: () => Date = () => new Date(),
 ): CidRetrievabilityStatus {
+  const checkedAt = now().toISOString();
   const status: CidRetrievabilityStatus = {
-    checkedAt: now().toISOString(),
+    checkedAt,
     copies: parsed.copies,
     sources: { ...parsed.sources },
+    state: parsed.error !== undefined ? 'failed' : parsed.copies > 0 ? 'ok' : 'no-providers',
   };
-  if (parsed.error !== undefined) status.error = parsed.error;
+  if (parsed.error !== undefined) {
+    status.lastError = parsed.error;
+    status.lastErrorAt = checkedAt;
+  }
   return status;
 }
 
