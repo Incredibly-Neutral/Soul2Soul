@@ -242,11 +242,14 @@ function latestBuildOpts(): { prev?: PublicationCidView } | undefined {
   return call[2] as { prev?: PublicationCidView } | undefined;
 }
 
-/** The CIDs currently rendered, read from each copy-hash's value property (shadow DOM). */
+/** The row CIDs currently rendered, read from each CID copy-hash's value
+ *  property (shadow DOM). Genesis ids also render as copy-hash but carry no
+ *  gateway href — they are excluded so row-order assertions see exactly the
+ *  rendered row CIDs. */
 function renderedCids(root: ShadowRoot): string[] {
-  return Array.from(root.querySelectorAll('copy-hash')).map(
-    (c) => (c as HTMLElement & { value: string }).value,
-  );
+  return Array.from(root.querySelectorAll('copy-hash'))
+    .filter((c) => (c as HTMLElement & { href: string }).href)
+    .map((c) => (c as HTMLElement & { value: string }).value);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,11 +392,13 @@ describe('s2s-cid-view-section', () => {
     // No tombstone badge — versions (the only tombstoned entries) are hidden.
     expect(root.querySelectorAll('.badge.tombstone').length).toBe(0);
 
-    // Gateway links — one per row, pointing at the ipfs.io gateway (via copy-hash href).
+    // Gateway links — one per row pointing at the ipfs.io gateway (via copy-hash
+    // href); the deal row's genesis id is an extra copyable value with no link.
     const links = Array.from(root.querySelectorAll('copy-hash')).map(
       (c) => (c as HTMLElement & { href: string }).href,
     );
-    expect(links).toHaveLength(10);
+    expect(links).toHaveLength(11);
+    expect(links.filter((h) => h)).toHaveLength(10);
     expect(links).toContain('https://ipfs.io/ipfs/bafydeal1');
     expect(links).toContain(`https://ipfs.io/ipfs/${ROOT_CID}`);
 
@@ -401,9 +406,10 @@ describe('s2s-cid-view-section', () => {
     const hashValues = Array.from(root.querySelectorAll('copy-hash')).map(
       (c) => (c as HTMLElement & { value: string }).value,
     );
-    expect(hashValues).toHaveLength(10);
+    expect(hashValues).toHaveLength(11);
     expect(hashValues).toContain('bafydeal1');
     expect(hashValues).toContain(ROOT_CID); // .value is the FULL cid
+    expect(hashValues).toContain('0xgen1'); // genesis id is copyable too
     // Offers + versions never reach the table.
     expect(hashValues).not.toContain('bafyoffer1');
     expect(hashValues).not.toContain('bafyver0');
@@ -1034,7 +1040,7 @@ describe('s2s-cid-view-section', () => {
     expect([...forced].sort()).toEqual([...all].sort());
   });
 
-  it('folds Role/Path and Genesis into one cell (genesis as muted sub-line)', async () => {
+  it('shows genesis as the single copyable Role/Path value on deal rows', async () => {
     const el = await mountLit('s2s-cid-view-section', {
       ctx: makeFullCtx(),
       publication: 'test.eth',
@@ -1045,12 +1051,18 @@ describe('s2s-cid-view-section', () => {
     const root = el.shadowRoot!;
     // Header no longer has a standalone Genesis column.
     expect(root.textContent).not.toContain('Genesis');
-    // Deal rows show the role in the first line and genesis in .cell-sub.
     const rows = Array.from(root.querySelectorAll('.cid-row'));
-    const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
-    const sub = dealRow!.querySelector('.cell-sub');
-    expect(sub).toBeTruthy();
-    expect(sub!.textContent).toContain('0xgen');
+    const dealRow = rows.find((r) => r.querySelector('.badge.deal'))!;
+    // Role/Path is the 3rd .cid-cell of each row (badge, cid, role/path, ...).
+    const rolePath = Array.from(dealRow.querySelectorAll('.cid-cell'))[2]!;
+    // No name + genesis sub-line anymore — just one copyable genesis id.
+    expect(rolePath.querySelector('.cell-sub')).toBeNull();
+    expect(rolePath.textContent).not.toContain('deal');
+    const genesisHash = rolePath.querySelector('copy-hash');
+    expect(genesisHash).toBeTruthy();
+    expect((genesisHash as HTMLElement & { value: string }).value).toBe('0xgen1');
+    // Shorter display, full value on copy (no gateway link for genesis).
+    expect((genesisHash as HTMLElement & { href: string }).href).toBe('');
   });
 
   it('shows the path when an entry has one, else a per-category name — never a bare "-"', async () => {
