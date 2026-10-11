@@ -163,6 +163,8 @@ export const renderwithLitActions = async (
   _ipfsGateway?: string,
   remove?: { path: string; replacedBy?: string }[],
   reset?: boolean,
+  /** Kubo RPC bearer token for the data gateway (token-gated writes). */
+  _ipfsGatewayAuth?: string,
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
@@ -188,6 +190,7 @@ export const renderwithLitActions = async (
   // _ipfsGateway: optional — falls back to protocolInfo.gateway
   const endpoints = {
     ipfsGateway: _ipfsGateway ?? protocolInfo.gateway,
+    ipfsGatewayAuth: _ipfsGatewayAuth,
     rpcs:
       _rpcs ??
       (() => {

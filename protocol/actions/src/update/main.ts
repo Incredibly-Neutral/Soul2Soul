@@ -5,7 +5,7 @@ import { evmRead, evmWrite, toHexString } from '../libs/evm';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { contenthashToIPFS } from '../libs/ipfs.factory';
-import { fetchWithTimeout, requireFields } from '../libs/helpers';
+import { fetchWithTimeout, requireFields, setRpcAuth } from '../libs/helpers';
 import { canPublish, canReset, extractSignerAddress } from '../libs/gates';
 import { getConfig } from '../render/config.ctrl';
 import {
@@ -103,6 +103,8 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
+    setRpcAuth(endpoints.ipfsGatewayAuth);
 
     const signerAddress = extractSignerAddress(
       ethers.utils.hashMessage('lit actions auth'),

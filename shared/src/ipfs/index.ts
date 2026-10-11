@@ -3,6 +3,7 @@ export class S2SIPFSMethods {
   private readonly pinataJWT: string;
   private readonly pinataGateway: string;
   private filebaseToken: string;
+  private readonly kuboToken: string;
 
   // Kubo MFS API timeouts — cp/pinAdd move content into the remote kubo node
   // (cp-root copies a whole tree) and need a realistic bound; metadata ops stay
@@ -21,11 +22,14 @@ export class S2SIPFSMethods {
     pinataJWT: string,
     pinataGateway: string,
     filebaseToken?: string,
+    /** Raw Kubo RPC bearer token for the data gateway (write auth). */
+    kuboToken?: string,
   ) {
     this.kuboGateway = kuboGateway;
     this.pinataJWT = pinataJWT;
     this.pinataGateway = pinataGateway;
     this.filebaseToken = filebaseToken || '';
+    this.kuboToken = kuboToken || '';
   }
 
   /** Set the Filebase access token after construction (e.g. from env vars). */
@@ -53,6 +57,7 @@ export class S2SIPFSMethods {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(this.kuboToken ? { Authorization: `Bearer ${this.kuboToken}` } : {}),
         ...extraHeaders,
       },
       body,
@@ -77,6 +82,7 @@ export class S2SIPFSMethods {
 
     const response = await fetch(`https://${this.fixEndpoint(this.kuboGateway)}/${apiPath}`, {
       method: 'POST',
+      headers: this.kuboToken ? { Authorization: `Bearer ${this.kuboToken}` } : undefined,
       body: formData,
     });
 
@@ -96,6 +102,7 @@ export class S2SIPFSMethods {
 
     const response = await fetch(`https://${this.fixEndpoint(this.kuboGateway)}/api/v0/dag/put`, {
       method: 'POST',
+      headers: this.kuboToken ? { Authorization: `Bearer ${this.kuboToken}` } : undefined,
       body: formData,
     });
 

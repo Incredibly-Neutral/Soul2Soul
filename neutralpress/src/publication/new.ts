@@ -26,7 +26,14 @@ export const newPublicationSafe = async (main: any, publication: S2SPublication)
 		main.plugin.settings.pinata_gateway || 'https://neutralpress.mypinata.cloud';
 	const filebaseToken =
 		main.plugin.settings.filebase_token || main.oxo?.settings?.filebase_token || '';
-	const ipfs = new S2SIPFSMethods(kuboGateway, pinataJwt, pinataGateway, filebaseToken);
+	const kuboToken = main.oxo?.settings?.kubo_token || '';
+	const ipfs = new S2SIPFSMethods(
+		kuboGateway,
+		pinataJwt,
+		pinataGateway,
+		filebaseToken,
+		kuboToken,
+	);
 
 	const githubToken = main.plugin.settings.github_token || main.oxo?.settings?.github_token || '';
 

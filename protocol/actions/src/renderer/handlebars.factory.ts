@@ -1,4 +1,5 @@
 import { helpers } from "./handlebars-helpers";
+import { fetchWithTimeout } from "../libs/helpers";
 import { decode } from "html-entities";
 
 interface TemplateData {
@@ -684,11 +685,10 @@ export const fetchPartialsSourceMap = async (
 
   for (const partial of partials) {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${gateway}/api/v0/cat?arg=${partial.cid}`,
-        {
-          method: "POST",
-        },
+        { method: "POST" },
+        30_000,
       );
 
       if (!response.ok) continue;

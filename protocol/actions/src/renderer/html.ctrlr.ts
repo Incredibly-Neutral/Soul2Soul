@@ -4,6 +4,7 @@ import {
   processTemplate,
   replacePartials,
 } from './handlebars.factory';
+import { fetchWithTimeout } from '../libs/helpers';
 
 /**
  * FETCHING half of the render pipeline (production only).
@@ -27,9 +28,11 @@ export const fetchTemplateBundle = async (config: any, templateConfig: any, gate
   }
 
   // Fetch template array
-  const response = await fetch(`${gateway}/api/v0/dag/get?arg=${config.templateCid}`, {
-    method: 'POST',
-  });
+  const response = await fetchWithTimeout(
+    `${gateway}/api/v0/dag/get?arg=${config.templateCid}`,
+    { method: 'POST' },
+    30_000,
+  );
 
   if (!response.ok) {
     console.error('Template fetch failed:', response.status, response.statusText);
@@ -49,9 +52,11 @@ export const fetchTemplateBundle = async (config: any, templateConfig: any, gate
   }
 
   // Fetch template content
-  const templateResponse = await fetch(`${gateway}/api/v0/cat?arg=${templateFile.cid}`, {
-    method: 'POST',
-  });
+  const templateResponse = await fetchWithTimeout(
+    `${gateway}/api/v0/cat?arg=${templateFile.cid}`,
+    { method: 'POST' },
+    30_000,
+  );
 
   if (!templateResponse.ok) {
     console.error(

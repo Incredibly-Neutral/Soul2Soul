@@ -9,7 +9,7 @@ import {
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { getLatestEntry, fetchById, fetchByPublication, getVersion } from '../libs/module.factory';
 import { getConfig, getTaskConfig } from '../render/config.ctrl';
-import { requireFields } from '../libs/helpers';
+import { requireFields, setRpcAuth } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
 import { rippleFiresForBody } from './ripple-gate';
 
@@ -47,6 +47,8 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     console.log(endpoints);
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
+    setRpcAuth(endpoints.ipfsGatewayAuth);
     if (!Array.isArray(contentIds) || contentIds.length === 0)
       throw 'contentIds must be a non-empty array';
 

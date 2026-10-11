@@ -13,7 +13,7 @@ import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
 import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
 import { canPublish, extractSignerAddress } from '../libs/gates';
-import { requireFields } from '../libs/helpers';
+import { requireFields, setRpcAuth } from '../libs/helpers';
 
 const ACTION = 'maintain-cache';
 
@@ -63,6 +63,8 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
     const { publication, signature, authorSafeAddress, preview, endpoints } = input;
     const gateway = endpoints.ipfsGateway;
     const rpcs = endpoints.rpcs;
+    // Auth for Kubo RPC on the data gateway (token-gated writes; sent on reads too).
+    setRpcAuth(endpoints.ipfsGatewayAuth);
 
     const signerAddress = extractSignerAddress(
       ethers.utils.hashMessage('lit actions auth'),

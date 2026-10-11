@@ -1,5 +1,7 @@
 /// <reference path="../action_globals.ts" />
 
+import { fetchWithTimeout } from '../libs/helpers';
+
 // Tree-mutation integrity gate — PKP provenance verification
 // Must match render/metadata.ts exactly for canonicalize and HTML extraction.
 //
@@ -52,7 +54,11 @@ export async function verifyProvenance(
   trace?: any[],
 ): Promise<void> {
   // Fetch the HTML content from IPFS
-  const resp = await fetch(`${gateway}/api/v0/cat?arg=${htmlCid}`, { method: 'POST' });
+  const resp = await fetchWithTimeout(
+    `${gateway}/api/v0/cat?arg=${htmlCid}`,
+    { method: 'POST' },
+    30_000,
+  );
   if (!resp.ok) {
     throw `Failed to fetch HTML ${htmlCid.slice(0, 12)}… for verify: ${resp.status}`;
   }
@@ -156,9 +162,11 @@ export function sanitizeRemovePath(path: string): string {
  * Read the genesis (schema.identifier) from the HTML at an MFS path.
  */
 export async function readGenesisAtMfsPath(gateway: string, mfsPath: string): Promise<string> {
-  const resp = await fetch(`${gateway}/api/v0/files/read?arg=${encodeURIComponent(mfsPath)}`, {
-    method: 'POST',
-  });
+  const resp = await fetchWithTimeout(
+    `${gateway}/api/v0/files/read?arg=${encodeURIComponent(mfsPath)}`,
+    { method: 'POST' },
+    30_000,
+  );
   if (!resp.ok) {
     throw `Failed to read MFS path ${mfsPath}: ${resp.status}`;
   }

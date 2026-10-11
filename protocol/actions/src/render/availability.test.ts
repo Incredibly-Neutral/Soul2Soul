@@ -70,6 +70,7 @@ vi.mock('../libs/gates', () => ({
 vi.mock('../libs/helpers', () => ({
   requireFields: vi.fn(),
   fetchWithTimeout: vi.fn(),
+  setRpcAuth: vi.fn(),
   addressToUserId: vi.fn(),
 }));
 vi.mock('./config.ctrl', () => ({

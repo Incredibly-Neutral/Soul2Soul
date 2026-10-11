@@ -104,10 +104,15 @@ async function main() {
     return;
   }
 
-  // ── Push: transport-union Kubo add ──
+  // ── Push: transport-union Kubo add (writes require the gateway bearer token) ──
   const fd = new FormData();
   fd.append('file', blob);
-  const addRes = await fetch(`${GATEWAY}/api/v0/add`, { method: 'POST', body: fd });
+  const kuboAuth = process.env.KUBO_TOKEN ? { Authorization: `Bearer ${process.env.KUBO_TOKEN}` } : {};
+  const addRes = await fetch(`${GATEWAY}/api/v0/add`, {
+    method: 'POST',
+    headers: kuboAuth,
+    body: fd,
+  });
   if (!addRes.ok) throw new Error(`transport-union add failed: ${addRes.status} ${addRes.statusText}`);
   const addJson = await addRes.json();
   console.log(`\ntransport-union add → ${addJson.Hash}`);

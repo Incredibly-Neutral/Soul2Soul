@@ -26,6 +26,7 @@ export const sampleJob: S2SJob = {
 
 export const sampleEndpoints = {
   ipfsGateway: 'https://ipfs.transport-union.dev',
+  ipfsGatewayAuth: 'Bearer test-token',
   rpcs: {
     L1: ['https://lb.drpc.live/ethereum/key'],
     L2: ['https://lb.drpc.live/base/key'],

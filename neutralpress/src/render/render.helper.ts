@@ -98,6 +98,7 @@ export async function renderCalls(
 		// move outside
 		const signature = await main.oxo.ctrlr.account['BASE'].signMessage('lit actions auth');
 		const rpcs = buildRpcEndpoints(main);
+		const kuboToken = main.oxo?.settings?.kubo_token;
 		const res: any = await renderwithLitActions(
 			!publish,
 			main.oxo.ctrlr.lit,
@@ -112,6 +113,8 @@ export async function renderCalls(
 			rpcs,
 			undefined,
 			remove,
+			undefined, // reset
+			kuboToken ? `Bearer ${kuboToken}` : undefined, // _ipfsGatewayAuth
 		);
 
 		console.log({ RES: res });

@@ -4,6 +4,7 @@ import OxO from './main.js';
 import { IOXOUser } from './user/user.js';
 import { IInvite, IUpdate } from './types/oxo.js';
 import { accountField } from './settings.factory.js';
+import { setRpcAuth } from './ipfs/remotekubo.service.js';
 import { AuthorModal } from './user/author.modal.js';
 
 export type PinProvider = 'pinata' | 'filebase';
@@ -26,6 +27,8 @@ export interface IOxOSettings {
 	pin_provider: PinProvider;
 	litUsageKey: string;
 	kubo_url: string;
+	/** Bearer token for authenticated Kubo RPC writes on the data gateway. */
+	kubo_token: string;
 }
 
 export const DEFAULT_SETTINGS: IOxOSettings = {
@@ -46,6 +49,7 @@ export const DEFAULT_SETTINGS: IOxOSettings = {
 	pin_provider: 'filebase',
 	litUsageKey: '',
 	kubo_url: 'ipfs.transport-union.dev',
+	kubo_token: '',
 };
 
 export class OxOAuthorsTab extends PluginSettingTab {
@@ -282,6 +286,24 @@ export class OxOAuthorsTab extends PluginSettingTab {
 			.addText((text) =>
 				text.setValue(this.plugin.settings.litUsageKey).onChange(async (value) => {
 					this.plugin.settings.litUsageKey = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('KUBO RPC TOKEN')
+			.setDesc(
+				'Bearer token for Kubo RPC writes on the data gateway (files/, add, dag/put, pin/add). Must match the token in the gateway nginx config.',
+			)
+			.addText((text) =>
+				text.setValue(this.plugin.settings.kubo_token).onChange(async (value) => {
+					this.plugin.settings.kubo_token = value.trim();
+					// Re-sync the live RPC auth header without requiring a restart.
+					setRpcAuth(
+						this.plugin.settings.kubo_token
+							? `Bearer ${this.plugin.settings.kubo_token}`
+							: undefined,
+					);
 					await this.plugin.saveSettings();
 				}),
 			);

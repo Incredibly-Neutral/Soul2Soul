@@ -2,6 +2,8 @@
 
 > **Audited against live code:** 2026-08-03; **partial re-audit 2026-08-06** for the
 > `EvmUpdateInput.remove` field + its zod schema (see handoff `handoff-actions-fixes-and-remove.md`).
+> **cid-view re-audit 2026-10-11** — the publication CID inventory + ipfs-check retrievability
+> wave (2026-10-08→10-11; see brain/worktrees.md).
 >
 > Component spec for `shared/` (`@s2s/soul2soul-shared`) — the common library every other package
 > imports. Read **SPEC-00** first. This spec is the **canonical type catalog** the front-end specs
@@ -53,7 +55,7 @@ get a runtime-free subset). Each entry tailors the surface to one build context:
 | `@s2s/soul2soul-shared` (`index.ts`) | **everything** (services + types + ABIs + identity) | neutralpress, 0xobsidian (**esbuild**) | full runtime OK |
 | `@s2s/soul2soul-shared/lit-actions` (`lit-actions.ts`) | **types + ABIs only**, no runtime | `protocol/actions` (**action bundler**) | **INV-7:** never add runtime/Node deps; zod validators intentionally commented out (bundle size) |
 | `@s2s/soul2soul-shared/rendering/action-io` (`rendering/action-io.ts`) | **zod runtime schemas** for action I/O (e.g. `s2sContentItemSchema`) | `protocol/actions` — only the action that needs runtime validation (currently `render` via `archive.factory`) | **narrow, deliberate:** carries zod into exactly one action bundle; added 2026-08-19 to fix the 413 (root-barrel import had dragged the whole shared graph into `render/main.js`, 2.6 MB → 341 KB). Do NOT re-export these schemas from `lit-actions` (keeps it zod-free, INV-7); do NOT import them from the root barrel inside action code. |
-| `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | minimal: `getProtocolInfo`, `fetchById`, `LitService`, types | safe-app (**Vite**) | keep lean — "no Lit/Lens/CCIP baggage" |
+| `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | `getProtocolInfo`, `LitService`, types + **the whole `cid-view/` surface** + `ConfigBuilder`/`AssetsBuilder`/`S2SIPFSMethods` | safe-app (**Vite**) | "no Lit/Lens/CCIP baggage" — the cid-view addition is deliberate (safe-app is its only consumer) |
 
 ## Canonical type catalog (single source of truth)
 
@@ -124,7 +126,41 @@ Key design decisions (from HANDOFF-content-item):
 | `metadata/` | `S2SContentInfo` type (+ client-side provenance helpers) | signing itself is in the action (`render/metadata.ts`, INV-5) |
 | `identity/` | **NEW** — sign-content, verify-content, JCS canonical JSON | EIP-712 signing and authorship verification. The `TypedDataSigner` interface is implemented by `PermissionlessSimpleService` in 0xobsidian (which already has `signTypedData`). `signContentItem` method wraps `buildSignedContentItem` for the publish pipeline. |
 | `helpers/` | `withRetry`, `callWithTimeout` | |
-| `eth-rpc/` | RPC helpers | |
+| `eth-rpc/` | RPC helpers |
+| `cid-view/` | **NEW** — the unified "all CIDs a publication uses" inventory + per-CID retrievability monitoring (dedicated section below) | exported wholesale via the `./safe-app` entry; collectors + coordinator + parser + ipfs-check client |
+| `filecoin/` | **NEW** — `FilecoinStorage` (Synapse + filecoin-pin CAR builder): upload/retrieve/delete/terminate, `uploadWithMinCopies`, `estimateMonthlyCost` | entry `@s2s/soul2soul-shared/filecoin`; browser CAR builder injected by the consumer (safe-app `src/filecoin/car-builder.ts`) |
+
+## cid-view — the publication CID inventory + retrievability monitoring (NEW)
+
+A sub-package under `shared/src/cid-view/`, exported wholesale via the `@s2s/soul2soul-shared/safe-app`
+entry (safe-app is the only consumer so far). It answers two questions for a storage operator:
+**every CID a publication uses** (deals/offers + version history, config/templates/assets, the site
+tree, the archive) and **which platforms currently hold a copy of each** (kubo / pinata / filebase /
+filecoin). Built 2026-10-08→10-11 (see brain/worktrees.md): T1 collectors → T2 incremental
+coordinator → T3 safe-app SWR cache → T4a retrievability core → PR #126 parser → #127–#129 Type
+column + chips + health buckets → #130 resume/persist → #131 exclude-version-CIDs.
+
+| file | role |
+|---|---|
+| `types.ts` | canonical **zod-free** types (INV-7 discipline): `CidCategory` (13 values), `CidEntry`, `CidViewSummary`, `CidViewMeta` (incremental baseline), `PublicationCidView`, `DealRead`, `VersionRead` |
+| `context.ts` | `CidViewReadContext` — transport-agnostic read contract: `getDeals`/`getOffers`/`getVersions`(+`getVersionsRange`)/`getConfig`/`getEnsText`/`dagGet`/`ls`/`cat` |
+| `adapter.ts` | `createCidViewContext(deps)` — thin 1:1 delegate factory; the consumer (safe-app) supplies chain/IPFS transports |
+| `deals.ts` | deal/offer/version collector + `DealCidSnapshot`/`dealFingerprint`/`collectDealCidsIncremental` (fingerprint fast-path → 0 version calls when unchanged; per-genesis count+tail diff; revoked-history retention) |
+| `config.ts` | config/template-DAG/assets collector (`configCid` → `templateCid` DAG → `assetsCid` unixfs tree walk, depth/entry caps) |
+| `tree.ts` | site tree + archive collectors (`contenthash_wrapped` via `decodeContenthashWrapped`, ENS `content_cache_<pub>` archive JSON → `archive-item` CIDs) |
+| `coordinator.ts` | **composition root** — `buildPublicationCidView(ctx, pub, {prev})`: COLD (all four collectors, stable merge order + cross-collector dedupe) vs INCREMENTAL (when `prev.meta.complete === true`, per-layer root-diff/reuse, zero version/RPC calls on unchanged layers); attaches the `meta` block; self-heals to cold on incomplete; validates via `parsePublicationCidView` |
+| `retrievability.ts` | per-CID retrievability core (T4a): `RETRIEVABILITY_SOURCES` (kubo/pinata/filebase/filecoin), `CidRetrievabilityStatus` + `CheckState` (ok/no-providers/inconclusive/not-served/failed), `RetrievabilityReadContext.hasCopy`, `checkCidRetrievability` (fail-open per source, capped concurrency, clone-merge into `prev`), `cidsFromView`, `filecoinBackedCidsFromView`, `orderByCopiesAscending`/`orderByStaleness` (never-checked-first, stable) |
+| `retrieval-parser.ts` | **ipfs-check `/batch` NDJSON parser** (PR #126) — pure, no fetch/zod (INV-7). `parseRow` → `ParsedCidRetrievability` (per-platform flags, copies 0–4, provider totals, error); `classifyProvider`; `parseBatchNdjson`; `aggregateRetrievability` (category rollups + missing/single-copy CID lists); `toCidRetrievabilityStatus` bridge. `FILECOIN_SP_HOSTS` (8 known SP gateways, mirrors `BROWSER_USABLE_PROVIDERS` in `filecoin/`) drives the filecoin flag |
+| `ipfs-check-client.ts` | the ONLY network surface in cid-view (INV-7): `checkBatch` (POST /batch, streamed NDJSON line-by-line), `statusFromCheckLine` (classifies each provider probe serves/missing/unreachable → CheckState; inconclusive/failed keeps last-known result and does NOT advance freshness), `checkRetrievability` (chunked orchestration, merges into `prev`, persists via injected `IpfsCheckBatchCache`, fail-open, rethrows only on abort). Endpoint `https://ipfs-check.transport-union.dev` |
+| `validation.ts` | zod schemas mirroring `types.ts` exactly: `cidCategorySchema`/`cidEntrySchema`/`cidViewMetaSchema`/`publicationCidViewSchema` + `parsePublicationCidView`; `parseCidRetrievabilityMap` (localStorage retrievability map) |
+| `index.ts` | barrel |
+
+Classification rules (empirical — do not invent others): served = Bitswap.Found OR HTTP.Found;
+kubo by agent (`/kubo|go-ipfs/`), pinata/filebase by host string, filecoin by Addr-host ∈
+`FILECOIN_SP_HOSTS`; a non-array `result` (e.g. MutableResolution for a non-CID) = no providers
+(note the deliberate divergence: `parseRow` treats it as a hard error, the client's
+`statusFromCheckLine` as `no-providers` — see the files). `FILECOIN_SP_HOSTS` and
+`BROWSER_USABLE_PROVIDERS` must stay in sync.
 
 ## The validation module (directly relevant to the testing plan)
 
@@ -168,15 +204,12 @@ entry. This is the existing author/publication gate, extended to guard appends.
 - **Two content-type systems coexist** during migration: the old Lens-era S2SBody/S2SPublicContent
   and the new S2SContentItem (protocol/types.ts). Actions still use the old; the identity modules
   use the new. Existing code not yet migrated.
-- **contenthash codec + CIDv1-for-subdomain conversion not yet homed here (GAP-14).** The INV-6
-  `contenthash_wrapped` codec (`0xe3`/`0x01`/base58-decode CIDv0) and the CIDv0→v1 display-label
-  conversion (OPEN-TASK-1's preview subdomain requires CIDv1 base32) are duplicated across 4 files
-  in 3 packages; the canonical `contenthashToIPFS` is trapped in `protocol/actions/src/libs`
-  (unreachable by clients). `shared/src/ipfs/index.ts` has no contenthash helper today despite
-  depending on `multiformats`. Consolidation target: pure helpers
-  `decodeContenthashWrapped` / `encodeContenthashWrapped` / `toPreviewLabel` here, exported via the
-  **zod-free** entry (INV-7; mirror `@s2s/soul2soul-shared/lit-actions`) so action libs re-export
-  and clients import. Doing so closes the neutralpress preview-link gap (OPEN-TASK-1).
+- **contenthash codec homed here (GAP-14 — RESOLVED 2026-10-11).** `shared/src/ipfs/contenthash.ts`
+  owns `parseCID` / `decodeContenthashWrapped` / `encodeContenthashWrapped` / `toPreviewLabel`,
+  exported from BOTH the zod-free `lit-actions` entry (INV-7 — action libs such as
+  `protocol/actions/src/libs/ipfs.factory.ts` import it from there) and the root barrel (safe-app
+  `src/lib/contenthash.ts`). The old `contenthashToIPFS` trapped in `protocol/actions/src/libs` is
+  gone; `cid-view/tree.ts` consumes `decodeContenthashWrapped` from here.
 - **`isBasedOn` removed** from the new content-item shape. Edit history is the contract append log.
   Cross-document derivation is deferred.
 - **No `license` field on the new content-item.** The permission model is the access gate —
@@ -187,16 +220,28 @@ entry. This is the existing author/publication gate, extended to guard appends.
 
 - 🟢 add services/helpers behind `index.ts`; extend zod schemas (both old and new); add ABIs.
 - 🟢 migrate action code from S2SBody to the new S2SContentItem (incremental).
+- 🟢 extend `cid-view/` (new collectors, new retrievability sources/fields) — keep the INV-7 purity
+  split (pure parser vs the single network client) and mirror any new zod schema in `validation.ts`.
 - 🔴 add runtime/Node deps to `lit-actions.ts` (breaks INV-7 bundling); change the `getProtocolInfo`
   record-key set without mirroring the action copy (INV-2); fork the canonical types further.
+- 🔴 change the ipfs-check classification rules (served/agent/host semantics, `FILECOIN_SP_HOSTS`)
+  without re-validating against the live endpoint; break the parser↔client purity split; diverge
+  `statusFromCheckLine` from `parseRow`'s non-array-`result` semantics without updating both.
 - 🔴 change the `encryption` field treatment (the new flat shape's `boolean` vs the old
   discriminated union) without updating both the identity modules and the action-io schemas.
 
 ## Test seams
 
-- **No standalone suite for `shared`.** It is validated only as compiled into its consumers — the
-  package builds (esbuild/Vite/action bundler) plus the consumers' unit/sequence tests are shared's
-  test coverage. The right place to assert shared's contracts is at the consumer boundaries.
+- **No standalone suite for `shared`** — except the `cid-view/` module, which carries its own vitest
+  suite (~2,900 lines: retrieval-parser 495, ipfs-check-client 388, coordinator 678, deals 864,
+  config 249, tree 382, retrievability 312, adapter 89 — run via `pnpm -C shared test`). Everything
+  else is validated only as compiled into its consumers — the package builds (esbuild/Vite/action
+  bundler) plus the consumers' unit/sequence tests are shared's test coverage. The right place to
+  assert shared's contracts is at the consumer boundaries.
+- **NEW test seam (cid-view):** fake `CidViewReadContext`s drive the collectors + coordinator; fake
+  fetch streams drive the ipfs-check batch client; the parser is pure. The safe-app
+  `s2s-cid-view-section` / `s2s-storage-tab` component tests exercise the same contracts through the
+  app's `lib/cid-view/` wiring.
 - The zod schemas **are** the boundary fixtures — assert real `getProtocolInfo`/`getConfig`/
   `fetchById` outputs parse against them at the consumer that calls them; the first failure names the field.
 - **NEW test seam:** `identity/jcs.ts` is pure — unit test deterministic JSON + keccak round-trips.
