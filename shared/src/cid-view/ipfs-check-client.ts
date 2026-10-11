@@ -157,11 +157,14 @@ export function statusFromCheckLine(
         : 'not-served';
 
   // Could not reach ANY provider → no signal this pass. Keep the last-known
-  // result and just flag it (inconclusive + lastErrorAt), so the cid stays
-  // unfresh and the next auto pass retries it instead of painting it lost.
-  if (state === 'inconclusive' && options.prev) {
+  // result and just flag it (inconclusive + lastErrorAt). Crucially the
+  // freshness stamp is NOT advanced: a previously-checked cid keeps its old
+  // checkedAt and a never-checked cid keeps '' (never fresh), so EVERY
+  // inconclusive cid is retried by the next auto pass instead of being
+  // treated as a fresh conclusive answer (same rule as 'failed').
+  if (state === 'inconclusive') {
     return {
-      ...options.prev,
+      ...(options.prev ?? emptyStatus()),
       state: 'inconclusive',
       providersFound: providers.length,
       ms: line.ms,

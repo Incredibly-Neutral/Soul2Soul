@@ -173,11 +173,16 @@ describe('statusFromCheckLine', () => {
     expect(withPrev.checkedAt).toBe('2025-12-31T00:00:00.000Z'); // stays unfresh → retried
     expect(withPrev.state).toBe('inconclusive');
     expect(withPrev.lastError).toBe('all providers unreachable');
-    // Without a previous result: all-false baseline + inconclusive flag.
+    // Without a previous result: all-false baseline + inconclusive flag, and
+    // checkedAt stays '' so the cid is never treated as fresh → retried next
+    // auto pass (consistent with the failed path).
     const fresh = statusFromCheckLine({ cid: 'bafyconfig', result: [unreachable] }, { now });
     expect(fresh.copies).toBe(0);
     expect(fresh.sources).toEqual(SOURCES_FALSE);
     expect(fresh.state).toBe('inconclusive');
+    expect(fresh.checkedAt).toBe('');
+    expect(fresh.lastError).toBe('all providers unreachable');
+    expect(fresh.lastErrorAt).toBe(now());
   });
 
   it('one serving provider among unreachable ones → ok', () => {
