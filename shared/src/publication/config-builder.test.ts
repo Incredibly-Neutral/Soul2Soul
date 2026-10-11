@@ -143,6 +143,87 @@ describe('ConfigBuilder', () => {
       });
     });
 
+    it('writes a real IPLD link per template entry on the fresh-build path', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes('/commits/')) {
+          return Promise.resolve(makeResponse({ sha: 'abc123def' }));
+        }
+        // GitHub templates dir → two template files
+        if (url.includes('/contents/templates')) {
+          return Promise.resolve(
+            makeResponse([
+              {
+                path: 'templates/post.hbs',
+                download_url:
+                  'https://raw.githubusercontent.com/owner/repo/main/templates/post.hbs',
+                type: 'file',
+              },
+              {
+                path: 'templates/layout.hbs',
+                download_url:
+                  'https://raw.githubusercontent.com/owner/repo/main/templates/layout.hbs',
+                type: 'file',
+              },
+            ]),
+          );
+        }
+        // GitHub API contents — no assets
+        if (url.includes('api.github.com/repos')) {
+          return Promise.resolve(makeResponse([]));
+        }
+        // Template file body
+        if (url.includes('raw.githubusercontent.com') && url.endsWith('.hbs')) {
+          return Promise.resolve(makeResponse('Hello {{name}}'));
+        }
+        // raw.githubusercontent.com for mapping.json
+        if (url.includes('raw.githubusercontent.com')) {
+          return Promise.resolve(
+            makeResponse(
+              JSON.stringify({
+                templateConfig: [{ template: 'post', selector: '.post' }],
+                ripples: [],
+                localePaths: { default: '', nl: '', en: '/en' },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(makeResponse(''));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const ipfs = mockIPFS();
+      ipfs.fetchFromKubo.mockRejectedValue(new Error('not found'));
+      // Distinct CID per template file so we can assert each link tracks its own cid.
+      ipfs.addToKubo.mockImplementation((_content: string, name: string) =>
+        Promise.resolve(`cid-${name}`),
+      );
+      const builder = makeBuilder(ipfs);
+
+      await builder.buildConfig(
+        'owner',
+        'repo',
+        'main',
+        'testpub.soul2soul.eth',
+        '0x1234',
+        'mock-assets-cid',
+      );
+
+      const dagPutCall = (ipfs.dagPut as any).mock.calls[0];
+      const templatesPayload = JSON.parse(dagPutCall[0]);
+      expect(templatesPayload).toHaveLength(2);
+      for (const entry of templatesPayload) {
+        // Every entry keeps path/cid/body and gains a REAL IPLD link derived
+        // from its own cid (`{ '/': <cid> }` — the dag-json link form).
+        expect(entry.path).toBeDefined();
+        expect(entry.body).toBeDefined();
+        expect(entry.link).toEqual({ '/': entry.cid });
+      }
+      // Sanity: the two cids are distinct, so each link is derived from the
+      // entry that carries it (not a shared/static value).
+      expect(templatesPayload[0].link['/']).toBe('cid-post.hbs');
+      expect(templatesPayload[1].link['/']).toBe('cid-layout.hbs');
+    });
+
     it('fetches mapping.json at commit SHA not branch ref', async () => {
       const fetchMock = vi.fn((url: string) => {
         if (url.includes('/commits/')) {
@@ -464,6 +545,11 @@ describe('ConfigBuilder', () => {
       // so the existing one is kept from the fetched config
       expect(templatesPayload).toHaveLength(1);
       expect(templatesPayload[0].path).toBe('templates/post.hbs');
+      // Carried-forward entry (from the fetched existing config) also gets a
+      // REAL IPLD link derived from its cid — it must not be skipped on the
+      // existing-config merge path.
+      expect(templatesPayload[0].cid).toBe('existing-cid');
+      expect(templatesPayload[0].link).toEqual({ '/': 'existing-cid' });
     });
   });
 });

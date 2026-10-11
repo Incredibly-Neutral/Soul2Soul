@@ -187,7 +187,16 @@ export class ConfigBuilder {
     }
 
     // --- Upload templates DAG ---
-    const templatesCid = await this.ipfs.dagPut(JSON.stringify(config.templates), 'templates.json');
+    // Normalize the templates array into a dag-json payload whose entries carry
+    // REAL IPLD links (`{ '/': <cid> }`) derived from each entry's cid, so
+    // recursive pinning (Filebase pin-by-CID) and dag export (Filecoin CAR)
+    // traverse to the actual template files instead of stopping at this single
+    // dag-cbor node. The link is derived from cid at this single point so it
+    // can never drift — including entries carried forward through the
+    // existing-config merge path. The original array is left untouched
+    // (path/cid/body exactly as before).
+    const templatesPayload = config.templates.map((t: any) => ({ ...t, link: { '/': t.cid } }));
+    const templatesCid = await this.ipfs.dagPut(JSON.stringify(templatesPayload), 'templates.json');
     console.log('[config-builder] templates dagPut CID:', templatesCid);
 
     // --- Fetch mapping.json at the pinned commit SHA ---
