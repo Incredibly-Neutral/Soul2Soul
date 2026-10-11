@@ -38,6 +38,7 @@ import { theme } from '../../src/styles/theme';
 import {
   DOMAIN_VALIDATION_CONFIG,
 } from '../../src/lib/domain-validation';
+import { pinCidFromRemote } from '@s2s/soul2soul-shared';
 
 // Adopt the design tokens the way main.ts does so var(--gray-*) resolve in the
 // test document exactly like in the real app. Without this the alias-pill's
@@ -130,7 +131,24 @@ const m = vi.hoisted(() => {
 
   const evmRead = vi.fn();
 
-  return { makeStore, safeIntegration, protocolIntegration, storage, evmRead, buildConfigCalls: [] as any[][] };
+  // templateCid seam: the mocked ConfigBuilder echoes this as the built
+  // config's templateCid (mirroring the REAL builder, which sets
+  // publicationConfig.templateCid from the templates DAG). Default null =>
+  // existing tests keep seeing a config with no templateCid.
+  let templateCid: string | null = null;
+
+  return {
+    makeStore,
+    safeIntegration,
+    protocolIntegration,
+    storage,
+    evmRead,
+    buildConfigCalls: [] as any[][],
+    setTemplateCid: (v: string | null) => {
+      templateCid = v;
+    },
+    getTemplateCid: () => templateCid,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -144,7 +162,10 @@ vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
       // Echo the aliases the caller passed (mirrors the real builder, which
       // persists the supplied alias list into config.aliases).
       const aliases = Array.isArray(args[8]) ? args[8].slice() : [];
-      return { cid: 'config-cid', config: { aliases } };
+      const config: { aliases: string[]; templateCid?: string } = { aliases };
+      const tpl = m.getTemplateCid();
+      if (tpl) config.templateCid = tpl;
+      return { cid: 'config-cid', config };
     });
   },
   AssetsBuilder: class {
@@ -160,7 +181,9 @@ vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
 
 vi.mock('@s2s/soul2soul-shared', () => ({
   renderwithLitActions: vi.fn(),
-  pinCidFromRemote: vi.fn(),
+  // Mirrors the real shape (Promise<boolean>) so the component's
+  // `void pinCidFromRemote(...).then(...)` never trips on a non-thenable.
+  pinCidFromRemote: vi.fn(async () => true),
   LitService: class {},
 }));
 
@@ -293,6 +316,7 @@ describe('s2s-records-tab', () => {
     (store as unknown as { reset: () => void }).reset();
     vi.clearAllMocks();
     m.buildConfigCalls = [];
+    m.setTemplateCid(null);
     vi.spyOn(window, 'open').mockImplementation(() => null);
     document.body.replaceChildren();
   });
@@ -485,6 +509,63 @@ describe('s2s-records-tab', () => {
     expect(m.buildConfigCalls[0][8]).toEqual([]);
     // The list is now empty (all write-targets cleared).
     expect(renderedAliasNames(el)).toEqual([]);
+  });
+
+  it('pins templateCid to Filebase after the build flow (provider filebase, recursive)', async () => {
+    // Seed name + config records so the config row's Update button renders.
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+    ]);
+    const el = await mountTab();
+
+    // Make dagExport (the only real network call in the Filecoin paths) fail
+    // fast so the non-fatal Filecoin uploads degrade gracefully instead of
+    // hitting the gateway.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'stubbed',
+        text: async () => 'stubbed',
+      })),
+    );
+
+    // The builder returns a templateCid (the templates DAG) — mirror the real
+    // ConfigBuilder shape for this run.
+    m.setTemplateCid('bafytemplates-1');
+
+    // Wait for the config row's Update button to render, then trigger the build.
+    await vi.waitFor(
+      () =>
+        expect(
+          [...el.shadowRoot!.querySelectorAll('button')].some((b) =>
+            b.textContent?.includes('Update'),
+          ),
+        ).toBe(true),
+      { timeout: 5000 },
+    );
+    clickButton(el, 'Update');
+
+    // Wait for the FULL build flow to settle (terminal optimistic store write).
+    await vi.waitFor(
+      () => {
+        expect(store.getRecord('config')).toBe('config-cid');
+        expect(m.buildConfigCalls.length).toBe(1);
+      },
+      { timeout: 5000 },
+    );
+
+    // After the build, templateCid is pinned to Filebase (recursive remote
+    // pin) — the same pinCidFromRemote path neutralpress uses for the assets
+    // tree. Provider is 'filebase' only (no pinata pin).
+    expect(vi.mocked(pinCidFromRemote)).toHaveBeenCalledWith(
+      'bafytemplates-1',
+      'https://ipfs.transport-union.dev',
+      expect.any(String), // VITE_FILEBASE_TOKEN, '' when unset
+      'filebase',
+    );
   });
 });
 
