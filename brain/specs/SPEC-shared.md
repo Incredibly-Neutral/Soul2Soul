@@ -162,6 +162,18 @@ kubo by agent (`/kubo|go-ipfs/`), pinata/filebase by host string, filecoin by Ad
 `statusFromCheckLine` as `no-providers` — see the files). `FILECOIN_SP_HOSTS` and
 `BROWSER_USABLE_PROVIDERS` must stay in sync.
 
+### heal — pin a remote CID everywhere (NEW, 2026-10-11)
+
+A sibling sub-package under `shared/src/heal/`, exported via the `@s2s/soul2soul-shared/safe-app`
+entry (and the root barrel for other esbuild consumers). Given a CID already living on the remote
+kubo node, spread it over a provider array so a copy is guaranteed across kubo ("remkubo"), pinata,
+filebase and 2× filecoin.
+
+| file | role |
+|---|---|
+| `heal.ts` | `HealProvider` (kubo/pinata/filebase/filecoin), `HEAL_PROVIDERS` default array, `HealConfig`, `HealFilecoinUploader`, `HealResult`/`HealOutcome`; `healCid(cid, config, providers?, {concurrency?})` — concurrency-limited (default 2), **fail-open per provider** (a throwing provider records its error and the rest still run; `healCid` never rejects), returns `ok`/`partial` + a `sources` map the UI flips availability dots from. kubo = `POST {source}/api/v0/pin/add` (Bearer kuboToken); pinata + filebase reuse the `pin/index.ts` `pinCidFromRemote` primitive; filecoin = injected `HealFilecoinUploader` (ok iff `copyCount >= 2` — the "2x filecoin" guarantee). Transport-agnostic (fetch + AbortSignal + performance only, no new deps, INV-7-safe). |
+| `index.ts` | barrel |
+
 ## The validation module (directly relevant to the testing plan)
 
 `publication/validation.ts` already defines **zod** schemas: `bodySchema`, `rippleSchema`,

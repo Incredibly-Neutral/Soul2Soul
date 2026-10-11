@@ -51,7 +51,7 @@ Cloud transactions (`deletePiece`/`terminateDataSet`).
 | `components/s2s-app.ts` | root element; **5 tabs (Deals/Whitelists/Records/Storage/Website Tree)**; two-phase render (cache→fetch); reads site root via `getText(node,"contenthash_wrapped")`; boots `FilecoinStorage` (`initWithSessionKey`) |
 | `components/s2s-deals-tab.ts` | Filecoin deals/offers via `getAllDealsAndOffers`; maps deals → list (replaces the old `s2s-licences-tab.ts`) |
 | `components/s2s-storage-tab.ts` | storage tab: **CID inventory** (`s2s-cid-view-section`) + Filecoin Storage/Data-Sets tables, cost summary, piece delete + dataset terminate |
-| `components/s2s-cid-view-section.ts` | read-only **CID inventory + retrievability monitor** (see Key flows) |
+| `components/s2s-cid-view-section.ts` | read-only **CID inventory + retrievability monitor** (see Key flows) + per-row **heart-heal** column (red spots → heal via shared `healCid`) |
 | `components/s2s-check.ts` | generic single-action check pill (whitelist "can publish", deals "genesis has a deal") — parent drives `.result` |
 | `components/s2s-table.ts`, `table-filter.ts`, `toggle-button.ts` | reusable table (sort/filter chrome), filter dropdown, toggle atom |
 | `components/s2s-button.ts`, `s2s-sliding-add-button.ts` | gradient-border button atom + sliding add (deals/website-tree row actions) |
@@ -59,7 +59,7 @@ Cloud transactions (`deletePiece`/`terminateDataSet`).
 | `components/s2s-records-tab.ts` | view/edit config records; config/asset build entry |
 | `components/copy-*.ts` | UI atoms (clipboard, copy-hash, etc.) |
 | `state/store.ts` + `observable.ts` + `*.store.ts` + `storage.ts` | observable store, **localStorage-backed**, slice subscriptions |
-| `lib/cid-view/` (`context.ts`, `cache.ts`, `ipfs-check.ts`, `index.ts`) | safe-app wiring of the shared cid-view surface: `buildSafeAppCidViewContext` (adapter), localStorage retrievability cache, ipfs-check batch wrapper (batch size 3) |
+| `lib/cid-view/` (`context.ts`, `cache.ts`, `ipfs-check.ts`, `heal.ts`, `index.ts`) | safe-app wiring of the shared cid-view surface: `buildSafeAppCidViewContext` (adapter), localStorage retrievability cache, ipfs-check batch wrapper (batch size 3), **heal adapter** (`buildHealConfig` + `healToFilecoin` dag/export→uploadTree) |
 | `lib/safe-integration.ts` | Safe SDK wrapper: discover modules (INV-4), read records/licenses, **propose** mutations |
 | `lib/protocol-integration.ts` | `getProtocolInfo(false, L1, L2)` via **viem** clients |
 | ~~`lib/config-builder.ts`~~ | ~~`ConfigBuilder`~~ — **moved to `shared/src/publication/config-builder.ts`** (GAP-12 consolidation); safe-app imports from shared |
@@ -102,6 +102,13 @@ Cloud transactions (`deletePiece`/`terminateDataSet`).
   - Health buckets: 0 copies = lost · 1 = danger · 2–4 = needs healing · ≥5 = healthy; an
     inconclusive/failed pass never reads as "lost" (overloaded check node ≠ data loss). Type + health
     chips are toggle filters; the flat table is risk-sorted (fewest copies first).
+  - **Heart heal** (PR #139): rows with red spots (lost/danger/needs-healing, incl. inconclusive/failed)
+    get a red `ph-heart` button; clicking runs the shared `healCid` across kubo/pinata/filebase + 2×
+    filecoin (`lib/cid-view/heal.ts` builds the config: env tokens + source `https://ipfs.transport-union.dev`;
+    filecoin uploader = `dag/export` the CAR from the remote kubo + `FilecoinStorage.uploadTree` → ≥2
+    copies). Confirmed sources fold into the retrievability map optimistically and persist
+    (`s2s.cidview.<pub>.retrievability`); a green check + "n/4 ok" title shows the last successful heal.
+    Fail-open throughout (no throw, no network in tests).
   - Storage-blocked probe: a sandboxed/private iframe that refuses localStorage surfaces
     `⚠ browser storage unavailable` instead of silently degrading.
 
@@ -116,7 +123,8 @@ as Safe proposals).
 Entry point: **`@s2s/soul2soul-shared/safe-app`** (the lean one). Imports: `getProtocolInfo(false,
 L1, L2)` (viem-based), `LitService`, the types `S2SProtocolInfo`/`S2SPublicationConfig`, plus the
 **whole `cid-view/` surface** (`buildPublicationCidView`, `parsePublicationCidView`,
-`createCidViewContext`, collectors, retrievability core, retrieval-parser, ipfs-check client) and
+`createCidViewContext`, collectors, retrievability core, retrieval-parser, ipfs-check client) and the
+**`heal/` surface** (`healCid`, `HealConfig`, `HealOutcome`, `HealProvider`, `HEAL_PROVIDERS`), plus
 `S2SIPFSMethods`/`ConfigBuilder`/`AssetsBuilder`. The Storage tab also pulls
 **`@s2s/soul2soul-shared/filecoin`** (`FilecoinStorage`). These compile into the safe-app bundle —
 treat them as this package's code. (Contract ABIs come from `protocol/generated`, not shared.)
