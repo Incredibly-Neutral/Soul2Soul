@@ -441,6 +441,18 @@ export class S2SRecordsTab extends LitElement {
       }
     }
 
+    // ── Filebase pin (templates DAG) ──────────────────────────────────
+    // Recursive pin of the templateCid DAG so the template files (and the real
+    // IPLD links that will soon sit inside the templates array) become durable
+    // on Filebase — the same remote-pin path neutralpress uses for the rendered
+    // site root (/assets). Fire-and-forget: pinCidFromRemote never throws, so
+    // this can't break the build flow.
+    if (templateCid) {
+      void pinCidFromRemote(templateCid, 'https://ipfs.transport-union.dev', import.meta.env.VITE_FILEBASE_TOKEN || '', 'filebase').then((ok) => {
+        console.log(ok ? '[records] templateCid pinned on filebase' : '[records] filebase pin failed');
+      });
+    }
+
     // ── existing ───────────────────────────────────────────────────────
     const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
