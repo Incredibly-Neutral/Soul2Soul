@@ -13,10 +13,10 @@ export const tableStyles = css`
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    margin-top: 0.75rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--gray-600);
+    gap: 1rem;S
+    margin-top: 1rem;
+    padding-bottom: 1rem;
+]
   }
 
   .table-toolbar__title {
