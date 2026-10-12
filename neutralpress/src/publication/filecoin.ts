@@ -1,19 +1,13 @@
 /**
- * Kubo/durability helpers for neutralpress.
+ * Filecoin durability helpers for neutralpress.
  *
- * Extracted from the old MainController monolith (SPEC-00 §3.2):
- *   - `kuboBaseUrl` — normalised Kubo gateway URL (with protocol), used by
- *     the Filecoin tree-export path.
- *   - `ipfsFromSettings` — builds the shared S2SIPFSMethods client from the
- *     plugin/oxo settings so the 4-way backup (filebase + pinata + filecoin,
- *     see S2SIPFSMethods.backupToProviders) can run after a kubo upload.
- *
- * The fire-and-forget + CID-parity logic that used to live here
- * (filecoinUploadBackground) now lives in the shared method it delegates to —
- * one implementation for every consumer.
+ * Extracted from the old MainController monolith (SPEC-00 §3.2): a normalised
+ * Kubo gateway URL getter and a fire-and-forget Filecoin upload wrapper that
+ * never blocks or throws the main flow.
  */
+import { Notice } from 'obsidian';
+import type { FilecoinUploadResult } from '@s2s/soul2soul-shared/filecoin';
 import type { IMainController } from '../main.ctrlr';
-import { S2SIPFSMethods } from '@s2s/soul2soul-shared';
 
 /** Normalized Kubo API base URL (with protocol) for Filecoin tree export. */
 export function kuboBaseUrl(main: IMainController): string {
@@ -22,22 +16,40 @@ export function kuboBaseUrl(main: IMainController): string {
 }
 
 /**
- * Build the shared IPFS client from plugin/oxo settings — the same token
- * precedence new-publication uses (plugin settings first, oxo fallback).
- * This is what lets the kubo upload path reuse the single shared backup
- * method (`backupToProviders`) for 4-way durable coverage.
+ * Fire-and-forget Filecoin durability upload (SPEC-00 §3.2).
+ * Never throws, never blocks the main flow. When `expectedCid` is given,
+ * asserts CID parity with the Filecoin rootCid (INV-13) and surfaces a
+ * notice on mismatch.
  */
-export function ipfsFromSettings(main: IMainController): S2SIPFSMethods {
-	const pluginSettings = main.plugin.settings as unknown as Record<string, unknown>;
-	const oxoSettings = (main.oxo?.settings ?? {}) as Record<string, unknown>;
-	const kuboGateway =
-		(pluginSettings.data_gateway as string) || 'https://ipfs.transport-union.dev';
-	const pinataJwt =
-		(pluginSettings.pinata_jwt as string) || (oxoSettings.pinata_jwt as string) || '';
-	const pinataGateway =
-		(pluginSettings.pinata_gateway as string) || 'https://neutralpress.mypinata.cloud';
-	const filebaseToken =
-		(pluginSettings.filebase_token as string) || (oxoSettings.filebase_token as string) || '';
-	const kuboToken = (oxoSettings.kubo_token as string) || '';
-	return new S2SIPFSMethods(kuboGateway, pinataJwt, pinataGateway, filebaseToken, kuboToken);
+export function filecoinUploadBackground(
+	main: IMainController,
+	kind: string,
+	upload: () => Promise<FilecoinUploadResult>,
+	expectedCid?: string,
+): void {
+	(async () => {
+		try {
+			const result = await upload();
+			// Quiet success — no logging unless CID parity is violated.
+			if (expectedCid && result.rootCid && expectedCid !== result.rootCid) {
+				console.error(
+					`[cid-mismatch] ${kind}: Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+				);
+				new Notice(
+					`⚠️ CID mismatch (${kind}): Kubo ${expectedCid.slice(0, 12)}… ≠ Filecoin ${result.rootCid.slice(0, 12)}…`,
+				);
+			}
+		} catch (err) {
+			// Exactly one concise line — never the full error object / nested causes.
+			// Detect the min-2-copies failure by its stable error name rather than
+			// importing the class: a value import would force esbuild to bundle the
+			// whole filecoin module (and @filoz/synapse-sdk) into this plugin.
+			if (err instanceof Error && err.name === 'FilecoinMinCopiesError') {
+				console.error(`[filecoin] ${kind} background upload failed: ${err.message}`);
+			} else {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[filecoin] ${kind} background upload failed: ${msg}`);
+			}
+		}
+	})();
 }
