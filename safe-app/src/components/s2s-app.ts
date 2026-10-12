@@ -21,7 +21,7 @@ import './copy-module.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import { tabStyles } from '@/styles/tab-styles.js';
-import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
+import { browserFilecoinBuilder } from '@s2s/soul2soul-shared/filecoin/car-builder/browser';
 
 const RECORDS_CONTRACT_ABI = [
   'function getText(bytes32 node, string key) view returns (string)',

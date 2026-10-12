@@ -24,6 +24,14 @@
       "types": "./dist/filecoin/index.d.ts",
       "default": "./dist/filecoin/index.js"
     },
+    "./filecoin/car-builder/node": {
+      "types": "./dist/filecoin/car-builder/node.d.ts",
+      "default": "./dist/filecoin/car-builder/node.js"
+    },
+    "./filecoin/car-builder/browser": {
+      "types": "./dist/filecoin/car-builder/browser.d.ts",
+      "default": "./dist/filecoin/car-builder/browser.js"
+    },
     "./chain-secured": {
       "types": "./dist/lit/chain-secured.d.ts",
       "default": "./dist/lit/chain-secured.js"
@@ -42,7 +50,7 @@
     "@filoz/synapse-sdk": "^1.0.1",
     "@ipld/car": "^5.4.6",
     "filecoin-pin": "^1.0.1",
-    "multiformats": "^13.4.2",
+    "multiformats": "^14.0.0",
     "@lens-chain/storage-client": "^1.0.6",
     "@lens-protocol/client": "0.0.0-canary-20250430134539",
     "@lens-protocol/metadata": "^2.1.0",
