@@ -1,52 +1,3 @@
-// ── Backup-to-every-provider orchestration ───────────────────────────────────
-// The single method backing up a kubo (ipfs.transport-union.dev) upload at all
-// the other providers (filebase + pinata pins, optional filecoin leg).
-
-/** A pinning-service provider that can mirror an existing CID. */
-export type PinProvider = 'filebase' | 'pinata';
-
-/** Result status of the (fire-and-forget) Filecoin durability leg. */
-export type BackupFilecoinStatus = 'ok' | 'mismatch' | 'failed' | 'skipped';
-
-export interface BackupToProvidersOptions {
-  /**
-   * Which pin services to back the CID up to. Default: both filebase + pinata.
-   */
-  providers?: PinProvider[];
-  /** Override the instance Filebase token (else the instance value is used). */
-  filebaseToken?: string;
-  /** Override the instance Pinata JWT (else the instance value is used). */
-  pinataJwt?: string;
-  /**
-   * Override the Kubo source URL the pins pull from (else the instance
-   * gateway is used). Used as Pinata's `sourceIpfs.apiUrl`. Normalised like
-   * every other kubo endpoint here (https:// + fixEndpoint).
-   */
-  kuboUrl?: string;
-  /**
-   * Filecoin durability leg — app-supplied, because FilecoinStorage needs an
-   * environment-specific CAR builder + init/session key (Node vs browser).
-   * Fired fire-and-forget alongside the pins. The resolved value may carry a
-   * `rootCid` for the INV-13 CID-parity check against `cid`. Never throws
-   * into the caller.
-   */
-  filecoin?: (cid: string) => Promise<{ rootCid?: string } | void | unknown>;
-  /**
-   * Invoked (non-blocking) when the Filecoin `rootCid` does not match the
-   * kubo `cid` — lets app layers surface a user-facing parity warning.
-   */
-  onFilecoinMismatch?: (rootCid: string) => void;
-}
-
-export interface BackupToProvidersResult {
-  /** True when the Filebase pin request was accepted. */
-  filebase: boolean;
-  /** True when the Pinata pin request was accepted. */
-  pinata: boolean;
-  /** Status of the optional Filecoin leg. */
-  filecoin: BackupFilecoinStatus;
-}
-
 export class S2SIPFSMethods {
   private readonly kuboGateway: string;
   private readonly pinataJWT: string;
@@ -97,105 +48,21 @@ export class S2SIPFSMethods {
    * uses for the rendered site root (SPEC-00 §3.2). Never throws; returns whether
    * the pin request was accepted. Used by ConfigBuilder to mirror templateCid.
    */
-  async pinCidRemote(
-    cid: string,
-    provider: 'filebase' | 'pinata' = 'filebase',
-    /** Override the provider token (else the instance value is used). */
-    token?: string,
-    /** Override the Kubo source URL (else the normalised instance gateway). */
-    remote?: string,
-  ): Promise<boolean> {
+  async pinCidRemote(cid: string, provider: 'filebase' | 'pinata' = 'filebase'): Promise<boolean> {
     try {
       const { pinCidFromRemote } = await import('../pin/index.js');
-      const resolvedToken = token ?? (provider === 'pinata' ? this.pinataJWT : this.filebaseToken);
+      const token = provider === 'pinata' ? this.pinataJWT : this.filebaseToken;
       // Normalize the kubo gateway the same way every other method here does
       // (https:// + fixEndpoint) so a scheme-less stored gateway cannot produce
       // a hostless Pinata sourceIpfs.apiUrl (which would silently fail the pin).
-      const resolvedRemote = remote ?? `https://${this.fixEndpoint(this.kuboGateway)}`;
-      return pinCidFromRemote(cid, resolvedRemote, resolvedToken, provider);
+      const remote = `https://${this.fixEndpoint(this.kuboGateway)}`;
+      return pinCidFromRemote(cid, remote, token, provider);
     } catch (error) {
       // Defensive: the dynamic import (the only path that can reject here) must
       // never surface — make "never throws" literally true.
       console.warn('[ipfs] pinCidRemote failed (non-fatal):', error);
       return false;
     }
-  }
-
-  /**
-   * Back up a CID that was just uploaded to the kubo node
-   * (ipfs.transport-union.dev) by mirroring it at the other providers —
-   * filebase + pinata pins and an optional Filecoin durability leg
-   * (SPEC-00 §3.2). This is the single method to call everywhere a kubo
-   * upload needs durable 4-way coverage.
-   *
-   * The kubo upload itself stays at the call site (it is awaited — the CID
-   * is needed there); every backup leg here is fire-and-forget, runs
-   * concurrently, and the method never throws. Call sites should `void` it.
-   */
-  async backupToProviders(
-    cid: string,
-    opts: BackupToProvidersOptions = {},
-  ): Promise<BackupToProvidersResult> {
-    const providers = opts.providers ?? ['filebase', 'pinata'];
-    const remote = `https://${this.fixEndpoint(opts.kuboUrl ?? this.kuboGateway)}`;
-    const filebaseToken = opts.filebaseToken ?? this.filebaseToken;
-    const pinataJwt = opts.pinataJwt ?? this.pinataJWT;
-
-    const result: BackupToProvidersResult = {
-      filebase: false,
-      pinata: false,
-      filecoin: 'skipped',
-    };
-
-    const legs: Array<Promise<void>> = [];
-
-    if (providers.includes('filebase')) {
-      legs.push(
-        this.pinCidRemote(cid, 'filebase', filebaseToken, remote).then((ok) => {
-          result.filebase = ok;
-        }),
-      );
-    }
-
-    if (providers.includes('pinata')) {
-      legs.push(
-        this.pinCidRemote(cid, 'pinata', pinataJwt, remote).then((ok) => {
-          result.pinata = ok;
-        }),
-      );
-    }
-
-    if (opts.filecoin) {
-      legs.push(
-        (async () => {
-          try {
-            const res: any = await opts.filecoin!(cid);
-            const rootCid = res?.rootCid;
-            if (rootCid && rootCid !== cid) {
-              result.filecoin = 'mismatch';
-              console.error(
-                `[backup] CID mismatch: kubo ${cid.slice(0, 12)}… ≠ filecoin ${String(rootCid).slice(0, 12)}…`,
-              );
-              opts.onFilecoinMismatch?.(String(rootCid));
-            } else {
-              result.filecoin = 'ok';
-            }
-          } catch (error) {
-            result.filecoin = 'failed';
-            console.error(
-              '[backup] filecoin leg failed (non-fatal):',
-              error instanceof Error ? error.message : error,
-            );
-          }
-        })(),
-      );
-    }
-
-    // allSettled is belt-and-suspenders: the pin legs already never throw and
-    // the filecoin leg catches its own, but we never want a rejection escaping
-    // a fire-and-forget backup.
-    await Promise.allSettled(legs);
-    return result;
   }
 
   // =========================================================================
