@@ -1,3 +1,14 @@
+## 2026-10-12 — neutralpress vitest suite (orchestrated) — PRs #140 #141 #142 #143 (awaiting human merge)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-12 | #140 | /home/joera/code/worktrees/np-content | agent/np-content-tests | impl-np-content | deepseek-v4-flash-0731 | content authoring + factories unit suite (8 files, 65 tests): parseNote, extractTitleAndBase, slug, custom bag, summaries, isValidForPublishing, distributeImages, ens-tags, _base/_note/_vault, note.factory slug-override seam |
+| 2026-10-12 | #141 | /home/joera/code/worktrees/np-publogic | agent/np-publication-logic-tests | impl-np-publogic | deepseek-v4-flash-0731 | publication pure logic + ABI/config sanity (6 files, 55 tests): intents dispatch, ens registry reads, github requestUrl, filecoin kubo/pinata config, uploadConfig/getTaskConfig shape, ABI names+selectors |
+| 2026-10-12 | #143 | /home/joera/code/worktrees/np-service | agent/np-service-tests | impl-np-service | deepseek-v4-flash-0731 | service/tx-runner/publish/revoke pipeline (4 files, 39 tests) w/ heavy @safe-global/ethers/viem mocking; documents SOURCE BUG: tag.contains should be .includes (getPublicationMultiSigAddresses throws on real tags) |
+| 2026-10-12 | #142 | /home/joera/code/worktrees/np-render | agent/np-render-tests | impl-np-render | deepseek-v4-flash-0731 | render/settings/preview seams (3 files, 24 tests): buildRpcEndpoints, pagePathFor CID digest compare, DEFAULT_SETTINGS + DSGSettingsTab, preview.ctrlr testable seams |
+
+Lead wired the harness directly on main first (`715e11d chore(neutralpress): wire vitest test harness` — vitest.config.ts + mocks + makeMain + test script, build gated on pnpm test; minimal 3-line pnpm-lock.yaml addition, rejecting a 496-line re-resolution churn). 4 worktrees from that commit. Lead independently verified every suite green (content 67/67, publogic 57/57, service 41/41, render 26/26 = 183 new tests across 21 files) and reviewed each diff (test-files-only, no src/config/lockfile changes). Only pi installed → cross-vendor review not possible; single-model limitation flagged per AGENTS.md. PRs #140 #141 #142 #143 open awaiting human merge. Worktrees/panes/agents left in place for requested-change turnaround; cleanup (worktree removal + branch/remote delete + pane close) after merges. Non-blocking notes: network flakiness to github timed out one PR create + one push (both succeeded on retry).
+
 ## 2026-10-09 — T4a shared per-CID retrievability core (orchestrated) — MERGED #120 (main 02ceb8a)
 
 | date | session | worktree | branch | agent | model | task |
