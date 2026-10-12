@@ -139,6 +139,45 @@ describe('statusFromCheckLine', () => {
     expect(status.ms).toBe(42);
   });
 
+  it('two Filecoin SPs serving → providersBySource names both (2-dot case)', () => {
+    const status = statusFromCheckLine(
+      {
+        cid: 'bafysp2',
+        result: [
+          provider({
+            ID: '12D3KooWsp1',
+            Addrs: ['/dns/main.ezpdpz.net/tcp/443/https'],
+            DataAvailableOverHTTP: { Enabled: true, Found: true },
+          }),
+          provider({
+            ID: '12D3KooWsp2',
+            Addrs: ['/dns/main2.ezpdpz.net/tcp/443/https'],
+            DataAvailableOverHTTP: { Enabled: true, Found: true },
+          }),
+        ],
+      },
+      { now },
+    );
+    expect(status.sources.filecoin).toBe(true);
+    expect(status.providersBySource?.filecoin).toEqual([
+      'ezpdpz-main (SP 1)',
+      'ezpdpz-main2 (SP 32)',
+    ]);
+    expect(status.providersBySource?.kubo).toBeUndefined();
+    // copies is per-platform: 2 SPs are still a single filecoin copy.
+    expect(status.copies).toBe(1);
+    expect(status.state).toBe('ok');
+  });
+
+  it('no serving providers → providersBySource omitted', () => {
+    const status = statusFromCheckLine(
+      { cid: 'bafynothing', result: [] },
+      { now },
+    );
+    expect(status.providersBySource).toBeUndefined();
+    expect(status.state).toBe('no-providers');
+  });
+
   it('providers reached but none had the cid → not-served', () => {
     const status = statusFromCheckLine(
       {

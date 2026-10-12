@@ -559,6 +559,12 @@ export class S2SCidViewSection extends LitElement {
       .dot.unknown {
         background: #4b5563;
       }
+      /* Per-provider dot group (Filecoin column): one dot per serving SP. */
+      .dots {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
       /* Copies n/4 risk colouring. */
       .copies {
         font-variant-numeric: tabular-nums;
@@ -1192,14 +1198,22 @@ export class S2SCidViewSection extends LitElement {
     this.cidSearch = '';
   }
 
-  /** Availability dot cell for one source. Gray while unchecked, green/red when checked. */
+  /**
+   * Availability dot cell for one source. Gray while unchecked, green/red when
+   * checked. The FILEcoin column is provider-aware: when the status carries
+   * named serving Filecoin providers it renders ONE dot per provider, each
+   * hover naming that provider (a 2-provider copy shows two dots). Other
+   * sources (kubo/pinata/filebase) keep the single-dot-per-platform shape.
+   */
   private renderSourceDot(
     source: RetrievabilitySource,
     status: CidRetrievabilityStatus | undefined,
   ): TemplateResult {
     let cls = 'dot unknown';
     let label = `${source}: not checked yet`;
+    let providers: string[] | undefined;
     if (status !== undefined) {
+      providers = status.providersBySource?.[source];
       if (status.state === 'inconclusive' && status.copies === 0) {
         // All providers unreachable and no last-known data — unknown, not absent.
         cls = 'dot unknown';
@@ -1211,6 +1225,18 @@ export class S2SCidViewSection extends LitElement {
         if (status.state === 'inconclusive') label += ' — providers unreachable this pass (last-known)';
         if (status.lastError) label += ` — ${status.lastError}`;
       }
+    }
+    const named = providers ?? [];
+    // Filecoin: one dot per serving provider, each hover naming that provider.
+    if (source === 'filecoin' && named.length > 1) {
+      return html`<div class="cid-cell"
+        ><span class="dots"
+          >${named.map((name) => html`<span class="${cls}" title="filecoin: ${name}"></span>`)}</span
+        ></div
+      >`;
+    }
+    if (source === 'filecoin' && named.length === 1) {
+      label = `filecoin: ${named[0]}`;
     }
     return html`<div class="cid-cell"><span class="${cls}" title="${label}"></span></div>`;
   }

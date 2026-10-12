@@ -300,6 +300,27 @@ describe('parseRow — real probe_http.json row (older shape, filecoin over HTTP
     expect(row.totalProviders).toBe(2);
     expect(row.servingProviders).toBe(2);
   });
+
+  it('two Filecoin SPs -> providersBySource names BOTH SPs (the 2-dot case)', () => {
+    const [row] = parseBatchNdjson(PROBE_HTTP_FILECOIN_ROW_NDJSON);
+    expect(row.providersBySource?.filecoin).toEqual([
+      'ezpdpz-main (SP 1)',
+      'ezpdpz-main2 (SP 32)',
+    ]);
+    // copies is per-platform, not per-provider — 2 SPs are still 1 filecoin copy.
+    expect(row.copies).toBe(1);
+  });
+
+  it('toCidRetrievabilityStatus carries providersBySource through', () => {
+    const [row] = parseBatchNdjson(PROBE_HTTP_FILECOIN_ROW_NDJSON);
+    const status = toCidRetrievabilityStatus(row, () => new Date('2026-01-01T00:00:00.000Z'));
+    expect(status.sources.filecoin).toBe(true);
+    expect(status.providersBySource?.filecoin).toEqual([
+      'ezpdpz-main (SP 1)',
+      'ezpdpz-main2 (SP 32)',
+    ]);
+    expect(status.state).toBe('ok');
+  });
 });
 
 describe('parseRow — synthetic rows (rule 7 + robustness)', () => {

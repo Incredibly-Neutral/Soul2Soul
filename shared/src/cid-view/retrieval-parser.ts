@@ -53,6 +53,23 @@ export const FILECOIN_SP_HOSTS: readonly string[] = [
   'main2.ezpdpz.net', // ezpdpz-main2 (SP 32)
 ];
 
+/**
+ * Human display names for the in-use Filecoin SP hosts (mirrors the comments
+ * on FILECOIN_SP_HOSTS). Used for the per-provider dot hover labels in the
+ * Storage CID view — a filecoin copy served by SP 1 + SP 15 shows two dots
+ * named 'ezpdpz-main (SP 1)' and 'TopBlocks (SP 15)'.
+ */
+export const FILECOIN_SP_NAMES: Readonly<Record<string, string>> = {
+  'main.ezpdpz.net': 'ezpdpz-main (SP 1)',
+  'pdp.lotus.dedyn.io': 'Mongo2Stor Mainnet (SP 5)',
+  'mainnet-pdp.infrafolio.com': 'infrafolio-mainnet-pdp (SP 7)',
+  'curio.akave.xyz': 'Angelo (SP 13)',
+  'pdp-main.topblocks.io': 'TopBlocks (SP 15)',
+  'sp.reiers.io': 'TSE Reiersen (SP 29)',
+  'foc.dealbot.site': 'foc-mainnet (SP 30)',
+  'main2.ezpdpz.net': 'ezpdpz-main2 (SP 32)',
+};
+
 /** One provider probe object from an ipfs-check row. All fields optional + loose. */
 export interface IpfsCheckProvider {
   ID?: string;
@@ -96,6 +113,8 @@ export interface ParsedCidRetrievability {
   servingProviders: number;
   sources: Record<RetrievabilitySource, boolean>;
   copies: number;
+  /** Display names of the SERVING providers per platform (filecoin → SP names). */
+  providersBySource?: Partial<Record<RetrievabilitySource, string[]>>;
   error?: string;
 }
 
@@ -205,6 +224,51 @@ export function classifyProvider(provider: IpfsCheckProvider): ParsedProvider {
 }
 
 /**
+ * Best-effort display name for a provider probe, used in the per-provider dot
+ * hover labels. Priority: an in-use Filecoin SP host → its human SP name; then
+ * the agent version (kubo/…, megaphone); then the peer ID; then a generic
+ * fallback. Never throws — a non-object probe returns the fallback.
+ */
+export function providerDisplayName(provider: IpfsCheckProvider): string {
+  if (!isRecord(provider)) return 'unknown provider';
+  for (const addr of [...(provider.Addrs ?? []), ...(provider.ConnectionMaddrs ?? [])]) {
+    const host = hostOf(addr);
+    const name = host !== '' ? FILECOIN_SP_NAMES[host] : undefined;
+    if (name) return name;
+  }
+  if (typeof provider.AgentVersion === 'string' && provider.AgentVersion !== '') {
+    return provider.AgentVersion;
+  }
+  if (typeof provider.ID === 'string' && provider.ID !== '') return provider.ID;
+  return 'unknown provider';
+}
+
+/**
+ * Display names of the SERVING providers, grouped by the platform(s) each
+ * serves (a provider may set several platform flags). Drives the per-provider
+ * dots — e.g. the Filecoin column shows two dots when two SPs hold a copy.
+ * Names are deduped per source (a provider may appear more than once in a
+ * probe). Empty object when nothing serves.
+ */
+export function providersBySourceFromProviders(
+  providers: readonly IpfsCheckProvider[],
+): Partial<Record<RetrievabilitySource, string[]>> {
+  const map: Partial<Record<RetrievabilitySource, string[]>> = {};
+  for (const p of providers) {
+    const classified = classifyProvider(p);
+    if (!classified.served) continue;
+    const name = providerDisplayName(p);
+    for (const source of classified.platforms) {
+      (map[source] ??= []).push(name);
+    }
+  }
+  for (const source of Object.keys(map) as RetrievabilitySource[]) {
+    map[source] = [...new Set(map[source])];
+  }
+  return map;
+}
+
+/**
  * Parse one /batch row into a per-CID verdict. Never throws. A non-object row,
  * an absent/object `result`, or an unparseable shape degrades to a hard-error
  * verdict (all sources false, copies 0, error set) instead of crashing.
@@ -247,6 +311,7 @@ export function parseRow(row: unknown): ParsedCidRetrievability {
     }
   }
 
+  const providersBySource = providersBySourceFromProviders(result as IpfsCheckProvider[]);
   const parsed: ParsedCidRetrievability = {
     cid,
     ms,
@@ -255,6 +320,7 @@ export function parseRow(row: unknown): ParsedCidRetrievability {
     sources,
     copies: countTrueSources(sources),
   };
+  if (Object.keys(providersBySource).length > 0) parsed.providersBySource = providersBySource;
   if (rowError !== undefined) parsed.error = rowError;
   return parsed;
 }
@@ -309,6 +375,9 @@ export function toCidRetrievabilityStatus(
   if (parsed.error !== undefined) {
     status.lastError = parsed.error;
     status.lastErrorAt = checkedAt;
+  }
+  if (parsed.providersBySource !== undefined) {
+    status.providersBySource = { ...parsed.providersBySource };
   }
   return status;
 }
