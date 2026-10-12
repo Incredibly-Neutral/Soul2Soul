@@ -147,3 +147,29 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
   both modules enabled + discoverable by NAME, feed created, records set, temp signer removed.
 - `renderCalls`: drive `renderwithLitActions` through the Bun runner with fixtures (same path as
   preview) — the sequence test from SPEC-protocol-actions.
+
+## Test coverage status (2026-10-12)
+
+Vitest suite live in `neutralpress/test/` (harness: `vitest.config.ts` aliases obsidian/electron to
+headless stubs + `@s2s/soul2soul-shared` to TS source; `test/mocks/{obsidian,electron}.ts`,
+`test/helpers/main.ts`). `pnpm test` runs 183 unit tests; `build` gates on it.
+
+Covered:
+- Content authoring: `parseNote` (title/slug/body, frontmatter-driven fields, custom bag,
+  `<!--more-->`/`<!--split-->` summaries, markdown→HTML, `.base` embeds), `isValidForPublishing`,
+  `distributeImages` (no-op + pinata rewrite), `ens-tags`, `_base/_note/_vault`, `note.factory`
+  (slug override seam, marked→turndown round-trip).
+- Publication pure logic: `intents` dispatch, `ens` (registry reads), `github` (requestUrl),
+  `filecoin` (kubo/pinata config), `config`, ABI sanity (protocol/publication/proxy-admin).
+- Service/pipeline: `publication.service` (module discovery, deal lifecycle dispatch, view reads),
+  `tx-runner.adapter`, `publish` (both render-gate branches), `revoke`.
+- Render/settings: `buildRpcEndpoints`, `pagePathFor` (CID digest compare), `DEFAULT_SETTINGS`,
+  `DSGSettingsTab` wiring, `preview` seams.
+
+Not covered (needs DOM/integration): `renderCalls` (Lit render pipeline), UI modals,
+`main.ts`/`main.ctrlr.ts`, `publication/new.ts` Safe-deploy orchestrator, encrypt↔decrypt round-trip
+(cross-package).
+
+Known source bug surfaced by the suite: `PublicationService.getPublicationMultiSigAddresses` calls
+`tag.contains('--s2s')` — `String.prototype.contains` does not exist (should be `.includes`) — throws
+TypeError on the first real tag. Test asserts current behavior; fix is a follow-up.
