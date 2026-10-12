@@ -16,12 +16,11 @@
 import { Notice } from 'obsidian';
 import {
 	parseCID,
-	pinCidFromRemote,
 	renderwithLitActions,
 	toPreviewLabel,
 } from '@s2s/soul2soul-shared';
 import type { IMainController } from '../main.ctrlr';
-import { filecoinUploadBackground, kuboBaseUrl } from '../publication/filecoin';
+import { ipfsFromSettings, kuboBaseUrl } from '../publication/filecoin';
 import { subdomainOf } from '../content/ens-tags';
 
 /** A path to remove from the published tree during an EVM update. */
@@ -122,33 +121,16 @@ export async function renderCalls(
 		if (main.notice) main.notice.setMessage('5/5 Pinning ...');
 
 		if (res.cid) {
-			// Fire-and-forget both the IPFS pin and the Filecoin upload in
-			// parallel — neither blocks the render flow, and the two durable-
-			// storage paths run concurrently (SPEC-00 §3.2: IPFS pinning +
-			// Filecoin hot-storage). pinCidFromRemote swallows errors and
-			// returns a boolean, so this can't throw into renderCalls.
-			// Provider selected via oxo settings pin_provider (default: filebase).
-			const pinProvider = main.oxo.settings.pin_provider || 'filebase';
-			const token =
-				pinProvider === 'pinata'
-					? main.oxo.settings.pinata_jwt || ''
-					: main.oxo.settings.filebase_token || '';
-			void pinCidFromRemote(res.cid, 'https://ipfs.transport-union.dev', token, pinProvider).then(
-				(ok) => {
-					console.log(ok ? `pinned on ${pinProvider}` : `${pinProvider} pin failed`);
-				},
-			);
-
+			// Mirroring is publish-only: preview renders get NO mirroring at all
+			// (no filebase/pinata pins, no filecoin). The rendered site root is
+			// mirrored only on the real publish path — kubo + filebase + pinata +
+			// filecoin (max 4-way) via the shared backupToProviders (SPEC-00
+			// §3.2: IPFS pinning + Filecoin hot-storage). Fire-and-forget and
+			// never throws into renderCalls.
 			if (publish) {
-				// Fire-and-forget Filecoin durability for the rendered site root
-				// (SPEC-00 §3.2 — rendered HTML → Filecoin hot-storage). Attributed
-				// to the publication multisig + author EOA — same owners as the
-				// article upload — so the root piece is attributed in storage
-				// listings (oxo filecoin view / safe-app storage tab).
-				filecoinUploadBackground(
-					main,
-					'render-root',
-					async () => {
+				const ipfs = ipfsFromSettings(main);
+				void ipfs.backupToProviders(res.cid, {
+					filecoin: async () => {
 						const pubAddress = await main
 							.getInitializedService(subdomainOf(publication))
 							.then((s) => s.getMultiSig());
@@ -160,8 +142,12 @@ export async function renderCalls(
 							'render-root',
 						);
 					},
-					res.cid,
-				);
+					onFilecoinMismatch: (rootCid) => {
+						new Notice(
+							`⚠️ CID mismatch (render-root): Kubo ${res.cid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
+						);
+					},
+				});
 			}
 		}
 
