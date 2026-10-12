@@ -352,10 +352,6 @@ export class S2SWhitelistTab extends LitElement {
             @s2s-sliding-add=${(e: CustomEvent) => void this.addDev(e.detail.value)}
           ></s2s-sliding-add-button>
         </div>
-
-        }
-      
-        
       </div>
     `;
   }
