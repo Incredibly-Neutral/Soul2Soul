@@ -121,32 +121,34 @@ export async function renderCalls(
 		if (main.notice) main.notice.setMessage('5/5 Pinning ...');
 
 		if (res.cid) {
-			// Fire-and-forget the 4-way backup (filebase + pinata pins + Filecoin
-			// upload) in parallel — nothing here blocks the render flow (SPEC-00
-			// §3.2: IPFS pinning + Filecoin hot-storage). backupToProviders never
-			// throws into renderCalls.
-			const ipfs = ipfsFromSettings(main);
-			void ipfs.backupToProviders(res.cid, {
-				filecoin: publish
-					? async () => {
-							const pubAddress = await main
-								.getInitializedService(subdomainOf(publication))
-								.then((s) => s.getMultiSig());
-							const authorEoa = main.oxo.ctrlr.user?.eoa;
-							return main.oxo.ctrlr.storage.uploadTree(
-								res.cid,
-								kuboBaseUrl(main),
-								[pubAddress, authorEoa].filter(Boolean),
-								'render-root',
-							);
-					  }
-					: undefined,
-				onFilecoinMismatch: (rootCid) => {
-					new Notice(
-						`⚠️ CID mismatch (render-root): Kubo ${res.cid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
-					);
-				},
-			});
+			// Mirroring is publish-only: preview renders get NO mirroring at all
+			// (no filebase/pinata pins, no filecoin). The rendered site root is
+			// mirrored only on the real publish path — kubo + filebase + pinata +
+			// filecoin (max 4-way) via the shared backupToProviders (SPEC-00
+			// §3.2: IPFS pinning + Filecoin hot-storage). Fire-and-forget and
+			// never throws into renderCalls.
+			if (publish) {
+				const ipfs = ipfsFromSettings(main);
+				void ipfs.backupToProviders(res.cid, {
+					filecoin: async () => {
+						const pubAddress = await main
+							.getInitializedService(subdomainOf(publication))
+							.then((s) => s.getMultiSig());
+						const authorEoa = main.oxo.ctrlr.user?.eoa;
+						return main.oxo.ctrlr.storage.uploadTree(
+							res.cid,
+							kuboBaseUrl(main),
+							[pubAddress, authorEoa].filter(Boolean),
+							'render-root',
+						);
+					},
+					onFilecoinMismatch: (rootCid) => {
+						new Notice(
+							`⚠️ CID mismatch (render-root): Kubo ${res.cid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
+						);
+					},
+				});
+			}
 		}
 
 		// do i want to unpin deprecated html ?
