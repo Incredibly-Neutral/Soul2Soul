@@ -26,6 +26,7 @@ import { fetchFromIPFS } from '@/lib/ipfs.factory.js';
 import { getRpcUrl } from '@/lib/evm.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
+import './pet-name.js';
 
 // Per-column sort configuration for the Offers and Deals tables.
 const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
@@ -380,7 +381,7 @@ export class S2SDealsTab extends LitElement {
     return html`
       <div class="offer-card table-row" data-genesis="${offer.genesis}">
         <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
-        <div class="table-cell">${this.shortenAddress(offer.author)}</div>
+        <div class="table-cell"><pet-name value=${offer.author}></pet-name></div>
         <div class="table-cell">${offer.postType ?? ''}</div>
         <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
@@ -399,7 +400,7 @@ export class S2SDealsTab extends LitElement {
     return html`
       <div class="deal-card table-row" data-genesis="${deal.genesis}">
         <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
-        <div class="table-cell">${this.shortenAddress(deal.author)}</div>
+        <div class="table-cell"><pet-name value=${deal.author}></pet-name></div>
         <div class="table-cell">${deal.postType ?? ''}</div>
         <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
         <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>

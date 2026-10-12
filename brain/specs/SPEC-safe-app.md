@@ -99,7 +99,7 @@ Cloud transactions (`deletePiece`/`terminateDataSet`).
     `RETRIEVABILITY_AUTO_FRESH_MS`) resumed from the localStorage map; manual Recheck forces a full
     pass. Batch endpoint via `lib/cid-view/ipfs-check.ts` (batch size 3 vs the shared default 50) →
     shared `checkRetrievability` → `s2s.cidview.<pub>.retrievability` + a bounded raw `/batch` debug log.
-  - Health buckets: 0 copies = lost · 1 = danger · 2–4 = needs healing · ≥5 = healthy; an
+  - Health buckets: 0 copies = lost · 1 = danger · 2–3 = needs healing · 4 (all four platforms) = healthy; an
     inconclusive/failed pass never reads as "lost" (overloaded check node ≠ data loss). Type + health
     chips are toggle filters; the flat table is risk-sorted (fewest copies first).
   - **Heart heal** (PR #139): rows with red spots (lost/danger/needs-healing, incl. inconclusive/failed)
