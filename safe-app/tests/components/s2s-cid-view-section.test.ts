@@ -1126,6 +1126,85 @@ describe('s2s-cid-view-section', () => {
     expect(rolePathTexts.some((t) => t === '-')).toBe(false);
   });
 
+  it('displays templates-DAG paths as template:<name> / partial:<name> in the table', async () => {
+    const ctx: CidViewReadContext = {
+      ...makeFullCtx(),
+      dagGet: async (cid: string) =>
+        cid === 'bafytemplatedag'
+          ? [
+              { path: 'templates/intro.handlebars', cid: 'bafytemplate1' },
+              { path: 'templates/partials/foot.handlebars', cid: 'bafytemplate2' },
+            ]
+          : null,
+    };
+    const el = await mountLit('s2s-cid-view-section', { ctx, publication: 'test.eth' });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
+    });
+    const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
+    const rolePathOf = (row: Element) =>
+      (Array.from(row.querySelectorAll('.cid-cell'))[2]?.textContent ?? '').trim();
+    const templateRows = rows.filter(
+      (r) => r.querySelector('.badge.config')?.getAttribute('title') === 'template',
+    );
+    expect(templateRows.length).toBe(2);
+    const rolePaths = templateRows.map(rolePathOf).sort();
+    expect(rolePaths).toContain('template:intro');
+    expect(rolePaths).toContain('partial:foot');
+    // The full path is gone — replaced by the compact form.
+    expect(rolePaths).not.toContain('templates/intro.handlebars');
+    expect(rolePaths).not.toContain('templates/partials/foot.handlebars');
+  });
+
+  it('filters the table by a single CID via the search pill beside the unique-CIDs chip', async () => {
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
+    });
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('.cid-row').length).toBe(10);
+
+    // The search pill sits in the chips-top row, right beside the counter chip.
+    const chipsTop = root.querySelector('.chips-top')!;
+    expect(chipsTop.textContent).toContain('10 unique CIDs');
+    const input = chipsTop.querySelector<HTMLInputElement>('.cid-search__input');
+    expect(input).toBeTruthy();
+    expect(input!.getAttribute('placeholder')).toBe('Qm....');
+    expect(input!.getAttribute('aria-label')).toBe('Filter by CID');
+    // Idle state shows the search (magnifying-glass) icon, not the clear X.
+    expect(chipsTop.querySelector('ph-magnifying-glass')).toBeTruthy();
+    expect(chipsTop.querySelector('ph-x')).toBeNull();
+
+    // Typing a CID substring narrows the risk-sorted rows live.
+    input!.value = 'bafydeal1';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
+    });
+    expect(el.shadowRoot!.querySelector('.cid-row .badge.deal')).toBeTruthy();
+    // Active filter swaps the search icon for a clear (X) icon.
+    expect(root.querySelector('ph-x')).toBeTruthy();
+    expect(root.querySelector('ph-magnifying-glass')).toBeNull();
+
+    // A non-matching CID leaves the table empty with a tailored message.
+    input!.value = 'bafynomatch';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(0);
+    });
+    expect(el.shadowRoot!.textContent).toContain('No CIDs match the search');
+
+    // Clearing via the icon restores all rows.
+    (root.querySelector('.cid-search__btn') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(10);
+    });
+    expect(root.querySelector('ph-magnifying-glass')).toBeTruthy();
+  });
+
 
 
   it('shows a relative last-check label for checked cids and a dash for unchecked', async () => {

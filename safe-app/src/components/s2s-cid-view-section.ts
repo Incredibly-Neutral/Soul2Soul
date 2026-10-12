@@ -94,12 +94,31 @@ const ROOT_NAME: Partial<Record<CidCategory, string>> = {
 };
 
 /**
+ * Compact display form for a templates-DAG file path, mirroring the renderer's
+ * template/partial split (the main template lives directly under `templates/`,
+ * partials under `templates/partials/`):
+ *   templates/intro.handlebars          → template:intro
+ *   templates/partials/foot.handlebars  → partial:foot
+ * Anything that isn't a `templates/…` path (nested templates, non-handlebars
+ * assets/site files, ledger rows) is returned unchanged — the table then shows
+ * the full path as before.
+ */
+function displayTemplatePath(path: string): string {
+  if (!path.startsWith('templates/')) return path;
+  const rest = path.slice('templates/'.length);
+  const isPartial = rest.startsWith('partials/');
+  const leaf = isPartial ? rest.slice('partials/'.length) : rest;
+  const name = leaf.replace(/\.handlebars$/, '');
+  return `${isPartial ? 'partial' : 'template'}:${name}`;
+}
+
+/**
  * Display name for the Role/Path cell: the path when one exists, else the
  * role, else a per-category description. Never renders a bare '-'
  * (the templates DAG row, e.g., reads 'templates DAG' instead of '-').
  */
 function entryName(entry: CidEntry): string {
-  if (entry.path) return entry.path;
+  if (entry.path) return displayTemplatePath(entry.path);
   if (entry.role) return entry.role;
   return ROOT_NAME[entry.category] ?? categoryLabel(entry.category);
 }
@@ -325,6 +344,10 @@ export class S2SCidViewSection extends LitElement {
   @state() private chips: Record<string, string[]> = {};
   /** Current sort (user-initiated; null = the default risk-sorted row order). */
   @state() private sort: SortState | null = null;
+  /** Single-CID search text (case-insensitive substring over the CID column);
+   *  empty = no search filter. Filtered here (rows + health chips) rather than
+   *  in <s2s-table> so the risk-sorted rows it receives are already narrowed. */
+  @state() private cidSearch = '';
 
   /** Monotonic build id — stale async builds never overwrite a newer one. */
   private buildId = 0;
@@ -630,6 +653,52 @@ export class S2SCidViewSection extends LitElement {
         color: #f59e0b;
         font-style: normal;
         font-weight: 600;
+      }
+
+      /* Single-CID search pill, styled like the s2s-check pill: border-only,
+         fully-rounded, mono input + a search icon button. Sits in the chips-top
+         row beside the unique-CIDs counter chip. */
+      .cid-search {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        box-sizing: border-box;
+        height: calc(0.25rem * 2 + 1px * 2 + 0.85rem * 1.55);
+        padding: 0 0.5rem 0 0.75rem;
+        border-radius: 999px;
+        border: 1px solid var(--gray-600, #4b5563);
+        background: transparent;
+      }
+      .cid-search:focus-within {
+        border-color: var(--gray-400, #9ca3af);
+      }
+      .cid-search__input {
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: 0;
+        min-width: 0;
+        width: 11rem;
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        color: var(--gray-50, #f9fafb);
+      }
+      .cid-search__input::placeholder {
+        color: var(--gray-500, #6b7280);
+      }
+      .cid-search__btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        border: none;
+        color: var(--gray-300, #d1d5db);
+        cursor: pointer;
+      }
+      .cid-search__btn:hover {
+        color: var(--gray-50, #f9fafb);
       }
 
       .loading {
@@ -969,12 +1038,39 @@ export class S2SCidViewSection extends LitElement {
    * <s2s-table>'s `chipsTop`. The clear-filters affordance is now the table's
    * built-in `.chip.clear-filters` in the chips row below (appears when any
    * group is active).
+   *
+   * The single-CID search pill renders right after the counter chip, before the
+   * optional type/health chips row — it filters the risk-sorted rows to a CID
+   * substring as the user types (see riskSortedRows / healthBucketValues).
    */
   private renderChipsTop(view: PublicationCidView): TemplateResult {
     return html`
       <span class="chip"
         ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
       >
+      <div class="cid-search" title="Filter the inventory to a single CID">
+        <input
+          class="cid-search__input"
+          type="text"
+          .value=${this.cidSearch}
+          placeholder="Qm...."
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Filter by CID"
+          @input=${this.onCidSearchInput}
+        />
+        <button
+          class="cid-search__btn"
+          type="button"
+          aria-label=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
+          title=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
+          @click=${this.onCidSearchButton}
+        >${
+            this.cidSearch
+              ? html`<ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>`
+              : html`<ph-magnifying-glass size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-magnifying-glass>`
+          }</button>
+      </div>
     `;
   }
 
@@ -987,6 +1083,7 @@ export class S2SCidViewSection extends LitElement {
   private healthBucketValues(view: PublicationCidView): Array<{ value: string; label: string }> {
     const counts = new Map<CidHealth, number>();
     for (const entry of this.firstOccurrenceEntries(view)) {
+      if (!this.cidMatches(entry.cid)) continue;
       const status = this.retrievabilityStatus(entry.cid);
       if (status !== undefined) {
         const bucket = healthBucket(status);
@@ -1066,12 +1163,33 @@ export class S2SCidViewSection extends LitElement {
       const entry = byCid.get(cid);
       if (entry) rows.push(entry);
     }
-    return rows;
+    // Single-CID search narrows the risk-ordered rows (empty search = all).
+    return this.cidSearch.trim() === '' ? rows : rows.filter((e) => this.cidMatches(e.cid));
+  }
+
+  /** True when a cid matches the active single-CID search (empty search = all). */
+  private cidMatches(cid: string): boolean {
+    const q = this.cidSearch.trim().toLowerCase();
+    return q === '' || cid.toLowerCase().includes(q);
+  }
+
+  /** Live filter as the user types — no submit needed. */
+  private onCidSearchInput(e: Event): void {
+    this.cidSearch = (e.target as HTMLInputElement).value;
+  }
+
+  /** Search icon: clears the filter when one is active, else focuses the field. */
+  private onCidSearchButton(): void {
+    if (this.cidSearch !== '') {
+      this.cidSearch = '';
+    }
+    this.renderRoot.querySelector<HTMLInputElement>('.cid-search__input')?.focus();
   }
 
   /** Clear every chip filter (used on view change so a fresh view isn't hidden). */
   private clearFilters(): void {
     this.chips = {};
+    this.cidSearch = '';
   }
 
   /** Availability dot cell for one source. Gray while unchecked, green/red when checked. */
@@ -1343,7 +1461,7 @@ export class S2SCidViewSection extends LitElement {
                 .chipsGroups=${this.chipsGroups(view)}
                 .chipsTop=${this.renderChipsTop(view)}
                 .rowRenderer=${this.entryRowRenderer}
-                emptyText="No rows match the active filters"
+                emptyText=${this.cidSearch.trim() !== '' ? 'No CIDs match the search' : 'No rows match the active filters'}
                 gridTemplate="0.8fr 2.6fr 1.6fr 1.1fr 0.55fr 0.55fr 0.55fr 0.55fr 0.6fr 0.95fr .5fr"
                 @sort=${(e: CustomEvent) => {
                   this.sort = toggleSort(this.sort, e.detail.key as string);
