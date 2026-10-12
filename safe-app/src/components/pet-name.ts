@@ -91,12 +91,12 @@ export class PetName extends LitElement {
       }
 
       .pet-input {
-        font-family: var(--font-mono, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
+        font-family: var(--font-body, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
         font-size: 0.8rem;
         background: var(--gray-800);
         color: var(--gray-50);
-        border: 1px solid var(--color-yellow);
-        border-radius: 3px;
+        border: none;
+
         padding: 0.1rem 0.4rem;
         width: 11rem;
         max-width: 100%;
