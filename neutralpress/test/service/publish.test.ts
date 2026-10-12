@@ -114,6 +114,25 @@ describe('publishToPublication', () => {
 		]);
 	});
 
+	it('preview (publish=false) skips the 4-way backup entirely', async () => {
+		const { main, service } = makePublishMain();
+
+		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {
+			render: true,
+			publish: false,
+		});
+
+		expect(service.makeOffer).toHaveBeenCalledWith(OBJECT_ID, 'QmKuboCid');
+		expect(renderCalls).toHaveBeenCalledWith(
+			main,
+			PUBLICATION,
+			[OBJECT_ID],
+			'test-lit-usage-key',
+			false,
+		);
+		expect(backupToProvidersMock).not.toHaveBeenCalled();
+	});
+
 	it('render=true, publish=true → renderCalls gets publish=true (prod update)', async () => {
 		const { main } = makePublishMain();
 		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {

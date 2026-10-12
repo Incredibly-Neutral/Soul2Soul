@@ -96,21 +96,26 @@ export async function publishToPublication(
 	/// renderwithLitActions). viem's http() withTimeout only aborts() the fetch
 	/// on timeout and relies on it rejecting, so a shim left installed across
 	/// an awaited RPC could hang it indefinitely.
-	const ipfs = ipfsFromSettings(main);
-	void ipfs.backupToProviders(kuboCid, {
-		filecoin: async () => {
-			const pubAddress = await service.getMultiSig();
-			const authorEoa = main.oxo.ctrlr.user?.eoa;
-			return main.oxo.ctrlr.storage.uploadJson(
-				signedItem,
-				[pubAddress, authorEoa].filter(Boolean),
-				'article',
-			);
-		},
-		onFilecoinMismatch: (rootCid) => {
-			new Notice(
-				`⚠️ CID mismatch (article): Kubo ${kuboCid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
-			);
-		},
-	});
+	/// Preview renders get NO mirroring at all; the real upload/publish paths
+	/// (upload intent = render:false, and prod publish) mirror the source
+	/// material at every provider — kubo + filebase + pinata + filecoin.
+	if (opts.publish !== false) {
+		const ipfs = ipfsFromSettings(main);
+		void ipfs.backupToProviders(kuboCid, {
+			filecoin: async () => {
+				const pubAddress = await service.getMultiSig();
+				const authorEoa = main.oxo.ctrlr.user?.eoa;
+				return main.oxo.ctrlr.storage.uploadJson(
+					signedItem,
+					[pubAddress, authorEoa].filter(Boolean),
+					'article',
+				);
+			},
+			onFilecoinMismatch: (rootCid) => {
+				new Notice(
+					`⚠️ CID mismatch (article): Kubo ${kuboCid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
+				);
+			},
+		});
+	}
 }
