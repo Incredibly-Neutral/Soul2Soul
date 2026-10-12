@@ -90,7 +90,7 @@ describe('pet-name', () => {
     expect(text.textContent).toBe('0x12...5678');
   });
 
-  it('cancel discards the draft', async () => {
+  it('quits editing and discards the draft on Escape', async () => {
     petNameStore.set(ADDR, 'bob');
     const el = await mountLit<PetName>('pet-name', { value: ADDR });
 
@@ -99,12 +99,45 @@ describe('pet-name', () => {
     const input = el.shadowRoot?.querySelector('input.pet-input') as HTMLInputElement;
     input.value = 'changed';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    (el.shadowRoot?.querySelector('button.btn-cancel') as HTMLButtonElement).click();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await el.updateComplete;
 
     expect(petNameStore.get(ADDR)).toBe('bob');
     const text = el.shadowRoot?.querySelector('.text') as HTMLSpanElement;
     expect(text.textContent).toBe('bob');
+  });
+
+  it('quits editing and discards the draft when clicking outside', async () => {
+    petNameStore.set(ADDR, 'bob');
+    const el = await mountLit<PetName>('pet-name', { value: ADDR });
+
+    (el.shadowRoot?.querySelector('button.btn-edit') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const input = el.shadowRoot?.querySelector('input.pet-input') as HTMLInputElement;
+    input.value = 'changed';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await el.updateComplete;
+
+    expect(petNameStore.get(ADDR)).toBe('bob');
+    const text = el.shadowRoot?.querySelector('.text') as HTMLSpanElement;
+    expect(text.textContent).toBe('bob');
+  });
+
+  it('keeps editing when clicking inside the component', async () => {
+    petNameStore.set(ADDR, 'bob');
+    const el = await mountLit<PetName>('pet-name', { value: ADDR });
+
+    (el.shadowRoot?.querySelector('button.btn-edit') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const input = el.shadowRoot?.querySelector('input.pet-input') as HTMLInputElement;
+    input.value = 'changed';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (el.shadowRoot?.querySelector('input.pet-input') as HTMLInputElement).click();
+    await el.updateComplete;
+
+    // Still editing: the save button and input remain.
+    expect(el.shadowRoot?.querySelector('input.pet-input')).toBeTruthy();
   });
 
   it('copies the full address on copy-button click', async () => {
@@ -116,10 +149,12 @@ describe('pet-name', () => {
     });
 
     const el = await mountLit<PetName>('pet-name', { value: ADDR });
-    (el.shadowRoot?.querySelector('button') as HTMLButtonElement).click();
+    (el.shadowRoot?.querySelector('button.btn-copy') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(ADDR));
     await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('button')?.classList.contains('copied')).toBe(true),
+      expect(el.shadowRoot?.querySelector('button.btn-copy')?.classList.contains('copied')).toBe(
+        true,
+      ),
     );
   });
 
@@ -143,10 +178,17 @@ describe('pet-name', () => {
     const el = await mountLit<PetName>('pet-name', {
       value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
     });
-    (el.shadowRoot?.querySelector('button') as HTMLButtonElement).click();
+    (el.shadowRoot?.querySelector('button.btn-copy') as HTMLButtonElement).click();
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith('0x1234567890abcdef1234567890abcdef12345678'),
     );
+  });
+
+  it('places the pencil before the copy button', async () => {
+    const el = await mountLit<PetName>('pet-name', { value: ADDR });
+    const buttons = [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('button')];
+    expect(buttons[0].classList.contains('btn-edit')).toBe(true);
+    expect(buttons[1].classList.contains('btn-copy')).toBe(true);
   });
 
   it('readonly renders the label only (no copy or pencil buttons)', async () => {
