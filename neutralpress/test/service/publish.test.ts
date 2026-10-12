@@ -6,13 +6,14 @@
  * durability. Everything is mocked; no network/chain/DOM ever touched.
  *
  * renderCalls is stubbed via vi.mock (never the real one — it needs DOM +
- * Lit); filecoinUploadBackground is stubbed (fire-and-forget would otherwise
- * run a real upload); kuboBaseUrl stays real (pure URL normalisation).
+ * Lit); ipfsFromSettings is stubbed to return a fake ipfs whose
+ * backupToProviders is a shared spy (fire-and-forget would otherwise run a
+ * real 4-way backup); kuboBaseUrl stays real (pure URL normalisation).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { SpyNotice } = vi.hoisted(() => {
+const { SpyNotice, ipfsFromSettingsMock, backupToProvidersMock } = vi.hoisted(() => {
 	class SpyNotice {
 		static calls: string[] = [];
 		static reset() {
@@ -25,19 +26,24 @@ const { SpyNotice } = vi.hoisted(() => {
 			SpyNotice.calls.push('hide');
 		}
 	}
-	return { SpyNotice };
+	return {
+		SpyNotice,
+		ipfsFromSettingsMock: vi.fn(),
+		backupToProvidersMock: vi.fn(),
+	};
 });
 
 vi.mock('obsidian', () => ({ Notice: SpyNotice, TFile: class TFile {} }));
 vi.mock('../../src/render/render.helper', () => ({ renderCalls: vi.fn() }));
 vi.mock('../../src/publication/filecoin', async (importOriginal) => {
 	const actual = (await importOriginal()) as Record<string, unknown>;
-	return { ...actual, filecoinUploadBackground: vi.fn() };
+	ipfsFromSettingsMock.mockReturnValue({ backupToProviders: backupToProvidersMock });
+	return { ...actual, ipfsFromSettings: ipfsFromSettingsMock };
 });
 
 import { publishToPublication } from '../../src/publication/publish';
 import { renderCalls } from '../../src/render/render.helper';
-import { filecoinUploadBackground, kuboBaseUrl } from '../../src/publication/filecoin';
+import { ipfsFromSettings, kuboBaseUrl } from '../../src/publication/filecoin';
 import { makeMain, makeVaultFile } from '../helpers/main';
 
 const OBJECT_ID = '0x' + '3'.repeat(64);
@@ -92,12 +98,11 @@ describe('publishToPublication', () => {
 			false,
 		);
 
-		// Fire-and-forget durability kicked off with the kubo cid.
-		expect(filecoinUploadBackground).toHaveBeenCalledWith(
-			main,
-			'article',
-			expect.any(Function),
+		// 4-way backup kicked off from the built client with the kubo cid.
+		expect(ipfsFromSettings).toHaveBeenCalledWith(main);
+		expect(backupToProvidersMock).toHaveBeenCalledWith(
 			'QmKuboCid',
+			expect.objectContaining({ filecoin: expect.any(Function) }),
 		);
 
 		// Notice lifecycle: 1/5 (ctor) → 2/5 → 3/5 → 4/5 → hide.
@@ -107,6 +112,25 @@ describe('publishToPublication', () => {
 			'setMessage:4/5 Authorizing ...',
 			'hide',
 		]);
+	});
+
+	it('preview (publish=false) skips the 4-way backup entirely', async () => {
+		const { main, service } = makePublishMain();
+
+		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {
+			render: true,
+			publish: false,
+		});
+
+		expect(service.makeOffer).toHaveBeenCalledWith(OBJECT_ID, 'QmKuboCid');
+		expect(renderCalls).toHaveBeenCalledWith(
+			main,
+			PUBLICATION,
+			[OBJECT_ID],
+			'test-lit-usage-key',
+			false,
+		);
+		expect(backupToProvidersMock).not.toHaveBeenCalled();
 	});
 
 	it('render=true, publish=true → renderCalls gets publish=true (prod update)', async () => {
@@ -138,7 +162,7 @@ describe('publishToPublication', () => {
 			'setMessage:3/5 appending version to publication contract ...',
 			'hide',
 		]);
-		expect(filecoinUploadBackground).toHaveBeenCalled();
+		expect(backupToProvidersMock).toHaveBeenCalled();
 	});
 
 	it('aborts cleanly when signing produces no item (publishContent falsy)', async () => {
@@ -149,7 +173,7 @@ describe('publishToPublication', () => {
 
 		expect(main.oxo.ctrlr.storage.uploadToKubo).not.toHaveBeenCalled();
 		expect(renderCalls).not.toHaveBeenCalled();
-		expect(filecoinUploadBackground).not.toHaveBeenCalled();
+		expect(backupToProvidersMock).not.toHaveBeenCalled();
 		// Notice hidden so '1/5…' never sticks.
 		expect(SpyNotice.calls).toContain('hide');
 	});
