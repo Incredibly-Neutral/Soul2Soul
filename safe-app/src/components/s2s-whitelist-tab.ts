@@ -10,6 +10,7 @@ import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
 import './s2s-sliding-add-button.js';
 import './copy-hash.js';
+import './pet-name.js';
 
 @customElement('s2s-whitelist-tab')
 export class S2SWhitelistTab extends LitElement {
@@ -292,7 +293,7 @@ export class S2SWhitelistTab extends LitElement {
           ${this.authors.map(
             (author) => html`
               <span class="alias-pill">
-                <copy-hash .value=${author}></copy-hash>
+                <pet-name value=${author}></pet-name>
                 <button
                   class="alias-pill__remove"
                   data-address="${author}"
@@ -332,7 +333,7 @@ export class S2SWhitelistTab extends LitElement {
           ${this.devs.map(
             (dev) => html`
               <span class="alias-pill">
-                <copy-hash .value=${dev}></copy-hash>
+                <pet-name value=${dev}></pet-name>
                 <button
                   class="alias-pill__remove"
                   data-address="${dev}"

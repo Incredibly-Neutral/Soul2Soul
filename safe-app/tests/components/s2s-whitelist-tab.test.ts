@@ -36,7 +36,7 @@ function notificationTexts(): string {
 // ---------------------------------------------------------------------------
 // New-DOM helpers — the whitelist is now a pill row per section, driven by the
 // slide-open <s2s-sliding-add-button> (its input lives in a nested shadow root)
-// and <copy-hash> (truncated display + copy button).
+// and <pet-name> (address + optional pet name, with copy button).
 // ---------------------------------------------------------------------------
 
 /**
@@ -93,7 +93,7 @@ async function submitAddInput(section: HTMLElement): Promise<void> {
 
 /** The full (untruncated) addresses rendered as pills in a section. */
 function pillValues(section: HTMLElement): string[] {
-  return [...section.querySelectorAll<HTMLElement>('copy-hash')].map(
+  return [...section.querySelectorAll<HTMLElement>('pet-name')].map(
     (c) => (c as unknown as { value: string }).value,
   );
 }

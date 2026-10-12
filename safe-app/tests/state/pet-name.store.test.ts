@@ -45,6 +45,13 @@ describe('PetNameStore (local-only pet names)', () => {
     expect(s.get('0xABC123')).toBe('casey');
   });
 
+  it('collides did:ethr-prefixed and bare addresses to the same name', () => {
+    const s = new PetNameStore();
+    s.set('did:ethr:0xAbC123', 'casey');
+    expect(s.get('0xabc123')).toBe('casey');
+    expect(s.get('did:ethr:0xABC123')).toBe('casey');
+  });
+
   it('setting an empty / whitespace name removes the entry', () => {
     const s = new PetNameStore();
     s.set('0xaaa', 'dave');

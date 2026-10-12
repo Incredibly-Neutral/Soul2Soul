@@ -59,7 +59,7 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
 // two groups, in the same order the dropdowns filtered before: author, then
 // postType.
 const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
-  { key: 'author', get: (d) => d.author ?? '' },
+  { key: 'author', get: (d) => d.author ?? '', petName: true },
   { key: 'postType', get: (d) => d.postType ?? '' },
 ];
 

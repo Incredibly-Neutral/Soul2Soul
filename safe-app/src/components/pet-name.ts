@@ -5,12 +5,16 @@
 // sent over the network, so on-chain identities stay pseudonymous: everyone
 // sees the raw address, each viewer sees only the names they chose.
 //
+// Authors arrive as `did:ethr:0x…`; the prefix is stripped so the address is
+// shown/copied as the bare `0x…` form.
+//
 // Render modes:
 //   1. display = the pet name, if this address has one (full address in title)
-//   2. otherwise the shortened address (0x1234…abcd)
+//   2. otherwise the shortened address (0x12…5678)
 // Copy button copies the full address; the pencil swaps the label for an
-// inline input to set / edit / clear the pet name.
-import { LitElement, html, css } from 'lit';
+// inline input to set / edit / clear the pet name. `readonly` renders just
+// the label (no buttons) — used inside chip pills and other compact spots.
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { petNameStore } from '@/state/pet-name.store.js';
@@ -24,6 +28,8 @@ export class PetName extends LitElement {
   @property() display = '';
   /** Placeholder shown in the inline input while naming. */
   @property() placeholder = 'Name this address';
+  /** Label-only mode (no copy / pencil) for compact spots like chip pills. */
+  @property({ type: Boolean }) readonly = false;
 
   @state() private copied = false;
   @state() private editing = false;
@@ -51,7 +57,7 @@ export class PetName extends LitElement {
       }
 
       .text.has-name {
-        color: var(--color-yellow);
+        color: var(--gray-50);
         font-weight: 600;
       }
 
@@ -102,7 +108,7 @@ export class PetName extends LitElement {
     super.connectedCallback();
     if (!this.value) this.value = this.textContent?.trim() || '';
     // Reflect pet-name edits made anywhere (the same address can appear in
-    // several rows) live. The store only emits on an actual change.
+    // several rows / chips) live. The store only emits on an actual change.
     this.unsub = petNameStore.subscribe(() => this.requestUpdate());
   }
 
@@ -111,6 +117,11 @@ export class PetName extends LitElement {
     this.unsub?.();
     this.unsub = null;
     if (this.timeout) clearTimeout(this.timeout);
+  }
+
+  /** Bare address — authors arrive as `did:ethr:0x…`, strip the prefix. */
+  private get address(): string {
+    return this.value.replace(/^did:ethr:/i, '');
   }
 
   private truncate(str: string): string {
@@ -122,7 +133,7 @@ export class PetName extends LitElement {
   private startEditing(e: Event) {
     e.preventDefault();
     e.stopPropagation();
-    this.draft = petNameStore.get(this.value) ?? '';
+    this.draft = petNameStore.get(this.address) ?? '';
     this.editing = true;
   }
 
@@ -137,7 +148,7 @@ export class PetName extends LitElement {
     e.preventDefault();
     e.stopPropagation();
     // An empty draft clears the pet name (back to shortened address).
-    petNameStore.set(this.value, this.draft);
+    petNameStore.set(this.address, this.draft);
     this.editing = false;
     this.draft = '';
   }
@@ -154,7 +165,7 @@ export class PetName extends LitElement {
 
   private async copy() {
     try {
-      await this.writeToClipboard(this.value);
+      await this.writeToClipboard(this.address);
       this.copied = true;
       if (this.timeout) clearTimeout(this.timeout);
       this.timeout = window.setTimeout(() => {
@@ -190,7 +201,7 @@ export class PetName extends LitElement {
   }
 
   render() {
-    if (this.editing) {
+    if (this.editing && !this.readonly) {
       return html`
         <span class="text" @click=${(e: Event) => e.stopPropagation()}>
           <input
@@ -224,33 +235,37 @@ export class PetName extends LitElement {
       `;
     }
 
-    const pet = petNameStore.get(this.value);
-    const shown = pet ?? (this.display || this.truncate(this.value) || '—');
+    const pet = petNameStore.get(this.address);
+    const shown = pet ?? (this.display || this.truncate(this.address) || '—');
 
     return html`
-      <span class="text ${pet ? 'has-name' : ''}" title=${this.value}>${shown}</span>
-      <button
-        class="${this.copied ? 'copied' : ''}"
-        aria-label="Copy full address"
-        title="Copy full address"
-        @click=${(e: Event) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this.copy();
-        }}
-      >
-        ${this.copied
-          ? html`<ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>`
-          : html`<ph-copy size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-copy>`}
-      </button>
-      <button
-        class="btn-edit"
-        aria-label="Set pet name"
-        title="Set pet name"
-        @click=${this.startEditing}
-      >
-        <ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple>
-      </button>
+      <span class="text ${pet ? 'has-name' : ''}" title=${this.address}>${shown}</span>
+      ${this.readonly
+        ? nothing
+        : html`
+            <button
+              class="${this.copied ? 'copied' : ''}"
+              aria-label="Copy full address"
+              title="Copy full address"
+              @click=${(e: Event) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.copy();
+              }}
+            >
+              ${this.copied
+                ? html`<ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>`
+                : html`<ph-copy size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-copy>`}
+            </button>
+            <button
+              class="btn-edit"
+              aria-label="Set pet name"
+              title="Set pet name"
+              @click=${this.startEditing}
+            >
+              <ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple>
+            </button>
+          `}
     `;
   }
 }

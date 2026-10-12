@@ -63,6 +63,7 @@ import {
 } from '@/utils/filter.js';
 import { chipStyles } from '@/styles/chip-styles.js';
 import './table-filter.js';
+import './pet-name.js';
 import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 
 @customElement('s2s-table')
@@ -285,7 +286,9 @@ export class S2STable<T> extends LitElement {
               @click=${() => this.handleChip(group.key, value)}
             >
               <span class="chip-value">${chipCount(this.rows, group, value)}</span>
-              ${label ?? value}
+              ${group.petName
+                ? html`<pet-name value=${value} readonly></pet-name>`
+                : (label ?? value)}
             </button>
           `;
         })}
