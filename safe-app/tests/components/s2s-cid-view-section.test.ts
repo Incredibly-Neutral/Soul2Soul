@@ -1190,13 +1190,15 @@ describe('s2s-cid-view-section', () => {
 
   it('health chips filter the table by copy buckets and combine with type chips (AND)', async () => {
     // Deterministic mixed retrievability covering every VISIBLE bucket: deal 5
-    // copies (healthy), config 1 copy (danger), assets 0 copies (lost); bafyver1
-    // 3 copies (needs healing) is seeded but the version row is hidden from the
-    // view, so its bucket never appears. Everything else unchecked.
+    // Deterministic mixed retrievability covering every VISIBLE bucket: deal 4
+    // copies (healthy — the realistic max, all four platforms), config 1 copy
+    // (danger), assets 0 copies (lost); bafyver1 3 copies (needs healing) is
+    // seeded but the version row is hidden from the view, so its bucket never
+    // appears. Everything else unchecked.
     const seed: CidRetrievabilityMap = {
       bafydeal1: {
         checkedAt: RECENT(),
-        copies: 5,
+        copies: 4,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
         state: 'ok',
       },
@@ -1242,7 +1244,7 @@ describe('s2s-cid-view-section', () => {
     expect(group2).toContain('1 danger');
     expect(group2).toContain('1 lost');
 
-    // Health chip 'healthy' → only the deal row (5/4) remains.
+    // Health chip 'healthy' → only the deal row (4/4) remains.
     const healthyChip = Array.from(root.querySelectorAll('button.chip')).find((b) =>
       b.textContent?.includes('healthy'),
     );
@@ -1252,7 +1254,7 @@ describe('s2s-cid-view-section', () => {
       expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
     });
     expect(el.shadowRoot!.querySelector('.cid-row .badge.deal')).toBeTruthy();
-    expect(el.shadowRoot!.textContent).toContain('5/4');
+    expect(el.shadowRoot!.textContent).toContain('4/4');
 
     // Toggle it back off → all rows return.
     const healthyChipActive = Array.from(
@@ -1501,7 +1503,7 @@ describe('s2s-cid-view-section', () => {
     const seed: CidRetrievabilityMap = {
       bafydeal1: {
         checkedAt: RECENT(),
-        copies: 5,
+        copies: 4,
         sources: { kubo: true, pinata: true, filebase: true, filecoin: true },
         state: 'ok',
       },

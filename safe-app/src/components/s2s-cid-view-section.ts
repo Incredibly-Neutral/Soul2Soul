@@ -185,7 +185,11 @@ const HEALTH_LABELS: Record<CidHealth, string> = {
   lost: 'lost',
 };
 
-/** 0 copies lost, 1 danger, 2–4 needs healing, ≥5 healthy. */
+/** 0 copies lost, 1 danger, 2–3 needs healing, 4 (all four platforms) healthy.
+ *  `copies` is capped at 4 — one per platform (kubo/pinata/filebase/filecoin) —
+ *  so "healthy" is only reachable at a full 4/4: a fully-replicated CID.
+ *  (The former ≥5 threshold was unreachable and kept healed CIDs on the red
+ *  heart forever.) */
 function healthBucket(status: CidRetrievabilityStatus): CidHealth {
   // 'inconclusive' (no provider reachable) and 'failed' (the check errored) are
   // NOT confirmed zero-copy — an overloaded check node must never read as
@@ -193,7 +197,7 @@ function healthBucket(status: CidRetrievabilityStatus): CidHealth {
   if (status.state === 'inconclusive' || status.state === 'failed') return 'needs-healing';
   if (status.copies === 0) return 'lost';
   if (status.copies < 2) return 'danger';
-  if (status.copies < 5) return 'needs-healing';
+  if (status.copies < 4) return 'needs-healing';
   return 'healthy';
 }
 
@@ -1105,26 +1109,29 @@ export class S2SCidViewSection extends LitElement {
     const healState = this.healing[cid];
     const running = healState === 'running';
     let inner: TemplateResult | typeof nothing = nothing;
-    if (this.healable(status)) {
-      if (running) {
-        inner = html`<button class="heal" disabled title="Healing ${this.shortenCid(cid)}…">…</button>`;
-      } else if (healState !== undefined && healState.ok) {
-        const okCount = healState.results.filter((r) => r.ok).length;
-        const total = healState.results.length;
-        inner = html`<button
-            class="heal ok"
-            disabled
-            title="Healed · ${String(okCount)}/${String(total)} providers ok"
-          ><ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check
-        ></button>`;
-      } else {
-        inner = html`<button
-            class="heal"
-            title="Heal: pin to kubo, pinata, filebase + 2× filecoin"
-            @click=${() => void this.handleHeal(cid)}
-          ><ph-heart size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-heart
-        ></button>`;
-      }
+    // A running heal and the green "healed" check render regardless of the
+    // current bucket: once a heal lands the row at 4/4 it reads as healthy, but
+    // the successful-outcome feedback must still show (a healthy row that was
+    // healed this session carries the green check; a healthy row that wasn't
+    // gets an empty cell).
+    if (running) {
+      inner = html`<button class="heal" disabled title="Healing ${this.shortenCid(cid)}…">…</button>`;
+    } else if (healState !== undefined && healState.ok) {
+      const okCount = healState.results.filter((r) => r.ok).length;
+      const total = healState.results.length;
+      inner = html`<button
+          class="heal ok"
+          disabled
+          title="Healed · ${String(okCount)}/${String(total)} providers ok"
+        ><ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check
+      ></button>`;
+    } else if (this.healable(status)) {
+      inner = html`<button
+          class="heal"
+          title="Heal: pin to kubo, pinata, filebase + 2× filecoin"
+          @click=${() => void this.handleHeal(cid)}
+        ><ph-heart size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-heart
+      ></button>`;
     }
     return html`<div class="cid-cell">${inner}</div>`;
   }

@@ -1,10 +1,12 @@
 import {  DealMap, RecordMap } from './types.js';
+import type { PetNameMap } from './pet-name.store.js';
 
 const RECORDS_STORAGE_KEY = 'records';
 const DEALS_STORAGE_KEY = 'deals';
 const ROOT_STORAGE_KEY = 'root';
 const OFFERS_STORAGE_KEY = 'offers';
 const PIECES_STORAGE_KEY = 'pieces';
+const PET_NAMES_STORAGE_KEY = 'pet-names';
 
 export function loadRootFromStorage(): string | null {
   try {
@@ -105,6 +107,32 @@ export function loadPiecesFromStorage<T>(): T[] | null {
     console.warn('Failed to load pieces from localStorage:', e);
   }
   return null;
+}
+
+export function loadPetNamesFromStorage(): PetNameMap | null {
+  try {
+    const stored = localStorage.getItem(PET_NAMES_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Defensive: only accept a plain object of string values.
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as PetNameMap;
+    }
+  } catch (e) {
+    console.warn('Failed to load pet names from localStorage:', e);
+  }
+  return null;
+}
+
+export function savePetNamesToStorage(names: PetNameMap | null): void {
+  try {
+    if (names === null) {
+      localStorage.removeItem(PET_NAMES_STORAGE_KEY);
+    } else {
+      localStorage.setItem(PET_NAMES_STORAGE_KEY, JSON.stringify(names));
+    }
+  } catch (e) {
+    console.warn('Failed to save pet names to localStorage:', e);
+  }
 }
 
 export function savePiecesToStorage<T>(pieces: T[] | null): void {
