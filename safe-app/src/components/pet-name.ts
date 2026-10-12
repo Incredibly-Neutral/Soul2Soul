@@ -37,6 +37,15 @@ export class PetName extends LitElement {
   private timeout: number | null = null;
   private unsub: (() => void) | null = null;
 
+  /** Quit editing when the user clicks anywhere outside this component. */
+  private onDocClick = (e: MouseEvent) => {
+    if (!this.editing) return;
+    if (!e.composedPath().includes(this)) {
+      this.editing = false;
+      this.draft = '';
+    }
+  };
+
   static styles = [
     typograhyStyles,
     css`
@@ -81,10 +90,6 @@ export class PetName extends LitElement {
         color: #2e7d32;
       }
 
-      button.btn-cancel:hover {
-        color: var(--color-red);
-      }
-
       .pet-input {
         font-family: var(--font-mono, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
         font-size: 0.8rem;
@@ -110,12 +115,14 @@ export class PetName extends LitElement {
     // Reflect pet-name edits made anywhere (the same address can appear in
     // several rows / chips) live. The store only emits on an actual change.
     this.unsub = petNameStore.subscribe(() => this.requestUpdate());
+    document.addEventListener('click', this.onDocClick);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this.unsub?.();
     this.unsub = null;
+    document.removeEventListener('click', this.onDocClick);
     if (this.timeout) clearTimeout(this.timeout);
   }
 
@@ -223,14 +230,6 @@ export class PetName extends LitElement {
           >
             <ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>
           </button>
-          <button
-            class="btn-cancel"
-            aria-label="Cancel"
-            title="Cancel"
-            @click=${this.cancelEditing}
-          >
-            <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
-          </button>
         </span>
       `;
     }
@@ -244,7 +243,15 @@ export class PetName extends LitElement {
         ? nothing
         : html`
             <button
-              class="${this.copied ? 'copied' : ''}"
+              class="btn-edit"
+              aria-label="Set pet name"
+              title="Set pet name"
+              @click=${this.startEditing}
+            >
+              <ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple>
+            </button>
+            <button
+              class="btn-copy ${this.copied ? 'copied' : ''}"
               aria-label="Copy full address"
               title="Copy full address"
               @click=${(e: Event) => {
@@ -256,14 +263,6 @@ export class PetName extends LitElement {
               ${this.copied
                 ? html`<ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>`
                 : html`<ph-copy size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-copy>`}
-            </button>
-            <button
-              class="btn-edit"
-              aria-label="Set pet name"
-              title="Set pet name"
-              @click=${this.startEditing}
-            >
-              <ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple>
             </button>
           `}
     `;
