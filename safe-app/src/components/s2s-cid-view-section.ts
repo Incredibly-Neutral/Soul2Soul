@@ -1057,14 +1057,14 @@ export class S2SCidViewSection extends LitElement {
           autocomplete="off"
           spellcheck="false"
           aria-label="Filter by CID"
-          @input=${this.onCidSearchInput}
+          @input=${(e: Event) => this.onCidSearchInput(e)}
         />
         <button
           class="cid-search__btn"
           type="button"
           aria-label=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
           title=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
-          @click=${this.onCidSearchButton}
+          @click=${() => this.onCidSearchButton()}
         >${
             this.cidSearch
               ? html`<ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>`
