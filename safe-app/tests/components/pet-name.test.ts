@@ -123,6 +123,39 @@ describe('pet-name', () => {
     );
   });
 
+  it('strips the did:ethr prefix from display and title', async () => {
+    const el = await mountLit<PetName>('pet-name', {
+      value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
+    });
+    const text = el.shadowRoot?.querySelector('.text') as HTMLSpanElement;
+    expect(text.textContent).toBe('0x12...5678');
+    expect(text.title).toBe('0x1234567890abcdef1234567890abcdef12345678');
+  });
+
+  it('copies the bare address without the did:ethr prefix', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+
+    const el = await mountLit<PetName>('pet-name', {
+      value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
+    });
+    (el.shadowRoot?.querySelector('button') as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('0x1234567890abcdef1234567890abcdef12345678'),
+    );
+  });
+
+  it('readonly renders the label only (no copy or pencil buttons)', async () => {
+    const el = await mountLit<PetName>('pet-name', { value: ADDR, readonly: true });
+    expect(el.shadowRoot?.querySelector('button')).toBeNull();
+    const text = el.shadowRoot?.querySelector('.text') as HTMLSpanElement;
+    expect(text.textContent).toBe('0x12...5678');
+  });
+
   it('reflects a pet name set on another instance live', async () => {
     const a = await mountLit<PetName>('pet-name', { value: ADDR });
     await mountLit<PetName>('pet-name', { value: ADDR });

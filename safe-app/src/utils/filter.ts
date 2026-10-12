@@ -118,6 +118,8 @@ export interface ChipsGroup<T> {
   matches?: (row: T, value: string) => boolean;
   /** Explicit chip values (required when `matches` is used; optional otherwise). */
   values?: readonly { value: string; label?: string }[];
+  /** When true, chip labels render as a <pet-name> (address → pet name). */
+  petName?: boolean;
 }
 
 /** True when a row matches a chip value (via `matches` or extracted `get` values). */

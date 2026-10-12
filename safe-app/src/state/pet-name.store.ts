@@ -29,9 +29,11 @@ export class PetNameStore {
     this.initialized = true;
   }
 
-  /** Normalised lookup key — addresses are case-insensitive. */
+  /** Normalised lookup key — addresses are case-insensitive and the
+   *  `did:ethr:` prefix is stripped, so `did:ethr:0xAbC` and `0xabc` collide
+   *  to the same pet name. */
   private static key(address: string): string {
-    return address.trim().toLowerCase();
+    return address.trim().replace(/^did:ethr:/i, '').toLowerCase();
   }
 
   get(address: string): string | undefined {
