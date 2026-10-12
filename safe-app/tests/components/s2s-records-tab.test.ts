@@ -17,7 +17,7 @@
 //   @/lib/evm                       -> evmRead (assert it is NOT called when the
 //                                      ownership gate is OFF)
 //   @/lib/ipfs.factory              -> dagExport (dynamic import in updateConfig)
-//   @/filecoin/car-builder          -> browserFilecoinBuilder (unused import)
+//   @s2s/soul2soul-shared/filecoin/car-builder/browser -> browserFilecoinBuilder (unused import)
 //   @/state/index.js                -> in-memory store mock
 //
 // ethers and domain-validation stay real: ethers.namehash is pure, and
@@ -199,7 +199,7 @@ vi.mock('@/lib/evm.js', () => ({ evmRead: m.evmRead, getRpcUrl: vi.fn() }));
 // module via a dynamic import trips the browser provider's route handler
 // ("Route is already handled!"). The real module is self-contained (no
 // imports) and dagExport just fetches the gateway, which the test stubs.
-vi.mock('@/filecoin/car-builder.js', () => ({
+vi.mock('@s2s/soul2soul-shared/filecoin/car-builder/browser', () => ({
   browserFilecoinBuilder: { buildCarFromBytes: vi.fn() },
 }));
 

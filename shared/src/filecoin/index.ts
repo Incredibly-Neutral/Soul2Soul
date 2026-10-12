@@ -5,8 +5,8 @@
  *
  * This class is shared (Node + browser). The actual CAR builder
  * is environment-specific:
- *   - Node (0xobsidian): 0xobsidian/src/filecoin/car-builder.ts
- *   - Browser (safe-app): safe-app/src/filecoin/car-builder.ts
+ *   - Node:    `@s2s/soul2soul-shared/filecoin/car-builder/node`
+ *   - Browser: `@s2s/soul2soul-shared/filecoin/car-builder/browser`
  *
  * The shared class accepts a `buildCarFromBytes` implementation via
  * init() or constructor injection. See the respective modules.
@@ -109,8 +109,8 @@ const noopLogger = {
 
 /**
  * Shared upload logic for Filecoin. The actual CAR builder is
- * environment-specific — see 0xobsidian/src/filecoin/car-builder.ts
- * (Node) and safe-app/src/filecoin/car-builder.ts (browser).
+ * environment-specific — `@s2s/soul2soul-shared/filecoin/car-builder/node`
+ * (Node) and `@s2s/soul2soul-shared/filecoin/car-builder/browser` (browser).
  */
 
 export interface FilecoinCarBuilder {

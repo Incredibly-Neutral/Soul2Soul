@@ -3,15 +3,16 @@
  * Uses filecoin-pin's createUnixfsCarBuilder() which requires
  * Node fs APIs (mkdtempSync, writeFileSync, readFileSync, unlinkSync).
  *
- * This module is NOT bundled into safe-app — it's only used
- * in the 0xobsidian Electron/Node context.
+ * Consumed by Node/Electron hosts via
+ * `@s2s/soul2soul-shared/filecoin/car-builder/node` — never bundled into
+ * browser targets.
  */
 
-import * as unixfs from "filecoin-pin/core/unixfs";
-import { mkdtempSync, writeFileSync, readFileSync, unlinkSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-import type { FilecoinCarBuilder } from "@s2s/soul2soul-shared/filecoin";
+import * as unixfs from 'filecoin-pin/core/unixfs';
+import { mkdtempSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import type { FilecoinCarBuilder } from '../index.js';
 
 export const nodeFilecoinBuilder: FilecoinCarBuilder = {
   async buildCarFromBytes(bytes: Uint8Array): Promise<{
@@ -20,8 +21,8 @@ export const nodeFilecoinBuilder: FilecoinCarBuilder = {
   }> {
     const builder = unixfs.createUnixfsCarBuilder();
     // Write bytes to temp file → CAR builder expects a source path
-    const dir = mkdtempSync(join(tmpdir(), "fc-car-"));
-    const srcPath = join(dir, "payload.json");
+    const dir = mkdtempSync(join(tmpdir(), 'fc-car-'));
+    const srcPath = join(dir, 'payload.json');
     writeFileSync(srcPath, bytes);
 
     const result = await builder.buildCar(srcPath);

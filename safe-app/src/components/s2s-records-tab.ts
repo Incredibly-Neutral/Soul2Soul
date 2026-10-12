@@ -14,7 +14,7 @@ import { typograhyStyles } from '@/styles/typography-styles.js';
 import { ICON_SIZE, ICON_SIZE_LARGE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-sliding-add-button.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
-import { browserFilecoinBuilder } from '../filecoin/car-builder.js';
+import { browserFilecoinBuilder } from '@s2s/soul2soul-shared/filecoin/car-builder/browser';
 import { ethers } from 'ethers';
 import { evmRead } from '../lib/evm.js';
 import {

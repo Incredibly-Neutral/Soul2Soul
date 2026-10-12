@@ -13,7 +13,7 @@
  */
 
 import { FilecoinStorage, FilecoinUser, FilecoinUploadResult, type FilecoinSessionKeyData } from "@s2s/soul2soul-shared/filecoin";
-import { nodeFilecoinBuilder } from "./car-builder.js";
+import { nodeFilecoinBuilder } from "@s2s/soul2soul-shared/filecoin/car-builder/node";
 import { addJson } from "../ipfs/remotekubo.service.js";
 import { installCorsFetch, restoreCorsFetch } from "./cors-fetch.js";
 import * as https from "https";

@@ -127,7 +127,7 @@ vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
 
 vi.mock('@/lib/evm.js', () => ({ evmRead: vi.fn(), getRpcUrl: vi.fn() }));
 
-vi.mock('@/filecoin/car-builder.js', () => ({ browserFilecoinBuilder: {} }));
+vi.mock('@s2s/soul2soul-shared/filecoin/car-builder/browser', () => ({ browserFilecoinBuilder: {} }));
 
 vi.mock('@/state/store.js', () => ({ store: storeMock.store }));
 

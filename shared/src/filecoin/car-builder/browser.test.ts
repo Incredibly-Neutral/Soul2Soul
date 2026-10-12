@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { browserFilecoinBuilder } from '../../src/filecoin/car-builder';
+import { browserFilecoinBuilder } from './browser.js';
 
 // The car-builder module imports `createCarFromFile` from
 // `filecoin-pin/core/unixfs`, whose "browser" condition exports it but whose
