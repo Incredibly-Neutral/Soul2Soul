@@ -14,7 +14,7 @@
 import { Notice, TFile } from 'obsidian';
 import type { IMainController } from '../main.ctrlr';
 import { subdomainOf } from '../content/ens-tags';
-import { filecoinUploadBackground, kuboBaseUrl } from './filecoin';
+import { ipfsFromSettings, kuboBaseUrl } from './filecoin';
 import { renderCalls } from '../render/render.helper';
 
 export interface PublishOptions {
@@ -89,16 +89,16 @@ export async function publishToPublication(
 	// here to cover both. Idempotent (hide on an already-hidden notice is a no-op).
 	if (main.notice) main.notice.hide();
 
-	/// fire & forget — Filecoin upload doesn't need to block the main flow.
-	/// Launched AFTER the awaited makeOffer + renderCalls RPCs complete so
-	/// its CORS-shim install window never overlaps an awaited viem
-	/// JSON-RPC (makeOffer / renderwithLitActions). viem's http() withTimeout
-	/// only aborts() the fetch on timeout and relies on it rejecting, so a
-	/// shim left installed across an awaited RPC could hang it indefinitely.
-	filecoinUploadBackground(
-		main,
-		'article',
-		async () => {
+	/// fire & forget — the 4-way backup (filebase + pinata pins + filecoin)
+	/// doesn't need to block the main flow. Launched AFTER the awaited
+	/// makeOffer + renderCalls RPCs complete so the filecoin leg's CORS-shim
+	/// install window never overlaps an awaited viem JSON-RPC (makeOffer /
+	/// renderwithLitActions). viem's http() withTimeout only aborts() the fetch
+	/// on timeout and relies on it rejecting, so a shim left installed across
+	/// an awaited RPC could hang it indefinitely.
+	const ipfs = ipfsFromSettings(main);
+	void ipfs.backupToProviders(kuboCid, {
+		filecoin: async () => {
 			const pubAddress = await service.getMultiSig();
 			const authorEoa = main.oxo.ctrlr.user?.eoa;
 			return main.oxo.ctrlr.storage.uploadJson(
@@ -107,6 +107,10 @@ export async function publishToPublication(
 				'article',
 			);
 		},
-		kuboCid,
-	);
+		onFilecoinMismatch: (rootCid) => {
+			new Notice(
+				`⚠️ CID mismatch (article): Kubo ${kuboCid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,
+			);
+		},
+	});
 }
