@@ -866,6 +866,59 @@ describe('s2s-cid-view-section', () => {
     expect(unknownRow!.textContent).toContain('—');
   });
 
+  it('Filecoin column: one dot per serving provider, hover names each provider', async () => {
+    const seed = seededRetrievability();
+    seed.bafydeal1 = {
+      ...seed.bafydeal1,
+      copies: 3,
+      sources: { kubo: true, pinata: true, filebase: false, filecoin: true },
+      providersBySource: {
+        kubo: ['kubo/0.43.1'],
+        pinata: ['gateway-v1.pinata.cloud'],
+        filecoin: ['ezpdpz-main (SP 1)', 'TopBlocks (SP 15)'],
+      },
+    };
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    cidViewMocks.checkRetrievability.mockImplementation(hangRetrievability);
+    const el = await mountLit('s2s-cid-view-section', {
+      ctx: makeFullCtx(),
+      publication: 'test.eth',
+    });
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('.table')).toBeTruthy();
+    });
+    const rows = Array.from(el.shadowRoot!.querySelectorAll('.cid-row'));
+    const dealRow = rows.find((r) => r.querySelector('.badge.deal'));
+    expect(dealRow).toBeTruthy();
+    // kubo + pinata single dots + TWO filecoin dots = 4 green, 1 red (filebase).
+    const onDots = dealRow!.querySelectorAll('.dot.on');
+    expect(onDots.length).toBe(4);
+    expect(dealRow!.querySelectorAll('.dot.off').length).toBe(1);
+    // Every filecoin dot carries its provider's name in the hover title.
+    const titles = Array.from(onDots).map((d) => (d as HTMLElement).getAttribute('title'));
+    expect(titles).toContain('filecoin: ezpdpz-main (SP 1)');
+    expect(titles).toContain('filecoin: TopBlocks (SP 15)');
+    // Single-provider filecoin dot also names its SP on hover.
+    seed.bafydeal1 = {
+      ...seed.bafydeal1,
+      providersBySource: {
+        kubo: ['kubo/0.43.1'],
+        pinata: ['gateway-v1.pinata.cloud'],
+        filecoin: ['Angelo (SP 13)'],
+      },
+    };
+    cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);
+    el.requestUpdate();
+    await el.updateComplete;
+    const dealRow2 = Array.from(el.shadowRoot!.querySelectorAll('.cid-row')).find((r) =>
+      r.querySelector('.badge.deal'),
+    );
+    const titles2 = Array.from(dealRow2!.querySelectorAll('.dot.on')).map((d) =>
+      (d as HTMLElement).getAttribute('title'),
+    );
+    expect(titles2).toContain('filecoin: Angelo (SP 13)');
+  });
+
   it('sorts the flat table fewest-copies-first (unchecked on top)', async () => {
     const seed = seededRetrievability();
     cidViewMocks.loadRetrievabilityMap.mockReturnValue(seed);

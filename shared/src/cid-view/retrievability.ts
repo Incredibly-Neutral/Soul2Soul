@@ -43,6 +43,11 @@ export interface CidRetrievabilityStatus {
   state: CheckState;
   /** Providers announced for this cid in the last check (0 when none). */
   providersFound?: number;
+  /** Display names of the SERVING providers, per platform (e.g. filecoin →
+   *  ['ezpdpz-main (SP 1)', 'TopBlocks (SP 15)']). Absent on statuses
+   *  persisted before this field existed (old cache blobs degrade to the
+   *  single-dot-per-platform render). */
+  providersBySource?: Partial<Record<RetrievabilitySource, string[]>>;
   /** ipfs-check probe latency in ms (absent when the check failed). */
   ms?: number;
   /** Last failure detail + when it happened. Kept alongside the last-known

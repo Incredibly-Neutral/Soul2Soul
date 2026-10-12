@@ -101,6 +101,9 @@ export const cidRetrievabilityStatusSchema = z.object({
   }),
   state: z.enum(['ok', 'no-providers', 'inconclusive', 'not-served', 'failed']),
   providersFound: z.number().int().min(0).optional(),
+  providersBySource: z
+    .record(z.enum(['kubo', 'pinata', 'filebase', 'filecoin']), z.array(z.string()))
+    .optional(),
   ms: z.number().optional(),
   lastError: z.string().optional(),
   lastErrorAt: z.string().optional(),

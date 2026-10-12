@@ -27,7 +27,12 @@
 // throws; the cache adapters default to no-ops.
 import { emptyStatus, type CidRetrievabilityMap, type CidRetrievabilityStatus, type CheckState } from './retrievability';
 import type { PublicationCidView } from './types';
-import { classifyProvider, type IpfsCheckProvider, type IpfsCheckRow } from './retrieval-parser';
+import {
+  classifyProvider,
+  providersBySourceFromProviders,
+  type IpfsCheckProvider,
+  type IpfsCheckRow,
+} from './retrieval-parser';
 
 /** Base URL of the user's self-hosted ipfs-check instance (overridable). */
 export const IPFS_CHECK_ENDPOINT = 'https://ipfs-check.transport-union.dev';
@@ -173,7 +178,17 @@ export function statusFromCheckLine(
     };
   }
 
-  return { checkedAt, copies, sources, state, providersFound: providers.length, ms: line.ms };
+  const providersBySource = providersBySourceFromProviders(providers);
+  const status: CidRetrievabilityStatus = {
+    checkedAt,
+    copies,
+    sources,
+    state,
+    providersFound: providers.length,
+    ms: line.ms,
+  };
+  if (Object.keys(providersBySource).length > 0) status.providersBySource = providersBySource;
+  return status;
 }
 
 /** How one provider's probe resolved — the atom behind CheckState. */
