@@ -5,8 +5,9 @@
 // closed: on any RPC error or CID disagreement it reports an error /
 // disagreement outcome instead of guessing.
 
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, namehash } from "viem";
 import { mainnet } from "viem/chains";
+import { getEnsResolver } from "viem/ens";
 
 import { contenthashToCid } from "./cid.js";
 
@@ -16,7 +17,7 @@ export interface ContenthashResult {
   contenthashHex: string | null;
   /** Decoded CID; null iff contenthashHex is null. */
   cid: string | null;
-  /** Block the read happened at (from viem getEnsContenthash), null if unavailable. */
+  /** Block the read happened at (best-effort), null if unavailable. */
   blockNumber: bigint | null;
   rpcUrl: string;
   /** Epoch ms. */
@@ -30,19 +31,18 @@ export type ResolveOutcome =
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-// viem removed the `getEnsContenthash` action (it was deprecated) before
-// 2.57, so the public-client type no longer carries it. We still read the
-// resolver contenthash through that action's historical shape
-// ({ contenthash, blockNumber, blockTag }) via a structural shim. If a runtime
-// client does not provide the method, the call throws and resolveContenthash
-// fails closed (status "error").
-interface EnsContenthashReader {
-  getEnsContenthash(args: { name: string }): Promise<{
-    contenthash: string | null;
-    blockNumber?: bigint | null;
-    blockTag?: string;
-  }>;
-}
+// EIP-137 public resolver `contenthash(bytes32 node)` view. viem 2.57 removed
+// the `getEnsContenthash` action, so we read the resolver's contenthash via
+// getEnsResolver (viem/ens) + a manual readContract against the minimal ABI.
+const RESOLVER_ABI = [
+  {
+    type: "function",
+    name: "contenthash",
+    stateMutability: "view",
+    inputs: [{ type: "bytes32", name: "node" }],
+    outputs: [{ type: "bytes", name: "" }],
+  },
+] as const;
 
 /** Normalize a raw contenthash: null / "0x" / "" -> null. */
 function normalizeContenthash(raw: string | null): string | null {
@@ -55,10 +55,14 @@ function normalizeContenthash(raw: string | null): string | null {
  *
  * Fail-closed semantics (load-bearing):
  *  - each rpcUrl gets its own client; every rpc is queried;
- *  - if ANY rpc call (or decode) throws -> status "error" immediately, no vote;
+ *  - if ANY rpc read (resolver lookup or contenthash read) throws ->
+ *    status "error" immediately, no vote;
  *  - if all succeed but the normalized CIDs differ -> status "disagreement";
  *  - only if all CIDs are identical -> status "ok" with the first result.
- * A unanimous `contenthash: null` is a VALUE (ok, cid null), not an error.
+ * A unanimous `contenthash: null` (no resolver, or resolver without a
+ * contenthash record) is a VALUE (ok, cid null), not an error.
+ * blockNumber is best-effort metadata: a getBlockNumber failure keeps null
+ * and does NOT fail closed.
  */
 export async function resolveContenthash(
   ensName: string,
@@ -74,16 +78,34 @@ export async function resolveContenthash(
       const client = createPublicClient({
         chain: mainnet,
         transport: http(rpcUrl, { timeout: timeoutMs }),
-      }) as unknown as EnsContenthashReader;
-      const res = await client.getEnsContenthash({ name: ensName });
+      });
+      const resolver = await getEnsResolver(client, { name: ensName });
 
-      const contenthashHex = normalizeContenthash(res.contenthash ?? null);
+      let contenthashHex: string | null = null;
+      let blockNumber: bigint | null = null;
+      if (resolver) {
+        const bytes = await client.readContract({
+          address: resolver,
+          abi: RESOLVER_ABI,
+          functionName: "contenthash",
+          args: [namehash(ensName)],
+        });
+        contenthashHex = normalizeContenthash(bytes);
+        if (contenthashHex !== null) {
+          try {
+            blockNumber = await client.getBlockNumber();
+          } catch {
+            blockNumber = null; // best-effort metadata; do NOT fail closed on it
+          }
+        }
+      }
+
       const cid = contenthashHex === null ? null : contenthashToCid(contenthashHex);
       results.push({
         ensName,
         contenthashHex,
         cid,
-        blockNumber: res.blockNumber ?? null,
+        blockNumber,
         rpcUrl,
         timestamp,
       });
