@@ -1,0 +1,32 @@
+# lastmile — ENS-verified .com serving daemon (Phase 1)
+#
+# Install:  sudo cp lastmile.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now lastmile
+#
+# Inspect:  journalctl -u lastmile -f
+#           systemctl status lastmile
+
+[Unit]
+Description=lastmile — serve .com from its .eth ENS contenthash (Phase 1)
+# Only start once the network is up (we resolve ENS over Ethereum RPCs).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# lastmile resolves against the installed package dir.
+WorkingDirectory=/opt/lastmile
+ExecStart=/usr/bin/env node /opt/lastmile/dist/index.js --config /etc/lastmile/config.toml
+# Runs as root because it must write /etc/nginx includes and run
+# `sudo -n nginx -t` / `sudo -n nginx -s reload` (password-less, non-interactive).
+User=root
+# Restart on crash or unclean exit, with a short backoff.
+Restart=always
+RestartSec=10
+# Systemd-managed stdout/stderr (structured log lines).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
