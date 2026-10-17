@@ -385,7 +385,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.9
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
   protocol:
     dependencies:
@@ -603,9 +603,6 @@ importers:
 
   safe-app:
     dependencies:
-      '@helia/unixfs':
-        specifier: ^8.0.3
-        version: 8.0.3
       '@ipld/car':
         specifier: ^5.4.6
         version: 5.4.6
@@ -719,8 +716,8 @@ importers:
         specifier: ^1.0.1
         version: 1.0.1(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@3.25.76)
       multiformats:
-        specifier: ^13.4.2
-        version: 13.4.2
+        specifier: ^14.0.0
+        version: 14.0.0
       viem:
         specifier: ^2.48.0
         version: 2.48.4(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@3.25.76)
@@ -2306,9 +2303,6 @@ packages:
 
   '@helia/unixfs@7.2.1':
     resolution: {integrity: sha512-kHj4vY7R+InI2nxYgoiqiuHsdIjl6pBri0sLfo8sK9tHCy+PK5MJ9m2NIGkSsuMua+9t09vRdC981dH5Qb1VeA==}
-
-  '@helia/unixfs@8.0.3':
-    resolution: {integrity: sha512-jv3aqek6f5/D0vdEsxRYX3zC0GWYmsRSINIQNWhfIj1Uut3a2aHPsOUS4bse4ROEctkNjjlsUoN/kBDXt21h6g==}
 
   '@helia/utils@2.5.2':
     resolution: {integrity: sha512-6/+RInRpJsJoo13ECQsSkBtK2xUGl/KWaJpBuK9tqg+ng3s5cec2qO9RVhZt4bdkPPqJc/PX+G9zwVhKqp5UwQ==}
@@ -13154,32 +13148,6 @@ snapshots:
       - encoding
       - supports-color
 
-  '@helia/unixfs@8.0.3':
-    dependencies:
-      '@helia/interface': 7.0.3
-      '@ipld/dag-pb': 4.1.7
-      '@libp2p/interface': 3.2.4
-      '@libp2p/logger': 6.2.9
-      '@libp2p/utils': 7.2.3
-      '@multiformats/murmur3': 2.2.7
-      interface-blockstore: 7.0.1
-      ipfs-unixfs: 13.0.0
-      ipfs-unixfs-exporter: 16.0.2
-      ipfs-unixfs-importer: 17.0.1
-      it-all: 3.0.11
-      it-first: 3.0.11
-      it-glob: 3.0.6
-      it-last: 3.0.11
-      it-pipe: 3.0.1
-      it-to-buffer: 5.0.0
-      multiformats: 14.0.0
-      progress-events: 1.1.0
-      sparse-array: 1.3.2
-      uint8arrays: 6.1.1
-    transitivePeerDependencies:
-      - encoding
-      - supports-color
-
   '@helia/utils@2.5.2':
     dependencies:
       '@helia/interface': 6.2.1
@@ -17352,6 +17320,20 @@ snapshots:
       - utf-8-validate
       - vite
 
+  '@vitest/browser-playwright@4.1.9(bufferutil@4.1.0)(playwright@1.63.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)':
+    dependencies:
+      '@vitest/browser': 4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)
+      '@vitest/mocker': 4.1.9(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))
+      playwright: 1.63.0
+      tinyrainbow: 3.1.0
+      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+    transitivePeerDependencies:
+      - bufferutil
+      - msw
+      - utf-8-validate
+      - vite
+    optional: true
+
   '@vitest/browser-playwright@4.1.9(bufferutil@4.1.0)(playwright@1.63.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)':
     dependencies:
       '@vitest/browser': 4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)
@@ -17410,6 +17392,24 @@ snapshots:
       - msw
       - utf-8-validate
       - vite
+
+  '@vitest/browser@4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)':
+    dependencies:
+      '@blazediff/core': 1.9.1
+      '@vitest/mocker': 4.1.9(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/utils': 4.1.9
+      magic-string: 0.30.21
+      pngjs: 7.0.0
+      sirv: 3.0.2
+      tinyrainbow: 3.1.0
+      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+      ws: 8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - bufferutil
+      - msw
+      - utf-8-validate
+      - vite
+    optional: true
 
   '@vitest/browser@4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)':
     dependencies:
@@ -17497,6 +17497,14 @@ snapshots:
       magic-string: 0.30.21
     optionalDependencies:
       vite: 6.4.4(@types/node@20.19.39)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  '@vitest/mocker@4.1.9(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))':
+    dependencies:
+      '@vitest/spy': 4.1.9
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/mocker@4.1.9(vite@8.0.16(@types/node@16.18.126)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
@@ -25106,6 +25114,23 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.3
 
+  vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3):
+    dependencies:
+      lightningcss: 1.33.0
+      picomatch: 4.0.4
+      postcss: 8.5.15
+      rolldown: 1.0.3
+      tinyglobby: 0.2.17
+    optionalDependencies:
+      '@types/node': 16.18.126
+      esbuild: 0.17.3
+      fsevents: 2.3.3
+      jiti: 2.7.0
+      sass: 1.101.0
+      terser: 5.48.0
+      tsx: 4.21.0
+      yaml: 2.8.3
+
   vite@8.0.16(@types/node@16.18.126)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3):
     dependencies:
       lightningcss: 1.33.0
@@ -25173,6 +25198,47 @@ snapshots:
       terser: 5.48.0
       tsx: 4.21.0
       yaml: 2.8.3
+
+  vitest@4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3):
+    dependencies:
+      '@vitest/expect': 4.1.9
+      '@vitest/mocker': 4.1.9(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/pretty-format': 4.1.9
+      '@vitest/runner': 4.1.9
+      '@vitest/snapshot': 4.1.9
+      '@vitest/spy': 4.1.9
+      '@vitest/utils': 4.1.9
+      es-module-lexer: 2.1.0
+      expect-type: 1.3.0
+      magic-string: 0.30.21
+      obug: 2.1.3
+      pathe: 2.0.3
+      picomatch: 4.0.4
+      std-env: 4.1.0
+      tinybench: 2.9.0
+      tinyexec: 1.2.4
+      tinyglobby: 0.2.17
+      tinyrainbow: 3.1.0
+      vite: 8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@types/node': 16.18.126
+      '@vitest/browser-playwright': 4.1.9(bufferutil@4.1.0)(playwright@1.63.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@16.18.126)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)
+      '@vitest/coverage-v8': 4.1.9(@vitest/browser@4.1.9)(vitest@4.1.9)
+    transitivePeerDependencies:
+      - '@vitejs/devtools'
+      - esbuild
+      - jiti
+      - less
+      - msw
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
   vitest@4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3):
     dependencies:

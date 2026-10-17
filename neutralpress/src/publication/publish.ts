@@ -16,6 +16,7 @@ import type { IMainController } from '../main.ctrlr';
 import { subdomainOf } from '../content/ens-tags';
 import { ipfsFromSettings, kuboBaseUrl } from './filecoin';
 import { renderCalls } from '../render/render.helper';
+import { runFilecoinLeg } from '@s2s/soul2soul-shared';
 
 export interface PublishOptions {
 	/** Whether to run the render pipeline after the on-chain append. */
@@ -102,15 +103,35 @@ export async function publishToPublication(
 	if (opts.publish !== false) {
 		const ipfs = ipfsFromSettings(main);
 		void ipfs.backupToProviders(kuboCid, {
-			filecoin: async () => {
-				const pubAddress = await service.getMultiSig();
-				const authorEoa = main.oxo.ctrlr.user?.eoa;
-				return main.oxo.ctrlr.storage.uploadJson(
-					signedItem,
-					[pubAddress, authorEoa].filter(Boolean),
+			filecoin: () =>
+				runFilecoinLeg(
 					'article',
-				);
-			},
+					async () => {
+						// The Filecoin leg needs 0xobsidian's FilecoinController, which is
+						// only initialised when session-key.json exists in the 0xobsidian
+						// plugin folder AND initWithSessionKey succeeds. When it's missing
+						// or the session key is expired, `ctrlr.storage` stays undefined
+						// and this leg used to fail SILENTLY — backupToProviders catches
+						// it into a console-only 'failed'. runFilecoinLeg logs started/ok/
+						// failed and turns a hang into a visible, time-boxed failure.
+						const storage = main.oxo?.ctrlr?.storage;
+						if (!storage) {
+							throw new Error(
+								'Filecoin storage not initialised (is session-key.json present in the 0xobsidian plugin folder?)',
+							);
+						}
+						const pubAddress = await service.getMultiSig();
+						const authorEoa = main.oxo.ctrlr.user?.eoa;
+						return storage.uploadJson(
+							signedItem,
+							[pubAddress, authorEoa].filter(Boolean),
+							'article',
+						);
+					},
+					{
+						onFailure: (msg) => new Notice(`⚠️ Filecoin backup failed: ${msg}`),
+					},
+				),
 			onFilecoinMismatch: (rootCid) => {
 				new Notice(
 					`⚠️ CID mismatch (article): Kubo ${kuboCid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,

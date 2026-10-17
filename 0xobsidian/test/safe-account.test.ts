@@ -31,7 +31,12 @@ type MockMain = {
   };
 };
 
-describe('PermissionlessSafeService', () => {
+describe('PermissionlessSafeService', { timeout: 30_000 }, () => {
+  // This suite talks to the live Base mainnet RPC (toSafeSmartAccount reads
+  // proxyCreationCode on-chain, isDeployed does getBytecode). The first cold
+  // round-trip can exceed vitest's 5000ms default on a slow/cold connection,
+  // which showed up as an intermittent timeout on the first derivation test.
+  // 30s is an upper bound only — assertions still fail fast on real errors.
   const rpcKey = process.env.VITE_DRPC_API_KEY;
   const testPk = process.env.TEST_PRIVATE_KEY;
   const chainName = 'BASE';

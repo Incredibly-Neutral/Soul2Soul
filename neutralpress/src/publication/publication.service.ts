@@ -3,7 +3,7 @@ import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
 import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
-import { S2SPublicationModuleV2, S2SRecordsModule} from "../../../protocol/contracts/generated/abis"
+import { S2SPublicationModuleV2 } from "../../../protocol/contracts/generated/abis"
 import { toBytes32Id } from '@s2s/soul2soul-shared'; 
 
 const L1 = "ETH_MAINNET";
@@ -20,14 +20,8 @@ export interface IPublicationSrv {
 		commit: string,
 	) => void;
 	makeOffer: (genesis: string, cid: string) => Promise<any>;
-	acceptOffer: (genesis: string) => Promise<any>;
 	retract: (genesis: string) => Promise<any>;
-	hasDeal: (genesis: string) => Promise<boolean>;
-	getDeals: (offset: number, limit: number) => Promise<any[]>;
-	getOffers: (offset: number, limit: number) => Promise<any[]>;
-	getPublicationMultiSigAddresses: (tags: string[]) => Promise<string>;
 	getMultiSig: () => Promise<string>;
-	getPublicationFeedAddress: () => Promise<string>;
 	publicationModule: string
 }
 
@@ -97,17 +91,6 @@ export class PublicationService implements IPublicationSrv{
 	  );
 	}
 
-	/** Publication Safe accepts a pending offer → deal. onlySafe. */
-	async acceptOffer(genesis: string) {
-	  return await this.main.oxo.ctrlr.account[L2].genericTx(
-	    this.publicationModule,
-	    JSON.stringify(S2SPublicationModuleV2),
-	    "acceptOffer",
-	    [toBytes32Id(genesis)],
-	    false,
-	  );
-	}
-
 	/**
 	 * Retract — asymmetric by caller:
 	 *   author → full withdrawal (removed from deals and/or offers)
@@ -123,52 +106,8 @@ export class PublicationService implements IPublicationSrv{
 	  );
 	}
 
-	async hasDeal(genesis: string): Promise<boolean> {
-	  return await readL2(
-	    this.main,
-	    this.publicationModule,
-	    S2SPublicationModuleV2,
-	    "hasDeal",
-	    [toBytes32Id(genesis)],
-	  );
-	}
-
-	async getDeals(offset = 0, limit = 50): Promise<any[]> {
-	  return await readL2(
-	    this.main,
-	    this.publicationModule,
-	    S2SPublicationModuleV2,
-	    "getDeals",
-	    [offset, limit],
-	  );
-	}
-
-	async getOffers(offset = 0, limit = 50): Promise<any[]> {
-	  return await readL2(
-	    this.main,
-	    this.publicationModule,
-	    S2SPublicationModuleV2,
-	    "getOffers",
-	    [offset, limit],
-	  );
-	}
-
 	async getMultiSig() {
 		return this.multisig;
-	}
-
-	async getPublicationMultiSigAddresses(tags: string[]) {
-		for (const tag of tags) {
-			if (tag.contains("--s2s")) {
-				const { addr } = await getPublicationMultiSig(
-					this.main,
-					tag.replace("--s2s", ".soul2soul.eth"),
-				);
-				if (addr) {
-					return addr;
-				}
-			}
-		}
 	}
 
 	async getModuleAdresses() {
@@ -214,13 +153,4 @@ export class PublicationService implements IPublicationSrv{
 		return { configModule, publicationModule } 
 	}
 
-	async getPublicationFeedAddress() {
-		return await readL2(
-			this.main,
-			this.configModule,
-			S2SRecordsModule,
-			"getRecord",
-			["feed"]  
-		);
-	}
 }

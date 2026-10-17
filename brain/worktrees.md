@@ -1,3 +1,25 @@
+## 2026-10-13 — lastmile Phase 1 (orchestrated, 2 waves) — MERGED (main 7a84f17)
+
+| date | session | worktree | branch | agent | model | task |
+|---|---|---|---|---|---|---|
+| 2026-10-13 | w1 | /home/joera/code/worktrees/lm1 | agent/lm1 | impl-lm1 | deepseek-v4-flash-0731 | wave 1: ens.ts (multi-RPC fail-closed ENS contenthash, viem/ens getEnsResolver + readContract) + cid.ts + ipfs/contenthash.ts (vendored) + tests (19) |
+| 2026-10-13 | w1 | /home/joera/code/worktrees/lm2 | agent/lm2 | impl-lm2 | deepseek-v4-flash-0731 | wave 1: kubo.ts (pin/add, pin/rm, pin/ls client) + state.ts (state.json + s2s.json, atomic writes, applyNewCid rollback depth) + tests (20) |
+| 2026-10-13 | w1 | /home/joera/code/worktrees/lm3 | agent/lm3 | impl-lm3 | deepseek-v4-flash-0731 | wave 1: config.ts (strict TOML loader, >=2 rpc_urls, defaults) + nginx.ts (atomic fail-closed include rewrite + nginx -t / reload, self-healing) + tests (26) |
+| 2026-10-13 | w2 | /home/joera/code/worktrees/lm4 | agent/lm4 | impl-lm4 | deepseek-v4-flash-0731 | wave 2: sync.ts (fail-closed per-magazine loop: resolve -> pin -> nginx -> persist; statuses updated/unchanged/stalled/error; reconcile) + logger.ts + index.ts (CLI --config/--once/--magazine, daemon loop) + lastmile.service + README + tests (10) |
+
+lastmile Phase 1 (server-side ENS-verified .com serving): scaffold committed directly on main `41ca0fd` (standalone npm package at repo root, sibling of cid-mirror; viem ^2.48 + smol-toml; rollup overridden 4.64.5 due to registry 4.64.6 tarball 404). Two-wave fan-out (wave 1 = lm1/lm2/lm3 fully independent; wave 2 = lm4 after merge, imports all modules). Lead review found + fixed a BLOCKING issue: installed viem resolved to 2.57.5 where `getEnsContenthash` was removed (client.getEnsContenthash === undefined -> permanent fail-closed error; unit tests mocked viem so missed it) — impl-lm1 rewrote ens.ts to `viem/ens` getEnsResolver + manual readContract(contenthash(bytes32)); lead verified live: s3ntiment.eth -> contenthash 0xe3010170...4c59273c... -> CID bafybeicmlettyk6marm347dxvkhhiaeehnvpzcnvywmfsbns26ilbzniwm @ block 26182720. lm1 confirmed the down RPC (eth.llamarpc 525) correctly failed closed. Wave-1 merged one at a time (53ea1f2/580a168/55fd1d7), gate re-run after each; lm4 merged 7a84f17. Final merged-main gate: build OK, **75/75 tests** (7 files), typecheck OK. Cleanup: worktrees lm1-4 removed, branches agent/lm1-4 deleted, panes w1J:p2-p5 closed. User's pre-existing dirty files on main untouched. Single-model review limitation (pi-only, no cross-vendor reviewer) flagged per AGENTS.md.
+
+## 2026-10-14 — lastmile Phase 2 / "improve helia" (in-browser verification) — ABANDONED
+
+No worktrees were created. The browser-side trustless-verification direction (same-origin CAR
+fetch + verified-block Cache API + ENS stale-while-revalidate + no-JS-fallback worker, planned as a
+`lastmile/browser` package) is **abandoned at the user's direction on 2026-10-14.** Cleanup: removed
+the unused `@helia/unixfs` direct dependency from `safe-app/package.json` (added `cd2d631`, never
+imported) + surgically pruned the `@helia/unixfs@8.0.3` entries from `pnpm-lock.yaml` (importers /
+snapshots / packages) — the user's dirty lockfile churn was preserved untouched and the lock
+validates clean (`pnpm install --frozen-lockfile` exit 0). Documented in SPEC-safe-app "Local
+gotchas / gaps".
+
 ## 2026-10-12 — neutralpress vitest suite (orchestrated) — MERGED #140 #141 #142 #143 (main 516055f)
 
 | date | session | worktree | branch | agent | model | task |

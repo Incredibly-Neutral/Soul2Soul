@@ -18,6 +18,7 @@ import {
 	parseCID,
 	renderwithLitActions,
 	toPreviewLabel,
+	runFilecoinLeg,
 } from '@s2s/soul2soul-shared';
 import type { IMainController } from '../main.ctrlr';
 import { ipfsFromSettings, kuboBaseUrl } from '../publication/filecoin';
@@ -130,18 +131,34 @@ export async function renderCalls(
 			if (publish) {
 				const ipfs = ipfsFromSettings(main);
 				void ipfs.backupToProviders(res.cid, {
-					filecoin: async () => {
-						const pubAddress = await main
-							.getInitializedService(subdomainOf(publication))
-							.then((s) => s.getMultiSig());
-						const authorEoa = main.oxo.ctrlr.user?.eoa;
-						return main.oxo.ctrlr.storage.uploadTree(
-							res.cid,
-							kuboBaseUrl(main),
-							[pubAddress, authorEoa].filter(Boolean),
+					filecoin: () =>
+						runFilecoinLeg(
 							'render-root',
-						);
-					},
+							async () => {
+								// Same guard as publish.ts: with no initialised FilecoinController
+								// (missing/expired session-key.json) this leg would fail silently;
+								// runFilecoinLeg logs started/ok/failed + time-boxes hangs.
+								const storage = main.oxo?.ctrlr?.storage;
+								if (!storage) {
+									throw new Error(
+										'Filecoin storage not initialised (is session-key.json present in the 0xobsidian plugin folder?)',
+									);
+								}
+								const pubAddress = await main
+									.getInitializedService(subdomainOf(publication))
+									.then((s) => s.getMultiSig());
+								const authorEoa = main.oxo.ctrlr.user?.eoa;
+								return storage.uploadTree(
+									res.cid,
+									kuboBaseUrl(main),
+									[pubAddress, authorEoa].filter(Boolean),
+									'render-root',
+								);
+							},
+							{
+								onFailure: (msg) => new Notice(`⚠️ Filecoin backup failed: ${msg}`),
+							},
+						),
 					onFilecoinMismatch: (rootCid) => {
 						new Notice(
 							`⚠️ CID mismatch (render-root): Kubo ${res.cid.slice(0, 12)}… ≠ Filecoin ${rootCid.slice(0, 12)}…`,

@@ -4,9 +4,9 @@
  * Heavily mocked, no network/chain ever touched:
  *   - L1 ENS reads (getPublicationMultiSig) are stubbed via
  *     main.oxo.ctrlr.account['ETH_MAINNET'].publicClient.readContract.
- *   - L2 reads (getModulesPaginated / NAME / getRecord / hasDeal / ...) are
- *     stubbed via main.oxo.ctrlr.viem.read.
- *   - All writes (makeOffer/acceptOffer/retract) go through
+ *   - L2 reads (getModulesPaginated / NAME / ...) are stubbed via
+ *     main.oxo.ctrlr.viem.read.
+ *   - All writes (makeOffer/retract) go through
  *     main.oxo.ctrlr.account['BASE'].genericTx.
  *
  * toBytes32Id is exercised only with 64-hex genesis values (the pass-through
@@ -18,15 +18,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { PublicationService } from '../../src/publication/publication.service';
 import { makeMain } from '../helpers/main';
 import { safeAbi, toBytes32Id } from '@s2s/soul2soul-shared';
-import {
-	S2SRecordsModule,
-	S2SPublicationModuleV2,
-} from '../../../protocol/contracts/generated/abis';
+import { S2SPublicationModuleV2 } from '../../../protocol/contracts/generated/abis';
 
 const MODULE_RECORDS = '0x' + 'a'.repeat(40); // NAME() === 'S2S Records Module'
 const MODULE_PUBLICATION = '0x' + 'b'.repeat(40); // NAME() === 'S2S Publication Module V2'
 const MANAGER = '0x' + 'd'.repeat(40); // ownerOf → publication Safe multisig
-const FEED = '0x' + 'f'.repeat(40); // getRecord('feed')
 const GENESIS = '0x' + '1'.repeat(64); // 64-hex → toBytes32Id pass-through
 const SENTINEL = '0x0000000000000000000000000000000000000001';
 
@@ -53,10 +49,6 @@ function makePublicationMain() {
 				if (address === MODULE_PUBLICATION) return 'S2S Publication Module V2';
 				return 'Some Other Module';
 			}
-			if (fn === 'getRecord') return FEED;
-			if (fn === 'hasDeal') return true;
-			if (fn === 'getDeals') return [{ objectId: GENESIS }];
-			if (fn === 'getOffers') return [{ objectId: GENESIS }];
 			return undefined;
 		},
 	);
@@ -204,7 +196,7 @@ describe('PublicationService', () => {
 		});
 	});
 
-	describe('makeOffer / acceptOffer / retract (L2 genericTx dispatch)', () => {
+	describe('makeOffer / retract (L2 genericTx dispatch)', () => {
 		it('makeOffer dispatches to the publication module with bytes32 genesis + cid', async () => {
 			const { main, svc } = makeService();
 			await svc.init();
@@ -216,20 +208,6 @@ describe('PublicationService', () => {
 				JSON.stringify(S2SPublicationModuleV2),
 				'makeOffer',
 				[toBytes32Id(GENESIS), 'QmRootCid'],
-				false,
-			);
-		});
-
-		it('acceptOffer dispatches acceptOffer with only the genesis', async () => {
-			const { main, svc } = makeService();
-			await svc.init();
-			await svc.acceptOffer(GENESIS);
-
-			expect(main.oxo.ctrlr.account.BASE.genericTx).toHaveBeenCalledWith(
-				MODULE_PUBLICATION,
-				JSON.stringify(S2SPublicationModuleV2),
-				'acceptOffer',
-				[toBytes32Id(GENESIS)],
 				false,
 			);
 		});
@@ -256,94 +234,12 @@ describe('PublicationService', () => {
 		});
 	});
 
-	describe('view reads (hasDeal / getDeals / getOffers / getPublicationFeedAddress)', () => {
-		it('hasDeal reads the publication module with bytes32 genesis', async () => {
-			const { main, svc } = makeService();
-			await svc.init();
-			await expect(svc.hasDeal(GENESIS)).resolves.toBe(true);
-
-			expect(main.oxo.ctrlr.viem.read).toHaveBeenCalledWith(
-				MODULE_PUBLICATION,
-				S2SPublicationModuleV2,
-				'hasDeal',
-				[toBytes32Id(GENESIS)],
-			);
-		});
-
-		it('getDeals defaults to offset 0 / limit 50 and honours explicit args', async () => {
-			const { main, svc } = makeService();
-			await svc.init();
-
-			await svc.getDeals();
-			expect(main.oxo.ctrlr.viem.read).toHaveBeenLastCalledWith(
-				MODULE_PUBLICATION,
-				S2SPublicationModuleV2,
-				'getDeals',
-				[0, 50],
-			);
-
-			await svc.getDeals(10, 20);
-			expect(main.oxo.ctrlr.viem.read).toHaveBeenLastCalledWith(
-				MODULE_PUBLICATION,
-				S2SPublicationModuleV2,
-				'getDeals',
-				[10, 20],
-			);
-		});
-
-		it('getOffers returns the mocked offer list', async () => {
-			const { main, svc } = makeService();
-			await svc.init();
-			const offers = await svc.getOffers(0, 50);
-			expect(offers).toEqual([{ objectId: GENESIS }]);
-			expect(main.oxo.ctrlr.viem.read).toHaveBeenCalledWith(
-				MODULE_PUBLICATION,
-				S2SPublicationModuleV2,
-				'getOffers',
-				[0, 50],
-			);
-		});
-
-		it('getPublicationFeedAddress reads the feed record off the records module', async () => {
-			const { main, svc } = makeService();
-			await svc.init();
-			await expect(svc.getPublicationFeedAddress()).resolves.toBe(FEED);
-
-			expect(main.oxo.ctrlr.viem.read).toHaveBeenCalledWith(
-				MODULE_RECORDS,
-				S2SRecordsModule,
-				'getRecord',
-				['feed'],
-			);
-		});
-	});
-
 	describe('getMultiSig', () => {
 		it('is undefined before init, resolves after', async () => {
 			const { svc } = makeService();
 			await expect(svc.getMultiSig()).resolves.toBeUndefined();
 			await svc.init();
 			await expect(svc.getMultiSig()).resolves.toBe(MANAGER);
-		});
-	});
-
-	describe('getPublicationMultiSigAddresses', () => {
-		it('returns undefined for an empty tag list (no ENS reads)', async () => {
-			const { main, svc } = makeService();
-			const result = await svc.getPublicationMultiSigAddresses([]);
-			expect(result).toBeUndefined();
-			expect(main.oxo.ctrlr.account.ETH_MAINNET.publicClient.readContract).not.toHaveBeenCalled();
-		});
-
-		it('BUG (source): throws — String.prototype.contains is not a function on ANY tag', async () => {
-			// The loop body calls `tag.contains('--s2s')` on every tag; JS strings
-			// have no `.contains` (it is `includes`). So the method can never
-			// resolve a publication from real tags — it throws a TypeError on the
-			// first tag before getPublicationMultiSig is reached.
-			const { svc } = makeService();
-			await expect(svc.getPublicationMultiSigAddresses(['acme--s2s'])).rejects.toThrow(
-				'tag.contains is not a function',
-			);
 		});
 	});
 });

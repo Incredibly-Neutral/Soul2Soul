@@ -1054,22 +1054,22 @@ export class S2SCidViewSection extends LitElement {
       <span class="chip"
         ><span class="chip-value">${view.summary.uniqueCids}</span> unique CIDs</span
       >
-      <div class="cid-search" title="Filter the inventory to a single CID">
+      <div class="cid-search" title="Filter the inventory to a single CID or genesis id">
         <input
           class="cid-search__input"
           type="text"
           .value=${this.cidSearch}
-          placeholder="Qm...."
+          placeholder="Qm.. / 0x.."
           autocomplete="off"
           spellcheck="false"
-          aria-label="Filter by CID"
+          aria-label="Filter by CID or genesis id"
           @input=${(e: Event) => this.onCidSearchInput(e)}
         />
         <button
           class="cid-search__btn"
           type="button"
-          aria-label=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
-          title=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID'}
+          aria-label=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID or genesis'}
+          title=${this.cidSearch ? 'Clear CID filter' : 'Filter by CID or genesis'}
           @click=${() => this.onCidSearchButton()}
         >${
             this.cidSearch
@@ -1089,7 +1089,7 @@ export class S2SCidViewSection extends LitElement {
   private healthBucketValues(view: PublicationCidView): Array<{ value: string; label: string }> {
     const counts = new Map<CidHealth, number>();
     for (const entry of this.firstOccurrenceEntries(view)) {
-      if (!this.cidMatches(entry.cid)) continue;
+      if (!this.cidMatches(entry)) continue;
       const status = this.retrievabilityStatus(entry.cid);
       if (status !== undefined) {
         const bucket = healthBucket(status);
@@ -1169,14 +1169,20 @@ export class S2SCidViewSection extends LitElement {
       const entry = byCid.get(cid);
       if (entry) rows.push(entry);
     }
-    // Single-CID search narrows the risk-ordered rows (empty search = all).
-    return this.cidSearch.trim() === '' ? rows : rows.filter((e) => this.cidMatches(e.cid));
+    // Single-CID/genesis search narrows the risk-ordered rows (empty search = all).
+    return this.cidSearch.trim() === '' ? rows : rows.filter((e) => this.cidMatches(e));
   }
 
-  /** True when a cid matches the active single-CID search (empty search = all). */
-  private cidMatches(cid: string): boolean {
+  /**
+   * True when an entry matches the active single-CID/genesis search (empty
+   * search = all). Matches the IPFS CID (Qm…/bafy…) and, when present, the
+   * deal/offer genesis id (0x…).
+   */
+  private cidMatches(entry: CidEntry): boolean {
     const q = this.cidSearch.trim().toLowerCase();
-    return q === '' || cid.toLowerCase().includes(q);
+    if (q === '') return true;
+    if (entry.cid.toLowerCase().includes(q)) return true;
+    return Boolean(entry.genesis && entry.genesis.toLowerCase().includes(q));
   }
 
   /** Live filter as the user types — no submit needed. */

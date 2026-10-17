@@ -42,7 +42,6 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@helia/unixfs": "^8.0.3",
     "@phosphor-icons/webcomponents": "2.1.5",
     "@ipld/car": "^5.4.6",
     "@s2s/soul2soul-shared": "workspace:*",
