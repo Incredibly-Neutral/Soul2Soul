@@ -49,10 +49,16 @@ const eth = vi.hoisted(() => {
   const rpcUrls: string[] = [];
   const contractCtorArgs: unknown[][] = [];
   const browserProviderCalls: unknown[] = [];
+  const getLogsCalls: unknown[] = [];
+  let getLogsResult: unknown = [];
 
   function JsonRpcProvider(this: any, url: string) {
     rpcUrls.push(url);
     this.url = url;
+    this.getLogs = async (args: unknown) => {
+      getLogsCalls.push(args);
+      return getLogsResult;
+    };
   }
   function BrowserProvider(this: any, ethObj: unknown) {
     browserProviderCalls.push(ethObj);
@@ -78,7 +84,13 @@ const eth = vi.hoisted(() => {
       },
     });
   }
-  return { contractStubs, directCalls, rpcUrls, contractCtorArgs, browserProviderCalls, JsonRpcProvider, BrowserProvider, Contract };
+  return {
+    contractStubs, directCalls, rpcUrls, contractCtorArgs, browserProviderCalls, getLogsCalls,
+    JsonRpcProvider, BrowserProvider, Contract,
+    // Accessors so tests can set the result the getLogs mock will return.
+    get getLogsResult() { return getLogsResult; },
+    set getLogsResult(v: unknown) { getLogsResult = v; },
+  };
 });
 
 function makeInterface() {
@@ -124,6 +136,8 @@ beforeEach(() => {
   eth.rpcUrls.length = 0;
   eth.contractCtorArgs.length = 0;
   eth.browserProviderCalls.length = 0;
+  eth.getLogsCalls.length = 0;
+  eth.getLogsResult = [];
   for (const k of Object.keys(eth.directCalls)) delete eth.directCalls[k];
 
   (globalThis as any).window = { ethers: eth, ethereum: '0xETHEREUM' };
@@ -220,6 +234,80 @@ describe('deleteRecord', () => {
       txs: [{ to: R_ADDR, value: '0', data: '0xdeleteRecord' }],
     });
     expect(eth.directCalls[R_ADDR]?.['deleteRecord']).toBeUndefined();
+  });
+});
+
+describe('proposeBatch — generic batch proposal (module-install init flow, AD-3)', () => {
+  it('sends the exact tx array via sdk.txs.send and returns the Safe queue URL', async () => {
+    const si = await initInstance();
+    const batch = [
+      { to: R_ADDR, value: '0', data: '0xcreateModule' },
+      { to: R_ADDR, value: '0', data: '0xenableModule' },
+    ];
+
+    const safeUrl = await si.proposeBatch(batch);
+
+    expect(sdk.txsSend).toHaveBeenCalledWith({ txs: batch });
+    expect(safeUrl).toBe(
+      `https://app.safe.global/transactions/queue?safe=8453:0xSafeAddress`,
+    );
+
+    // NEVER a direct send: nothing was invoked on any contract instance.
+    for (const k of Object.keys(eth.directCalls)) {
+      expect(eth.directCalls[k]).toEqual({});
+    }
+  });
+
+  it('throws when the Safe SDK is missing', async () => {
+    const si = new SafeIntegration();
+    await expect(si.proposeBatch([{ to: R_ADDR, value: '0', data: '0x00' }]))
+      .rejects.toThrow('Safe SDK not initialized');
+    expect(sdk.txsSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('getProvider — JSON-RPC provider for the Safe chain', () => {
+  it('returns a JsonRpcProvider built via getRpcUrl for the Safe chainId', async () => {
+    const si = await initInstance();
+    const provider = si.getProvider();
+    expect(provider.url).toBe('https://lb.drpc.live/base/testkey');
+  });
+});
+
+describe('fetchFactoryModuleCreatedLogs — factory ModuleCreated log reads', () => {
+  it('calls provider.getLogs with address + padded safe topic and returns the logs', async () => {
+    const si = await initInstance();
+    const factory = '0xFactory'; 
+    const safeAddress = '0xAbCdef1234567890AbCdef1234567890AbCdef12'; // 40 hex chars
+    const topic0 = '0x' + '0'.repeat(64);
+    const paddedSafe = '0x' + '0'.repeat(24) + 'abcdef1234567890abcdef1234567890abcdef12';
+    const log = { topics: [topic0, paddedSafe], data: '0x' };
+    eth.getLogsResult = [log];
+
+    const result = await si.fetchFactoryModuleCreatedLogs(factory, safeAddress, topic0, 12345);
+
+    expect(eth.getLogsCalls).toEqual([{
+      address: factory,
+      topics: [topic0, paddedSafe],
+      fromBlock: 12345,
+      toBlock: 'latest',
+    }]);
+    expect(result).toEqual([log]);
+  });
+});
+
+describe('readIsModuleEnabled — standard Safe module check', () => {
+  it('reads isModuleEnabled through the contract on the Safe address with the minimal ABI', async () => {
+    const isModuleEnabled = vi.fn(async () => true);
+    eth.contractStubs[SAFE_DATA.safeAddress] = { isModuleEnabled };
+    const si = await initInstance();
+
+    await expect(si.readIsModuleEnabled('0xModule')).resolves.toBe(true);
+    expect(isModuleEnabled).toHaveBeenCalledWith('0xModule');
+
+    // The contract is built on the Safe address with the minimal ABI.
+    const ctor = eth.contractCtorArgs.find(([addr]) => addr === SAFE_DATA.safeAddress);
+    expect(ctor?.[1]).toEqual(['function isModuleEnabled(address) view returns (bool)']);
   });
 });
 
