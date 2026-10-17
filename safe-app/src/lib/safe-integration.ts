@@ -104,6 +104,69 @@ export class SafeIntegration {
     }
   }
 
+  // ===== GENERIC SAFE PRIMITIVES (module-install / init flow, SPEC-hosts AD-3) =====
+  // These are runtime-agnostic Safe-side building blocks. The orchestration
+  // layer (publication-init) injects them as deps and never imports this file's
+  // host internals.
+
+  /**
+   * Propose an arbitrary batch of txs to the Safe for owner confirmation.
+   * Used to install the records + publication modules in a single proposal
+   * (SPEC-hosts AD-3 step 3). Returns the Safe UI queue URL.
+   */
+  async proposeBatch(txs: Array<{ to: string; value: string; data: string }>): Promise<string> {
+    if (!this.safeSdk) {
+      throw new Error('Safe SDK not initialized');
+    }
+
+    await this.safeSdk.txs.send({ txs });
+
+    const safeUrl = `https://app.safe.global/transactions/queue?safe=${this.safeInfo.chainId}:${this.safeInfo.safeAddress}`;
+
+    console.log('Transaction batch proposed. Execute at:', safeUrl);
+
+    return safeUrl;
+  }
+
+  /** Fresh JSON-RPC provider for the Safe's chain (same pattern as initialize). */
+  getProvider() {
+    const rpcUrl = getRpcUrl(this.safeInfo.chainId);
+    return new window.ethers.JsonRpcProvider(rpcUrl);
+  }
+
+  /**
+   * Fetch raw factory `ModuleCreated` logs for a given safe address.
+   * topic[1] is the padded indexed safe address (bytes32). Returns the raw
+   * log objects, which carry `.topics`.
+   */
+  async fetchFactoryModuleCreatedLogs(
+    factoryAddress: string,
+    safeAddress: string,
+    topic0: string,
+    fromBlock: number
+  ): Promise<Array<{ topics: string[] }>> {
+    const provider = this.getProvider();
+    const paddedSafe =
+      '0x' + safeAddress.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    return await provider.getLogs({
+      address: factoryAddress,
+      topics: [topic0, paddedSafe],
+      fromBlock,
+      toBlock: 'latest',
+    });
+  }
+
+  /** Read whether a module is enabled on the Safe (standard Safe function). */
+  async readIsModuleEnabled(moduleAddress: string): Promise<boolean> {
+    const provider = this.getProvider();
+    const contract = new window.ethers.Contract(
+      this.safeInfo.safeAddress,
+      ['function isModuleEnabled(address) view returns (bool)'],
+      provider
+    );
+    return await contract.isModuleEnabled(moduleAddress);
+  }
+
   // ===== RECORDS MODULE METHODS =====
   
   async getAllRecords(): Promise<[string[], string[]]> {
