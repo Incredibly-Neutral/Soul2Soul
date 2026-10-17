@@ -39,24 +39,23 @@ render-pipeline invocations.
 
 Entry point: **`@s2s/soul2soul-shared`** (full index). Imports: `getProtocolInfo`,
 **`renderwithLitActions`** (the orchestrator), `pinCidFromRemote`, `postToLens`/`updateToLens`,
-content types `S2SPublicContent`/`S2SToEncrypt`/`S2SContentItem`, `S2SProtocolInfo`. This is the
-package that drives the pipeline, so most of shared's *orchestration* surface lands here.
+content types `S2SPublicContent`/`S2SToEncrypt`/`S2SContentItem`, `S2SProtocolInfo`,
+**`runFilecoinLeg`** (Filecoin durability-leg runner: lifecycle logging + timeout +
+`onFailure` callback — relocated from `publication/filecoin.ts`, see SPEC-shared). This is
+the package that drives the pipeline, so most of shared's *orchestration* surface lands here.
 
 ## Sub-component map (from FLOW.md Component Index)
 
 | path | role |
 |---|---|
 | `main.ctrlr.ts` | `MainController` — `newPublication`, `proposeContent`, `publishToPublication`, `renderCalls`, `grantLicense`, `revokeLicense`, `initializeOxo` |
-| `publication/publication.service.ts` | `PublicationService` — init, L1/L2 Safe instances, `getModuleAdresses` (NAME discovery, INV-4), license mgmt, feed/multisig getters |
+| `publication/publication.service.ts` | `PublicationService` — init, L1/L2 Safe instances, `getModuleAdresses` (NAME discovery, INV-4), `makeOffer`/`retract`, `getMultiSig` |
 | `publication/new.ts` | `newPublicationSafe` — Safe×2 deploy (same salt), ENS reg, module deploy+enable+verify, config, feed, records, owner mgmt |
-| `publication/new.modal.ts`, `ui/*.modal.ts` | UI: new publication, domain, revoke, whitelist-author, upgrade; `publish.notice` |
+| `publication/new.modal.ts`, `ui/revoke.modal.ts` | UI: new publication, revoke |
 | `publication/ens.ts` | `isAvailableEnsName`, `getPublicationMultiSig` |
-| `publication/config.ts` / config.ctrl | `uploadConfig`, `getTaskConfig` (**overlaps safe-app ConfigBuilder**) |
 | `content/content.ctrlr.ts` | `parseNote`, `storeNoteOnLens`, `encryptContent` |
-| `content/_base.ts`, `_note.ts`, `_vault.ts`, `images.ts` | parse `.base`/`.md` notes, vault access, image distribution |
-| ~~`factories/lens.factory.ts`~~, `note.factory.ts` | ~~Lens posting~~ + note construction; `note.factory` reads frontmatter `slug` override | **`lens.factory.ts` gone** — file removed (2026-08-07 drift check); `note.factory.ts` remains. Lens posting now via `main.oxo.ctrlr.lens.createFeed` in `publication/new.ts:48` — but 0xobsidian's lens controller is commented-out (see SPEC-0xobsidian); reconcile whether that call is live or dead. |
+| `content/images.ts` | image distribution |
 | `preview.ctrlr.ts` | preview rendering |
-| `protocol.abi.ts`, `publication/abi.ts` | ABIs (**overlap shared/contracts**) |
 
 ## Key flows (condensed from FLOW.md)
 
@@ -88,13 +87,13 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 
 ## Local gotchas / gaps (incl. single-source-of-truth violations)
 
-- **Duplicate config path:** `publication/config` `uploadConfig` vs safe-app `ConfigBuilder` — two
-  config builders that can diverge; consolidate the config-shaping into `shared`.
-- **Duplicate ABIs** (`protocol.abi.ts`, `publication/abi.ts`) vs `shared/contracts`; ~~duplicate
-  Lens (`factories/lens.factory`) vs `shared/lens`~~ — `factories/lens.factory.ts` **removed**
-  (2026-08-07); lens now called via `oxo.ctrlr.lens` (0xobsidian-side, commented-out). Reconcile
-  whether lens is fully dead across the authoring path (cf. 0xobsidian, which duplicates some of
-  the same).
+- **Duplicate config path (RESOLVED 2026-10-17):** the neutralpress `publication/config.ts`
+  (`uploadConfig`/`getTaskConfig`) duplicate was deleted; config-shaping now lives only in
+  safe-app's `ConfigBuilder` (no diverging neutralpress copy remains).
+- **Duplicate ABIs (RESOLVED 2026-10-17):** the neutralpress `protocol.abi.ts`/`publication/abi.ts`
+  copies were deleted — ABIs now come only from `shared/contracts` + `protocol/contracts`. Lens is
+  called via `oxo.ctrlr.lens` (0xobsidian-side, commented-out — see SPEC-0xobsidian); reconcile
+  whether lens is fully dead across the authoring path.
 - **`litUsageKey` in plugin settings** with a `// hardcoded?` note — it's the INV-8 group credential
   that authorizes execution; treat its provisioning deliberately (and it's a secret at rest like the
   author key — low stakes per SPEC-0xobsidian, but it gates publishing).
@@ -107,7 +106,7 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
   `genesis = signedItem.objectId`); the render pipeline fetches by it as a genesis (`prep`
   `fetchById`→`getLatest(bytes32)`). Don't break this round-trip — a non-bytes32 value breaks ABI
   encoding at `getLatest`.
-- **Slug override (2026-08-06):** `note.factory.ts:parseNote` reads `frontmatter?.slug` and uses it
+- **Slug override:** `content/content.ctrlr.ts:parseNote` reads `frontmatter?.slug` and uses it
   in preference to `slug(title)`. The chosen slug propagates as `body.slug` through the pipeline
   into the Lit render action's `createPath` (which interpolates `{slug}`). A changed `slug`
   frontmatter therefore moves the page to a new path — and leaves the old path in the IPFS tree
@@ -152,17 +151,18 @@ package that drives the pipeline, so most of shared's *orchestration* surface la
 
 Vitest suite live in `neutralpress/test/` (harness: `vitest.config.ts` aliases obsidian/electron to
 headless stubs + `@s2s/soul2soul-shared` to TS source; `test/mocks/{obsidian,electron}.ts`,
-`test/helpers/main.ts`). `pnpm test` runs 183 unit tests; `build` gates on it.
+`test/helpers/main.ts`). `pnpm test` runs 143 unit tests; `build` gates on it. (Count dropped from
+183 in 2026-10-12 — the dead-code sweep removed the dead-file tests: `_legacy`, `note.factory`,
+`abi`, `config`, `github`; live-path coverage is unchanged.)
 
 Covered:
 - Content authoring: `parseNote` (title/slug/body, frontmatter-driven fields, custom bag,
   `<!--more-->`/`<!--split-->` summaries, markdown→HTML, `.base` embeds), `isValidForPublishing`,
-  `distributeImages` (no-op + pinata rewrite), `ens-tags`, `_base/_note/_vault`, `note.factory`
-  (slug override seam, marked→turndown round-trip).
-- Publication pure logic: `intents` dispatch, `ens` (registry reads), `github` (requestUrl),
-  `filecoin` (kubo/pinata config), `config`, ABI sanity (protocol/publication/proxy-admin).
-- Service/pipeline: `publication.service` (module discovery, deal lifecycle dispatch, view reads),
-  `tx-runner.adapter`, `publish` (both render-gate branches), `revoke`.
+  `distributeImages` (no-op + pinata rewrite), `ens-tags`.
+- Publication pure logic: `intents` dispatch, `ens` (registry reads), `filecoin` (kubo/pinata
+  config, `runFilecoinLeg` hang → time-boxed failure via the shared runner).
+- Service/pipeline: `publication.service` (module discovery, `makeOffer`/`retract` genericTx
+  dispatch, `getMultiSig`), `tx-runner.adapter`, `publish` (both render-gate branches), `revoke`.
 - Render/settings: `buildRpcEndpoints`, `pagePathFor` (CID digest compare), `DEFAULT_SETTINGS`,
   `DSGSettingsTab` wiring, `preview` seams.
 
@@ -170,6 +170,7 @@ Not covered (needs DOM/integration): `renderCalls` (Lit render pipeline), UI mod
 `main.ts`/`main.ctrlr.ts`, `publication/new.ts` Safe-deploy orchestrator, encrypt↔decrypt round-trip
 (cross-package).
 
-Known source bug surfaced by the suite: `PublicationService.getPublicationMultiSigAddresses` calls
-`tag.contains('--s2s')` — `String.prototype.contains` does not exist (should be `.includes`) — throws
-TypeError on the first real tag. Test asserts current behavior; fix is a follow-up.
+The `PublicationService.getPublicationMultiSigAddresses` `.contains` bug noted in earlier revisions
+is gone: the dead view-reads (`acceptOffer`, `hasDeal`, `getDeals`, `getOffers`,
+`getPublicationMultiSigAddresses`, `getPublicationFeedAddress`) were pruned from the service in the
+2026-10-17 dead-code sweep — none were reachable from `main.ts`.

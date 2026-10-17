@@ -182,6 +182,14 @@ All rows are proposed as Safe transactions (multisig); none execute directly.
   out; superseded by the assets-into-`/assets` refactor) — prune.
 - **iframe constraints:** clipboard (`copy-hash.ts`) is subject to the Safe iframe's permissions
   policy; store `connectedCallback` must avoid double-subscribe render loops (watch slice subs).
+- **ABANDONED — helia in-browser verification (lastmile Phase 2 / "improve helia").** The
+  browser-side trustless-verification direction (same-origin CAR fetch + per-block re-hash +
+  verified-block Cache API + ENS stale-while-revalidate + no-JS-fallback worker) is **abandoned
+  at the user's direction (2026-10-14) — do not build it.** Its only residue in this repo was the
+  unused `@helia/unixfs` direct dependency in safe-app (added in `cd2d631` for the filecoin upload
+  work, **never imported**); it was removed 2026-10-14 (package.json + surgical pnpm-lock.yaml
+  prune; the transitive `@helia/unixfs@7.2.1` stays — it backs other packages). Do not re-add a
+  full helia node (`helia` / `@helia/unixfs` / libp2p) for in-browser verification.
 - **ipfs-check discovery blind spots (live, PR #131):** Filecoin + Pinata copies are INVISIBLE to
   ipfs-check discovery (0 filecoin agents returned for any publication CID) — the `filecoin` source
   flag therefore relies on the Addr-host → `FILECOIN_SP_HOSTS` heuristic, and "copies" undercounts
@@ -199,9 +207,11 @@ All rows are proposed as Safe transactions (multisig); none execute directly.
 
 ## Build, deploy & QA
 
-**Preferred deploy: `./deploy.sh`** (the package.json `deploy` script delegates to it
-— it is the single source of truth): `pnpm build` (tsc type-check → vite build →
-pnpm sass) then `rsync -avz --delete dist/ joera:/srv/publication-module/`. The
+**Preferred deploy: `pnpm deploy:safe-app` from the repo root** (or `./deploy.sh` inside `safe-app/`)
+— the package.json `deploy` script delegates to it — it is the single source of truth):
+`pnpm build` (tsc type-check → vite build → pnpm sass) then
+`rsync -avz --delete dist/ joera:/srv/publication-module/`. The script is context-aware
+(`cd "$(dirname "$0")"`), so it works from any directory in the monorepo. The
 `--delete` keeps the remote identical to `dist/`; verify the remote bundle hash
 matches `dist/main.*.js` after deploying.
 

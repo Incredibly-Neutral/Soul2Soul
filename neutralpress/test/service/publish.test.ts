@@ -16,8 +16,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { SpyNotice, ipfsFromSettingsMock, backupToProvidersMock } = vi.hoisted(() => {
 	class SpyNotice {
 		static calls: string[] = [];
+		static constructed: string[] = [];
 		static reset() {
 			SpyNotice.calls = [];
+			SpyNotice.constructed = [];
+		}
+		constructor(msg?: string) {
+			if (msg) SpyNotice.constructed.push(msg);
 		}
 		setMessage(m: string) {
 			SpyNotice.calls.push(`setMessage:${m}`);
@@ -44,6 +49,7 @@ vi.mock('../../src/publication/filecoin', async (importOriginal) => {
 import { publishToPublication } from '../../src/publication/publish';
 import { renderCalls } from '../../src/render/render.helper';
 import { ipfsFromSettings, kuboBaseUrl } from '../../src/publication/filecoin';
+import { runFilecoinLeg } from '@s2s/soul2soul-shared';
 import { makeMain, makeVaultFile } from '../helpers/main';
 
 const OBJECT_ID = '0x' + '3'.repeat(64);
@@ -185,6 +191,85 @@ describe('publishToPublication', () => {
 		await expect(
 			publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION),
 		).rejects.toThrow('append reverted');
+	});
+
+	it('filecoin leg resolves and pins when storage is initialised', async () => {
+		const { main } = makePublishMain();
+		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {
+			render: false,
+		});
+
+		const logSpy = vi.spyOn(console, 'log');
+		const opts = backupToProvidersMock.mock.calls[0][1] as { filecoin: () => Promise<unknown> };
+		await expect(opts.filecoin()).resolves.toMatchObject({ rootCid: 'QmKuboCid' });
+		expect(main.oxo.ctrlr.storage.uploadJson).toHaveBeenCalledWith(
+			{ objectId: OBJECT_ID },
+			['0xpub', '0xEoa'],
+			'article',
+		);
+		// The leg is now observable: it logs started + ok(rootCid) on success.
+		expect(logSpy).toHaveBeenCalledWith('[filecoin] article: leg started');
+		expect(logSpy).toHaveBeenCalledWith('[filecoin] article: leg ok, rootCid=QmKuboCid');
+		logSpy.mockRestore();
+		// No failure notice on the happy path.
+		expect(SpyNotice.constructed.some((m) => m.includes('Filecoin backup failed'))).toBe(false);
+	});
+
+	it('filecoin leg fails loudly (notice + reject) when 0xobsidian storage is missing', async () => {
+		const { main } = makePublishMain();
+		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {
+			render: false,
+		});
+
+		// Simulate 0xobsidian failing to init Filecoin (no session-key.json):
+		// the 4-way backup still fires (pins unaffected)…
+		delete (main.oxo.ctrlr as { storage?: unknown }).storage;
+		const errorSpy = vi.spyOn(console, 'error');
+		const opts = backupToProvidersMock.mock.calls[0][1] as { filecoin: () => Promise<unknown> };
+
+		// …but the filecoin leg rejects with the diagnosable message and surfaces
+		// a user-visible notice + error log instead of being silently swallowed.
+		await expect(opts.filecoin()).rejects.toThrow(/Filecoin storage not initialised/);
+		expect(errorSpy).toHaveBeenCalledWith(
+			'[filecoin] article backup failed:',
+			expect.stringMatching(/Filecoin storage not initialised/),
+		);
+		errorSpy.mockRestore();
+		expect(
+			SpyNotice.constructed.some((m) => m.includes('Filecoin backup failed') && m.includes('not initialised')),
+		).toBe(true);
+	});
+
+	it('filecoin leg fails loudly when uploadJson rejects', async () => {
+		const { main } = makePublishMain();
+		(main.oxo.ctrlr.storage as { uploadJson: unknown }).uploadJson = vi
+			.fn()
+			.mockRejectedValue(new Error('could not store 2 Filecoin copies'));
+		await publishToPublication(main, makeVaultFile('post.md', ''), PUBLICATION, {
+			render: false,
+		});
+
+		const opts = backupToProvidersMock.mock.calls[0][1] as { filecoin: () => Promise<unknown> };
+		await expect(opts.filecoin()).rejects.toThrow('could not store 2 Filecoin copies');
+		expect(
+			SpyNotice.constructed.some((m) => m.includes('Filecoin backup failed') && m.includes('2 Filecoin copies')),
+		).toBe(true);
+	});
+
+	it('runFilecoinLeg turns a hang into a visible, time-boxed failure', async () => {
+		// An upload that never settles would previously hang forever with zero
+		// logs (the leg is fire-and-forget). Now it is capped and surfaced. The
+		// Notice is the CALLER's job (shared can't import obsidian) — the test
+		// passes the same onFailure publish.ts/render.helper.ts use.
+		await expect(
+			runFilecoinLeg('article', () => new Promise(() => {}), {
+				timeoutMs: 50,
+				onFailure: (msg) => new SpyNotice(`⚠️ Filecoin backup failed: ${msg}`),
+			}),
+		).rejects.toThrow(/timed out after 0.05s/);
+		expect(
+			SpyNotice.constructed.some((m) => m.includes('Filecoin backup failed') && m.includes('timed out')),
+		).toBe(true);
 	});
 
 	it('kuboBaseUrl normalises a bare host to https', () => {

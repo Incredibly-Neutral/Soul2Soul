@@ -47,6 +47,62 @@ export interface BackupToProvidersResult {
   filecoin: BackupFilecoinStatus;
 }
 
+/** Options for {@link runFilecoinLeg} — the companion to `backupToProviders`' `filecoin` leg. */
+export interface RunFilecoinLegOptions {
+  /**
+   * Upper bound for a single leg (Synapse store+commit of a min-2-copies
+   * upload can legitimately take a while; 120s is generous).
+   */
+  timeoutMs?: number;
+  /**
+   * Invoked (non-blocking) with the failure message — lets app layers surface
+   * a user-visible error (e.g. an obsidian Notice). Not called on success.
+   */
+  onFailure?: (message: string) => void;
+}
+
+/**
+ * Run a Filecoin durability leg with visible lifecycle logging and a hard
+ * ceiling. `backupToProviders` fires the leg fire-and-forget and only logs on
+ * failure/mismatch — so a leg that starts, a leg that succeeds, and a leg
+ * that HANGS are all silent (this is how a missing/unreachable Filecoin
+ * upload looked like "everything's fine but nothing lands"). This wrapper:
+ *   1. logs when the leg starts (making a run observable),
+ *   2. logs the resolved result and `rootCid` when present,
+ *   3. turns a hang into a logged+noticed failure instead of infinite silence.
+ *
+ * Throws on failure so `backupToProviders` still marks the leg 'failed'.
+ * `options.onFailure` receives the message for user-visible surfacing.
+ */
+export async function runFilecoinLeg<T>(
+  label: string,
+  upload: () => Promise<T>,
+  options: RunFilecoinLegOptions = {},
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 120_000;
+  console.log(`[filecoin] ${label}: leg started`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
+  });
+  try {
+    const res = await Promise.race([upload(), timeout]);
+    clearTimeout(timer);
+    const rootCid = (res as { rootCid?: string } | null | undefined)?.rootCid;
+    console.log(`[filecoin] ${label}: leg ok${rootCid ? `, rootCid=${rootCid}` : ''}`);
+    return res;
+  } catch (err) {
+    clearTimeout(timer);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[filecoin] ${label} backup failed:`, msg);
+    options.onFailure?.(msg);
+    throw err;
+  }
+}
+
 export class S2SIPFSMethods {
   private readonly kuboGateway: string;
   private readonly pinataJWT: string;

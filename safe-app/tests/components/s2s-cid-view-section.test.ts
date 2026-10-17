@@ -1225,8 +1225,8 @@ describe('s2s-cid-view-section', () => {
     expect(chipsTop.textContent).toContain('10 unique CIDs');
     const input = chipsTop.querySelector<HTMLInputElement>('.cid-search__input');
     expect(input).toBeTruthy();
-    expect(input!.getAttribute('placeholder')).toBe('Qm....');
-    expect(input!.getAttribute('aria-label')).toBe('Filter by CID');
+    expect(input!.getAttribute('placeholder')).toBe('Qm.. / 0x..');
+    expect(input!.getAttribute('aria-label')).toBe('Filter by CID or genesis id');
     // Idle state shows the search (magnifying-glass) icon, not the clear X.
     expect(chipsTop.querySelector('ph-magnifying-glass')).toBeTruthy();
     expect(chipsTop.querySelector('ph-x')).toBeNull();
@@ -1241,6 +1241,14 @@ describe('s2s-cid-view-section', () => {
     // Active filter swaps the search icon for a clear (X) icon.
     expect(root.querySelector('ph-x')).toBeTruthy();
     expect(root.querySelector('ph-magnifying-glass')).toBeNull();
+
+    // Searching a genesis id (0x…) matches the deal row too.
+    input!.value = '0xgen1';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(el.shadowRoot!.querySelectorAll('.cid-row').length).toBe(1);
+    });
+    expect(el.shadowRoot!.querySelector('.cid-row .badge.deal')).toBeTruthy();
 
     // A non-matching CID leaves the table empty with a tailored message.
     input!.value = 'bafynomatch';

@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.11.1",
   "scripts": {
+    "deploy:safe-app": "pnpm -C safe-app run deploy",
     "deploy-group": "tsx --require dotenv/config protocol/scripts/lit/deploy-group.ts",
     "inspect-group": "tsx --require dotenv/config protocol/scripts/lit/inspect-group.ts",
     "actions:build": "node protocol/scripts/lit/build-actions.cjs",
