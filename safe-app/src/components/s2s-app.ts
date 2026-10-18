@@ -1,5 +1,5 @@
 // s2s-app.ts
-import { LitElement, html } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
@@ -14,6 +14,8 @@ import { LitService } from '@s2s/soul2soul-shared';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
+import { buttonStyles } from '@/styles/button-styles.js';
+import { buildDeletePublicationBatch } from '../lib/publication-init.js';
 import { evmRead } from '@/lib/evm.js';
 import { CID } from 'multiformats';
 import './copy-link.js';
@@ -40,9 +42,39 @@ export class S2SApp extends LitElement {
     'deals';
   @state() private fetching = false;
 
+  // Reset/teardown: two-click confirm → propose the disable+deleteRecord batch.
+  @state() private resetState: 'idle' | 'armed' | 'proposing' = 'idle';
+  @state() private resetUrl: string | null = null;
+  @state() private resetError: string | null = null;
+
   private unsubscribers: Array<() => void> = [];
 
-  static styles = [mainStyles, tabStyles, typograhyStyles, pillStyles];
+  static styles = [
+    mainStyles,
+    tabStyles,
+    typograhyStyles,
+    pillStyles,
+    buttonStyles,
+    css`
+      .reset-button.armed {
+        border-color: var(--color-red);
+        color: var(--color-red);
+      }
+      .reset-status {
+        margin-top: 1rem;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        letter-spacing: 0.04em;
+        color: var(--gray-300);
+      }
+      .reset-status a {
+        color: var(--color-yellow);
+      }
+      .reset-status.error {
+        color: var(--color-red);
+      }
+    `,
+  ];
 
   constructor() {
     super();
@@ -178,6 +210,41 @@ export class S2SApp extends LitElement {
     this.currentTab = tab;
   }
 
+  /**
+   * Reset/start-over: first click arms (confirm), second click proposes the
+   * teardown batch (disable both S2S modules + records.deleteRecord("name")).
+   * Human-in-the-loop, like the init flow — the batch lands in the Safe queue.
+   */
+  private async handleReset(): Promise<void> {
+    if (this.resetState !== 'armed') {
+      this.resetState = 'armed';
+      this.resetUrl = null;
+      this.resetError = null;
+      return;
+    }
+
+    const safeInfo = store.safeInfo;
+    if (!safeInfo) return;
+
+    this.resetState = 'proposing';
+    this.resetError = null;
+    try {
+      const safeModules = await this.safeIntegration.fetchSafeModules();
+      const batch = buildDeletePublicationBatch(
+        safeInfo.safeAddress,
+        {
+          recordsModule: safeInfo.s2sRecords ?? '',
+          publicationModule: safeInfo.s2sPublication ?? '',
+        },
+        safeModules,
+      );
+      this.resetUrl = await this.safeIntegration.proposeBatch(batch);
+    } catch (e) {
+      this.resetError = e instanceof Error ? e.message : String(e);
+      this.resetState = 'idle';
+    }
+  }
+
   private activeTabTemplate() {
     switch (this.currentTab) {
       case 'deals':
@@ -268,7 +335,41 @@ export class S2SApp extends LitElement {
                 label="Records Module"
               ></copy-module>
             </div>
+            ${hasModules
+              ? html`
+                  <button
+                    class="button reset-button ${this.resetState === 'armed' ? 'armed' : ''}"
+                    id="reset-publication"
+                    ?disabled=${this.resetState === 'proposing'}
+                    @click=${() => this.handleReset()}
+                    title="Disable the S2S modules and clear the publication name so you can start a new publication."
+                  >
+                    ${this.resetState === 'armed'
+                      ? 'Confirm reset?'
+                      : this.resetState === 'proposing'
+                        ? 'Proposing…'
+                        : 'Reset'}
+                  </button>
+                `
+              : ''}
           </div>
+
+          ${this.resetUrl
+            ? html`
+                <div class="reset-status" id="reset-status">
+                  Reset proposed — execute it in the
+                  <a href=${this.resetUrl} target="_blank" rel="noreferrer">Safe queue</a>, then
+                  reload the app to start a new publication.
+                </div>
+              `
+            : ''}
+          ${this.resetError
+            ? html`
+                <div class="reset-status error" id="reset-error">
+                  Reset failed: ${this.resetError}
+                </div>
+              `
+            : ''}
 
           <h1 class="title">${publication}</h1>
 
