@@ -57,6 +57,10 @@ export class S2SApp extends LitElement {
     pillStyles,
     buttonStyles,
     css`
+      .reset-button {
+        /* Push the reset action to the right end of the module-status row. */
+        margin: auto 0 auto auto;
+      }
       .reset-button.armed {
         /* Intensify the warning accent while the reset is armed for confirm. */
         --gb-accent: rgba(219, 66, 51, 0.95);
@@ -164,10 +168,28 @@ export class S2SApp extends LitElement {
         await this.fcInitPromise;
 
         try {
+          const pubAddress = this.safeIntegration.getSafeInfo().s2sPublication?.toLowerCase() ?? '';
           const freshPieces = await this.filecoinStorage.listPublicationStorage(
             this.filecoinStorage.walletAddress.toLowerCase(),
           );
-          const typed = freshPieces.map((p) => ({ ...p, confirmed: true }));
+          // listPublicationStorage returns every wallet piece regardless of
+          // attribution, so scope the Storage tab to THIS publication: keep only
+          // pieces attributed to the current publication module (the config-update
+          // flow attributes uploads to it).
+          const scoped = freshPieces.filter((p) => {
+            const raw = p.metadata.attributedTo;
+            if (!raw) return false;
+            try {
+              const owners: unknown = JSON.parse(raw);
+              return (
+                Array.isArray(owners) &&
+                owners.map((o) => String(o).toLowerCase()).includes(pubAddress)
+              );
+            } catch {
+              return false;
+            }
+          });
+          const typed = scoped.map((p) => ({ ...p, confirmed: true }));
           store.setPieces(typed);
 
           // Derive datasets from pieces (one pass, no extra chain call)
@@ -245,6 +267,42 @@ export class S2SApp extends LitElement {
       this.resetState = 'idle';
     }
   }
+
+  /**
+   * Fresh publication proposed by the init flow. The name/repo/branch records
+   * are proposed but still pending Safe execution, so the chain read in
+   * fetchFreshData cannot see them yet — write them to the store optimistically
+   * so the title + web-status populate immediately (no reload needed), clear
+   * any stale root from a previous publication, then run the first config
+   * build automatically on the Config tab.
+   */
+  private readonly onInitComplete = async (e: Event): Promise<void> => {
+    const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
+      .detail;
+    const { name, repo, branch } = detail ?? {};
+
+    // Surface the Config tab — the immediate config update below runs there.
+    this.currentTab = 'records';
+    await this.fetchFreshData();
+
+    // Re-apply the pending (not-yet-executed) records on top of the chain read.
+    if (name) store.setRecord({ key: 'name', value: name, type: 'metadata' });
+    if (repo) store.setRecord({ key: 'repo', value: repo, type: 'metadata' });
+    if (branch) store.setRecord({ key: 'branch', value: branch, type: 'metadata' });
+    // A brand-new publication has no content published yet — drop any root that
+    // still points at a previous publication's content.
+    if (name) store.setRoot('');
+
+    await this.updateComplete;
+    const tab = this.renderRoot.querySelector('s2s-records-tab') as {
+      updateConfig?: () => Promise<unknown>;
+    } | null;
+    if (tab?.updateConfig) {
+      void tab.updateConfig().catch((err: unknown) => {
+        console.error('[s2s-app] immediate config update failed:', err);
+      });
+    }
+  };
 
   private activeTabTemplate() {
     switch (this.currentTab) {
@@ -378,12 +436,16 @@ export class S2SApp extends LitElement {
           ${hasModules
             ? html`
                 <div class="web-status">
-                  <div><copy-hash .value=${rootCid}></copy-hash></div>
-                  <div>
-                    <a href="https://${rootCid}.preview.transport-union.dev" target="_blank"
-                      >preview</a
-                    >
-                  </div>
+                  ${rootCid
+                    ? html`
+                        <div><copy-hash .value=${rootCid}></copy-hash></div>
+                        <div>
+                          <a href="https://${rootCid}.preview.transport-union.dev" target="_blank"
+                            >preview</a
+                          >
+                        </div>
+                      `
+                    : ''}
                   <div>
                     <a href="https://${publication}.limo" target="_blank">${publication}.limo</a>
                   </div>
@@ -398,7 +460,7 @@ export class S2SApp extends LitElement {
                 .safeIntegration=${this.safeIntegration}
                 .protocolInfo=${store.protocolInfo}
                 .safeInfo=${safeInfo}
-                @s2s-init-complete=${() => this.fetchFreshData()}
+                @s2s-init-complete=${this.onInitComplete}
               ></s2s-publication-init>
             `
           : ''}
