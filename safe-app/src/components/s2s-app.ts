@@ -5,6 +5,7 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
 import './s2s-init.js';
 import './s2s-button.js';
+import './s2s-confirm-modal.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
@@ -43,8 +44,9 @@ export class S2SApp extends LitElement {
     'deals';
   @state() private fetching = false;
 
-  // Reset/teardown: two-click confirm → propose the disable+deleteRecord batch.
-  @state() private resetState: 'idle' | 'armed' | 'proposing' = 'idle';
+  // Reset/teardown: opens a confirmation modal → propose the disable+deleteRecord
+  // batch. 'done' closes the modal and surfaces the Safe queue link.
+  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'done' = 'idle';
   @state() private resetUrl: string | null = null;
   @state() private resetError: string | null = null;
 
@@ -234,17 +236,13 @@ export class S2SApp extends LitElement {
   }
 
   /**
-   * Reset/start-over: first click arms (confirm), second click proposes the
-   * teardown batch (disable both S2S modules + records.deleteRecord("name")).
+   * Reset/start-over: propose the teardown batch (disable both S2S modules +
+   * records.deleteRecord("name")). Only runs from the confirmation modal's
+   * confirm action — the modal stays open, busy, while the batch is proposed.
    * Human-in-the-loop, like the init flow — the batch lands in the Safe queue.
    */
   private async handleReset(): Promise<void> {
-    if (this.resetState !== 'armed') {
-      this.resetState = 'armed';
-      this.resetUrl = null;
-      this.resetError = null;
-      return;
-    }
+    if (this.resetState !== 'confirming') return;
 
     const safeInfo = store.safeInfo;
     if (!safeInfo) return;
@@ -262,6 +260,7 @@ export class S2SApp extends LitElement {
         safeModules,
       );
       this.resetUrl = await this.safeIntegration.proposeBatch(batch);
+      this.resetState = 'done';
     } catch (e) {
       this.resetError = e instanceof Error ? e.message : String(e);
       this.resetState = 'idle';
@@ -398,17 +397,13 @@ export class S2SApp extends LitElement {
               ? html`
                   <s2s-button
                     type="warning"
-                    class="reset-button ${this.resetState === 'armed' ? 'armed' : ''}"
+                    class="reset-button"
                     id="reset-publication"
                     ?disabled=${this.resetState === 'proposing'}
                     title="Disable the S2S modules and clear the publication name so you can start a new publication."
-                    @click=${() => this.handleReset()}
+                    @click=${() => (this.resetState = 'confirming')}
                   >
-                    ${this.resetState === 'armed'
-                      ? 'Confirm reset?'
-                      : this.resetState === 'proposing'
-                        ? 'Proposing…'
-                        : 'Reset'}
+                    Reset
                   </s2s-button>
                 `
               : ''}
@@ -512,6 +507,17 @@ export class S2SApp extends LitElement {
             `
           : ''}
       </div>
+
+      <s2s-confirm-modal
+        .open=${this.resetState === 'confirming' || this.resetState === 'proposing'}
+        headline="Reset publication?"
+        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone. You can start a new publication afterwards, which re-creates the modules."
+        confirmLabel=${this.resetState === 'proposing' ? 'Proposing…' : 'Confirm reset'}
+        .busy=${this.resetState === 'proposing'}
+        variant="warning"
+        @s2s-confirm=${() => void this.handleReset()}
+        @s2s-cancel=${() => (this.resetState = 'idle')}
+      ></s2s-confirm-modal>
     `;
   }
 }
