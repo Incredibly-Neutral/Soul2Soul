@@ -127,7 +127,9 @@ vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
 
 vi.mock('@/lib/evm.js', () => ({ evmRead: vi.fn(), getRpcUrl: vi.fn() }));
 
-vi.mock('@s2s/soul2soul-shared/filecoin/car-builder/browser', () => ({ browserFilecoinBuilder: {} }));
+vi.mock('@s2s/soul2soul-shared/filecoin/car-builder/browser', () => ({
+  browserFilecoinBuilder: {},
+}));
 
 vi.mock('@/state/store.js', () => ({ store: storeMock.store }));
 
@@ -183,9 +185,7 @@ describe('s2s-app (shell)', () => {
 
     // Phase 2: the SDK connect resolves deterministically.
     resolveInit(SAFE_INFO);
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
     expect(el.shadowRoot?.textContent).not.toContain('Loading Soul2Soul Safe App...');
     for (const id of NAV_TABS) {
@@ -195,9 +195,7 @@ describe('s2s-app (shell)', () => {
 
   it('renders the five nav tabs and keeps the default deals tab active', async () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
     for (const id of NAV_TABS) {
       const btn = el.shadowRoot?.querySelector(`#${id}`) as HTMLButtonElement;
@@ -209,9 +207,7 @@ describe('s2s-app (shell)', () => {
 
   it('switches the active tab and swaps the rendered child component', async () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
     // Default: deals tab active, deals child mounted, no records child.
     expect(el.shadowRoot?.querySelector('s2s-deals-tab')).toBeTruthy();
@@ -219,28 +215,22 @@ describe('s2s-app (shell)', () => {
 
     // Click Records → child swaps, active class moves.
     (el.shadowRoot?.querySelector('#records-tab') as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy());
     expect(el.shadowRoot?.querySelector('s2s-deals-tab')).toBeNull();
     expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
     expect(el.shadowRoot?.querySelector('#deals-tab')?.classList.contains('active')).toBe(false);
 
     // Storage is always enabled → child appears.
     (el.shadowRoot?.querySelector('#storage-tab') as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('s2s-storage-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-storage-tab')).toBeTruthy());
     expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeNull();
 
     // Whitelist is gated by the publication module (on by default).
     (el.shadowRoot?.querySelector('#whitelist-tab') as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('s2s-whitelist-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-whitelist-tab')).toBeTruthy());
   });
 
-  it('disables gated tabs and renders the publication init when no modules are installed', async () => {
+  it('renders the publication init as the whole screen when no modules are installed', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
@@ -252,30 +242,23 @@ describe('s2s-app (shell)', () => {
     expect(el.shadowRoot?.querySelector('.error-message')).toBeNull();
     // The heading lives in the child component's own shadow root.
     const init = el.shadowRoot?.querySelector('s2s-publication-init') as any;
-    await vi.waitFor(() =>
-      expect(init.shadowRoot?.textContent).toContain('No S2S modules found'),
-    );
+    await vi.waitFor(() => expect(init.shadowRoot?.textContent).toContain('New publication'));
 
-    for (const id of ['deals-tab', 'whitelist-tab', 'records-tab', 'website-tree-tab']) {
-      expect((el.shadowRoot?.querySelector(`#${id}`) as HTMLButtonElement).disabled).toBe(true);
+    // With no modules the shell chrome (web-status + tabs) is hidden — the
+    // init flow owns the whole screen.
+    expect(el.shadowRoot?.querySelector('.web-status')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.tabs')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.tab-content')).toBeNull();
+    for (const id of ['deals-tab', 'storage-tab']) {
+      expect(el.shadowRoot?.querySelector(`#${id}`)).toBeNull();
     }
-    expect((el.shadowRoot?.querySelector('#storage-tab') as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-
-    // Clicking a gated tab renders no child.
-    (el.shadowRoot?.querySelector('#deals-tab') as HTMLButtonElement).click();
-    await el.updateComplete;
-    expect(el.shadowRoot?.querySelector('s2s-deals-tab')).toBeNull();
   });
 
   it('renders the module status pills and the root CID from the store', async () => {
     storeMock.store.setRoot('bafyroot123');
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
     expect(el.shadowRoot?.textContent).toContain('Connected to Safe');
 
