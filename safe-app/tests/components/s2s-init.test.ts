@@ -112,11 +112,11 @@ describe('s2s-publication-init', () => {
     expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_B}"]`)).not.toBeNull();
     expect(el.shadowRoot!.querySelector('#init-authors')).toBeNull();
 
-    const start = el.shadowRoot!.querySelector<HTMLButtonElement>('#init-start')!;
+    const start = el.shadowRoot!.querySelector<HTMLElement>('#init-start')!;
     expect(start.textContent).toContain('Create');
-    // Plain app button (yellow hover highlight) — no invented primary class.
-    expect(start.classList.contains('button')).toBe(true);
-    expect(start.classList.contains('btn-primary')).toBe(false);
+    // Uses the app's s2s-button with the primary (yellow) type.
+    expect(start.tagName.toLowerCase()).toBe('s2s-button');
+    expect(start.getAttribute('type')).toBe('primary');
   });
 
   it('runs the full three-proposal flow (create -> detect -> enable -> name)', async () => {
@@ -216,9 +216,43 @@ describe('s2s-publication-init', () => {
     expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).not.toBeNull();
   });
 
-  it('surfaces an error and stays incomplete when enable verification fails', async () => {
+  it('waits for the enable batch to be executed before proposing the name record', async () => {
+    // Modules become enabled only after a few polls — simulating the human
+    // executing the enable proposal in the Safe app mid-flow.
+    let calls = 0;
+    const si = makeSafeIntegration();
+    si.readIsModuleEnabled = vi.fn(async () => {
+      calls += 1;
+      return calls >= 5; // calls 5 & 6 (3rd poll) → both true
+    });
+    const el = await mount({ safeIntegration: si, enablePollIntervalMs: 5 });
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await complete;
+    await flush();
+
+    // The name record is only proposed AFTER the modules became enabled.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
+    expect(calls).toBeGreaterThanOrEqual(5);
+    const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
+    expect(nameBatch).toHaveLength(1);
+    expect(nameBatch[0].to).toBe(RECORDS_MODULE);
+    expect(bodyText(el)).toContain('Publication initialized');
+  });
+
+  it('stays incomplete and surfaces a timeout when the enable batch is never executed', async () => {
     const si = makeSafeIntegration({ enabled: false });
-    const el = await mount({ safeIntegration: si });
+    const el = await mount({
+      safeIntegration: si,
+      enableTimeoutMs: 30,
+      enablePollIntervalMs: 10,
+    });
 
     let completed = false;
     el.addEventListener('s2s-init-complete', () => (completed = true));
@@ -226,10 +260,11 @@ describe('s2s-publication-init', () => {
     setInput(el, '#init-name', 'my-publication');
     clickInit(el);
 
-    // Verification rejects after proposing create + enable + name.
+    // Enable never becomes true → the wait times out before the name is
+    // proposed; only create + enable were proposed.
     await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
     expect(completed).toBe(false);
-    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
     expect(bodyText(el)).toContain('not enabled');
 
     // "Try again" returns to the form.

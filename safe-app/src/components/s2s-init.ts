@@ -7,8 +7,12 @@
 //   1. propose create-batch  (buildCreateModuleBatch)   → Safe queue URL
 //   2. await execution, detect module addresses          (detectModuleAddresses)
 //   3. propose enable-batch  (buildEnableModuleBatch)    → Safe queue URL
-//   4. propose name-record batch                         (buildNameRecordBatch)
-//   5. verify both modules are enabled                   (readIsModuleEnabled)
+//   4. await enable execution, then propose name record  (buildNameRecordBatch)
+//
+// Step 4 waits for the human to EXECUTE the enable batch in the Safe app
+// before proposing the name record — verification used to run immediately
+// after proposing and failed whenever the enable batch was still pending
+// in the queue (the real-world init failure).
 //
 // The component deliberately drives the steps itself (rather than calling the
 // single-shot initializePublication) so each Safe-proposal queue URL can be
@@ -34,6 +38,7 @@ import {
   type ProtocolInfo,
 } from '../lib/publication-init.js';
 import './s2s-sliding-add-button.js';
+import './s2s-button.js';
 import './pet-name.js';
 import type { SafeInfo } from '@/types/index.js';
 
@@ -59,6 +64,10 @@ const DEFAULT_DETECTION_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_LOOKBACK_BLOCKS = 10_000;
 
+/** How long to wait for the enable batch to be executed in the Safe app. */
+const DEFAULT_ENABLE_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_ENABLE_POLL_INTERVAL_MS = 2_000;
+
 /** Suffix appended to the publication name (displayed and recorded). */
 const SOUL2SOUL_ETH = '.soul2soul.eth';
 
@@ -69,8 +78,8 @@ type Step =
   | 'creating'
   | 'detecting'
   | 'enabling'
+  | 'awaiting-enable'
   | 'naming'
-  | 'verifying'
   | 'done'
   | 'error';
 
@@ -81,6 +90,11 @@ export class S2SPublicationInit extends LitElement {
 
   /** Deployed factory addresses (recordsFactory + publicationFactory). */
   @property({ attribute: false }) protocolInfo?: ProtocolInfo;
+
+  /** How long to wait for the enable batch to be executed in the Safe app. */
+  @property({ type: Number }) enableTimeoutMs = DEFAULT_ENABLE_TIMEOUT_MS;
+  /** Poll interval while waiting for the enable batch to be executed. */
+  @property({ type: Number }) enablePollIntervalMs = DEFAULT_ENABLE_POLL_INTERVAL_MS;
 
   /** The current Safe (safeAddress / chainId / owners). */
   @property({ attribute: false }) safeInfo?: SafeInfo;
@@ -363,28 +377,36 @@ export class S2SPublicationInit extends LitElement {
       const enableUrl = await si.proposeBatch(enableBatch);
       this.proposals = [...this.proposals, enableUrl];
 
+      // 3b. Wait for the human to EXECUTE the enable batch in the Safe queue
+      //     before proposing the name record — verification used to run
+      //     immediately after proposing and failed whenever the enable batch
+      //     was still pending (the real-world init failure).
+      this.step = 'awaiting-enable';
+      const enableStart = Date.now();
+      for (;;) {
+        const [recordsEnabled, publicationEnabled] = await Promise.all([
+          si.readIsModuleEnabled(recordsModule),
+          si.readIsModuleEnabled(publicationModule),
+        ]);
+        if (recordsEnabled && publicationEnabled) break;
+        if (Date.now() - enableStart > this.enableTimeoutMs) {
+          const missing: string[] = [];
+          if (!recordsEnabled) missing.push('records');
+          if (!publicationEnabled) missing.push('publication');
+          this.fail(
+            `Timed out waiting for the enable proposal to be executed — not enabled: ${missing.join(', ')}. ` +
+              'Open the enable proposal in the Safe app, execute it, then try again.',
+          );
+          return;
+        }
+        await new Promise((r) => setTimeout(r, this.enablePollIntervalMs));
+      }
+
       // 4. Record the publication name.
       this.step = 'naming';
       const nameBatch = buildNameRecordBatch(recordsModule, publicationName);
       const nameUrl = await si.proposeBatch(nameBatch);
       this.proposals = [...this.proposals, nameUrl];
-
-      // 5. Verify both modules are enabled on the Safe.
-      this.step = 'verifying';
-      const [recordsEnabled, publicationEnabled] = await Promise.all([
-        si.readIsModuleEnabled(recordsModule),
-        si.readIsModuleEnabled(publicationModule),
-      ]);
-      if (!recordsEnabled || !publicationEnabled) {
-        const missing: string[] = [];
-        if (!recordsEnabled) missing.push('records');
-        if (!publicationEnabled) missing.push('publication');
-        this.fail(
-          `Module enable verification failed — not enabled: ${missing.join(', ')}. ` +
-            'Check the Safe queue and execute any remaining proposals, then try again.',
-        );
-        return;
-      }
 
       this.step = 'done';
       this.dispatchEvent(
@@ -420,16 +442,16 @@ export class S2SPublicationInit extends LitElement {
       this.step === 'creating' ||
       this.step === 'detecting' ||
       this.step === 'enabling' ||
-      this.step === 'naming' ||
-      this.step === 'verifying';
+      this.step === 'awaiting-enable' ||
+      this.step === 'naming';
     if (!running) return '';
 
     const labels: Partial<Record<Step, string>> = {
       creating: 'Proposing module creation…',
       detecting: 'Waiting for proposal 1 to be executed…',
       enabling: 'Proposing module enable…',
+      'awaiting-enable': 'Waiting for proposal 2 to be executed…',
       naming: 'Proposing name record…',
-      verifying: 'Verifying modules…',
     };
 
     return html`
@@ -519,7 +541,9 @@ export class S2SPublicationInit extends LitElement {
       </div>
 
       <div class="init__actions">
-        <button class="button" id="init-start" @click=${() => void this.start()}>Create</button>
+        <s2s-button type="primary" id="init-start" @click=${() => void this.start()}
+          >Create</s2s-button
+        >
       </div>
     `;
   }
