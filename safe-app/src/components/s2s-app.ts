@@ -4,6 +4,7 @@ import { customElement, state } from 'lit/decorators.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
 import './s2s-init.js';
+import './s2s-button.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
@@ -57,8 +58,8 @@ export class S2SApp extends LitElement {
     buttonStyles,
     css`
       .reset-button.armed {
-        border-color: var(--color-red);
-        color: var(--color-red);
+        /* Intensify the warning accent while the reset is armed for confirm. */
+        --gb-accent: rgba(219, 66, 51, 0.95);
       }
       .reset-status {
         margin-top: 1rem;
@@ -337,19 +338,20 @@ export class S2SApp extends LitElement {
             </div>
             ${hasModules
               ? html`
-                  <button
-                    class="button reset-button ${this.resetState === 'armed' ? 'armed' : ''}"
+                  <s2s-button
+                    type="warning"
+                    class="reset-button ${this.resetState === 'armed' ? 'armed' : ''}"
                     id="reset-publication"
                     ?disabled=${this.resetState === 'proposing'}
-                    @click=${() => this.handleReset()}
                     title="Disable the S2S modules and clear the publication name so you can start a new publication."
+                    @click=${() => this.handleReset()}
                   >
                     ${this.resetState === 'armed'
                       ? 'Confirm reset?'
                       : this.resetState === 'proposing'
                         ? 'Proposing…'
                         : 'Reset'}
-                  </button>
+                  </s2s-button>
                 `
               : ''}
           </div>
