@@ -23,6 +23,7 @@ import {
   encodeDeleteRecord,
   moduleCreatedTopic0,
   detectModuleAddresses,
+  waitForModulesEnabled,
   initializePublication,
   defaultSafeUrl,
 } from '../../src/lib/publication-init';
@@ -70,8 +71,12 @@ const detectDeps = {
 describe('encoders', () => {
   it('encodeEnableModule: Safe enableModule selector + arg encoding', () => {
     const iface = new Interface(['function enableModule(address module)']);
-    expect(encodeEnableModule(RECORDS_MODULE)).toBe(iface.encodeFunctionData('enableModule', [RECORDS_MODULE]));
-    expect(encodeEnableModule(RECORDS_MODULE).startsWith(iface.getFunction('enableModule').selector)).toBe(true);
+    expect(encodeEnableModule(RECORDS_MODULE)).toBe(
+      iface.encodeFunctionData('enableModule', [RECORDS_MODULE]),
+    );
+    expect(
+      encodeEnableModule(RECORDS_MODULE).startsWith(iface.getFunction('enableModule').selector),
+    ).toBe(true);
   });
 
   it('encodeCreateRecordsModule: recordsFactory.createModule(safe)', () => {
@@ -87,12 +92,16 @@ describe('encoders', () => {
     expect(data).toBe(iface.encodeFunctionData('createModule', [SAFE, [AUTHOR1, AUTHOR2], []]));
     expect(data.startsWith(iface.getFunction('createModule').selector)).toBe(true);
     // empty authors still encodes the address[] slot as an empty array
-    expect(encodeCreatePublicationModule(SAFE, [])).toBe(iface.encodeFunctionData('createModule', [SAFE, [], []]));
+    expect(encodeCreatePublicationModule(SAFE, [])).toBe(
+      iface.encodeFunctionData('createModule', [SAFE, [], []]),
+    );
   });
 
   it('encodeSetRecord: recordsModule.setRecord(key, value)', () => {
     const iface = new Interface(['function setRecord(string key, string value)']);
-    expect(encodeSetRecord('name', 'my-pub')).toBe(iface.encodeFunctionData('setRecord', ['name', 'my-pub']));
+    expect(encodeSetRecord('name', 'my-pub')).toBe(
+      iface.encodeFunctionData('setRecord', ['name', 'my-pub']),
+    );
   });
 
   it('encodeDisableModule: Safe disableModule selector + arg encoding', () => {
@@ -110,8 +119,12 @@ describe('encoders', () => {
   it('moduleCreatedTopic0: derived from each factory ABI and distinct', () => {
     const rec = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
     const pub = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
-    expect(rec).toBe(new Interface(Abi_S2SRecordsModuleFactory).getEvent('ModuleCreated').topicHash);
-    expect(pub).toBe(new Interface(Abi_S2SPublicationModuleV2Factory).getEvent('ModuleCreated').topicHash);
+    expect(rec).toBe(
+      new Interface(Abi_S2SRecordsModuleFactory).getEvent('ModuleCreated').topicHash,
+    );
+    expect(pub).toBe(
+      new Interface(Abi_S2SPublicationModuleV2Factory).getEvent('ModuleCreated').topicHash,
+    );
     // different event signatures → different topic0
     expect(rec).not.toBe(pub);
   });
@@ -129,8 +142,16 @@ describe('batch builders', () => {
     const pubIface = new Interface(Abi_S2SPublicationModuleV2Factory);
     const batch = buildCreateModuleBatch(protocolInfo, SAFE, [AUTHOR1, AUTHOR2]);
     expect(batch).toEqual([
-      { to: RECORDS_FACTORY, value: '0', data: recIface.encodeFunctionData('createModule', [SAFE]) },
-      { to: PUB_FACTORY, value: '0', data: pubIface.encodeFunctionData('createModule', [SAFE, [AUTHOR1, AUTHOR2], []]) },
+      {
+        to: RECORDS_FACTORY,
+        value: '0',
+        data: recIface.encodeFunctionData('createModule', [SAFE]),
+      },
+      {
+        to: PUB_FACTORY,
+        value: '0',
+        data: pubIface.encodeFunctionData('createModule', [SAFE, [AUTHOR1, AUTHOR2], []]),
+      },
     ]);
   });
 
@@ -146,7 +167,13 @@ describe('batch builders', () => {
   it('buildNameRecordBatch: [records.setRecord("name", name)]', () => {
     const iface = new Interface(['function setRecord(string key, string value)']);
     const batch = buildNameRecordBatch(RECORDS_MODULE, 'my-pub');
-    expect(batch).toEqual([{ to: RECORDS_MODULE, value: '0', data: iface.encodeFunctionData('setRecord', ['name', 'my-pub']) }]);
+    expect(batch).toEqual([
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: iface.encodeFunctionData('setRecord', ['name', 'my-pub']),
+      },
+    ]);
   });
 
   it('every batch tx carries value "0"', () => {
@@ -154,7 +181,11 @@ describe('batch builders', () => {
       buildCreateModuleBatch(protocolInfo, SAFE, []),
       buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
       buildNameRecordBatch(RECORDS_MODULE, 'x'),
-      buildDeletePublicationBatch(SAFE, { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE }, [RECORDS_MODULE, PUB_MODULE]),
+      buildDeletePublicationBatch(
+        SAFE,
+        { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+        [RECORDS_MODULE, PUB_MODULE],
+      ),
     ]) {
       for (const tx of batch) expect(tx.value).toBe('0');
     }
@@ -166,7 +197,9 @@ describe('batch builders', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildDeletePublicationBatch', () => {
-  const disableIface = new Interface(['function disableModule(address prevModule, address module)']);
+  const disableIface = new Interface([
+    'function disableModule(address prevModule, address module)',
+  ]);
   const delIface = new Interface(['function deleteRecord(string key)']);
 
   it('disables in reverse list order with the correct prev, then deletes the name record', () => {
@@ -178,9 +211,24 @@ describe('buildDeletePublicationBatch', () => {
       [RECORDS_MODULE, PUB_MODULE],
     );
     expect(batch).toEqual([
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [RECORDS_MODULE, PUB_MODULE]) },
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', RECORDS_MODULE]) },
-      { to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [RECORDS_MODULE, PUB_MODULE]),
+      },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [
+          '0x0000000000000000000000000000000000000001',
+          RECORDS_MODULE,
+        ]),
+      },
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: delIface.encodeFunctionData('deleteRecord', ['name']),
+      },
     ]);
   });
 
@@ -196,11 +244,23 @@ describe('buildDeletePublicationBatch', () => {
       [OTHER, RECORDS_MODULE, OTHER2, PUB_MODULE],
     );
     expect(batch.slice(0, 2)).toEqual([
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [OTHER2, PUB_MODULE]) },
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [OTHER, RECORDS_MODULE]) },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [OTHER2, PUB_MODULE]),
+      },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [OTHER, RECORDS_MODULE]),
+      },
     ]);
     // Last tx is still the name-record deletion.
-    expect(batch[2]).toEqual({ to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) });
+    expect(batch[2]).toEqual({
+      to: RECORDS_MODULE,
+      value: '0',
+      data: delIface.encodeFunctionData('deleteRecord', ['name']),
+    });
   });
 
   it('handles a partial state: only the module actually present is disabled', () => {
@@ -210,8 +270,19 @@ describe('buildDeletePublicationBatch', () => {
       [RECORDS_MODULE], // publication not currently enabled
     );
     expect(batch).toEqual([
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', RECORDS_MODULE]) },
-      { to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [
+          '0x0000000000000000000000000000000000000001',
+          RECORDS_MODULE,
+        ]),
+      },
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: delIface.encodeFunctionData('deleteRecord', ['name']),
+      },
     ]);
   });
 
@@ -222,7 +293,14 @@ describe('buildDeletePublicationBatch', () => {
       [PUB_MODULE],
     );
     expect(batch).toEqual([
-      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', PUB_MODULE]) },
+      {
+        to: SAFE,
+        value: '0',
+        data: disableIface.encodeFunctionData('disableModule', [
+          '0x0000000000000000000000000000000000000001',
+          PUB_MODULE,
+        ]),
+      },
     ]);
   });
 
@@ -327,7 +405,8 @@ describe('detectModuleAddresses', () => {
     const lowerRecords = RECORDS_MODULE.toLowerCase();
     const lowerPub = PUB_MODULE.toLowerCase();
     const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [{ topics: [recordsTopic0, pad(SAFE), pad(lowerRecords)] }];
+      if (factory === RECORDS_FACTORY)
+        return [{ topics: [recordsTopic0, pad(SAFE), pad(lowerRecords)] }];
       return [{ topics: [pubTopic0, pad(SAFE), pad(lowerPub)] }];
     });
 
@@ -348,7 +427,10 @@ describe('detectModuleAddresses', () => {
     const OLD_PUB = getAddress('0x8888888888888888888888888888888888888888');
     const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
       if (factory === RECORDS_FACTORY) {
-        return [logFor(recordsTopic0, SAFE, OLD_RECORDS), logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+        return [
+          logFor(recordsTopic0, SAFE, OLD_RECORDS),
+          logFor(recordsTopic0, SAFE, RECORDS_MODULE),
+        ];
       }
       return [logFor(pubTopic0, SAFE, OLD_PUB), logFor(pubTopic0, SAFE, PUB_MODULE)];
     });
@@ -363,6 +445,59 @@ describe('detectModuleAddresses', () => {
 });
 
 // ---------------------------------------------------------------------------
+// waitForModulesEnabled — the human-in-the-loop bridge between the enable
+// proposal and the name-record proposal.
+// ---------------------------------------------------------------------------
+
+describe('waitForModulesEnabled', () => {
+  const deps = {
+    recordsModule: RECORDS_MODULE,
+    publicationModule: PUB_MODULE,
+    isModuleEnabled: async () => true,
+    now: () => 1000,
+  };
+
+  it('returns immediately when both modules are already enabled', async () => {
+    const isModuleEnabled = vi.fn(async () => true);
+    await waitForModulesEnabled({ ...deps, isModuleEnabled }, { pollIntervalMs: 0 });
+    expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
+    expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
+    expect(isModuleEnabled).toHaveBeenCalledTimes(2);
+  });
+
+  it('polls until both modules become enabled', async () => {
+    const isModuleEnabled = vi
+      .fn()
+      .mockResolvedValueOnce(false) // poll 1: records, publication
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false) // poll 2: records, publication
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true) // poll 3 onwards: both true
+      .mockResolvedValue(true);
+
+    await waitForModulesEnabled(
+      { ...deps, isModuleEnabled },
+      { pollIntervalMs: 0, timeoutMs: 60_000 },
+    );
+    expect(isModuleEnabled).toHaveBeenCalledTimes(6);
+  });
+
+  it('times out naming the module(s) still not enabled', async () => {
+    const isModuleEnabled = vi.fn(async (module: string) => module !== RECORDS_MODULE);
+    let t = 1000;
+    const now = vi.fn(() => (t += 2_000)); // start = 3000; next now() = 5000 → elapsed 2000 > 1000
+
+    await expect(
+      waitForModulesEnabled(
+        { ...deps, isModuleEnabled, now },
+        { timeoutMs: 1_000, pollIntervalMs: 0 },
+      ),
+    ).rejects.toThrow(/not enabled: records/);
+    expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
+    expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
+  });
+});
+
 // initializePublication.
 // ---------------------------------------------------------------------------
 
@@ -373,7 +508,9 @@ describe('initializePublication', () => {
     protocolInfo: { recordsFactory: RECORDS_FACTORY, publicationFactory: PUB_FACTORY },
     propose: async () => 'proposal-0',
     fetchModuleCreatedLogs: async (factory: string) =>
-      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [logFor(pubTopic0, SAFE, PUB_MODULE)],
+      factory === RECORDS_FACTORY
+        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
+        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
     getBlockNumber: async () => 1_000_000,
     isModuleEnabled: async () => true,
     now: () => 500,
@@ -397,7 +534,9 @@ describe('initializePublication', () => {
     expect(propose.mock.calls[0][0]).toEqual(
       buildCreateModuleBatch(initDeps.protocolInfo, SAFE, []),
     );
-    expect(propose.mock.calls[1][0]).toEqual(buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE));
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+    );
     // verification ran on both modules
     expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
@@ -418,7 +557,9 @@ describe('initializePublication', () => {
   it('authors are passed into the create batch (createModule(safe, authors, []))', async () => {
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `p`);
     await initializePublication({ ...initDeps, propose }, { authors: [AUTHOR1, AUTHOR2] });
-    expect(propose.mock.calls[0][0]).toEqual(buildCreateModuleBatch(initDeps.protocolInfo, SAFE, [AUTHOR1, AUTHOR2]));
+    expect(propose.mock.calls[0][0]).toEqual(
+      buildCreateModuleBatch(initDeps.protocolInfo, SAFE, [AUTHOR1, AUTHOR2]),
+    );
   });
 
   it('detection timeout surfaces a descriptive error', async () => {
@@ -427,19 +568,55 @@ describe('initializePublication', () => {
     const now = vi.fn(() => (t += 130_000)); // start=130000; first check elapsed 130000 > default 120000 → throw
 
     await expect(
-      initializePublication(
-        { ...initDeps, fetchModuleCreatedLogs, now },
-        {},
-      ),
+      initializePublication({ ...initDeps, fetchModuleCreatedLogs, now }, {}),
     ).rejects.toThrow(/Timed out/);
   });
 
-  it('verification failure throws naming the module that is not enabled', async () => {
+  it('delays the name-record proposal until the enable batch is executed', async () => {
+    let n = 0;
+    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
+    // Polls 1-2 see modules disabled; poll 3 sees both enabled.
+    const isModuleEnabled = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true)
+      .mockResolvedValue(true);
+
+    const result = await initializePublication(
+      { ...initDeps, propose, isModuleEnabled },
+      { name: 'my-pub', enablePollIntervalMs: 0 },
+    );
+
+    // Name record proposed last, only after the modules became enabled.
+    expect(propose).toHaveBeenCalledTimes(3);
+    expect(propose.mock.calls[2][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+    expect(isModuleEnabled).toHaveBeenCalledTimes(6);
+    expect(result.proposals).toEqual(['proposal-1', 'proposal-2', 'proposal-3']);
+  });
+
+  it('times out (name never proposed) when the enable batch is never executed', async () => {
+    let n = 0;
+    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
     const isModuleEnabled = vi.fn(async (module: string) => module !== RECORDS_MODULE);
+    let t = 500;
+    // now() advances past the 1000ms timeout on the very first check.
+    const now = vi.fn(() => (t += 2_000));
 
     await expect(
-      initializePublication({ ...initDeps, isModuleEnabled }, {}),
-    ).rejects.toThrow(/records/);
+      initializePublication(
+        { ...initDeps, propose, isModuleEnabled, now },
+        { enableTimeoutMs: 1_000, enablePollIntervalMs: 0 },
+      ),
+    ).rejects.toThrow(/not enabled: records/);
+
+    // The enable batch was proposed, but the name record was NOT (wait timed out first).
+    expect(propose).toHaveBeenCalledTimes(2);
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+    );
     expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
@@ -447,7 +624,9 @@ describe('initializePublication', () => {
   it('no direct sends: all I/O goes through injected deps, lib stays pure', async () => {
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => 'p');
     const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [logFor(pubTopic0, SAFE, PUB_MODULE)],
+      factory === RECORDS_FACTORY
+        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
+        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
     );
 
     await initializePublication({ ...initDeps, propose, fetchModuleCreatedLogs }, {});
@@ -459,7 +638,10 @@ describe('initializePublication', () => {
 
     // Structural purity: no SDK, no safe-integration, no window, no shared import.
     // (Match import statements — the header comment may legitimately name them.)
-    const src = await readFile(new URL('../../src/lib/publication-init.ts', import.meta.url), 'utf8');
+    const src = await readFile(
+      new URL('../../src/lib/publication-init.ts', import.meta.url),
+      'utf8',
+    );
     expect(src).not.toMatch(/^import .*@safe-global\/safe-apps-sdk/m);
     expect(src).not.toMatch(/^import .*safe-integration/m);
     expect(src).not.toMatch(/window\./);
@@ -467,6 +649,8 @@ describe('initializePublication', () => {
   });
 
   it('defaultSafeUrl matches the Safe queue URL format', () => {
-    expect(defaultSafeUrl(8453, SAFE)).toBe(`https://app.safe.global/transactions/queue?safe=8453:${SAFE}`);
+    expect(defaultSafeUrl(8453, SAFE)).toBe(
+      `https://app.safe.global/transactions/queue?safe=8453:${SAFE}`,
+    );
   });
 });

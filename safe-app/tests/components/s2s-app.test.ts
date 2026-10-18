@@ -14,7 +14,10 @@ const SAFE_INFO = {
   address: '0x1111111111111111111111111111111111111111',
   safeAddress: '0x1111111111111111111111111111111111111111',
   chainId: 8453,
-  modules: ['0x5555555555555555555555555555555555555555', '0x4444444444444444444444444444444444444444'],
+  modules: [
+    '0x5555555555555555555555555555555555555555',
+    '0x4444444444444444444444444444444444444444',
+  ],
   s2sPublication: '0x5555555555555555555555555555555555555555',
   s2sRecords: '0x4444444444444444444444444444444444444444',
 };
@@ -302,18 +305,16 @@ describe('s2s-app (shell)', () => {
 
   it('reset: first click arms a confirm, second click proposes the teardown batch and shows the queue link', async () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy());
 
     const btn = el.shadowRoot?.querySelector('#reset-publication') as HTMLButtonElement;
 
     // Click 1 → armed, nothing proposed yet.
     btn.click();
     await vi.waitFor(() =>
-      expect(
-        el.shadowRoot?.querySelector('#reset-publication')?.textContent?.trim(),
-      ).toBe('Confirm reset?'),
+      expect(el.shadowRoot?.querySelector('#reset-publication')?.textContent?.trim()).toBe(
+        'Confirm reset?',
+      ),
     );
     expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
 
@@ -329,9 +330,7 @@ describe('s2s-app (shell)', () => {
     expect(batch[batch.length - 1].to).toBe(SAFE_INFO.s2sRecords);
 
     // The queue link is surfaced after proposing.
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy(),
-    );
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy());
     expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
   });
 });
