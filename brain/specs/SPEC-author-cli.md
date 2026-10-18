@@ -29,8 +29,8 @@ progress goes to stderr.
 
 ## Command surface
 
-Top-level bin `s2s`; two groups: `author` (content actions on an existing publication)
-and `publication` (publication lifecycle).
+Top-level bin `s2s`; three groups: `author` (content actions on an existing
+publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
 s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
@@ -39,6 +39,11 @@ s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + previ
 s2s author publish   <note> [--publication <ens>] [--json]        # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]        # on-chain retract + remove re-render
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
+s2s config set       <key> <value> [--local] [--json]            # write a config value
+s2s config get       <key> [--json]                              # effective value for a key
+s2s config unset     <key> [--local] [--json]                    # remove a key from the file
+s2s config list      [--json]                                    # all effective values (secrets masked)
+s2s config path      [--local] [--json]                          # print the config file path
 ```
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
@@ -61,6 +66,46 @@ Global flags parse anywhere in the argv:
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
 | `--author <addr>,...` | (new) Initial author set; defaults to the EOA address. |
 | `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
+| `--local` | (config) Target the project config file (`.s2sconfig.json` in cwd) instead of the user config. |
+
+### Config file (bring-your-own infra)
+
+The `config` group writes a JSON config file that supplies any setting the env
+surface can. No private key or RPC endpoint is required to run it — it is
+dispatched by `cli.ts` **before** `buildContext`, so you can configure the CLI
+from a completely unprovisioned machine.
+
+| File | Location | Written by |
+|---|---|---|
+| user config | `~/.config/s2s/config.json` (`XDG_CONFIG_HOME` honored) | `s2s config set` (default), mode `0600` |
+| project config | `./.s2sconfig.json` (cwd) | `s2s config set --local` |
+
+Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
+`privateKey`, … — `s2s config list` shows the full set). List keys (`rpcL1`,
+`rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
+(`environment`, `filecoinChain`, `entryPoint`) are validated on write.
+
+**Precedence** (git-style, env is the 12-factor escape hatch):
+
+```
+env vars (incl. cwd .env) > project config > user config > built-in defaults
+```
+
+Examples:
+
+```sh
+s2s config set kuboGateway http://127.0.0.1:5001        # bring your own Kubo
+s2s config set rpcL1 http://my-l1.example,http://fallback # comma lists allowed
+s2s config set privateKey 0x… --json                     # stored 0600, masked on read
+s2s config set environment dev
+s2s config get kuboGateway        # prints the *effective* value (env may win)
+s2s config list --json            # full effective surface, secrets masked
+```
+
+Secret keys (`privateKey`, `lit*Key`, `githubToken`, `kuboToken`, `pinataJwt`,
+`filebaseToken`, `filecoinPrivateKey`) are **masked** in `get`/`list` output, and
+`set --local` warns when a secret lands in the project file (commit risk — keep
+secrets in the user config or gitignore `.s2sconfig.json`).
 
 ### Exit codes
 
@@ -95,7 +140,9 @@ Help/version in `--json` mode are also JSON (`{ "help": "…" }` / `{ "name": "s
 ## Environment surface
 
 `.env` in the CWD is loaded by the entrypoint (`dotenv/config`) before config resolution. All
-settings flow through `loadConfig()` into a single `CliConfig` (`src/core/config.ts`).
+settings flow through `loadConfig()` into a single `CliConfig` (`src/core/config.ts`), which
+merges the two config-file layers beneath the env layer (see **Config file** above). The table
+lists the env names; every one is also settable via `s2s config set <key>` with a flat camelCase key.
 
 | Env var | Required | Default | Purpose |
 |---|---|---|---|
@@ -125,9 +172,9 @@ settings flow through `loadConfig()` into a single `CliConfig` (`src/core/config
 src/
   cli.ts            top-level dispatch (s2s <group> <action>), json/help/version, error envelope
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
-  core/             config, context (clients), service (publication resolver), author write/revoke
+  core/             config + configfile (field registry, config-file IO), context (clients), service, author write/revoke
   adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), ipfs, lit, rpc, filecoin
-  commands/         upload / propose / preview / publish / revoke (author), new (publication)
+  commands/         upload / propose / preview / publish / revoke (author), new (publication), config set/get/unset/list/path
 ```
 
 Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`,
@@ -208,14 +255,16 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 `pnpm test` (vitest, node env) covers the pure parts: arg parsing (`booleanFlags` never consuming
 the next token, value flags, `--`, `-h`), env config defaults/overrides/aliases, `requireSetting`,
-`saltNonceFor` (determinism, top-bit-cleared range), and `upsertFrontmatter` (upsert, body
-preservation, hex quoting). Gate: `pnpm build` = `tsc -noEmit` + esbuild; eslint strict
-(`--max-warnings 0`) over `src/` and `test/`.
+`saltNonceFor` (determinism, top-bit-cleared range), `upsertFrontmatter` (upsert, body
+preservation, hex quoting), and the config-file layer (field-registry coverage, env > project >
+user > default precedence, list/enum normalization, file round-trip, secret masking). Gate:
+`pnpm build` = `tsc -noEmit` + esbuild; eslint strict (`--max-warnings 0`) over `src/` and `test/`.
 
 ## Live execution notes
 
-Hand smoke-tests that pass in this environment: bare invocation, `--version`, all three help
-levels, unknown action (exit 2), missing settings (exit 1), and the `--json` error envelope — all
-clean, with stdout carrying exactly one JSON document. End-to-end authoring against live RPCs
-requires the full env surface (private key, Lit keys, Kubo, bundler) and is the manual-acceptance
-step.
+Hand smoke-tests that pass in this environment: bare invocation, `--version`, all four help
+levels (top, author, publication, config), unknown group/action (exit 2), missing settings (exit
+1), and the `--json` error envelope — all clean, with stdout carrying exactly one JSON document.
+The `config` group runs with a completely empty environment (no private key, no RPC) — verified
+with `env -i`. End-to-end authoring against live RPCs requires the full env surface (private key,
+Lit keys, Kubo, bundler) and is the manual-acceptance step.

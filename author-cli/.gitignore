@@ -3,3 +3,4 @@ node_modules/
 *.tsbuildinfo
 *.log
 .env
+.s2sconfig.json

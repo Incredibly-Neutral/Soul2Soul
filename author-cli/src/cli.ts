@@ -2,7 +2,8 @@
 // s2s — Soul2Soul headless authoring CLI.
 //
 // Top-level dispatch: `s2s <group> <action> [flags]`.
-// Groups: `author` (content actions) and `publication` (publication lifecycle).
+// Groups: `author` (content actions), `publication` (publication lifecycle),
+// and `config` (CLI settings — dispatched without a context build).
 // Flags parse anywhere; `--json` switches stdout to a machine-readable JSON
 // result (Neovim plugin contract). Human progress always goes to stderr.
 // ============================================================================
@@ -20,6 +21,7 @@ import {
   findPublicationCommand,
   publicationCommands,
 } from './commands';
+import { runConfigGroup } from './commands/config';
 import type { CommandSpec } from './lib/command';
 
 const VERSION = '0.1.0';
@@ -32,6 +34,7 @@ Usage:
 Groups:
   author        Upload, preview, propose, publish, or revoke content
   publication   Create publications
+  config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
 Global flags:
   --json        emit the result as JSON on stdout (machine-readable)
@@ -61,7 +64,9 @@ function actionHelp(command: CommandSpec): string {
 }
 
 async function main(argv: string[]): Promise<number> {
-  const { flags, positionals } = parseArgs(argv, { booleanFlags: ['json', 'help', 'h', 'version'] });
+  const { flags, positionals } = parseArgs(argv, {
+    booleanFlags: ['json', 'help', 'h', 'version', 'local'],
+  });
   const json = flags.json !== undefined;
   const out = createOut(json);
   const wantHelp = (['help', 'h', 'version'] as const).some((k) => flags[k] === true);
@@ -83,8 +88,17 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // `config` is dispatched without building a context (no private key / RPC
+  // needed) so the CLI can be configured before anything else is set up.
+  if (group === 'config') {
+    runConfigGroup(out, wantHelp, flags, action, positionals.slice(2));
+    return 0;
+  }
+
   if (group !== 'author' && group !== 'publication') {
-    throw new UsageError(`unknown command group '${group}' — expected 'author' or 'publication'`);
+    throw new UsageError(
+      `unknown command group '${group}' — expected 'author', 'publication', or 'config'`,
+    );
   }
 
   const findCommand = group === 'author' ? findAuthorCommand : findPublicationCommand;
