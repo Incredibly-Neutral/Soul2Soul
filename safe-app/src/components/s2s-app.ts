@@ -6,6 +6,7 @@ import './s2s-deals-tab.js';
 import './s2s-init.js';
 import './s2s-button.js';
 import './s2s-confirm-modal.js';
+import './s2s-init-progress-modal.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
@@ -18,6 +19,12 @@ import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { buildDeletePublicationBatch } from '../lib/publication-init.js';
+import {
+  INIT_SESSION_KEY,
+  clearInitSession,
+  loadInitSession,
+  type InitPhase,
+} from '../lib/init-session.js';
 import { evmRead } from '@/lib/evm.js';
 import { CID } from 'multiformats';
 import './copy-link.js';
@@ -49,6 +56,13 @@ export class S2SApp extends LitElement {
   @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'done' = 'idle';
   @state() private resetUrl: string | null = null;
   @state() private resetError: string | null = null;
+
+  // Init progress: the publication-creation flow (live or recovered from local
+  // storage after a reload) drives this progress modal. 'initPhase' null = no
+  // active flow; otherwise the modal is open, showing the current phase.
+  @state() private initPhase: InitPhase | null = null;
+  @state() private initProposals: string[] = [];
+  @state() private initName = '';
 
   private unsubscribers: Array<() => void> = [];
 
@@ -132,6 +146,10 @@ export class S2SApp extends LitElement {
     try {
       const safeInfo = await this.safeIntegration.initialize();
       store.setSafeInfo(safeInfo);
+
+      // If a publication-init session was persisted, surface its progress (or
+      // clear it once everything is on-chain).
+      await this.syncInitProgress(safeInfo);
 
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
@@ -268,6 +286,56 @@ export class S2SApp extends LitElement {
   }
 
   /**
+   * Drive the init progress modal from a persisted session. Called once on
+   * page load (after the Safe is connected). The init component, when mounted,
+   * will also resume the flow and dispatch s2s-init-progress events that
+   * supersede this initial state; this handles the reload-into-an-already-
+   * enabled-setup case where the init component is NOT mounted (modules live,
+   * name record still pending).
+   */
+  private async syncInitProgress(safeInfo: {
+    chainId: number;
+    safeAddress: string;
+  }): Promise<void> {
+    const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    if (!session) return;
+
+    // A session from another Safe or chain must not hijack this page.
+    if (
+      session.chainId !== safeInfo.chainId ||
+      session.safeAddress.toLowerCase() !== safeInfo.safeAddress.toLowerCase()
+    ) {
+      return;
+    }
+
+    if (session.phase === 'done') {
+      clearInitSession(window.localStorage, INIT_SESSION_KEY);
+      this.initPhase = null;
+      return;
+    }
+
+    if (this.safeIntegration.hasRecordsModule()) {
+      // Modules are live — only the name record can still be pending.
+      const nameRecorded = (await this.safeIntegration.getRecord('name')) !== '';
+      if (nameRecorded) {
+        clearInitSession(window.localStorage, INIT_SESSION_KEY);
+        this.initPhase = null;
+        return;
+      }
+      this.initPhase = 'awaiting-name';
+      this.initProposals = session.proposals;
+      this.initName = session.publicationName;
+      return;
+    }
+
+    // Modules not live: the init component (mounted below) resumes the flow
+    // itself; show the recovered progress in the meantime.
+    this.initPhase = session.phase;
+    this.initProposals = session.proposals;
+    this.initName = session.publicationName;
+  }
+
+  /**
    * Fresh publication proposed by the init flow. The name/repo/branch records
    * are proposed but still pending Safe execution, so the chain read in
    * fetchFreshData cannot see them yet — write them to the store optimistically
@@ -279,6 +347,10 @@ export class S2SApp extends LitElement {
     const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
       .detail;
     const { name, repo, branch } = detail ?? {};
+
+    // The flow finished proposing — close the progress modal. The session stays
+    // persisted for crash-safety until the last record is observed on-chain.
+    this.initPhase = null;
 
     // Surface the Config tab — the immediate config update below runs there.
     this.currentTab = 'records';
@@ -301,6 +373,23 @@ export class S2SApp extends LitElement {
         console.error('[s2s-app] immediate config update failed:', err);
       });
     }
+  };
+
+  /** Live progress from the init component while a flow is running. */
+  private readonly onInitProgress = (e: Event): void => {
+    const detail = (
+      e as CustomEvent<
+        { step: string; phase: InitPhase; proposals: string[]; name?: string } | undefined
+      >
+    ).detail;
+    if (!detail) return;
+    if (detail.phase === 'done') {
+      this.initPhase = null;
+      return;
+    }
+    this.initPhase = detail.phase;
+    this.initProposals = detail.proposals;
+    if (detail.name) this.initName = detail.name;
   };
 
   private activeTabTemplate() {
@@ -456,6 +545,7 @@ export class S2SApp extends LitElement {
                 .protocolInfo=${store.protocolInfo}
                 .safeInfo=${safeInfo}
                 @s2s-init-complete=${this.onInitComplete}
+                @s2s-init-progress=${this.onInitProgress}
               ></s2s-publication-init>
             `
           : ''}
@@ -518,6 +608,13 @@ export class S2SApp extends LitElement {
         @s2s-confirm=${() => void this.handleReset()}
         @s2s-cancel=${() => (this.resetState = 'idle')}
       ></s2s-confirm-modal>
+
+      <s2s-init-progress-modal
+        .open=${this.initPhase !== null}
+        .phase=${this.initPhase ?? 'creating'}
+        .proposals=${this.initProposals}
+        .name=${this.initName}
+      ></s2s-init-progress-modal>
     `;
   }
 }

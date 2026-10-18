@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Interface } from 'ethers';
 import type { S2SPublicationInit } from '../../src/components/s2s-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
+import { INIT_SESSION_KEY, saveInitSession, type InitSession } from '../../src/lib/init-session';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/s2s-init';
 
@@ -50,9 +51,17 @@ function decodeSetRecord(tx: MetaTransactionData): { key: string; value: string 
 
 /** Duck-typed SafeIntegration that resolves the flow instantly. */
 function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
-  const enabled = opts.enabled ?? true;
+  // Simulates the enable proposal being EXECUTED on-chain: modules are only
+  // reported enabled once an enable batch (Safe self-calls) has been proposed.
+  let enableProposed = false;
+  const proposeBatch = vi.fn(async (txs: MetaTransactionData[]) => {
+    if (txs.length > 0 && txs.every((t) => t.to.toLowerCase() === SAFE_ADDRESS.toLowerCase())) {
+      enableProposed = true;
+    }
+    return QUEUE_URL;
+  });
   return {
-    proposeBatch: vi.fn(async (_txs: MetaTransactionData[]) => QUEUE_URL),
+    proposeBatch,
     getProvider: vi.fn(() => ({
       getBlockNumber: vi.fn(async () => 12_000_000),
     })),
@@ -61,8 +70,28 @@ function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
         ? [{ topics: [TOPIC0, PADDED_SAFE, PADDED_RECORDS] }]
         : [{ topics: [TOPIC0, PADDED_SAFE, PADDED_PUB] }],
     ),
-    readIsModuleEnabled: vi.fn(async () => enabled),
+    readIsModuleEnabled: vi.fn(async () =>
+      opts.enabled !== undefined ? opts.enabled : enableProposed,
+    ),
+    getRecord: vi.fn(async (_key: string) => ''),
   };
+}
+
+/** Seed an in-flight session into localStorage so the next mount resumes it. */
+function seedSession(overrides: Partial<InitSession> = {}): void {
+  saveInitSession(window.localStorage, INIT_SESSION_KEY, {
+    version: 1,
+    chainId: 8453,
+    safeAddress: SAFE_ADDRESS,
+    phase: 'detecting',
+    name: 'my-publication',
+    publicationName: 'my-publication.soul2soul.eth',
+    repo: 'https://github.com/Joera/website-starter',
+    branch: 'main',
+    authors: [OWNER_A, OWNER_B],
+    proposals: [],
+    ...overrides,
+  });
 }
 
 /** Wait for the component's async flow to settle (next microtask flush). */
@@ -93,6 +122,12 @@ function bodyText(el: S2SPublicationInit): string {
 }
 
 describe('s2s-publication-init', () => {
+  // The component persists its flow to localStorage; a completed/aborted flow
+  // from a previous test must never bleed into the next mount.
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('renders the new-publication form with owner pills and the .soul2soul.eth suffix', async () => {
     const el = await mount();
 
@@ -326,5 +361,153 @@ describe('s2s-publication-init', () => {
     expect(bodyText(el)).toContain('Initialization failed');
     expect(bodyText(el)).toContain('Not connected to a Safe');
     expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  // ---- Crash-safe resume (persisted session) ---------------------------------
+
+  /** Create + connect the element with the listener already attached, so the
+   * async auto-resume (which starts in connectedCallback) is never missed. */
+  async function mountWithListener(
+    si: ReturnType<typeof makeSafeIntegration>,
+    props: Record<string, unknown> = {},
+  ): Promise<{ el: S2SPublicationInit; complete: Promise<CustomEvent> }> {
+    const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
+    Object.assign(el, {
+      protocolInfo: PROTOCOL_INFO,
+      safeInfo: SAFE_INFO,
+      safeIntegration: si,
+      ...props,
+    });
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return { el, complete };
+  }
+
+  it('auto-resumes a mid-flow session without re-proposing the create batch', async () => {
+    // Reload happened while the create proposal was pending execution.
+    seedSession({
+      phase: 'detecting',
+      proposals: [QUEUE_URL], // create already proposed in the previous session
+    });
+    const si = makeSafeIntegration();
+
+    const { el, complete } = await mountWithListener(si);
+    const evt = await complete;
+    await flush();
+
+    // Create was NOT re-proposed — only enable + name are new.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    // The restored create proposal is kept in front of the two new ones.
+    expect(evt.detail.proposals).toHaveLength(3);
+    expect(evt.detail.proposals[0]).toBe(QUEUE_URL);
+    expect(bodyText(el)).toContain('Publication initialized');
+  });
+
+  it('skips the enable wait on resume when the modules are already enabled', async () => {
+    seedSession({
+      phase: 'awaiting-enable',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+
+    const { el, complete } = await mountWithListener(si);
+    const evt = await complete;
+    await flush();
+
+    // Enable is already satisfied on-chain -> straight to the name record.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    const nameBatch = si.proposeBatch.mock.calls[0][0] as MetaTransactionData[];
+    expect(nameBatch).toHaveLength(3);
+    expect(decodeSetRecord(nameBatch[0])).toEqual({
+      key: 'name',
+      value: 'my-publication.soul2soul.eth',
+    });
+    expect(evt.detail.proposals).toHaveLength(3); // 2 restored + 1 new
+    expect(bodyText(el)).toContain('Publication initialized');
+  });
+
+  it('finishes immediately on resume when the name record is already on-chain', async () => {
+    seedSession({
+      phase: 'awaiting-name',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    si.getRecord = vi.fn(async (key: string) =>
+      key === 'name' ? 'my-publication.soul2soul.eth' : '',
+    );
+
+    const { complete } = await mountWithListener(si);
+    const evt = await complete;
+    await flush();
+
+    // Nothing left to propose — the whole flow was already executed.
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    // The session is cleared once everything is on-chain.
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('waits for a pending name record on resume, then clears the session', async () => {
+    seedSession({
+      phase: 'awaiting-name',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    let recorded = false;
+    si.getRecord = vi.fn(async (key: string) =>
+      key === 'name' && recorded ? 'my-publication.soul2soul.eth' : '',
+    );
+
+    const { complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
+    // The human executes the name proposal after a few polls.
+    setTimeout(() => {
+      recorded = true;
+    }, 40);
+    const evt = await complete;
+    await flush();
+
+    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('broadcasts the restored phase so the host can open the progress modal', async () => {
+    seedSession({
+      phase: 'awaiting-enable',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+    });
+    const progress: Array<{ step: string; phase: string; proposals: string[] }> = [];
+
+    const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
+    Object.assign(el, {
+      protocolInfo: PROTOCOL_INFO,
+      safeInfo: SAFE_INFO,
+      safeIntegration: makeSafeIntegration(),
+    });
+    el.addEventListener('s2s-init-progress', (e) =>
+      progress.push(
+        (e as CustomEvent<{ step: string; phase: string; proposals: string[] }>).detail,
+      ),
+    );
+    document.body.appendChild(el);
+    await el.updateComplete;
+    await flush();
+
+    expect(progress.length).toBeGreaterThan(0);
+    expect(progress[0].phase).toBe('awaiting-enable');
+    expect(progress[0].step).toBe('awaiting-enable');
   });
 });
