@@ -1,15 +1,25 @@
 // ============================================================================
-// Environment configuration for the CLI. Single source of the env surface;
-// every adapter reads its settings from a CliConfig.
+// Environment configuration for the CLI. Single source of the effective config
+// surface; every adapter reads its settings from a CliConfig.
 //
-// Naming:
-//   S2S_*       — CLI-specific settings
-//   LIT_*       — Lit credentials (same names neutralpress/0xobsidian use)
-//   GITHUB_TOKEN — GitHub API token (same name neutralpress uses)
+// Precedence (git-style): env vars > project config (.s2sconfig.json in cwd) >
+// user config (~/.config/s2s/config.json) > built-in defaults. The env surface
+// (S2S_*, LIT_*, GITHUB_TOKEN) is the top override layer; the config files are
+// managed by `s2s config set/get/unset` — see src/core/configfile.ts for the
+// field registry shared by both.
 //
 // A `.env` in the current working directory is loaded by the CLI entrypoint
-// before `loadConfig()` runs.
+// before `loadConfig()` runs, so it participates at the env layer.
 // ============================================================================
+
+import {
+  CONFIG_FIELD,
+  configFilePaths,
+  configFileValue,
+  readConfigFile,
+  type ConfigField,
+  type ConfigKey,
+} from './configfile';
 
 export type EntryPointVersion = '0.6' | '0.7';
 export type FilecoinChain = 'mainnet' | 'calibration';
@@ -64,61 +74,135 @@ export interface CliConfig {
   bundler: BundlerConfig;
 }
 
-function envList(env: NodeJS.ProcessEnv, names: string[]): string[] {
-  for (const name of names) {
-    const value = env[name];
-    if (value && value.trim().length > 0) {
-      return value
-        .split(',')
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0);
-    }
-  }
-  return [];
+/** Override the config-file locations (used by tests). */
+export interface LoadConfigOptions {
+  userConfigPath?: string;
+  projectConfigPath?: string;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): CliConfig {
-  const entryPoint = env.S2S_ENTRY_POINT === '0.7' ? '0.7' : '0.6';
-  const filecoinChain: FilecoinChain = env.S2S_FILECOIN_CHAIN === 'calibration' ? 'calibration' : 'mainnet';
-  const environment: 'dev' | 'prod' = env.S2S_ENV === 'dev' ? 'dev' : 'prod';
+/** Explicit paths when provided, else the standard user/project locations. */
+function pathsFor(opts: LoadConfigOptions): { user: string; project: string } {
+  if (opts.userConfigPath || opts.projectConfigPath) {
+    return { user: opts.userConfigPath ?? '', project: opts.projectConfigPath ?? '' };
+  }
+  return configFilePaths();
+}
+
+/** Typed registry lookup — every key in CONFIG_FIELDS is guaranteed present (guarded, no assertion). */
+function field(key: ConfigKey): ConfigField {
+  const found = CONFIG_FIELD[key];
+  if (!found) {
+    throw new Error(`config registry is missing key: ${key}`);
+  }
+  return found;
+}
+
+/** Default for a field that always declares one (kuboGateway, runnerUrl, filecoinRpc). */
+function def(key: ConfigKey): string {
+  const value = field(key).default;
+  if (value === undefined) {
+    throw new Error(`config registry is missing a default for: ${key}`);
+  }
+  return value;
+}
+
+/**
+ * Resolve one field's effective value given the env layer + both config files.
+ * Env vars win, then project file, then user file, then the built-in default.
+ */
+function resolveFieldValue(
+  field: ConfigField,
+  env: NodeJS.ProcessEnv,
+  projectFile: Record<string, unknown>,
+  userFile: Record<string, unknown>,
+): string | undefined {
+  for (const name of field.env) {
+    const value = env[name];
+    if (value !== undefined && value.trim().length > 0) return value.trim();
+  }
+  const fromProject = configFileValue(projectFile[field.key], field);
+  if (fromProject !== undefined) return fromProject;
+  const fromUser = configFileValue(userFile[field.key], field);
+  if (fromUser !== undefined) return fromUser;
+  return field.default;
+}
+
+function listValue(value: string | undefined): string[] {
+  return value
+    ? value
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+    : [];
+}
+
+/** Enum fields fall back to the default when given an unrecognized value. */
+function enumValue<T extends string>(field: ConfigField, fallback: T, value: string | undefined): T {
+  if (value !== undefined && field.enumValues?.includes(value)) {
+    return value as T;
+  }
+  return fallback;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfigOptions = {}): CliConfig {
+  const paths = pathsFor(opts);
+  const projectFile = readConfigFile(paths.project);
+  const userFile = readConfigFile(paths.user);
+
+  const resolve = (f: ConfigField): string | undefined => resolveFieldValue(f, env, projectFile, userFile);
 
   return {
-    environment,
-    privateKey: env.S2S_PRIVATE_KEY,
-    litAccountKey: env.LIT_ACCOUNT_KEY,
-    litUsageKey: env.LIT_USAGE_KEY,
-    githubToken: env.GITHUB_TOKEN ?? env.S2S_GITHUB_TOKEN,
-    kuboGateway: env.S2S_KUBO_GATEWAY ?? 'ipfs.transport-union.dev',
-    kuboToken: env.S2S_KUBO_TOKEN,
-    pinataJwt: env.S2S_PINATA_JWT,
-    pinataGateway: env.S2S_PINATA_GATEWAY,
-    filebaseToken: env.S2S_FILEBASE_TOKEN,
-    runnerUrl: env.S2S_RUNNER_URL ?? 'https://run.transport-union.dev/run',
+    environment: enumValue(field('environment'), 'prod', resolve(field('environment'))),
+    privateKey: resolve(field('privateKey')),
+    litAccountKey: resolve(field('litAccountKey')),
+    litUsageKey: resolve(field('litUsageKey')),
+    githubToken: resolve(field('githubToken')),
+    kuboGateway: resolve(field('kuboGateway')) ?? def('kuboGateway'),
+    kuboToken: resolve(field('kuboToken')),
+    pinataJwt: resolve(field('pinataJwt')),
+    pinataGateway: resolve(field('pinataGateway')),
+    filebaseToken: resolve(field('filebaseToken')),
+    runnerUrl: resolve(field('runnerUrl')) ?? def('runnerUrl'),
     rpc: {
-      L1: envList(env, ['S2S_RPC_L1', 'MAINNET_RPC_URL']),
-      L2: envList(env, ['S2S_RPC_L2', 'BASE_RPC_URL']),
+      L1: listValue(resolve(field('rpcL1'))),
+      L2: listValue(resolve(field('rpcL2'))),
     },
-    ensRegistry: env.S2S_ENS_REGISTRY,
+    ensRegistry: resolve(field('ensRegistry')),
     filecoin: {
-      chain: filecoinChain,
-      rpcUrl: env.S2S_FILECOIN_RPC ?? 'https://api.node.glif.io/rpc/v1',
-      sessionKeyPath: env.S2S_FILECOIN_SESSION_KEY,
-      privateKey: env.S2S_FILECOIN_PRIVATE_KEY,
+      chain: enumValue(field('filecoinChain'), 'mainnet', resolve(field('filecoinChain'))),
+      rpcUrl: resolve(field('filecoinRpc')) ?? def('filecoinRpc'),
+      sessionKeyPath: resolve(field('filecoinSessionKey')),
+      privateKey: resolve(field('filecoinPrivateKey')),
     },
     bundler: {
-      baseUrl: env.S2S_BUNDLER_URL,
-      paymasterUrl: env.S2S_PAYMASTER_URL,
-      entryPoint,
+      baseUrl: resolve(field('bundlerUrl')),
+      paymasterUrl: resolve(field('paymasterUrl')),
+      entryPoint: enumValue(field('entryPoint'), '0.6', resolve(field('entryPoint'))),
     },
   };
+}
+
+/** Effective value for a single config key (used by `s2s config get/list`). */
+export function configKeyValue(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: LoadConfigOptions = {},
+): string | undefined {
+  const field = CONFIG_FIELD[key];
+  if (!field) return undefined;
+  const paths = pathsFor(opts);
+  return resolveFieldValue(field, env, readConfigFile(paths.project), readConfigFile(paths.user));
 }
 
 /** Required-setting helper — throws a clear, actionable error for a missing key. */
 export function requireSetting<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
     throw new Error(
-      `Missing required setting \`${name}\`. Set it in the environment or in a .env file next to where you run the CLI.`,
+      `Missing required setting \`${name}\`. Set it in the environment, a .env file, or run \`s2s config set\`.`,
     );
   }
   return value;
 }
+
+// Re-export the field registry so the config commands and tests share one source.
+export { CONFIG_FIELDS, CONFIG_FIELD, configFilePaths, maskSecret, type ConfigField } from './configfile';
