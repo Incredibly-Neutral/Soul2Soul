@@ -85,7 +85,23 @@ export type InitializePublicationOpts = {
   authors?: string[];
   name?: string;
   safeUrl?: (chainId: number, safeAddress: string) => string;
+  /** How long to wait for the human to execute the enable batch (default 10 min). */
+  enableTimeoutMs?: number;
+  /** Poll interval while waiting for the enable batch to be executed (default 2s). */
+  enablePollIntervalMs?: number;
 };
+
+export interface WaitForModulesEnabledDeps {
+  recordsModule: string;
+  publicationModule: string;
+  isModuleEnabled: (module: string) => Promise<boolean>;
+  now?: () => number;
+}
+
+export interface WaitForModulesEnabledOpts {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
 
 export type InitResult = {
   recordsModule: string;
@@ -101,6 +117,8 @@ export type InitResult = {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_LOOKBACK_BLOCKS = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_ENABLE_TIMEOUT_MS = 600_000; // 10 min — a human must execute the batch in the Safe app
+const DEFAULT_ENABLE_POLL_INTERVAL_MS = 2_000;
 
 /** Safe sentinel module address — prevModule of the first module in the linked list. */
 const SENTINEL_MODULES = '0x0000000000000000000000000000000000000001';
@@ -372,6 +390,47 @@ export async function detectModuleAddresses(
 }
 
 // ---------------------------------------------------------------------------
+// Enable-wait (human-in-the-loop bridge).
+// ---------------------------------------------------------------------------
+
+/**
+ * Wait until BOTH modules are enabled on the Safe. This is the bridge between
+ * proposing the enable batch and everything that follows: a human must open
+ * the Safe app and EXECUTE the pending enable proposal before the modules are
+ * live, so the name-record batch must not be proposed (and verification must
+ * not run) until then. Mirrors detectModuleAddresses — polls isModuleEnabled
+ * every pollIntervalMs until both return true or the timeout elapses.
+ * Default timeout 10 min; a human in the Safe UI typically takes seconds.
+ */
+export async function waitForModulesEnabled(
+  deps: WaitForModulesEnabledDeps,
+  opts: WaitForModulesEnabledOpts = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_ENABLE_TIMEOUT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_ENABLE_POLL_INTERVAL_MS;
+  const now = deps.now ?? Date.now;
+  const start = now();
+
+  for (;;) {
+    const [recordsEnabled, publicationEnabled] = await Promise.all([
+      deps.isModuleEnabled(deps.recordsModule),
+      deps.isModuleEnabled(deps.publicationModule),
+    ]);
+    if (recordsEnabled && publicationEnabled) return;
+
+    if (now() - start > timeoutMs) {
+      const missing: string[] = [];
+      if (!recordsEnabled) missing.push('records');
+      if (!publicationEnabled) missing.push('publication');
+      throw new Error(
+        `Timed out waiting for the enable proposal to be executed; not enabled: ${missing.join(', ')}`,
+      );
+    }
+    await sleep(pollIntervalMs);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration.
 // ---------------------------------------------------------------------------
 
@@ -385,8 +444,8 @@ export function defaultSafeUrl(chainId: number, safeAddress: string): string {
  *   1. propose create-batch (both modules),
  *   2. detect deployed module addresses from ModuleCreated logs,
  *   3. propose enable-batch (both modules),
- *   4. if `name` given, propose the name-record batch,
- *   5. verify both modules are enabled (throw if not).
+ *   4. wait for a human to EXECUTE the enable batch (waitForModulesEnabled),
+ *   5. if `name` given, propose the name-record batch.
  *
  * `proposals` is ordered and has length 2 (3 with `name`).
  */
@@ -419,23 +478,25 @@ export async function initializePublication(
   const enableBatch = buildEnableModuleBatch(deps.safeAddress, recordsModule, publicationModule);
   proposals.push(await deps.propose(enableBatch));
 
+  // Wait for the human to execute the enable batch in the Safe queue before
+  // proposing the name record. Proposing name early and verifying immediately
+  // used to fail with "not enabled" whenever the enable batch was still
+  // pending — the exact failure seen in real-world testing.
+  await waitForModulesEnabled(
+    {
+      recordsModule,
+      publicationModule,
+      isModuleEnabled: deps.isModuleEnabled,
+      now: deps.now,
+    },
+    { timeoutMs: opts.enableTimeoutMs, pollIntervalMs: opts.enablePollIntervalMs },
+  );
+
   // Batch 3 (optional): record the publication name.
   let nameRecorded = false;
   if (name !== undefined && name !== '') {
     proposals.push(await deps.propose(buildNameRecordBatch(recordsModule, name)));
     nameRecorded = true;
-  }
-
-  // Verify both modules are actually enabled on the Safe.
-  const [recordsEnabled, publicationEnabled] = await Promise.all([
-    deps.isModuleEnabled(recordsModule),
-    deps.isModuleEnabled(publicationModule),
-  ]);
-  if (!recordsEnabled || !publicationEnabled) {
-    const missing: string[] = [];
-    if (!recordsEnabled) missing.push('records');
-    if (!publicationEnabled) missing.push('publication');
-    throw new Error(`Module enable verification failed; not enabled: ${missing.join(', ')}`);
   }
 
   return { recordsModule, publicationModule, nameRecorded, proposals };
