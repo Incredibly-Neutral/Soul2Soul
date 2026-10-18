@@ -11,10 +11,12 @@ import { mountLit } from '../helpers/mount';
 // ---------------------------------------------------------------------------
 
 const SAFE_INFO = {
-  address: '0x00000000000000000000000000000000000000A1',
+  address: '0x1111111111111111111111111111111111111111',
+  safeAddress: '0x1111111111111111111111111111111111111111',
   chainId: 8453,
-  s2sPublication: '0xPublicationModule1111111111111111111111111111111',
-  s2sRecords: '0xRecordsModule2222222222222222222222222222222',
+  modules: ['0x5555555555555555555555555555555555555555', '0x4444444444444444444444444444444444444444'],
+  s2sPublication: '0x5555555555555555555555555555555555555555',
+  s2sRecords: '0x4444444444444444444444444444444444444444',
 };
 
 const safeIntMocks = vi.hoisted(() => ({
@@ -23,6 +25,8 @@ const safeIntMocks = vi.hoisted(() => ({
   hasPublicationModule: vi.fn(),
   hasRecordsModule: vi.fn(),
   isConnected: vi.fn(),
+  fetchSafeModules: vi.fn(),
+  proposeBatch: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -104,6 +108,8 @@ vi.mock('@/lib/safe-integration.js', () => ({
     hasPublicationModule = safeIntMocks.hasPublicationModule;
     hasRecordsModule = safeIntMocks.hasRecordsModule;
     isConnected = safeIntMocks.isConnected;
+    fetchSafeModules = safeIntMocks.fetchSafeModules;
+    proposeBatch = safeIntMocks.proposeBatch;
   },
 }));
 
@@ -154,6 +160,8 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.hasPublicationModule.mockReset();
     safeIntMocks.hasRecordsModule.mockReset();
     safeIntMocks.isConnected.mockReset();
+    safeIntMocks.fetchSafeModules.mockReset();
+    safeIntMocks.proposeBatch.mockReset();
     protocolMocks.initialize.mockReset();
     filecoinMocks.initWithSessionKey.mockReset();
     filecoinMocks.listPublicationStorage.mockReset();
@@ -164,6 +172,10 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(true);
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
     safeIntMocks.isConnected.mockReturnValue(true);
+    safeIntMocks.fetchSafeModules.mockResolvedValue(SAFE_INFO.modules);
+    safeIntMocks.proposeBatch.mockResolvedValue(
+      'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1',
+    );
     protocolMocks.initialize.mockResolvedValue(undefined);
     filecoinMocks.initWithSessionKey.mockResolvedValue(undefined);
     filecoinMocks.listPublicationStorage.mockResolvedValue([]);
@@ -264,5 +276,62 @@ describe('s2s-app (shell)', () => {
 
     const rootHash = el.shadowRoot?.querySelector('copy-hash') as any;
     expect(rootHash.value).toBe('bafyroot123');
+  });
+
+  it('renders the reset button behind the module pills when modules exist', async () => {
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const btn = el.shadowRoot?.querySelector('#reset-publication') as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    expect(btn.textContent?.trim()).toBe('Reset');
+    // It sits in the same module-status row as the pills.
+    expect(el.shadowRoot?.querySelector('.module-status')?.contains(btn)).toBe(true);
+  });
+
+  it('hides the reset button when no modules are installed', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    expect(el.shadowRoot?.querySelector('#reset-publication')).toBeNull();
+  });
+
+  it('reset: first click arms a confirm, second click proposes the teardown batch and shows the queue link', async () => {
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy(),
+    );
+
+    const btn = el.shadowRoot?.querySelector('#reset-publication') as HTMLButtonElement;
+
+    // Click 1 → armed, nothing proposed yet.
+    btn.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('#reset-publication')?.textContent?.trim(),
+      ).toBe('Confirm reset?'),
+    );
+    expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
+
+    // Click 2 → proposes the teardown batch (disables + name deletion).
+    btn.click();
+    await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
+    const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
+      to: string;
+      value: string;
+      data: string;
+    }>;
+    expect(batch.length).toBeGreaterThanOrEqual(3); // 2 disables + name deletion
+    expect(batch[batch.length - 1].to).toBe(SAFE_INFO.s2sRecords);
+
+    // The queue link is surfaced after proposing.
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy(),
+    );
+    expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
   });
 });

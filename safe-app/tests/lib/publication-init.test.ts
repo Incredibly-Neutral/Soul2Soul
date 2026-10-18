@@ -14,10 +14,13 @@ import {
   buildCreateModuleBatch,
   buildEnableModuleBatch,
   buildNameRecordBatch,
+  buildDeletePublicationBatch,
   encodeEnableModule,
   encodeCreateRecordsModule,
   encodeCreatePublicationModule,
   encodeSetRecord,
+  encodeDisableModule,
+  encodeDeleteRecord,
   moduleCreatedTopic0,
   detectModuleAddresses,
   initializePublication,
@@ -92,6 +95,18 @@ describe('encoders', () => {
     expect(encodeSetRecord('name', 'my-pub')).toBe(iface.encodeFunctionData('setRecord', ['name', 'my-pub']));
   });
 
+  it('encodeDisableModule: Safe disableModule selector + arg encoding', () => {
+    const iface = new Interface(['function disableModule(address prevModule, address module)']);
+    expect(encodeDisableModule(SAFE, RECORDS_MODULE)).toBe(
+      iface.encodeFunctionData('disableModule', [SAFE, RECORDS_MODULE]),
+    );
+  });
+
+  it('encodeDeleteRecord: recordsModule.deleteRecord(key)', () => {
+    const iface = new Interface(['function deleteRecord(string key)']);
+    expect(encodeDeleteRecord('name')).toBe(iface.encodeFunctionData('deleteRecord', ['name']));
+  });
+
   it('moduleCreatedTopic0: derived from each factory ABI and distinct', () => {
     const rec = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
     const pub = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
@@ -139,9 +154,86 @@ describe('batch builders', () => {
       buildCreateModuleBatch(protocolInfo, SAFE, []),
       buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
       buildNameRecordBatch(RECORDS_MODULE, 'x'),
+      buildDeletePublicationBatch(SAFE, { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE }, [RECORDS_MODULE, PUB_MODULE]),
     ]) {
       for (const tx of batch) expect(tx.value).toBe('0');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDeletePublicationBatch (teardown / start-over).
+// ---------------------------------------------------------------------------
+
+describe('buildDeletePublicationBatch', () => {
+  const disableIface = new Interface(['function disableModule(address prevModule, address module)']);
+  const delIface = new Interface(['function deleteRecord(string key)']);
+
+  it('disables in reverse list order with the correct prev, then deletes the name record', () => {
+    // Safe list order: [records, publication]. publication is later → disabled
+    // first (prev = records), then records (prev = sentinel), then deleteRecord.
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+      [RECORDS_MODULE, PUB_MODULE],
+    );
+    expect(batch).toEqual([
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [RECORDS_MODULE, PUB_MODULE]) },
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', RECORDS_MODULE]) },
+      { to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) },
+    ]);
+  });
+
+  it('computed prevs come from the surrounding list, not assuming adjacency', () => {
+    const OTHER = getAddress('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const OTHER2 = getAddress('0x8888888888888888888888888888888888888888');
+    // List: [OTHER, records, OTHER2, publication].
+    // publication (idx 3) disabled first with prev = OTHER2;
+    // records (idx 1) disabled second with prev = OTHER.
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+      [OTHER, RECORDS_MODULE, OTHER2, PUB_MODULE],
+    );
+    expect(batch.slice(0, 2)).toEqual([
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [OTHER2, PUB_MODULE]) },
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', [OTHER, RECORDS_MODULE]) },
+    ]);
+    // Last tx is still the name-record deletion.
+    expect(batch[2]).toEqual({ to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) });
+  });
+
+  it('handles a partial state: only the module actually present is disabled', () => {
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+      [RECORDS_MODULE], // publication not currently enabled
+    );
+    expect(batch).toEqual([
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', RECORDS_MODULE]) },
+      { to: RECORDS_MODULE, value: '0', data: delIface.encodeFunctionData('deleteRecord', ['name']) },
+    ]);
+  });
+
+  it('omits the name deletion when no records module address is supplied', () => {
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: '', publicationModule: PUB_MODULE },
+      [PUB_MODULE],
+    );
+    expect(batch).toEqual([
+      { to: SAFE, value: '0', data: disableIface.encodeFunctionData('disableModule', ['0x0000000000000000000000000000000000000001', PUB_MODULE]) },
+    ]);
+  });
+
+  it('throws when neither module is in the Safe module list', () => {
+    expect(() =>
+      buildDeletePublicationBatch(
+        SAFE,
+        { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+        [],
+      ),
+    ).toThrow(/No enabled S2S modules to reset/);
   });
 });
 
@@ -246,6 +338,27 @@ describe('detectModuleAddresses', () => {
 
     expect(result.recordsModule).toBe(getAddress(lowerRecords));
     expect(result.publicationModule).toBe(getAddress(lowerPub));
+  });
+
+  it('prefers the most recent ModuleCreated log (last wins) so re-init after reset lands on fresh modules', async () => {
+    // The factories are non-idempotent: a prior init's logs are still inside
+    // the lookback window when a new run starts. eth_getLogs returns logs
+    // oldest-first, so the stale run's logs come before the fresh run's.
+    const OLD_RECORDS = getAddress('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const OLD_PUB = getAddress('0x8888888888888888888888888888888888888888');
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
+      if (factory === RECORDS_FACTORY) {
+        return [logFor(recordsTopic0, SAFE, OLD_RECORDS), logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+      }
+      return [logFor(pubTopic0, SAFE, OLD_PUB), logFor(pubTopic0, SAFE, PUB_MODULE)];
+    });
+
+    const result = await detectModuleAddresses(
+      { ...detectDeps, fetchModuleCreatedLogs },
+      { pollIntervalMs: 0 },
+    );
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
   });
 });
 
