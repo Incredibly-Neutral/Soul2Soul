@@ -101,12 +101,6 @@ export class S2SPublicationInit extends LitElement {
         display: block;
       }
 
-      .init__heading {
-        font-size: 1.15rem;
-        font-weight: 600;
-        margin: 0 0 1.25rem;
-      }
-
       .init__field {
         margin-bottom: 1rem;
       }
@@ -124,7 +118,7 @@ export class S2SPublicationInit extends LitElement {
       }
 
       .init__input {
-        width: 100%;
+        width: 240px;
         box-sizing: border-box;
         padding: 0.5rem 0.75rem;
         border-radius: 6px 0 0 6px;
@@ -450,7 +444,7 @@ export class S2SPublicationInit extends LitElement {
   render() {
     if (this.step === 'done') {
       return html`
-        <h2 class="init__heading">Publication initialized</h2>
+        <h2>Publication initialized</h2>
         <div class="init__success">
           Records and Publication modules are installed and enabled on this Safe.
         </div>
@@ -460,7 +454,7 @@ export class S2SPublicationInit extends LitElement {
 
     if (this.step === 'error') {
       return html`
-        <h2 class="init__heading">Initialization failed</h2>
+        <h2>Initialization failed</h2>
         <div class="init__error">${this.error}</div>
         <div class="init__actions">
           <button class="button" @click=${this.reset}>Try again</button>
@@ -470,13 +464,13 @@ export class S2SPublicationInit extends LitElement {
 
     if (this.step !== 'idle') {
       return html`
-        <h2 class="init__heading">Initializing publication</h2>
+        <h2>Initializing publication</h2>
         ${this.renderWorking()}
       `;
     }
 
     return html`
-      <h2 class="init__heading">New publication</h2>
+      <h2>New publication</h2>
 
       <div class="init__field">
         <label class="init__label" for="init-name">Publication name</label>
@@ -525,9 +519,7 @@ export class S2SPublicationInit extends LitElement {
       </div>
 
       <div class="init__actions">
-        <button class="button btn-primary" id="init-start" @click=${() => void this.start()}>
-          Create
-        </button>
+        <button class="button" id="init-start" @click=${() => void this.start()}>Create</button>
       </div>
     `;
   }
