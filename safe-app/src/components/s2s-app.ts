@@ -3,6 +3,7 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
+import './s2s-init.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
@@ -19,7 +20,6 @@ import './copy-link.js';
 import './copy-hash.js';
 import './copy-module.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
-import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import { tabStyles } from '@/styles/tab-styles.js';
 import { browserFilecoinBuilder } from '@s2s/soul2soul-shared/filecoin/car-builder/browser';
 
@@ -251,9 +251,12 @@ export class S2SApp extends LitElement {
 
         ${!this.safeIntegration.hasPublicationModule() && !this.safeIntegration.hasRecordsModule()
           ? html`
-              <div class="error-message">
-                <ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> No S2S modules found. Please install the Publication Module and/or Records Module first.
-              </div>
+              <s2s-publication-init
+                .safeIntegration=${this.safeIntegration}
+                .protocolInfo=${store.protocolInfo}
+                .safeInfo=${safeInfo}
+                @s2s-init-complete=${() => this.fetchFreshData()}
+              ></s2s-publication-init>
             `
           : ''}
 

@@ -240,15 +240,21 @@ describe('s2s-app (shell)', () => {
     );
   });
 
-  it('disables gated tabs and shows the error banner when no modules are installed', async () => {
+  it('disables gated tabs and renders the publication init when no modules are installed', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('.error-message')).toBeTruthy(),
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
     );
-    expect(el.shadowRoot?.textContent).toContain('No S2S modules found');
+    // The old error banner is replaced by the AD-3 init component.
+    expect(el.shadowRoot?.querySelector('.error-message')).toBeNull();
+    // The heading lives in the child component's own shadow root.
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as any;
+    await vi.waitFor(() =>
+      expect(init.shadowRoot?.textContent).toContain('No S2S modules found'),
+    );
 
     for (const id of ['deals-tab', 'whitelist-tab', 'records-tab', 'website-tree-tab']) {
       expect((el.shadowRoot?.querySelector(`#${id}`) as HTMLButtonElement).disabled).toBe(true);
