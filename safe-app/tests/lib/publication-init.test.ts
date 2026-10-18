@@ -176,6 +176,31 @@ describe('batch builders', () => {
     ]);
   });
 
+  it('buildNameRecordBatch: appends repo/branch setRecords when supplied', () => {
+    const iface = new Interface(['function setRecord(string key, string value)']);
+    const batch = buildNameRecordBatch(RECORDS_MODULE, 'my-pub', {
+      repo: 'https://github.com/acme/site',
+      branch: 'main',
+    });
+    expect(batch).toEqual([
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: iface.encodeFunctionData('setRecord', ['name', 'my-pub']),
+      },
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: iface.encodeFunctionData('setRecord', ['repo', 'https://github.com/acme/site']),
+      },
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: iface.encodeFunctionData('setRecord', ['branch', 'main']),
+      },
+    ]);
+  });
+
   it('every batch tx carries value "0"', () => {
     for (const batch of [
       buildCreateModuleBatch(protocolInfo, SAFE, []),
@@ -552,6 +577,24 @@ describe('initializePublication', () => {
     expect(result.proposals).toEqual(['proposal-1', 'proposal-2', 'proposal-3']);
     expect(propose).toHaveBeenCalledTimes(3);
     expect(propose.mock.calls[2][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+  });
+
+  it('records repo + branch in the name-record batch when supplied', async () => {
+    let n = 0;
+    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
+
+    const result = await initializePublication(
+      { ...initDeps, propose },
+      { name: 'my-pub', repo: 'https://github.com/acme/site', branch: 'dev' },
+    );
+
+    expect(result.nameRecorded).toBe(true);
+    expect(propose.mock.calls[2][0]).toEqual(
+      buildNameRecordBatch(RECORDS_MODULE, 'my-pub', {
+        repo: 'https://github.com/acme/site',
+        branch: 'dev',
+      }),
+    );
   });
 
   it('authors are passed into the create batch (createModule(safe, authors, []))', async () => {

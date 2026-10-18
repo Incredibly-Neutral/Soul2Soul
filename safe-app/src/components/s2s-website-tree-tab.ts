@@ -162,12 +162,12 @@ export class S2SWebsiteTreeTab extends LitElement {
       }
 
       .tree-dir summary::before {
-        content: "▸";
+        content: '▸';
         color: var(--gray-500);
       }
 
       .tree-dir[open] summary::before {
-        content: "▾";
+        content: '▾';
       }
 
       .tree-file {
@@ -385,8 +385,11 @@ export class S2SWebsiteTreeTab extends LitElement {
   }
 
   /** Fresh root CID: re-read `contenthash_wrapped` from the ENS records contract
-   *  (mirrors s2s-app.ts fetchFreshData), falling back to the store root.
-   *  Any read or decode failure degrades to the store root — this never throws. */
+   *  (mirrors s2s-app.ts fetchFreshData). When a publication IS configured but
+   *  has no usable contenthash on-chain yet (fresh init / not republished),
+   *  return null instead of degrading to the app-level store root — that root
+   *  can hold a previous publication's content. The store root is only used as
+   *  a fallback when no publication name is configured at all. Never throws. */
   private async fetchRootCid(): Promise<string | null> {
     const publication = store.getRecord('name');
     const protocolInfo = store.protocolInfo;
@@ -402,10 +405,11 @@ export class S2SWebsiteTreeTab extends LitElement {
         );
         const decoded = this.decodeRootCid(onchainHash);
         if (decoded) return decoded;
-        console.warn('[website-tree] unusable contenthash on-chain, using store root');
+        console.warn('[website-tree] publication has no usable contenthash on-chain yet');
       } catch (e) {
-        console.warn('[website-tree] ENS read failed, falling back to store root:', e);
+        console.warn('[website-tree] ENS read failed:', e);
       }
+      return null;
     }
     return store.getRoot();
   }
@@ -661,7 +665,7 @@ export class S2SWebsiteTreeTab extends LitElement {
       const rootCid = rootOverride ?? (await this.fetchRootCid());
       if (!rootCid) {
         this.error =
-          'No site root available. Is the publication name and ENS records module configured?';
+          'No site root available yet. Publish content for this publication and reload — or check the ENS records module configuration.';
         return;
       }
 
@@ -713,11 +717,14 @@ export class S2SWebsiteTreeTab extends LitElement {
    *  (initial load / error / missing record) — never throws. */
   private contentCacheFooter(): TemplateResult | typeof nothing {
     if (!this.contentCacheCid) return nothing;
-    return html`
-      <div class="cid-footer">
-        <span class="cid-label">Content cache CID</span>
-        <copy-hash .value=${this.contentCacheCid} display=${this.shortenCid(this.contentCacheCid)} href=${this.gatewayUrl(this.contentCacheCid)}></copy-hash>
-      </div>`;
+    return html` <div class="cid-footer">
+      <span class="cid-label">Content cache CID</span>
+      <copy-hash
+        .value=${this.contentCacheCid}
+        display=${this.shortenCid(this.contentCacheCid)}
+        href=${this.gatewayUrl(this.contentCacheCid)}
+      ></copy-hash>
+    </div>`;
   }
 
   private computeStats(): { entries: number; pages: number } {
@@ -749,43 +756,49 @@ export class S2SWebsiteTreeTab extends LitElement {
 
     if (isDir) {
       const children = node.children.map((c) => this.renderNode(c, depth + 1));
-      return html`
-        <details class="tree-dir${isAdded ? ' added' : ''}">
-          <summary style="padding-left:${String(indent)}px">
-            <span class="tree-icon"><ph-folder size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-folder></span>
-            <span class="tree-name">${node.name}</span>
-            <span class="tree-count">(${String(node.children.length)})</span>
-            ${addedTag}
-          </summary>
-          <div class="tree-children">${children}</div>
-        </details>`;
+      return html` <details class="tree-dir${isAdded ? ' added' : ''}">
+        <summary style="padding-left:${String(indent)}px">
+          <span class="tree-icon"
+            ><ph-folder size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-folder
+          ></span>
+          <span class="tree-name">${node.name}</span>
+          <span class="tree-count">(${String(node.children.length)})</span>
+          ${addedTag}
+        </summary>
+        <div class="tree-children">${children}</div>
+      </details>`;
     }
 
-    return html`
-      <div class="tree-file${isAdded ? ' added' : ''}" style="padding-left:${String(indent)}px">
-        <span class="tree-icon"><ph-file-text size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-file-text></span>
-        <span class="tree-name">${node.name}</span>
-        ${isPage ? html`<span class="badge badge-page">page</span>` : ''}
-        <span class="tree-size">${this.formatBytes(node.size)}</span>
-        ${addedTag}
-      </div>`;
+    return html` <div
+      class="tree-file${isAdded ? ' added' : ''}"
+      style="padding-left:${String(indent)}px"
+    >
+      <span class="tree-icon"
+        ><ph-file-text size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-file-text
+      ></span>
+      <span class="tree-name">${node.name}</span>
+      ${isPage ? html`<span class="badge badge-page">page</span>` : ''}
+      <span class="tree-size">${this.formatBytes(node.size)}</span>
+      ${addedTag}
+    </div>`;
   }
 
   private renderRemoved(): TemplateResult | typeof nothing {
     if (this.removedPaths.size === 0) return nothing;
     const items = ([...this.removedPaths] as string[]).sort().map(
-      (p) => html`
-        <div class="removed-row">
-          <span class="tree-icon"><ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash></span>
+      (p) =>
+        html` <div class="removed-row">
+          <span class="tree-icon"
+            ><ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash
+          ></span>
           <span class="removed-name">${p}</span>
           <span class="tag tag-removed">removed</span>
         </div>`,
     );
-    return html`
-      <div class="removed-section">
-        <div class="removed-title">Removed since last sync (${String(this.removedPaths.size)})</div>
-        <div class="removed-list">${items}</div>
-      </div>`;
+    return html` <div class="removed-section">
+      <div class="removed-title">Removed since last sync (${String(this.removedPaths.size)})</div>
+      <div class="removed-list">${items}</div>
+    </div>`;
   }
 
   render(): TemplateResult {
@@ -803,8 +816,14 @@ export class S2SWebsiteTreeTab extends LitElement {
           <div class="stats">
             <span class="stat">${String(stats.entries)} entries</span>
             <span class="stat">${String(stats.pages)} pages</span>
-            ${this.addedPaths.size > 0 ? html`<span class="stat stat-added">+${String(this.addedPaths.size)} added</span>` : ''}
-            ${this.removedPaths.size > 0 ? html`<span class="stat stat-removed">−${String(this.removedPaths.size)} removed</span>` : ''}
+            ${this.addedPaths.size > 0
+              ? html`<span class="stat stat-added">+${String(this.addedPaths.size)} added</span>`
+              : ''}
+            ${this.removedPaths.size > 0
+              ? html`<span class="stat stat-removed"
+                  >−${String(this.removedPaths.size)} removed</span
+                >`
+              : ''}
           </div>
           ${this.renderRemoved()}
         `;
@@ -812,7 +831,9 @@ export class S2SWebsiteTreeTab extends LitElement {
         body = html`
           <div class="tree-root">
             <div class="tree-file">
-              <span class="tree-icon"><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text></span>
+              <span class="tree-icon"
+                ><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text
+              ></span>
               <span class="tree-name">${this.tree.name || this.tree.hash}</span>
             </div>
           </div>
@@ -825,23 +846,42 @@ export class S2SWebsiteTreeTab extends LitElement {
     return html`
       <div class="toolbar">
         <div class="toolbar-left">
-          <s2s-button type="primary" id="sync-btn" ?disabled=${this.syncing || this.resetting}
-            @click=${() => void this.sync()}>
-            ${this.syncing ? 'Syncing…' : html`<ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync`}
+          <s2s-button
+            type="primary"
+            id="sync-btn"
+            ?disabled=${this.syncing || this.resetting}
+            @click=${() => void this.sync()}
+          >
+            ${this.syncing
+              ? 'Syncing…'
+              : html`<ph-arrow-clockwise
+                    size="${ICON_SIZE}"
+                    weight="${ICON_WEIGHT}"
+                  ></ph-arrow-clockwise>
+                  Sync`}
           </s2s-button>
-          ${this.lastSynced ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>` : ''}
+          ${this.lastSynced
+            ? html`<span class="last-synced">Last synced: ${this.lastSynced}</span>`
+            : ''}
         </div>
-        <button class="button" id="reset-btn" ?disabled=${this.syncing || this.resetting}
-          @click=${this.showResetDialog}>
-          ${this.resetting ? 'Resetting…' : html`<ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Reset tree`}
+        <button
+          class="button"
+          id="reset-btn"
+          ?disabled=${this.syncing || this.resetting}
+          @click=${this.showResetDialog}
+        >
+          ${this.resetting
+            ? 'Resetting…'
+            : html`<ph-trash size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-trash> Reset tree`}
         </button>
       </div>
 
-      ${this.error ? html`<div class="error"><ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> ${this.error}</div>` : ''}
-
-      ${body}
-
-      ${this.contentCacheFooter()}
+      ${this.error
+        ? html`<div class="error">
+            <ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning> ${this.error}
+          </div>`
+        : ''}
+      ${body} ${this.contentCacheFooter()}
     `;
   }
 }

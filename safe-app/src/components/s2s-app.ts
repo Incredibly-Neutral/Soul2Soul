@@ -5,6 +5,7 @@ import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
 import './s2s-init.js';
 import './s2s-button.js';
+import './s2s-confirm-modal.js';
 import './s2s-whitelist-tab.js';
 import './s2s-records-tab.js';
 import './s2s-storage-tab.js';
@@ -43,8 +44,9 @@ export class S2SApp extends LitElement {
     'deals';
   @state() private fetching = false;
 
-  // Reset/teardown: two-click confirm → propose the disable+deleteRecord batch.
-  @state() private resetState: 'idle' | 'armed' | 'proposing' = 'idle';
+  // Reset/teardown: opens a confirmation modal → propose the disable+deleteRecord
+  // batch. 'done' closes the modal and surfaces the Safe queue link.
+  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'done' = 'idle';
   @state() private resetUrl: string | null = null;
   @state() private resetError: string | null = null;
 
@@ -57,6 +59,10 @@ export class S2SApp extends LitElement {
     pillStyles,
     buttonStyles,
     css`
+      .reset-button {
+        /* Push the reset action to the right end of the module-status row. */
+        margin: auto 0 auto auto;
+      }
       .reset-button.armed {
         /* Intensify the warning accent while the reset is armed for confirm. */
         --gb-accent: rgba(219, 66, 51, 0.95);
@@ -164,10 +170,28 @@ export class S2SApp extends LitElement {
         await this.fcInitPromise;
 
         try {
+          const pubAddress = this.safeIntegration.getSafeInfo().s2sPublication?.toLowerCase() ?? '';
           const freshPieces = await this.filecoinStorage.listPublicationStorage(
             this.filecoinStorage.walletAddress.toLowerCase(),
           );
-          const typed = freshPieces.map((p) => ({ ...p, confirmed: true }));
+          // listPublicationStorage returns every wallet piece regardless of
+          // attribution, so scope the Storage tab to THIS publication: keep only
+          // pieces attributed to the current publication module (the config-update
+          // flow attributes uploads to it).
+          const scoped = freshPieces.filter((p) => {
+            const raw = p.metadata.attributedTo;
+            if (!raw) return false;
+            try {
+              const owners: unknown = JSON.parse(raw);
+              return (
+                Array.isArray(owners) &&
+                owners.map((o) => String(o).toLowerCase()).includes(pubAddress)
+              );
+            } catch {
+              return false;
+            }
+          });
+          const typed = scoped.map((p) => ({ ...p, confirmed: true }));
           store.setPieces(typed);
 
           // Derive datasets from pieces (one pass, no extra chain call)
@@ -212,17 +236,13 @@ export class S2SApp extends LitElement {
   }
 
   /**
-   * Reset/start-over: first click arms (confirm), second click proposes the
-   * teardown batch (disable both S2S modules + records.deleteRecord("name")).
+   * Reset/start-over: propose the teardown batch (disable both S2S modules +
+   * records.deleteRecord("name")). Only runs from the confirmation modal's
+   * confirm action — the modal stays open, busy, while the batch is proposed.
    * Human-in-the-loop, like the init flow — the batch lands in the Safe queue.
    */
   private async handleReset(): Promise<void> {
-    if (this.resetState !== 'armed') {
-      this.resetState = 'armed';
-      this.resetUrl = null;
-      this.resetError = null;
-      return;
-    }
+    if (this.resetState !== 'confirming') return;
 
     const safeInfo = store.safeInfo;
     if (!safeInfo) return;
@@ -240,11 +260,48 @@ export class S2SApp extends LitElement {
         safeModules,
       );
       this.resetUrl = await this.safeIntegration.proposeBatch(batch);
+      this.resetState = 'done';
     } catch (e) {
       this.resetError = e instanceof Error ? e.message : String(e);
       this.resetState = 'idle';
     }
   }
+
+  /**
+   * Fresh publication proposed by the init flow. The name/repo/branch records
+   * are proposed but still pending Safe execution, so the chain read in
+   * fetchFreshData cannot see them yet — write them to the store optimistically
+   * so the title + web-status populate immediately (no reload needed), clear
+   * any stale root from a previous publication, then run the first config
+   * build automatically on the Config tab.
+   */
+  private readonly onInitComplete = async (e: Event): Promise<void> => {
+    const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
+      .detail;
+    const { name, repo, branch } = detail ?? {};
+
+    // Surface the Config tab — the immediate config update below runs there.
+    this.currentTab = 'records';
+    await this.fetchFreshData();
+
+    // Re-apply the pending (not-yet-executed) records on top of the chain read.
+    if (name) store.setRecord({ key: 'name', value: name, type: 'metadata' });
+    if (repo) store.setRecord({ key: 'repo', value: repo, type: 'metadata' });
+    if (branch) store.setRecord({ key: 'branch', value: branch, type: 'metadata' });
+    // A brand-new publication has no content published yet — drop any root that
+    // still points at a previous publication's content.
+    if (name) store.setRoot('');
+
+    await this.updateComplete;
+    const tab = this.renderRoot.querySelector('s2s-records-tab') as {
+      updateConfig?: () => Promise<unknown>;
+    } | null;
+    if (tab?.updateConfig) {
+      void tab.updateConfig().catch((err: unknown) => {
+        console.error('[s2s-app] immediate config update failed:', err);
+      });
+    }
+  };
 
   private activeTabTemplate() {
     switch (this.currentTab) {
@@ -340,17 +397,13 @@ export class S2SApp extends LitElement {
               ? html`
                   <s2s-button
                     type="warning"
-                    class="reset-button ${this.resetState === 'armed' ? 'armed' : ''}"
+                    class="reset-button"
                     id="reset-publication"
                     ?disabled=${this.resetState === 'proposing'}
                     title="Disable the S2S modules and clear the publication name so you can start a new publication."
-                    @click=${() => this.handleReset()}
+                    @click=${() => (this.resetState = 'confirming')}
                   >
-                    ${this.resetState === 'armed'
-                      ? 'Confirm reset?'
-                      : this.resetState === 'proposing'
-                        ? 'Proposing…'
-                        : 'Reset'}
+                    Reset
                   </s2s-button>
                 `
               : ''}
@@ -378,12 +431,16 @@ export class S2SApp extends LitElement {
           ${hasModules
             ? html`
                 <div class="web-status">
-                  <div><copy-hash .value=${rootCid}></copy-hash></div>
-                  <div>
-                    <a href="https://${rootCid}.preview.transport-union.dev" target="_blank"
-                      >preview</a
-                    >
-                  </div>
+                  ${rootCid
+                    ? html`
+                        <div><copy-hash .value=${rootCid}></copy-hash></div>
+                        <div>
+                          <a href="https://${rootCid}.preview.transport-union.dev" target="_blank"
+                            >preview</a
+                          >
+                        </div>
+                      `
+                    : ''}
                   <div>
                     <a href="https://${publication}.limo" target="_blank">${publication}.limo</a>
                   </div>
@@ -398,7 +455,7 @@ export class S2SApp extends LitElement {
                 .safeIntegration=${this.safeIntegration}
                 .protocolInfo=${store.protocolInfo}
                 .safeInfo=${safeInfo}
-                @s2s-init-complete=${() => this.fetchFreshData()}
+                @s2s-init-complete=${this.onInitComplete}
               ></s2s-publication-init>
             `
           : ''}
@@ -450,6 +507,17 @@ export class S2SApp extends LitElement {
             `
           : ''}
       </div>
+
+      <s2s-confirm-modal
+        .open=${this.resetState === 'confirming' || this.resetState === 'proposing'}
+        headline="Reset publication?"
+        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone. You can start a new publication afterwards, which re-creates the modules."
+        confirmLabel=${this.resetState === 'proposing' ? 'Proposing…' : 'Confirm reset'}
+        .busy=${this.resetState === 'proposing'}
+        variant="warning"
+        @s2s-confirm=${() => void this.handleReset()}
+        @s2s-cancel=${() => (this.resetState = 'idle')}
+      ></s2s-confirm-modal>
     `;
   }
 }
