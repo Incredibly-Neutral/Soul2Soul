@@ -21,6 +21,11 @@
 //     detect  = read ModuleCreated logs to learn the deployed addresses
 //     batch2 = enable both modules
 //     batch3 = (optional) records.setRecord("name", name)
+//
+// The inverse (buildDeletePublicationBatch) is a teardown for starting over:
+// disable both modules on the Safe + records.deleteRecord("name"). It never
+// creates or destroys contracts — the factories are non-idempotent, so the
+// NEXT init run deploys fresh modules regardless.
 
 import { Interface, getAddress } from 'ethers';
 import type { InterfaceAbi } from 'ethers';
@@ -97,10 +102,19 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_LOOKBACK_BLOCKS = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
+/** Safe sentinel module address — prevModule of the first module in the linked list. */
+const SENTINEL_MODULES = '0x0000000000000000000000000000000000000001';
+
 const recordsFactoryInterface = new Interface(Abi_S2SRecordsModuleFactory);
 const publicationFactoryInterface = new Interface(Abi_S2SPublicationModuleV2Factory);
-const safeInterface = new Interface(['function enableModule(address module)']);
-const recordsModuleInterface = new Interface(['function setRecord(string key, string value)']);
+const safeInterface = new Interface([
+  'function enableModule(address module)',
+  'function disableModule(address prevModule, address module)',
+]);
+const recordsModuleInterface = new Interface([
+  'function setRecord(string key, string value)',
+  'function deleteRecord(string key)',
+]);
 
 // ---------------------------------------------------------------------------
 // Encoders (exported for unit testing; selectors are derived from the ABIs,
@@ -125,6 +139,16 @@ export function encodeCreatePublicationModule(safe: string, authors: string[]): 
 /** recordsModule.setRecord(string key, string value) → data. */
 export function encodeSetRecord(key: string, value: string): string {
   return recordsModuleInterface.encodeFunctionData('setRecord', [key, value]);
+}
+
+/** Safe disableModule(address prevModule, address module) → data (Safe self-call). */
+export function encodeDisableModule(prevModule: string, module: string): string {
+  return safeInterface.encodeFunctionData('disableModule', [prevModule, module]);
+}
+
+/** recordsModule.deleteRecord(string key) → data. */
+export function encodeDeleteRecord(key: string): string {
+  return recordsModuleInterface.encodeFunctionData('deleteRecord', [key]);
 }
 
 /**
@@ -192,6 +216,57 @@ export function buildNameRecordBatch(recordsModule: string, name: string): MetaT
   return [{ to: recordsModule, value: '0', data: encodeSetRecord('name', name) }];
 }
 
+/**
+ * Teardown batch — the inverse of init, for starting a new publication:
+ *   [disableModule(prev, laterModule), disableModule(prev, earlierModule), records.deleteRecord("name")]
+ *
+ * Only DISABLES — it never creates or destroys contracts. Each init run
+ * deploys fresh modules (the factories are non-idempotent), so tearing down
+ * only needs to (a) remove the modules from the Safe and (b) unregister the
+ * name record; the orphaned deployments stay on-chain as harmless leftovers.
+ *
+ * Safe's disableModule(prevModule, module) needs the PREVIOUS module in the
+ * Safe's linked list. `safeModules` is the Safe's current enabled-module list
+ * (as returned by Safe.getModules(), in list order). Modules are disabled in
+ * DESCENDING list order so each module's prev (taken from the original list)
+ * is still present when its disable executes. `deleteRecord("name")` is only
+ * included when a records module address is supplied.
+ */
+export function buildDeletePublicationBatch(
+  safeAddress: string,
+  modules: { recordsModule: string; publicationModule: string },
+  safeModules: string[],
+): MetaTransactionData[] {
+  const indexOf = new Map<string, number>();
+  safeModules.forEach((m, i) => indexOf.set(m.toLowerCase(), i));
+
+  const toDisable: { module: string; index: number }[] = [];
+  for (const addr of [modules.recordsModule, modules.publicationModule]) {
+    if (!addr) continue;
+    const index = indexOf.get(addr.toLowerCase());
+    if (index !== undefined) toDisable.push({ module: addr, index });
+  }
+  if (toDisable.length === 0) {
+    throw new Error('No enabled S2S modules to reset');
+  }
+
+  // Disable the later list entries first so their prev (from the original
+  // list) is still present when the earlier disable runs.
+  toDisable.sort((a, b) => b.index - a.index);
+
+  const txs: MetaTransactionData[] = toDisable.map(({ module, index }) => ({
+    to: safeAddress,
+    value: '0',
+    data: encodeDisableModule(index > 0 ? safeModules[index - 1] : SENTINEL_MODULES, module),
+  }));
+
+  if (modules.recordsModule) {
+    txs.push({ to: modules.recordsModule, value: '0', data: encodeDeleteRecord('name') });
+  }
+
+  return txs;
+}
+
 // ---------------------------------------------------------------------------
 // Log parsing.
 // ---------------------------------------------------------------------------
@@ -209,15 +284,25 @@ function topicToAddress(topic: string): string {
 /**
  * Find the module address among logs for one factory, ignoring logs emitted
  * for a different safe (topic[1] = padded indexed safe must match).
+ *
+ * eth_getLogs returns logs oldest-first, and the factory emits a fresh
+ * ModuleCreated for EVERY createModule call (non-idempotent). Returning the
+ * LAST matching log makes detection prefer the most recent deployment —
+ * essential for re-init runs after a reset/teardown, where the previous
+ * run's logs are still within the lookback range.
  */
-function findModuleAddress(logs: Array<{ topics: string[] }>, paddedSafe: string): string | undefined {
+function findModuleAddress(
+  logs: Array<{ topics: string[] }>,
+  paddedSafe: string,
+): string | undefined {
+  let module: string | undefined;
   for (const log of logs) {
     const topics = log?.topics;
     if (!topics || topics.length < 3) continue;
     if (topics[1] === undefined || topics[1].toLowerCase() !== paddedSafe) continue;
-    return topicToAddress(topics[2]);
+    module = topicToAddress(topics[2]);
   }
-  return undefined;
+  return module;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -267,7 +352,12 @@ export async function detectModuleAddresses(
 
     const [recordsLogs, publicationLogs] = await Promise.all([
       deps.fetchModuleCreatedLogs(deps.recordsFactory, deps.safeAddress, recordsTopic0, fromBlock),
-      deps.fetchModuleCreatedLogs(deps.publicationFactory, deps.safeAddress, publicationTopic0, fromBlock),
+      deps.fetchModuleCreatedLogs(
+        deps.publicationFactory,
+        deps.safeAddress,
+        publicationTopic0,
+        fromBlock,
+      ),
     ]);
 
     if (!recordsModule) recordsModule = findModuleAddress(recordsLogs, paddedSafe);
