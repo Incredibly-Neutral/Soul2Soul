@@ -16,6 +16,8 @@ import '@phosphor-icons/webcomponents/PhPencilSimple';
 import '@phosphor-icons/webcomponents/PhFileText';
 import '@phosphor-icons/webcomponents/PhFolder';
 import '@phosphor-icons/webcomponents/PhWarning';
+import '@phosphor-icons/webcomponents/PhRocket';
+import '@phosphor-icons/webcomponents/PhCheckCircle';
 import '@phosphor-icons/webcomponents/PhCaretUp';
 import '@phosphor-icons/webcomponents/PhCaretDown';
 import '@phosphor-icons/webcomponents/PhHeart';
