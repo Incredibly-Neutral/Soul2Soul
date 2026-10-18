@@ -21,10 +21,22 @@
 //
 // It depends on the SafeIntegration only through a small duck-typed surface
 // (proposeBatch / getProvider / fetchFactoryModuleCreatedLogs /
-// readIsModuleEnabled) so component tests can hand-roll a mock — the same
-// pattern as the other tabs.
+// readIsModuleEnabled / getRecord) so component tests can hand-roll a mock —
+// the same pattern as the other tabs.
+//
+// # Crash-safe resume (init-session.ts)
+//
+// The flow is human-in-the-loop, so the page can reload at any point (the
+// human navigates to the Safe app to execute a proposal, and comes back to a
+// fresh page load). To survive that, every phase transition is persisted to
+// local storage via init-session.ts (phase, form values, proposal URLs,
+// learned module addresses). On connect the component restores a matching
+// session and auto-resumes the plan loop; the loop is driven by
+// `planNextAction`, which never re-proposes a batch that was already sent —
+// if a proposal is still pending it waits instead. When the flow finishes the
+// session is cleared.
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
@@ -34,9 +46,21 @@ import {
   buildEnableModuleBatch,
   buildNameRecordBatch,
   detectModuleAddresses,
+  waitForModulesEnabled,
   type MetaTransactionData,
   type ProtocolInfo,
 } from '../lib/publication-init.js';
+import {
+  INIT_SESSION_KEY,
+  clearInitSession,
+  loadInitSession,
+  planNextAction,
+  saveInitSession,
+  type InitPhase,
+  type InitSession,
+  type InitSessionStorage,
+  type ResumeAction,
+} from '../lib/init-session.js';
 import './s2s-sliding-add-button.js';
 import './s2s-button.js';
 import './pet-name.js';
@@ -57,6 +81,7 @@ interface InitSafeIntegration {
     fromBlock: number,
   ): Promise<{ topics: string[] }[]>;
   readIsModuleEnabled(moduleAddress: string): Promise<boolean>;
+  getRecord(key: string): Promise<string>;
 }
 
 /** How long to keep polling for the create-batch execution (human-in-the-loop). */
@@ -77,15 +102,19 @@ const DEFAULT_BRANCH = 'main';
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
-type Step =
-  | 'idle'
-  | 'creating'
-  | 'detecting'
-  | 'enabling'
-  | 'awaiting-enable'
-  | 'naming'
-  | 'done'
-  | 'error';
+const WORKING_STEPS = [
+  'creating',
+  'detecting',
+  'enabling',
+  'awaiting-enable',
+  'naming',
+  'awaiting-name',
+] as const;
+
+type Step = 'idle' | (typeof WORKING_STEPS)[number] | 'done' | 'error';
+
+/** Sentinel thrown when a human-in-the-loop wait timed out (fail() already ran). */
+class InitTimeoutError extends Error {}
 
 @customElement('s2s-publication-init')
 export class S2SPublicationInit extends LitElement {
@@ -103,6 +132,12 @@ export class S2SPublicationInit extends LitElement {
   /** The current Safe (safeAddress / chainId / owners). */
   @property({ attribute: false }) safeInfo?: SafeInfo;
 
+  /**
+   * Where the flow's state is persisted between page loads (injected so unit
+   * tests can pass a fake; defaults to the real localStorage).
+   */
+  @property({ attribute: false }) storage: InitSessionStorage = window.localStorage;
+
   /** Publication name label (the .soul2soul.eth suffix is appended). */
   @state() private name = '';
   @state() private nameError = '';
@@ -114,6 +149,11 @@ export class S2SPublicationInit extends LitElement {
   @state() private step: Step = 'idle';
   @state() private proposals: string[] = [];
   @state() private error = '';
+
+  /** The persisted flow session (null when no flow is in progress). */
+  private session: InitSession | null = null;
+  /** Guards against auto-resuming more than once per component lifetime. */
+  private resumed = false;
 
   static styles = [
     typograhyStyles,
@@ -304,22 +344,114 @@ export class S2SPublicationInit extends LitElement {
     if (this.authors.length === 0 && owners?.length) {
       this.authors = [...new Set(owners)];
     }
+
+    // If a flow for this Safe is mid-flight in storage, restore it — the
+    // step, form values and proposal links all come back from the session.
+    this.restorePersisted();
+    this.maybeResume();
+  }
+
+  protected updated(changed: PropertyValues<this>): void {
+    // The deps (safeIntegration / protocolInfo / safeInfo) may arrive after
+    // connect (s2s-app renders this component as soon as the Safe resolves);
+    // resume once everything is available.
+    if (changed.has('safeIntegration') || changed.has('protocolInfo') || changed.has('safeInfo')) {
+      this.maybeResume();
+    }
   }
 
   private get safeAddress(): string {
     return this.safeInfo?.safeAddress ?? '';
   }
 
+  private isWorkingStep(step: Step): boolean {
+    return (WORKING_STEPS as readonly string[]).includes(step);
+  }
+
+  /** Restore an in-flight session for this Safe, if any, into component state. */
+  private restorePersisted(): void {
+    const session = loadInitSession(this.storage, INIT_SESSION_KEY);
+    if (!session) return;
+    // The session must belong to the currently connected Safe + chain.
+    if (!this.safeInfo) return;
+    if (session.safeAddress.toLowerCase() !== this.safeInfo.safeAddress.toLowerCase()) return;
+    if (session.chainId !== this.safeInfo.chainId) return;
+
+    this.session = session;
+    this.name = session.name;
+    this.repo = session.repo;
+    this.branch = session.branch;
+    this.authors = session.authors;
+    this.proposals = session.proposals;
+    this.step = session.phase;
+    this.dispatchProgress();
+  }
+
+  /** Auto-resume a restored flow once, once the deps are present. */
+  private maybeResume(): void {
+    if (this.resumed) return;
+    if (!this.session || !this.isWorkingStep(this.step)) return;
+    if (!this.safeIntegration || !this.protocolInfo || !this.safeAddress) return;
+    this.resumed = true;
+    void this.start();
+  }
+
   /** Reset to the form (also used as "try again" after an error). */
   private readonly reset = (): void => {
+    clearInitSession(this.storage, INIT_SESSION_KEY);
+    this.session = null;
     this.step = 'idle';
     this.error = '';
     this.proposals = [];
+    this.dispatchProgress();
   };
 
   private fail(message: string): void {
     this.error = message;
     this.step = 'error';
+    this.dispatchProgress();
+  }
+
+  /** Persist the current session with a new phase (and optional field updates). */
+  private persist(phase: InitPhase, extra: Partial<InitSession> = {}): void {
+    if (!this.session) return;
+    this.session = { ...this.session, ...extra, phase, updatedAt: Date.now() };
+    saveInitSession(this.storage, INIT_SESSION_KEY, this.session);
+  }
+
+  /** Broadcast the current step so the host can keep its progress modal in sync. */
+  private dispatchProgress(): void {
+    this.dispatchEvent(
+      new CustomEvent('s2s-init-progress', {
+        detail: {
+          step: this.step,
+          phase: this.session?.phase ?? 'creating',
+          proposals: this.proposals,
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** Signal successful completion to the host (used by both fresh + resumed flows). */
+  private complete(): void {
+    this.step = 'done';
+    const session = this.session;
+    this.dispatchEvent(
+      new CustomEvent('s2s-init-complete', {
+        detail: {
+          recordsModule: session?.recordsModule,
+          publicationModule: session?.publicationModule,
+          proposals: this.proposals,
+          name: session?.publicationName,
+          repo: session?.repo,
+          branch: session?.branch,
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private readonly onNameInput = (e: Event): void => {
@@ -356,102 +488,255 @@ export class S2SPublicationInit extends LitElement {
       return;
     }
 
-    const label = this.name.trim();
-    if (!label) {
-      this.nameError = 'Publication name is required.';
-      return;
+    // Fresh start (user clicked "Create"): validate the form and open a session.
+    if (!this.session) {
+      const label = this.name.trim();
+      if (!label) {
+        this.nameError = 'Publication name is required.';
+        return;
+      }
+      this.error = '';
+      this.proposals = [];
+      this.session = {
+        version: 1,
+        chainId: this.safeInfo?.chainId ?? 0,
+        safeAddress,
+        phase: 'creating',
+        name: label,
+        publicationName: `${label}${SOUL2SOUL_ETH}`,
+        repo: this.repo.trim() || DEFAULT_REPO,
+        branch: this.branch.trim() || DEFAULT_BRANCH,
+        authors: [...this.authors],
+        proposals: [],
+        updatedAt: Date.now(),
+      };
+      this.persist('creating');
+    } else {
+      this.error = '';
     }
 
-    this.error = '';
-    this.proposals = [];
-    const publicationName = `${label}${SOUL2SOUL_ETH}`;
-    const repo = this.repo.trim() || DEFAULT_REPO;
-    const branch = this.branch.trim() || DEFAULT_BRANCH;
-
     try {
-      // 1. Propose create-batch (both modules from their factories).
-      this.step = 'creating';
-      const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
-      const createUrl = await si.proposeBatch(createBatch);
-      this.proposals = [createUrl];
-      this.step = 'detecting';
-
-      // 2. Await execution and detect the deployed module addresses.
-      //    The human must open the Safe app and execute proposal 1 for the
-      //    ModuleCreated logs to appear — detection polls until they do.
-      const { recordsModule, publicationModule } = await detectModuleAddresses(
-        {
-          fetchModuleCreatedLogs: (factoryAddress, safe, topic0, fromBlock) =>
-            si.fetchFactoryModuleCreatedLogs(factoryAddress, safe, topic0, fromBlock),
-          safeAddress,
-          recordsFactory: info.recordsFactory,
-          publicationFactory: info.publicationFactory,
-          getBlockNumber: () => si.getProvider().getBlockNumber(),
-        },
-        {
-          timeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
-          pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
-          lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
-        },
-      );
-
-      // 3. Propose enable-batch (Safe self-calls).
-      this.step = 'enabling';
-      const enableBatch = buildEnableModuleBatch(safeAddress, recordsModule, publicationModule);
-      const enableUrl = await si.proposeBatch(enableBatch);
-      this.proposals = [...this.proposals, enableUrl];
-
-      // 3b. Wait for the human to EXECUTE the enable batch in the Safe queue
-      //     before proposing the name record — verification used to run
-      //     immediately after proposing and failed whenever the enable batch
-      //     was still pending (the real-world init failure).
-      this.step = 'awaiting-enable';
-      const enableStart = Date.now();
       for (;;) {
-        const [recordsEnabled, publicationEnabled] = await Promise.all([
-          si.readIsModuleEnabled(recordsModule),
-          si.readIsModuleEnabled(publicationModule),
-        ]);
-        if (recordsEnabled && publicationEnabled) break;
-        if (Date.now() - enableStart > this.enableTimeoutMs) {
-          const missing: string[] = [];
-          if (!recordsEnabled) missing.push('records');
-          if (!publicationEnabled) missing.push('publication');
-          this.fail(
-            `Timed out waiting for the enable proposal to be executed — not enabled: ${missing.join(', ')}. ` +
-              'Open the enable proposal in the Safe app, execute it, then try again.',
-          );
-          return;
-        }
-        await new Promise((r) => setTimeout(r, this.enablePollIntervalMs));
+        const action = await this.plan(si, info, safeAddress);
+        const done = await this.runAction(action, si, info, safeAddress);
+        if (done) return;
+      }
+    } catch (e) {
+      if (e instanceof InitTimeoutError) return; // fail() already ran with the timeout message
+      this.fail(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Decide the next step from the persisted phase + on-chain checks. Never
+   * re-proposes a batch the session says was already sent.
+   */
+  private async plan(
+    si: InitSafeIntegration,
+    _info: ProtocolInfo,
+    _safeAddress: string,
+  ): Promise<ResumeAction> {
+    const session = this.session;
+    if (!session) return { type: 'create' };
+
+    const recordsModule = session.recordsModule;
+    const publicationModule = session.publicationModule;
+    const recordsKnown = !!recordsModule;
+    const publicationKnown = !!publicationModule;
+
+    let recordsEnabled = false;
+    let publicationEnabled = false;
+    if (recordsModule && publicationModule) {
+      [recordsEnabled, publicationEnabled] = await Promise.all([
+        si.readIsModuleEnabled(recordsModule),
+        si.readIsModuleEnabled(publicationModule),
+      ]);
+    }
+
+    let nameRecorded = false;
+    if (recordsKnown) {
+      try {
+        nameRecorded = (await si.getRecord('name')) !== '';
+      } catch {
+        nameRecorded = false;
+      }
+    }
+
+    return planNextAction(session, {
+      recordsKnown,
+      publicationKnown,
+      recordsEnabled,
+      publicationEnabled,
+      nameRecorded,
+    });
+  }
+
+  /** Execute one planned action; returns true when the flow is finished. */
+  private async runAction(
+    action: ResumeAction,
+    si: InitSafeIntegration,
+    info: ProtocolInfo,
+    safeAddress: string,
+  ): Promise<boolean> {
+    const session = this.session;
+    if (!session) return false;
+
+    switch (action.type) {
+      case 'create': {
+        this.step = 'creating';
+        this.dispatchProgress();
+        const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
+        const createUrl = await si.proposeBatch(createBatch);
+        this.proposals = [createUrl];
+        this.persist('detecting', { proposals: [createUrl] });
+        this.step = 'detecting';
+        this.dispatchProgress();
+        return false;
       }
 
-      // 4. Record the publication identity (name + starter repo/branch).
-      this.step = 'naming';
-      const nameBatch = buildNameRecordBatch(recordsModule, publicationName, {
-        repo,
-        branch,
-      });
-      const nameUrl = await si.proposeBatch(nameBatch);
-      this.proposals = [...this.proposals, nameUrl];
-
-      this.step = 'done';
-      this.dispatchEvent(
-        new CustomEvent('s2s-init-complete', {
-          detail: {
-            recordsModule,
-            publicationModule,
-            proposals: this.proposals,
-            name: publicationName,
-            repo,
-            branch,
+      case 'detect': {
+        this.step = 'detecting';
+        this.dispatchProgress();
+        const { recordsModule, publicationModule } = await detectModuleAddresses(
+          {
+            fetchModuleCreatedLogs: (factoryAddress, safe, topic0, fromBlock) =>
+              si.fetchFactoryModuleCreatedLogs(factoryAddress, safe, topic0, fromBlock),
+            safeAddress,
+            recordsFactory: info.recordsFactory,
+            publicationFactory: info.publicationFactory,
+            getBlockNumber: () => si.getProvider().getBlockNumber(),
           },
-          bubbles: true,
-          composed: true,
-        }),
+          {
+            timeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+            pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+            lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
+          },
+        );
+        this.persist('enabling', { recordsModule, publicationModule });
+        return false;
+      }
+
+      case 'enable': {
+        this.step = 'enabling';
+        this.dispatchProgress();
+        const { recordsModule, publicationModule } = this.requireModules(session);
+        const enableBatch = buildEnableModuleBatch(safeAddress, recordsModule, publicationModule);
+        const enableUrl = await si.proposeBatch(enableBatch);
+        this.proposals = [...this.proposals, enableUrl];
+        this.persist('awaiting-enable', { proposals: this.proposals });
+        this.step = 'awaiting-enable';
+        this.dispatchProgress();
+        return false;
+      }
+
+      case 'await-enable': {
+        this.step = 'awaiting-enable';
+        this.dispatchProgress();
+        const { recordsModule, publicationModule } = this.requireModules(session);
+        await this.waitForEnabled(si, recordsModule, publicationModule);
+        return false;
+      }
+
+      case 'name': {
+        this.step = 'naming';
+        this.dispatchProgress();
+        const { recordsModule } = this.requireModules(session);
+        const nameBatch = buildNameRecordBatch(recordsModule, session.publicationName, {
+          repo: session.repo,
+          branch: session.branch,
+        });
+        const nameUrl = await si.proposeBatch(nameBatch);
+        this.proposals = [...this.proposals, nameUrl];
+        this.persist('awaiting-name', { proposals: this.proposals });
+        this.step = 'awaiting-name';
+        this.dispatchProgress();
+        // Optimistic completion for the forward path: the host populates the
+        // app immediately (PR #155) while the session keeps tracking the
+        // pending name record, so a reload mid-execution resumes correctly.
+        this.complete();
+        return true;
+      }
+
+      case 'await-name': {
+        this.step = 'awaiting-name';
+        this.dispatchProgress();
+        await this.waitForNameRecord(si);
+        return false;
+      }
+
+      case 'done': {
+        // Everything is on-chain — the flow is genuinely finished. Tell the
+        // host first (reads the still-live session), then clear it.
+        this.complete();
+        clearInitSession(this.storage, INIT_SESSION_KEY);
+        this.session = null;
+        return true;
+      }
+    }
+  }
+
+  /**
+   * The module addresses are learned by detection before any address-dependent
+   * step runs, so plan() guarantees they are present — this narrows the
+   * optional session fields and surfaces a bug loudly if that invariant breaks.
+   */
+  private requireModules(session: InitSession): {
+    recordsModule: string;
+    publicationModule: string;
+  } {
+    const recordsModule = session.recordsModule;
+    const publicationModule = session.publicationModule;
+    if (!recordsModule || !publicationModule) {
+      throw new Error('Init flow reached an address-dependent step without module addresses.');
+    }
+    return { recordsModule, publicationModule };
+  }
+
+  /** Poll until both modules are enabled (the human executes proposal 2). */
+  private async waitForEnabled(
+    si: InitSafeIntegration,
+    recordsModule: string,
+    publicationModule: string,
+  ): Promise<void> {
+    try {
+      await waitForModulesEnabled(
+        {
+          recordsModule,
+          publicationModule,
+          isModuleEnabled: (module) => si.readIsModuleEnabled(module),
+        },
+        {
+          timeoutMs: this.enableTimeoutMs,
+          pollIntervalMs: this.enablePollIntervalMs,
+        },
       );
     } catch (e) {
-      this.fail(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      this.fail(
+        `${message} Open the enable proposal in the Safe app, execute it, then reload — the app will resume where it left off.`,
+      );
+      throw new InitTimeoutError(message);
+    }
+  }
+
+  /** Poll until the name record is on-chain (the human executes proposal 3). */
+  private async waitForNameRecord(si: InitSafeIntegration): Promise<void> {
+    const start = Date.now();
+    for (;;) {
+      let value = '';
+      try {
+        value = await si.getRecord('name');
+      } catch {
+        value = '';
+      }
+      if (value !== '') return;
+      if (Date.now() - start > this.enableTimeoutMs) {
+        this.fail(
+          'Timed out waiting for the name record to be executed. Open the name proposal in the Safe app, execute it, then reload — the app will resume where it left off.',
+        );
+        throw new InitTimeoutError('name-record timeout');
+      }
+      await new Promise((r) => setTimeout(r, this.enablePollIntervalMs));
     }
   }
 
@@ -472,13 +757,7 @@ export class S2SPublicationInit extends LitElement {
   }
 
   private renderWorking(): unknown {
-    const running =
-      this.step === 'creating' ||
-      this.step === 'detecting' ||
-      this.step === 'enabling' ||
-      this.step === 'awaiting-enable' ||
-      this.step === 'naming';
-    if (!running) return '';
+    if (!this.isWorkingStep(this.step)) return '';
 
     const labels: Partial<Record<Step, string>> = {
       creating: 'Proposing module creation…',
@@ -486,6 +765,7 @@ export class S2SPublicationInit extends LitElement {
       enabling: 'Proposing module enable…',
       'awaiting-enable': 'Waiting for proposal 2 to be executed…',
       naming: 'Proposing name record…',
+      'awaiting-name': 'Waiting for proposal 3 to be executed…',
     };
 
     return html`
@@ -499,10 +779,16 @@ export class S2SPublicationInit extends LitElement {
 
   render() {
     if (this.step === 'done') {
+      // After an optimistic completion the name record may still be pending
+      // execution — say so instead of implying it landed.
+      const pendingName = this.session?.phase === 'awaiting-name';
       return html`
         <h2>Publication initialized</h2>
         <div class="init__success">
           Records and Publication modules are installed and enabled on this Safe.
+          ${pendingName
+            ? ' The name record is proposed — execute it in the Safe app to finish.'
+            : ''}
         </div>
         ${this.renderProposals()}
       `;
@@ -518,7 +804,7 @@ export class S2SPublicationInit extends LitElement {
       `;
     }
 
-    if (this.step !== 'idle') {
+    if (this.isWorkingStep(this.step)) {
       return html`
         <h2>Initializing publication</h2>
         ${this.renderWorking()}
