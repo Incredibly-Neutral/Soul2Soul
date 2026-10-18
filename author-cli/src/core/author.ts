@@ -1,0 +1,334 @@
+// ============================================================================
+// Author write path — the CLI port of neutralpress' publishToPublication.
+//
+// Flow (upload/publish):  parse note → buildSignedContentItem (shared) →
+//   Kubo upload (2-space JSON to match the Filecoin CAR rootCid) →
+//   on-chain makeOffer → frontmatter write-back → durability legs.
+//
+// Flow (revoke):          on-chain retract FIRST (author-caller path, fully
+//   withdraws), then a remove-plumbing re-render so the revoked path stops
+//   resolving on the production site.
+// ============================================================================
+
+import { readFileSync, writeFileSync } from 'node:fs';
+
+import {
+  buildSignedContentItem,
+  noOpEncrypt,
+  parseMarkdownNote,
+  renderwithLitActions,
+  revokedPathFor,
+  runFilecoinLeg,
+  toDidEthr,
+  toPreviewLabel,
+} from '@s2s/soul2soul-shared';
+import type { Address } from 'viem';
+
+import { createFilecoinStorage } from '../adapters/filecoin';
+import { upsertFrontmatter } from '../lib/frontmatter';
+import { requireSetting } from './config';
+import type { CliContext } from './context';
+import { PublicationService } from './service';
+
+// ===========================================================================
+// Shared result types
+// ===========================================================================
+
+export interface RenderOutcome {
+  cid: string;
+  path: string;
+  /** ipfs://<rootCid>/<path> style human-readable preview link. */
+  previewUrl: string;
+  /** Production ENS-based link (publish only). */
+  prodUrl: string | undefined;
+  /** ipfs://<rootCid> gateway-agnostic link. */
+  ipfsUrl: string;
+}
+
+export interface AuthorWriteResult {
+  /** Stable on-chain identity (genesis objectId). */
+  objectId: string;
+  /** Kubo root CID of the signed content JSON. */
+  kuboCid: string;
+  /** Publication ENS name (e.g. name.soul2soul.eth). */
+  publication: string;
+  subdomain: string;
+  /** makeOffer (or retract) transaction hash on L2. */
+  txHash: string;
+  /** Present when the command ran the render pipeline. */
+  render: RenderOutcome | undefined;
+  /** Whether the note file's frontmatter was updated. */
+  frontmatterWritten: boolean;
+}
+
+export interface AuthorWriteOptions {
+  /** Run the render pipeline after the on-chain append. */
+  render: boolean;
+  /** true → live prod update; false → preview render only. */
+  publish: boolean;
+  /** Revocation remove entries (render path only). */
+  remove?: { path: string; replacedBy?: string }[];
+}
+
+// ===========================================================================
+// Author flow
+// ===========================================================================
+
+/**
+ * Parse, sign, upload, and append a note to a publication. `render` runs the
+ * preview/prod render pipeline; `publish` gates which one. Durability
+ * (Pinata/Filebase/Filecoin) is fired fire-and-forget on real uploads.
+ */
+export async function authorWrite(
+  ctx: CliContext,
+  notePath: string,
+  publication: string,
+  opts: AuthorWriteOptions,
+): Promise<AuthorWriteResult> {
+  const raw = readFileSync(notePath, 'utf8');
+  const parsed = await parseMarkdownNote(raw, notePath);
+
+  const service = await PublicationService.init(
+    {
+      l1: ctx.l1,
+      l2: ctx.l2,
+      l2Runner: ctx.l2Runner,
+      ensRegistry: ctx.ensRegistry,
+      ipfs: ctx.ipfs,
+    },
+    publication,
+  );
+  const authorSafeAddress = service.getMultiSig();
+
+  const now = Math.floor(Date.now() / 1000);
+  const custom = { ...parsed.custom };
+  if (parsed.summary !== undefined) custom.summary = parsed.summary;
+
+  const signedItem = await buildSignedContentItem(
+    {
+      specVersion: '1',
+      postType: parsed.postType,
+      mediaType: 'text/markdown',
+      parent: String(parsed.parent),
+      position: String(parsed.position),
+      publication: service.subdomain,
+      locale: parsed.locale,
+      createdAt: now,
+      base: parsed.slug,
+      tags: parsed.tags,
+      attributes: undefined,
+    },
+    { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
+    ctx.signer,
+    noOpEncrypt,
+    toDidEthr(ctx.eoaAddress),
+  );
+
+  const objectId = parsed.genesis ?? signedItem.objectId;
+  // 2-space JSON.stringify is load-bearing: filecoin-pin builds the CAR from
+  // the same serialized bytes, so Kubo CID == Filecoin rootCid (CID parity).
+  const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
+
+  const txHash = await service.makeOffer(objectId, kuboCid);
+  ctx.out.log(`✓ appended ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+
+  // Frontmatter write-back: genesis+author on first publish; modified_date always.
+  const updates: Record<string, string> = {
+    modified_date: new Date().toISOString().slice(0, 19),
+  };
+  if (!parsed.genesis) {
+    updates.genesis = objectId;
+    updates.author = signedItem.public.author;
+  }
+  const frontmatterWritten = writeNoteFrontmatter(notePath, updates);
+
+  // Durability — real upload/publish only (never preview-only renders).
+  if (opts.publish) {
+    scheduleDurability(ctx, service, signedItem, kuboCid);
+  }
+
+  let render: RenderOutcome | undefined;
+  if (opts.render) {
+    render = await renderContent(ctx, service, publication, objectId, authorSafeAddress, opts);
+  }
+
+  return {
+    objectId,
+    kuboCid,
+    publication,
+    subdomain: service.subdomain,
+    txHash,
+    render,
+    frontmatterWritten,
+  };
+}
+
+// ===========================================================================
+// Render pipeline
+// ===========================================================================
+
+async function renderContent(
+  ctx: CliContext,
+  service: PublicationService,
+  publication: string,
+  objectId: string,
+  authorSafeAddress: Address,
+  opts: AuthorWriteOptions,
+): Promise<RenderOutcome> {
+  const signature = await ctx.signer.signMessage('lit actions auth');
+  const litUsageKey = requireSetting(ctx.config.litUsageKey, 'LIT_USAGE_KEY');
+
+  const res = await renderwithLitActions(
+    !opts.publish,
+    ctx.lit,
+    signature,
+    litUsageKey,
+    ctx.protocolInfo,
+    null,
+    authorSafeAddress,
+    publication,
+    [objectId],
+    undefined,
+    ctx.rpcs,
+    undefined,
+    opts.remove !== undefined && opts.remove.length > 0 ? opts.remove : undefined,
+    undefined,
+    ctx.config.kuboToken ? `Bearer ${ctx.config.kuboToken}` : undefined,
+  );
+
+  if (!res.success) {
+    throw new Error(`render failed: ${String(res.error ?? 'unknown render error')}`);
+  }
+  const cid = res.cid;
+  if (!cid) {
+    throw new Error('render reported success but produced no root CID');
+  }
+
+  const previewUrl = `https://${toPreviewLabel(cid)}.ipfs.transport-union.dev/${res.path}`;
+  const ipfsUrl = `ipfs://${cid}/${res.path}`;
+  const prodUrl = opts.publish ? `https://${publication}/${res.path}` : undefined;
+
+  return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl };
+}
+
+// ===========================================================================
+// Durability
+// ===========================================================================
+
+/**
+ * Fire-and-forget 4-way backup: Kubo (done in authorWrite) + Filebase + Pinata
+ * remote pins + Filecoin hot-storage leg. Failures are surfaced as warnings on
+ * stderr — never fatal to the append.
+ */
+function scheduleDurability(
+  ctx: CliContext,
+  service: PublicationService,
+  signedItem: unknown,
+  kuboCid: string,
+): void {
+  void (async () => {
+    try {
+      const result = await ctx.ipfs.backupToProviders(kuboCid, {
+        providers: ['filebase', 'pinata'],
+        filecoin: (_cid) =>
+          runFilecoinLeg('article', async () => {
+            const storage = await createFilecoinStorage(ctx.config);
+            if (!storage) {
+              throw new Error(
+                'Filecoin storage not configured — set S2S_FILECOIN_SESSION_KEY or S2S_FILECOIN_PRIVATE_KEY',
+              );
+            }
+            return storage.uploadJson(signedItem, [service.getMultiSig(), ctx.eoaAddress], 'article');
+          }, {
+            onFailure: (message) => {
+              ctx.out.warn(`Filecoin backup failed: ${message}`);
+            },
+          }),
+        onFilecoinMismatch: (rootCid) => {
+          ctx.out.warn(
+            `Filecoin CID mismatch: kubo ${kuboCid.slice(0, 12)}… ≠ filecoin ${rootCid.slice(0, 12)}…`,
+          );
+        },
+      });
+      if (!result.filebase && !result.pinata && result.filecoin !== 'ok') {
+        ctx.out.warn('no backup provider confirmed the content');
+      }
+    } catch (err) {
+      ctx.out.warn(`backup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  })();
+}
+
+// ===========================================================================
+// Revoke
+// ===========================================================================
+
+/**
+ * Revoke a publication's content on-chain FIRST (author-caller path fully
+ * withdraws from deals and/or offers), then re-render the removed path so the
+ * production site stops resolving it.
+ */
+export async function revokeContent(
+  ctx: CliContext,
+  notePath: string,
+  publication: string,
+): Promise<AuthorWriteResult> {
+  const raw = readFileSync(notePath, 'utf8');
+  const parsed = await parseMarkdownNote(raw, notePath);
+  const genesis = parsed.genesis;
+  if (!genesis) {
+    throw new Error(`note ${notePath} has no genesis — nothing to revoke on-chain`);
+  }
+
+  const service = await PublicationService.init(
+    {
+      l1: ctx.l1,
+      l2: ctx.l2,
+      l2Runner: ctx.l2Runner,
+      ensRegistry: ctx.ensRegistry,
+      ipfs: ctx.ipfs,
+    },
+    publication,
+  );
+  const authorSafeAddress = service.getMultiSig();
+
+  // 1. Retract first — removes the version from deals/offers.
+  const txHash = await service.retract(genesis);
+  ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash.slice(0, 12)}…)`);
+
+  // 2. Remove-plumbing re-render so the published site stops resolving it.
+  const localePaths = await service.localePathsOf();
+  const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths);
+  ctx.out.log(`removing ${removePath} from the rendered tree…`);
+
+  const render = await renderContent(
+    ctx,
+    service,
+    publication,
+    genesis,
+    authorSafeAddress,
+    { render: true, publish: true, remove: [{ path: removePath }] },
+  );
+
+  return {
+    objectId: genesis,
+    kuboCid: '',
+    publication,
+    subdomain: service.subdomain,
+    txHash,
+    render,
+    frontmatterWritten: false,
+  };
+}
+
+// ===========================================================================
+// Internal helper
+// ===========================================================================
+
+function writeNoteFrontmatter(notePath: string, updates: Record<string, string>): boolean {
+  const raw = readFileSync(notePath, 'utf8');
+  const next = upsertFrontmatter(raw, updates);
+  if (next === raw) return false;
+  writeFileSync(notePath, next, 'utf8');
+  return true;
+}

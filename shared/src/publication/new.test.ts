@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TxRunner } from './tx-runner';
-import { newPublicationSafe, verifyModulesEnabled, setRecordsWithRetry } from './new';
+import { newPublicationSafe, verifyModulesEnabled, setRecordsWithRetry, buildNewPublicationDeps } from './new';
 import type { S2SPublication } from './types';
 
 // =============================================================================
@@ -491,5 +491,56 @@ describe('newPublicationSafe', () => {
       ([_content, name]: [string, string]) => name === 'config.json',
     );
     expect(configUploadCalls).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// buildNewPublicationDeps — deps assembly
+// =============================================================================
+
+describe('buildNewPublicationDeps', () => {
+  it('wires injected pieces through and defaults ensRecordsAddress from protocolInfo', () => {
+    const l1 = {} as TxRunner;
+    const l2 = {} as TxRunner;
+    const ipfs = {} as any;
+    const protocolInfo = { ensRegistry: '0xr', recordsFactory: '0xf', publicationFactory: '0xp', ensRecords: '0xer' } as any;
+
+    const deps = buildNewPublicationDeps({
+      runners: { l1, l2 },
+      privateKey: 'pk',
+      protocolInfo,
+      recordsModuleFactoryAbi: ['recordsFactoryAbi'],
+      publicationModuleFactoryAbi: ['pubFactoryAbi'],
+      recordsModuleAbi: ['recordsAbi'],
+      ipfs,
+      githubToken: 'gh',
+      createFeed: async () => '0xfeed',
+    });
+
+    expect(deps.l1).toBe(l1);
+    expect(deps.l2).toBe(l2);
+    expect(deps.privateKey).toBe('pk');
+    expect(deps.protocolInfo).toBe(protocolInfo);
+    expect(deps.recordsModuleFactoryAbi).toEqual(['recordsFactoryAbi']);
+    expect(deps.publicationModuleFactoryAbi).toEqual(['pubFactoryAbi']);
+    expect(deps.recordsModuleAbi).toEqual(['recordsAbi']);
+    expect(deps.ipfs).toBe(ipfs);
+    expect(deps.githubToken).toBe('gh');
+    expect(deps.ensRecordsAddress).toBe('0xer');
+  });
+
+  it('falls back to an empty ensRecordsAddress when protocolInfo.ensRecords is missing', () => {
+    const deps = buildNewPublicationDeps({
+      runners: { l1: {} as TxRunner, l2: {} as TxRunner },
+      privateKey: 'pk',
+      protocolInfo: {} as any,
+      recordsModuleFactoryAbi: [],
+      publicationModuleFactoryAbi: [],
+      recordsModuleAbi: [],
+      ipfs: {} as any,
+      githubToken: '',
+      createFeed: async () => '0xfeed',
+    });
+    expect(deps.ensRecordsAddress).toBe('');
   });
 });
