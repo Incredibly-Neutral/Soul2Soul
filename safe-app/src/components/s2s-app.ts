@@ -36,7 +36,8 @@ export class S2SApp extends LitElement {
   private filecoinStorage: FilecoinStorage;
   private fcInitPromise: Promise<void> | null = null;
 
-  @state() private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' = 'deals';
+  @state() private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' =
+    'deals';
   @state() private fetching = false;
 
   private unsubscribers: Array<() => void> = [];
@@ -103,7 +104,7 @@ export class S2SApp extends LitElement {
           key,
           value: values[index],
           type: 'metadata',
-        }))
+        })),
       );
 
       const publication = store.getRecord('name');
@@ -115,7 +116,7 @@ export class S2SApp extends LitElement {
           protocolInfo.ensRecords,
           RECORDS_CONTRACT_ABI,
           'getText',
-          [node, 'contenthash_wrapped']
+          [node, 'contenthash_wrapped'],
         );
 
         const hex = onchainHash.slice(6); // strip 0x + ipfs-ns(0xe3) + contenthash-version(0x01)
@@ -131,20 +132,23 @@ export class S2SApp extends LitElement {
 
         try {
           const freshPieces = await this.filecoinStorage.listPublicationStorage(
-            this.filecoinStorage.walletAddress.toLowerCase()
+            this.filecoinStorage.walletAddress.toLowerCase(),
           );
           const typed = freshPieces.map((p) => ({ ...p, confirmed: true }));
           store.setPieces(typed);
 
           // Derive datasets from pieces (one pass, no extra chain call)
-          const datasetMap = new Map<string, {
-            dataSetId: string;
-            provider: string;
-            pieceCount: number;
-            pdpEndEpoch: bigint | null;
-            isLive: boolean;
-            metadata: Record<string, string>;
-          }>();
+          const datasetMap = new Map<
+            string,
+            {
+              dataSetId: string;
+              provider: string;
+              pieceCount: number;
+              pdpEndEpoch: bigint | null;
+              isLive: boolean;
+              metadata: Record<string, string>;
+            }
+          >();
           for (const p of typed) {
             if (!datasetMap.has(p.dataSetId)) {
               datasetMap.set(p.dataSetId, {
@@ -181,7 +185,8 @@ export class S2SApp extends LitElement {
           ? html`<s2s-deals-tab
               .safeIntegration=${this.safeIntegration}
               .protocolIntegration=${this.protocolIntegration}
-              .lit=${this.lit}></s2s-deals-tab>`
+              .lit=${this.lit}
+            ></s2s-deals-tab>`
           : html``;
       case 'whitelist':
         return this.safeIntegration.hasPublicationModule()
@@ -193,18 +198,21 @@ export class S2SApp extends LitElement {
               .safeIntegration=${this.safeIntegration}
               .protocolIntegration=${this.protocolIntegration}
               .lit=${this.lit}
-              .storage=${this.filecoinStorage}></s2s-records-tab>`
+              .storage=${this.filecoinStorage}
+            ></s2s-records-tab>`
           : html``;
       case 'storage':
         return html`<s2s-storage-tab
           .storage=${this.filecoinStorage}
           .safeIntegration=${this.safeIntegration}
-          .protocolIntegration=${this.protocolIntegration}></s2s-storage-tab>`;
+          .protocolIntegration=${this.protocolIntegration}
+        ></s2s-storage-tab>`;
       case 'websiteTree':
         return this.safeIntegration.hasRecordsModule()
           ? html`<s2s-website-tree-tab
               .safeIntegration=${this.safeIntegration}
-              .lit=${this.lit}></s2s-website-tree-tab>`
+              .lit=${this.lit}
+            ></s2s-website-tree-tab>`
           : html``;
     }
   }
@@ -215,6 +223,10 @@ export class S2SApp extends LitElement {
     const rootCid = store.getRoot() ?? '';
     const publication = store.getRecord('name') ?? '';
     const hasCache = !!safeInfo;
+    // The init flow is the whole screen until both modules are installed:
+    // header status, tabs and tab content are all hidden while it runs.
+    const hasModules =
+      this.safeIntegration.hasPublicationModule() || this.safeIntegration.hasRecordsModule();
 
     if (!hasCache && this.fetching) {
       return html`
@@ -229,27 +241,55 @@ export class S2SApp extends LitElement {
       <div class="container">
         <div class="header">
           <div class="module-status">
-            <div class="pill safe-status ${this.safeIntegration.isConnected() ? 'module-active' : 'module-inactive'}">
+            <div
+              class="pill safe-status ${this.safeIntegration.isConnected()
+                ? 'module-active'
+                : 'module-inactive'}"
+            >
               ${this.safeIntegration.isConnected() ? 'Connected to Safe' : 'Not Connected'}
             </div>
-            <div class="pill module-badge ${this.safeIntegration.hasPublicationModule() ? 'module-active' : 'module-inactive'}">
-              <copy-module .value=${safeInfo?.s2sPublication ?? ''} label="Publication Module"></copy-module>
+            <div
+              class="pill module-badge ${this.safeIntegration.hasPublicationModule()
+                ? 'module-active'
+                : 'module-inactive'}"
+            >
+              <copy-module
+                .value=${safeInfo?.s2sPublication ?? ''}
+                label="Publication Module"
+              ></copy-module>
             </div>
-            <div class="pill module-badge ${this.safeIntegration.hasRecordsModule() ? 'module-active' : 'module-inactive'}">
-              <copy-module .value=${safeInfo?.s2sRecords ?? ''} label="Records Module"></copy-module>
+            <div
+              class="pill module-badge ${this.safeIntegration.hasRecordsModule()
+                ? 'module-active'
+                : 'module-inactive'}"
+            >
+              <copy-module
+                .value=${safeInfo?.s2sRecords ?? ''}
+                label="Records Module"
+              ></copy-module>
             </div>
           </div>
 
           <h1 class="title">${publication}</h1>
 
-          <div class="web-status">
-            <div><copy-hash .value=${rootCid}></copy-hash></div>
-            <div><a href="https://${rootCid}.preview.transport-union.dev" target="_blank">preview</a></div>
-            <div><a href="https://${publication}.limo" target="_blank">${publication}.limo</a></div>
-          </div>
+          ${hasModules
+            ? html`
+                <div class="web-status">
+                  <div><copy-hash .value=${rootCid}></copy-hash></div>
+                  <div>
+                    <a href="https://${rootCid}.preview.transport-union.dev" target="_blank"
+                      >preview</a
+                    >
+                  </div>
+                  <div>
+                    <a href="https://${publication}.limo" target="_blank">${publication}.limo</a>
+                  </div>
+                </div>
+              `
+            : ''}
         </div>
 
-        ${!this.safeIntegration.hasPublicationModule() && !this.safeIntegration.hasRecordsModule()
+        ${!hasModules
           ? html`
               <s2s-publication-init
                 .safeIntegration=${this.safeIntegration}
@@ -259,42 +299,53 @@ export class S2SApp extends LitElement {
               ></s2s-publication-init>
             `
           : ''}
+        ${hasModules
+          ? html`
+              <div class="tabs">
+                <button
+                  class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
+                  id="deals-tab"
+                  ?disabled=${!this.safeIntegration.hasPublicationModule()}
+                  @click=${() => this.switchTab('deals')}
+                >
+                  Deals
+                </button>
+                <button
+                  class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
+                  id="whitelist-tab"
+                  ?disabled=${!this.safeIntegration.hasPublicationModule()}
+                  @click=${() => this.switchTab('whitelist')}
+                >
+                  Whitelists
+                </button>
+                <button
+                  class="tab ${this.currentTab === 'records' ? 'active' : ''}"
+                  id="records-tab"
+                  ?disabled=${!this.safeIntegration.hasRecordsModule()}
+                  @click=${() => this.switchTab('records')}
+                >
+                  Config
+                </button>
+                <button
+                  class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
+                  id="storage-tab"
+                  @click=${() => this.switchTab('storage')}
+                >
+                  Storage
+                </button>
+                <button
+                  class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
+                  id="website-tree-tab"
+                  ?disabled=${!this.safeIntegration.hasRecordsModule()}
+                  @click=${() => this.switchTab('websiteTree')}
+                >
+                  Tree
+                </button>
+              </div>
 
-        <div class="tabs">
-          <button
-            class="tab ${this.currentTab === 'deals' ? 'active' : ''}"
-            id="deals-tab"
-            ?disabled=${!this.safeIntegration.hasPublicationModule()}
-            @click=${() => this.switchTab('deals')}
-          >Deals</button>
-          <button
-            class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"
-            id="whitelist-tab"
-            ?disabled=${!this.safeIntegration.hasPublicationModule()}
-            @click=${() => this.switchTab('whitelist')}
-          >Whitelists</button>
-          <button
-            class="tab ${this.currentTab === 'records' ? 'active' : ''}"
-            id="records-tab"
-            ?disabled=${!this.safeIntegration.hasRecordsModule()}
-            @click=${() => this.switchTab('records')}
-          >Config</button>
-          <button
-            class="tab ${this.currentTab === 'storage' ? 'active' : ''}"
-            id="storage-tab"
-            @click=${() => this.switchTab('storage')}
-          >Storage</button>
-          <button
-            class="tab ${this.currentTab === 'websiteTree' ? 'active' : ''}"
-            id="website-tree-tab"
-            ?disabled=${!this.safeIntegration.hasRecordsModule()}
-            @click=${() => this.switchTab('websiteTree')}
-          >Tree</button>
-        </div>
-
-        <div class="tab-content" id="tab-content">
-          ${this.activeTabTemplate()}
-        </div>
+              <div class="tab-content" id="tab-content">${this.activeTabTemplate()}</div>
+            `
+          : ''}
       </div>
     `;
   }

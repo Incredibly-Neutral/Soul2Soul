@@ -1,4 +1,4 @@
-// s2s-init.ts — "New publication init" component (SPEC-hosts.md AD-3).
+// s2s-init.ts — "New publication" component (SPEC-hosts.md AD-3).
 //
 // Shown by <s2s-app> when the loaded Safe has neither the records nor the
 // publication module. It drives the two-proposal init flow end-to-end using
@@ -7,7 +7,7 @@
 //   1. propose create-batch  (buildCreateModuleBatch)   → Safe queue URL
 //   2. await execution, detect module addresses          (detectModuleAddresses)
 //   3. propose enable-batch  (buildEnableModuleBatch)    → Safe queue URL
-//   4. (optional) propose name-record batch              (buildNameRecordBatch)
+//   4. propose name-record batch                         (buildNameRecordBatch)
 //   5. verify both modules are enabled                   (readIsModuleEnabled)
 //
 // The component deliberately drives the steps itself (rather than calling the
@@ -33,6 +33,8 @@ import {
   type MetaTransactionData,
   type ProtocolInfo,
 } from '../lib/publication-init.js';
+import './s2s-sliding-add-button.js';
+import './pet-name.js';
 import type { SafeInfo } from '@/types/index.js';
 
 /**
@@ -57,6 +59,11 @@ const DEFAULT_DETECTION_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_LOOKBACK_BLOCKS = 10_000;
 
+/** Suffix appended to the publication name (displayed and recorded). */
+const SOUL2SOUL_ETH = '.soul2soul.eth';
+
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+
 type Step =
   | 'idle'
   | 'creating'
@@ -78,11 +85,12 @@ export class S2SPublicationInit extends LitElement {
   /** The current Safe (safeAddress / chainId / owners). */
   @property({ attribute: false }) safeInfo?: SafeInfo;
 
+  /** Publication name label (the .soul2soul.eth suffix is appended). */
   @state() private name = '';
-  @state() private authorsText = '';
+  @state() private nameError = '';
+  @state() private authors: string[] = [];
   @state() private step: Step = 'idle';
   @state() private proposals: string[] = [];
-  @state() private detail = '';
   @state() private error = '';
 
   static styles = [
@@ -91,26 +99,12 @@ export class S2SPublicationInit extends LitElement {
     css`
       :host {
         display: block;
-        padding: 1.5rem;
-        border-radius: 8px;
-        background: var(--gray-800);
-        border: 1px solid var(--gray-600);
-        color: var(--gray-50);
       }
 
       .init__heading {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 1.05rem;
+        font-size: 1.15rem;
         font-weight: 600;
-        margin: 0 0 0.5rem;
-      }
-
-      .init__sub {
         margin: 0 0 1.25rem;
-        color: var(--gray-400);
-        font-size: 0.9rem;
       }
 
       .init__field {
@@ -124,12 +118,16 @@ export class S2SPublicationInit extends LitElement {
         color: var(--gray-300);
       }
 
-      .init__input,
-      .init__textarea {
+      .init__name {
+        display: flex;
+        align-items: stretch;
+      }
+
+      .init__input {
         width: 100%;
         box-sizing: border-box;
         padding: 0.5rem 0.75rem;
-        border-radius: 6px;
+        border-radius: 6px 0 0 6px;
         border: 1px solid var(--gray-500);
         background: var(--gray-900);
         color: var(--gray-50);
@@ -138,20 +136,63 @@ export class S2SPublicationInit extends LitElement {
         outline: none;
       }
 
-      .init__input:focus,
-      .init__textarea:focus {
+      .init__input:focus {
         border-color: var(--accent);
       }
 
-      .init__textarea {
-        min-height: 4rem;
-        resize: vertical;
+      .init__suffix {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-radius: 0 6px 6px 0;
+        border: 1px solid var(--gray-500);
+        border-left: none;
+        background: var(--gray-900);
+        color: var(--gray-400);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        white-space: nowrap;
       }
 
-      .init__hint {
-        margin-top: 0.3rem;
-        font-size: 0.78rem;
+      .init__name-error {
+        margin-top: 0.35rem;
+        font-size: 0.8rem;
+        color: #ffb4b4;
+      }
+
+      .alias-pills {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .alias-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        background: var(--gray-800);
+        border: 1px solid var(--gray-600);
+        color: var(--gray-50);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+      }
+
+      .alias-pill__remove {
+        display: inline-flex;
+        align-items: center;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        border: none;
         color: var(--gray-400);
+        cursor: pointer;
+      }
+
+      .alias-pill__remove:hover {
+        color: var(--color-red);
       }
 
       .init__status {
@@ -176,12 +217,6 @@ export class S2SPublicationInit extends LitElement {
         to {
           transform: rotate(360deg);
         }
-      }
-
-      .init__detail {
-        color: var(--gray-300);
-        font-size: 0.85rem;
-        margin: 0 0 0.75rem;
       }
 
       .init__proposals {
@@ -244,20 +279,9 @@ export class S2SPublicationInit extends LitElement {
     // Prefill authors with the Safe's owners the first time we connect.
     // (owners is defensive: some callers pass a partial safeInfo.)
     const owners = this.safeInfo?.owners;
-    if (!this.authorsText && owners?.length) {
-      this.authorsText = owners.join(', ');
+    if (this.authors.length === 0 && owners?.length) {
+      this.authors = [...new Set(owners)];
     }
-  }
-
-  private parseAuthors(): string[] {
-    return [
-      ...new Set(
-        this.authorsText
-          .split(/[\s,]+/)
-          .map((a) => a.trim())
-          .filter(Boolean),
-      ),
-    ];
   }
 
   private get safeAddress(): string {
@@ -268,7 +292,6 @@ export class S2SPublicationInit extends LitElement {
   private readonly reset = (): void => {
     this.step = 'idle';
     this.error = '';
-    this.detail = '';
     this.proposals = [];
   };
 
@@ -276,6 +299,22 @@ export class S2SPublicationInit extends LitElement {
     this.error = message;
     this.step = 'error';
   }
+
+  private readonly onNameInput = (e: Event): void => {
+    this.name = (e.target as HTMLInputElement).value;
+    if (this.nameError) this.nameError = '';
+  };
+
+  private readonly addAuthor = (value: string): void => {
+    const address = value.trim();
+    if (!ADDRESS_RE.test(address)) return;
+    if (this.authors.includes(address)) return;
+    this.authors = [...this.authors, address];
+  };
+
+  private readonly removeAuthor = (address: string): void => {
+    this.authors = this.authors.filter((a) => a !== address);
+  };
 
   private async start(): Promise<void> {
     const si = this.safeIntegration;
@@ -287,17 +326,20 @@ export class S2SPublicationInit extends LitElement {
       return;
     }
 
+    const label = this.name.trim();
+    if (!label) {
+      this.nameError = 'Publication name is required.';
+      return;
+    }
+
     this.error = '';
-    this.detail = '';
     this.proposals = [];
-    const authors = this.parseAuthors();
-    const cleanName = this.name.trim();
+    const publicationName = `${label}${SOUL2SOUL_ETH}`;
 
     try {
       // 1. Propose create-batch (both modules from their factories).
       this.step = 'creating';
-      this.detail = 'Proposing module creation...';
-      const createBatch = buildCreateModuleBatch(info, safeAddress, authors);
+      const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
       const createUrl = await si.proposeBatch(createBatch);
       this.proposals = [createUrl];
       this.step = 'detecting';
@@ -305,7 +347,6 @@ export class S2SPublicationInit extends LitElement {
       // 2. Await execution and detect the deployed module addresses.
       //    The human must open the Safe app and execute proposal 1 for the
       //    ModuleCreated logs to appear — detection polls until they do.
-      this.detail = `Proposal 1 (create modules) is in the queue. Open it in the Safe app and execute it — this app continues automatically once it lands on-chain.`;
       const { recordsModule, publicationModule } = await detectModuleAddresses(
         {
           fetchModuleCreatedLogs: (factoryAddress, safe, topic0, fromBlock) =>
@@ -324,23 +365,18 @@ export class S2SPublicationInit extends LitElement {
 
       // 3. Propose enable-batch (Safe self-calls).
       this.step = 'enabling';
-      this.detail = 'Proposing module enable...';
       const enableBatch = buildEnableModuleBatch(safeAddress, recordsModule, publicationModule);
       const enableUrl = await si.proposeBatch(enableBatch);
       this.proposals = [...this.proposals, enableUrl];
 
-      // 4. Optional: record the publication name.
-      if (cleanName) {
-        this.step = 'naming';
-        this.detail = 'Proposing name record...';
-        const nameBatch = buildNameRecordBatch(recordsModule, cleanName);
-        const nameUrl = await si.proposeBatch(nameBatch);
-        this.proposals = [...this.proposals, nameUrl];
-      }
+      // 4. Record the publication name.
+      this.step = 'naming';
+      const nameBatch = buildNameRecordBatch(recordsModule, publicationName);
+      const nameUrl = await si.proposeBatch(nameBatch);
+      this.proposals = [...this.proposals, nameUrl];
 
       // 5. Verify both modules are enabled on the Safe.
       this.step = 'verifying';
-      this.detail = 'Verifying modules...';
       const [recordsEnabled, publicationEnabled] = await Promise.all([
         si.readIsModuleEnabled(recordsModule),
         si.readIsModuleEnabled(publicationModule),
@@ -357,7 +393,6 @@ export class S2SPublicationInit extends LitElement {
       }
 
       this.step = 'done';
-      this.detail = '';
       this.dispatchEvent(
         new CustomEvent('s2s-init-complete', {
           detail: { recordsModule, publicationModule, proposals: this.proposals },
@@ -371,11 +406,10 @@ export class S2SPublicationInit extends LitElement {
   }
 
   private renderProposals(): unknown {
-    const links = this.proposals;
-    if (!links.length) return '';
+    if (this.proposals.length === 0) return '';
     return html`
       <ul class="init__proposals">
-        ${links.map(
+        ${this.proposals.map(
           (url, i) => html`
             <li class="init__proposal">
               <span>Proposal ${i + 1}:</span>
@@ -409,7 +443,6 @@ export class S2SPublicationInit extends LitElement {
         <span class="init__spinner" aria-hidden="true"></span>
         <span>${labels[this.step]}</span>
       </div>
-      <p class="init__detail">${this.detail}</p>
       ${this.renderProposals()}
     `;
   }
@@ -417,10 +450,7 @@ export class S2SPublicationInit extends LitElement {
   render() {
     if (this.step === 'done') {
       return html`
-        <div class="init__heading">
-          <ph-check-circle size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check-circle>
-          Publication initialized
-        </div>
+        <h2 class="init__heading">Publication initialized</h2>
         <div class="init__success">
           Records and Publication modules are installed and enabled on this Safe.
         </div>
@@ -430,70 +460,73 @@ export class S2SPublicationInit extends LitElement {
 
     if (this.step === 'error') {
       return html`
-        <div class="init__heading">
-          <ph-warning size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-warning>
-          Initialization failed
-        </div>
+        <h2 class="init__heading">Initialization failed</h2>
         <div class="init__error">${this.error}</div>
         <div class="init__actions">
-          <button class="btn" @click=${this.reset}>Try again</button>
+          <button class="button" @click=${this.reset}>Try again</button>
         </div>
       `;
     }
 
     if (this.step !== 'idle') {
       return html`
-        <div class="init__heading">
-          <ph-rocket size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-rocket>
-          Initializing publication
-        </div>
+        <h2 class="init__heading">Initializing publication</h2>
         ${this.renderWorking()}
       `;
     }
 
     return html`
-      <div class="init__heading">
-        <ph-rocket size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-rocket>
-        No S2S modules found
-      </div>
-      <p class="init__sub">
-        This Safe is not yet a Soul2Soul publication. Initialize it now — the app will propose a
-        create + enable sequence for the Records and Publication modules, and you approve each step
-        in the Safe app.
-      </p>
+      <h2 class="init__heading">New publication</h2>
 
       <div class="init__field">
-        <label class="init__label" for="init-name">Publication name (optional)</label>
-        <input
-          id="init-name"
-          class="init__input"
-          .value=${this.name}
-          placeholder="e.g. my-publication"
-          @input=${(e: Event) => (this.name = (e.target as HTMLInputElement).value)}
-        />
-        <div class="init__hint">
-          Stored as a <code>name</code> record on the Records module (proposed in a final step).
-          Leave empty to skip.
+        <label class="init__label" for="init-name">Publication name</label>
+        <div class="init__name">
+          <input
+            id="init-name"
+            class="init__input"
+            .value=${this.name}
+            placeholder="my-publication"
+            @input=${this.onNameInput}
+          />
+          <span class="init__suffix">${SOUL2SOUL_ETH}</span>
         </div>
+        ${this.nameError ? html`<div class="init__name-error">${this.nameError}</div>` : ''}
       </div>
 
       <div class="init__field">
-        <label class="init__label" for="init-authors">Authors</label>
-        <textarea
-          id="init-authors"
-          class="init__textarea"
-          .value=${this.authorsText}
-          placeholder="Comma or space separated addresses — defaults to this Safe's owners"
-          @input=${(e: Event) => (this.authorsText = (e.target as HTMLTextAreaElement).value)}
-        ></textarea>
-        <div class="init__hint">
-          Whitelisted authors (addresses that may publish). Defaults to this Safe's owners.
+        <label class="init__label">Authors</label>
+        <div class="alias-pills">
+          ${this.authors.map(
+            (author) => html`
+              <span class="alias-pill">
+                <pet-name value=${author}></pet-name>
+                <button
+                  class="alias-pill__remove"
+                  data-address="${author}"
+                  aria-label="Remove ${author}"
+                  title="Remove ${author}"
+                  @click=${() => {
+                    this.removeAuthor(author);
+                  }}
+                >
+                  <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x>
+                </button>
+              </span>
+            `,
+          )}
+          <s2s-sliding-add-button
+            placeholder="Author address (0x...)"
+            buttonLabel="Add author"
+            @s2s-sliding-add=${(e: CustomEvent<{ value: string }>) => {
+              this.addAuthor(e.detail.value);
+            }}
+          ></s2s-sliding-add-button>
         </div>
       </div>
 
       <div class="init__actions">
-        <button class="btn" id="init-start" @click=${() => void this.start()}>
-          Initialize publication
+        <button class="button btn-primary" id="init-start" @click=${() => void this.start()}>
+          Create
         </button>
       </div>
     `;
