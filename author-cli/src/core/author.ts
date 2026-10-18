@@ -26,6 +26,7 @@ import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
 import { upsertFrontmatter } from '../lib/frontmatter';
+import { UsageError } from '../lib/errors';
 import { requireSetting } from './config';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -53,8 +54,8 @@ export interface AuthorWriteResult {
   /** Publication ENS name (e.g. name.soul2soul.eth). */
   publication: string;
   subdomain: string;
-  /** makeOffer (or retract) transaction hash on L2. */
-  txHash: string;
+  /** makeOffer transaction hash on L2 — present only when the run offered on-chain. */
+  txHash: string | undefined;
   /** Present when the command ran the render pipeline. */
   render: RenderOutcome | undefined;
   /** Whether the note file's frontmatter was updated. */
@@ -62,10 +63,12 @@ export interface AuthorWriteResult {
 }
 
 export interface AuthorWriteOptions {
-  /** Run the render pipeline after the on-chain append. */
+  /** Run the render pipeline (preview or prod depending on publish). */
   render: boolean;
-  /** true → live prod update; false → preview render only. */
+  /** true → live prod update (prod render + durability pins); false → preview render only. */
   publish: boolean;
+  /** true → also append the on-chain makeOffer. `upload`/`preview` stay off-chain. */
+  offer: boolean;
   /** Revocation remove entries (render path only). */
   remove?: { path: string; replacedBy?: string }[];
 }
@@ -128,9 +131,15 @@ export async function authorWrite(
   // 2-space JSON.stringify is load-bearing: filecoin-pin builds the CAR from
   // the same serialized bytes, so Kubo CID == Filecoin rootCid (CID parity).
   const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
+  ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${service.subdomain})`);
 
-  const txHash = await service.makeOffer(objectId, kuboCid);
-  ctx.out.log(`✓ appended ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+  // On-chain append only when asked (`propose`/`publish`). A bare `upload`
+  // stays off-chain — ipfs + pins only; the offer is a separate step.
+  let txHash: string | undefined;
+  if (opts.offer) {
+    txHash = await service.makeOffer(objectId, kuboCid);
+    ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+  }
 
   // Frontmatter write-back: genesis+author on first publish; modified_date always.
   const updates: Record<string, string> = {
@@ -160,6 +169,63 @@ export async function authorWrite(
     txHash,
     render,
     frontmatterWritten,
+  };
+}
+
+export interface ProposeResult {
+  /** Stable on-chain identity (frontmatter `genesis`, else `content_id`). */
+  objectId: string;
+  /** The CID anchored on-chain. */
+  kuboCid: string;
+  /** Publication ENS name (e.g. name.soul2soul.eth). */
+  publication: string;
+  subdomain: string;
+  /** makeOffer transaction hash on L2. */
+  txHash: string;
+}
+
+/**
+ * On-chain offer only — the `propose` step split out of `upload`. The content
+ * must already be on IPFS (run `upload` first: it writes `genesis` back to the
+ * note and reports `kuboCid`). No re-upload, no render, no durability, no
+ * frontmatter write.
+ */
+export async function proposeContent(
+  ctx: CliContext,
+  notePath: string,
+  publication: string,
+  kuboCid: string,
+): Promise<ProposeResult> {
+  const raw = readFileSync(notePath, 'utf8');
+  const parsed = await parseMarkdownNote(raw, notePath);
+
+  const objectId = parsed.genesis ?? parsed.contentId;
+  if (!objectId) {
+    throw new UsageError(
+      `cannot propose ${notePath}: no on-chain identity (frontmatter \`genesis\` or \`content_id\`). Run \`s2s author upload\` first.`,
+    );
+  }
+
+  const service = await PublicationService.init(
+    {
+      l1: ctx.l1,
+      l2: ctx.l2,
+      l2Runner: ctx.l2Runner,
+      ensRegistry: ctx.ensRegistry,
+      ipfs: ctx.ipfs,
+    },
+    publication,
+  );
+
+  const txHash = await service.makeOffer(objectId, kuboCid);
+  ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+
+  return {
+    objectId,
+    kuboCid,
+    publication,
+    subdomain: service.subdomain,
+    txHash,
   };
 }
 
@@ -263,6 +329,18 @@ function scheduleDurability(
 // Revoke
 // ===========================================================================
 
+export interface RevokeResult {
+  /** On-chain genesis of the revoked content. */
+  objectId: string;
+  /** Publication ENS name (e.g. name.soul2soul.eth). */
+  publication: string;
+  subdomain: string;
+  /** retract transaction hash on L2. */
+  txHash: string;
+  /** Result of the remove-plumbing re-render. */
+  render: RenderOutcome | undefined;
+}
+
 /**
  * Revoke a publication's content on-chain FIRST (author-caller path fully
  * withdraws from deals and/or offers), then re-render the removed path so the
@@ -272,7 +350,7 @@ export async function revokeContent(
   ctx: CliContext,
   notePath: string,
   publication: string,
-): Promise<AuthorWriteResult> {
+): Promise<RevokeResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, notePath);
   const genesis = parsed.genesis;
@@ -307,17 +385,15 @@ export async function revokeContent(
     publication,
     genesis,
     authorSafeAddress,
-    { render: true, publish: true, remove: [{ path: removePath }] },
+    { render: true, publish: true, offer: false, remove: [{ path: removePath }] },
   );
 
   return {
     objectId: genesis,
-    kuboCid: '',
     publication,
     subdomain: service.subdomain,
     txHash,
     render,
-    frontmatterWritten: false,
   };
 }
 

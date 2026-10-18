@@ -1,5 +1,5 @@
 // ============================================================================
-// s2s author new <name> — create a twin L1+L2 publication Safe + ENS.
+// s2s publication new <name> — create a twin L1+L2 publication Safe + ENS.
 //
 // Ports neutralpress' createPublication via shared's newPublicationSafe, with
 // two blank-slate host differences:
@@ -37,7 +37,7 @@ export const newPublication: CommandSpec = {
   name: 'new',
   summary: 'Create a new publication (twin L1+L2 Safes + ENS subdomain + modules).',
   usage:
-    's2s author new <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]',
+    's2s publication new <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]',
   async run(ctx, args) {
     const name = requireName(args);
     const repo = requireRepo(args);

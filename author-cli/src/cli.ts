@@ -2,7 +2,7 @@
 // s2s — Soul2Soul headless authoring CLI.
 //
 // Top-level dispatch: `s2s <group> <action> [flags]`.
-// Only group today is `author` (SPEC-hosts AD-4 command structure).
+// Groups: `author` (content actions) and `publication` (publication lifecycle).
 // Flags parse anywhere; `--json` switches stdout to a machine-readable JSON
 // result (Neovim plugin contract). Human progress always goes to stderr.
 // ============================================================================
@@ -14,7 +14,12 @@ import { CliError, UsageError } from './lib/errors';
 import { createOut } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
-import { authorCommands, findAuthorCommand } from './commands';
+import {
+  authorCommands,
+  findAuthorCommand,
+  findPublicationCommand,
+  publicationCommands,
+} from './commands';
 import type { CommandSpec } from './lib/command';
 
 const VERSION = '0.1.0';
@@ -25,26 +30,31 @@ Usage:
   s2s <group> <action> [flags]
 
 Groups:
-  author   Upload, preview, publish, revoke, or create publications
+  author        Upload, preview, propose, publish, or revoke content
+  publication   Create publications
 
 Global flags:
   --json        emit the result as JSON on stdout (machine-readable)
   -h, --help    show help for the current level
 
-Run "s2s author --help" for the author actions.`;
+Run "s2s author --help" or "s2s publication --help" for the actions.`;
 
-function authorHelp(): string {
-  const rows = authorCommands.map((c) => `  ${c.name.padEnd(8)} ${c.summary}`).join('\n');
-  return `s2s author — publication authoring
+function groupHelp(commands: CommandSpec[], group: string, tagline: string): string {
+  const rows = commands.map((c) => `  ${c.name.padEnd(8)} ${c.summary}`).join('\n');
+  return `s2s ${group} — ${tagline}
 
 Usage:
-  s2s author <action> [flags]
+  s2s ${group} <action> [flags]
 
 Actions:
 ${rows}
 
-Run "s2s author <action> --help" for details on an action.`;
+Run "s2s ${group} <action> --help" for details on an action.`;
 }
+
+const authorHelp = (): string => groupHelp(authorCommands, 'author', 'content actions');
+const publicationHelp = (): string =>
+  groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
 function actionHelp(command: CommandSpec): string {
   return `${command.usage}\n\n${command.summary}`;
@@ -73,31 +83,30 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (group !== 'author') {
-    throw new UsageError(`unknown command group '${group}' — expected 'author'`);
+  if (group !== 'author' && group !== 'publication') {
+    throw new UsageError(`unknown command group '${group}' — expected 'author' or 'publication'`);
   }
 
+  const findCommand = group === 'author' ? findAuthorCommand : findPublicationCommand;
+  const help = group === 'author' ? authorHelp() : publicationHelp();
+
   if (!action) {
-    if (wantHelp) {
-      out.result({ help: authorHelp() }, authorHelp());
-      return 0;
-    }
-    out.result({ help: authorHelp() }, authorHelp());
+    out.result({ help }, help);
     return 0;
   }
 
   if (wantHelp) {
-    const command = findAuthorCommand(action);
+    const command = findCommand(action);
     if (!command) {
-      throw new UsageError(`unknown author action '${action}'`);
+      throw new UsageError(`unknown ${group} action '${action}'`);
     }
     out.result({ help: actionHelp(command) }, actionHelp(command));
     return 0;
   }
 
-  const command = findAuthorCommand(action);
+  const command = findCommand(action);
   if (!command) {
-    throw new UsageError(`unknown author action '${action}'`);
+    throw new UsageError(`unknown ${group} action '${action}'`);
   }
 
   const context = await buildContext(out, loadConfig());
