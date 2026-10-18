@@ -41,8 +41,11 @@ Entry point: **`@s2s/soul2soul-shared`** (full index). Imports: `getProtocolInfo
 **`renderwithLitActions`** (the orchestrator), `pinCidFromRemote`, `postToLens`/`updateToLens`,
 content types `S2SPublicContent`/`S2SToEncrypt`/`S2SContentItem`, `S2SProtocolInfo`,
 **`runFilecoinLeg`** (Filecoin durability-leg runner: lifecycle logging + timeout +
-`onFailure` callback — relocated from `publication/filecoin.ts`, see SPEC-shared). This is
-the package that drives the pipeline, so most of shared's *orchestration* surface lands here.
+`onFailure` callback — relocated from `publication/filecoin.ts`, see SPEC-shared), and the
+new-publication surface **`newPublicationSafe`** + **`buildNewPublicationDeps`** (deps
+assembly, see below) + **`createL1Runner`/`createL2Runner`** (oxo→`TxRunner` bridge,
+relocated from `publication/tx-runner.adapter.ts`). This is the package that drives the
+pipeline, so most of shared's *orchestration* surface lands here.
 
 ## Sub-component map (from FLOW.md Component Index)
 
@@ -50,7 +53,7 @@ the package that drives the pipeline, so most of shared's *orchestration* surfac
 |---|---|
 | `main.ctrlr.ts` | `MainController` — `newPublication`, `proposeContent`, `publishToPublication`, `renderCalls`, `grantLicense`, `revokeLicense`, `initializeOxo` |
 | `publication/publication.service.ts` | `PublicationService` — init, L1/L2 Safe instances, `getModuleAdresses` (NAME discovery, INV-4), `makeOffer`/`retract`, `getMultiSig` |
-| `publication/new.ts` | `newPublicationSafe` — Safe×2 deploy (same salt), ENS reg, module deploy+enable+verify, config, feed, records, owner mgmt |
+| `publication/new.ts` | `newPublicationSafe` — thin obsidian/oxo glue: reads plugin/oxo settings + private key + lens, injects protocol ABIs, calls shared `buildNewPublicationDeps` + shared orchestration |
 | `publication/new.modal.ts`, `ui/revoke.modal.ts` | UI: new publication, revoke |
 | `publication/ens.ts` | `isAvailableEnsName`, `getPublicationMultiSig` |
 | `content/content.ctrlr.ts` | `parseNote`, `storeNoteOnLens`, `encryptContent` |
@@ -162,12 +165,15 @@ Covered:
 - Publication pure logic: `intents` dispatch, `ens` (registry reads), `filecoin` (kubo/pinata
   config, `runFilecoinLeg` hang → time-boxed failure via the shared runner).
 - Service/pipeline: `publication.service` (module discovery, `makeOffer`/`retract` genericTx
-  dispatch, `getMultiSig`), `tx-runner.adapter`, `publish` (both render-gate branches), `revoke`.
+  dispatch, `getMultiSig`), `publish` (both render-gate branches), `revoke`.
+- Shared-adjacent: the oxo→`TxRunner` bridge + `buildNewPublicationDeps` are covered from
+  `shared/` (`tx-runner.test.ts`, `new.test.ts`) — the neutralpress-local copies are gone.
 - Render/settings: `buildRpcEndpoints`, `pagePathFor` (CID digest compare), `DEFAULT_SETTINGS`,
   `DSGSettingsTab` wiring, `preview` seams.
 
 Not covered (needs DOM/integration): `renderCalls` (Lit render pipeline), UI modals,
-`main.ts`/`main.ctrlr.ts`, `publication/new.ts` Safe-deploy orchestrator, encrypt↔decrypt round-trip
+`main.ts`/`main.ctrlr.ts`, `publication/new.ts` Safe-deploy orchestration glue (the orchestration
+itself is covered in `shared/new.test.ts`), encrypt↔decrypt round-trip
 (cross-package).
 
 The `PublicationService.getPublicationMultiSigAddresses` `.contains` bug noted in earlier revisions

@@ -29,6 +29,54 @@ export interface NewPublicationDeps {
 }
 
 // =============================================================================
+// Deps assembly
+//
+// Single entry point for building NewPublicationDeps from injected pieces — so
+// each host (neutralpress with its obsidian plugin settings, safe-app with its
+// own gateway config) supplies the pieces and shared wires them together,
+// centralizing the ensRecordsAddress fallback.
+// =============================================================================
+
+export interface BuildNewPublicationDepsInput {
+  runners: { l1: TxRunner; l2: TxRunner };
+  privateKey: string;
+  protocolInfo: S2SProtocolInfo; // sources ensRegistry, recordsFactory, publicationFactory
+  recordsModuleFactoryAbi: any; // protocol-generated
+  publicationModuleFactoryAbi: any; // protocol-generated
+  recordsModuleAbi: any; // protocol-generated
+  ipfs: S2SIPFSMethods; // app-constructed with its kubo+pinata gateways
+  githubToken: string;
+  createFeed: (name: string, desc: string, safeAddr: string) => Promise<string>;
+}
+
+export function buildNewPublicationDeps(input: BuildNewPublicationDepsInput): NewPublicationDeps {
+  const {
+    runners,
+    privateKey,
+    protocolInfo,
+    recordsModuleFactoryAbi,
+    publicationModuleFactoryAbi,
+    recordsModuleAbi,
+    ipfs,
+    githubToken,
+    createFeed,
+  } = input;
+  return {
+    l1: runners.l1,
+    l2: runners.l2,
+    privateKey,
+    protocolInfo,
+    recordsModuleFactoryAbi,
+    publicationModuleFactoryAbi,
+    recordsModuleAbi,
+    ipfs,
+    githubToken,
+    ensRecordsAddress: protocolInfo?.ensRecords ?? '',
+    createFeed,
+  };
+}
+
+// =============================================================================
 // Main orchestration
 // =============================================================================
 

@@ -39,3 +39,31 @@ export interface TxRunner {
 
   batchGenericTx(calls: TxCall[]): Promise<string[]>;
 }
+
+// =============================================================================
+// oxo-core → TxRunner bridge
+//
+// Builds a TxRunner from a 0xobsidian controller's `safeInstance`
+// (PermissionlessSafeService already implements every TxRunner method). The
+// controller object is passed in — no imports, no plugin coupling — so any
+// host with an oxo-style controller (neutralpress, smart-account) reuses this.
+// =============================================================================
+
+const CHAIN_L1 = "ETH_MAINNET";
+const CHAIN_L2 = "BASE";
+
+/** Build a TxRunner from oxo-core's safeInstance for the given chain. */
+export function createTxRunner(oxo: any, chain: string): TxRunner {
+  const service = oxo.ctrlr.safeInstance(chain);
+  return service as unknown as TxRunner;
+}
+
+/** Pre-built L1 (ETH_MAINNET) runner for convenience. */
+export function createL1Runner(oxo: any): TxRunner {
+  return createTxRunner(oxo, CHAIN_L1);
+}
+
+/** Pre-built L2 (BASE) runner for convenience. */
+export function createL2Runner(oxo: any): TxRunner {
+  return createTxRunner(oxo, CHAIN_L2);
+}

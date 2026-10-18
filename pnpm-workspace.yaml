@@ -1,5 +1,6 @@
 packages:
   - '0xobsidian'
+  - 'author-cli'
   - 'neutralpress'
   - 'protocol'
   - 'shared'

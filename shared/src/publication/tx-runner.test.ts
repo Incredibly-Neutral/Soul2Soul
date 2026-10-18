@@ -1,5 +1,5 @@
 /**
- * Unit tests — TxRunner adapter (src/publication/tx-runner.adapter.ts).
+ * Unit tests — oxo-core → TxRunner bridge (src/publication/tx-runner.ts).
  *
  * Pure module: `createTxRunner` delegates to oxo.ctrlr.safeInstance(chain) and
  * casts the returned PermissionlessSafeService to TxRunner. `createL1Runner` /
@@ -11,7 +11,7 @@ import {
 	createTxRunner,
 	createL1Runner,
 	createL2Runner,
-} from '../../src/publication/tx-runner.adapter';
+} from './tx-runner';
 
 describe('tx-runner adapter', () => {
 	const safeService = { getMultiSig: vi.fn(async () => '0xsafe') };

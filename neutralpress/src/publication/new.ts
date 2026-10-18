@@ -1,14 +1,24 @@
 /**
- * neutralpress publication creation — thin adapter that builds TxRunners
- * from oxo-core and delegates to the shared orchestration.
+ * neutralpress publication creation — obsidian/oxo glue only.
+ *
+ * The re-usable parts live in shared (see SPEC-shared / shared/src/publication):
+ *   - `newPublicationSafe` — the Safe×2/ENS/modules/config/feed/records orchestration
+ *   - `buildNewPublicationDeps` — assembles NewPublicationDeps from injected pieces
+ *   - `createL1Runner`/`createL2Runner` — oxo-core → TxRunner bridge
+ *
+ * What stays here is the obsidian-specific wiring: reading plugin/oxo settings
+ * (gateways, tokens), pulling the author private key + lens from the oxo
+ * controller, and injecting the protocol-generated ABIs (outside shared's rootDir).
  */
 
 import {
+	buildNewPublicationDeps,
+	createL1Runner,
+	createL2Runner,
 	newPublicationSafe as sharedNew,
-	S2SPublication,
-	S2SIPFSMethods,
+	type S2SPublication,
 } from '@s2s/soul2soul-shared';
-import { createL1Runner, createL2Runner } from './tx-runner.adapter';
+import { ipfsFromSettings } from './filecoin';
 import {
 	S2SRecordsModuleFactory,
 	S2SPublicationModuleV2Factory,
@@ -16,41 +26,23 @@ import {
 } from '../../../protocol/contracts/generated/abis';
 
 export const newPublicationSafe = async (main: any, publication: S2SPublication) => {
-	const l1 = createL1Runner(main.oxo);
-	const l2 = createL2Runner(main.oxo);
+	const githubToken =
+		main.plugin.settings.github_token || main.oxo?.settings?.github_token || '';
 
-	// Build the IPFS client from plugin settings
-	const kuboGateway = main.plugin.settings.data_gateway || 'https://ipfs.transport-union.dev';
-	const pinataJwt = main.plugin.settings.pinata_jwt || main.oxo?.settings?.pinata_jwt || '';
-	const pinataGateway =
-		main.plugin.settings.pinata_gateway || 'https://neutralpress.mypinata.cloud';
-	const filebaseToken =
-		main.plugin.settings.filebase_token || main.oxo?.settings?.filebase_token || '';
-	const kuboToken = main.oxo?.settings?.kubo_token || '';
-	const ipfs = new S2SIPFSMethods(
-		kuboGateway,
-		pinataJwt,
-		pinataGateway,
-		filebaseToken,
-		kuboToken,
-	);
-
-	const githubToken = main.plugin.settings.github_token || main.oxo?.settings?.github_token || '';
-
-	return sharedNew(
-		{
-			l1,
-			l2,
-			privateKey: main.oxo.ctrlr.user.private_key,
-			protocolInfo: main.protocolInfo,
-			recordsModuleFactoryAbi: S2SRecordsModuleFactory,
-			publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
-			recordsModuleAbi: S2SRecordsModule,
-			ipfs,
-			githubToken,
-			ensRecordsAddress: main.protocolInfo?.ensRecords ?? '',
-			createFeed: (name, desc, addr) => main.oxo.ctrlr.lens.createFeed(name, desc, addr),
+	const deps = buildNewPublicationDeps({
+		runners: {
+			l1: createL1Runner(main.oxo),
+			l2: createL2Runner(main.oxo),
 		},
-		publication,
-	);
+		privateKey: main.oxo.ctrlr.user.private_key,
+		protocolInfo: main.protocolInfo,
+		recordsModuleFactoryAbi: S2SRecordsModuleFactory,
+		publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
+		recordsModuleAbi: S2SRecordsModule,
+		ipfs: ipfsFromSettings(main),
+		githubToken,
+		createFeed: (name, desc, addr) => main.oxo.ctrlr.lens.createFeed(name, desc, addr),
+	});
+
+	return sharedNew(deps, publication);
 };

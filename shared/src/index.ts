@@ -2,6 +2,11 @@ export * from './helpers';
 
 export * from './rpc';
 
+// authoring — pure, host-agnostic authoring logic (tags, note parse, links,
+// revoke-path, publication resolution) shared by neutralpress + author-cli
+// (SPEC-00 §0 single source). Not re-exported from ./lit-actions (INV-7).
+export * from './authoring';
+
 export * from './protocol';
 export * from './contracts';
 export * from './cid-view';

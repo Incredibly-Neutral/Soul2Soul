@@ -21,7 +21,9 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
-    "format:fix": "prettier --write ."
+    "format:fix": "prettier --write .",
+    "author-cli:build": "pnpm -C author-cli run build",
+    "author-cli:test": "pnpm -C author-cli run test"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "5.29.0",
