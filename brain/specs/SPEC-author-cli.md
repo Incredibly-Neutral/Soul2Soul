@@ -29,15 +29,24 @@ progress goes to stderr.
 
 ## Command surface
 
-Top-level bin `s2s`; one group `author`; five actions.
+Top-level bin `s2s`; two groups: `author` (content actions on an existing publication)
+and `publication` (publication lifecycle).
 
 ```
-s2s author upload   <note> [--publication <ens>] [--json]
-s2s author preview  <note> [--publication <ens>] [--json]
-s2s author publish  <note> [--publication <ens>] [--json]
-s2s author revoke   <note> [--publication <ens>] [--json]
-s2s author new      <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
+s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
+s2s author propose   <note> --cid <kuboCid> [--publication <ens>] [--json]  # on-chain offer only
+s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + preview render (off-chain)
+s2s author publish   <note> [--publication <ens>] [--json]        # all-in-one: upload + offer + render + pins
+s2s author revoke    <note> [--publication <ens>] [--json]        # on-chain retract + remove re-render
+s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
 ```
+
+The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
+legs, and writes `genesis`/`author` back — but **never touches the chain**. The on-chain
+`makeOffer` is the separate **`propose`** step, which takes the `kuboCid` that `upload`
+reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
+`content_id`, mirroring neutralpress' revoke genesis resolution). `publish` remains the
+one-shot convenience that does upload + propose + prod render + pins together.
 
 Global flags parse anywhere in the argv:
 
@@ -47,6 +56,7 @@ Global flags parse anywhere in the argv:
 | `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). |
 | `--version` | Print `s2s v<version>` and exit 0. |
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. |
+| `--cid <kuboCid>` | (propose) The content CID reported by `s2s author upload` — required. |
 | `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
 | `--author <addr>,...` | (new) Initial author set; defaults to the EOA address. |
@@ -73,9 +83,10 @@ Global flags parse anywhere in the argv:
 
 Success results are flat, typed objects per action (see `src/commands/*.ts`):
 
-- `upload`: `{ action, note, publication, subdomain, objectId, kuboCid, txHash, frontmatterWritten }`
-- `preview`: same plus `render: { cid, path, previewUrl }`
-- `publish`: same plus `render: { cid, path, previewUrl, prodUrl }`
+- `upload`: `{ action, note, publication, subdomain, objectId, kuboCid, frontmatterWritten }` — **no** `txHash` (off-chain).
+- `propose`: `{ action, note, publication, subdomain, objectId, kuboCid, txHash }` — the on-chain offer for an already-uploaded CID.
+- `preview`: `{ action, note, publication, subdomain, objectId, kuboCid, render: { cid, path, previewUrl } }` — no `txHash`.
+- `publish`: `{ action, note, publication, subdomain, objectId, kuboCid, txHash, render: { cid, path, previewUrl, prodUrl } }`
 - `revoke`: `{ action, note, publication, subdomain, objectId, txHash, render? }`
 - `new`: `{ action, name, safeAddress, configCid, owners, authors, devRepository, branch, feed }`
 
@@ -116,7 +127,7 @@ src/
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
   core/             config, context (clients), service (publication resolver), author write/revoke
   adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), ipfs, lit, rpc, filecoin
-  commands/         upload / preview / publish / revoke / new (CommandSpec registry)
+  commands/         upload / propose / preview / publish / revoke (author), new (publication)
 ```
 
 Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`,
@@ -129,8 +140,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 - **EOA signer** (`adapters/signer.ts`) — viem `privateKeyToAccount`, EIP-712 typed signing for
   `buildSignedContentItem`; DID = `toDidEthr(eoaAddress)`.
-- **TxRunner ×2** (`adapters/tx-runner.ts`) — a plain EOA runner for upload/preview/publish/revoke
-  (genericTx encodes calldata from the protocol ABIs and sends a normal L2 tx), and
+- **TxRunner ×2** (`adapters/tx-runner.ts`) — a plain EOA runner for propose/publish/revoke
+  (genericTx encodes calldata from the protocol ABIs and sends a normal L2 tx; `upload`/`preview`
+  never touch the chain), and
   `createSafeRunner` (permissionless `toSafeSmartAccount` + Pimlico) for `new`. `saltNonceFor`
   derives a deterministic, top-bit-cleared Safe salt-nonce from a human salt — identical on L1 and
   L2 so the twin Safes land on the same address.
@@ -144,8 +156,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 ### The ETH actor split (AD-1 / INV-10)
 
-- **upload / preview / publish / revoke** — the **EOA** is the actor (genesisAuthor). The Safe is
+- **propose / publish / revoke** — the **EOA** is the actor (genesisAuthor). The Safe is
   *not* the actor for author flows; `makeOffer`/`retract` are sent as plain L2 txs from the EOA.
+  (`upload`/`preview` are **off-chain** — they never touch the chain at all.)
 - **new** — the Safe is the actor for the deployment sequence: both L1 and L2 Safes are deployed
   with the same salt via `toSafeSmartAccount`; the SafeRunner sends the registerSubdomain (L1),
   module installs (L2), publication module, enableModule×2, config records, and owner-setup userOps
@@ -156,10 +169,14 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 - **Signed content**: `buildSignedContentItem` + `noOpEncrypt`; `objectId` = frontmatter `genesis`
   when present, else the signed item's objectId. `genesis` is written back to the note's frontmatter
   (`upsertFrontmatter`) when it was missing.
+- **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
+  `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends the
+  `makeOffer(objectId, kuboCid)` for the `--cid` it was given; it expects `upload` to have run first
+  (genesis must exist, or it errors with a pointer to `s2s author upload`).
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
   signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
-- **Durability** (publish and real uploads only, never preview): fire-and-forget
+- **Durability** (upload and publish only, never preview): fire-and-forget
   `backupToProviders` (filebase + pinata) plus the Filecoin leg (`runFilecoinLeg`) with
   `onFilecoinMismatch` CID reporting.
 - **Revoke**: on-chain `retract` **first** (author-caller full withdrawal), then a remove-plumbing
