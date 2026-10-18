@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SApp } from '../../src/components/s2s-app';
+import type { S2SConfirmModal } from '../../src/components/s2s-confirm-modal';
 import { mountLit } from '../helpers/mount';
 
 // ---------------------------------------------------------------------------
@@ -303,23 +304,25 @@ describe('s2s-app (shell)', () => {
     expect(el.shadowRoot?.querySelector('#reset-publication')).toBeNull();
   });
 
-  it('reset: first click arms a confirm, second click proposes the teardown batch and shows the queue link', async () => {
+  it('reset: opens a confirmation modal, confirm proposes the teardown batch and shows the queue link', async () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy());
 
-    const btn = el.shadowRoot?.querySelector('#reset-publication') as HTMLButtonElement;
+    const modal = el.shadowRoot?.querySelector('s2s-confirm-modal') as S2SConfirmModal;
+    expect(modal).toBeTruthy();
+    expect(modal.open).toBe(false);
 
-    // Click 1 → armed, nothing proposed yet.
-    btn.click();
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#reset-publication')?.textContent?.trim()).toBe(
-        'Confirm reset?',
-      ),
-    );
+    // Click Reset → the confirmation modal opens over the (blurred) page.
+    (el.shadowRoot?.querySelector('#reset-publication') as HTMLElement).click();
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+    expect(modal.shadowRoot?.querySelector('.overlay')).toBeTruthy();
+    expect(modal.shadowRoot?.querySelector('.dialog')?.textContent).toContain('Reset publication?');
     expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
 
-    // Click 2 → proposes the teardown batch (disables + name deletion).
-    btn.click();
+    // Confirm in the modal → proposes the teardown batch (disables + name deletion).
+    const confirmBtn = modal.shadowRoot?.querySelector('#confirm-ok') as HTMLElement;
+    confirmBtn.click();
     await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
     const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
       to: string;
@@ -329,8 +332,25 @@ describe('s2s-app (shell)', () => {
     expect(batch.length).toBeGreaterThanOrEqual(3); // 2 disables + name deletion
     expect(batch[batch.length - 1].to).toBe(SAFE_INFO.s2sRecords);
 
-    // The queue link is surfaced after proposing.
+    // The modal closes and the queue link is surfaced after proposing.
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy());
+    expect(modal.open).toBe(false);
     expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
+  });
+
+  it('reset: cancel closes the modal without proposing anything', async () => {
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-confirm-modal') as S2SConfirmModal;
+    (el.shadowRoot?.querySelector('#reset-publication') as HTMLElement).click();
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+
+    const cancelBtn = modal.shadowRoot?.querySelector('#confirm-cancel') as HTMLButtonElement;
+    cancelBtn.click();
+    await el.updateComplete;
+    expect(modal.open).toBe(false);
+    expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
   });
 });
