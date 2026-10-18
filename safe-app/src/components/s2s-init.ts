@@ -159,6 +159,7 @@ export class S2SPublicationInit extends LitElement {
       .init__input--full {
         width: 100%;
         border-radius: 6px;
+        max-width: 420px;
       }
 
       .init__suffix {

@@ -68,10 +68,6 @@ export class S2SConfirmModal extends LitElement {
 
       .headline {
         margin: 0 0 0.75rem;
-        color: var(--color-red, #db4233);
-        font-size: 1.1rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
       }
 
       .message {
@@ -142,7 +138,7 @@ export class S2SConfirmModal extends LitElement {
             e.stopPropagation();
           }}
         >
-          <h3 class="headline" id="confirm-headline">${this.headline}</h3>
+          <h2  id="confirm-headline">${this.headline}</h2>
           <p class="message">${this.message}</p>
           <div class="actions">
             <button class="button" id="confirm-cancel" @click=${this.emitCancel}>
