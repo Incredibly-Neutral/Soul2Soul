@@ -123,7 +123,9 @@ function mountTab(overrides: Partial<TreeTab> = {}) {
  * direct children; the `arg` query param of the fetched URL is the CID.
  * Mirrors the gateway response shape the component reads (Objects[0].Links).
  */
-function stubKuboLs(linksByCid: Record<string, Array<{ Name: string; Hash: string; Size: number; Type: number }>>) {
+function stubKuboLs(
+  linksByCid: Record<string, Array<{ Name: string; Hash: string; Size: number; Type: number }>>,
+) {
   return vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string | URL) => {
@@ -135,7 +137,10 @@ function stubKuboLs(linksByCid: Record<string, Array<{ Name: string; Hash: strin
   );
 }
 
-const SITE_LINKS: Record<string, Array<{ Name: string; Hash: string; Size: number; Type: number }>> = {
+const SITE_LINKS: Record<
+  string,
+  Array<{ Name: string; Hash: string; Size: number; Type: number }>
+> = {
   bafyroot: [
     { Name: 'index.html', Hash: 'QmHome', Size: 123, Type: 2 },
     { Name: 'about', Hash: 'QmAboutDir', Size: 0, Type: 1 },
@@ -175,16 +180,39 @@ describe('s2s-website-tree-tab', () => {
     expect(root.querySelector('.cid-footer')).toBeNull();
   });
 
+  it('does NOT show a stale store root when the publication has no usable contenthash', async () => {
+    // A previous publication's root lingers in the store.
+    store.setRoot('bafyroot');
+    store.setRecord({ key: 'name', value: 's3ntiment.eth', type: 'metadata' });
+    store.setProtocolInfo({ ensRecords: '0xRecords', gateway: 'https://gw' });
+    stubKuboLs(SITE_LINKS);
+    // evmRead resolves the ENS read to an unusable/absent contenthash.
+    m.evmRead.mockImplementation(async () => '');
+    m.decodeRootCid.mockImplementation(() => null);
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain('No site root available');
+    });
+    // The stale store root was never walked.
+    expect(root.textContent).not.toContain('4 entries');
+    expect(root.textContent).not.toContain('index.html');
+  });
+
   it('reads the root + content-cache CID from the ENS records contract when configured', async () => {
     store.setRecord({ key: 'name', value: 's3ntiment.eth', type: 'metadata' });
     store.setProtocolInfo({ ensRecords: '0xRecords', gateway: 'https://gw' });
     stubKuboLs(SITE_LINKS);
 
-    m.evmRead.mockImplementation(async (_chainId: number, _addr: string, _abi: unknown, method: string, args: unknown[]) => {
-      if (String(args[1]).startsWith('contenthash_wrapped')) return ROOT_HASH;
-      if (String(args[1]).startsWith('content_cache_')) return CACHE_HASH;
-      return null;
-    });
+    m.evmRead.mockImplementation(
+      async (_chainId: number, _addr: string, _abi: unknown, method: string, args: unknown[]) => {
+        if (String(args[1]).startsWith('contenthash_wrapped')) return ROOT_HASH;
+        if (String(args[1]).startsWith('content_cache_')) return CACHE_HASH;
+        return null;
+      },
+    );
     m.decodeRootCid.mockImplementation((hash: unknown) =>
       hash === ROOT_HASH ? 'bafyroot' : hash === CACHE_HASH ? 'bafycache' : null,
     );
@@ -217,7 +245,10 @@ describe('s2s-website-tree-tab', () => {
   });
 
   it('diffs the new tree against the previous localStorage snapshot and lists removals', async () => {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(['index.html', 'about/', 'about/index.html', 'old-page.html']));
+    localStorage.setItem(
+      SNAPSHOT_KEY,
+      JSON.stringify(['index.html', 'about/', 'about/index.html', 'old-page.html']),
+    );
     store.setRoot('bafyroot');
     stubKuboLs(SITE_LINKS);
 
@@ -241,7 +272,9 @@ describe('s2s-website-tree-tab', () => {
     const root = el.shadowRoot!;
     await vi.waitFor(() => expect(root.textContent).toContain('4 entries'));
 
-    const resetBtn = [...root.querySelectorAll('button')].find((b) => b.textContent?.includes('Reset tree'))!;
+    const resetBtn = [...root.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Reset tree'),
+    )!;
     resetBtn.click();
 
     const overlay = root.querySelector('.modal-overlay');
@@ -262,23 +295,36 @@ describe('s2s-website-tree-tab', () => {
     store.setRecord({ key: 'name', value: 's3ntiment.eth', type: 'metadata' });
     store.setProtocolInfo({ ensRecords: '0xRecords', gateway: 'https://gw' });
     store.setSafeInfo({ safeAddress: '0xSafe', s2sPublication: '0xPub' });
-    // Seed a store root for the initial sync (evmRead/decodeRootCid return
-    // nothing here, so fetchRootCid degrades to the store root).
+    // The initial sync resolves a root from the (stubbed) ENS read: a
+    // configured publication with no usable contenthash must NOT fall back to
+    // a stale store root anymore, so the read is stubbed to yield 'bafyroot'.
     store.setRoot('bafyroot');
+    m.evmRead.mockImplementation(
+      async (_chainId: number, _addr: string, _abi: unknown, method: string, args: unknown[]) =>
+        String(args[1]).startsWith('contenthash_wrapped') ? ROOT_HASH : null,
+    );
+    m.decodeRootCid.mockImplementation((hash: unknown) => (hash === ROOT_HASH ? 'bafyroot' : null));
     // The pipeline reports a fresh root ('bafyfresh'); the re-sync walk must
     // serve that new root, not the old one.
-    stubKuboLs({ ...SITE_LINKS, bafyfresh: [{ Name: 'index.html', Hash: 'QmHome', Size: 10, Type: 2 }] });
+    stubKuboLs({
+      ...SITE_LINKS,
+      bafyfresh: [{ Name: 'index.html', Hash: 'QmHome', Size: 10, Type: 2 }],
+    });
 
     const el = await mountTab();
     const root = el.shadowRoot!;
     await vi.waitFor(() => expect(root.textContent).toContain('4 entries'));
 
-    const resetBtn = [...root.querySelectorAll('button')].find((b) => b.textContent?.includes('Reset tree'))!;
+    const resetBtn = [...root.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Reset tree'),
+    )!;
     resetBtn.click();
     root.querySelector<HTMLButtonElement>('#reset-only-btn')!.click();
 
     // signWithSigner -> renderwithLitActions(reset: true) -> fresh root saved.
-    await vi.waitFor(() => expect(m.safeIntegration.signWithSigner).toHaveBeenCalledWith('lit actions auth'));
+    await vi.waitFor(() =>
+      expect(m.safeIntegration.signWithSigner).toHaveBeenCalledWith('lit actions auth'),
+    );
     expect(m.renderwithLitActions).toHaveBeenCalledTimes(1);
     const resetArgs = m.renderwithLitActions.mock.calls[0];
     // 14th positional arg is the reset flag; reset-only passes an empty contentIds list.

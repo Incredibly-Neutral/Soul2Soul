@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SApp } from '../../src/components/s2s-app';
+import type { S2SConfirmModal } from '../../src/components/s2s-confirm-modal';
 import { mountLit } from '../helpers/mount';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ const safeIntMocks = vi.hoisted(() => ({
   isConnected: vi.fn(),
   fetchSafeModules: vi.fn(),
   proposeBatch: vi.fn(),
+  getSafeInfo: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -45,6 +47,7 @@ const storeMock = vi.hoisted(() => {
     safeInfo: unknown = undefined;
     private root: string | null = null;
     private records: Array<{ key: string; value: string; type: string }> = [];
+    private pieces: unknown[] = [];
     private listeners: Record<string, Array<() => void>> = {
       safe: [],
       protocol: [],
@@ -62,6 +65,12 @@ const storeMock = vi.hoisted(() => {
     getRecord(key: string) {
       return this.records.find((r) => r.key === key)?.value ?? null;
     }
+    setRecord(r: { key: string; value: string; type: string }) {
+      const i = this.records.findIndex((x) => x.key === r.key);
+      if (i >= 0) this.records[i] = r;
+      else this.records.push(r);
+      this.notify('records');
+    }
     setAllRecords(recs: Array<{ key: string; value: string; type: string }>) {
       this.records = recs;
       this.notify('records');
@@ -73,7 +82,12 @@ const storeMock = vi.hoisted(() => {
       }
     }
     setProtocolInfo(_info: unknown) {}
-    setPieces(_p: unknown[]) {}
+    setPieces(p: unknown[]) {
+      this.pieces = p;
+    }
+    getPieces() {
+      return this.pieces;
+    }
     setDataSets(_d: unknown[]) {}
     subscribeToSafeInfo(l: () => void) {
       this.listeners.safe.push(l);
@@ -98,6 +112,7 @@ const storeMock = vi.hoisted(() => {
       this.safeInfo = undefined;
       this.root = null;
       this.records = [];
+      this.pieces = [];
       for (const k of Object.keys(this.listeners)) this.listeners[k].length = 0;
     }
   }
@@ -113,6 +128,7 @@ vi.mock('@/lib/safe-integration.js', () => ({
     isConnected = safeIntMocks.isConnected;
     fetchSafeModules = safeIntMocks.fetchSafeModules;
     proposeBatch = safeIntMocks.proposeBatch;
+    getSafeInfo = safeIntMocks.getSafeInfo;
   },
 }));
 
@@ -165,6 +181,7 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.isConnected.mockReset();
     safeIntMocks.fetchSafeModules.mockReset();
     safeIntMocks.proposeBatch.mockReset();
+    safeIntMocks.getSafeInfo.mockReset();
     protocolMocks.initialize.mockReset();
     filecoinMocks.initWithSessionKey.mockReset();
     filecoinMocks.listPublicationStorage.mockReset();
@@ -176,6 +193,7 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
     safeIntMocks.isConnected.mockReturnValue(true);
     safeIntMocks.fetchSafeModules.mockResolvedValue(SAFE_INFO.modules);
+    safeIntMocks.getSafeInfo.mockReturnValue(SAFE_INFO);
     safeIntMocks.proposeBatch.mockResolvedValue(
       'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1',
     );
@@ -303,23 +321,25 @@ describe('s2s-app (shell)', () => {
     expect(el.shadowRoot?.querySelector('#reset-publication')).toBeNull();
   });
 
-  it('reset: first click arms a confirm, second click proposes the teardown batch and shows the queue link', async () => {
+  it('reset: opens a confirmation modal, confirm proposes the teardown batch and shows the queue link', async () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy());
 
-    const btn = el.shadowRoot?.querySelector('#reset-publication') as HTMLButtonElement;
+    const modal = el.shadowRoot?.querySelector('s2s-confirm-modal') as S2SConfirmModal;
+    expect(modal).toBeTruthy();
+    expect(modal.open).toBe(false);
 
-    // Click 1 → armed, nothing proposed yet.
-    btn.click();
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('#reset-publication')?.textContent?.trim()).toBe(
-        'Confirm reset?',
-      ),
-    );
+    // Click Reset → the confirmation modal opens over the (blurred) page.
+    (el.shadowRoot?.querySelector('#reset-publication') as HTMLElement).click();
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+    expect(modal.shadowRoot?.querySelector('.overlay')).toBeTruthy();
+    expect(modal.shadowRoot?.querySelector('.dialog')?.textContent).toContain('Reset publication?');
     expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
 
-    // Click 2 → proposes the teardown batch (disables + name deletion).
-    btn.click();
+    // Confirm in the modal → proposes the teardown batch (disables + name deletion).
+    const confirmBtn = modal.shadowRoot?.querySelector('#confirm-ok') as HTMLElement;
+    confirmBtn.click();
     await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
     const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
       to: string;
@@ -329,8 +349,108 @@ describe('s2s-app (shell)', () => {
     expect(batch.length).toBeGreaterThanOrEqual(3); // 2 disables + name deletion
     expect(batch[batch.length - 1].to).toBe(SAFE_INFO.s2sRecords);
 
-    // The queue link is surfaced after proposing.
+    // The modal closes and the queue link is surfaced after proposing.
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy());
+    expect(modal.open).toBe(false);
     expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
+  });
+
+  it('scopes the Storage pieces to the current publication module only', async () => {
+    const pubAddr = SAFE_INFO.s2sPublication.toLowerCase();
+    const otherAddr = '0x9999999999999999999999999999999999999999';
+    const base = {
+      pieceId: 'pid',
+      rootCid: 'bafy',
+      dataSetId: 'ds1',
+      provider: 'filecoin',
+      attributed: true,
+      size: 10,
+      pdpEndEpoch: null,
+      isLive: true,
+      dataSetMetadata: {},
+      scheduledForRemoval: false,
+    };
+    const attributed = {
+      ...base,
+      pieceCid: 'baga1',
+      metadata: { attributedTo: JSON.stringify([pubAddr]) },
+    };
+    const foreign = {
+      ...base,
+      pieceCid: 'baga2',
+      metadata: { attributedTo: JSON.stringify([otherAddr]) },
+    };
+    const unattributed = {
+      ...base,
+      pieceCid: 'baga3',
+      metadata: {},
+    };
+    filecoinMocks.listPublicationStorage.mockResolvedValue([attributed, foreign, unattributed]);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    // Only the piece attributed to the current publication survives the filter.
+    await vi.waitFor(() => expect(storeMock.store.getPieces()).toHaveLength(1));
+    expect((storeMock.store.getPieces() as Array<{ pieceCid: string }>)[0].pieceCid).toBe('baga1');
+  });
+
+  it('omits the root + preview links when no root CID is available yet', async () => {
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    // No root seeded => no copy-hash, no preview link — only the .limo link.
+    expect(el.shadowRoot?.querySelector('copy-hash')).toBeNull();
+    expect(el.shadowRoot?.textContent).not.toContain('preview');
+    expect(el.shadowRoot?.textContent).toContain('.limo');
+  });
+
+  it('on init-complete: writes the proposed records optimistically, clears the stale root, switches to the Config tab', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    // A stale root from a previous publication lingers in the store.
+    storeMock.store.setRoot('bafystale');
+
+    // The modules come online as the init flow completes.
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-complete', {
+        detail: {
+          recordsModule: SAFE_INFO.s2sRecords,
+          publicationModule: SAFE_INFO.s2sPublication,
+          proposals: ['https://app.safe.global/transactions/queue?safe=1:0x1'],
+          name: 'my-pub.soul2soul.eth',
+          repo: 'https://github.com/Joera/website-starter',
+          branch: 'main',
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+
+    // The proposed (not-yet-executed) records land in the store immediately,
+    // so the title + web-status populate without a reload.
+    await vi.waitFor(() => expect(storeMock.store.getRecord('name')).toBe('my-pub.soul2soul.eth'));
+    expect(storeMock.store.getRecord('repo')).toBe('https://github.com/Joera/website-starter');
+    expect(storeMock.store.getRecord('branch')).toBe('main');
+    // The stale previous-publication root is dropped.
+    expect(storeMock.store.getRoot()).toBe('');
+
+    // The shell switched to the Config tab so the automatic build is visible.
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy());
+    expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
+
+    // The auto config-update trigger is duck-type-guarded: the mocked
+    // records-tab has no updateConfig, so the handler must not throw.
+    await new Promise((r) => setTimeout(r, 0));
   });
 });
