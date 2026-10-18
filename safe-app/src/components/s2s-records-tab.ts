@@ -17,10 +17,7 @@ import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
 import { browserFilecoinBuilder } from '@s2s/soul2soul-shared/filecoin/car-builder/browser';
 import { ethers } from 'ethers';
 import { evmRead } from '../lib/evm.js';
-import {
-  maybeVerifyDomainOwnership,
-  DOMAIN_VALIDATION_CONFIG,
-} from '../lib/domain-validation.js';
+import { maybeVerifyDomainOwnership, DOMAIN_VALIDATION_CONFIG } from '../lib/domain-validation.js';
 
 @customElement('s2s-records-tab')
 export class S2SRecordsTab extends LitElement {
@@ -61,7 +58,9 @@ export class S2SRecordsTab extends LitElement {
         background: var(--gray-900);
       }
 
-      .table { grid-template-columns: 1fr 3fr auto; }
+      .table {
+        grid-template-columns: 1fr 3fr auto;
+      }
 
       .record-value-input {
         width: 100%;
@@ -278,8 +277,7 @@ export class S2SRecordsTab extends LitElement {
    */
   private async loadCurrentAliases(): Promise<void> {
     const cached = store.getRecord('config');
-    const configCid =
-      cached ?? (await this.safeIntegration.getRecord('config').catch(() => null));
+    const configCid = cached ?? (await this.safeIntegration.getRecord('config').catch(() => null));
     if (!configCid) {
       this.aliases = [];
       return;
@@ -362,10 +360,21 @@ export class S2SRecordsTab extends LitElement {
     await this.updateConfig(next);
   }
 
-  private async updateConfig(aliasesOverride?: string[]) {
-    const existingCid = await this.safeIntegration.getRecord('config');
-    const repo = await this.safeIntegration.getRecord('repo');
-    const publicationUrl = await this.safeIntegration.getRecord('name');
+  /**
+   * Rebuild the publication config (assets + config DAGs) and propose the
+   * config record update to the Safe. Public so s2s-app can trigger an
+   * immediate build right after a new publication is initialized — reads the
+   * repo/branch/name from the store first (optimistic values written by the
+   * init flow) and falls back to the on-chain records.
+   */
+  async updateConfig(aliasesOverride?: string[]) {
+    const existingCid =
+      store.getRecord('config') ?? (await this.safeIntegration.getRecord('config'));
+    const repo = store.getRecord('repo') ?? (await this.safeIntegration.getRecord('repo'));
+    const branch =
+      store.getRecord('branch') ?? ((await this.safeIntegration.getRecord('branch')) || 'main');
+    const publicationUrl =
+      store.getRecord('name') ?? (await this.safeIntegration.getRecord('name'));
     const pInfo = await this.protocolIntegration.getInfo();
 
     const ipfs = this.makeIPFS();
@@ -379,7 +388,7 @@ export class S2SRecordsTab extends LitElement {
     const { cid: assetsCid } = await assets.buildAssets(
       owner,
       repoName,
-      'main',
+      branch,
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
     );
@@ -389,7 +398,7 @@ export class S2SRecordsTab extends LitElement {
     const { cid: configCid, config: publicationConfig } = await config.buildConfig(
       owner,
       repoName,
-      'main',
+      branch,
       publicationUrl,
       this.safeIntegration.getSafeInfo().s2sPublication || '',
       assetsCid,
@@ -450,8 +459,15 @@ export class S2SRecordsTab extends LitElement {
     // site root (/assets). Fire-and-forget: pinCidFromRemote never throws, so
     // this can't break the build flow.
     if (templateCid) {
-      void pinCidFromRemote(templateCid, 'https://ipfs.transport-union.dev', import.meta.env.VITE_FILEBASE_TOKEN || '', 'filebase').then((ok) => {
-        console.log(ok ? '[records] templateCid pinned on filebase' : '[records] filebase pin failed');
+      void pinCidFromRemote(
+        templateCid,
+        'https://ipfs.transport-union.dev',
+        import.meta.env.VITE_FILEBASE_TOKEN || '',
+        'filebase',
+      ).then((ok) => {
+        console.log(
+          ok ? '[records] templateCid pinned on filebase' : '[records] filebase pin failed',
+        );
       });
     }
 
@@ -568,12 +584,26 @@ export class S2SRecordsTab extends LitElement {
 
   private valueTemplate(record: OnChainRecord) {
     if (record.key === 'config' && record.value) {
-      return html`<a href="https://ipfs.io/ipfs/${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+      return html`<a
+        href="https://ipfs.io/ipfs/${record.value}"
+        target="_blank"
+        rel="noopener noreferrer"
+        style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;"
+        >${record.value} ↗</a
+      >`;
     }
     if (record.key === 'repo' && record.value) {
-      return html`<a href="${record.value}" target="_blank" rel="noopener noreferrer" style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;">${record.value} ↗</a>`;
+      return html`<a
+        href="${record.value}"
+        target="_blank"
+        rel="noopener noreferrer"
+        style="color: var(--blue-400); font-size: 0.875rem; word-break: break-all;"
+        >${record.value} ↗</a
+      >`;
     }
-    return html`<span style="font-size: 0.875rem; color: var(--gray-50); word-break: break-all;">${record.value}</span>`;
+    return html`<span style="font-size: 0.875rem; color: var(--gray-50); word-break: break-all;"
+      >${record.value}</span
+    >`;
   }
 
   render() {
@@ -616,14 +646,14 @@ export class S2SRecordsTab extends LitElement {
                 </div>
               `
             : html`
-                  <div class="alias-pills">      
-                      <s2s-sliding-add-button
-                      placeholder="e.g. s3ntiment.eth"
-                      buttonLabel="Add"
-                      @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
-                    ></s2s-sliding-add-button>
-                  </div>
-            `}
+                <div class="alias-pills">
+                  <s2s-sliding-add-button
+                    placeholder="e.g. s3ntiment.eth"
+                    buttonLabel="Add"
+                    @s2s-sliding-add=${(e: CustomEvent) => void this.addAlias(e.detail.value)}
+                  ></s2s-sliding-add-button>
+                </div>
+              `}
         </div>
 
         <div class="list_header" style="margin-top: 2rem;">
@@ -661,27 +691,55 @@ export class S2SRecordsTab extends LitElement {
                         ${this.editingKey === record.key
                           ? html`
                               <div style="display: flex; gap: 0.5rem;">
-                                <button class="button thin"
+                                <button
+                                  class="button thin"
                                   @click=${() => {
                                     const input = this.renderRoot.querySelector(
                                       `#edit-value-${record.key}`,
                                     ) as HTMLInputElement;
                                     if (input) void this.updateRecord(record.key, input.value);
-                                  }}><ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check> Save</button>
-                                <button class="button button-secondary thin" @click=${this.cancelEdit}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Cancel</button>
+                                  }}
+                                >
+                                  <ph-check size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-check>
+                                  Save
+                                </button>
+                                <button
+                                  class="button button-secondary thin"
+                                  @click=${this.cancelEdit}
+                                >
+                                  <ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Cancel
+                                </button>
                               </div>
                             `
                           : record.key === 'config'
                             ? html`
                                 <div style="display: flex; gap: 0.5rem;">
-                                  <button class="button thin" @click=${() => void this.updateConfig()}><ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Update</button>
+                                  <button
+                                    class="button thin"
+                                    @click=${() => void this.updateConfig()}
+                                  >
+                                    <ph-arrow-clockwise
+                                      size="${ICON_SIZE}"
+                                      weight="${ICON_WEIGHT}"
+                                    ></ph-arrow-clockwise>
+                                    Update
+                                  </button>
                                 </div>
                               `
                             : html`
-                              <div style="display: flex; gap: 0.5rem;">
-                                <button class="button thin" @click=${() => this.startEdit(record.key)}><ph-pencil-simple size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-pencil-simple> Edit</button>
-                              </div>
-                            `}
+                                <div style="display: flex; gap: 0.5rem;">
+                                  <button
+                                    class="button thin"
+                                    @click=${() => this.startEdit(record.key)}
+                                  >
+                                    <ph-pencil-simple
+                                      size="${ICON_SIZE}"
+                                      weight="${ICON_WEIGHT}"
+                                    ></ph-pencil-simple>
+                                    Edit
+                                  </button>
+                                </div>
+                              `}
                       </div>
                     </div>
                   `;
@@ -690,7 +748,9 @@ export class S2SRecordsTab extends LitElement {
             `
           : html`
               <div class="empty-state">
-                <div><ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text></div>
+                <div>
+                  <ph-file-text size="${ICON_SIZE_LARGE}" weight="${ICON_WEIGHT}"></ph-file-text>
+                </div>
                 <p>${this.searchTerm ? 'No records match your search' : 'No records yet'}</p>
               </div>
             `}

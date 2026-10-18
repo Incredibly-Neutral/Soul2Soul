@@ -35,9 +35,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LitElement } from 'lit';
 import { mountLit } from '../helpers/mount';
 import { theme } from '../../src/styles/theme';
-import {
-  DOMAIN_VALIDATION_CONFIG,
-} from '../../src/lib/domain-validation';
+import { DOMAIN_VALIDATION_CONFIG } from '../../src/lib/domain-validation';
 import { pinCidFromRemote } from '@s2s/soul2soul-shared';
 
 // Adopt the design tokens the way main.ts does so var(--gray-*) resolve in the
@@ -383,7 +381,9 @@ describe('s2s-records-tab', () => {
     await vi.waitFor(
       () => {
         expect(store.getRecord('config')).toBe('config-cid');
-        expect(notificationTexts().join(' | ')).toContain('Alias "example.eth" saved as write-target');
+        expect(notificationTexts().join(' | ')).toContain(
+          'Alias "example.eth" saved as write-target',
+        );
       },
       { timeout: 5000 },
     );
@@ -412,19 +412,17 @@ describe('s2s-records-tab', () => {
     // mount (bugfix). Wait for that read to settle first so the accumulation
     // below is deterministic (no in-flight loadCurrentAliases overwriting the
     // list), then each add accumulates on top of the preloaded alias.
-    await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
-      { timeout: 5000 },
-    );
+    await vi.waitFor(() => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']), {
+      timeout: 5000,
+    });
 
     // First add: the list grows from ['s3ntiment.eth'] to
     // ['s3ntiment.eth','first.eth'].
     setAliasInput(el, 'first.eth');
     submitAddInput(el);
-    await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth']),
-      { timeout: 5000 },
-    );
+    await vi.waitFor(() => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth', 'first.eth']), {
+      timeout: 5000,
+    });
     // buildConfig(owner, repo, branch, pub, addr, assetsCid, existingCid, domain, aliases)
     await vi.waitFor(() => expect(m.buildConfigCalls.length).toBe(1));
     expect(m.buildConfigCalls[0][8]).toEqual(['s3ntiment.eth', 'first.eth']);
@@ -471,10 +469,9 @@ describe('s2s-records-tab', () => {
 
     const el = await mountTab();
 
-    await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
-      { timeout: 5000 },
-    );
+    await vi.waitFor(() => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']), {
+      timeout: 5000,
+    });
     // The alias pills (not the empty state) are shown.
     expect(el.shadowRoot!.textContent).toContain('Aliases');
     expect(el.shadowRoot!.textContent).not.toContain('No custom write-targets set');
@@ -489,10 +486,9 @@ describe('s2s-records-tab', () => {
     const el = await mountTab();
 
     // Wait for the alias pills to render from the (mocked) config read.
-    await vi.waitFor(
-      () => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']),
-      { timeout: 5000 },
-    );
+    await vi.waitFor(() => expect(renderedAliasNames(el)).toEqual(['s3ntiment.eth']), {
+      timeout: 5000,
+    });
     clickPillRemove(el, 's3ntiment.eth');
 
     // buildConfig is reached asynchronously after the optimistic notification;
@@ -566,6 +562,52 @@ describe('s2s-records-tab', () => {
       expect.any(String), // VITE_FILEBASE_TOKEN, '' when unset
       'filebase',
     );
+  });
+
+  it('builds the config from the repo + branch records in the store (immediate post-init update)', async () => {
+    // The init flow wrote the (pending) repo/branch optimistically into the
+    // store; updateConfig must prefer those over the chain + the old
+    // hardcoded 'main' so the very first build uses the starter template.
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+      { key: 'repo', value: 'https://github.com/Joera/website-starter', type: 'metadata' },
+      { key: 'branch', value: 'dev', type: 'metadata' },
+    ]);
+    const el = await mountTab();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'stubbed',
+        text: async () => 'stubbed',
+      })),
+    );
+
+    await vi.waitFor(
+      () =>
+        expect(
+          [...el.shadowRoot!.querySelectorAll('button')].some((b) =>
+            b.textContent?.includes('Update'),
+          ),
+        ).toBe(true),
+      { timeout: 5000 },
+    );
+    clickButton(el, 'Update');
+
+    await vi.waitFor(
+      () => {
+        expect(m.buildConfigCalls.length).toBe(1);
+        expect(store.getRecord('config')).toBe('config-cid');
+      },
+      { timeout: 5000 },
+    );
+    // buildConfig(owner, repoName, branch, publicationUrl, pub, assetsCid, ...)
+    expect(m.buildConfigCalls[0][0]).toBe('Joera');
+    expect(m.buildConfigCalls[0][1]).toBe('website-starter');
+    expect(m.buildConfigCalls[0][2]).toBe('dev');
   });
 });
 

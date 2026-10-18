@@ -119,6 +119,41 @@ describe('s2s-publication-init', () => {
     expect(start.getAttribute('type')).toBe('primary');
   });
 
+  it('prefills the repo + branch with the starter template and records edits in the name batch', async () => {
+    const si = makeSafeIntegration();
+    const el = await mount({ safeIntegration: si });
+
+    // Repo + branch inputs are present and prefilled.
+    const repoInput = el.shadowRoot!.querySelector<HTMLInputElement>('#init-repo');
+    const branchInput = el.shadowRoot!.querySelector<HTMLInputElement>('#init-branch');
+    expect(repoInput).not.toBeNull();
+    expect(branchInput).not.toBeNull();
+    expect(repoInput!.value).toBe('https://github.com/Joera/website-starter');
+    expect(branchInput!.value).toBe('main');
+
+    // Customizing them flows into the name batch's repo/branch records.
+    setInput(el, '#init-name', 'my-publication');
+    setInput(el, '#init-repo', 'https://github.com/Joera/other-site');
+    setInput(el, '#init-branch', 'dev');
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    clickInit(el);
+    const evt = await complete;
+    await flush();
+
+    const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
+    expect(nameBatch).toHaveLength(3);
+    expect(decodeSetRecord(nameBatch[1])).toEqual({
+      key: 'repo',
+      value: 'https://github.com/Joera/other-site',
+    });
+    expect(decodeSetRecord(nameBatch[2])).toEqual({ key: 'branch', value: 'dev' });
+    expect(evt.detail.repo).toBe('https://github.com/Joera/other-site');
+    expect(evt.detail.branch).toBe('dev');
+  });
+
   it('runs the full three-proposal flow (create -> detect -> enable -> name)', async () => {
     const si = makeSafeIntegration();
     const el = await mount({ safeIntegration: si });
@@ -149,14 +184,19 @@ describe('s2s-publication-init', () => {
     expect(enableBatch).toHaveLength(2);
     expect(enableBatch.every((tx) => tx.to === SAFE_ADDRESS)).toBe(true);
 
-    // 3) name-record: single setRecord with the fully-qualified name.
+    // 3) name-record: name + starter repo + branch set on the records module.
     const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(1);
-    expect(nameBatch[0].to).toBe(RECORDS_MODULE);
+    expect(nameBatch).toHaveLength(3);
+    expect(nameBatch.every((tx) => tx.to === RECORDS_MODULE)).toBe(true);
     expect(decodeSetRecord(nameBatch[0])).toEqual({
       key: 'name',
       value: 'my-publication.soul2soul.eth',
     });
+    expect(decodeSetRecord(nameBatch[1])).toEqual({
+      key: 'repo',
+      value: 'https://github.com/Joera/website-starter',
+    });
+    expect(decodeSetRecord(nameBatch[2])).toEqual({ key: 'branch', value: 'main' });
 
     // Detection queried the correct factories with the right safe.
     expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledWith(
@@ -169,6 +209,9 @@ describe('s2s-publication-init', () => {
     // Done state surfaced the module addresses and proposal links.
     expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
     expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    expect(evt.detail.repo).toBe('https://github.com/Joera/website-starter');
+    expect(evt.detail.branch).toBe('main');
     expect(bodyText(el)).toContain('Publication initialized');
     expect(bodyText(el)).toContain('open in Safe app');
   });
@@ -241,8 +284,8 @@ describe('s2s-publication-init', () => {
     expect(si.proposeBatch).toHaveBeenCalledTimes(3);
     expect(calls).toBeGreaterThanOrEqual(5);
     const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(1);
-    expect(nameBatch[0].to).toBe(RECORDS_MODULE);
+    expect(nameBatch).toHaveLength(3);
+    expect(nameBatch.every((tx) => tx.to === RECORDS_MODULE)).toBe(true);
     expect(bodyText(el)).toContain('Publication initialized');
   });
 

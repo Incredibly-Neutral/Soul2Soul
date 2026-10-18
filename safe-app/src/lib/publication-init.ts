@@ -84,6 +84,10 @@ export type InitializePublicationDeps = {
 export type InitializePublicationOpts = {
   authors?: string[];
   name?: string;
+  /** Git repo URL recorded alongside the name (used by the config build). */
+  repo?: string;
+  /** Git branch recorded alongside the name (defaults to 'main' at build time). */
+  branch?: string;
   safeUrl?: (chainId: number, safeAddress: string) => string;
   /** How long to wait for the human to execute the enable batch (default 10 min). */
   enableTimeoutMs?: number;
@@ -227,11 +231,26 @@ export function buildEnableModuleBatch(
 }
 
 /**
- * Batch 3 (optional): record the publication name.
- * [records.setRecord("name", name)].
+ * Batch 3 (optional): record the publication identity.
+ * [records.setRecord("name", name), records.setRecord("repo", repo),
+ *  records.setRecord("branch", branch)] — repo/branch are only included when
+ * supplied, so the batch stays a single setRecord for existing callers.
  */
-export function buildNameRecordBatch(recordsModule: string, name: string): MetaTransactionData[] {
-  return [{ to: recordsModule, value: '0', data: encodeSetRecord('name', name) }];
+export function buildNameRecordBatch(
+  recordsModule: string,
+  name: string,
+  extra?: { repo?: string; branch?: string },
+): MetaTransactionData[] {
+  const batch: MetaTransactionData[] = [
+    { to: recordsModule, value: '0', data: encodeSetRecord('name', name) },
+  ];
+  if (extra?.repo) {
+    batch.push({ to: recordsModule, value: '0', data: encodeSetRecord('repo', extra.repo) });
+  }
+  if (extra?.branch) {
+    batch.push({ to: recordsModule, value: '0', data: encodeSetRecord('branch', extra.branch) });
+  }
+  return batch;
 }
 
 /**
@@ -492,10 +511,14 @@ export async function initializePublication(
     { timeoutMs: opts.enableTimeoutMs, pollIntervalMs: opts.enablePollIntervalMs },
   );
 
-  // Batch 3 (optional): record the publication name.
+  // Batch 3 (optional): record the publication name (+ repo/branch when given).
   let nameRecorded = false;
   if (name !== undefined && name !== '') {
-    proposals.push(await deps.propose(buildNameRecordBatch(recordsModule, name)));
+    proposals.push(
+      await deps.propose(
+        buildNameRecordBatch(recordsModule, name, { repo: opts.repo, branch: opts.branch }),
+      ),
+    );
     nameRecorded = true;
   }
 
