@@ -114,7 +114,9 @@ describe('s2s-publication-init', () => {
 
     const start = el.shadowRoot!.querySelector<HTMLButtonElement>('#init-start')!;
     expect(start.textContent).toContain('Create');
-    expect(start.classList.contains('btn-primary')).toBe(true);
+    // Plain app button (yellow hover highlight) — no invented primary class.
+    expect(start.classList.contains('button')).toBe(true);
+    expect(start.classList.contains('btn-primary')).toBe(false);
   });
 
   it('runs the full three-proposal flow (create -> detect -> enable -> name)', async () => {
