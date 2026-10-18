@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Interface } from 'ethers';
 import type { S2SPublicationInit } from '../../src/components/s2s-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
 import { mountLit } from '../helpers/mount';
@@ -38,6 +39,14 @@ const TOPIC0 = '0x' + 'a'.repeat(64);
 const PADDED_SAFE = pad(SAFE_ADDRESS);
 const PADDED_RECORDS = pad(RECORDS_MODULE);
 const PADDED_PUB = pad(PUB_MODULE);
+
+/** Decode the single setRecord call so we can assert the recorded value. */
+function decodeSetRecord(tx: MetaTransactionData): { key: string; value: string } {
+  const parsed = new Interface(['function setRecord(string key, string value)']).parseTransaction({
+    data: tx.data,
+  });
+  return { key: String(parsed!.args[0]), value: String(parsed!.args[1]) };
+}
 
 /** Duck-typed SafeIntegration that resolves the flow instantly. */
 function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
@@ -84,21 +93,31 @@ function bodyText(el: S2SPublicationInit): string {
 }
 
 describe('s2s-publication-init', () => {
-  it('renders the form with authors prefilled from the Safe owners', async () => {
+  it('renders the new-publication form with owner pills and the .soul2soul.eth suffix', async () => {
     const el = await mount();
 
-    expect(bodyText(el)).toContain('No S2S modules found');
-    const name = el.shadowRoot!.querySelector<HTMLInputElement>('#init-name')!;
-    expect(name).not.toBeNull();
+    expect(bodyText(el)).toContain('New publication');
 
-    const authors = el.shadowRoot!.querySelector<HTMLTextAreaElement>('#init-authors')!;
-    expect(authors.value).toBe(`${OWNER_A}, ${OWNER_B}`);
+    // Name field: input + rendered .soul2soul.eth suffix.
+    const name = el.shadowRoot!.querySelector<HTMLInputElement>('#init-name');
+    expect(name).not.toBeNull();
+    expect(bodyText(el)).toContain('.soul2soul.eth');
+
+    // Authors prefilled as pills (one per Safe owner), not a textarea.
+    // pet-name renders the address in its own shadow root, so assert the
+    // pill's value binding rather than bodyText.
+    const pills = el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill');
+    expect(pills.length).toBe(2);
+    expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).not.toBeNull();
+    expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_B}"]`)).not.toBeNull();
+    expect(el.shadowRoot!.querySelector('#init-authors')).toBeNull();
 
     const start = el.shadowRoot!.querySelector<HTMLButtonElement>('#init-start')!;
-    expect(start.textContent).toContain('Initialize publication');
+    expect(start.textContent).toContain('Create');
+    expect(start.classList.contains('btn-primary')).toBe(true);
   });
 
-  it('runs the full two-proposal flow (create -> detect -> enable -> name)', async () => {
+  it('runs the full three-proposal flow (create -> detect -> enable -> name)', async () => {
     const si = makeSafeIntegration();
     const el = await mount({ safeIntegration: si });
 
@@ -128,10 +147,14 @@ describe('s2s-publication-init', () => {
     expect(enableBatch).toHaveLength(2);
     expect(enableBatch.every((tx) => tx.to === SAFE_ADDRESS)).toBe(true);
 
-    // 3) name-record: single setRecord on the records module.
+    // 3) name-record: single setRecord with the fully-qualified name.
     const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
     expect(nameBatch).toHaveLength(1);
     expect(nameBatch[0].to).toBe(RECORDS_MODULE);
+    expect(decodeSetRecord(nameBatch[0])).toEqual({
+      key: 'name',
+      value: 'my-publication.soul2soul.eth',
+    });
 
     // Detection queried the correct factories with the right safe.
     expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledWith(
@@ -148,22 +171,47 @@ describe('s2s-publication-init', () => {
     expect(bodyText(el)).toContain('open in Safe app');
   });
 
-  it('skips the name-record proposal when no name is given', async () => {
+  it('requires a name: empty name blocks the flow with an inline error', async () => {
     const si = makeSafeIntegration();
     const el = await mount({ safeIntegration: si });
 
-    const complete = new Promise<CustomEvent>((resolve) => {
-      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
-    });
-
     clickInit(el);
-    await complete;
     await flush();
 
-    // Only create + enable — no name-record batch.
-    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
-    const enableBatch = si.proposeBatch.mock.calls[1][0] as MetaTransactionData[];
-    expect(enableBatch).toHaveLength(2);
+    // No proposals proposed; form stays with a validation message.
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(bodyText(el)).toContain('Publication name is required.');
+    expect(bodyText(el)).toContain('New publication');
+    expect(el.shadowRoot!.querySelector('#init-start')).not.toBeNull();
+
+    // Typing clears the error.
+    setInput(el, '#init-name', 'ok');
+    await el.updateComplete;
+    expect(bodyText(el)).not.toContain('Publication name is required.');
+  });
+
+  it('supports adding and removing author pills', async () => {
+    const el = await mount();
+
+    // Owner pills present; remove one.
+    let pills = el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill');
+    expect(pills.length).toBe(2);
+    const removeBtn = el.shadowRoot!.querySelector<HTMLButtonElement>(
+      `.alias-pill__remove[data-address="${OWNER_A}"]`,
+    )!;
+    removeBtn.click();
+    await el.updateComplete;
+    pills = el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill');
+    expect(pills.length).toBe(1);
+    expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).toBeNull();
+
+    // Dispatch a sliding-add for a new author -> pill appears.
+    const addBtn = el.shadowRoot!.querySelector('s2s-sliding-add-button')!;
+    addBtn.dispatchEvent(new CustomEvent('s2s-sliding-add', { detail: { value: OWNER_A } }));
+    await el.updateComplete;
+    pills = el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill');
+    expect(pills.length).toBe(2);
+    expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).not.toBeNull();
   });
 
   it('surfaces an error and stays incomplete when enable verification fails', async () => {
@@ -173,18 +221,19 @@ describe('s2s-publication-init', () => {
     let completed = false;
     el.addEventListener('s2s-init-complete', () => (completed = true));
 
+    setInput(el, '#init-name', 'my-publication');
     clickInit(el);
 
-    // Verification rejects after proposing create + enable.
+    // Verification rejects after proposing create + enable + name.
     await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
     expect(completed).toBe(false);
-    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
     expect(bodyText(el)).toContain('not enabled');
 
     // "Try again" returns to the form.
     el.shadowRoot!.querySelector<HTMLButtonElement>('button')!.click();
     await el.updateComplete;
-    expect(bodyText(el)).toContain('No S2S modules found');
+    expect(bodyText(el)).toContain('New publication');
   });
 
   it('fails fast when not connected to a Safe', async () => {
