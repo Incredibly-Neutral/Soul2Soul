@@ -71,6 +71,10 @@ const DEFAULT_ENABLE_POLL_INTERVAL_MS = 2_000;
 /** Suffix appended to the publication name (displayed and recorded). */
 const SOUL2SOUL_ETH = '.soul2soul.eth';
 
+/** Starter template the config build pulls from (prefilled, overridable). */
+const DEFAULT_REPO = 'https://github.com/Joera/website-starter';
+const DEFAULT_BRANCH = 'main';
+
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
 type Step =
@@ -102,6 +106,10 @@ export class S2SPublicationInit extends LitElement {
   /** Publication name label (the .soul2soul.eth suffix is appended). */
   @state() private name = '';
   @state() private nameError = '';
+  /** Starter repo the config build pulls from — recorded on-chain, then edited in the Config tab. */
+  @state() private repo = DEFAULT_REPO;
+  /** Git branch of the starter repo — recorded on-chain, then edited in the Config tab. */
+  @state() private branch = DEFAULT_BRANCH;
   @state() private authors: string[] = [];
   @state() private step: Step = 'idle';
   @state() private proposals: string[] = [];
@@ -146,6 +154,11 @@ export class S2SPublicationInit extends LitElement {
 
       .init__input:focus {
         border-color: var(--accent);
+      }
+
+      .init__input--full {
+        width: 100%;
+        border-radius: 6px;
       }
 
       .init__suffix {
@@ -313,6 +326,14 @@ export class S2SPublicationInit extends LitElement {
     if (this.nameError) this.nameError = '';
   };
 
+  private readonly onRepoInput = (e: Event): void => {
+    this.repo = (e.target as HTMLInputElement).value;
+  };
+
+  private readonly onBranchInput = (e: Event): void => {
+    this.branch = (e.target as HTMLInputElement).value;
+  };
+
   private readonly addAuthor = (value: string): void => {
     const address = value.trim();
     if (!ADDRESS_RE.test(address)) return;
@@ -343,6 +364,8 @@ export class S2SPublicationInit extends LitElement {
     this.error = '';
     this.proposals = [];
     const publicationName = `${label}${SOUL2SOUL_ETH}`;
+    const repo = this.repo.trim() || DEFAULT_REPO;
+    const branch = this.branch.trim() || DEFAULT_BRANCH;
 
     try {
       // 1. Propose create-batch (both modules from their factories).
@@ -402,16 +425,26 @@ export class S2SPublicationInit extends LitElement {
         await new Promise((r) => setTimeout(r, this.enablePollIntervalMs));
       }
 
-      // 4. Record the publication name.
+      // 4. Record the publication identity (name + starter repo/branch).
       this.step = 'naming';
-      const nameBatch = buildNameRecordBatch(recordsModule, publicationName);
+      const nameBatch = buildNameRecordBatch(recordsModule, publicationName, {
+        repo,
+        branch,
+      });
       const nameUrl = await si.proposeBatch(nameBatch);
       this.proposals = [...this.proposals, nameUrl];
 
       this.step = 'done';
       this.dispatchEvent(
         new CustomEvent('s2s-init-complete', {
-          detail: { recordsModule, publicationModule, proposals: this.proposals },
+          detail: {
+            recordsModule,
+            publicationModule,
+            proposals: this.proposals,
+            name: publicationName,
+            repo,
+            branch,
+          },
           bubbles: true,
           composed: true,
         }),
@@ -507,6 +540,28 @@ export class S2SPublicationInit extends LitElement {
           <span class="init__suffix">${SOUL2SOUL_ETH}</span>
         </div>
         ${this.nameError ? html`<div class="init__name-error">${this.nameError}</div>` : ''}
+      </div>
+
+      <div class="init__field">
+        <label class="init__label" for="init-repo">Repository</label>
+        <input
+          id="init-repo"
+          class="init__input init__input--full"
+          .value=${this.repo}
+          placeholder="https://github.com/org/site"
+          @input=${this.onRepoInput}
+        />
+      </div>
+
+      <div class="init__field">
+        <label class="init__label" for="init-branch">Branch</label>
+        <input
+          id="init-branch"
+          class="init__input init__input--full"
+          .value=${this.branch}
+          placeholder="main"
+          @input=${this.onBranchInput}
+        />
       </div>
 
       <div class="init__field">
