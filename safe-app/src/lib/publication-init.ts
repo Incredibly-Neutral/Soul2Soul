@@ -267,12 +267,20 @@ export function buildNameRecordBatch(
  * (as returned by Safe.getModules(), in list order). Modules are disabled in
  * DESCENDING list order so each module's prev (taken from the original list)
  * is still present when its disable executes. `deleteRecord("name")` is only
- * included when a records module address is supplied.
+ * included when a records module address is supplied AND `opts.deleteName` is
+ * not false.
+ *
+ * The batch is a single atomic MultiSend tx — if ANY operation reverts the
+ * whole thing fails to estimate (Safe UI GS013). S2SRecordsModule.deleteRecord
+ * reverts with KeyNotFound() when the key was never written, so callers must
+ * gate `deleteName` on the name record actually existing on-chain (defaults to
+ * true to preserve the full-teardown intent for callers that cannot know).
  */
 export function buildDeletePublicationBatch(
   safeAddress: string,
   modules: { recordsModule: string; publicationModule: string },
   safeModules: string[],
+  opts: { deleteName?: boolean } = {},
 ): MetaTransactionData[] {
   const indexOf = new Map<string, number>();
   safeModules.forEach((m, i) => indexOf.set(m.toLowerCase(), i));
@@ -297,7 +305,7 @@ export function buildDeletePublicationBatch(
     data: encodeDisableModule(index > 0 ? safeModules[index - 1] : SENTINEL_MODULES, module),
   }));
 
-  if (modules.recordsModule) {
+  if (modules.recordsModule && (opts.deleteName ?? true)) {
     txs.push({ to: modules.recordsModule, value: '0', data: encodeDeleteRecord('name') });
   }
 
