@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SApp } from '../../src/components/s2s-app';
 import type { S2SConfirmModal } from '../../src/components/s2s-confirm-modal';
+import type { S2SInitProgressModal } from '../../src/components/s2s-init-progress-modal';
+import { INIT_SESSION_KEY, saveInitSession, type InitSession } from '../../src/lib/init-session';
 import { mountLit } from '../helpers/mount';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +34,10 @@ const safeIntMocks = vi.hoisted(() => ({
   fetchSafeModules: vi.fn(),
   proposeBatch: vi.fn(),
   getSafeInfo: vi.fn(),
+  getRecord: vi.fn(),
+  readIsModuleEnabled: vi.fn(),
+  fetchFactoryModuleCreatedLogs: vi.fn(),
+  getProvider: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -129,6 +135,10 @@ vi.mock('@/lib/safe-integration.js', () => ({
     fetchSafeModules = safeIntMocks.fetchSafeModules;
     proposeBatch = safeIntMocks.proposeBatch;
     getSafeInfo = safeIntMocks.getSafeInfo;
+    getRecord = safeIntMocks.getRecord;
+    readIsModuleEnabled = safeIntMocks.readIsModuleEnabled;
+    fetchFactoryModuleCreatedLogs = safeIntMocks.fetchFactoryModuleCreatedLogs;
+    getProvider = safeIntMocks.getProvider;
   },
 }));
 
@@ -171,6 +181,33 @@ import '../../src/components/s2s-app';
 
 const NAV_TABS = ['deals-tab', 'whitelist-tab', 'records-tab', 'storage-tab', 'website-tree-tab'];
 
+const Q1 =
+  'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1';
+const Q2 =
+  'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A2';
+const Q3 =
+  'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A3';
+
+/** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
+function seedInitSession(overrides: Partial<InitSession> = {}): void {
+  saveInitSession(window.localStorage, INIT_SESSION_KEY, {
+    version: 1,
+    chainId: 8453,
+    safeAddress: SAFE_INFO.safeAddress,
+    phase: 'awaiting-name',
+    name: 'my-pub',
+    publicationName: 'my-pub.soul2soul.eth',
+    repo: 'https://github.com/Joera/website-starter',
+    branch: 'main',
+    authors: [],
+    proposals: [Q1, Q2, Q3],
+    recordsModule: SAFE_INFO.s2sRecords,
+    publicationModule: SAFE_INFO.s2sPublication,
+    updatedAt: Date.now(),
+    ...overrides,
+  });
+}
+
 describe('s2s-app (shell)', () => {
   beforeEach(() => {
     storeMock.store.__reset();
@@ -197,6 +234,10 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.proposeBatch.mockResolvedValue(
       'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1',
     );
+    safeIntMocks.getRecord.mockResolvedValue('');
+    safeIntMocks.readIsModuleEnabled.mockResolvedValue(false);
+    safeIntMocks.fetchFactoryModuleCreatedLogs.mockResolvedValue([]);
+    safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
     protocolMocks.initialize.mockResolvedValue(undefined);
     filecoinMocks.initWithSessionKey.mockResolvedValue(undefined);
     filecoinMocks.listPublicationStorage.mockResolvedValue([]);
@@ -206,6 +247,9 @@ describe('s2s-app (shell)', () => {
       'fetch',
       vi.fn(async () => ({ ok: true, json: async () => ({}) })),
     );
+
+    // A persisted init session from a previous test must never bleed in.
+    window.localStorage.clear();
   });
 
   it('renders the loading screen first, then the full shell once connect resolves', async () => {
@@ -452,5 +496,112 @@ describe('s2s-app (shell)', () => {
     // The auto config-update trigger is duck-type-guarded: the mocked
     // records-tab has no updateConfig, so the handler must not throw.
     await new Promise((r) => setTimeout(r, 0));
+
+    // The progress modal is closed once the init completes.
+    const modal = el.shadowRoot?.querySelector(
+      's2s-init-progress-modal',
+    ) as S2SInitProgressModal | null;
+    expect(modal?.open).toBe(false);
+  });
+
+  // ---- Init progress modal (live events + reload recovery) -----------------
+
+  it('opens the progress modal from s2s-init-progress events and closes on done', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal).toBeTruthy();
+    expect(modal.open).toBe(false);
+
+    // Live flow: the init component reports an in-flight proposal.
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-progress', {
+        detail: { step: 'awaiting-enable', phase: 'awaiting-enable', proposals: [Q1, Q2] },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+    expect(modal.phase).toBe('awaiting-enable');
+    expect(modal.proposals).toEqual([Q1, Q2]);
+    expect(modal.shadowRoot?.textContent).toContain('Waiting for proposal 2');
+    expect(modal.shadowRoot?.querySelector('.step--current')).toBeTruthy();
+
+    // Flow reaches 'done' → the modal closes.
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-progress', {
+        detail: { step: 'done', phase: 'done', proposals: [Q1, Q2] },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    await el.updateComplete;
+    expect(modal.open).toBe(false);
+  });
+
+  it('restores a persisted mid-flow session on load and opens the progress modal', async () => {
+    seedInitSession({
+      phase: 'detecting',
+      proposals: [Q1],
+      recordsModule: undefined,
+      publicationModule: undefined,
+    });
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-init-progress-modal')).toBeTruthy(),
+    );
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(true);
+    expect(modal.phase).toBe('detecting');
+    expect(modal.proposals).toEqual([Q1]);
+    expect(modal.shadowRoot?.textContent).toContain('my-pub.soul2soul.eth');
+  });
+
+  it('ignores a persisted session that belongs to a different Safe', async () => {
+    seedInitSession({ safeAddress: '0x9999999999999999999999999999999999999999' });
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+  });
+
+  it('shows the name-record wait when modules are live but the record is still pending', async () => {
+    seedInitSession(); // defaults: 'awaiting-name', modules live
+    safeIntMocks.getRecord.mockResolvedValue('');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(true);
+    expect(modal.phase).toBe('awaiting-name');
+    expect(modal.proposals).toEqual([Q1, Q2, Q3]);
+    expect(safeIntMocks.getRecord).toHaveBeenCalledWith('name');
+  });
+
+  it('clears the persisted session and keeps the modal closed once the name is on-chain', async () => {
+    seedInitSession();
+    safeIntMocks.getRecord.mockResolvedValue('my-pub.soul2soul.eth');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 });
