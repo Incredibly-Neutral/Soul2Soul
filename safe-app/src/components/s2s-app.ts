@@ -269,6 +269,18 @@ export class S2SApp extends LitElement {
     this.resetError = null;
     try {
       const safeModules = await this.safeIntegration.fetchSafeModules();
+      // deleteRecord('name') reverts KeyNotFound() when the record was never
+      // written on-chain, and the teardown batch is an atomic MultiSend — so
+      // gate the deletion on the name record actually existing, mirroring how
+      // disableModule is already gated by the fresh enabled-module list.
+      let nameRecorded = false;
+      if (this.safeIntegration.hasRecordsModule()) {
+        try {
+          nameRecorded = (await this.safeIntegration.getRecord('name')) !== '';
+        } catch {
+          nameRecorded = false;
+        }
+      }
       const batch = buildDeletePublicationBatch(
         safeInfo.safeAddress,
         {
@@ -276,6 +288,7 @@ export class S2SApp extends LitElement {
           publicationModule: safeInfo.s2sPublication ?? '',
         },
         safeModules,
+        { deleteName: nameRecorded },
       );
       this.resetUrl = await this.safeIntegration.proposeBatch(batch);
       this.resetState = 'done';

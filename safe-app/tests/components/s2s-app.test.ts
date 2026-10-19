@@ -385,18 +385,47 @@ describe('s2s-app (shell)', () => {
     const confirmBtn = modal.shadowRoot?.querySelector('#confirm-ok') as HTMLElement;
     confirmBtn.click();
     await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
+    expect(safeIntMocks.getRecord).toHaveBeenCalledWith('name');
     const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
       to: string;
       value: string;
       data: string;
     }>;
-    expect(batch.length).toBeGreaterThanOrEqual(3); // 2 disables + name deletion
-    expect(batch[batch.length - 1].to).toBe(SAFE_INFO.s2sRecords);
+    // The name record is NOT on-chain (mock getRecord → ''), so the teardown
+    // skips deleteRecord('name') — otherwise the atomic MultiSend reverts
+    // KeyNotFound() and the whole reset fails to estimate (GS013).
+    expect(batch.length).toBe(2); // 2 disables, no name deletion
+    expect(batch.every((tx) => tx.to.toLowerCase() === SAFE_INFO.safeAddress.toLowerCase())).toBe(
+      true,
+    );
 
     // The modal closes and the queue link is surfaced after proposing.
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy());
     expect(modal.open).toBe(false);
     expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
+  });
+
+  it('reset: includes the deleteRecord op when the name record is on-chain', async () => {
+    safeIntMocks.getRecord.mockResolvedValue('my-pub.soul2soul.eth');
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-confirm-modal') as S2SConfirmModal;
+    (el.shadowRoot?.querySelector('#reset-publication') as HTMLElement).click();
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+
+    const confirmBtn = modal.shadowRoot?.querySelector('#confirm-ok') as HTMLElement;
+    confirmBtn.click();
+    await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
+    const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
+      to: string;
+      value: string;
+      data: string;
+    }>;
+    // Record exists → the full teardown: 2 disables + records.deleteRecord('name').
+    expect(batch.length).toBe(3);
+    expect(batch[2].to).toBe(SAFE_INFO.s2sRecords);
   });
 
   it('scopes the Storage pieces to the current publication module only', async () => {
