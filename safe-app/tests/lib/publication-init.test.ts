@@ -329,6 +329,34 @@ describe('buildDeletePublicationBatch', () => {
     ]);
   });
 
+  it('omits the name deletion when deleteName:false (record not on-chain)', () => {
+    // deleteRecord('name') reverts KeyNotFound() when the record was never
+    // written, and the batch is one atomic MultiSend — so callers gate the
+    // deletion on the record existing. Default stays delete-on.
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+      [RECORDS_MODULE, PUB_MODULE],
+      { deleteName: false },
+    );
+    expect(batch.length).toBe(2); // 2 disables, no deleteRecord
+    expect(batch.every((tx) => tx.to.toLowerCase() === SAFE.toLowerCase())).toBe(true);
+  });
+
+  it('deletes the name record by default (full teardown)', () => {
+    const batch = buildDeletePublicationBatch(
+      SAFE,
+      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+      [RECORDS_MODULE, PUB_MODULE],
+    );
+    expect(batch.length).toBe(3);
+    expect(batch[2]).toEqual({
+      to: RECORDS_MODULE,
+      value: '0',
+      data: delIface.encodeFunctionData('deleteRecord', ['name']),
+    });
+  });
+
   it('throws when neither module is in the Safe module list', () => {
     expect(() =>
       buildDeletePublicationBatch(
