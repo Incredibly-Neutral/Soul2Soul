@@ -13,6 +13,7 @@ import { Abi_S2SPublicationModuleV2Factory } from '../../../protocol/generated/a
 import {
   buildCreateModuleBatch,
   buildEnableModuleBatch,
+  buildFinalizeBatch,
   buildNameRecordBatch,
   buildDeletePublicationBatch,
   encodeEnableModule,
@@ -595,19 +596,22 @@ describe('initializePublication', () => {
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
 
-  it('with a name: 3 proposals (create, enable, name-record), nameRecorded true', async () => {
+  it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {
     let n = 0;
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
 
     const result = await initializePublication({ ...initDeps, propose }, { name: 'my-pub' });
 
     expect(result.nameRecorded).toBe(true);
-    expect(result.proposals).toEqual(['proposal-1', 'proposal-2', 'proposal-3']);
-    expect(propose).toHaveBeenCalledTimes(3);
-    expect(propose.mock.calls[2][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+    expect(result.proposals).toEqual(['proposal-1', 'proposal-2']);
+    expect(propose).toHaveBeenCalledTimes(2);
+    // The merged batch enables both modules AND records the name in one proposal.
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
+    );
   });
 
-  it('records repo + branch in the name-record batch when supplied', async () => {
+  it('records repo + branch in the merged finalize batch when supplied', async () => {
     let n = 0;
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
 
@@ -617,8 +621,8 @@ describe('initializePublication', () => {
     );
 
     expect(result.nameRecorded).toBe(true);
-    expect(propose.mock.calls[2][0]).toEqual(
-      buildNameRecordBatch(RECORDS_MODULE, 'my-pub', {
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub', {
         repo: 'https://github.com/acme/site',
         branch: 'dev',
       }),
@@ -643,7 +647,7 @@ describe('initializePublication', () => {
     ).rejects.toThrow(/Timed out/);
   });
 
-  it('delays the name-record proposal until the enable batch is executed', async () => {
+  it('proposes the merged enable+name batch immediately, then waits for execution', async () => {
     let n = 0;
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
     // Polls 1-2 see modules disabled; poll 3 sees both enabled.
@@ -661,14 +665,17 @@ describe('initializePublication', () => {
       { name: 'my-pub', enablePollIntervalMs: 0 },
     );
 
-    // Name record proposed last, only after the modules became enabled.
-    expect(propose).toHaveBeenCalledTimes(3);
-    expect(propose.mock.calls[2][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+    // The merged batch (enable + name) is proposed up front; the flow then
+    // waits for the human to execute it. No separate name proposal.
+    expect(propose).toHaveBeenCalledTimes(2);
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
+    );
     expect(isModuleEnabled).toHaveBeenCalledTimes(6);
-    expect(result.proposals).toEqual(['proposal-1', 'proposal-2', 'proposal-3']);
+    expect(result.proposals).toEqual(['proposal-1', 'proposal-2']);
   });
 
-  it('times out (name never proposed) when the enable batch is never executed', async () => {
+  it('times out (never completes) when the finalize batch is never executed', async () => {
     let n = 0;
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
     const isModuleEnabled = vi.fn(async (module: string) => module !== RECORDS_MODULE);
@@ -679,14 +686,14 @@ describe('initializePublication', () => {
     await expect(
       initializePublication(
         { ...initDeps, propose, isModuleEnabled, now },
-        { enableTimeoutMs: 1_000, enablePollIntervalMs: 0 },
+        { name: 'my-pub', enableTimeoutMs: 1_000, enablePollIntervalMs: 0 },
       ),
     ).rejects.toThrow(/not enabled: records/);
 
-    // The enable batch was proposed, but the name record was NOT (wait timed out first).
+    // Create + merged finalize proposed, then the wait timed out.
     expect(propose).toHaveBeenCalledTimes(2);
     expect(propose.mock.calls[1][0]).toEqual(
-      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
     );
     expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
