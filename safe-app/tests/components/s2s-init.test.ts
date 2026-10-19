@@ -18,6 +18,7 @@ const PUB_MODULE = '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65';
 const OWNER_A = '0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc';
 const OWNER_B = '0x976EA74026E726554dB657fA54763abd0C3a0aa9';
 const QUEUE_URL = 'https://app.safe.global/transactions/queue?safe=8453:0xAbC';
+const PUB_NAME = 'my-publication.soul2soul.eth';
 
 const SAFE_INFO = {
   safeAddress: SAFE_ADDRESS,
@@ -41,7 +42,7 @@ const PADDED_SAFE = pad(SAFE_ADDRESS);
 const PADDED_RECORDS = pad(RECORDS_MODULE);
 const PADDED_PUB = pad(PUB_MODULE);
 
-/** Decode the single setRecord call so we can assert the recorded value. */
+/** Decode a single setRecord call so we can assert the recorded value. */
 function decodeSetRecord(tx: MetaTransactionData): { key: string; value: string } {
   const parsed = new Interface(['function setRecord(string key, string value)']).parseTransaction({
     data: tx.data,
@@ -49,14 +50,22 @@ function decodeSetRecord(tx: MetaTransactionData): { key: string; value: string 
   return { key: String(parsed!.args[0]), value: String(parsed!.args[1]) };
 }
 
-/** Duck-typed SafeIntegration that resolves the flow instantly. */
+/** Duck-typed SafeIntegration that resolves the flow instantly.
+ *
+ * Models the proposals EXECUTING on-chain:
+ *  - modules are enabled once a batch containing Safe self-calls is proposed;
+ *  - the name record is on-chain once a batch containing records-module calls
+ *    (the merged finalize batch) is proposed.
+ */
 function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
-  // Simulates the enable proposal being EXECUTED on-chain: modules are only
-  // reported enabled once an enable batch (Safe self-calls) has been proposed.
   let enableProposed = false;
+  let nameProposed = false;
   const proposeBatch = vi.fn(async (txs: MetaTransactionData[]) => {
-    if (txs.length > 0 && txs.every((t) => t.to.toLowerCase() === SAFE_ADDRESS.toLowerCase())) {
+    if (txs.some((t) => t.to.toLowerCase() === SAFE_ADDRESS.toLowerCase())) {
       enableProposed = true;
+    }
+    if (txs.some((t) => t.to.toLowerCase() === RECORDS_MODULE.toLowerCase())) {
+      nameProposed = true;
     }
     return QUEUE_URL;
   });
@@ -73,19 +82,21 @@ function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
     readIsModuleEnabled: vi.fn(async () =>
       opts.enabled !== undefined ? opts.enabled : enableProposed,
     ),
-    getRecord: vi.fn(async (_key: string) => ''),
+    getRecord: vi.fn(async (key: string) =>
+      key === 'name' && nameProposed ? PUB_NAME : '',
+    ),
   };
 }
 
 /** Seed an in-flight session into localStorage so the next mount resumes it. */
 function seedSession(overrides: Partial<InitSession> = {}): void {
   saveInitSession(window.localStorage, INIT_SESSION_KEY, {
-    version: 1,
+    version: 2,
     chainId: 8453,
     safeAddress: SAFE_ADDRESS,
     phase: 'detecting',
     name: 'my-publication',
-    publicationName: 'my-publication.soul2soul.eth',
+    publicationName: PUB_NAME,
     repo: 'https://github.com/Joera/website-starter',
     branch: 'main',
     authors: [OWNER_A, OWNER_B],
@@ -121,6 +132,23 @@ function bodyText(el: S2SPublicationInit): string {
   return (el.shadowRoot!.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** The merged finalize batch layout: 2 enable self-calls + 3 setRecord calls. */
+function expectFinalizeShape(batch: MetaTransactionData[], expectedName: string): void {
+  expect(batch).toHaveLength(5);
+  // Enable both modules via Safe self-calls.
+  expect(batch[0].to).toBe(SAFE_ADDRESS);
+  expect(batch[1].to).toBe(SAFE_ADDRESS);
+  expect(batch.every((tx, i) => (i < 2 ? tx.to === SAFE_ADDRESS : true))).toBe(true);
+  // Identity records on the records module.
+  expect(batch.slice(2).every((tx) => tx.to === RECORDS_MODULE)).toBe(true);
+  expect(decodeSetRecord(batch[2])).toEqual({ key: 'name', value: expectedName });
+  expect(decodeSetRecord(batch[3])).toEqual({
+    key: 'repo',
+    value: 'https://github.com/Joera/website-starter',
+  });
+  expect(decodeSetRecord(batch[4])).toEqual({ key: 'branch', value: 'main' });
+}
+
 describe('s2s-publication-init', () => {
   // The component persists its flow to localStorage; a completed/aborted flow
   // from a previous test must never bleed into the next mount.
@@ -139,8 +167,6 @@ describe('s2s-publication-init', () => {
     expect(bodyText(el)).toContain('.soul2soul.eth');
 
     // Authors prefilled as pills (one per Safe owner), not a textarea.
-    // pet-name renders the address in its own shadow root, so assert the
-    // pill's value binding rather than bodyText.
     const pills = el.shadowRoot!.querySelectorAll<HTMLElement>('.alias-pill');
     expect(pills.length).toBe(2);
     expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).not.toBeNull();
@@ -154,7 +180,7 @@ describe('s2s-publication-init', () => {
     expect(start.getAttribute('type')).toBe('primary');
   });
 
-  it('prefills the repo + branch with the starter template and records edits in the name batch', async () => {
+  it('prefills repo + branch and records custom edits in the merged finalize batch', async () => {
     const si = makeSafeIntegration();
     const el = await mount({ safeIntegration: si });
 
@@ -166,7 +192,7 @@ describe('s2s-publication-init', () => {
     expect(repoInput!.value).toBe('https://github.com/Joera/website-starter');
     expect(branchInput!.value).toBe('main');
 
-    // Customizing them flows into the name batch's repo/branch records.
+    // Customizing them flows into the merged batch's repo/branch records.
     setInput(el, '#init-name', 'my-publication');
     setInput(el, '#init-repo', 'https://github.com/Joera/other-site');
     setInput(el, '#init-branch', 'dev');
@@ -178,18 +204,18 @@ describe('s2s-publication-init', () => {
     const evt = await complete;
     await flush();
 
-    const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(3);
-    expect(decodeSetRecord(nameBatch[1])).toEqual({
+    const finalizeBatch = si.proposeBatch.mock.calls[1][0] as MetaTransactionData[];
+    expect(finalizeBatch).toHaveLength(5);
+    expect(decodeSetRecord(finalizeBatch[3])).toEqual({
       key: 'repo',
       value: 'https://github.com/Joera/other-site',
     });
-    expect(decodeSetRecord(nameBatch[2])).toEqual({ key: 'branch', value: 'dev' });
+    expect(decodeSetRecord(finalizeBatch[4])).toEqual({ key: 'branch', value: 'dev' });
     expect(evt.detail.repo).toBe('https://github.com/Joera/other-site');
     expect(evt.detail.branch).toBe('dev');
   });
 
-  it('runs the full three-proposal flow (create -> detect -> enable -> name)', async () => {
+  it('runs the direct two-proposal flow (create -> merged finalize)', async () => {
     const si = makeSafeIntegration();
     const el = await mount({ safeIntegration: si });
 
@@ -203,8 +229,8 @@ describe('s2s-publication-init', () => {
     const evt = await complete;
     await flush();
 
-    // Three proposals: create-batch, enable-batch, name-record.
-    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
+    // Exactly two proposals: create-batch then the merged finalize batch.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
 
     // 1) create-batch: records + publication factory calls.
     const createBatch = si.proposeBatch.mock.calls[0][0] as MetaTransactionData[];
@@ -214,24 +240,11 @@ describe('s2s-publication-init', () => {
     expect(createBatch[1].to).toBe(PUB_FACTORY);
     expect(createBatch[1].value).toBe('0');
 
-    // 2) enable-batch: both modules enabled via Safe self-calls.
-    const enableBatch = si.proposeBatch.mock.calls[1][0] as MetaTransactionData[];
-    expect(enableBatch).toHaveLength(2);
-    expect(enableBatch.every((tx) => tx.to === SAFE_ADDRESS)).toBe(true);
-
-    // 3) name-record: name + starter repo + branch set on the records module.
-    const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(3);
-    expect(nameBatch.every((tx) => tx.to === RECORDS_MODULE)).toBe(true);
-    expect(decodeSetRecord(nameBatch[0])).toEqual({
-      key: 'name',
-      value: 'my-publication.soul2soul.eth',
-    });
-    expect(decodeSetRecord(nameBatch[1])).toEqual({
-      key: 'repo',
-      value: 'https://github.com/Joera/website-starter',
-    });
-    expect(decodeSetRecord(nameBatch[2])).toEqual({ key: 'branch', value: 'main' });
+    // 2) merged finalize: enable both modules + set name/repo/branch.
+    expectFinalizeShape(
+      si.proposeBatch.mock.calls[1][0] as MetaTransactionData[],
+      PUB_NAME,
+    );
 
     // Detection queried the correct factories with the right safe.
     expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledWith(
@@ -241,14 +254,18 @@ describe('s2s-publication-init', () => {
       expect.any(Number),
     );
 
-    // Done state surfaced the module addresses and proposal links.
+    // Done state surfaced the module addresses and identity.
     expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
     expect(evt.detail.publicationModule).toBe(PUB_MODULE);
-    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    expect(evt.detail.name).toBe(PUB_NAME);
     expect(evt.detail.repo).toBe('https://github.com/Joera/website-starter');
     expect(evt.detail.branch).toBe('main');
+    expect(evt.detail.proposals).toHaveLength(2);
     expect(bodyText(el)).toContain('Publication initialized');
-    expect(bodyText(el)).toContain('open in Safe app');
+    // No external "open in Safe app" links anywhere — the app runs embedded
+    // in the Safe web; proposal queue entries render as plain text instead.
+    expect(bodyText(el)).not.toContain('open in Safe app');
+    expect(bodyText(el)).not.toContain('http');
   });
 
   it('requires a name: empty name blocks the flow with an inline error', async () => {
@@ -294,9 +311,9 @@ describe('s2s-publication-init', () => {
     expect(el.shadowRoot!.querySelector(`pet-name[value="${OWNER_A}"]`)).not.toBeNull();
   });
 
-  it('waits for the enable batch to be executed before proposing the name record', async () => {
+  it('completes only after the merged finalize batch is executed', async () => {
     // Modules become enabled only after a few polls — simulating the human
-    // executing the enable proposal in the Safe app mid-flow.
+    // executing the merged finalize proposal in the Safe app mid-flow.
     let calls = 0;
     const si = makeSafeIntegration();
     si.readIsModuleEnabled = vi.fn(async () => {
@@ -315,16 +332,13 @@ describe('s2s-publication-init', () => {
     await complete;
     await flush();
 
-    // The name record is only proposed AFTER the modules became enabled.
-    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
+    // The merged batch is proposed once (up front); execution is polled.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
     expect(calls).toBeGreaterThanOrEqual(5);
-    const nameBatch = si.proposeBatch.mock.calls[2][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(3);
-    expect(nameBatch.every((tx) => tx.to === RECORDS_MODULE)).toBe(true);
     expect(bodyText(el)).toContain('Publication initialized');
   });
 
-  it('stays incomplete and surfaces a timeout when the enable batch is never executed', async () => {
+  it('stays incomplete and surfaces a timeout when the finalize batch is never executed', async () => {
     const si = makeSafeIntegration({ enabled: false });
     const el = await mount({
       safeIntegration: si,
@@ -338,8 +352,8 @@ describe('s2s-publication-init', () => {
     setInput(el, '#init-name', 'my-publication');
     clickInit(el);
 
-    // Enable never becomes true → the wait times out before the name is
-    // proposed; only create + enable were proposed.
+    // Enable never becomes true → the wait times out before the flow finishes;
+    // only create + finalize were proposed.
     await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
     expect(completed).toBe(false);
     expect(si.proposeBatch).toHaveBeenCalledTimes(2);
@@ -398,52 +412,28 @@ describe('s2s-publication-init', () => {
     const evt = await complete;
     await flush();
 
-    // Create was NOT re-proposed — only enable + name are new.
-    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    // Create was NOT re-proposed — only the merged finalize batch is new.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
     expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
     expect(evt.detail.publicationModule).toBe(PUB_MODULE);
-    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
-    // The restored create proposal is kept in front of the two new ones.
-    expect(evt.detail.proposals).toHaveLength(3);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    // The restored create proposal is kept in front of the new finalize one.
+    expect(evt.detail.proposals).toHaveLength(2);
     expect(evt.detail.proposals[0]).toBe(QUEUE_URL);
     expect(bodyText(el)).toContain('Publication initialized');
   });
 
-  it('skips the enable wait on resume when the modules are already enabled', async () => {
+  it('finishes immediately on resume when the whole flow already executed', async () => {
     seedSession({
-      phase: 'awaiting-enable',
+      phase: 'awaiting-finalize',
       recordsModule: RECORDS_MODULE,
       publicationModule: PUB_MODULE,
       proposals: [QUEUE_URL, QUEUE_URL],
     });
     const si = makeSafeIntegration({ enabled: true });
-
-    const { el, complete } = await mountWithListener(si);
-    const evt = await complete;
-    await flush();
-
-    // Enable is already satisfied on-chain -> straight to the name record.
-    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
-    const nameBatch = si.proposeBatch.mock.calls[0][0] as MetaTransactionData[];
-    expect(nameBatch).toHaveLength(3);
-    expect(decodeSetRecord(nameBatch[0])).toEqual({
-      key: 'name',
-      value: 'my-publication.soul2soul.eth',
-    });
-    expect(evt.detail.proposals).toHaveLength(3); // 2 restored + 1 new
-    expect(bodyText(el)).toContain('Publication initialized');
-  });
-
-  it('finishes immediately on resume when the name record is already on-chain', async () => {
-    seedSession({
-      phase: 'awaiting-name',
-      recordsModule: RECORDS_MODULE,
-      publicationModule: PUB_MODULE,
-      proposals: [QUEUE_URL, QUEUE_URL, QUEUE_URL],
-    });
-    const si = makeSafeIntegration({ enabled: true });
     si.getRecord = vi.fn(async (key: string) =>
-      key === 'name' ? 'my-publication.soul2soul.eth' : '',
+      key === 'name' ? PUB_NAME : '',
     );
 
     const { complete } = await mountWithListener(si);
@@ -452,44 +442,78 @@ describe('s2s-publication-init', () => {
 
     // Nothing left to propose — the whole flow was already executed.
     expect(si.proposeBatch).not.toHaveBeenCalled();
-    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    expect(evt.detail.name).toBe(PUB_NAME);
     // The session is cleared once everything is on-chain.
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
-  it('waits for a pending name record on resume, then clears the session', async () => {
+  it('re-proposes the merged batch on resume when modules are enabled but the name is missing', async () => {
+    // The legacy dead-end state: modules enabled on-chain, name never recorded.
+    // planNextAction must recover it by re-proposing the merged finalize batch
+    // (enableModule is idempotent on the Safe).
     seedSession({
-      phase: 'awaiting-name',
+      phase: 'finalizing',
       recordsModule: RECORDS_MODULE,
       publicationModule: PUB_MODULE,
-      proposals: [QUEUE_URL, QUEUE_URL, QUEUE_URL],
+      proposals: [QUEUE_URL],
     });
     const si = makeSafeIntegration({ enabled: true });
     let recorded = false;
     si.getRecord = vi.fn(async (key: string) =>
-      key === 'name' && recorded ? 'my-publication.soul2soul.eth' : '',
+      key === 'name' && recorded ? PUB_NAME : '',
+    );
+
+    const { el, complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
+    // The human executes the re-proposed finalize batch after a few polls.
+    setTimeout(() => {
+      recorded = true;
+    }, 40);
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(bodyText(el)).toContain('Publication initialized');
+  });
+
+  it('waits for the finalize batch to be executed on resume, then clears the session', async () => {
+    seedSession({
+      phase: 'awaiting-finalize',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    let recorded = false;
+    si.getRecord = vi.fn(async (key: string) =>
+      key === 'name' && recorded ? PUB_NAME : '',
     );
 
     const { complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
-    // The human executes the name proposal after a few polls.
+    // The human executes the finalize proposal after a few polls.
     setTimeout(() => {
       recorded = true;
     }, 40);
     const evt = await complete;
     await flush();
 
-    expect(evt.detail.name).toBe('my-publication.soul2soul.eth');
+    expect(evt.detail.name).toBe(PUB_NAME);
     expect(si.proposeBatch).not.toHaveBeenCalled();
+    // Once both modules are enabled AND the name is on-chain, the session is cleared.
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
-  it('broadcasts the restored phase so the host can open the progress modal', async () => {
+  it('broadcasts the restored phase so the host can keep the progress modal in sync', async () => {
     seedSession({
-      phase: 'awaiting-enable',
+      phase: 'awaiting-finalize',
       recordsModule: RECORDS_MODULE,
       publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL],
     });
-    const progress: Array<{ step: string; phase: string; proposals: string[] }> = [];
+    const progress: Array<{ step: string; phase: string; proposals: string[]; name?: string }> =
+      [];
 
     const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
     Object.assign(el, {
@@ -499,7 +523,14 @@ describe('s2s-publication-init', () => {
     });
     el.addEventListener('s2s-init-progress', (e) =>
       progress.push(
-        (e as CustomEvent<{ step: string; phase: string; proposals: string[] }>).detail,
+        (
+          e as CustomEvent<{
+            step: string;
+            phase: string;
+            proposals: string[];
+            name?: string;
+          }>
+        ).detail,
       ),
     );
     document.body.appendChild(el);
@@ -507,7 +538,9 @@ describe('s2s-publication-init', () => {
     await flush();
 
     expect(progress.length).toBeGreaterThan(0);
-    expect(progress[0].phase).toBe('awaiting-enable');
-    expect(progress[0].step).toBe('awaiting-enable');
+    expect(progress[0].phase).toBe('awaiting-finalize');
+    expect(progress[0].step).toBe('awaiting-finalize');
+    // The progress event carries the publication name for the modal title.
+    expect(progress[0].name).toBe(PUB_NAME);
   });
 });

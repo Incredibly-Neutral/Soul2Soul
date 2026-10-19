@@ -254,6 +254,37 @@ export function buildNameRecordBatch(
 }
 
 /**
+ * Batch 2 (MERGED — the direct sequence, PR #158): enable BOTH modules AND
+ * record the publication identity in ONE atomic MultiSend proposal:
+ *   [enableModule(records), enableModule(publication),
+ *    records.setRecord("name", name),
+ *    records.setRecord("repo", repo)?, records.setRecord("branch", branch)?]
+ *
+ * setRecord is onlySafe on the records module and does not require the module
+ * to be enabled on the Safe (that is exactly what this batch does), and every
+ * operand targets the Safe's own chain — so there is no reason to split enable
+ * and name into two round-trips. Merging them makes the direct happy path two
+ * Safe executions total (create → finalize) and eliminates the window where
+ * modules are enabled but the name record was never proposed (the
+ * reload-into-already-enabled-setup dead end of the 3-proposal flow).
+ *
+ * Safe's enableModule is idempotent, so re-proposing this batch against
+ * already-enabled modules during a recovery is harmless.
+ */
+export function buildFinalizeBatch(
+  safeAddress: string,
+  recordsModule: string,
+  publicationModule: string,
+  name: string,
+  extra?: { repo?: string; branch?: string },
+): MetaTransactionData[] {
+  return [
+    ...buildEnableModuleBatch(safeAddress, recordsModule, publicationModule),
+    ...buildNameRecordBatch(recordsModule, name, extra),
+  ];
+}
+
+/**
  * Teardown batch — the inverse of init, for starting a new publication:
  *   [disableModule(prev, laterModule), disableModule(prev, earlierModule), records.deleteRecord("name")]
  *
@@ -467,14 +498,15 @@ export function defaultSafeUrl(chainId: number, safeAddress: string): string {
 
 /**
  * Orchestrate the full "new publication init" flow as a sequence of Safe
- * proposals (never direct sends):
+ * proposals (never direct sends) — the direct sequence (PR #158):
  *   1. propose create-batch (both modules),
  *   2. detect deployed module addresses from ModuleCreated logs,
- *   3. propose enable-batch (both modules),
- *   4. wait for a human to EXECUTE the enable batch (waitForModulesEnabled),
- *   5. if `name` given, propose the name-record batch.
+ *   3. propose the MERGED enable+name batch (buildFinalizeBatch) — one
+ *      proposal enables both modules AND records the identity,
+ *   4. wait for a human to EXECUTE the merged batch (waitForModulesEnabled).
  *
- * `proposals` is ordered and has length 2 (3 with `name`).
+ * `proposals` is ordered and has length 2. When `name` is empty the merged
+ * batch is just the two enableModule calls (identity steps skipped).
  */
 export async function initializePublication(
   deps: InitializePublicationDeps,
@@ -501,14 +533,21 @@ export async function initializePublication(
     {},
   );
 
-  // Batch 2: enable both modules (Safe self-calls).
-  const enableBatch = buildEnableModuleBatch(deps.safeAddress, recordsModule, publicationModule);
-  proposals.push(await deps.propose(enableBatch));
+  // Batch 2 (merged): enable both modules AND record the identity — one
+  // proposal, one Safe execution. setRecord is onlySafe (no enable needed),
+  // so splitting enable and name was an unnecessary extra round-trip; that
+  // split was also what left "modules enabled but name never proposed" as a
+  // resumable-but-dead state across reloads.
+  const hasName = name !== undefined && name !== '';
+  const finalizeBatch = hasName
+    ? buildFinalizeBatch(deps.safeAddress, recordsModule, publicationModule, name, {
+        repo: opts.repo,
+        branch: opts.branch,
+      })
+    : buildEnableModuleBatch(deps.safeAddress, recordsModule, publicationModule);
+  proposals.push(await deps.propose(finalizeBatch));
 
-  // Wait for the human to execute the enable batch in the Safe queue before
-  // proposing the name record. Proposing name early and verifying immediately
-  // used to fail with "not enabled" whenever the enable batch was still
-  // pending — the exact failure seen in real-world testing.
+  // Wait for the human to execute the merged batch in the Safe queue.
   await waitForModulesEnabled(
     {
       recordsModule,
@@ -519,16 +558,5 @@ export async function initializePublication(
     { timeoutMs: opts.enableTimeoutMs, pollIntervalMs: opts.enablePollIntervalMs },
   );
 
-  // Batch 3 (optional): record the publication name (+ repo/branch when given).
-  let nameRecorded = false;
-  if (name !== undefined && name !== '') {
-    proposals.push(
-      await deps.propose(
-        buildNameRecordBatch(recordsModule, name, { repo: opts.repo, branch: opts.branch }),
-      ),
-    );
-    nameRecorded = true;
-  }
-
-  return { recordsModule, publicationModule, nameRecorded, proposals };
+  return { recordsModule, publicationModule, nameRecorded: hasName, proposals };
 }
