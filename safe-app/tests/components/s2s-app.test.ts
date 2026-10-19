@@ -185,22 +185,20 @@ const Q1 =
   'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1';
 const Q2 =
   'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A2';
-const Q3 =
-  'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A3';
 
 /** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
 function seedInitSession(overrides: Partial<InitSession> = {}): void {
   saveInitSession(window.localStorage, INIT_SESSION_KEY, {
-    version: 1,
+    version: 2,
     chainId: 8453,
     safeAddress: SAFE_INFO.safeAddress,
-    phase: 'awaiting-name',
+    phase: 'awaiting-finalize',
     name: 'my-pub',
     publicationName: 'my-pub.soul2soul.eth',
     repo: 'https://github.com/Joera/website-starter',
     branch: 'main',
     authors: [],
-    proposals: [Q1, Q2, Q3],
+    proposals: [Q1, Q2],
     recordsModule: SAFE_INFO.s2sRecords,
     publicationModule: SAFE_INFO.s2sPublication,
     updatedAt: Date.now(),
@@ -533,9 +531,9 @@ describe('s2s-app (shell)', () => {
     expect(modal?.open).toBe(false);
   });
 
-  // ---- Init progress modal (live events + reload recovery) -----------------
+  // ---- Init progress modal (fallback-only: live inline status + reload recovery) ----
 
-  it('opens the progress modal from s2s-init-progress events and closes on done', async () => {
+  it('live s2s-init-progress events never open the modal (fallback-only) but keep it in sync', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
@@ -548,23 +546,30 @@ describe('s2s-app (shell)', () => {
     expect(modal).toBeTruthy();
     expect(modal.open).toBe(false);
 
-    // Live flow: the init component reports an in-flight proposal.
+    // Live happy path: the init component reports an in-flight proposal. The
+    // full-screen modal must stay CLOSED — the inline component status is the
+    // happy path; the modal is the reload-recovery fallback only.
     const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
-        detail: { step: 'awaiting-enable', phase: 'awaiting-enable', proposals: [Q1, Q2] },
+        detail: {
+          step: 'awaiting-finalize',
+          phase: 'awaiting-finalize',
+          proposals: [Q1, Q2],
+          name: 'my-pub.soul2soul.eth',
+        },
         bubbles: true,
         composed: true,
       }),
     );
     await el.updateComplete;
-    expect(modal.open).toBe(true);
-    expect(modal.phase).toBe('awaiting-enable');
+    expect(modal.open).toBe(false);
+    // The tracked state stays in sync (and the name reaches the modal title).
+    expect(modal.phase).toBe('awaiting-finalize');
     expect(modal.proposals).toEqual([Q1, Q2]);
-    expect(modal.shadowRoot?.textContent).toContain('Waiting for proposal 2');
-    expect(modal.shadowRoot?.querySelector('.step--current')).toBeTruthy();
+    expect(modal.name).toBe('my-pub.soul2soul.eth');
 
-    // Flow reaches 'done' → the modal closes.
+    // Flow reports 'done' → modal stays closed.
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
         detail: { step: 'done', phase: 'done', proposals: [Q1, Q2] },
@@ -576,7 +581,7 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
   });
 
-  it('restores a persisted mid-flow session on load and opens the progress modal', async () => {
+  it('restores a persisted mid-flow session on load and opens the progress modal (recovery fallback)', async () => {
     seedInitSession({
       phase: 'detecting',
       proposals: [Q1],
@@ -587,12 +592,14 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() =>
-      expect(el.shadowRoot?.querySelector('s2s-init-progress-modal')).toBeTruthy(),
-    );
+    await vi.waitFor(() => {
+      const modal = el.shadowRoot?.querySelector(
+        's2s-init-progress-modal',
+      ) as S2SInitProgressModal;
+      expect(modal.open).toBe(true);
+    });
 
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
-    expect(modal.open).toBe(true);
     expect(modal.phase).toBe('detecting');
     expect(modal.proposals).toEqual([Q1]);
     expect(modal.shadowRoot?.textContent).toContain('my-pub.soul2soul.eth');
@@ -608,23 +615,13 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
   });
 
-  it('shows the name-record wait when modules are live but the record is still pending', async () => {
-    seedInitSession(); // defaults: 'awaiting-name', modules live
-    safeIntMocks.getRecord.mockResolvedValue('');
-
-    const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
-
-    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
-    expect(modal.open).toBe(true);
-    expect(modal.phase).toBe('awaiting-name');
-    expect(modal.proposals).toEqual([Q1, Q2, Q3]);
-    expect(safeIntMocks.getRecord).toHaveBeenCalledWith('name');
-  });
-
-  it('clears the persisted session and keeps the modal closed once the name is on-chain', async () => {
+  it('clears any stale persisted session when modules are already live', async () => {
+    // The merged flow is atomic: modules live ⇒ the enable+name batch executed ⇒
+    // the name record is set too — there is nothing left to resume. A stale
+    // session against live modules is dropped (no modal), so the user can
+    // re-create/re-publish cleanly instead of being stuck behind it.
     seedInitSession();
-    safeIntMocks.getRecord.mockResolvedValue('my-pub.soul2soul.eth');
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());

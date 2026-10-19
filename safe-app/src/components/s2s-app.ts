@@ -58,11 +58,15 @@ export class S2SApp extends LitElement {
   @state() private resetError: string | null = null;
 
   // Init progress: the publication-creation flow (live or recovered from local
-  // storage after a reload) drives this progress modal. 'initPhase' null = no
-  // active flow; otherwise the modal is open, showing the current phase.
+  // storage after a reload) drives this progress modal. 'initModalOpen' is the
+  // fallback-only switch — it opens ONLY on reload-recovery (syncInitProgress),
+  // never for a live flow, which uses the init component's inline status.
+  // 'initPhase' null = no active flow; the other fields keep the (recovery)
+  // modal in sync with the resumed flow's progress events.
   @state() private initPhase: InitPhase | null = null;
   @state() private initProposals: string[] = [];
   @state() private initName = '';
+  @state() private initModalOpen = false;
 
   private unsubscribers: Array<() => void> = [];
 
@@ -149,7 +153,7 @@ export class S2SApp extends LitElement {
 
       // If a publication-init session was persisted, surface its progress (or
       // clear it once everything is on-chain).
-      await this.syncInitProgress(safeInfo);
+      this.syncInitProgress(safeInfo);
 
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
@@ -300,16 +304,13 @@ export class S2SApp extends LitElement {
 
   /**
    * Drive the init progress modal from a persisted session. Called once on
-   * page load (after the Safe is connected). The init component, when mounted,
-   * will also resume the flow and dispatch s2s-init-progress events that
-   * supersede this initial state; this handles the reload-into-an-already-
-   * enabled-setup case where the init component is NOT mounted (modules live,
-   * name record still pending).
+   * page load (after the Safe is connected). This is the ONLY path that opens
+   * the progress modal — the reload-recovery fallback the flow needs when a
+   * reload interrupts a direct sequence. When modules aren't live yet the init
+   * component (mounted below) resumes the flow itself; the modal is the banner
+   * while it catches up.
    */
-  private async syncInitProgress(safeInfo: {
-    chainId: number;
-    safeAddress: string;
-  }): Promise<void> {
+  private syncInitProgress(safeInfo: { chainId: number; safeAddress: string }): void {
     const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     if (!session) return;
 
@@ -324,25 +325,26 @@ export class S2SApp extends LitElement {
     if (session.phase === 'done') {
       clearInitSession(window.localStorage, INIT_SESSION_KEY);
       this.initPhase = null;
+      this.initModalOpen = false;
       return;
     }
 
     if (this.safeIntegration.hasRecordsModule()) {
-      // Modules are live — only the name record can still be pending.
-      const nameRecorded = (await this.safeIntegration.getRecord('name')) !== '';
-      if (nameRecorded) {
-        clearInitSession(window.localStorage, INIT_SESSION_KEY);
-        this.initPhase = null;
-        return;
-      }
-      this.initPhase = 'awaiting-name';
-      this.initProposals = session.proposals;
-      this.initName = session.publicationName;
+      // Modules are live. The direct-sequence flow enables AND records the
+      // name in ONE atomic batch, so once the records module is live the name
+      // record is set too — the flow is complete. (A legacy half-initialized
+      // setup — modules enabled but name missing — can't be resumed by the
+      // merged flow; drop the stale session and let the user set records via
+      // the Config tab or reset.)
+      clearInitSession(window.localStorage, INIT_SESSION_KEY);
+      this.initPhase = null;
+      this.initModalOpen = false;
       return;
     }
 
-    // Modules not live: the init component (mounted below) resumes the flow
-    // itself; show the recovered progress in the meantime.
+    // Modules not live yet: the init component (mounted below) resumes the
+    // merged flow itself; the modal is the fallback banner while it catches up.
+    this.initModalOpen = true;
     this.initPhase = session.phase;
     this.initProposals = session.proposals;
     this.initName = session.publicationName;
@@ -361,9 +363,11 @@ export class S2SApp extends LitElement {
       .detail;
     const { name, repo, branch } = detail ?? {};
 
-    // The flow finished proposing — close the progress modal. The session stays
-    // persisted for crash-safety until the last record is observed on-chain.
+    // The flow finished proposing — close the (recovery) progress modal. The
+    // session stays persisted for crash-safety until the last record is
+    // observed on-chain.
     this.initPhase = null;
+    this.initModalOpen = false;
 
     // Surface the Config tab — the immediate config update below runs there.
     this.currentTab = 'records';
@@ -396,8 +400,13 @@ export class S2SApp extends LitElement {
       >
     ).detail;
     if (!detail) return;
-    if (detail.phase === 'done') {
+    // 'error' / 'done' end the flow — close the (recovery) modal so the
+    // inline result is visible. Live progress never OPENS the modal: the happy
+    // path uses the init component's inline status; the modal is the
+    // reload-recovery fallback only.
+    if (detail.step === 'error' || detail.step === 'done') {
       this.initPhase = null;
+      this.initModalOpen = false;
       return;
     }
     this.initPhase = detail.phase;
@@ -623,7 +632,7 @@ export class S2SApp extends LitElement {
       ></s2s-confirm-modal>
 
       <s2s-init-progress-modal
-        .open=${this.initPhase !== null}
+        .open=${this.initModalOpen}
         .phase=${this.initPhase ?? 'creating'}
         .proposals=${this.initProposals}
         .name=${this.initName}

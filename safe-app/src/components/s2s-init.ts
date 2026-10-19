@@ -1,18 +1,24 @@
 // s2s-init.ts — "New publication" component (SPEC-hosts.md AD-3).
 //
 // Shown by <s2s-app> when the loaded Safe has neither the records nor the
-// publication module. It drives the two-proposal init flow end-to-end using
-// the exported building blocks of publication-init.ts (the pure lib, PR #147):
+// publication module. It drives the DIRECT-SEQUENCE init flow end-to-end
+// (PR #158) using the exported building blocks of publication-init.ts (the
+// pure lib, PR #147):
 //
-//   1. propose create-batch  (buildCreateModuleBatch)   → Safe queue URL
-//   2. await execution, detect module addresses          (detectModuleAddresses)
-//   3. propose enable-batch  (buildEnableModuleBatch)    → Safe queue URL
-//   4. await enable execution, then propose name record  (buildNameRecordBatch)
+//   1. propose create-batch  (buildCreateModuleBatch)      → Safe queue
+//   2. await execution, detect module addresses           (detectModuleAddresses)
+//   3. propose the MERGED enable+name batch (buildFinalizeBatch) → Safe queue
+//   4. await execution (modules enabled AND name recorded) → done
 //
-// Step 4 waits for the human to EXECUTE the enable batch in the Safe app
-// before proposing the name record — verification used to run immediately
-// after proposing and failed whenever the enable batch was still pending
-// in the queue (the real-world init failure).
+// Only two proposals, only two Safe executions. The module addresses are
+// unknowable until the create batch executes (plain CREATE, non-idempotent
+// factories), so a single-proposal init is impossible without a protocol
+// change; the merged finalize batch is the floor for the safe-app-only flow.
+//
+// The component deliberately drives the steps itself (rather than calling the
+// single-shot initializePublication) so each Safe-proposal queue URL can be
+// surfaced the moment it is created — a human has to open the Safe app and
+// execute each proposal before the next step can run.
 //
 // The component deliberately drives the steps itself (rather than calling the
 // single-shot initializePublication) so each Safe-proposal queue URL can be
@@ -43,8 +49,7 @@ import { buttonStyles } from '@/styles/button-styles.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import {
   buildCreateModuleBatch,
-  buildEnableModuleBatch,
-  buildNameRecordBatch,
+  buildFinalizeBatch,
   detectModuleAddresses,
   waitForModulesEnabled,
   type MetaTransactionData,
@@ -102,14 +107,7 @@ const DEFAULT_BRANCH = 'main';
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
-const WORKING_STEPS = [
-  'creating',
-  'detecting',
-  'enabling',
-  'awaiting-enable',
-  'naming',
-  'awaiting-name',
-] as const;
+const WORKING_STEPS = ['creating', 'detecting', 'finalizing', 'awaiting-finalize'] as const;
 
 type Step = 'idle' | (typeof WORKING_STEPS)[number] | 'done' | 'error';
 
@@ -427,6 +425,7 @@ export class S2SPublicationInit extends LitElement {
           step: this.step,
           phase: this.session?.phase ?? 'creating',
           proposals: this.proposals,
+          name: this.session?.publicationName ?? this.name,
         },
         bubbles: true,
         composed: true,
@@ -498,7 +497,7 @@ export class S2SPublicationInit extends LitElement {
       this.error = '';
       this.proposals = [];
       this.session = {
-        version: 1,
+        version: 2,
         chainId: this.safeInfo?.chainId ?? 0,
         safeAddress,
         phase: 'creating',
@@ -612,55 +611,35 @@ export class S2SPublicationInit extends LitElement {
             lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
           },
         );
-        this.persist('enabling', { recordsModule, publicationModule });
+        this.persist('finalizing', { recordsModule, publicationModule });
         return false;
       }
 
-      case 'enable': {
-        this.step = 'enabling';
+      case 'finalize': {
+        this.step = 'finalizing';
         this.dispatchProgress();
         const { recordsModule, publicationModule } = this.requireModules(session);
-        const enableBatch = buildEnableModuleBatch(safeAddress, recordsModule, publicationModule);
-        const enableUrl = await si.proposeBatch(enableBatch);
-        this.proposals = [...this.proposals, enableUrl];
-        this.persist('awaiting-enable', { proposals: this.proposals });
-        this.step = 'awaiting-enable';
+        const finalizeBatch = buildFinalizeBatch(
+          safeAddress,
+          recordsModule,
+          publicationModule,
+          session.publicationName,
+          { repo: session.repo, branch: session.branch },
+        );
+        const finalizeUrl = await si.proposeBatch(finalizeBatch);
+        this.proposals = [...this.proposals, finalizeUrl];
+        this.persist('awaiting-finalize', { proposals: this.proposals });
+        this.step = 'awaiting-finalize';
         this.dispatchProgress();
         return false;
       }
 
-      case 'await-enable': {
-        this.step = 'awaiting-enable';
+      case 'await-finalize': {
+        this.step = 'awaiting-finalize';
         this.dispatchProgress();
         const { recordsModule, publicationModule } = this.requireModules(session);
         await this.waitForEnabled(si, recordsModule, publicationModule);
-        return false;
-      }
-
-      case 'name': {
-        this.step = 'naming';
-        this.dispatchProgress();
-        const { recordsModule } = this.requireModules(session);
-        const nameBatch = buildNameRecordBatch(recordsModule, session.publicationName, {
-          repo: session.repo,
-          branch: session.branch,
-        });
-        const nameUrl = await si.proposeBatch(nameBatch);
-        this.proposals = [...this.proposals, nameUrl];
-        this.persist('awaiting-name', { proposals: this.proposals });
-        this.step = 'awaiting-name';
-        this.dispatchProgress();
-        // Optimistic completion for the forward path: the host populates the
-        // app immediately (PR #155) while the session keeps tracking the
-        // pending name record, so a reload mid-execution resumes correctly.
-        this.complete();
-        return true;
-      }
-
-      case 'await-name': {
-        this.step = 'awaiting-name';
-        this.dispatchProgress();
-        await this.waitForNameRecord(si);
+        await this.waitForNameRecord(si, session.publicationName);
         return false;
       }
 
@@ -692,7 +671,7 @@ export class S2SPublicationInit extends LitElement {
     return { recordsModule, publicationModule };
   }
 
-  /** Poll until both modules are enabled (the human executes proposal 2). */
+  /** Poll until the enable proposal is executed (the human executes it). */
   private async waitForEnabled(
     si: InitSafeIntegration,
     recordsModule: string,
@@ -713,14 +692,14 @@ export class S2SPublicationInit extends LitElement {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       this.fail(
-        `${message} Open the enable proposal in the Safe app, execute it, then reload — the app will resume where it left off.`,
+        `${message} Open the proposal in the Safe app, execute it, then reload — the app will resume where it left off.`,
       );
       throw new InitTimeoutError(message);
     }
   }
 
-  /** Poll until the name record is on-chain (the human executes proposal 3). */
-  private async waitForNameRecord(si: InitSafeIntegration): Promise<void> {
+  /** Poll until the name record is on-chain (the human executes proposal 2). */
+  private async waitForNameRecord(si: InitSafeIntegration, pubName: string): Promise<void> {
     const start = Date.now();
     for (;;) {
       let value = '';
@@ -729,12 +708,12 @@ export class S2SPublicationInit extends LitElement {
       } catch {
         value = '';
       }
-      if (value !== '') return;
+      if (value === pubName) return;
       if (Date.now() - start > this.enableTimeoutMs) {
         this.fail(
-          'Timed out waiting for the name record to be executed. Open the name proposal in the Safe app, execute it, then reload — the app will resume where it left off.',
+          'Timed out waiting for the proposal to be executed. Open it in the Safe app, execute it, then reload — the app will resume where it left off.',
         );
-        throw new InitTimeoutError('name-record timeout');
+        throw new InitTimeoutError('finalize timeout');
       }
       await new Promise((r) => setTimeout(r, this.enablePollIntervalMs));
     }
@@ -742,13 +721,15 @@ export class S2SPublicationInit extends LitElement {
 
   private renderProposals(): unknown {
     if (this.proposals.length === 0) return '';
+    // The app runs embedded inside the Safe web — the queue is on the same
+    // page, so no external "open in Safe app" links are needed (external
+    // navigation from the Safe-app iframe is intercepted anyway).
     return html`
       <ul class="init__proposals">
         ${this.proposals.map(
-          (url, i) => html`
+          (_url, i) => html`
             <li class="init__proposal">
-              <span>Proposal ${i + 1}:</span>
-              <a href=${url} target="_blank" rel="noopener noreferrer">open in Safe app</a>
+              <span>Proposal ${i + 1}: queued in the Safe</span>
             </li>
           `,
         )}
@@ -761,14 +742,17 @@ export class S2SPublicationInit extends LitElement {
 
     const labels: Partial<Record<Step, string>> = {
       creating: 'Proposing module creation…',
-      detecting: 'Waiting for proposal 1 to be executed…',
-      enabling: 'Proposing module enable…',
-      'awaiting-enable': 'Waiting for proposal 2 to be executed…',
-      naming: 'Proposing name record…',
-      'awaiting-name': 'Waiting for proposal 3 to be executed…',
+      detecting: 'Waiting for proposal 1 (create modules) to be executed…',
+      finalizing: 'Proposing module enable + name record…',
+      'awaiting-finalize': 'Waiting for proposal 2 (enable + name record) to be executed…',
     };
 
+    const heading = this.session?.publicationName
+      ? `Initializing publication — ${this.session.publicationName}`
+      : 'Initializing publication';
+
     return html`
+      <h2>${heading}</h2>
       <div class="init__status">
         <span class="init__spinner" aria-hidden="true"></span>
         <span>${labels[this.step]}</span>
@@ -779,18 +763,13 @@ export class S2SPublicationInit extends LitElement {
 
   render() {
     if (this.step === 'done') {
-      // After an optimistic completion the name record may still be pending
-      // execution — say so instead of implying it landed.
-      const pendingName = this.session?.phase === 'awaiting-name';
+      // The merged batch only completes once it is executed — modules enabled
+      // AND name record on-chain — so "done" is the real, on-chain state.
       return html`
         <h2>Publication initialized</h2>
         <div class="init__success">
-          Records and Publication modules are installed and enabled on this Safe.
-          ${pendingName
-            ? ' The name record is proposed — execute it in the Safe app to finish.'
-            : ''}
+          Records and Publication modules are enabled and the name record is set on this Safe.
         </div>
-        ${this.renderProposals()}
       `;
     }
 
@@ -805,10 +784,7 @@ export class S2SPublicationInit extends LitElement {
     }
 
     if (this.isWorkingStep(this.step)) {
-      return html`
-        <h2>Initializing publication</h2>
-        ${this.renderWorking()}
-      `;
+      return html` ${this.renderWorking()} `;
     }
 
     return html`

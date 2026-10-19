@@ -16,7 +16,7 @@ const SAFE = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 
 function makeSession(overrides: Partial<InitSession> = {}): InitSession {
   return {
-    version: 1,
+    version: 2,
     chainId: 8453,
     safeAddress: SAFE,
     phase: 'detecting',
@@ -57,7 +57,7 @@ describe('init-session persistence', () => {
   it('round-trips a session through save -> load', () => {
     const storage = makeStorage();
     const session = makeSession({
-      phase: 'awaiting-enable',
+      phase: 'awaiting-finalize',
       recordsModule: '0x90F79bf6EB2c4f870365E785982E1f101E93b906',
       publicationModule: '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65',
       proposals: ['url-1', 'url-2'],
@@ -81,12 +81,19 @@ describe('init-session persistence', () => {
 
   it('returns null for a wrong-version or incomplete session', () => {
     const bad = makeStorage({
-      [INIT_SESSION_KEY]: JSON.stringify({ version: 2, phase: 'detecting' }),
+      [INIT_SESSION_KEY]: JSON.stringify({ version: 3, phase: 'detecting' }),
     });
     expect(loadInitSession(bad, INIT_SESSION_KEY)).toBeNull();
 
+    // v1 sessions from the old 3-proposal flow are incompatible with the
+    // merged direct sequence — they must be dropped, not resumed.
+    const oldV1 = makeStorage({
+      [INIT_SESSION_KEY]: JSON.stringify({ version: 1, phase: 'awaiting-name' }),
+    });
+    expect(loadInitSession(oldV1, INIT_SESSION_KEY)).toBeNull();
+
     const missingName = makeStorage({
-      [INIT_SESSION_KEY]: JSON.stringify({ version: 1, phase: 'detecting' }),
+      [INIT_SESSION_KEY]: JSON.stringify({ version: 2, phase: 'detecting' }),
     });
     expect(loadInitSession(missingName, INIT_SESSION_KEY)).toBeNull();
   });
@@ -94,10 +101,10 @@ describe('init-session persistence', () => {
   it('tolerates malformed optional fields and drops non-string members', () => {
     const storage = makeStorage({
       [INIT_SESSION_KEY]: JSON.stringify({
-        version: 1,
+        version: 2,
         chainId: 8453,
         safeAddress: SAFE,
-        phase: 'awaiting-name',
+        phase: 'awaiting-finalize',
         name: null,
         publicationName: 'x.soul2soul.eth',
         repo: 42,
@@ -108,7 +115,7 @@ describe('init-session persistence', () => {
     });
 
     const loaded = loadInitSession(storage, INIT_SESSION_KEY)!;
-    expect(loaded.phase).toBe('awaiting-name');
+    expect(loaded.phase).toBe('awaiting-finalize');
     expect(loaded.name).toBe('');
     expect(loaded.repo).toBe('');
     expect(loaded.branch).toBe('main');
@@ -129,17 +136,11 @@ describe('init-session persistence', () => {
 
 describe('proposalProgress', () => {
   it('tracks which batches have been proposed at each phase', () => {
-    expect(proposalProgress('creating')).toEqual({ create: false, enable: false, name: false });
-    expect(proposalProgress('detecting')).toEqual({ create: true, enable: false, name: false });
-    expect(proposalProgress('enabling')).toEqual({ create: true, enable: false, name: false });
-    expect(proposalProgress('awaiting-enable')).toEqual({
-      create: true,
-      enable: true,
-      name: false,
-    });
-    expect(proposalProgress('naming')).toEqual({ create: true, enable: true, name: false });
-    expect(proposalProgress('awaiting-name')).toEqual({ create: true, enable: true, name: true });
-    expect(proposalProgress('done')).toEqual({ create: true, enable: true, name: true });
+    expect(proposalProgress('creating')).toEqual({ create: false, finalize: false });
+    expect(proposalProgress('detecting')).toEqual({ create: true, finalize: false });
+    expect(proposalProgress('finalizing')).toEqual({ create: true, finalize: false });
+    expect(proposalProgress('awaiting-finalize')).toEqual({ create: true, finalize: true });
+    expect(proposalProgress('done')).toEqual({ create: true, finalize: true });
   });
 });
 
@@ -147,24 +148,20 @@ describe('currentStepIndex + stepState', () => {
   it('maps each phase to the proposal currently being waited on', () => {
     expect(currentStepIndex('creating')).toBe(1);
     expect(currentStepIndex('detecting')).toBe(1);
-    expect(currentStepIndex('enabling')).toBe(2);
-    expect(currentStepIndex('awaiting-enable')).toBe(2);
-    expect(currentStepIndex('naming')).toBe(3);
-    expect(currentStepIndex('awaiting-name')).toBe(3);
+    expect(currentStepIndex('finalizing')).toBe(2);
+    expect(currentStepIndex('awaiting-finalize')).toBe(2);
     expect(currentStepIndex('done')).toBe(0);
   });
 
   it('stepState marks past steps done, the current one active, later ones pending', () => {
-    // Waiting on proposal 2 → step 1 done, step 2 current, step 3 pending.
-    expect(stepState('awaiting-enable', 1)).toBe('done');
-    expect(stepState('awaiting-enable', 2)).toBe('current');
-    expect(stepState('awaiting-enable', 3)).toBe('pending');
+    // Waiting on proposal 2 → step 1 done, step 2 current.
+    expect(stepState('awaiting-finalize', 1)).toBe('done');
+    expect(stepState('awaiting-finalize', 2)).toBe('current');
   });
 
   it('when done, every step is marked done', () => {
     expect(stepState('done', 1)).toBe('done');
     expect(stepState('done', 2)).toBe('done');
-    expect(stepState('done', 3)).toBe('done');
   });
 });
 
@@ -191,34 +188,36 @@ describe('planNextAction', () => {
     ).toEqual({ type: 'detect' });
   });
 
-  it('addresses known, not enabled, enable not yet proposed -> enable', () => {
-    const session = makeSession({ phase: 'enabling' });
+  it('addresses known, nothing executed, finalize not yet proposed -> finalize', () => {
+    const session = makeSession({ phase: 'finalizing' });
     expect(
       planNextAction(session, { ...known, recordsEnabled: false, publicationEnabled: false }),
-    ).toEqual({ type: 'enable' });
+    ).toEqual({ type: 'finalize' });
   });
 
-  it('enable already proposed but not executed -> await-enable', () => {
-    const session = makeSession({ phase: 'awaiting-enable' });
+  it('finalize already proposed but not executed -> await-finalize', () => {
+    const session = makeSession({ phase: 'awaiting-finalize' });
     expect(
       planNextAction(session, { ...known, recordsEnabled: false, publicationEnabled: false }),
-    ).toEqual({ type: 'await-enable' });
+    ).toEqual({ type: 'await-finalize' });
   });
 
-  it('enabled, name not proposed -> name', () => {
-    const session = makeSession({ phase: 'awaiting-enable' });
-    expect(planNextAction(session, { ...known, nameRecorded: false })).toEqual({ type: 'name' });
-  });
-
-  it('name proposed but not recorded -> await-name', () => {
-    const session = makeSession({ phase: 'awaiting-name' });
+  it('enabled but name missing -> proposes finalize again (enable is idempotent)', () => {
+    const session = makeSession({ phase: 'finalizing' });
     expect(planNextAction(session, { ...known, nameRecorded: false })).toEqual({
-      type: 'await-name',
+      type: 'finalize',
+    });
+  });
+
+  it('enabled but name missing and finalize already proposed -> await-finalize', () => {
+    const session = makeSession({ phase: 'awaiting-finalize' });
+    expect(planNextAction(session, { ...known, nameRecorded: false })).toEqual({
+      type: 'await-finalize',
     });
   });
 
   it('everything executed -> done (skips re-proposing anything)', () => {
-    const session = makeSession({ phase: 'awaiting-name' });
+    const session = makeSession({ phase: 'awaiting-finalize' });
     expect(planNextAction(session, known)).toEqual({ type: 'done' });
   });
 
@@ -231,12 +230,12 @@ describe('planNextAction', () => {
   });
 
   it('enables only one module -> still not done', () => {
-    const session = makeSession({ phase: 'awaiting-enable' });
+    const session = makeSession({ phase: 'awaiting-finalize' });
     const action = planNextAction(session, {
       ...known,
       recordsEnabled: false,
       nameRecorded: false,
     }) as ResumeAction;
-    expect(action.type).toBe('await-enable');
+    expect(action.type).toBe('await-finalize');
   });
 });
