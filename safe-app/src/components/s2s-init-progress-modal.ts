@@ -135,13 +135,6 @@ export class S2SInitProgressModal extends LitElement {
       color: var(--gray-300, #bdb3a0);
     }
 
-    .proposal a {
-      color: var(--accent);
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      word-break: break-all;
-    }
-
     .hint {
       margin: 0;
       font-size: 0.78rem;
@@ -150,7 +143,7 @@ export class S2SInitProgressModal extends LitElement {
     }
   `;
 
-  private renderStep(index: 1 | 2 | 3, title: string): unknown {
+  private renderStep(index: 1 | 2, title: string): unknown {
     const state = stepState(this.phase, index);
     const marker =
       state === 'done'
@@ -192,12 +185,9 @@ export class S2SInitProgressModal extends LitElement {
             ? html`
                 <ul class="proposals">
                   ${this.proposals.map(
-                    (url, i) => html`
+                    (_url, i) => html`
                       <li class="proposal">
-                        <span>Proposal ${i + 1}:</span>
-                        <a href=${url} target="_blank" rel="noopener noreferrer"
-                          >open in Safe app</a
-                        >
+                        <span>Proposal ${i + 1}: queued in the Safe</span>
                       </li>
                     `,
                   )}
@@ -206,8 +196,8 @@ export class S2SInitProgressModal extends LitElement {
             : ''}
 
           <p class="hint">
-            Execute each proposal in the Safe app — this window stays open and resumes the flow
-            automatically.
+            The app resumes automatically once the proposal is executed in the Safe queue on this
+            page.
           </p>
         </div>
       </div>

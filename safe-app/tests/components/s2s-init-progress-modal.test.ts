@@ -37,43 +37,41 @@ describe('s2s-init-progress-modal', () => {
   it('shows the checklist with the current proposal active and past ones done', async () => {
     const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
       open: true,
-      phase: 'awaiting-enable',
+      phase: 'awaiting-finalize',
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(3);
+    expect(steps.length).toBe(2);
 
-    // Create already sent + executed → done (check). Enable waiting → current
-    // (spinner). Name → pending (dot).
+    // Create already sent + executed → done (check). Finalize waiting → current
+    // (spinner). No third step — enable and name are one merged proposal.
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
     expect(steps[1]?.classList.contains('step--current')).toBe(true);
-    expect(steps[2]?.classList.contains('step--pending')).toBe(true);
     expect(steps[0]?.querySelector('ph-check')).toBeTruthy();
     expect(steps[1]?.querySelector('.step__marker--spinner')).toBeTruthy();
-    expect(steps[2]?.querySelector('.step__marker--dot')).toBeTruthy();
 
     // Phase label rendered.
-    expect(text(el)).toContain('Waiting for proposal 2 (enable modules) to be executed…');
+    expect(text(el)).toContain('Waiting for proposal 2 (enable + name record) to be executed…');
   });
 
-  it('renders each proposed Safe queue link in order', async () => {
+  it('renders each proposed queue entry as plain text, in order', async () => {
     const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
       open: true,
-      phase: 'awaiting-name',
+      phase: 'awaiting-finalize',
       proposals: [
         'https://app.safe.global/transactions/queue?safe=8453:0xAbC&id=1',
         'https://app.safe.global/transactions/queue?safe=8453:0xAbC&id=2',
-        'https://app.safe.global/transactions/queue?safe=8453:0xAbC&id=3',
       ],
     });
 
+    // No external "open in Safe app" links — the app runs embedded in the
+    // Safe web, so proposals are rendered as plain queued-in-the-Safe text.
     const links = el.shadowRoot?.querySelectorAll<HTMLAnchorElement>('.proposal a') ?? [];
-    expect(links.length).toBe(3);
-    expect(links[0]?.getAttribute('href')).toContain('id=1');
-    expect(links[1]?.getAttribute('href')).toContain('id=2');
-    expect(links[2]?.getAttribute('href')).toContain('id=3');
-    expect(text(el)).toContain('Proposal 1:');
-    expect(text(el)).toContain('Proposal 3:');
+    expect(links.length).toBe(0);
+    const proposals = el.shadowRoot?.querySelectorAll<HTMLElement>('.proposal') ?? [];
+    expect(proposals.length).toBe(2);
+    expect(text(el)).toContain('Proposal 1: queued in the Safe');
+    expect(text(el)).toContain('Proposal 2: queued in the Safe');
   });
 
   it('marks every step done and shows the completion label for phase done', async () => {
@@ -83,9 +81,9 @@ describe('s2s-init-progress-modal', () => {
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
+    expect(steps.length).toBe(2);
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
     expect(steps[1]?.classList.contains('step--done')).toBe(true);
-    expect(steps[2]?.classList.contains('step--done')).toBe(true);
     expect(text(el)).toContain('Publication initialized');
   });
 
