@@ -64,15 +64,6 @@ export type InitSessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeIt
 
 export const INIT_SESSION_KEY = 's2s.publication-init.v2';
 
-/** Human-friendly labels per phase — shared by the component + progress modal. */
-export const INIT_PHASE_LABELS: Record<InitPhase, string> = {
-  creating: 'Proposing module creation…',
-  detecting: 'Waiting for proposal 1 (create modules) to be executed…',
-  finalizing: 'Proposing module enable + name record…',
-  'awaiting-finalize': 'Waiting for proposal 2 (enable + name record) to be executed…',
-  done: 'Publication initialized',
-};
-
 /** The two checklist rows the progress modal renders. */
 export interface InitStepRow {
   index: 1 | 2;

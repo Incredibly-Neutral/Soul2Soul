@@ -6,15 +6,14 @@
 // blurs the page behind it — interaction is blocked while the flow is active,
 // so the user cannot lose track of it).
 //
-// It is CONTROLLED: the host binds `.open` / `.phase` / `.proposals` and the
-// modal never flips `open` itself. Unlike the confirm modal there is no
-// confirm/cancel — a progress dialog, the only way forward is executing the
-// proposals it links to.
+// It is CONTROLLED: the host binds `.open` / `.phase` and the modal never
+// flips `open` itself. A progress dialog with no actions — the proposals it
+// tracks are executed in the Safe queue on this page.
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
-import { INIT_PHASE_LABELS, INIT_STEPS, stepState, type InitPhase } from '../lib/init-session.js';
+import { INIT_STEPS, stepState, type InitPhase } from '../lib/init-session.js';
 
 @customElement('s2s-init-progress-modal')
 export class S2SInitProgressModal extends LitElement {
@@ -22,10 +21,6 @@ export class S2SInitProgressModal extends LitElement {
   @property({ type: Boolean }) open = false;
   /** The persisted/current phase of the init flow. */
   @property() phase: InitPhase = 'creating';
-  /** Safe transaction-queue URLs, in proposal order. */
-  @property({ attribute: false }) proposals: string[] = [];
-  /** The publication name being created (for the headline). */
-  @property() name = '';
 
   static styles = css`
     :host {
@@ -109,38 +104,6 @@ export class S2SInitProgressModal extends LitElement {
         transform: rotate(360deg);
       }
     }
-
-    .phase {
-      margin: 0 0 0.75rem;
-      padding: 0.6rem 0.75rem;
-      border-radius: 6px;
-      background: var(--gray-900, #1c1a17);
-      border: 1px solid var(--gray-700, #4a443c);
-      font-size: 0.85rem;
-      color: var(--gray-100, #efe9dd);
-    }
-
-    .proposals {
-      margin: 0 0 1rem;
-      padding: 0;
-      list-style: none;
-    }
-
-    .proposal {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 0.4rem;
-      font-size: 0.85rem;
-      color: var(--gray-300, #bdb3a0);
-    }
-
-    .hint {
-      margin: 0;
-      font-size: 0.78rem;
-      color: var(--gray-400, #a89d8a);
-      line-height: 1.5;
-    }
   `;
 
   private renderStep(index: 1 | 2, title: string): unknown {
@@ -171,34 +134,11 @@ export class S2SInitProgressModal extends LitElement {
           aria-modal="true"
           aria-labelledby="init-progress-headline"
         >
-          <h2 class="headline" id="init-progress-headline">
-            Initializing publication${this.name ? ` — ${this.name}` : ''}
-          </h2>
+          <h2 class="headline" id="init-progress-headline">Initializing publication</h2>
 
           <ul class="steps">
             ${INIT_STEPS.map((row) => this.renderStep(row.index, row.title))}
           </ul>
-
-          <p class="phase" id="init-progress-phase">${INIT_PHASE_LABELS[this.phase]}</p>
-
-          ${this.proposals.length > 0
-            ? html`
-                <ul class="proposals">
-                  ${this.proposals.map(
-                    (_url, i) => html`
-                      <li class="proposal">
-                        <span>Proposal ${i + 1}: queued in the Safe</span>
-                      </li>
-                    `,
-                  )}
-                </ul>
-              `
-            : ''}
-
-          <p class="hint">
-            The app resumes automatically once the proposal is executed in the Safe queue on this
-            page.
-          </p>
         </div>
       </div>
     `;
