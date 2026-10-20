@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SApp } from '../../src/components/s2s-app';
 import type { S2SConfirmModal } from '../../src/components/s2s-confirm-modal';
 import type { S2SInitProgressModal } from '../../src/components/s2s-init-progress-modal';
-import { INIT_SESSION_KEY, saveInitSession, type InitSession } from '../../src/lib/init-session';
+import {
+  INIT_SESSION_KEY,
+  loadInitSession,
+  saveInitSession,
+  type InitPhase,
+  type InitSession,
+} from '../../src/lib/init-session';
 import { mountLit } from '../helpers/mount';
 
 // ---------------------------------------------------------------------------
@@ -38,9 +44,15 @@ const safeIntMocks = vi.hoisted(() => ({
   readIsModuleEnabled: vi.fn(),
   fetchFactoryModuleCreatedLogs: vi.fn(),
   getProvider: vi.fn(),
+  adoptModules: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
+
+// The records-tab module is mocked away below, so the host's duck-typed call
+// (`tab.updateConfig(undefined, { suppressQueueOpen: true })`) needs a stub
+// element that implements the pinned contract and records the call.
+const recordsTabMocks = vi.hoisted(() => ({ updateConfig: vi.fn() }));
 
 const filecoinMocks = vi.hoisted(() => ({
   initWithSessionKey: vi.fn(),
@@ -139,6 +151,7 @@ vi.mock('@/lib/safe-integration.js', () => ({
     readIsModuleEnabled = safeIntMocks.readIsModuleEnabled;
     fetchFactoryModuleCreatedLogs = safeIntMocks.fetchFactoryModuleCreatedLogs;
     getProvider = safeIntMocks.getProvider;
+    adoptModules = safeIntMocks.adoptModules;
   },
 }));
 
@@ -177,6 +190,18 @@ vi.mock('@/components/s2s-records-tab.js', () => ({ S2SRecordsTab: class {} }));
 vi.mock('@/components/s2s-storage-tab.js', () => ({ S2SStorageTab: class {} }));
 vi.mock('@/components/s2s-website-tree-tab.js', () => ({ S2SWebsiteTreeTab: class {} }));
 
+// Register a stub for the mocked-away records tab so the shell's config step
+// (step 3) has a real element to call. Without it the tag stays an unknown
+// element with no updateConfig and the host would (correctly) fail loudly.
+if (!customElements.get('s2s-records-tab')) {
+  customElements.define(
+    's2s-records-tab',
+    class extends HTMLElement {
+      updateConfig = (...args: unknown[]) => recordsTabMocks.updateConfig(...args);
+    },
+  );
+}
+
 import '../../src/components/s2s-app';
 
 const NAV_TABS = ['deals-tab', 'whitelist-tab', 'records-tab', 'storage-tab', 'website-tree-tab'];
@@ -185,6 +210,26 @@ const Q1 =
   'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1';
 const Q2 =
   'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A2';
+
+/** A synthetic progress event, as the init component dispatches it. */
+function initProgress(phase: InitPhase, step: string = phase): CustomEvent {
+  return new CustomEvent('s2s-init-progress', {
+    detail: { step, phase, proposals: [Q1, Q2], name: 'my-pub.soul2soul.eth' },
+    bubbles: true,
+    composed: true,
+  });
+}
+
+/** An s2s-init-complete event, as the init component dispatches it. */
+function initComplete(
+  detail: { name?: string; repo?: string; branch?: string } = {
+    name: 'my-pub.soul2soul.eth',
+    repo: 'https://github.com/Joera/website-starter',
+    branch: 'main',
+  },
+): CustomEvent {
+  return new CustomEvent('s2s-init-complete', { detail, bubbles: true, composed: true });
+}
 
 /** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
 function seedInitSession(overrides: Partial<InitSession> = {}): void {
@@ -236,6 +281,10 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.readIsModuleEnabled.mockResolvedValue(false);
     safeIntMocks.fetchFactoryModuleCreatedLogs.mockResolvedValue([]);
     safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
+    safeIntMocks.adoptModules.mockReset();
+    safeIntMocks.adoptModules.mockResolvedValue(undefined);
+    recordsTabMocks.updateConfig.mockReset();
+    recordsTabMocks.updateConfig.mockResolvedValue('bafyconfig');
     protocolMocks.initialize.mockResolvedValue(undefined);
     filecoinMocks.initWithSessionKey.mockResolvedValue(undefined);
     filecoinMocks.listPublicationStorage.mockResolvedValue([]);
@@ -506,6 +555,42 @@ describe('s2s-app (shell)', () => {
     expect(el.shadowRoot?.textContent).toContain('.limo');
   });
 
+  it('keeps the init element mounted after the module addresses are adopted (init phase still pending)', async () => {
+    // P0 regression: adoptModules() flips hasRecordsModule()/hasPublicationModule()
+    // to true as soon as the create batch executed — the modules are DEPLOYED,
+    // not enabled. The shell must not swap the init element out for the tabs
+    // then: the enable+name proposal is still pending and step 3 would never run.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    // The addresses are adopted right before the 'finalizing' dispatch, so the
+    // very next render already sees hasRecordsModule() === true.
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initProgress('finalizing'));
+    await el.updateComplete;
+
+    expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBe(init);
+    expect(el.shadowRoot?.querySelector('.tabs')).toBeNull();
+    expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeNull();
+    // The header must not claim the modules are active while the enable
+    // proposal is still pending, and Reset must stay hidden.
+    expect(el.shadowRoot?.querySelector('.module-badge.module-active')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#reset-publication')).toBeNull();
+
+    // Still mounted while the merged batch waits for execution.
+    init.dispatchEvent(initProgress('awaiting-finalize'));
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBe(init);
+    expect(el.shadowRoot?.querySelector('.tabs')).toBeNull();
+  });
+
   it('on init-complete: writes the proposed records optimistically, clears the stale root, switches to the Config tab', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
@@ -519,14 +604,15 @@ describe('s2s-app (shell)', () => {
     // A stale root from a previous publication lingers in the store.
     storeMock.store.setRoot('bafystale');
 
-    // The modules come online as the init flow completes.
+    // The module addresses are adopted mid-flow (deployed, not yet enabled).
     safeIntMocks.hasPublicationModule.mockReturnValue(true);
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
-    // Step 3 (config): the config record is a THIRD Safe execution. With the
-    // mocked records-tab having no updateConfig the build step is skipped
-    // (duck-type guard must not throw), and this mock reports the config
-    // record on-chain → the step completes and the modal closes. The chain
-    // snapshot after the flow is the records the refetch would read.
+    init.dispatchEvent(initProgress('awaiting-finalize'));
+    await el.updateComplete;
+
+    // Step 3 (config): the config record is a THIRD Safe execution. The stub
+    // records tab implements the pinned contract, and this mock reports the
+    // config record on-chain afterwards → the step completes, the modal closes.
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
       key === 'config' ? 'bafyconfig' : '',
     );
@@ -562,8 +648,15 @@ describe('s2s-app (shell)', () => {
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy());
     expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
 
-    // Step 3 (config) ran through the host: the config record is on-chain →
-    // the modal closed and the session was cleared.
+    // Step 3 ran through the host with the pinned tab contract: the tab builds +
+    // proposes the config record but does NOT open the queue itself (the modal
+    // is the status surface while the step is host-driven).
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledWith(undefined, {
+      suppressQueueOpen: true,
+    });
+
+    // The config record is on-chain → the modal closed and the session cleared.
     const modal = el.shadowRoot?.querySelector(
       's2s-init-progress-modal',
     ) as S2SInitProgressModal | null;
@@ -693,13 +786,47 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
   });
 
-  it('drops a legacy half-init session when modules are live but the name record is missing', async () => {
-    // Modules live with NO name record is a legacy half-init (modules enabled
-    // by an old flow, name never proposed) — the merged flow can't resume it.
-    // The stale session is dropped silently: no modal, no banner.
-    seedInitSession();
+  it('keeps an init-phase session that has installed module addresses (modules deployed ≠ flow done)', async () => {
+    // The module addresses are learned mid-flow and adopted, so hasRecordsModule()
+    // is true while the ENABLE proposal may still be pending. That is not
+    // "finished": the session must survive, the modal must stay open at its
+    // phase, and the init element stays mounted to plan the next action.
+    seedInitSession({ phase: 'awaiting-finalize' });
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
-    safeIntMocks.getRecord.mockResolvedValue('');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+    expect(modal.phase).toBe('awaiting-finalize');
+    // Session kept verbatim — it drives the resumed flow.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-finalize');
+    // The live UI (tabs, module badges, Reset) stays hidden while a phase runs.
+    expect(el.shadowRoot?.querySelector('.tabs')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.module-badge.module-active')).toBeNull();
+  });
+
+  it('keeps a finalizing session with installed modules and opens the modal at that phase', async () => {
+    seedInitSession({ phase: 'finalizing' });
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+    expect(modal.phase).toBe('finalizing');
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+  });
+
+  it("clears the session and closes the modal only for phase 'done'", async () => {
+    seedInitSession({ phase: 'done' });
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
@@ -710,20 +837,302 @@ describe('s2s-app (shell)', () => {
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
-  it('clears a completed flow on reload silently: modules live + name record set', async () => {
-    // The finalize batch enables the modules AND records the name atomically;
-    // once it executes and the app reloads, the reload must recognise the flow
-    // is finished and clear the session WITHOUT any success banner — the live
-    // app UI is the completion signal.
-    seedInitSession();
+  it('resumeConfigStep selects the Config tab and calls updateConfig with the pinned contract', async () => {
+    // Regression: resumeConfigStep never set currentTab, so the records tab was
+    // never rendered, updateConfig was silently skipped and the host waited 10
+    // minutes for a config record that was never proposed.
+    seedInitSession({ phase: 'configuring' });
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.getRecord.mockResolvedValue('');
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    // The default tab is 'deals'; the config step must switch to Config.
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledWith(undefined, {
+      suppressQueueOpen: true,
+    });
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
+    expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy();
+
+    // The step is now waiting on the 3rd Safe execution — modal open, message
+    // telling the user to execute the proposal, session at 'awaiting-config'.
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.phase).toBe('awaiting-config'));
+    expect(modal.open).toBe(true);
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-message')?.textContent).toContain(
+        'execute it in the Safe app',
+      ),
+    );
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
+  });
+
+  it('fails loudly when the records tab is missing during the config step (no silent skip, no long wait)', async () => {
+    // No modules installed → the Config tab never renders, so the host has no
+    // way to propose the config record. It must keep the modal open with an
+    // error and keep the session at 'configuring' — not wait 10 minutes and
+    // then wipe the flow.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-complete', {
+        detail: {
+          recordsModule: SAFE_INFO.s2sRecords,
+          publicationModule: SAFE_INFO.s2sPublication,
+          proposals: [Q1, Q2],
+          name: 'my-pub.soul2soul.eth',
+          repo: 'https://github.com/Joera/website-starter',
+          branch: 'main',
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
 
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+    );
+    expect(modal.open).toBe(true);
+    expect(modal.shadowRoot?.querySelector('#init-progress-error')?.textContent).toContain(
+      'Config tab is not available',
+    );
+    // The reason is surfaced with a Retry action, never as a URL.
+    expect(modal.shadowRoot?.querySelector('#init-retry')).toBeTruthy();
+    expect(modal.shadowRoot?.querySelector('.dialog')?.textContent).not.toContain('http');
+    // updateConfig was never called (there was no tab to call) ...
+    expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+    // ... and the session is still at 'configuring' — nothing was wiped.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+  });
+
+  it('retry from the modal re-runs the config step once the tab is available', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-complete', {
+        detail: {
+          name: 'my-pub.soul2soul.eth',
+          repo: 'https://github.com/Joera/website-starter',
+          branch: 'main',
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+    );
+    expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+
+    // The modules become live (e.g. the enable proposal executed) → the Config
+    // tab can render, so Retry can actually drive the step.
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.getRecord.mockResolvedValue('');
+
+    (modal.shadowRoot?.querySelector('#init-retry') as HTMLElement).click();
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    await el.updateComplete;
+    expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
+  });
+
+  it('keeps the modal open with the reason when updateConfig rejects, and Retry proposes again', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+    recordsTabMocks.updateConfig.mockRejectedValueOnce(
+      new Error('no assets/ directory in the base repo'),
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    // The modules go live (the create batch executed and was adopted), so the
+    // Config tab renders and the step reaches updateConfig — which throws.
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+    );
+    const errorText = modal.shadowRoot?.querySelector('#init-progress-error')?.textContent ?? '';
+    expect(errorText).toContain('Building the configuration failed');
+    // The underlying reason is surfaced, not swallowed into a bare spinner.
+    expect(errorText).toContain('no assets/ directory in the base repo');
+    // Modal stays open (the step is not done) and the session is retryable.
+    expect(modal.open).toBe(true);
+    expect(modal.shadowRoot?.querySelector('#init-retry')).toBeTruthy();
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1);
+
+    // Retry rebuilds + proposes again (the failed attempt proposed nothing).
+    (modal.shadowRoot?.querySelector('#init-retry') as HTMLElement).click();
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(2));
+    expect(recordsTabMocks.updateConfig).toHaveBeenLastCalledWith(undefined, {
+      suppressQueueOpen: true,
+    });
+    await vi.waitFor(() => expect(modal.phase).toBe('awaiting-config'));
+  });
+
+  it('treats an empty config CID as "nothing was proposed": fails at configuring and Retry rebuilds', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+    // The tab resolves without proposing anything — '' per the pinned contract.
+    recordsTabMocks.updateConfig.mockResolvedValueOnce('');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+    );
+    // Never 'awaiting-config': there is no queued transaction to wait for, and a
+    // persisted awaiting-config would stop a reload from re-proposing.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+    expect(modal.shadowRoot?.querySelector('#init-progress-error')?.textContent).toContain(
+      'did not propose a configuration record',
+    );
+  });
+
+  it('keeps the session at awaiting-config when the wait times out, and Retry re-waits instead of re-proposing', async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    // The proposal is queued but never executed.
+    safeIntMocks.getRecord.mockResolvedValue('');
+    seedInitSession({ phase: 'awaiting-config' });
+
+    // Fast-forward the 10-minute wait: every Date.now() call jumps 11 minutes
+    // ahead of the previous one, so the first post-poll check times out. (The
+    // test's own waiting uses timers, not Date.now.)
+    const t0 = 1_700_000_000_000;
+    let ticks = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => t0 + ticks++ * 11 * 60_000);
+    try {
+      const el = await mountLit<S2SApp>('s2s-app', {});
+      const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+
+      await vi.waitFor(() =>
+        expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+      );
+      expect(modal.open).toBe(true);
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')?.textContent).toContain(
+        'still pending in the Safe queue',
+      );
+      // Timeout must NOT wipe the flow.
+      expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
+      expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+
+      // Retry only re-waits: re-proposing would queue a duplicate Safe tx.
+      // (Restore real time first so the re-wait keeps running instead of
+      // instantly timing out again.)
+      nowSpy.mockRestore();
+      (modal.shadowRoot?.querySelector('#init-retry') as HTMLElement).click();
+      await vi.waitFor(() =>
+        expect(modal.shadowRoot?.querySelector('#init-progress-message')?.textContent).toContain(
+          'execute it in the Safe app',
+        ),
+      );
+      expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+      expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps the init element mounted and closes the modal on an init-flow error', async () => {
+    // P0: an error inside the init element (waitForEnabled / waitForNameRecord
+    // or a proposeBatch throw) is the only place the inline error + Try again /
+    // Start over exists. The module addresses are already adopted at that point,
+    // so nulling initPhase would unmount the element and hide the error
+    // entirely — in exactly the window this branch fixes.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initProgress('finalizing'));
+    await el.updateComplete;
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(true);
+
+    init.dispatchEvent(initProgress('finalizing', 'error'));
+    await el.updateComplete;
+
+    // The overlay must not cover (or replace) the inline error.
     expect(modal.open).toBe(false);
-    expect(el.shadowRoot?.querySelector('#init-finished')).toBeNull();
-    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(el.shadowRoot?.querySelector('.overlay')).toBeNull();
+    // Same instance, still on screen: it owns the error message + retry actions.
+    expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBe(init);
+    expect(el.shadowRoot?.querySelector('.tabs')).toBeNull();
+    expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeNull();
+    // Not a 'live' app either: the enable proposal never executed.
+    expect(el.shadowRoot?.querySelector('.module-badge.module-active')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#reset-publication')).toBeNull();
+  });
+
+  it("treats the init element's 'idle' (reset/cancel) signal as nothing running: no overlay", async () => {
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+
+    init.dispatchEvent(initProgress('awaiting-finalize'));
+    await el.updateComplete;
+    expect(modal.open).toBe(true);
+
+    // "Start over" clears the session and dispatches 'idle' — a full-screen
+    // overlay with no running flow and no action would make the form behind it
+    // unreachable (reload to escape).
+    init.dispatchEvent(initProgress('creating', 'idle'));
+    await el.updateComplete;
+
+    expect(modal.open).toBe(false);
+    expect(el.shadowRoot?.querySelector('.overlay')).toBeNull();
+    expect(modal.message).toBe('');
+    expect(modal.error).toBe('');
+    // The form is back in the user's hands.
+    expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBe(init);
   });
 });
