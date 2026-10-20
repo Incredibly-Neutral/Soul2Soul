@@ -279,6 +279,44 @@ describe('initialize — module discovery by NAME()', () => {
     assertWhole();
   });
 
+  it('keeps a module adopted while initialize() is suspended on a NAME() probe (no lost update)', async () => {
+    // N3: the publish used to write back the wrapper captured at entry, so an
+    // adoptModules() landing mid-pass was discarded — hasRecordsModule() false
+    // for the rest of the page, Config tab gone, config session dropped.
+    const ADOPTED = '0xAdoptedMidPass';
+    const GATE = '0xGateModule';
+    eth.contractStubs[ADOPTED] = makeRecordsStub();
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => (releaseGate = r));
+    const gateName = vi.fn(async () => {
+      await gate;
+      return 'Some Other Module';
+    });
+    eth.contractStubs[GATE] = { NAME: gateName };
+
+    const si = new SafeIntegration();
+    // The Safe lists only an unrelated module, so this pass discovers nothing.
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [GATE] });
+
+    const pending = si.initialize();
+    await vi.waitFor(() => expect(gateName).toHaveBeenCalled());
+
+    // The init flow learns the freshly-deployed module and adopts it now.
+    await si.adoptModules(ADOPTED);
+    expect(si.hasRecordsModule()).toBe(true);
+
+    releaseGate();
+    const info = await pending;
+
+    // The adopted wrapper survived the publish, and the derived address too.
+    expect(si.hasRecordsModule()).toBe(true);
+    expect(info.s2sRecords).toBe(ADOPTED);
+    await si.setRecord('config', 'bafyCid');
+    expect(sdk.txsSend).toHaveBeenLastCalledWith({
+      txs: [{ to: ADOPTED, value: '0', data: '0xsetRecord' }],
+    });
+  });
+
   it('clears a module the Safe no longer lists, so hasRecordsModule() stops lying after a reset', async () => {
     const si = await initInstance();
     expect(si.hasRecordsModule()).toBe(true);
