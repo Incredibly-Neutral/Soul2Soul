@@ -6,9 +6,11 @@
 // blurs the page behind it — interaction is blocked while the flow is active,
 // so the user cannot lose track of it).
 //
-// It is CONTROLLED: the host binds `.open` / `.phase` / `.message` / `.error` /
-// `.canDismiss` and the modal never flips `open` itself. When the host reports
-// an error it offers up to two actions: Retry, and — only for a failure that
+// It is CONTROLLED: the host binds `.open` / `.phase` / `.error` /
+// `.canDismiss` and the modal never flips `open` itself. It shows only the three
+// step markers (spinner for the current step, check for done, dot for pending)
+// and — when there is a failure — the red error block. When the host reports an
+// error it offers up to two actions: Retry, and — only for a failure that
 // queued nothing (a build/propose error, where retrying the same input cannot
 // work) — "Close and fix the configuration", which dismisses the flow and
 // hands the page back so the input can be fixed. A timed-out proposal is never
@@ -26,10 +28,8 @@ import { INIT_STEPS, stepState, type InitPhase } from '../lib/init-session.js';
 export class S2SInitProgressModal extends LitElement {
   /** Whether the dialog is visible. */
   @property({ type: Boolean }) open = false;
-  /** The persisted/current phase of the init flow. */
+  /** The persisted/current phase of the init flow (drives the step markers). */
   @property() phase: InitPhase = 'creating';
-  /** Status line the host drives (e.g. "Building configuration…"). */
-  @property() message = '';
   /** Failure text; when set, the modal offers Retry. */
   @property() error = '';
   /**
@@ -125,13 +125,6 @@ export class S2SInitProgressModal extends LitElement {
         }
       }
 
-      .message {
-        margin: 0 0 1rem;
-        font-size: 0.85rem;
-        line-height: 1.4;
-        color: var(--gray-300, #bdb3a0);
-      }
-
       /* Same red init-error treatment as the inline flow's error block. */
       .init__error {
         display: flex;
@@ -186,7 +179,7 @@ export class S2SInitProgressModal extends LitElement {
     if (!this.open) return '';
 
     return html`
-      <div class="overlay">
+      <div class="overlay" id="init-progress">
         <div
           class="dialog"
           role="dialog"
@@ -199,9 +192,6 @@ export class S2SInitProgressModal extends LitElement {
             ${INIT_STEPS.map((row) => this.renderStep(row.index, row.title))}
           </ul>
 
-          ${this.message
-            ? html`<p class="message" id="init-progress-message">${this.message}</p>`
-            : ''}
           ${this.error
             ? html`
                 <div class="init__error" id="init-progress-error" role="alert">${this.error}</div>

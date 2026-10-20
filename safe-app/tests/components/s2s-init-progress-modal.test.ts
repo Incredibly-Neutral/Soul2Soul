@@ -84,27 +84,21 @@ describe('s2s-init-progress-modal', () => {
     expect(text(el)).toContain('Initialize configuration');
   });
 
-  it('renders the host-driven status message under the step list', async () => {
+  it('shows only the step markers: no status line under the checklist', async () => {
     const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
       open: true,
-      phase: 'configuring',
-      message: 'Building configuration…',
+      phase: 'awaiting-config',
     });
 
-    const message = el.shadowRoot?.querySelector('#init-progress-message');
-    expect(message?.textContent).toBe('Building configuration…');
-    // Under the checklist, and no error/retry while the step is healthy.
-    const steps = el.shadowRoot?.querySelector('.steps');
-    expect(steps?.nextElementSibling).toBe(message);
+    expect(el.shadowRoot?.querySelector('#init-progress-message')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.message')).toBeNull();
+    // The checklist is the only progress surface while the step is healthy:
+    // no error block, no actions.
+    const dialog = el.shadowRoot?.querySelector('.dialog') as HTMLElement;
+    expect(dialog.children.length).toBe(2); // headline + steps
     expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
     expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
-
-    // The waiting copy is a status line, not a link: the modal never renders URLs.
-    el.message = 'Configuration proposal sent — execute it in the Safe app to finish.';
-    await el.updateComplete;
-    expect(el.shadowRoot?.querySelector('#init-progress-message')?.textContent).toContain(
-      'execute it in the Safe app',
-    );
+    // It never renders a URL — the proposals live in the Safe queue on this page.
     expect(text(el)).not.toContain('http');
   });
 
@@ -134,9 +128,8 @@ describe('s2s-init-progress-modal', () => {
     document.body.removeEventListener('s2s-init-retry', onRetry);
 
     // A retry in flight is driven by the host: clearing the error removes the
-    // action while the checklist/message stay.
+    // action while the checklist (the only progress surface) stays.
     el.error = '';
-    el.message = 'Building configuration…';
     await el.updateComplete;
     expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
     expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
