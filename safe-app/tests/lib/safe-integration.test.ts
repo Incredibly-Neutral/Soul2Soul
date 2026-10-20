@@ -71,6 +71,10 @@ const eth = vi.hoisted(() => {
   function Contract(this: any, address: string, abi: unknown, provider: unknown) {
     contractCtorArgs.push([address, abi, provider]);
     const stub = contractStubs[address] ?? {};
+    // Faithful to ethers v6: a wrapper knows the address it was constructed
+    // with (`target`). The source takes tx `to:` from here, so the mock must
+    // carry it too.
+    if (!('target' in stub)) stub.target = address;
     const record: Record<string, unknown[][]> = (directCalls[address] ??= {});
     return new Proxy(stub, {
       get(t, prop) {
@@ -198,6 +202,119 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.hasRecordsModule()).toBe(false);
     expect(si.hasPublicationModule()).toBe(false);
   });
+
+  // --- step-3 race (`to: ''` → invalid address) ---------------------------
+
+  it('a second initialize() whose NAME() probes revert keeps the known addresses (the step-3 repro)', async () => {
+    const si = await initInstance();
+
+    // The live repro: an overlapping fetchFreshData() calls initialize() again
+    // while the RPC is unhappy, so every NAME() probe reverts. The Safe still
+    // LISTS both modules — it just could not tell us their names this time.
+    records.NAME.mockRejectedValue(new Error('revert'));
+    pub.NAME.mockRejectedValue(new Error('revert'));
+
+    const info = await si.initialize();
+
+    expect(info.s2sRecords).toBe(R_ADDR);
+    expect(info.s2sPublication).toBe(P_ADDR);
+    expect(si.hasRecordsModule()).toBe(true);
+
+    // The tx that used to be proposed with `to: ''` now targets the module.
+    await si.setRecord('config', 'bafyCid');
+    expect(sdk.txsSend).toHaveBeenLastCalledWith({
+      txs: [{ to: R_ADDR, value: '0', data: '0xsetRecord' }],
+    });
+  });
+
+  it('publishes its result atomically: no reader ever sees a known module with an empty address', async () => {
+    const si = await initInstance(); // records + publication known and published
+
+    let releaseRecords!: () => void;
+    let releasePub!: () => void;
+    const recordsGate = new Promise<void>((r) => (releaseRecords = r));
+    const pubGate = new Promise<void>((r) => (releasePub = r));
+    records.NAME.mockImplementation(async () => {
+      await recordsGate;
+      return 'S2S Records Module';
+    });
+    pub.NAME.mockImplementation(async () => {
+      await pubGate;
+      return 'S2S Publication Module V2';
+    });
+
+    // Count only this pair of calls (initInstance above already probed NAME()).
+    records.NAME.mockClear();
+    pub.NAME.mockClear();
+
+    // Two overlapping initializations, exactly like the two fetchFreshData()
+    // calls in the live crash.
+    const first = si.initialize();
+    const second = si.initialize();
+
+    // Invariant a reader (setRecord, the UI) relies on: a module we claim to
+    // have always has its address published. "Known module, '' address" is what
+    // produced the tx to `to: ''`.
+    const assertWhole = () => {
+      if (si.hasRecordsModule()) expect(si.getSafeInfo().s2sRecords).toBe(R_ADDR);
+      if (si.hasPublicationModule()) expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+    };
+
+    // Both calls are parked on the records NAME() probe. Nothing may have been
+    // published yet — in particular safeInfo must NOT have been blanked.
+    await vi.waitFor(() => expect(records.NAME).toHaveBeenCalledTimes(2));
+    assertWhole();
+
+    // Records rediscovered, publication still probing: still no asymmetry.
+    releaseRecords();
+    await vi.waitFor(() => expect(pub.NAME).toHaveBeenCalledTimes(2));
+    assertWhole();
+
+    releasePub();
+    const infos = await Promise.all([first, second]);
+    for (const info of infos) {
+      expect(info.s2sRecords).toBe(R_ADDR);
+      expect(info.s2sPublication).toBe(P_ADDR);
+    }
+    assertWhole();
+  });
+
+  it('clears a module the Safe no longer lists, so hasRecordsModule() stops lying after a reset', async () => {
+    const si = await initInstance();
+    expect(si.hasRecordsModule()).toBe(true);
+    expect(si.hasPublicationModule()).toBe(true);
+
+    // Reset: both modules are gone from the Safe's module list.
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [O_ADDR] });
+    const info = await si.initialize();
+
+    expect(info.s2sRecords).toBe('');
+    expect(info.s2sPublication).toBe('');
+    expect(si.hasRecordsModule()).toBe(false);
+    expect(si.hasPublicationModule()).toBe(false);
+    await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
+  });
+
+  it('keeps a module adopted mid-init that the Safe does not list yet (deployed, enable tx pending)', async () => {
+    const ADOPTED = '0xAdoptedRecordsModule';
+    eth.contractStubs[ADOPTED] = makeRecordsStub();
+
+    const si = new SafeIntegration();
+    // Fresh Safe: no modules installed yet.
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+    expect(si.hasRecordsModule()).toBe(false);
+
+    // The init flow deploys the contracts and adopts them (factory logs) BEFORE
+    // the enableModule proposal executes; a concurrent initialize() must not
+    // wipe that recovery handle.
+    await si.adoptModules(ADOPTED);
+    expect(si.hasRecordsModule()).toBe(true);
+
+    const info = await si.initialize();
+    expect(info.s2sRecords).toBe(ADOPTED);
+    expect(si.hasRecordsModule()).toBe(true);
+  });
 });
 
 describe('setRecord — proposes via safeSdk.txs.send, never a direct send', () => {
@@ -220,7 +337,42 @@ describe('setRecord — proposes via safeSdk.txs.send, never a direct send', () 
 
   it('throws when not initialized (no records module)', async () => {
     const si = new SafeIntegration();
-    await expect(si.setRecord('k', 'v')).rejects.toThrow('Safe SDK or records module not initialized');
+    await expect(si.setRecord('k', 'v')).rejects.toThrow('Safe SDK not initialized');
+  });
+
+  it('REFUSES to propose a tx with no records module: clear error, sdk.txs.send never called', async () => {
+    // The step-3 crash was `to: ''` reaching the Safe SDK. A known-but-addressless
+    // module must not silently degrade into that: no send at all, clear error.
+    const si = await initInstance();
+    si.recordsModule = null;
+    sdk.txsSend.mockClear();
+
+    await expect(si.setRecord('config', 'bafyX')).rejects.toThrow(
+      'records module not found on this Safe',
+    );
+    await expect(si.deleteRecord('config')).rejects.toThrow(
+      'records module not found on this Safe',
+    );
+    expect(sdk.txsSend).not.toHaveBeenCalled();
+  });
+
+  it('takes `to:` from the contract target, never from a possibly-stale safeInfo address', async () => {
+    const si = await initInstance();
+    // Simulate the old racy shape: safeInfo says '' while the wrapper is known.
+    // (initialize() can no longer produce this, but the payload must not depend
+    // on it either.)
+    si.getSafeInfo().s2sRecords = '';
+    si.getSafeInfo().s2sPublication = '';
+
+    await si.setRecord('config', 'bafyX');
+    await si.whitelistAuthor('0xAuthor');
+
+    expect(sdk.txsSend).toHaveBeenNthCalledWith(1, {
+      txs: [{ to: R_ADDR, value: '0', data: '0xsetRecord' }],
+    });
+    expect(sdk.txsSend).toHaveBeenNthCalledWith(2, {
+      txs: [{ to: P_ADDR, value: '0', data: '0xwhitelistAuthor' }],
+    });
   });
 });
 
@@ -357,8 +509,19 @@ describe('publication mutations — makeOffer / acceptOffer / retract / whitelis
 
   it('throws when publication methods are called without initialization', async () => {
     const si = new SafeIntegration();
-    await expect(si.makeOffer('0x', 'cid')).rejects.toThrow(/publication module not initialized/);
-    await expect(si.acceptOffer('0x')).rejects.toThrow(/publication module not initialized/);
+    await expect(si.makeOffer('0x', 'cid')).rejects.toThrow(/Safe SDK not initialized/);
+    await expect(si.acceptOffer('0x')).rejects.toThrow(/Safe SDK not initialized/);
+  });
+
+  it('refuses to propose publication txs with no publication module', async () => {
+    const si = await initInstance();
+    si.publicationModule = null;
+    sdk.txsSend.mockClear();
+
+    await expect(si.makeOffer(`0x${'a'.repeat(64)}`, 'cid')).rejects.toThrow(
+      'publication module not found on this Safe',
+    );
+    expect(sdk.txsSend).not.toHaveBeenCalled();
   });
 });
 
