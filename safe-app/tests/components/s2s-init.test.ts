@@ -53,24 +53,56 @@ function decodeSetRecord(tx: MetaTransactionData): { key: string; value: string 
 /** Duck-typed SafeIntegration that resolves the flow instantly.
  *
  * Models the proposals EXECUTING on-chain:
+ *  - the create batch deploying a module pair, so ModuleCreated logs for this
+ *    Safe exist only once a create batch has been proposed (or when the caller
+ *    declares a pair that was deployed by an earlier run via `existing`);
  *  - modules are enabled once a batch containing Safe self-calls is proposed;
  *  - the name record is on-chain once a batch containing records-module calls
  *    (the merged finalize batch) is proposed.
+ *
+ * `existing` models the state the component now has to cope with: the modules
+ * are already on-chain while the session knows nothing about them (earlier run,
+ * lost session). A partial pair (only one factory) is allowed.
  */
-function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
+function makeSafeIntegration(
+  opts: {
+    enabled?: boolean;
+    existing?: { recordsModule?: string; publicationModule?: string };
+  } = {},
+) {
   let enableProposed = false;
   let nameProposed = false;
+  let createProposed = false;
   const proposeBatch = vi.fn(async (txs: MetaTransactionData[]) => {
-    if (txs.some((t) => t.to.toLowerCase() === SAFE_ADDRESS.toLowerCase())) {
+    const to = (addr: string) => addr.toLowerCase();
+    if (txs.some((t) => to(t.to) === to(SAFE_ADDRESS))) {
       enableProposed = true;
     }
-    if (txs.some((t) => t.to.toLowerCase() === RECORDS_MODULE.toLowerCase())) {
+    if (txs.some((t) => to(t.to) === to(RECORDS_MODULE))) {
       nameProposed = true;
+    }
+    if (txs.length === 2 && txs[0] && to(txs[0].to) === to(RECORDS_FACTORY)) {
+      createProposed = true;
     }
     return QUEUE_URL;
   });
+
+  /** ModuleCreated logs for one factory, for THIS safe only. */
+  const logsFor = (existingAddr: string | undefined, createdAddr: string) => {
+    const addr = existingAddr ?? (createProposed ? createdAddr : undefined);
+    return addr ? [{ topics: [TOPIC0, PADDED_SAFE, pad(addr)] }] : [];
+  };
+
+  const isCreateBatch = (txs: MetaTransactionData[]) =>
+    txs.length === 2 && txs[0] !== undefined && txs[0].to.toLowerCase() === RECORDS_FACTORY.toLowerCase();
+
   return {
     proposeBatch,
+    /** Calls that proposed the (non-idempotent) create batch. */
+    createProposals: () =>
+      proposeBatch.mock.calls
+        .map(([txs]) => txs as MetaTransactionData[])
+        .filter((txs) => isCreateBatch(txs)),
     adoptModules: vi.fn(async (_recordsModule?: string, _publicationModule?: string) => {
       // In the real integration this wires freshly-created modules into the
       // shared SafeIntegration so getRecord works live. Mocks expose it so
@@ -81,8 +113,8 @@ function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
     })),
     fetchFactoryModuleCreatedLogs: vi.fn(async (factoryAddress: string) =>
       factoryAddress === RECORDS_FACTORY
-        ? [{ topics: [TOPIC0, PADDED_SAFE, PADDED_RECORDS] }]
-        : [{ topics: [TOPIC0, PADDED_SAFE, PADDED_PUB] }],
+        ? logsFor(opts.existing?.recordsModule, RECORDS_MODULE)
+        : logsFor(opts.existing?.publicationModule, PUB_MODULE),
     ),
     readIsModuleEnabled: vi.fn(async () =>
       opts.enabled !== undefined ? opts.enabled : enableProposed,
@@ -627,7 +659,10 @@ describe('s2s-publication-init', () => {
       phase: 'detecting',
       proposals: [QUEUE_URL], // create already proposed in the previous session
     });
-    const si = makeSafeIntegration();
+    // The pair was deployed by that earlier session.
+    const si = makeSafeIntegration({
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
 
     const { el, complete } = await mountWithListener(si);
     const evt = await complete;
@@ -697,7 +732,9 @@ describe('s2s-publication-init', () => {
     // resume from the persisted phase — not show a blank form, and not leave
     // the old session behind to be overwritten by a fresh create.
     seedSession({ phase: 'detecting', proposals: [QUEUE_URL] });
-    const si = makeSafeIntegration();
+    const si = makeSafeIntegration({
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
 
     const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
     Object.assign(el, { protocolInfo: PROTOCOL_INFO, safeIntegration: si });
@@ -734,7 +771,9 @@ describe('s2s-publication-init', () => {
 
   it('a late safeInfo does not clobber typed input (name and edited repo survive)', async () => {
     seedSession({ phase: 'detecting', proposals: [QUEUE_URL] });
-    const si = makeSafeIntegration();
+    const si = makeSafeIntegration({
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
 
     const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
     Object.assign(el, { protocolInfo: PROTOCOL_INFO, safeIntegration: si });
@@ -928,5 +967,261 @@ describe('s2s-publication-init', () => {
     expect(progress[0].step).toBe('awaiting-finalize');
     // The progress event carries the publication name for the modal title.
     expect(progress[0].name).toBe(PUB_NAME);
+  });
+
+  // -------------------------------------------------------------------------
+  // Create-batch skip: the module factories are plain CREATE (non-idempotent),
+  // so a Safe that already has a pair must not be asked to deploy another one.
+  // -------------------------------------------------------------------------
+
+  it('skips the create batch when the module pair already exists, and goes straight to finalize', async () => {
+    // Created by an earlier run; the session was lost, so the component starts
+    // from a blank form and would previously have proposed a duplicate pair.
+    // `enabled: false` keeps the merged finalize batch unexecuted, so the flow
+    // parks at 'awaiting-finalize' instead of racing to done.
+    const si = makeSafeIntegration({
+      enabled: false,
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    // No create batch at all — the only proposal is the enable+name batch.
+    expect(si.createProposals()).toEqual([]);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
+
+    // The existing addresses were adopted and persisted, so the flow's next
+    // plan is 'finalize' (waiting for the human to execute it).
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.recordsModule).toBe(RECORDS_MODULE);
+    expect(persisted.publicationModule).toBe(PUB_MODULE);
+    expect(bodyText(el)).not.toContain('Publication initialized');
+  });
+
+  it('completes without any proposal when the existing pair is enabled and the name is recorded', async () => {
+    const si = makeSafeIntegration({
+      enabled: true,
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
+    // Half-initialized/fully-initialized on-chain state from an earlier run.
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' ? PUB_NAME : ''));
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('still proposes the create batch exactly once when no modules exist', async () => {
+    const si = makeSafeIntegration({ enabled: true });
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.createProposals()).toHaveLength(1);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+  });
+
+  it('proposes the create batch once when the module scan throws', async () => {
+    const si = makeSafeIntegration({ enabled: true });
+    const logsImpl = si.fetchFactoryModuleCreatedLogs.getMockImplementation()!;
+    let calls = 0;
+    // The pre-create scan is the first two fetches: make it fail (RPC hiccup).
+    si.fetchFactoryModuleCreatedLogs = vi.fn(async (factoryAddress: string) => {
+      calls += 1;
+      if (calls <= 2) throw new Error('rpc hiccup');
+      return logsImpl(factoryAddress);
+    });
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    const evt = await complete;
+    await flush();
+
+    // A failed scan must never block the flow.
+    expect(si.createProposals()).toHaveLength(1);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+  });
+
+  it('does not adopt a lone module — a partial pair still proposes the create batch', async () => {
+    const si = makeSafeIntegration({
+      enabled: true,
+      existing: { recordsModule: RECORDS_MODULE }, // publication never deployed
+    });
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await complete;
+    await flush();
+
+    expect(si.createProposals()).toHaveLength(1);
+    // Nothing was adopted from the scan: only complete pairs are ever adopted
+    // (the runAction session adoption later on always carries both).
+    expect(si.adoptModules.mock.calls.every(([records, publication]) => records && publication)).toBe(
+      true,
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Scan escalation: a pair deployed days ago is outside the default 10k-block
+  // window, so the pre-create scan widens once (250k) before giving up.
+  // -------------------------------------------------------------------------
+
+  const HEAD_BLOCK = 12_000_000;
+  /** Only answer when the query window reaches at least `depth` blocks back. */
+  const logsVisibleAtDepth = (
+    si: ReturnType<typeof makeSafeIntegration>,
+    depth: number,
+    pair: { recordsModule?: string; publicationModule?: string },
+  ) => {
+    si.fetchFactoryModuleCreatedLogs = vi.fn(
+      async (
+        factoryAddress: string,
+        _safe?: string,
+        _topic0?: string,
+        fromBlock?: number,
+      ) => {
+        if ((fromBlock ?? HEAD_BLOCK) > HEAD_BLOCK - depth) return [];
+        const addr =
+          factoryAddress === RECORDS_FACTORY ? pair.recordsModule : pair.publicationModule;
+        return addr ? [{ topics: [TOPIC0, PADDED_SAFE, pad(addr)] }] : [];
+      },
+    );
+  };
+
+  it('does not widen the scan when the default window already has the pair', async () => {
+    const si = makeSafeIntegration({
+      enabled: false,
+      existing: { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
+    });
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    // A narrow hit is one RPC pair — no second, wider pass.
+    expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledTimes(2);
+    expect(si.createProposals()).toEqual([]);
+  });
+
+  it('finds a pair older than the default window by widening the scan', async () => {
+    // Deployed long ago: invisible at 10k blocks, visible at 250k.
+    const si = makeSafeIntegration({ enabled: false });
+    logsVisibleAtDepth(si, 250_000, {
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+    });
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    expect(si.createProposals()).toEqual([]);
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.recordsModule).toBe(RECORDS_MODULE);
+    expect(persisted.publicationModule).toBe(PUB_MODULE);
+  });
+
+  it('still proposes the create batch when the wide scan throws', async () => {
+    const si = makeSafeIntegration({ enabled: true });
+    const base = si.fetchFactoryModuleCreatedLogs.getMockImplementation()!;
+    si.fetchFactoryModuleCreatedLogs = vi.fn(
+      async (
+        factoryAddress: string,
+        _safe?: string,
+        _topic0?: string,
+        fromBlock?: number,
+      ) => {
+        // Public RPCs often cap getLogs ranges — the wide window is rejected.
+        if ((fromBlock ?? HEAD_BLOCK) <= HEAD_BLOCK - 250_000) {
+          throw new Error('getLogs range too large');
+        }
+        return base(factoryAddress);
+      },
+    );
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.createProposals()).toHaveLength(1);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+  });
+
+  it('completes a partial narrow hit with the wide scan instead of re-creating', async () => {
+    const si = makeSafeIntegration({ enabled: false });
+    si.fetchFactoryModuleCreatedLogs = vi.fn(
+      async (
+        factoryAddress: string,
+        _safe?: string,
+        _topic0?: string,
+        fromBlock?: number,
+      ) => {
+        const wide = (fromBlock ?? HEAD_BLOCK) <= HEAD_BLOCK - 250_000;
+        if (factoryAddress === RECORDS_FACTORY) {
+          // Young records module: found by the narrow pass.
+          return [{ topics: [TOPIC0, PADDED_SAFE, PADDED_RECORDS] }];
+        }
+        // Publication module predates the default window.
+        return wide ? [{ topics: [TOPIC0, PADDED_SAFE, PADDED_PUB] }] : [];
+      },
+    );
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    // Narrow records + wide publication are merged into one complete pair.
+    expect(si.createProposals()).toEqual([]);
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
   });
 });
