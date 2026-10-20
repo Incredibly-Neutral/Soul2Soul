@@ -6,6 +6,15 @@
 // pure lib, PR #147):
 //
 //   1. propose create-batch  (buildCreateModuleBatch)      → Safe queue
+//      — SKIPPED when a scan of both factories' ModuleCreated logs finds both
+//      modules for this Safe already (scanExistingModules): the factory is
+//      plain CREATE, so re-proposing would deploy a duplicate pair. The scan
+//      escalates once — default 10k-block window, then 250k, because the pair
+//      is often days old; a failed wide scan just means "no answer". On a hit
+//      it adopts the existing addresses and jumps straight to the enable+name
+//      batch below (or to done when they are already enabled and the name is
+//      recorded). A half-present pair is never adopted on its own — the flow
+//      needs both modules, so a partial narrow hit also triggers the wide pass.
 //   2. await execution, detect module addresses           (detectModuleAddresses)
 //   3. propose the MERGED enable+name batch (buildFinalizeBatch) → Safe queue
 //   4. await execution (modules enabled AND name recorded) → hand over
@@ -77,6 +86,7 @@ import {
   buildCreateModuleBatch,
   buildFinalizeBatch,
   detectModuleAddresses,
+  scanExistingModules,
   waitForModulesEnabled,
   type MetaTransactionData,
   type ProtocolInfo,
@@ -122,6 +132,14 @@ interface InitSafeIntegration {
 const DEFAULT_DETECTION_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_LOOKBACK_BLOCKS = 10_000;
+/**
+ * Second, wider window for the pre-create module scan. Iterating users hit
+ * "the modules already exist" days after they were deployed — far outside the
+ * default ~14h (5s blocks) window — so the scan escalates once instead of
+ * re-proposing a duplicate create batch. Not used for post-create detection
+ * (those logs are seconds old).
+ */
+const WIDE_SCAN_LOOKBACK_BLOCKS = 250_000;
 
 /** How long to wait for the enable batch to be executed in the Safe app. */
 const DEFAULT_ENABLE_TIMEOUT_MS = 10 * 60_000;
@@ -733,6 +751,82 @@ export class S2SPublicationInit extends LitElement {
       case 'create': {
         this.step = 'creating';
         this.dispatchProgress();
+
+        // The module factories are plain CREATE (non-idempotent), so proposing
+        // the create batch for a Safe that ALREADY has the pair deploys a
+        // duplicate — the modules the user has been building on get replaced by
+        // two new empty ones. That state is normal while iterating (an earlier
+        // run created them, the session was lost), so look before proposing.
+        const scanDeps = {
+          fetchModuleCreatedLogs: (
+            factoryAddress: string,
+            safe: string,
+            topic0: string,
+            fromBlock: number,
+          ) => si.fetchFactoryModuleCreatedLogs(factoryAddress, safe, topic0, fromBlock),
+          safeAddress,
+          recordsFactory: info.recordsFactory,
+          publicationFactory: info.publicationFactory,
+          getBlockNumber: () => si.getProvider().getBlockNumber(),
+        };
+        const scanAt = (lookbackBlocks: number) =>
+          scanExistingModules(scanDeps, { lookbackBlocks });
+        const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+        let existing: { recordsModule?: string; publicationModule?: string } = {};
+        let narrowScanFailed = false;
+        try {
+          existing = await scanAt(DEFAULT_LOOKBACK_BLOCKS);
+        } catch (err) {
+          // A failed scan must never block the flow: without an answer we are
+          // back to the pre-scan behaviour (propose the create batch). No
+          // widening either — an RPC that just failed will fail again.
+          narrowScanFailed = true;
+          console.log(
+            `[init] create: module scan failed (${reason(err)}), proposing the create batch`,
+          );
+        }
+
+        if (!narrowScanFailed && !(existing.recordsModule && existing.publicationModule)) {
+          // A pair deployed a while ago is invisible to the default window
+          // (10k blocks ≈ 14h on a 5s chain) — "I created them earlier" is the
+          // normal iterating state, so escalate once before re-creating. This
+          // also covers a partial narrow hit: the missing module may predate
+          // the window. Prefer the narrow value per module, fill gaps from the
+          // wide pass.
+          console.log(
+            `[init] create: no complete pair in the last ${DEFAULT_LOOKBACK_BLOCKS} blocks, widening the scan to 250k`,
+          );
+          try {
+            const wide = await scanAt(WIDE_SCAN_LOOKBACK_BLOCKS);
+            existing = {
+              recordsModule: existing.recordsModule ?? wide.recordsModule,
+              publicationModule: existing.publicationModule ?? wide.publicationModule,
+            };
+          } catch (err) {
+            // Public RPCs commonly cap getLogs ranges; a failed wide scan is
+            // just "no answer", never a reason to stop the flow.
+            console.log(`[init] create: wide scan failed (${reason(err)})`);
+          }
+        }
+
+        if (existing.recordsModule && existing.publicationModule) {
+          console.log(
+            `[init] create: modules already exist for this Safe, skipping the create batch (records=${existing.recordsModule} publication=${existing.publicationModule})`,
+          );
+          await si.adoptModules(existing.recordsModule, existing.publicationModule);
+          this.persist('finalizing', {
+            recordsModule: existing.recordsModule,
+            publicationModule: existing.publicationModule,
+          });
+          // The loop re-plans from 'finalizing': straight to the enable+name
+          // batch, or straight to done when the pair is already live.
+          return false;
+        }
+
+        console.log(
+          `[init] create: no complete module pair found (records=${existing.recordsModule ?? 'none'} publication=${existing.publicationModule ?? 'none'}), proposing the create batch`,
+        );
         const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
         const createUrl = await si.proposeBatch(createBatch);
         this.proposals = [createUrl];

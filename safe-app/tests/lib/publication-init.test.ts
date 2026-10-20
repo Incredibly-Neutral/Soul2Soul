@@ -24,6 +24,7 @@ import {
   encodeDeleteRecord,
   moduleCreatedTopic0,
   detectModuleAddresses,
+  scanExistingModules,
   waitForModulesEnabled,
   initializePublication,
   defaultSafeUrl,
@@ -366,6 +367,94 @@ describe('buildDeletePublicationBatch', () => {
         [],
       ),
     ).toThrow(/No enabled S2S modules to reset/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scanExistingModules (one look, before proposing the create batch).
+// ---------------------------------------------------------------------------
+
+describe('scanExistingModules', () => {
+  it('returns both addresses from a single pass over both factories', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
+      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
+    });
+    const getBlockNumber = vi.fn(async () => 1_000_000);
+
+    const result = await scanExistingModules({
+      ...detectDeps,
+      fetchModuleCreatedLogs,
+      getBlockNumber,
+    });
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
+    expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a partial result when only one factory has a log for this safe', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
+    );
+
+    const result = await scanExistingModules({ ...detectDeps, fetchModuleCreatedLogs });
+
+    // Half a pair is reported as-is — deciding whether that is usable is the
+    // caller's job (the init flow needs both modules).
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: undefined });
+  });
+
+  it('ignores logs for a different safe and returns the newest matching one', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY
+        ? [
+            logFor(recordsTopic0, OTHER_SAFE, PUB_MODULE),
+            logFor(recordsTopic0, SAFE, RECORDS_MODULE),
+          ]
+        : [],
+    );
+
+    const result = await scanExistingModules({ ...detectDeps, fetchModuleCreatedLogs });
+
+    expect(result.recordsModule).toBe(RECORDS_MODULE);
+  });
+
+  it('makes exactly one fetch per factory (no polling) and does not throw when nothing is found', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
+    const getBlockNumber = vi.fn(async () => 1_000_000);
+
+    const result = await scanExistingModules({
+      ...detectDeps,
+      fetchModuleCreatedLogs,
+      getBlockNumber,
+    });
+
+    expect(result).toEqual({ recordsModule: undefined, publicationModule: undefined });
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
+    expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('queries each factory with its own topic0 and the lookback window', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
+
+    await scanExistingModules(
+      { ...detectDeps, fetchModuleCreatedLogs },
+      { lookbackBlocks: 500 },
+    );
+
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
+      RECORDS_FACTORY,
+      SAFE,
+      recordsTopic0,
+      999_500,
+    );
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
+      PUB_FACTORY,
+      SAFE,
+      pubTopic0,
+      999_500,
+    );
   });
 });
 
