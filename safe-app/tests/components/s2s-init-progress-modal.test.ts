@@ -142,4 +142,34 @@ describe('s2s-init-progress-modal', () => {
     expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
     expect(el.shadowRoot?.querySelectorAll('.step').length).toBe(3);
   });
+
+  it('offers "Close and fix the configuration" only when the host marks the failure dismissible', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'configuring',
+      error: 'Building the configuration failed: no assets/ directory in the base repo',
+    });
+
+    // Default (a queued proposal / a timeout): no escape hatch, the pending Safe
+    // transaction must stay in sight.
+    expect(el.shadowRoot?.querySelector('#init-dismiss')).toBeNull();
+
+    el.canDismiss = true;
+    await el.updateComplete;
+
+    const dismiss = el.shadowRoot?.querySelector('#init-dismiss') as HTMLButtonElement;
+    expect(dismiss).toBeTruthy();
+    expect(dismiss.textContent?.trim()).toBe('Close and fix the configuration');
+    // Retry stays available next to it (same failing build, but the host decides).
+    expect(el.shadowRoot?.querySelector('#init-retry')).toBeTruthy();
+
+    const onDismiss = vi.fn();
+    document.body.addEventListener('s2s-init-dismiss', onDismiss);
+    dismiss.click();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    document.body.removeEventListener('s2s-init-dismiss', onDismiss);
+
+    // No URL is ever rendered in the dialog.
+    expect(text(el)).not.toContain('http');
+  });
 });

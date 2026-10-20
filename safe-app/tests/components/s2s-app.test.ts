@@ -675,7 +675,7 @@ describe('s2s-app (shell)', () => {
 
   // ---- Init progress modal (primary surface: live flow + reload recovery) ----
 
-  it('live s2s-init-progress events open the progress modal and keep it in sync; done/error close it', async () => {
+  it('live s2s-init-progress events open the progress modal and keep it in sync; idle/error close it', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
@@ -707,10 +707,11 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(true);
     expect(modal.phase).toBe('awaiting-finalize');
 
-    // Flow reports 'done' → modal closes so the inline result is visible.
+    // The element's reset/cancel signal ('idle') closes the overlay: nothing is
+    // running, so there is nothing to show over the form.
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
-        detail: { step: 'done', phase: 'done', proposals: [Q1, Q2] },
+        detail: { step: 'idle', phase: 'creating', proposals: [Q1, Q2] },
         bubbles: true,
         composed: true,
       }),
@@ -718,7 +719,7 @@ describe('s2s-app (shell)', () => {
     await el.updateComplete;
     expect(modal.open).toBe(false);
 
-    // An error closes it too.
+    // An error closes it too (the element's inline error is the surface).
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
         detail: { step: 'error', phase: 'awaiting-finalize', proposals: [Q1, Q2] },
@@ -830,19 +831,6 @@ describe('s2s-app (shell)', () => {
     await vi.waitFor(() => expect(modal.open).toBe(true));
     expect(modal.phase).toBe('finalizing');
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
-  });
-
-  it("clears the session and closes the modal only for phase 'done'", async () => {
-    seedInitSession({ phase: 'done' });
-    safeIntMocks.hasRecordsModule.mockReturnValue(true);
-
-    const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
-
-    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
-    expect(modal.open).toBe(false);
-    expect(el.shadowRoot?.querySelector('#init-finished')).toBeNull();
-    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
   it('resumeConfigStep selects the Config tab and calls updateConfig with the pinned contract', async () => {
@@ -992,6 +980,10 @@ describe('s2s-app (shell)', () => {
     // Modal stays open (the step is not done) and the session is retryable.
     expect(modal.open).toBe(true);
     expect(modal.shadowRoot?.querySelector('#init-retry')).toBeTruthy();
+    // A build/propose failure queued nothing, so the overlay also offers an exit:
+    // Retry re-runs the same failing build forever otherwise.
+    expect(modal.canDismiss).toBe(true);
+    expect(modal.shadowRoot?.querySelector('#init-dismiss')).toBeTruthy();
     expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
     expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1);
 
@@ -1002,6 +994,45 @@ describe('s2s-app (shell)', () => {
       suppressQueueOpen: true,
     });
     await vi.waitFor(() => expect(modal.phase).toBe('awaiting-config'));
+  });
+
+  it('lets the user dismiss a deterministic build failure and lands on the Config tab', async () => {
+    // A bad repo URL / missing assets/ / wrong branch fails the build the same way
+    // every time, so Retry alone is a trap: the scrim covers the Config tab where
+    // repo/branch are fixed and the Reset button. Dismiss must clear the session
+    // (nothing was queued) and hand the app back.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+    recordsTabMocks.updateConfig.mockRejectedValue(new Error('missing assets/ directory'));
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.shadowRoot?.querySelector('#init-dismiss')).toBeTruthy());
+
+    (modal.shadowRoot?.querySelector('#init-dismiss') as HTMLElement).click();
+    await el.updateComplete;
+
+    // Overlay gone, session gone (a reload must not re-arm the failing build).
+    expect(modal.open).toBe(false);
+    expect(el.shadowRoot?.querySelector('.overlay')).toBeNull();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1);
+
+    // Dropped on the Config tab: fix repo/branch in the Records table, then use
+    // the tab's own "Initialize configuration" action.
+    expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
+    expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy();
+    // And the rest of the app (incl. Reset) is reachable again.
+    expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy();
   });
 
   it('treats an empty config CID as "nothing was proposed": fails at configuring and Retry rebuilds', async () => {
@@ -1059,6 +1090,10 @@ describe('s2s-app (shell)', () => {
       // Timeout must NOT wipe the flow.
       expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
       expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+      // …and must NOT be dismissible: a Safe transaction may be queued for this
+      // record, so closing the modal would hide a pending proposal.
+      expect(modal.canDismiss).toBe(false);
+      expect(modal.shadowRoot?.querySelector('#init-dismiss')).toBeNull();
 
       // Retry only re-waits: re-proposing would queue a duplicate Safe tx.
       // (Restore real time first so the re-wait keeps running instead of
