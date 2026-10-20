@@ -428,8 +428,6 @@ export class S2SRecordsTab extends LitElement {
 
     const ipfs = this.makeIPFS();
 
-    console.log(import.meta.env.VITE_GITHUB_TOKEN);
-
     const assets = new AssetsBuilder(ipfs, import.meta.env.VITE_GITHUB_TOKEN);
 
     const [owner, repoName] = repo.split('/').slice(3);
