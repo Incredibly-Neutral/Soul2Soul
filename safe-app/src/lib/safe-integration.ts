@@ -183,6 +183,9 @@ export class SafeIntegration {
    * UI.
    */
   async adoptModules(recordsModule?: string, publicationModule?: string): Promise<void> {
+    console.log(
+      `[si] adoptModules r=${recordsModule ?? 'null'} p=${publicationModule ?? 'null'} (had r=${String(!!this.recordsModule)} p=${String(!!this.publicationModule)})`,
+    );
     if (recordsModule && !this.recordsModule) {
       this.recordsModule = new window.ethers.Contract(
         recordsModule,
@@ -216,7 +219,9 @@ export class SafeIntegration {
     }
 
     try {
-      return await this.recordsModule.getRecord(key);
+      const value = await this.recordsModule.getRecord(key);
+      console.log(`[si] getRecord('${key}') -> '${value}'`);
+      return value;
     } catch (error) {
       console.error(`Error getting record for key "${key}":`, error);
       throw error;

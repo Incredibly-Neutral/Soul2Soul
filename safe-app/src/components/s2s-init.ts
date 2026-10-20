@@ -426,6 +426,7 @@ export class S2SPublicationInit extends LitElement {
   private complete(): void {
     this.step = 'done';
     const session = this.session;
+    console.log(`[init] COMPLETE - flow finished. session=${session ? session.phase : 'null'}`);
     this.dispatchEvent(
       new CustomEvent('s2s-init-complete', {
         detail: {
@@ -506,6 +507,7 @@ export class S2SPublicationInit extends LitElement {
     try {
       for (;;) {
         const action = await this.plan(si, info, safeAddress);
+        console.log(`[init] plan -> ${action.type}`);
         const done = await this.runAction(action, si, info, safeAddress);
         if (done) return;
       }
@@ -550,13 +552,17 @@ export class S2SPublicationInit extends LitElement {
       }
     }
 
-    return planNextAction(session, {
+    const action = planNextAction(session, {
       recordsKnown,
       publicationKnown,
       recordsEnabled,
       publicationEnabled,
       nameRecorded,
     });
+    console.log(
+      `[init] plan checks { known:${String(recordsKnown)}/${String(publicationKnown)}, enabled:${String(recordsEnabled)}/${String(publicationEnabled)}, nameRecorded:${String(nameRecorded)} } -> ${action.type}`,
+    );
+    return action;
   }
 
   /** Execute one planned action; returns true when the flow is finished. */
@@ -569,9 +575,13 @@ export class S2SPublicationInit extends LitElement {
     const session = this.session;
     if (!session) return false;
 
+    console.log(`[init] runAction ${action.type} (phase=${this.session?.phase ?? 'none'})`);
     // Populate the shared integration's module wrappers from the session so
     // getRecord works live (freshly-created modules postdate initialize()).
     if (session.recordsModule || session.publicationModule) {
+      console.log(
+        `[init] adoptModules(session) ${session.recordsModule ?? 'none'}/${session.publicationModule ?? 'none'}`,
+      );
       await si.adoptModules(session.recordsModule, session.publicationModule);
     }
 
@@ -681,7 +691,11 @@ export class S2SPublicationInit extends LitElement {
         {
           recordsModule,
           publicationModule,
-          isModuleEnabled: (module) => si.readIsModuleEnabled(module),
+          isModuleEnabled: async (module) => {
+            const on = await si.readIsModuleEnabled(module);
+            console.log(`[init] waitForEnabled poll ${module.slice(0, 10)}... -> ${String(on)}`);
+            return on;
+          },
         },
         {
           timeoutMs: this.enableTimeoutMs,
@@ -708,7 +722,11 @@ export class S2SPublicationInit extends LitElement {
       let value = '';
       try {
         value = await si.getRecord('name');
-      } catch {
+        console.log(`[init] waitForNameRecord poll getRecord('name') -> '${value}'`);
+      } catch (e) {
+        console.log(
+          `[init] waitForNameRecord poll getRecord('name') THREW: ${e instanceof Error ? e.message : String(e)}`,
+        );
         value = '';
       }
       if (value !== '') return;
