@@ -6,12 +6,15 @@
 // blurs the page behind it — interaction is blocked while the flow is active,
 // so the user cannot lose track of it).
 //
-// It is CONTROLLED: the host binds `.open` / `.phase` / `.message` / `.error`
-// and the modal never flips `open` itself. The only action it offers is Retry,
-// shown when the host reports an error: the config build/propose failed or its
-// proposal timed out, and re-running it is the only way forward. The proposals
-// it tracks are executed in the Safe queue on this page — the modal never
-// renders a URL.
+// It is CONTROLLED: the host binds `.open` / `.phase` / `.message` / `.error` /
+// `.canDismiss` and the modal never flips `open` itself. When the host reports
+// an error it offers up to two actions: Retry, and — only for a failure that
+// queued nothing (a build/propose error, where retrying the same input cannot
+// work) — "Close and fix the configuration", which dismisses the flow and
+// hands the page back so the input can be fixed. A timed-out proposal is never
+// dismissible: its Safe transaction may still be pending. The proposals it
+// tracks are executed in the Safe queue on this page — the modal never renders
+// a URL.
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';

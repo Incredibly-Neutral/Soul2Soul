@@ -438,8 +438,8 @@ export class S2SApp extends LitElement {
    * adopting freshly-created module addresses flips hasRecordsModule() true
    * while the modules are only DEPLOYED (the enable proposal is still pending),
    * and the config record (step 3) is still missing even after it executes.
-   * Only phase 'done' means finished. Any init phase is kept and handed back to
-   * the init component; a config phase is resumed by the host.
+   * Any init phase is kept and handed back to the init component; a config
+   * phase is resumed by the host.
    */
   private syncInitProgress(safeInfo: { chainId: number; safeAddress: string }): void {
     const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
@@ -696,8 +696,14 @@ export class S2SApp extends LitElement {
 
       const tab = this.renderRoot.querySelector('s2s-records-tab') as ConfigTab | null;
       if (typeof tab?.updateConfig !== 'function') {
+        // Retry cannot fix this one (the tab does not render at all), so the
+        // message names the recoveries that do exist: dismiss and the init form
+        // comes back (no session is kept, so the flow starts over), or reopen
+        // the app. It must NOT point at the Records table — activeTabTemplate
+        // renders nothing for 'records' without the records module, which is
+        // exactly the state that fired this.
         this.failConfigStep(
-          'The Config tab is not available, so the configuration record was not proposed. Reopen the app and retry.',
+          'The Config tab is not available, so the configuration record was not proposed. Close this and start the initialization again, or reopen the app.',
         );
         return;
       }
@@ -815,6 +821,13 @@ export class S2SApp extends LitElement {
    * timeout state has no dismiss.
    */
   private readonly onInitDismiss = (): void => {
+    // Re-entrancy guard: a dismiss must never clear the session while a build
+    // is in flight (the button is only rendered once the run has failed, but a
+    // queued click can outlive the error).
+    if (this.configStepActive) {
+      console.log('[app] onInitDismiss ignored: config step in flight');
+      return;
+    }
     console.log(`[app] onInitDismiss phase=${this.initPhase ?? 'none'}`);
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
     this.initPhase = null;
@@ -822,9 +835,16 @@ export class S2SApp extends LitElement {
     this.initMessage = '';
     this.initError = '';
     this.configDismissible = false;
-    // Land on the Config tab: fix repo/branch in the Records table, then run
-    // "Initialize configuration" from there.
-    this.currentTab = 'records';
+    // Land where the user can actually act: the Config tab when it exists (fix
+    // repo/branch in the Records table, then re-run the config from there),
+    // else the first tab that renders — 'records' renders nothing without the
+    // records module, i.e. a blank page under the tabs. With no modules at all
+    // neither applies: the init form comes back, which is the real restart.
+    this.currentTab = this.safeIntegration.hasRecordsModule()
+      ? 'records'
+      : this.safeIntegration.hasPublicationModule()
+        ? 'deals'
+        : 'storage';
   };
 
   /**
