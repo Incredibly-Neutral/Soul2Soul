@@ -390,6 +390,77 @@ function sleep(ms: number): Promise<void> {
 // Detection.
 // ---------------------------------------------------------------------------
 
+export type ScanExistingModulesOpts = {
+  lookbackBlocks?: number;
+};
+
+type ModuleScanResult = {
+  blockNumber: number;
+  recordsLogs: number;
+  publicationLogs: number;
+  recordsModule?: string;
+  publicationModule?: string;
+};
+
+/**
+ * One pass over both factories' ModuleCreated logs: the shared primitive
+ * behind detectModuleAddresses (which polls it) and scanExistingModules
+ * (which calls it exactly once). Each factory's topic0 comes from its own ABI
+ * (moduleCreatedTopic0), so the differing event signatures resolve to distinct
+ * topic0. Missing modules are `undefined` — this never waits, never throws.
+ */
+async function scanModuleLogs(
+  deps: DetectModuleAddressesDeps,
+  lookbackBlocks: number,
+): Promise<ModuleScanResult> {
+  const paddedSafe = padAddress(deps.safeAddress);
+  const recordsTopic0 = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
+  const publicationTopic0 = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
+
+  const blockNumber = await deps.getBlockNumber();
+  const fromBlock = Math.max(0, blockNumber - lookbackBlocks);
+
+  const [recordsLogs, publicationLogs] = await Promise.all([
+    deps.fetchModuleCreatedLogs(deps.recordsFactory, deps.safeAddress, recordsTopic0, fromBlock),
+    deps.fetchModuleCreatedLogs(
+      deps.publicationFactory,
+      deps.safeAddress,
+      publicationTopic0,
+      fromBlock,
+    ),
+  ]);
+
+  return {
+    blockNumber,
+    recordsLogs: recordsLogs.length,
+    publicationLogs: publicationLogs.length,
+    recordsModule: findModuleAddress(recordsLogs, paddedSafe),
+    publicationModule: findModuleAddress(publicationLogs, paddedSafe),
+  };
+}
+
+/**
+ * ONE look at the ModuleCreated logs: "does this Safe already have an
+ * S2S module pair on-chain?". Used before proposing the create batch — the
+ * factories are plain CREATE (non-idempotent), so re-creating a pair that
+ * already exists deploys a duplicate (and anything the user built on the old
+ * modules is orphaned).
+ *
+ * Returns a PARTIAL result when only one factory has a log for this Safe; the
+ * caller decides whether a lone module is usable (it is not: the flow needs
+ * both). Never polls and never throws for "nothing found" — RPC errors reject
+ * like any other await, so callers that must not be blocked wrap it in
+ * try/catch.
+ */
+export async function scanExistingModules(
+  deps: DetectModuleAddressesDeps,
+  opts: ScanExistingModulesOpts = {},
+): Promise<{ recordsModule?: string; publicationModule?: string }> {
+  const lookbackBlocks = opts.lookbackBlocks ?? DEFAULT_LOOKBACK_BLOCKS;
+  const { recordsModule, publicationModule } = await scanModuleLogs(deps, lookbackBlocks);
+  return { recordsModule, publicationModule };
+}
+
 /**
  * Poll both factories' ModuleCreated logs until both module addresses are
  * found (or the timeout elapses). Each factory's topic0 is derived from its
@@ -406,10 +477,6 @@ export async function detectModuleAddresses(
   const now = deps.now ?? Date.now;
   const start = now();
 
-  const paddedSafe = padAddress(deps.safeAddress);
-  const recordsTopic0 = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
-  const publicationTopic0 = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
-
   let recordsModule: string | undefined;
   let publicationModule: string | undefined;
 
@@ -423,24 +490,13 @@ export async function detectModuleAddresses(
       );
     }
 
-    const blockNumber = await deps.getBlockNumber();
-    const fromBlock = Math.max(0, blockNumber - lookbackBlocks);
-
-    const [recordsLogs, publicationLogs] = await Promise.all([
-      deps.fetchModuleCreatedLogs(deps.recordsFactory, deps.safeAddress, recordsTopic0, fromBlock),
-      deps.fetchModuleCreatedLogs(
-        deps.publicationFactory,
-        deps.safeAddress,
-        publicationTopic0,
-        fromBlock,
-      ),
-    ]);
+    const poll = await scanModuleLogs(deps, lookbackBlocks);
     console.log(
-      `[init] detect poll block=${blockNumber} recordsLogs=${recordsLogs.length} publicationLogs=${publicationLogs.length}`,
+      `[init] detect poll block=${poll.blockNumber} recordsLogs=${poll.recordsLogs} publicationLogs=${poll.publicationLogs}`,
     );
 
-    if (!recordsModule) recordsModule = findModuleAddress(recordsLogs, paddedSafe);
-    if (!publicationModule) publicationModule = findModuleAddress(publicationLogs, paddedSafe);
+    if (!recordsModule) recordsModule = poll.recordsModule;
+    if (!publicationModule) publicationModule = poll.publicationModule;
 
     if (recordsModule && publicationModule) {
       return { recordsModule, publicationModule };
