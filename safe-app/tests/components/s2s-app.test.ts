@@ -222,7 +222,15 @@ function initProgress(phase: InitPhase, step: string = phase): CustomEvent {
 
 /** An s2s-init-complete event, as the init component dispatches it. */
 function initComplete(
-  detail: { name?: string; repo?: string; branch?: string } = {
+  detail: {
+    recordsModule?: string;
+    publicationModule?: string;
+    name?: string;
+    repo?: string;
+    branch?: string;
+    authors?: string[];
+    proposals?: string[];
+  } = {
     name: 'my-pub.soul2soul.eth',
     repo: 'https://github.com/Joera/website-starter',
     branch: 'main',
@@ -1134,5 +1142,90 @@ describe('s2s-app (shell)', () => {
     expect(modal.error).toBe('');
     // The form is back in the user's hands.
     expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBe(init);
+  });
+
+  it('takes the config-phase session identity from the completion event, not from storage', async () => {
+    // Cross-branch contract: the init element clears its OWN session around the
+    // dispatch, so there is nothing to merge from when the host persists step 3.
+    // Everything (identity + module addresses) must come from the event detail,
+    // and it must be on disk synchronously — before the refresh that follows.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    // The element dropped its session before dispatching (contract): storage is
+    // empty at the moment the host sees the event.
+    window.localStorage.removeItem(INIT_SESSION_KEY);
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)).toBeNull();
+
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(
+      initComplete({
+        recordsModule: '0x9999999999999999999999999999999999999999',
+        publicationModule: '0x8888888888888888888888888888888888888888',
+        name: 'my-pub.soul2soul.eth',
+        repo: 'https://github.com/Joera/website-starter',
+        branch: 'main',
+        authors: ['0x2222222222222222222222222222222222222222'],
+        proposals: [Q1, Q2],
+      }),
+    );
+
+    // Synchronous persist: no await between the dispatch and the session being
+    // readable, so a reload here resumes instead of losing step 3.
+    const persisted = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    expect(persisted?.phase).toBe('configuring');
+    expect(persisted?.name).toBe('my-pub.soul2soul.eth');
+    expect(persisted?.publicationName).toBe('my-pub.soul2soul.eth');
+    expect(persisted?.repo).toBe('https://github.com/Joera/website-starter');
+    expect(persisted?.branch).toBe('main');
+    expect(persisted?.authors).toEqual(['0x2222222222222222222222222222222222222222']);
+    expect(persisted?.proposals).toEqual([Q1, Q2]);
+    // The module addresses come from the detail too (they may not be adopted yet).
+    expect(persisted?.recordsModule).toBe('0x9999999999999999999999999999999999999999');
+    expect(persisted?.publicationModule).toBe('0x8888888888888888888888888888888888888888');
+
+    // …and the step still runs: the host drives the tab exactly once.
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledWith(undefined, {
+      suppressQueueOpen: true,
+    });
+  });
+
+  it('keeps the session the host is driving when the modules are not installed (no identity wipe)', async () => {
+    // The synchronous persist is followed by the step's own fetchFreshData().
+    // With no modules installed (the create batch never adopted its addresses),
+    // syncInitProgress used to take the "stale config session" branch and clear
+    // the session it had just been given — identity and all — so the error said
+    // "reopen and retry" while a reopen had nothing left to resume.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+    );
+    expect(modal.shadowRoot?.querySelector('#init-progress-error')?.textContent).toContain(
+      'Config tab is not available',
+    );
+    // The flow is still resumable: phase kept AND the identity with it.
+    const persisted = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    expect(persisted?.phase).toBe('configuring');
+    expect(persisted?.name).toBe('my-pub.soul2soul.eth');
+    expect(persisted?.repo).toBe('https://github.com/Joera/website-starter');
   });
 });
