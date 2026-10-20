@@ -52,9 +52,17 @@ export class S2SApp extends LitElement {
   @state() private fetching = false;
 
   // Reset/teardown: opens a confirmation modal → propose the disable+deleteRecord
-  // batch. 'done' closes the modal and surfaces the Safe queue link.
-  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'done' = 'idle';
+  // batch, then watch for its execution and reload the app fresh. On load the
+  // Safe is re-read from scratch (module check re-runs), so once the teardown
+  // executes the app returns to the no-modules state and the 2-proposal init
+  // flow comes back.
+  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'waiting' = 'idle';
   @state() private resetError: string | null = null;
+
+  // Guards the reset-execution poll (one active poll per element) and cancels
+  // it when the element is torn down mid-wait (test unmount, tab close).
+  private resetPollActive = false;
+  private resetPollCancelled = false;
 
   // Init progress: the publication-creation flow (live or recovered from local
   // storage after a reload) drives this progress modal. Both the live init
@@ -135,6 +143,8 @@ export class S2SApp extends LitElement {
     super.disconnectedCallback();
     this.unsubscribers.forEach((unsub) => unsub());
     this.unsubscribers = [];
+    // Stop any reset-execution poll mid-wait (test teardown, tab close).
+    this.resetPollCancelled = true;
   }
 
   private async fetchFreshData() {
@@ -254,7 +264,10 @@ export class S2SApp extends LitElement {
    * Reset/start-over: propose the teardown batch (disable both S2S modules +
    * records.deleteRecord("name")). Only runs from the confirmation modal's
    * confirm action — the modal stays open, busy, while the batch is proposed.
-   * Human-in-the-loop, like the init flow — the batch lands in the Safe queue.
+   * Human-in-the-loop, like the init flow — the batch lands in the Safe queue
+   * and needs an owner signature + execution. Once proposed we watch the Safe
+   * for the execution and then reload the app, which re-initializes everything
+   * (fresh module check → no modules → init flow available again).
    */
   private async handleReset(): Promise<void> {
     if (this.resetState !== 'confirming') return;
@@ -264,6 +277,7 @@ export class S2SApp extends LitElement {
 
     this.resetState = 'proposing';
     this.resetError = null;
+    this.resetPollCancelled = false;
     try {
       const safeModules = await this.safeIntegration.fetchSafeModules();
       // deleteRecord('name') reverts KeyNotFound() when the record was never
@@ -287,12 +301,72 @@ export class S2SApp extends LitElement {
         safeModules,
         { deleteName: nameRecorded },
       );
-      this.safeIntegration.proposeBatch(batch);
-      this.resetState = 'done';
+      await this.safeIntegration.proposeBatch(batch);
+      // Proposed — hold the modal open and wait for the teardown to execute,
+      // then reload. Same host-mediated channel (SDK module read) the reload
+      // path uses, not a raw RPC poll.
+      this.resetState = 'waiting';
+      void this.waitForResetExecution(safeInfo);
     } catch (e) {
       this.resetError = e instanceof Error ? e.message : String(e);
       this.resetState = 'idle';
     }
+  }
+
+  /**
+   * Watch the Safe's installed-module list until the teardown batch executes
+   * (both S2S modules gone), then reload the app. On reload, initialize()
+   * re-reads the Safe from scratch: no modules → s2s-publication-init mounts
+   * and the 2-proposal init flow is available again. Times out (leaves the
+   * error in place) if the owner never executes it in the Safe queue.
+   */
+  private async waitForResetExecution(safeInfo: {
+    s2sRecords?: string;
+    s2sPublication?: string;
+  }): Promise<void> {
+    if (this.resetPollActive) return;
+    this.resetPollActive = true;
+    const recordsModule = safeInfo.s2sRecords ?? '';
+    const publicationModule = safeInfo.s2sPublication ?? '';
+    const stillInstalled = (mods: string[]): boolean =>
+      (recordsModule !== '' && mods.includes(recordsModule)) ||
+      (publicationModule !== '' && mods.includes(publicationModule));
+    const startedAt = Date.now();
+    const timeoutMs = 10 * 60_000;
+    try {
+      // First check immediately (the tx may already have executed), then poll.
+      for (;;) {
+        if (this.resetPollCancelled) return;
+        let modules: string[] = [];
+        try {
+          modules = await this.safeIntegration.fetchSafeModules();
+        } catch {
+          modules = [];
+        }
+        console.log(
+          `[app] waitForResetExecution modules=${String(modules.length)} stillInstalled=${String(stillInstalled(modules))}`,
+        );
+        if (!stillInstalled(modules)) {
+          console.log('[app] reset executed -> reloading to re-initialize');
+          this.reloadApp();
+          return;
+        }
+        if (Date.now() - startedAt > timeoutMs) {
+          this.resetError =
+            'The reset proposal is still pending in the Safe queue. Execute it, then reload to run a new publication.';
+          this.resetState = 'idle';
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    } finally {
+      this.resetPollActive = false;
+    }
+  }
+
+  /** Separate seam so tests can intercept the reload without touching location. */
+  private reloadApp(): void {
+    window.location.reload();
   }
 
   /**
@@ -509,7 +583,7 @@ export class S2SApp extends LitElement {
                     type="warning"
                     class="reset-button"
                     id="reset-publication"
-                    ?disabled=${this.resetState === 'proposing'}
+                    ?disabled=${this.resetState === 'proposing' || this.resetState === 'waiting'}
                     title="Disable the S2S modules and clear the publication name so you can start a new publication."
                     @click=${() => (this.resetState = 'confirming')}
                   >
@@ -611,11 +685,17 @@ export class S2SApp extends LitElement {
       </div>
 
       <s2s-confirm-modal
-        .open=${this.resetState === 'confirming' || this.resetState === 'proposing'}
+        .open=${this.resetState === 'confirming' ||
+        this.resetState === 'proposing' ||
+        this.resetState === 'waiting'}
         headline="Reset publication?"
-        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone. You can start a new publication afterwards, which re-creates the modules."
-        confirmLabel=${this.resetState === 'proposing' ? 'Proposing…' : 'Confirm reset'}
-        .busy=${this.resetState === 'proposing'}
+        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone."
+        confirmLabel=${this.resetState === 'proposing'
+          ? 'Proposing…'
+          : this.resetState === 'waiting'
+            ? 'Waiting for execution…'
+            : 'Confirm reset'}
+        .busy=${this.resetState === 'proposing' || this.resetState === 'waiting'}
         variant="warning"
         @s2s-confirm=${() => void this.handleReset()}
         @s2s-cancel=${() => (this.resetState = 'idle')}
