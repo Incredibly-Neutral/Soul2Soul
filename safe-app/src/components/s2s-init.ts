@@ -719,46 +719,13 @@ export class S2SPublicationInit extends LitElement {
     }
   }
 
-  private renderProposals(): unknown {
-    if (this.proposals.length === 0) return '';
-    // The app runs embedded inside the Safe web — the queue is on the same
-    // page, so no external "open in Safe app" links are needed (external
-    // navigation from the Safe-app iframe is intercepted anyway).
-    return html`
-      <ul class="init__proposals">
-        ${this.proposals.map(
-          (_url, i) => html`
-            <li class="init__proposal">
-              <span>Proposal ${i + 1}: queued in the Safe</span>
-            </li>
-          `,
-        )}
-      </ul>
-    `;
-  }
-
   private renderWorking(): unknown {
     if (!this.isWorkingStep(this.step)) return '';
-
-    const labels: Partial<Record<Step, string>> = {
-      creating: 'Proposing module creation…',
-      detecting: 'Waiting for proposal 1 (create modules) to be executed…',
-      finalizing: 'Proposing module enable + name record…',
-      'awaiting-finalize': 'Waiting for proposal 2 (enable + name record) to be executed…',
-    };
-
-    const heading = this.session?.publicationName
-      ? `Initializing publication — ${this.session.publicationName}`
-      : 'Initializing publication';
-
-    return html`
-      <h2>${heading}</h2>
-      <div class="init__status">
-        <span class="init__spinner" aria-hidden="true"></span>
-        <span>${labels[this.step]}</span>
-      </div>
-      ${this.renderProposals()}
-    `;
+    // Progress is surfaced by the progress modal and the native Safe queue on
+    // this page; the init component itself renders nothing while working so no
+    // redundant "tx queue" block sits at the bottom of the page. Error and
+    // done states render below (the modal closes on those).
+    return '';
   }
 
   render() {
