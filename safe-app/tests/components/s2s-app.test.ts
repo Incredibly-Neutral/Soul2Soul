@@ -531,9 +531,9 @@ describe('s2s-app (shell)', () => {
     expect(modal?.open).toBe(false);
   });
 
-  // ---- Init progress modal (fallback-only: live inline status + reload recovery) ----
+  // ---- Init progress modal (primary surface: live flow + reload recovery) ----
 
-  it('live s2s-init-progress events never open the modal (fallback-only) but keep it in sync', async () => {
+  it('live s2s-init-progress events open the progress modal and keep it in sync; done/error close it', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
 
@@ -547,8 +547,7 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
 
     // Live happy path: the init component reports an in-flight proposal. The
-    // full-screen modal must stay CLOSED — the inline component status is the
-    // happy path; the modal is the reload-recovery fallback only.
+    // modal is the primary progress surface — it opens for the live flow too.
     const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
@@ -563,16 +562,26 @@ describe('s2s-app (shell)', () => {
       }),
     );
     await el.updateComplete;
-    expect(modal.open).toBe(false);
-    // The tracked state stays in sync (and the name reaches the modal title).
+    expect(modal.open).toBe(true);
     expect(modal.phase).toBe('awaiting-finalize');
     expect(modal.proposals).toEqual([Q1, Q2]);
     expect(modal.name).toBe('my-pub.soul2soul.eth');
 
-    // Flow reports 'done' → modal stays closed.
+    // Flow reports 'done' → modal closes so the inline result is visible.
     init.dispatchEvent(
       new CustomEvent('s2s-init-progress', {
         detail: { step: 'done', phase: 'done', proposals: [Q1, Q2] },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    await el.updateComplete;
+    expect(modal.open).toBe(false);
+
+    // An error closes it too.
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-progress', {
+        detail: { step: 'error', phase: 'awaiting-finalize', proposals: [Q1, Q2] },
         bubbles: true,
         composed: true,
       }),
@@ -593,9 +602,7 @@ describe('s2s-app (shell)', () => {
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => {
-      const modal = el.shadowRoot?.querySelector(
-        's2s-init-progress-modal',
-      ) as S2SInitProgressModal;
+      const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
       expect(modal.open).toBe(true);
     });
 
@@ -615,17 +622,37 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
   });
 
-  it('clears any stale persisted session when modules are already live', async () => {
-    // The merged flow is atomic: modules live ⇒ the enable+name batch executed ⇒
-    // the name record is set too — there is nothing left to resume. A stale
-    // session against live modules is dropped (no modal), so the user can
-    // re-create/re-publish cleanly instead of being stuck behind it.
+  it('drops a legacy half-init session when modules are live but the name record is missing', async () => {
+    // Modules live with NO name record is a legacy half-init (modules enabled
+    // by an old flow, name never proposed) — the merged flow can't resume it.
+    // The stale session is dropped silently: no modal, no banner.
     seedInitSession();
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.getRecord.mockResolvedValue('');
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(el.shadowRoot?.querySelector('#init-finished')).toBeNull();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('confirms a completed flow on reload: modules live + name record set → one-shot finished banner', async () => {
+    // The finalize batch enables the modules AND records the name atomically;
+    // after it executes and the app reloads, the reload must recognise the
+    // flow is finished and surface it instead of silently dropping it.
+    seedInitSession();
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.getRecord.mockResolvedValue('my-pub.soul2soul.eth');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#init-finished')).toBeTruthy());
+
+    expect(el.shadowRoot?.querySelector('#init-finished')?.textContent).toContain(
+      'my-pub.soul2soul.eth',
+    );
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.open).toBe(false);
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();

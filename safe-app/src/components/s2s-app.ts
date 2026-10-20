@@ -58,15 +58,15 @@ export class S2SApp extends LitElement {
   @state() private resetError: string | null = null;
 
   // Init progress: the publication-creation flow (live or recovered from local
-  // storage after a reload) drives this progress modal. 'initModalOpen' is the
-  // fallback-only switch — it opens ONLY on reload-recovery (syncInitProgress),
-  // never for a live flow, which uses the init component's inline status.
-  // 'initPhase' null = no active flow; the other fields keep the (recovery)
-  // modal in sync with the resumed flow's progress events.
+  // storage after a reload) drives this progress modal. Both the live init
+  // component (s2s-init-progress events) and the reload-recovery path open it;
+  // it closes on error/done. 'initFinished' is a one-shot success banner shown
+  // when a reload after the finalize batch executed confirms the name record.
   @state() private initPhase: InitPhase | null = null;
   @state() private initProposals: string[] = [];
   @state() private initName = '';
   @state() private initModalOpen = false;
+  @state() private initFinished = '';
 
   private unsubscribers: Array<() => void> = [];
 
@@ -97,6 +97,17 @@ export class S2SApp extends LitElement {
       }
       .reset-status.error {
         color: var(--color-red);
+      }
+      .init-finished {
+        margin-top: 1rem;
+        padding: 0.6rem 0.85rem;
+        border-radius: 6px;
+        border: 1px solid var(--gray-600, #5f564b);
+        background: var(--gray-900, #1c1a17);
+        color: var(--accent, #f5c542);
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        letter-spacing: 0.04em;
       }
     `,
   ];
@@ -153,7 +164,7 @@ export class S2SApp extends LitElement {
 
       // If a publication-init session was persisted, surface its progress (or
       // clear it once everything is on-chain).
-      this.syncInitProgress(safeInfo);
+      await this.syncInitProgress(safeInfo);
 
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
@@ -304,13 +315,17 @@ export class S2SApp extends LitElement {
 
   /**
    * Drive the init progress modal from a persisted session. Called once on
-   * page load (after the Safe is connected). This is the ONLY path that opens
-   * the progress modal — the reload-recovery fallback the flow needs when a
-   * reload interrupts a direct sequence. When modules aren't live yet the init
-   * component (mounted below) resumes the flow itself; the modal is the banner
-   * while it catches up.
+   * page load (after the Safe is connected). Opens the modal for a
+   * reload-recovery while the init component (mounted below when modules
+   * aren't live yet) resumes the flow itself. When the finalize batch has
+   * already executed (modules live on a reload), confirms the name record and
+   * surfaces a one-shot "Publication initialized" banner instead of dropping
+   * the session silently.
    */
-  private syncInitProgress(safeInfo: { chainId: number; safeAddress: string }): void {
+  private async syncInitProgress(safeInfo: {
+    chainId: number;
+    safeAddress: string;
+  }): Promise<void> {
     const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     if (!session) return;
 
@@ -330,20 +345,30 @@ export class S2SApp extends LitElement {
     }
 
     if (this.safeIntegration.hasRecordsModule()) {
-      // Modules are live. The direct-sequence flow enables AND records the
-      // name in ONE atomic batch, so once the records module is live the name
-      // record is set too — the flow is complete. (A legacy half-initialized
-      // setup — modules enabled but name missing — can't be resumed by the
-      // merged flow; drop the stale session and let the user set records via
-      // the Config tab or reset.)
+      // The finalize batch enables the modules AND records the name in one
+      // atomic transaction, so once the records module is live the name record
+      // is set in the same block — a single read confirms the flow finished.
+      // Surface the completed state as a one-shot banner so the user sees it
+      // land. Modules live with NO name record is a legacy half-init that the
+      // merged flow can't resume — drop the session silently, no banner.
+      let name = '';
+      try {
+        name = await this.safeIntegration.getRecord('name');
+      } catch {
+        name = '';
+      }
+      const nameSet = session.publicationName === '' || name !== '';
       clearInitSession(window.localStorage, INIT_SESSION_KEY);
       this.initPhase = null;
       this.initModalOpen = false;
+      if (nameSet) {
+        this.initFinished = session.publicationName;
+      }
       return;
     }
 
     // Modules not live yet: the init component (mounted below) resumes the
-    // merged flow itself; the modal is the fallback banner while it catches up.
+    // merged flow itself; the modal is the banner while it catches up.
     this.initModalOpen = true;
     this.initPhase = session.phase;
     this.initProposals = session.proposals;
@@ -400,10 +425,9 @@ export class S2SApp extends LitElement {
       >
     ).detail;
     if (!detail) return;
-    // 'error' / 'done' end the flow — close the (recovery) modal so the
-    // inline result is visible. Live progress never OPENS the modal: the happy
-    // path uses the init component's inline status; the modal is the
-    // reload-recovery fallback only.
+    // 'error' / 'done' end the flow — close the progress modal so the inline
+    // result is visible. Any other step opens it: the modal is the primary
+    // progress surface for both the live flow and the reload-recovery.
     if (detail.step === 'error' || detail.step === 'done') {
       this.initPhase = null;
       this.initModalOpen = false;
@@ -412,6 +436,7 @@ export class S2SApp extends LitElement {
     this.initPhase = detail.phase;
     this.initProposals = detail.proposals;
     if (detail.name) this.initName = detail.name;
+    this.initModalOpen = true;
   };
 
   private activeTabTemplate() {
@@ -523,9 +548,8 @@ export class S2SApp extends LitElement {
           ${this.resetUrl
             ? html`
                 <div class="reset-status" id="reset-status">
-                  Reset proposed — execute it in the
-                  <a href=${this.resetUrl} target="_blank" rel="noreferrer">Safe queue</a>, then
-                  reload the app to start a new publication.
+                  Reset proposed — execute it in the Safe queue on this page, then reload the app to
+                  start a new publication.
                 </div>
               `
             : ''}
@@ -533,6 +557,13 @@ export class S2SApp extends LitElement {
             ? html`
                 <div class="reset-status error" id="reset-error">
                   Reset failed: ${this.resetError}
+                </div>
+              `
+            : ''}
+          ${this.initFinished
+            ? html`
+                <div class="init-finished" id="init-finished">
+                  Publication initialized — ${this.initFinished} is live on this Safe.
                 </div>
               `
             : ''}
