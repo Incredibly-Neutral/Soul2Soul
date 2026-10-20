@@ -60,7 +60,9 @@ export class SafeIntegration {
    * dropped so `hasRecordsModule()` stops lying. A module the Safe never listed
    * — adopted mid-init from the factory logs, deployed but not yet enabled — is
    * deliberately kept: the enable tx has not run yet, and clearing it would
-   * strand the init flow's own recovery (see `adoptModules`).
+   * strand the init flow's own recovery (see `adoptModules`). For the same
+   * reason the publish merges: a wrapper adopted while this pass was awaiting a
+   * NAME() probe is newer than the one we captured and wins.
    */
   async initialize(): Promise<SafeInfo> {
     try {
@@ -84,8 +86,13 @@ export class SafeIntegration {
         prevModules.some((m) => (m ?? '').toLowerCase() === address.toLowerCase());
 
       // Discovery locals — `this` is untouched until the end.
-      let recordsModule: EthersContract | null = this.recordsModule;
-      let publicationModule: any | null = this.publicationModule;
+      // Captured so the publish below can tell whether an out-of-band adoption
+      // (`adoptModules`, which can land while a NAME() probe is awaiting)
+      // replaced the field under us.
+      const capturedRecords = this.recordsModule;
+      const capturedPublication = this.publicationModule;
+      let recordsModule: EthersContract | null = capturedRecords;
+      let publicationModule: any | null = capturedPublication;
 
       // Drop a module the Safe used to list and no longer does (reset), so
       // hasRecordsModule()/hasPublicationModule() cannot keep claiming it.
@@ -136,6 +143,19 @@ export class SafeIntegration {
           // contract (if any) is kept — see the non-destructive note above.
           console.log(`Module ${moduleAddress} doesn't have NAME(), skipping`);
         }
+      }
+
+      // Merge with anything adopted while this pass was awaiting a probe. The
+      // field having changed means a NEWER wrapper exists (adoptModules is the
+      // only mid-pass writer: it runs when the init flow learns the addresses
+      // from factory logs), so keep it — publishing our older local would
+      // discard it, and hasRecordsModule() would then be false for the rest of
+      // the page (Config tab gone, a config session dropped).
+      if (this.recordsModule && this.recordsModule !== capturedRecords) {
+        recordsModule = this.recordsModule;
+      }
+      if (this.publicationModule && this.publicationModule !== capturedPublication) {
+        publicationModule = this.publicationModule;
       }
 
       // Single, complete publication of the discovery result. The addresses in
