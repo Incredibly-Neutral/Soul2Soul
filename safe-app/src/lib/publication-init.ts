@@ -435,6 +435,9 @@ export async function detectModuleAddresses(
         fromBlock,
       ),
     ]);
+    console.log(
+      `[init] detect poll block=${blockNumber} recordsLogs=${recordsLogs.length} publicationLogs=${publicationLogs.length}`,
+    );
 
     if (!recordsModule) recordsModule = findModuleAddress(recordsLogs, paddedSafe);
     if (!publicationModule) publicationModule = findModuleAddress(publicationLogs, paddedSafe);
