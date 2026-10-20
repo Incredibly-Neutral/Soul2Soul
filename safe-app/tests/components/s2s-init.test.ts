@@ -82,9 +82,7 @@ function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
     readIsModuleEnabled: vi.fn(async () =>
       opts.enabled !== undefined ? opts.enabled : enableProposed,
     ),
-    getRecord: vi.fn(async (key: string) =>
-      key === 'name' && nameProposed ? PUB_NAME : '',
-    ),
+    getRecord: vi.fn(async (key: string) => (key === 'name' && nameProposed ? PUB_NAME : '')),
   };
 }
 
@@ -241,10 +239,7 @@ describe('s2s-publication-init', () => {
     expect(createBatch[1].value).toBe('0');
 
     // 2) merged finalize: enable both modules + set name/repo/branch.
-    expectFinalizeShape(
-      si.proposeBatch.mock.calls[1][0] as MetaTransactionData[],
-      PUB_NAME,
-    );
+    expectFinalizeShape(si.proposeBatch.mock.calls[1][0] as MetaTransactionData[], PUB_NAME);
 
     // Detection queried the correct factories with the right safe.
     expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledWith(
@@ -261,7 +256,7 @@ describe('s2s-publication-init', () => {
     expect(evt.detail.repo).toBe('https://github.com/Joera/website-starter');
     expect(evt.detail.branch).toBe('main');
     expect(evt.detail.proposals).toHaveLength(2);
-    expect(bodyText(el)).toContain('Publication initialized');
+    expect(bodyText(el)).not.toContain('Publication initialized');
     // No external "open in Safe app" links anywhere — the app runs embedded
     // in the Safe web; proposal queue entries render as plain text instead.
     expect(bodyText(el)).not.toContain('open in Safe app');
@@ -335,7 +330,7 @@ describe('s2s-publication-init', () => {
     // The merged batch is proposed once (up front); execution is polled.
     expect(si.proposeBatch).toHaveBeenCalledTimes(2);
     expect(calls).toBeGreaterThanOrEqual(5);
-    expect(bodyText(el)).toContain('Publication initialized');
+    expect(bodyText(el)).not.toContain('Publication initialized');
   });
 
   it('stays incomplete and surfaces a timeout when the finalize batch is never executed', async () => {
@@ -421,7 +416,7 @@ describe('s2s-publication-init', () => {
     // The restored create proposal is kept in front of the new finalize one.
     expect(evt.detail.proposals).toHaveLength(2);
     expect(evt.detail.proposals[0]).toBe(QUEUE_URL);
-    expect(bodyText(el)).toContain('Publication initialized');
+    expect(bodyText(el)).not.toContain('Publication initialized');
   });
 
   it('finishes immediately on resume when the whole flow already executed', async () => {
@@ -432,9 +427,7 @@ describe('s2s-publication-init', () => {
       proposals: [QUEUE_URL, QUEUE_URL],
     });
     const si = makeSafeIntegration({ enabled: true });
-    si.getRecord = vi.fn(async (key: string) =>
-      key === 'name' ? PUB_NAME : '',
-    );
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' ? PUB_NAME : ''));
 
     const { complete } = await mountWithListener(si);
     const evt = await complete;
@@ -459,9 +452,7 @@ describe('s2s-publication-init', () => {
     });
     const si = makeSafeIntegration({ enabled: true });
     let recorded = false;
-    si.getRecord = vi.fn(async (key: string) =>
-      key === 'name' && recorded ? PUB_NAME : '',
-    );
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' && recorded ? PUB_NAME : ''));
 
     const { el, complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
     // The human executes the re-proposed finalize batch after a few polls.
@@ -475,7 +466,7 @@ describe('s2s-publication-init', () => {
     expect(si.proposeBatch).toHaveBeenCalledTimes(1);
     expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
     expect(evt.detail.name).toBe(PUB_NAME);
-    expect(bodyText(el)).toContain('Publication initialized');
+    expect(bodyText(el)).not.toContain('Publication initialized');
   });
 
   it('waits for the finalize batch to be executed on resume, then clears the session', async () => {
@@ -487,9 +478,7 @@ describe('s2s-publication-init', () => {
     });
     const si = makeSafeIntegration({ enabled: true });
     let recorded = false;
-    si.getRecord = vi.fn(async (key: string) =>
-      key === 'name' && recorded ? PUB_NAME : '',
-    );
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' && recorded ? PUB_NAME : ''));
 
     const { complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
     // The human executes the finalize proposal after a few polls.
@@ -512,8 +501,7 @@ describe('s2s-publication-init', () => {
       publicationModule: PUB_MODULE,
       proposals: [QUEUE_URL, QUEUE_URL],
     });
-    const progress: Array<{ step: string; phase: string; proposals: string[]; name?: string }> =
-      [];
+    const progress: Array<{ step: string; phase: string; proposals: string[]; name?: string }> = [];
 
     const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
     Object.assign(el, {
