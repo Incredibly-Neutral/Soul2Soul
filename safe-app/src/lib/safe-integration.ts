@@ -170,6 +170,37 @@ export class SafeIntegration {
     return await contract.isModuleEnabled(moduleAddress);
   }
 
+  /**
+   * Adopt freshly-created module addresses mid-flow. `initialize()` only
+   * finds modules already in the Safe's module list; during a fresh init they
+   * are deployed AFTER that snapshot, so recordsModule/publicationModule stay
+   * null on this page and the live finish-poll's getRecord would keep throwing
+   * ("Records module not initialized") until a reload. Once the init component
+   * learns the addresses (detection or a resumed session) it hands them back
+   * here: this re-creates the contract wrappers so getRecord and the live
+   * finish detection work without a reload, and flips
+   * hasRecordsModule/hasPublicationModule so the app switches to its normal
+   * UI.
+   */
+  async adoptModules(recordsModule?: string, publicationModule?: string): Promise<void> {
+    if (recordsModule && !this.recordsModule) {
+      this.recordsModule = new window.ethers.Contract(
+        recordsModule,
+        Abi_S2SRecordsModule,
+        this.getProvider(),
+      );
+      if (this.safeInfo) this.safeInfo.s2sRecords = recordsModule;
+    }
+    if (publicationModule && !this.publicationModule) {
+      this.publicationModule = new window.ethers.Contract(
+        publicationModule,
+        Abi_S2SPublicationModuleV2,
+        this.getProvider(),
+      );
+      if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
+    }
+  }
+
   // ===== RECORDS MODULE METHODS =====
 
   async getAllRecords(): Promise<[string[], string[]]> {
