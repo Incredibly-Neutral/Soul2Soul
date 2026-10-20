@@ -143,7 +143,12 @@ export function proposalProgress(phase: InitPhase): ProposalProgress {
       return { create: true, finalize: false, config: false };
     case 'awaiting-finalize':
       return { create: true, finalize: true, config: false };
+    // Same invariant as the other transient phases: the phase that is CURRENTLY
+    // sending a batch reports false for it ('creating' → create:false,
+    // 'finalizing' → finalize:false), so 'configuring' → config:false and only
+    // the waiting phase reports it as proposed.
     case 'configuring':
+      return { create: true, finalize: true, config: false };
     case 'awaiting-config':
       return { create: true, finalize: true, config: true };
     case 'done':
