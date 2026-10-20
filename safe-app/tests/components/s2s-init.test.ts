@@ -71,6 +71,11 @@ function makeSafeIntegration(opts: { enabled?: boolean } = {}) {
   });
   return {
     proposeBatch,
+    adoptModules: vi.fn(async (_recordsModule?: string, _publicationModule?: string) => {
+      // In the real integration this wires freshly-created modules into the
+      // shared SafeIntegration so getRecord works live. Mocks expose it so
+      // the component's call sites run.
+    }),
     getProvider: vi.fn(() => ({
       getBlockNumber: vi.fn(async () => 12_000_000),
     })),
@@ -437,6 +442,38 @@ describe('s2s-publication-init', () => {
     expect(si.proposeBatch).not.toHaveBeenCalled();
     expect(evt.detail.name).toBe(PUB_NAME);
     // The session is cleared once everything is on-chain.
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('picks up the executed finalize live: getRecord only works after the module addresses are adopted', async () => {
+    // Regression: on the live page SafeIntegration.recordsModule is null (the
+    // module was created AFTER the connect-time module scan), so getRecord
+    // throws "Records module not initialized" every poll and the flow would
+    // hang on the finalize step with the spinner running forever. The init
+    // component must adopt the addresses it learned so the finish-poll works
+    // without a reload.
+    seedSession({
+      phase: 'awaiting-finalize',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    let adopted = false;
+    si.adoptModules = vi.fn(async () => {
+      adopted = true;
+    });
+    si.getRecord = vi.fn(async (key: string) => {
+      if (!adopted) throw new Error('Records module not initialized');
+      return key === 'name' ? PUB_NAME : '';
+    });
+
+    const { complete } = await mountWithListener(si, { enablePollIntervalMs: 5 });
+    const evt = await complete;
+    await flush();
+
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
