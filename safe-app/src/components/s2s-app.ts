@@ -305,6 +305,9 @@ export class S2SApp extends LitElement {
    */
   private syncInitProgress(safeInfo: { chainId: number; safeAddress: string }): void {
     const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    console.log(
+      `[app] syncInitProgress session=${session ? session.phase : 'none'} hasRecordsModule=${String(this.safeIntegration.hasRecordsModule())}`,
+    );
     if (!session) return;
 
     // A session from another Safe or chain must not hijack this page.
@@ -328,6 +331,7 @@ export class S2SApp extends LitElement {
       // finished. Clear the session silently — no banner; the app is now in
       // its normal live state. Modules live with NO name record is a legacy
       // half-init the merged flow can't resume — dropped the same way.
+      console.log('[app] syncInitProgress: records module LIVE -> silent clear');
       clearInitSession(window.localStorage, INIT_SESSION_KEY);
       this.initPhase = null;
       this.initModalOpen = false;
@@ -336,6 +340,7 @@ export class S2SApp extends LitElement {
 
     // Modules not live yet: the init component (mounted below) resumes the
     // merged flow itself; the modal is the banner while it catches up.
+    console.log('[app] syncInitProgress: modules not live -> open recovery modal');
     this.initModalOpen = true;
     this.initPhase = session.phase;
   }
@@ -352,6 +357,9 @@ export class S2SApp extends LitElement {
     const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
       .detail;
     const { name, repo, branch } = detail ?? {};
+    console.log(
+      `[app] onInitComplete name=${name ?? 'undefined'} repo=${repo ?? 'undefined'} branch=${branch ?? 'undefined'}`,
+    );
 
     // The flow finished proposing — close the (recovery) progress modal. The
     // session stays persisted for crash-safety until the last record is
@@ -390,6 +398,9 @@ export class S2SApp extends LitElement {
       >
     ).detail;
     if (!detail) return;
+    console.log(
+      `[app] onInitProgress step=${detail.step} phase=${detail.phase} name=${detail.name ?? 'undefined'}`,
+    );
     // 'error' / 'done' end the flow — close the progress modal so the inline
     // result is visible. Any other step opens it: the modal is the primary
     // progress surface for both the live flow and the reload-recovery.
