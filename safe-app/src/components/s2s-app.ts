@@ -66,6 +66,39 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The stage `s2s-records-tab.updateConfig()` tags a rejection with. */
+type ConfigFailureStage = 'build' | 'propose';
+
+/**
+ * Read the stage the records tab tags a `updateConfig()` rejection with, when it
+ * tags one. Duck-typed on purpose: the component is not imported here (it is a
+ * separate owner's module), and an older/foreign throwable simply has no stage.
+ */
+function configFailureStage(err: unknown): ConfigFailureStage | null {
+  const stage = (err as { stage?: unknown } | null | undefined)?.stage;
+  return stage === 'build' || stage === 'propose' ? stage : null;
+}
+
+/**
+ * Message for a failed step-3 build+propose. The tab builds AND proposes inside
+ * one `updateConfig()` call, so the stage is only known when the tab tagged the
+ * rejection — name it when it did, stay neutral when it did not. Never guess: a
+ * wrong stage sends the user to fix the repo for a rejected Safe proposal (the
+ * crash history: a concurrent initialize() blanked s2sRecords, so the proposal
+ * went out with `to: ''` and the SDK rejected it).
+ */
+function describeConfigFailure(err: unknown): string {
+  const stage = configFailureStage(err);
+  const reason = describeError(err);
+  if (stage === 'build') {
+    return `Building the configuration failed: ${reason}. That stage covers the repo/branch/assets, the chain reads and the IPFS uploads — fix what the reason says, then Retry.`;
+  }
+  if (stage === 'propose') {
+    return `Proposing the configuration record failed: ${reason}. If the Safe app shows no queued transaction, Retry re-sends it.`;
+  }
+  return `Building or proposing the configuration record failed: ${reason}. Fix the reason above (repo, branch, assets or the Safe proposal), then Retry.`;
+}
+
 /**
  * Drop `undefined` entries so a spread can't overwrite a persisted/known value
  * with `undefined` (the caller's fallback would be lost).
@@ -89,6 +122,19 @@ export class S2SApp extends LitElement {
   @state() private currentTab: 'deals' | 'whitelist' | 'records' | 'storage' | 'websiteTree' =
     'deals';
   @state() private fetching = false;
+  // The refresh pass currently running. Concurrent callers join it instead of
+  // starting their own. History (fixed at the payload seam: initialize() now
+  // publishes one atomic snapshot): two passes meant two initialize() calls,
+  // the second of which blanked safeInfo.s2sRecords mid-flight, so a config
+  // proposal from the other pass went out with `to: ''` and the Safe SDK
+  // rejected it. Joining is no longer a correctness requirement — it just keeps
+  // the store from being read half-refreshed.
+  private fetchInFlight: Promise<void> | null = null;
+  // Upper bound on joining that pass from step 3 (see waitForRefresh): the pass
+  // ends with the Filecoin init + list calls, which can stall rather than fail.
+  // Readonly by contract; the component test narrows it through a cast so the
+  // suite does not have to wait the production value.
+  private readonly configRefreshJoinMs = 20_000;
 
   // Reset/teardown: opens a confirmation modal → propose the disable+deleteRecord
   // batch, then watch for its execution and reload the app fresh. On load the
@@ -206,7 +252,26 @@ export class S2SApp extends LitElement {
     this.configPollCancelled = true;
   }
 
-  private async fetchFreshData() {
+  /**
+   * Refresh every store slice from the chain. SINGLE-FLIGHT: concurrent callers
+   * get the pass already in flight, never a second one — one initialize() per
+   * burst, one set of store updates.
+   */
+  private fetchFreshData(): Promise<void> {
+    if (this.fetchInFlight) {
+      console.log('[app] fetchFreshData: joining the refresh already in flight');
+      return this.fetchInFlight;
+    }
+    const pass = this.runFetchFreshData().finally(() => {
+      // Cleared after the pass settles, so an awaiter that resumes below sees
+      // "nothing in flight" and can start its own pass if it needs to.
+      this.fetchInFlight = null;
+    });
+    this.fetchInFlight = pass;
+    return pass;
+  }
+
+  private async runFetchFreshData(): Promise<void> {
     this.fetching = true;
 
     try {
@@ -574,7 +639,13 @@ export class S2SApp extends LitElement {
 
     // Surface the Config tab — the immediate config build below runs there.
     this.currentTab = 'records';
-    await this.fetchFreshData();
+    // Bring the store up to date before the optimistic re-apply below, but
+    // never at the cost of hanging the flow: the init element's complete() can
+    // fire from INSIDE a refresh (its maybeResume runs off the setProtocolInfo
+    // store update), so a pass is usually already running — join it (bounded,
+    // with a visible message) or start one when there is none. Single-flight
+    // means this never doubles the pass.
+    await this.waitForRefresh(true);
 
     // Re-apply the pending (not-yet-executed) records on top of the chain read.
     if (name) store.setRecord({ key: 'name', value: name, type: 'metadata' });
@@ -692,6 +763,15 @@ export class S2SApp extends LitElement {
       // Select the Config tab so the records tab element is actually rendered
       // (activeTabTemplate renders nothing for a non-active tab).
       this.currentTab = 'records';
+      // Courtesy join of a refresh already in flight — BOUNDED and never silent:
+      // the pass ends with the Filecoin init/list calls, which can stall on a bad
+      // network, and step 3 must not sit here with no message and no buttons.
+      // Historically this wait mattered (a second initialize() blanked
+      // s2sRecords and the proposal went out with `to: ''`); now that the
+      // payload seam is atomic, proceeding without it is safe — the wait only
+      // avoids building on a half-refreshed store.
+      await this.waitForRefresh();
+      this.initMessage = 'Building configuration…';
       await this.updateComplete;
 
       const tab = this.renderRoot.querySelector('s2s-records-tab') as ConfigTab | null;
@@ -712,10 +792,7 @@ export class S2SApp extends LitElement {
       try {
         configCid = await tab.updateConfig(undefined, { suppressQueueOpen: true });
       } catch (err) {
-        // A build/propose failure (e.g. the base repo has no assets/) must not
-        // wedge the modal or lose the session: keep the flow at 'configuring'
-        // with the error + Retry visible.
-        this.failConfigStep(`Building the configuration failed: ${describeError(err)}`);
+        this.failConfigStep(describeConfigFailure(err));
         return;
       }
       console.log(`[app] config proposal sent cid=${configCid}`);
@@ -737,6 +814,40 @@ export class S2SApp extends LitElement {
       await this.waitForConfigRecord();
     } finally {
       this.configStepActive = false;
+    }
+  }
+
+  /**
+   * Bring the store up to date before step 3 builds, without ever hanging the
+   * modal: join the refresh in flight (or start one when `start`), for at most
+   * `configRefreshJoinMs`. Courtesy, not a dependency — with the atomic payload
+   * seam a concurrent pass can no longer produce a `to: ''` proposal, so if the
+   * pass overshoots its bound we simply proceed. The waiting message is set
+   * BEFORE the await: a stalled refresh must never leave the flow with no
+   * message and therefore no Retry/dismiss.
+   */
+  private async waitForRefresh(start = false): Promise<boolean> {
+    if (start && !this.fetchInFlight) void this.fetchFreshData();
+    const pass = this.fetchInFlight;
+    if (!pass) return true;
+    console.log('[app] joining the refresh in flight (bounded)');
+    if (this.initModalOpen) {
+      this.initMessage = 'Waiting for the app to finish loading…';
+      await this.updateComplete;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pass.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn('[app] refresh did not settle in time -> proceeding');
+            resolve(false);
+          }, this.configRefreshJoinMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -790,7 +901,12 @@ export class S2SApp extends LitElement {
     this.initError = '';
     this.configDismissible = false;
     // Awaited: the Config tab must render the freshly-recorded config (record
-    // value + CID) as soon as the modal closes, not a beat later.
+    // value + CID) as soon as the modal closes, not a beat later. Settle any
+    // pass that started BEFORE the record landed first (bounded — a Filecoin
+    // stall must not park the refresh forever) — joining it would leave the
+    // modal closed onto a Config tab still showing the pending state — then
+    // start a fresh read of the new state.
+    await this.waitForRefresh();
     await this.fetchFreshData();
   }
 
