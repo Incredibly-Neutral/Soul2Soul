@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/s2s-init-progress-modal';
 import type { S2SInitProgressModal } from '../../src/components/s2s-init-progress-modal';
@@ -82,5 +82,64 @@ describe('s2s-init-progress-modal', () => {
     expect(steps[2]?.classList.contains('step--current')).toBe(true);
     expect(steps[2]?.querySelector('.step__marker--spinner')).toBeTruthy();
     expect(text(el)).toContain('Initialize configuration');
+  });
+
+  it('renders the host-driven status message under the step list', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'configuring',
+      message: 'Building configuration…',
+    });
+
+    const message = el.shadowRoot?.querySelector('#init-progress-message');
+    expect(message?.textContent).toBe('Building configuration…');
+    // Under the checklist, and no error/retry while the step is healthy.
+    const steps = el.shadowRoot?.querySelector('.steps');
+    expect(steps?.nextElementSibling).toBe(message);
+    expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
+
+    // The waiting copy is a status line, not a link: the modal never renders URLs.
+    el.message = 'Configuration proposal sent — execute it in the Safe app to finish.';
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('#init-progress-message')?.textContent).toContain(
+      'execute it in the Safe app',
+    );
+    expect(text(el)).not.toContain('http');
+  });
+
+  it('renders the error in the red init-error block and a Retry action that dispatches s2s-init-retry', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'configuring',
+      error: 'The Config tab is not available, so the configuration record was not proposed.',
+    });
+
+    const error = el.shadowRoot?.querySelector('#init-progress-error') as HTMLElement;
+    expect(error).toBeTruthy();
+    expect(error.textContent).toContain('Config tab is not available');
+    expect(error.getAttribute('role')).toBe('alert');
+    const style = getComputedStyle(error);
+    expect(style.backgroundColor).toBe('rgb(58, 20, 20)'); // --error-bg
+    expect(style.borderTopColor).toBe('rgb(122, 42, 42)'); // --error-border
+
+    const retry = el.shadowRoot?.querySelector('#init-retry') as HTMLButtonElement;
+    expect(retry).toBeTruthy();
+    expect(retry.textContent?.trim()).toBe('Retry');
+
+    const onRetry = vi.fn();
+    document.body.addEventListener('s2s-init-retry', onRetry);
+    retry.click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    document.body.removeEventListener('s2s-init-retry', onRetry);
+
+    // A retry in flight is driven by the host: clearing the error removes the
+    // action while the checklist/message stay.
+    el.error = '';
+    el.message = 'Building configuration…';
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
+    expect(el.shadowRoot?.querySelectorAll('.step').length).toBe(3);
   });
 });
