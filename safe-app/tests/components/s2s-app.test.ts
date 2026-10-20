@@ -898,9 +898,12 @@ describe('s2s-app (shell)', () => {
       expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
     );
     expect(modal.open).toBe(true);
-    expect(modal.shadowRoot?.querySelector('#init-progress-error')?.textContent).toContain(
-      'Config tab is not available',
-    );
+    const errorText = modal.shadowRoot?.querySelector('#init-progress-error')?.textContent ?? '';
+    expect(errorText).toContain('Config tab is not available');
+    // It must name a recovery that exists in THIS state and must not send the
+    // user to the Records table — it is not rendered without the records module.
+    expect(errorText).toContain('start the initialization again');
+    expect(errorText).not.toContain('Records table');
     // The reason is surfaced with a Retry action, never as a URL.
     expect(modal.shadowRoot?.querySelector('#init-retry')).toBeTruthy();
     expect(modal.shadowRoot?.querySelector('.dialog')?.textContent).not.toContain('http');
@@ -908,6 +911,18 @@ describe('s2s-app (shell)', () => {
     expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
     // ... and the session is still at 'configuring' — nothing was wiped.
     expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+
+    // Nothing was queued, so this failure is dismissible — and the recovery the
+    // message names is real: the init form comes back (no tabs, `live` is false
+    // because no module is installed), never a blank Config tab.
+    expect(modal.canDismiss).toBe(true);
+    (modal.shadowRoot?.querySelector('#init-dismiss') as HTMLElement).click();
+    await el.updateComplete;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#records-tab')).toBeNull();
   });
 
   it('retry from the modal re-runs the config step once the tab is available', async () => {
@@ -1033,6 +1048,38 @@ describe('s2s-app (shell)', () => {
     expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy();
     // And the rest of the app (incl. Reset) is reachable again.
     expect(el.shadowRoot?.querySelector('#reset-publication')).toBeTruthy();
+  });
+
+  it('ignores a dismiss that arrives while the config build is in flight', async () => {
+    // The dismiss button is only rendered once the run has failed, but a queued
+    // click (or a stale event) must not clear the session of a build that is
+    // still running — that would orphan the proposal it is about to send.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+    recordsTabMocks.updateConfig.mockReturnValue(new Promise<string>(() => {}));
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy(),
+    );
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    expect(modal.canDismiss).toBe(false);
+    expect(modal.shadowRoot?.querySelector('#init-dismiss')).toBeNull();
+
+    modal.dispatchEvent(new CustomEvent('s2s-init-dismiss', { bubbles: true, composed: true }));
+    await el.updateComplete;
+
+    // Still configuring, still open, session still there.
+    expect(modal.phase).toBe('configuring');
+    expect(modal.open).toBe(true);
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
   });
 
   it('treats an empty config CID as "nothing was proposed": fails at configuring and Retry rebuilds', async () => {
