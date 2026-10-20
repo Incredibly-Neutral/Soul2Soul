@@ -445,6 +445,27 @@ describe('s2s-publication-init', () => {
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
+  it("leaves a host-owned config-phase session untouched on resume (step 3 is s2s-app's)", async () => {
+    // A persisted 'configuring'/'awaiting-config' session is driven by the
+    // host — the init component unmounts once the modules are live, so
+    // restorePersisted must leave it alone: no auto-resume, no proposals.
+    seedSession({ phase: 'configuring' });
+    const si = makeSafeIntegration();
+
+    let completed = false;
+    const el = await mount({ safeIntegration: si });
+    el.addEventListener('s2s-init-complete', () => (completed = true), { once: true });
+    await el.updateComplete;
+    await flush();
+
+    expect(completed).toBe(false);
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    // The session stays in storage for the host to drive.
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+    // The component remained on the form — no flow was started.
+    expect(el.shadowRoot?.querySelector('#init-start')).toBeTruthy();
+  });
+
   it('picks up the executed finalize live: getRecord only works after the module addresses are adopted', async () => {
     // Regression: on the live page SafeIntegration.recordsModule is null (the
     // module was created AFTER the connect-time module scan), so getRecord

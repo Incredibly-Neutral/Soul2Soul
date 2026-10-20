@@ -39,12 +39,13 @@ describe('s2s-init-progress-modal', () => {
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(2);
+    expect(steps.length).toBe(3);
 
     // Create already sent + executed → done (check). Finalize waiting → current
-    // (spinner). No third step — enable and name are one merged proposal.
+    // (spinner). Config not reached yet → pending (dot).
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
     expect(steps[1]?.classList.contains('step--current')).toBe(true);
+    expect(steps[2]?.classList.contains('step--pending')).toBe(true);
     expect(steps[0]?.querySelector('ph-check')).toBeTruthy();
     expect(steps[1]?.querySelector('.step__marker--spinner')).toBeTruthy();
 
@@ -61,9 +62,25 @@ describe('s2s-init-progress-modal', () => {
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(2);
+    expect(steps.length).toBe(3);
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
     expect(steps[1]?.classList.contains('step--done')).toBe(true);
+    expect(steps[2]?.classList.contains('step--done')).toBe(true);
     expect(text(el)).not.toContain('Publication initialized');
+  });
+
+  it('highlights the config step (step 3) as current while the config record is proposed', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'awaiting-config',
+    });
+
+    const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
+    expect(steps.length).toBe(3);
+    expect(steps[0]?.classList.contains('step--done')).toBe(true);
+    expect(steps[1]?.classList.contains('step--done')).toBe(true);
+    expect(steps[2]?.classList.contains('step--current')).toBe(true);
+    expect(steps[2]?.querySelector('.step__marker--spinner')).toBeTruthy();
+    expect(text(el)).toContain('Initialize configuration');
   });
 });

@@ -17,25 +17,48 @@
 // factories use plain CREATE), but once they are known the enable step and the
 // name-record step are merged into ONE atomic batch (setRecord is onlySafe on
 // the records module and does not need the module enabled, so there is no
-// reason to split them). The persisted phases therefore describe two proposal
+// reason to split them). The persisted phases therefore describe the proposal
 // round-trips:
 //
 //   creating  → transient: proposing the create batch
 //   detecting → create proposed, waiting for execution
 //   finalizing → transient: proposing the merged enable+name batch
 //   awaiting-finalize → merged batch proposed, waiting for execution
+//   configuring → transient: building + proposing the config record (host-owned)
+//   awaiting-config → config record proposed, waiting for execution (host-owned)
 //   done      → everything on-chain
 //
 // The driving decision lives in `planNextAction`: given the persisted phase
 // (what has been *proposed*) and on-chain checks (what has *executed*), it
 // returns the single next action. The component then just runs that loop:
 // propose -> persist the waiting phase -> poll -> propose -> ... -> done.
+//
+// The config step ('configuring'/'awaiting-config') is NOT driven by
+// s2s-publication-init: once the finalize batch executes the modules are live
+// and the component unmounts, so the host (<s2s-app>) drives it instead
+// (build + propose the config record via the records tab, then wait for its
+// execution). Its phases live here so the step is persisted + surfaced in the
+// progress modal exactly like the others.
 
-/** Phases of the init flow, in execution order. 'creating'/'finalizing' are
- * the transient "proposing in progress" states; 'detecting' / 'awaiting-finalize'
- * are the "proposal sent, waiting for the human to execute it in the Safe app"
- * states. */
-export type InitPhase = 'creating' | 'detecting' | 'finalizing' | 'awaiting-finalize' | 'done';
+/** Phases of the init flow, in execution order. 'creating'/'finalizing'/
+ * 'configuring' are the transient "proposing in progress" states;
+ * 'detecting' / 'awaiting-finalize' / 'awaiting-config' are the "proposal
+ * sent, waiting for the human to execute it in the Safe app" states. */
+export type InitPhase =
+  | 'creating'
+  | 'detecting'
+  | 'finalizing'
+  | 'awaiting-finalize'
+  | 'configuring'
+  | 'awaiting-config'
+  | 'done';
+
+/** True for the host-owned config step (modules live, s2s-init unmounted). */
+export function isConfigPhase(
+  phase: InitPhase,
+): phase is Extract<InitPhase, 'configuring' | 'awaiting-config'> {
+  return phase === 'configuring' || phase === 'awaiting-config';
+}
 
 /** Everything worth persisting to resume a flow after a reload. */
 export interface InitSession {
@@ -64,24 +87,26 @@ export type InitSessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeIt
 
 export const INIT_SESSION_KEY = 's2s.publication-init.v2';
 
-/** The two checklist rows the progress modal renders. */
+/** The three checklist rows the progress modal renders. */
 export interface InitStepRow {
-  index: 1 | 2;
+  index: 1 | 2 | 3;
   title: string;
 }
 export const INIT_STEPS: InitStepRow[] = [
   { index: 1, title: 'Create modules' },
   { index: 2, title: 'Enable + record name' },
+  { index: 3, title: 'Initialize configuration' },
 ];
 
-/** Which of the two batches have been PROPOSED at a given phase. */
+/** Which of the proposals/records have been PROPOSED at a given phase. */
 export interface ProposalProgress {
   create: boolean;
   finalize: boolean;
+  config: boolean;
 }
 
 /** The proposal the flow is currently waiting on (0 = nothing, all done). */
-export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 {
+export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 | 3 {
   switch (phase) {
     case 'creating':
     case 'detecting':
@@ -89,6 +114,9 @@ export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 {
     case 'finalizing':
     case 'awaiting-finalize':
       return 2;
+    case 'configuring':
+    case 'awaiting-config':
+      return 3;
     case 'done':
       return 0;
   }
@@ -98,7 +126,7 @@ export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 {
  * Checklist state for a given step row: 'done' (its proposal already sent),
  * 'current' (the flow is waiting on this proposal), or 'pending'.
  */
-export function stepState(phase: InitPhase, index: 1 | 2): 'done' | 'current' | 'pending' {
+export function stepState(phase: InitPhase, index: 1 | 2 | 3): 'done' | 'current' | 'pending' {
   const current = currentStepIndex(phase);
   if (current === 0) return 'done';
   if (index < current) return 'done';
@@ -109,13 +137,17 @@ export function stepState(phase: InitPhase, index: 1 | 2): 'done' | 'current' | 
 export function proposalProgress(phase: InitPhase): ProposalProgress {
   switch (phase) {
     case 'creating':
-      return { create: false, finalize: false };
+      return { create: false, finalize: false, config: false };
     case 'detecting':
     case 'finalizing':
-      return { create: true, finalize: false };
+      return { create: true, finalize: false, config: false };
     case 'awaiting-finalize':
+      return { create: true, finalize: true, config: false };
+    case 'configuring':
+    case 'awaiting-config':
+      return { create: true, finalize: true, config: true };
     case 'done':
-      return { create: true, finalize: true };
+      return { create: true, finalize: true, config: true };
   }
 }
 

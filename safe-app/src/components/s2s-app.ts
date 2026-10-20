@@ -22,8 +22,11 @@ import { buildDeletePublicationBatch } from '../lib/publication-init.js';
 import {
   INIT_SESSION_KEY,
   clearInitSession,
+  isConfigPhase,
   loadInitSession,
+  saveInitSession,
   type InitPhase,
+  type InitSession,
 } from '../lib/init-session.js';
 import { evmRead } from '@/lib/evm.js';
 import { CID } from 'multiformats';
@@ -52,9 +55,22 @@ export class S2SApp extends LitElement {
   @state() private fetching = false;
 
   // Reset/teardown: opens a confirmation modal → propose the disable+deleteRecord
-  // batch. 'done' closes the modal and surfaces the Safe queue link.
-  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'done' = 'idle';
+  // batch, then watch for its execution and reload the app fresh. On load the
+  // Safe is re-read from scratch (module check re-runs), so once the teardown
+  // executes the app returns to the no-modules state and the 2-proposal init
+  // flow comes back.
+  @state() private resetState: 'idle' | 'confirming' | 'proposing' | 'waiting' = 'idle';
   @state() private resetError: string | null = null;
+
+  // Guards the reset-execution poll (one active poll per element) and cancels
+  // it when the element is torn down mid-wait (test unmount, tab close).
+  private resetPollActive = false;
+  private resetPollCancelled = false;
+
+  // Host-owned config step (step 3): guards re-entry and cancels the config
+  // wait loop when the element is torn down mid-poll.
+  private configStepActive = false;
+  private configPollCancelled = false;
 
   // Init progress: the publication-creation flow (live or recovered from local
   // storage after a reload) drives this progress modal. Both the live init
@@ -135,6 +151,10 @@ export class S2SApp extends LitElement {
     super.disconnectedCallback();
     this.unsubscribers.forEach((unsub) => unsub());
     this.unsubscribers = [];
+    // Stop any reset-execution / config-wait poll mid-flight (test teardown,
+    // tab close) so no dangling loop outlives the element.
+    this.resetPollCancelled = true;
+    this.configPollCancelled = true;
   }
 
   private async fetchFreshData() {
@@ -254,7 +274,10 @@ export class S2SApp extends LitElement {
    * Reset/start-over: propose the teardown batch (disable both S2S modules +
    * records.deleteRecord("name")). Only runs from the confirmation modal's
    * confirm action — the modal stays open, busy, while the batch is proposed.
-   * Human-in-the-loop, like the init flow — the batch lands in the Safe queue.
+   * Human-in-the-loop, like the init flow — the batch lands in the Safe queue
+   * and needs an owner signature + execution. Once proposed we watch the Safe
+   * for the execution and then reload the app, which re-initializes everything
+   * (fresh module check → no modules → init flow available again).
    */
   private async handleReset(): Promise<void> {
     if (this.resetState !== 'confirming') return;
@@ -264,6 +287,7 @@ export class S2SApp extends LitElement {
 
     this.resetState = 'proposing';
     this.resetError = null;
+    this.resetPollCancelled = false;
     try {
       const safeModules = await this.safeIntegration.fetchSafeModules();
       // deleteRecord('name') reverts KeyNotFound() when the record was never
@@ -287,12 +311,72 @@ export class S2SApp extends LitElement {
         safeModules,
         { deleteName: nameRecorded },
       );
-      this.safeIntegration.proposeBatch(batch);
-      this.resetState = 'done';
+      await this.safeIntegration.proposeBatch(batch);
+      // Proposed — hold the modal open and wait for the teardown to execute,
+      // then reload. Same host-mediated channel (SDK module read) the reload
+      // path uses, not a raw RPC poll.
+      this.resetState = 'waiting';
+      void this.waitForResetExecution(safeInfo);
     } catch (e) {
       this.resetError = e instanceof Error ? e.message : String(e);
       this.resetState = 'idle';
     }
+  }
+
+  /**
+   * Watch the Safe's installed-module list until the teardown batch executes
+   * (both S2S modules gone), then reload the app. On reload, initialize()
+   * re-reads the Safe from scratch: no modules → s2s-publication-init mounts
+   * and the 2-proposal init flow is available again. Times out (leaves the
+   * error in place) if the owner never executes it in the Safe queue.
+   */
+  private async waitForResetExecution(safeInfo: {
+    s2sRecords?: string;
+    s2sPublication?: string;
+  }): Promise<void> {
+    if (this.resetPollActive) return;
+    this.resetPollActive = true;
+    const recordsModule = safeInfo.s2sRecords ?? '';
+    const publicationModule = safeInfo.s2sPublication ?? '';
+    const stillInstalled = (mods: string[]): boolean =>
+      (recordsModule !== '' && mods.includes(recordsModule)) ||
+      (publicationModule !== '' && mods.includes(publicationModule));
+    const startedAt = Date.now();
+    const timeoutMs = 10 * 60_000;
+    try {
+      // First check immediately (the tx may already have executed), then poll.
+      for (;;) {
+        if (this.resetPollCancelled) return;
+        let modules: string[] = [];
+        try {
+          modules = await this.safeIntegration.fetchSafeModules();
+        } catch {
+          modules = [];
+        }
+        console.log(
+          `[app] waitForResetExecution modules=${String(modules.length)} stillInstalled=${String(stillInstalled(modules))}`,
+        );
+        if (!stillInstalled(modules)) {
+          console.log('[app] reset executed -> reloading to re-initialize');
+          this.reloadApp();
+          return;
+        }
+        if (Date.now() - startedAt > timeoutMs) {
+          this.resetError =
+            'The reset proposal is still pending in the Safe queue. Execute it, then reload to run a new publication.';
+          this.resetState = 'idle';
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    } finally {
+      this.resetPollActive = false;
+    }
+  }
+
+  /** Separate seam so tests can intercept the reload without touching location. */
+  private reloadApp(): void {
+    window.location.reload();
   }
 
   /**
@@ -326,6 +410,15 @@ export class S2SApp extends LitElement {
     }
 
     if (this.safeIntegration.hasRecordsModule()) {
+      if (isConfigPhase(session.phase)) {
+        // The finalize batch executed but the config record is still pending
+        // (or was never proposed) — the host's step 3. Resume it: reopen the
+        // modal at that step and drive it to completion via the records tab's
+        // updateConfig (the config record gets its own Safe signature).
+        console.log('[app] syncInitProgress: config phase -> resume config step');
+        void this.resumeConfigStep(session.phase);
+        return;
+      }
       // The finalize batch enables the modules AND records the name in one
       // atomic transaction, so once the records module is live the flow is
       // finished. Clear the session silently — no banner; the app is now in
@@ -341,6 +434,16 @@ export class S2SApp extends LitElement {
     // Modules not live yet: the init component (mounted below) resumes the
     // merged flow itself; the modal is the banner while it catches up.
     console.log('[app] syncInitProgress: modules not live -> open recovery modal');
+    if (isConfigPhase(session.phase)) {
+      // A config-phase session with no live modules is stale (config implies
+      // the modules were once live — i.e. a reset wiped them). Drop it so the
+      // recovery modal doesn't wedge on a step nothing can drive.
+      console.log('[app] syncInitProgress: config session, modules dead -> drop');
+      clearInitSession(window.localStorage, INIT_SESSION_KEY);
+      this.initPhase = null;
+      this.initModalOpen = false;
+      return;
+    }
     this.initModalOpen = true;
     this.initPhase = session.phase;
   }
@@ -350,8 +453,13 @@ export class S2SApp extends LitElement {
    * are proposed but still pending Safe execution, so the chain read in
    * fetchFreshData cannot see them yet — write them to the store optimistically
    * so the title + web-status populate immediately (no reload needed), clear
-   * any stale root from a previous publication, then run the first config
-   * build automatically on the Config tab.
+   * any stale root from a previous publication, then run the config step.
+   *
+   * The config step is step 3 of the flow (owned by the host, since the init
+   * component unmounts once the modules go live): the config record is a THIRD
+   * Safe execution (build + propose via the records tab, then wait for it to be
+   * recorded on-chain). The progress modal stays open on that step so the flow
+   * can't be lost, and its phase is persisted for reload-resume.
    */
   private readonly onInitComplete = async (e: Event): Promise<void> => {
     const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
@@ -361,13 +469,12 @@ export class S2SApp extends LitElement {
       `[app] onInitComplete name=${name ?? 'undefined'} repo=${repo ?? 'undefined'} branch=${branch ?? 'undefined'}`,
     );
 
-    // The flow finished proposing — close the (recovery) progress modal. The
-    // session stays persisted for crash-safety until the last record is
-    // observed on-chain.
-    this.initPhase = null;
-    this.initModalOpen = false;
+    // The two S2S init proposals are done; the configuration record is not —
+    // keep the modal open on step 3 while the host drives it.
+    this.initPhase = 'configuring';
+    this.initModalOpen = true;
 
-    // Surface the Config tab — the immediate config update below runs there.
+    // Surface the Config tab — the immediate config build below runs there.
     this.currentTab = 'records';
     await this.fetchFreshData();
 
@@ -379,16 +486,153 @@ export class S2SApp extends LitElement {
     // still points at a previous publication's content.
     if (name) store.setRoot('');
 
+    // Persist the config phase (with the fresh publication identity) before
+    // running the step, so a reload during it can resume.
+    this.persistInitPhase('configuring', {
+      name: name ?? '',
+      publicationName: name ?? '',
+      repo: repo ?? '',
+      branch: branch ?? '',
+    });
+
     await this.updateComplete;
-    const tab = this.renderRoot.querySelector('s2s-records-tab') as {
-      updateConfig?: () => Promise<unknown>;
-    } | null;
-    if (tab?.updateConfig) {
-      void tab.updateConfig().catch((err: unknown) => {
-        console.error('[s2s-app] immediate config update failed:', err);
-      });
-    }
+    await this.runConfigStep();
   };
+
+  // ── Host-owned config step (step 3) ───────────────────────────────────────
+
+  /** Persist (or refresh) the init session with a new phase, keeping known fields. */
+  private persistInitPhase(phase: InitPhase, extra: Partial<InitSession> = {}): void {
+    const prev = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    const safeInfo = store.safeInfo;
+    saveInitSession(window.localStorage, INIT_SESSION_KEY, {
+      version: 2,
+      chainId: safeInfo?.chainId ?? 0,
+      safeAddress: safeInfo?.safeAddress ?? '',
+      name: '',
+      publicationName: '',
+      repo: '',
+      branch: '',
+      authors: [],
+      proposals: [],
+      recordsModule: safeInfo?.s2sRecords,
+      publicationModule: safeInfo?.s2sPublication,
+      ...(prev ?? {}),
+      ...extra,
+      phase,
+      updatedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Resume a config-phase session after a reload. If the config record is
+   * already on-chain the flow is actually done (clear + close); otherwise
+   * reopen the modal at step 3 and drive the step — re-proposing the config
+   * record only when it was never proposed ('configuring'), mere-waiting when
+   * it was ('awaiting-config', proposal still pending in the Safe queue).
+   */
+  private async resumeConfigStep(phase: InitPhase): Promise<void> {
+    let value = '';
+    try {
+      value = await this.safeIntegration.getRecord('config');
+    } catch {
+      value = '';
+    }
+    console.log(`[app] resumeConfigStep getRecord('config') -> '${value}'`);
+    if (value !== '') {
+      console.log('[app] resumeConfigStep: config already on-chain -> flow complete');
+      this.finishConfigStep();
+      return;
+    }
+    this.initPhase = phase;
+    this.initModalOpen = true;
+    if (phase === 'awaiting-config') {
+      // Proposed but not executed — just wait for it, never duplicate it.
+      await this.waitForConfigRecord();
+    } else {
+      await this.runConfigStep();
+    }
+  }
+
+  /**
+   * Drive the config step to completion: persist 'configuring', propose the
+   * config record through the records tab (its updateConfig builds + proposes
+   * the config DAG), persist 'awaiting-config', then wait for the record to be
+   * recorded on-chain before clearing the session and closing the modal.
+   */
+  private async runConfigStep(): Promise<void> {
+    if (this.configStepActive) return;
+    this.configStepActive = true;
+    try {
+      this.initPhase = 'configuring';
+      this.initModalOpen = true;
+      this.persistInitPhase('configuring');
+      await this.updateComplete;
+      const tab = this.renderRoot.querySelector('s2s-records-tab') as {
+        updateConfig?: () => Promise<unknown>;
+      } | null;
+      if (tab?.updateConfig) {
+        try {
+          await tab.updateConfig();
+        } catch (err) {
+          // A build/propose failure (e.g. the base repo has no assets/) must
+          // not wedge the modal: stop, close and log so the user can retry
+          // from the Config tab instead of being stuck behind a modal.
+          console.error('[app] config update failed, closing the config step:', err);
+          this.resetConfigStep();
+          return;
+        }
+      }
+      this.initPhase = 'awaiting-config';
+      this.persistInitPhase('awaiting-config');
+      await this.waitForConfigRecord();
+    } finally {
+      this.configStepActive = false;
+    }
+  }
+
+  /** Poll the chain until the config record exists (the 3rd Safe execution). */
+  private async waitForConfigRecord(): Promise<void> {
+    const startedAt = Date.now();
+    const timeoutMs = 10 * 60_000;
+    for (;;) {
+      if (this.configPollCancelled) return;
+      let value = '';
+      try {
+        value = await this.safeIntegration.getRecord('config');
+      } catch {
+        value = '';
+      }
+      console.log(`[app] waitForConfigRecord getRecord('config') -> '${value}'`);
+      if (value !== '') {
+        console.log('[app] configuration record on-chain -> flow complete');
+        this.finishConfigStep();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        console.error('[app] timed out waiting for the config record to be executed');
+        this.resetConfigStep();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
+  /** Config record is on-chain: clear the session, close the modal, refresh so
+   * the Config tab shows the record it just built. */
+  private finishConfigStep(): void {
+    clearInitSession(window.localStorage, INIT_SESSION_KEY);
+    this.initPhase = null;
+    this.initModalOpen = false;
+    void this.fetchFreshData();
+  }
+
+  /** Stop the config step without completing it (failure/timeout). */
+  private resetConfigStep(): void {
+    clearInitSession(window.localStorage, INIT_SESSION_KEY);
+    this.initPhase = null;
+    this.initModalOpen = false;
+  }
 
   /** Live progress from the init component while a flow is running. */
   private readonly onInitProgress = (e: Event): void => {
@@ -509,7 +753,7 @@ export class S2SApp extends LitElement {
                     type="warning"
                     class="reset-button"
                     id="reset-publication"
-                    ?disabled=${this.resetState === 'proposing'}
+                    ?disabled=${this.resetState === 'proposing' || this.resetState === 'waiting'}
                     title="Disable the S2S modules and clear the publication name so you can start a new publication."
                     @click=${() => (this.resetState = 'confirming')}
                   >
@@ -611,11 +855,17 @@ export class S2SApp extends LitElement {
       </div>
 
       <s2s-confirm-modal
-        .open=${this.resetState === 'confirming' || this.resetState === 'proposing'}
+        .open=${this.resetState === 'confirming' ||
+        this.resetState === 'proposing' ||
+        this.resetState === 'waiting'}
         headline="Reset publication?"
-        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone. You can start a new publication afterwards, which re-creates the modules."
-        confirmLabel=${this.resetState === 'proposing' ? 'Proposing…' : 'Confirm reset'}
-        .busy=${this.resetState === 'proposing'}
+        message="This disables the S2S Records and Publication modules on this Safe and clears the publication name record. It creates a Safe proposal you must execute — once executed it cannot be undone."
+        confirmLabel=${this.resetState === 'proposing'
+          ? 'Proposing…'
+          : this.resetState === 'waiting'
+            ? 'Waiting for execution…'
+            : 'Confirm reset'}
+        .busy=${this.resetState === 'proposing' || this.resetState === 'waiting'}
         variant="warning"
         @s2s-confirm=${() => void this.handleReset()}
         @s2s-cancel=${() => (this.resetState = 'idle')}

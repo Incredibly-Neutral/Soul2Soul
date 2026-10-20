@@ -135,12 +135,42 @@ describe('init-session persistence', () => {
 });
 
 describe('proposalProgress', () => {
-  it('tracks which batches have been proposed at each phase', () => {
-    expect(proposalProgress('creating')).toEqual({ create: false, finalize: false });
-    expect(proposalProgress('detecting')).toEqual({ create: true, finalize: false });
-    expect(proposalProgress('finalizing')).toEqual({ create: true, finalize: false });
-    expect(proposalProgress('awaiting-finalize')).toEqual({ create: true, finalize: true });
-    expect(proposalProgress('done')).toEqual({ create: true, finalize: true });
+  it('tracks which batches/records have been proposed at each phase', () => {
+    expect(proposalProgress('creating')).toEqual({
+      create: false,
+      finalize: false,
+      config: false,
+    });
+    expect(proposalProgress('detecting')).toEqual({
+      create: true,
+      finalize: false,
+      config: false,
+    });
+    expect(proposalProgress('finalizing')).toEqual({
+      create: true,
+      finalize: false,
+      config: false,
+    });
+    expect(proposalProgress('awaiting-finalize')).toEqual({
+      create: true,
+      finalize: true,
+      config: false,
+    });
+    expect(proposalProgress('configuring')).toEqual({
+      create: true,
+      finalize: true,
+      config: true,
+    });
+    expect(proposalProgress('awaiting-config')).toEqual({
+      create: true,
+      finalize: true,
+      config: true,
+    });
+    expect(proposalProgress('done')).toEqual({
+      create: true,
+      finalize: true,
+      config: true,
+    });
   });
 });
 
@@ -150,18 +180,31 @@ describe('currentStepIndex + stepState', () => {
     expect(currentStepIndex('detecting')).toBe(1);
     expect(currentStepIndex('finalizing')).toBe(2);
     expect(currentStepIndex('awaiting-finalize')).toBe(2);
+    expect(currentStepIndex('configuring')).toBe(3);
+    expect(currentStepIndex('awaiting-config')).toBe(3);
     expect(currentStepIndex('done')).toBe(0);
   });
 
   it('stepState marks past steps done, the current one active, later ones pending', () => {
-    // Waiting on proposal 2 → step 1 done, step 2 current.
+    // Waiting on proposal 2 → step 1 done, step 2 current, config still pending.
     expect(stepState('awaiting-finalize', 1)).toBe('done');
     expect(stepState('awaiting-finalize', 2)).toBe('current');
+    expect(stepState('awaiting-finalize', 3)).toBe('pending');
+  });
+
+  it('drives the 3-step checklist through the config phase', () => {
+    // Step 3 (config) is what the host waits on while the config record is
+    // being built/executed — steps 1–2 are already done by then.
+    expect(stepState('configuring', 1)).toBe('done');
+    expect(stepState('configuring', 2)).toBe('done');
+    expect(stepState('configuring', 3)).toBe('current');
+    expect(stepState('awaiting-config', 3)).toBe('current');
   });
 
   it('when done, every step is marked done', () => {
     expect(stepState('done', 1)).toBe('done');
     expect(stepState('done', 2)).toBe('done');
+    expect(stepState('done', 3)).toBe('done');
   });
 });
 

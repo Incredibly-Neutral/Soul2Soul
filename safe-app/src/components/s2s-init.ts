@@ -58,6 +58,7 @@ import {
 import {
   INIT_SESSION_KEY,
   clearInitSession,
+  isConfigPhase,
   loadInitSession,
   planNextAction,
   saveInitSession,
@@ -363,6 +364,9 @@ export class S2SPublicationInit extends LitElement {
     if (!this.safeInfo) return;
     if (session.safeAddress.toLowerCase() !== this.safeInfo.safeAddress.toLowerCase()) return;
     if (session.chainId !== this.safeInfo.chainId) return;
+    // Config-phase sessions are host-owned: the modules are live by then (this
+    // component only mounts when they are not), so <s2s-app> drives that step.
+    if (isConfigPhase(session.phase)) return;
 
     this.session = session;
     this.name = session.name;
