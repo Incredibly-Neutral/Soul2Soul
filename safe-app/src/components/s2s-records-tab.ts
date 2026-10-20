@@ -197,12 +197,6 @@ export class S2SRecordsTab extends LitElement {
       .alias-pill__remove:hover {
         color: var(--color-red);
       }
-
-      .config-pending {
-        color: var(--gray-400);
-        font-size: 0.8rem;
-        margin: 0 0 1rem;
-      }
     `,
   ];
 
@@ -281,14 +275,6 @@ export class S2SRecordsTab extends LitElement {
    */
   private get firstConfigGate(): boolean {
     return this.configRecordKnown && !this.chainConfigCid && !this.storedConfigCid;
-  }
-
-  /**
-   * A proposal is queued but not executed: the store has a CID the chain does
-   * not. Served as a non-interactive note so the missing action is explained.
-   */
-  private get configProposalPending(): boolean {
-    return this.configRecordKnown && !this.chainConfigCid && !!this.storedConfigCid;
   }
 
   disconnectedCallback() {
@@ -869,13 +855,6 @@ export class S2SRecordsTab extends LitElement {
                   ${this.buildingConfig ? 'Building configuration…' : 'Initialize configuration'}
                 </button>
               </div>
-            `
-          : ''}
-        ${this.configProposalPending
-          ? html`
-              <p id="config-pending" class="config-pending">
-                Configuration proposal pending in the Safe queue — execute it there.
-              </p>
             `
           : ''}
 
