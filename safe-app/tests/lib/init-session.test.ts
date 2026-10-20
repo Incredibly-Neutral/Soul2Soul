@@ -156,10 +156,12 @@ describe('proposalProgress', () => {
       finalize: true,
       config: false,
     });
+    // 'configuring' is the transient "sending the config proposal" phase, so —
+    // like 'creating'/'finalizing' — it reports the batch as NOT yet proposed.
     expect(proposalProgress('configuring')).toEqual({
       create: true,
       finalize: true,
-      config: true,
+      config: false,
     });
     expect(proposalProgress('awaiting-config')).toEqual({
       create: true,

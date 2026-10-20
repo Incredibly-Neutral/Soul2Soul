@@ -359,10 +359,231 @@ describe('s2s-publication-init', () => {
     expect(si.proposeBatch).toHaveBeenCalledTimes(2);
     expect(bodyText(el)).toContain('not enabled');
 
-    // "Try again" returns to the form.
-    el.shadowRoot!.querySelector<HTMLButtonElement>('button')!.click();
+    // The error view offers two actions: retry (keeps the session) and an
+    // explicit start-over (clears it and returns to the form).
+    const retryBtn = el.shadowRoot!.querySelector<HTMLElement>('#init-retry');
+    const startOverBtn = el.shadowRoot!.querySelector<HTMLElement>('#init-start-over');
+    expect(retryBtn).not.toBeNull();
+    expect(startOverBtn).not.toBeNull();
+    expect(retryBtn!.textContent).toContain('Try again');
+    expect(startOverBtn!.textContent).toContain('Start over');
+
+    // "Start over" returns to the form and drops the persisted session.
+    startOverBtn!.click();
     await el.updateComplete;
     expect(bodyText(el)).toContain('New publication');
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('retry keeps the session and resumes from the persisted phase (no duplicate create)', async () => {
+    const si = makeSafeIntegration({ enabled: false });
+    const el = await mount({
+      safeIntegration: si,
+      enableTimeoutMs: 30,
+      enablePollIntervalMs: 10,
+    });
+
+    let completions = 0;
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener(
+        's2s-init-complete',
+        (e) => {
+          completions += 1;
+          resolve(e as CustomEvent);
+        },
+        { once: true },
+      );
+    });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+
+    // Create + finalize were proposed; the session survived the timeout at the
+    // phase that records both proposals (awaiting execution).
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.phase).toBe('awaiting-finalize');
+    expect(persisted.recordsModule).toBe(RECORDS_MODULE);
+
+    // The human finally executes the merged proposal → both modules enabled
+    // and the name recorded on-chain.
+    si.readIsModuleEnabled = vi.fn(async () => true);
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' ? PUB_NAME : ''));
+
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+    const evt = await complete;
+    await flush();
+
+    // Resumed from the persisted phase: no third proposal, no second create
+    // batch (which would have deployed a duplicate module pair).
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    const createBatches = si.proposeBatch.mock.calls
+      .map((c) => c[0])
+      .filter((txs) => txs.length === 2 && txs[0].to === RECORDS_FACTORY);
+    expect(createBatches).toHaveLength(1);
+    expect(completions).toBe(1);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('retry while the finalize batch is still unexecuted resumes waiting, without re-proposing it', async () => {
+    const si = makeSafeIntegration({ enabled: false });
+    const el = await mount({
+      safeIntegration: si,
+      enableTimeoutMs: 30,
+      enablePollIntervalMs: 10,
+    });
+    const progress: Array<{ step: string; phase: string }> = [];
+    el.addEventListener('s2s-init-progress', (e) =>
+      progress.push((e as CustomEvent<{ step: string; phase: string }>).detail),
+    );
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+
+    // Retry with the merged batch STILL unexecuted (modules disabled, no name
+    // record): the plan must return await-finalize — the enable/name batch is
+    // already queued, so proposing it again would duplicate it.
+    el.enableTimeoutMs = 2_000;
+    el.enablePollIntervalMs = 5;
+    let recorded = false;
+    si.readIsModuleEnabled = vi.fn(async () => false);
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' && recorded ? PUB_NAME : ''));
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+
+    // A few poll rounds pass with the proposal still unexecuted: no new batch
+    // is proposed and the component sits in awaiting-finalize.
+    await new Promise((r) => setTimeout(r, 60));
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(progress.at(-1)?.step).toBe('awaiting-finalize');
+    expect(progress.at(-1)?.phase).toBe('awaiting-finalize');
+    expect(bodyText(el)).not.toContain('Initialization failed');
+
+    // The human executes the queued batch → the same loop finishes.
+    recorded = true;
+    si.readIsModuleEnabled = vi.fn(async () => true);
+    const evt = await complete;
+    await flush();
+
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('retry after a failed create proposes exactly one new create batch and completes', async () => {
+    // The uncovered failure mode documented in the component header: a
+    // proposeBatch that throws while phase is 'creating'. The retry replays
+    // the create step (the session says no create was sent) — this test pins
+    // that behaviour to ONE queued create batch, so a regression to more than
+    // one duplicate module deployment is visible.
+    const si = makeSafeIntegration();
+    const originalPropose = si.proposeBatch;
+    const createOutcomes: Array<'threw' | 'queued'> = [];
+    let failNextCreate = true;
+    si.proposeBatch = vi.fn(async (txs: MetaTransactionData[]) => {
+      const isCreate = txs.length === 2 && txs[0].to === RECORDS_FACTORY;
+      if (isCreate) {
+        if (failNextCreate) {
+          failNextCreate = false;
+          createOutcomes.push('threw');
+          throw new Error('signature rejected');
+        }
+        createOutcomes.push('queued');
+      }
+      return originalPropose(txs);
+    });
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('signature rejected'));
+
+    // The session was persisted at 'creating' before the batch was sent, and
+    // exactly one create attempt exists (the one that threw, unqueued).
+    expect(JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!).phase).toBe('creating');
+    expect(createOutcomes).toEqual(['threw']);
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+    const evt = await complete;
+    await flush();
+
+    // One create batch was queued by the retry (the failed attempt returned no
+    // queue URL), then the merged finalize batch — nothing else.
+    expect(createOutcomes).toEqual(['threw', 'queued']);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(3);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('start over after an error clears the session and returns to the blank form', async () => {
+    const si = makeSafeIntegration({ enabled: false });
+    const el = await mount({
+      safeIntegration: si,
+      enableTimeoutMs: 30,
+      enablePollIntervalMs: 10,
+    });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+
+    el.shadowRoot!.querySelector<HTMLElement>('#init-start-over')!.click();
+    await el.updateComplete;
+
+    // Session gone, blank form back (name field empty again).
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(bodyText(el)).toContain('New publication');
+    expect(bodyText(el)).not.toContain('Initialization failed');
+    expect(el.shadowRoot!.querySelector<HTMLInputElement>('#init-name')!.value).toBe('');
+    expect(el.shadowRoot!.querySelector('#init-start')).not.toBeNull();
+
+    // No extra proposals were made by starting over.
+    await flush();
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('a double start() proposes the create batch only once', async () => {
+    const si = makeSafeIntegration();
+    const el = await mount({ safeIntegration: si });
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+
+    setInput(el, '#init-name', 'my-publication');
+    // Two clicks in the same tick: the re-entrancy guard makes the second a
+    // no-op, so only one plan loop runs.
+    const start = (el as unknown as { start(): Promise<void> }).start.bind(el);
+    void start();
+    void start();
+
+    await complete;
+    await flush();
+
+    const createBatches = si.proposeBatch.mock.calls
+      .map((c) => c[0])
+      .filter((txs) => txs.length === 2 && txs[0].to === RECORDS_FACTORY);
+    expect(createBatches).toHaveLength(1);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
   it('fails fast when not connected to a Safe', async () => {
@@ -422,6 +643,125 @@ describe('s2s-publication-init', () => {
     expect(evt.detail.proposals).toHaveLength(2);
     expect(evt.detail.proposals[0]).toBe(QUEUE_URL);
     expect(bodyText(el)).not.toContain('Publication initialized');
+  });
+
+  it('completes from a restored awaiting-finalize session when the modules are already installed', async () => {
+    // The host keeps <s2s-publication-init> mounted even after the modules are
+    // adopted, and may hand over safeInfo only after connect. A session that
+    // says "both proposals sent" + on-chain modules enabled + name recorded
+    // must finish the flow from the component itself: emit s2s-init-complete
+    // with the session's addresses/name and clear the session.
+    seedSession({
+      phase: 'awaiting-finalize',
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL, QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    si.getRecord = vi.fn(async (key: string) => (key === 'name' ? PUB_NAME : ''));
+
+    // Mount WITHOUT safeInfo first (the Safe has not resolved yet).
+    const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
+    Object.assign(el, { protocolInfo: PROTOCOL_INFO, safeIntegration: si });
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    await flush();
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+
+    // safeInfo arrives late → the session matches and the plan says done.
+    Object.assign(el, { safeInfo: SAFE_INFO });
+    await el.updateComplete;
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.publicationModule).toBe(PUB_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    // The full identity rides on the event — the component has already cleared
+    // storage, so the host cannot fall back to reading the session.
+    expect(evt.detail.repo).toBe('https://github.com/Joera/website-starter');
+    expect(evt.detail.branch).toBe('main');
+    expect(evt.detail.authors).toEqual([OWNER_A, OWNER_B]);
+    expect(evt.detail.proposals).toEqual([QUEUE_URL, QUEUE_URL]);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('retry after a "not connected" failure restores the persisted session instead of wiping it', async () => {
+    // The failure happened before any session existed in memory (no safeInfo),
+    // but a half-finished flow is still persisted. Retry must restore it and
+    // resume from the persisted phase — not show a blank form, and not leave
+    // the old session behind to be overwritten by a fresh create.
+    seedSession({ phase: 'detecting', proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration();
+
+    const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
+    Object.assign(el, { protocolInfo: PROTOCOL_INFO, safeIntegration: si });
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // No Safe yet → Create fails fast, and the persisted session is untouched.
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Not connected to a Safe'));
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+
+    // The safeInfo race resolves → retry takes the restore path.
+    Object.assign(el, { safeInfo: SAFE_INFO });
+    await el.updateComplete;
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+    // The session was read (not cleared) on the way in.
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+
+    const evt = await complete;
+    await flush();
+
+    // Resumed at 'detecting': only the merged finalize batch is proposed.
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+    expect(evt.detail.name).toBe(PUB_NAME);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('a late safeInfo does not clobber typed input (name and edited repo survive)', async () => {
+    seedSession({ phase: 'detecting', proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration();
+
+    const el = document.createElement('s2s-publication-init') as S2SPublicationInit;
+    Object.assign(el, { protocolInfo: PROTOCOL_INFO, safeIntegration: si });
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // The user starts typing while the Safe is still resolving.
+    setInput(el, '#init-name', 'typed-by-user');
+    setInput(el, '#init-repo', 'https://github.com/Joera/typed-site');
+    await el.updateComplete;
+
+    Object.assign(el, { safeInfo: SAFE_INFO });
+    await el.updateComplete;
+    await flush();
+
+    // Nothing was restored over the input: the name and repo survive, the
+    // component stays on the form, and the persisted session is untouched
+    // (no proposals either).
+    expect(el.shadowRoot!.querySelector<HTMLInputElement>('#init-name')!.value).toBe(
+      'typed-by-user',
+    );
+    expect(el.shadowRoot!.querySelector<HTMLInputElement>('#init-repo')!.value).toBe(
+      'https://github.com/Joera/typed-site',
+    );
+    expect(el.shadowRoot!.querySelector('#init-start')).not.toBeNull();
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
   });
 
   it('finishes immediately on resume when the whole flow already executed', async () => {
