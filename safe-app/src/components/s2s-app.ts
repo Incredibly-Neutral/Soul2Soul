@@ -42,6 +42,42 @@ const RECORDS_CONTRACT_ABI = [
   'function setText(bytes32 node, string key, string value) nonpayable',
 ];
 
+/**
+ * The records-tab surface the host's config step (step 3) drives. Duck-typed so
+ * the shell never imports the tab's heavy module graph (and component tests can
+ * stub it). `updateConfig` builds the publication config and proposes the
+ * config record to the Safe; it returns the proposed config CID.
+ * `suppressQueueOpen` stops the tab from opening the Safe queue itself — the
+ * host owns the progress modal here.
+ */
+interface ConfigTab {
+  updateConfig(
+    aliasesOverride?: string[],
+    options?: { suppressQueueOpen?: boolean },
+  ): Promise<string>;
+}
+
+/** Modal status while step 3's proposal sits in the Safe queue. */
+const CONFIG_WAITING_MESSAGE =
+  'Configuration proposal sent — execute it in the Safe app to finish.';
+
+/** Narrow an unknown throwable to a message for the modal's error line. */
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Drop `undefined` entries so a spread can't overwrite a persisted/known value
+ * with `undefined` (the caller's fallback would be lost).
+ */
+function definedOnly<T extends object>(values: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [key, value] of Object.entries(values) as [keyof T, T[keyof T]][]) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 @customElement('s2s-app')
 export class S2SApp extends LitElement {
   private safeIntegration: SafeIntegration;
@@ -67,18 +103,31 @@ export class S2SApp extends LitElement {
   private resetPollActive = false;
   private resetPollCancelled = false;
 
-  // Host-owned config step (step 3): guards re-entry and cancels the config
-  // wait loop when the element is torn down mid-poll.
+  // Host-owned config step (step 3): one active step + one wait poll, both
+  // stopped by disconnectedCallback.
   private configStepActive = false;
   private configPollCancelled = false;
+  // Guards the config-record wait loop (retry can re-enter it while the
+  // previous poll is still in flight).
+  private configWaitActive = false;
+  // True when the current step-3 failure is a build/propose error, i.e. nothing
+  // was queued — the user may dismiss the modal and fix the config themselves.
+  // A wait timeout is NOT dismissible: a transaction may be in the Safe queue.
+  private configDismissible = false;
 
   // Init progress: the publication-creation flow (live or recovered from local
   // storage after a reload) drives this progress modal. Both the live init
   // component (s2s-init-progress events) and the reload-recovery path open it;
-  // it closes on error/done. There is no success banner: once the modules are
+  // it closes on error/idle. There is no success banner: once the modules are
   // live the app simply switches to its normal UI.
   @state() private initPhase: InitPhase | null = null;
   @state() private initModalOpen = false;
+  // Status lines the host drives in the progress modal: what the flow is
+  // doing right now, and (on failure/timeout) why it stopped. The modal is the
+  // only surface for the host-owned config step, so these must be explicit —
+  // a silent skip would leave the user staring at a spinner that never ends.
+  @state() private initMessage = '';
+  @state() private initError = '';
 
   private unsubscribers: Array<() => void> = [];
 
@@ -382,10 +431,15 @@ export class S2SApp extends LitElement {
   /**
    * Drive the init progress modal from a persisted session. Called once on
    * page load (after the Safe is connected). Opens the modal for a
-   * reload-recovery while the init component (mounted below when modules
-   * aren't live yet) resumes the flow itself. When the finalize batch has
-   * already executed (modules live on a reload), the session is cleared
-   * silently — the live app UI is the completion signal.
+   * reload-recovery while the init component (mounted whenever an init phase
+   * is still in flight — see the render gate) resumes the flow itself.
+   *
+   * "The modules are installed" is NOT the same as "the flow finished":
+   * adopting freshly-created module addresses flips hasRecordsModule() true
+   * while the modules are only DEPLOYED (the enable proposal is still pending),
+   * and the config record (step 3) is still missing even after it executes.
+   * Any init phase is kept and handed back to the init component; a config
+   * phase is resumed by the host.
    */
   private syncInitProgress(safeInfo: { chainId: number; safeAddress: string }): void {
     const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
@@ -402,15 +456,10 @@ export class S2SApp extends LitElement {
       return;
     }
 
-    if (session.phase === 'done') {
-      clearInitSession(window.localStorage, INIT_SESSION_KEY);
-      this.initPhase = null;
-      this.initModalOpen = false;
-      return;
-    }
+    const modulesInstalled = this.safeIntegration.hasRecordsModule();
 
-    if (this.safeIntegration.hasRecordsModule()) {
-      if (isConfigPhase(session.phase)) {
+    if (isConfigPhase(session.phase)) {
+      if (modulesInstalled) {
         // The finalize batch executed but the config record is still pending
         // (or was never proposed) — the host's step 3. Resume it: reopen the
         // modal at that step and drive it to completion via the records tab's
@@ -419,31 +468,38 @@ export class S2SApp extends LitElement {
         void this.resumeConfigStep(session.phase);
         return;
       }
-      // The finalize batch enables the modules AND records the name in one
-      // atomic transaction, so once the records module is live the flow is
-      // finished. Clear the session silently — no banner; the app is now in
-      // its normal live state. Modules live with NO name record is a legacy
-      // half-init the merged flow can't resume — dropped the same way.
-      console.log('[app] syncInitProgress: records module LIVE -> silent clear');
-      clearInitSession(window.localStorage, INIT_SESSION_KEY);
-      this.initPhase = null;
-      this.initModalOpen = false;
-      return;
-    }
-
-    // Modules not live yet: the init component (mounted below) resumes the
-    // merged flow itself; the modal is the banner while it catches up.
-    console.log('[app] syncInitProgress: modules not live -> open recovery modal');
-    if (isConfigPhase(session.phase)) {
-      // A config-phase session with no live modules is stale (config implies
-      // the modules were once live — i.e. a reset wiped them). Drop it so the
-      // recovery modal doesn't wedge on a step nothing can drive.
+      // A config-phase session with no installed modules is stale on LOAD (config
+      // implies the modules were once live — i.e. a reset wiped them). Drop it so
+      // the recovery modal doesn't wedge on a step nothing can drive — but never
+      // drop a session this page is already driving: it is the step's only record
+      // (identity included), and the missing module is what the step reports.
+      // Only the "modules vanished mid-step" case reaches this: every live step
+      // has initPhase set to a config phase already, so the session is kept.
+      if (
+        (this.initPhase !== null && isConfigPhase(this.initPhase)) ||
+        this.configStepActive ||
+        this.configWaitActive
+      ) {
+        console.log('[app] syncInitProgress: config step driven here -> keep the session');
+        return;
+      }
       console.log('[app] syncInitProgress: config session, modules dead -> drop');
       clearInitSession(window.localStorage, INIT_SESSION_KEY);
       this.initPhase = null;
       this.initModalOpen = false;
       return;
     }
+
+    // An init phase (creating … awaiting-finalize) is never cleared here — even
+    // if the module addresses were adopted (modules deployed ≠ enabled). The
+    // init component stays mounted for these phases and plans the next action
+    // itself (→ done → onInitComplete → step 3); the modal is its banner. The
+    // actual bug this replaces was here: "records module present" used to mean
+    // "flow finished", which silently dropped a session whose enable proposal
+    // (and config record) had not executed yet.
+    console.log(
+      `[app] syncInitProgress: init phase ${session.phase} kept -> open recovery modal (modulesInstalled=${String(modulesInstalled)})`,
+    );
     this.initModalOpen = true;
     this.initPhase = session.phase;
   }
@@ -456,23 +512,65 @@ export class S2SApp extends LitElement {
    * any stale root from a previous publication, then run the config step.
    *
    * The config step is step 3 of the flow (owned by the host, since the init
-   * component unmounts once the modules go live): the config record is a THIRD
+   * component is done once the modules go live): the config record is a THIRD
    * Safe execution (build + propose via the records tab, then wait for it to be
    * recorded on-chain). The progress modal stays open on that step so the flow
    * can't be lost, and its phase is persisted for reload-resume.
    */
   private readonly onInitComplete = async (e: Event): Promise<void> => {
-    const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
-      .detail;
-    const { name, repo, branch } = detail ?? {};
+    const detail = (
+      e as CustomEvent<
+        | {
+            recordsModule?: string;
+            publicationModule?: string;
+            name?: string;
+            repo?: string;
+            branch?: string;
+            authors?: string[];
+            proposals?: string[];
+          }
+        | undefined
+      >
+    ).detail;
+    const { name, repo, branch, authors, proposals, recordsModule, publicationModule } =
+      detail ?? {};
     console.log(
       `[app] onInitComplete name=${name ?? 'undefined'} repo=${repo ?? 'undefined'} branch=${branch ?? 'undefined'}`,
     );
+    // The init element's listener is never detached (lit keeps the EventPart on
+    // the node), so a stale instance can deliver this event twice. A second
+    // complete during/after the config step must not re-fetch and re-persist
+    // over the step that is already running.
+    if (this.initPhase !== null && isConfigPhase(this.initPhase)) {
+      console.log(`[app] onInitComplete ignored: config phase already active (${this.initPhase})`);
+      return;
+    }
 
     // The two S2S init proposals are done; the configuration record is not —
     // keep the modal open on step 3 while the host drives it.
     this.initPhase = 'configuring';
     this.initModalOpen = true;
+
+    // The host OWNS the config-phase session from this moment: the init element
+    // drops its own copy around the dispatch, so there is no session on disk to
+    // merge from — every field comes from the event detail. (Optional ones are
+    // only written when present, so hasRecordsModule()/safeInfo stay the
+    // fallback.) Persisted SYNCHRONOUSLY, before anything awaits: a reload
+    // during the refresh below would otherwise find no session at all — the
+    // live UI with no config record and no resume path.
+    this.persistInitPhase(
+      'configuring',
+      definedOnly({
+        recordsModule,
+        publicationModule,
+        name: name ?? '',
+        publicationName: name ?? '',
+        repo: repo ?? '',
+        branch: branch ?? '',
+        authors,
+        proposals,
+      }),
+    );
 
     // Surface the Config tab — the immediate config build below runs there.
     this.currentTab = 'records';
@@ -486,15 +584,9 @@ export class S2SApp extends LitElement {
     // still points at a previous publication's content.
     if (name) store.setRoot('');
 
-    // Persist the config phase (with the fresh publication identity) before
-    // running the step, so a reload during it can resume.
-    this.persistInitPhase('configuring', {
-      name: name ?? '',
-      publicationName: name ?? '',
-      repo: repo ?? '',
-      branch: branch ?? '',
-    });
-
+    // The session was already persisted above (synchronously, with the same
+    // identity), so nothing is written again here: runConfigStep re-persists
+    // 'configuring' when it starts.
     await this.updateComplete;
     await this.runConfigStep();
   };
@@ -503,6 +595,9 @@ export class S2SApp extends LitElement {
 
   /** Persist (or refresh) the init session with a new phase, keeping known fields. */
   private persistInitPhase(phase: InitPhase, extra: Partial<InitSession> = {}): void {
+    // `prev` is often gone (the init element clears its own session around the
+    // completion dispatch), so callers must pass what the flow needs rather than
+    // relying on a merge.
     const prev = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     const safeInfo = store.safeInfo;
     saveInitSession(window.localStorage, INIT_SESSION_KEY, {
@@ -532,6 +627,16 @@ export class S2SApp extends LitElement {
    * it was ('awaiting-config', proposal still pending in the Safe queue).
    */
   private async resumeConfigStep(phase: InitPhase): Promise<void> {
+    // Only a page load resumes step 3. syncInitProgress also runs inside
+    // fetchFreshData, and onInitComplete persists 'configuring' BEFORE fetching
+    // (so a reload there can resume) — without this guard the fetch would resume
+    // the step the host is already driving, re-proposing after a failure.
+    if (this.initPhase !== null && isConfigPhase(this.initPhase)) {
+      console.log(
+        `[app] resumeConfigStep: already driving step 3 here (${this.initPhase}) -> skip`,
+      );
+      return;
+    }
     let value = '';
     try {
       value = await this.safeIntegration.getRecord('config');
@@ -541,13 +646,18 @@ export class S2SApp extends LitElement {
     console.log(`[app] resumeConfigStep getRecord('config') -> '${value}'`);
     if (value !== '') {
       console.log('[app] resumeConfigStep: config already on-chain -> flow complete');
-      this.finishConfigStep();
+      await this.finishConfigStep();
       return;
     }
     this.initPhase = phase;
     this.initModalOpen = true;
+    // The config step renders inside the Config tab: without selecting it the
+    // records tab is not in the DOM and the step has nothing to drive. This WAS
+    // the silent-skip bug — set it before awaiting anything.
+    this.currentTab = 'records';
     if (phase === 'awaiting-config') {
       // Proposed but not executed — just wait for it, never duplicate it.
+      this.initMessage = CONFIG_WAITING_MESSAGE;
       await this.waitForConfigRecord();
     } else {
       await this.runConfigStep();
@@ -559,31 +669,70 @@ export class S2SApp extends LitElement {
    * config record through the records tab (its updateConfig builds + proposes
    * the config DAG), persist 'awaiting-config', then wait for the record to be
    * recorded on-chain before clearing the session and closing the modal.
+   *
+   * Every failure keeps the modal OPEN with an error + Retry: the config record
+   * is the last thing standing between the user and a usable publication, so
+   * dropping the session (or silently skipping the build) is never acceptable.
    */
   private async runConfigStep(): Promise<void> {
-    if (this.configStepActive) return;
+    if (this.configStepActive) {
+      // Explicit, not silent: a re-entry means something dispatched twice
+      // (retry click during a live build, resume after onInitComplete).
+      console.log('[app] runConfigStep: already active -> ignoring re-entry');
+      return;
+    }
     this.configStepActive = true;
+    this.configDismissible = false;
     try {
       this.initPhase = 'configuring';
       this.initModalOpen = true;
+      this.initError = '';
+      this.initMessage = 'Building configuration…';
       this.persistInitPhase('configuring');
+      // Select the Config tab so the records tab element is actually rendered
+      // (activeTabTemplate renders nothing for a non-active tab).
+      this.currentTab = 'records';
       await this.updateComplete;
-      const tab = this.renderRoot.querySelector('s2s-records-tab') as {
-        updateConfig?: () => Promise<unknown>;
-      } | null;
-      if (tab?.updateConfig) {
-        try {
-          await tab.updateConfig();
-        } catch (err) {
-          // A build/propose failure (e.g. the base repo has no assets/) must
-          // not wedge the modal: stop, close and log so the user can retry
-          // from the Config tab instead of being stuck behind a modal.
-          console.error('[app] config update failed, closing the config step:', err);
-          this.resetConfigStep();
-          return;
-        }
+
+      const tab = this.renderRoot.querySelector('s2s-records-tab') as ConfigTab | null;
+      if (typeof tab?.updateConfig !== 'function') {
+        // Retry cannot fix this one (the tab does not render at all), so the
+        // message names the recoveries that do exist: dismiss and the init form
+        // comes back (no session is kept, so the flow starts over), or reopen
+        // the app. It must NOT point at the Records table — activeTabTemplate
+        // renders nothing for 'records' without the records module, which is
+        // exactly the state that fired this.
+        this.failConfigStep(
+          'The Config tab is not available, so the configuration record was not proposed. Close this and start the initialization again, or reopen the app.',
+        );
+        return;
       }
+
+      let configCid = '';
+      try {
+        configCid = await tab.updateConfig(undefined, { suppressQueueOpen: true });
+      } catch (err) {
+        // A build/propose failure (e.g. the base repo has no assets/) must not
+        // wedge the modal or lose the session: keep the flow at 'configuring'
+        // with the error + Retry visible.
+        this.failConfigStep(`Building the configuration failed: ${describeError(err)}`);
+        return;
+      }
+      console.log(`[app] config proposal sent cid=${configCid}`);
+      if (!configCid) {
+        // Per the pinned contract an empty CID means the tab proposed NOTHING.
+        // Continuing into 'awaiting-config' would wait ten minutes for a
+        // transaction that does not exist and then report a false reason, and
+        // the persisted phase would stop a reload from re-proposing. Fail at
+        // 'configuring' instead so Retry rebuilds.
+        this.failConfigStep(
+          'The Config tab did not propose a configuration record. Retry to rebuild it.',
+        );
+        return;
+      }
+
       this.initPhase = 'awaiting-config';
+      this.initMessage = CONFIG_WAITING_MESSAGE;
       this.persistInitPhase('awaiting-config');
       await this.waitForConfigRecord();
     } finally {
@@ -593,46 +742,126 @@ export class S2SApp extends LitElement {
 
   /** Poll the chain until the config record exists (the 3rd Safe execution). */
   private async waitForConfigRecord(): Promise<void> {
+    if (this.configWaitActive) return;
+    this.configWaitActive = true;
     const startedAt = Date.now();
     const timeoutMs = 10 * 60_000;
-    for (;;) {
-      if (this.configPollCancelled) return;
-      let value = '';
-      try {
-        value = await this.safeIntegration.getRecord('config');
-      } catch {
-        value = '';
+    try {
+      for (;;) {
+        if (this.configPollCancelled) return;
+        let value = '';
+        try {
+          value = await this.safeIntegration.getRecord('config');
+        } catch {
+          value = '';
+        }
+        console.log(`[app] waitForConfigRecord getRecord('config') -> '${value}'`);
+        if (value !== '') {
+          console.log('[app] configuration record on-chain -> flow complete');
+          await this.finishConfigStep();
+          return;
+        }
+        if (Date.now() - startedAt > timeoutMs) {
+          // Timeout: KEEP the session (the proposal is still queued — a retry
+          // must not re-propose it) and surface the reason in the modal.
+          console.error('[app] timed out waiting for the config record to be executed');
+          this.initError =
+            'The configuration proposal is still pending in the Safe queue. Execute it, then retry.';
+          this.initMessage = '';
+          this.initModalOpen = true;
+          // NOT dismissible: a Safe transaction may be queued for this record.
+          this.configDismissible = false;
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
-      console.log(`[app] waitForConfigRecord getRecord('config') -> '${value}'`);
-      if (value !== '') {
-        console.log('[app] configuration record on-chain -> flow complete');
-        this.finishConfigStep();
-        return;
-      }
-      if (Date.now() - startedAt > timeoutMs) {
-        console.error('[app] timed out waiting for the config record to be executed');
-        this.resetConfigStep();
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+    } finally {
+      this.configWaitActive = false;
     }
   }
 
   /** Config record is on-chain: clear the session, close the modal, refresh so
    * the Config tab shows the record it just built. */
-  private finishConfigStep(): void {
+  private async finishConfigStep(): Promise<void> {
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
     this.initPhase = null;
     this.initModalOpen = false;
-    void this.fetchFreshData();
+    this.initMessage = '';
+    this.initError = '';
+    this.configDismissible = false;
+    // Awaited: the Config tab must render the freshly-recorded config (record
+    // value + CID) as soon as the modal closes, not a beat later.
+    await this.fetchFreshData();
   }
 
-  /** Stop the config step without completing it (failure/timeout). */
-  private resetConfigStep(): void {
+  /**
+   * Build/propose failure of step 3. Keeps everything needed to retry — the
+   * session stays at 'configuring', the modal stays open with the reason — and
+   * additionally offers a DISMISS path: this class of failure is deterministic
+   * (bad repo URL, no assets/, wrong branch), so Retry alone can trap the user
+   * behind a full-screen overlay that covers the Config tab where the repo and
+   * branch are fixed. Nothing was queued at this point, so walking away is safe
+   * — the publication is half-initialized (modules enabled, no config record),
+   * which is exactly what the records tab's "Initialize configuration" is for.
+   */
+  private failConfigStep(message: string): void {
+    console.error(`[app] config step failed: ${message}`);
+    this.initPhase = 'configuring';
+    this.initModalOpen = true;
+    this.initError = message;
+    this.initMessage = '';
+    this.configDismissible = true;
+    this.persistInitPhase('configuring');
+  }
+
+  /**
+   * Dismiss a failed step 3 and hand the user back the app. Only offered for
+   * build/propose failures (nothing queued, `configDismissible`): after the
+   * proposal was sent a pending Safe transaction must stay in sight, so the
+   * timeout state has no dismiss.
+   */
+  private readonly onInitDismiss = (): void => {
+    // Re-entrancy guard: a dismiss must never clear the session while a build
+    // is in flight (the button is only rendered once the run has failed, but a
+    // queued click can outlive the error).
+    if (this.configStepActive) {
+      console.log('[app] onInitDismiss ignored: config step in flight');
+      return;
+    }
+    console.log(`[app] onInitDismiss phase=${this.initPhase ?? 'none'}`);
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
     this.initPhase = null;
     this.initModalOpen = false;
-  }
+    this.initMessage = '';
+    this.initError = '';
+    this.configDismissible = false;
+    // Land where the user can actually act: the Config tab when it exists (fix
+    // repo/branch in the Records table, then re-run the config from there),
+    // else the first tab that renders — 'records' renders nothing without the
+    // records module, i.e. a blank page under the tabs. With no modules at all
+    // neither applies: the init form comes back, which is the real restart.
+    this.currentTab = this.safeIntegration.hasRecordsModule()
+      ? 'records'
+      : this.safeIntegration.hasPublicationModule()
+        ? 'deals'
+        : 'storage';
+  };
+
+  /**
+   * Retry from the modal's Retry action. A step that already proposed its
+   * config record ('awaiting-config') only re-waits — re-proposing would
+   * duplicate the Safe transaction. Anything else re-runs the build+propose.
+   */
+  private readonly onInitRetry = (): void => {
+    console.log(`[app] onInitRetry phase=${this.initPhase ?? 'none'}`);
+    this.initError = '';
+    if (this.initPhase === 'awaiting-config') {
+      this.initMessage = CONFIG_WAITING_MESSAGE;
+      void this.waitForConfigRecord();
+      return;
+    }
+    void this.runConfigStep();
+  };
 
   /** Live progress from the init component while a flow is running. */
   private readonly onInitProgress = (e: Event): void => {
@@ -645,11 +874,28 @@ export class S2SApp extends LitElement {
     console.log(
       `[app] onInitProgress step=${detail.step} phase=${detail.phase} name=${detail.name ?? 'undefined'}`,
     );
-    // 'error' / 'done' end the flow — close the progress modal so the inline
-    // result is visible. Any other step opens it: the modal is the primary
-    // progress surface for both the live flow and the reload-recovery.
-    if (detail.step === 'error' || detail.step === 'done') {
+    // The element emits 'idle' (reset/cancel) and 'error'; it never emits a
+    // 'done' progress step — completion arrives as s2s-init-complete.
+    //   - 'idle': nothing is running, so there is nothing to show and no
+    //     overlay to keep (an overlay with no progress and no action is a dead
+    //     end over a reachable form).
+    //   - 'error' is a failure INSIDE the element (e.g. waitForEnabled timed
+    //     out): the element owns the only error surface (message + Try again /
+    //     Start over), so its phase must be kept or the gate would unmount it
+    //     and leave the user with nothing at all — in exactly the create→enable
+    //     window where the module addresses are already adopted. The overlay is
+    //     closed so it cannot cover that inline error.
+    // Any other step opens the modal: it is the progress surface for both the
+    // live flow and the reload-recovery.
+    this.initMessage = '';
+    this.initError = '';
+    if (detail.step === 'idle') {
       this.initPhase = null;
+      this.initModalOpen = false;
+      return;
+    }
+    if (detail.step === 'error') {
+      this.initPhase = detail.phase;
       this.initModalOpen = false;
       return;
     }
@@ -706,6 +952,23 @@ export class S2SApp extends LitElement {
     // header status, tabs and tab content are all hidden while it runs.
     const hasModules =
       this.safeIntegration.hasPublicationModule() || this.safeIntegration.hasRecordsModule();
+    // An init phase that is still in flight (creating … awaiting-finalize) keeps
+    // the init component mounted even once the module addresses are adopted:
+    // freshly-created modules flip hasRecordsModule() true while they are only
+    // DEPLOYED, not enabled. (This is not about event delivery — lit keeps an
+    // @listener bound to the node, so a detached instance still delivers
+    // s2s-init-complete — it is about one instance instead of unmount/remount
+    // re-planning, and about not lying in the UI.) Config phases (host-owned
+    // step 3) are not init flow — they need the tabs, so the Config tab can
+    // drive updateConfig.
+    const initFlowRunning = this.initPhase !== null && !isConfigPhase(this.initPhase);
+    // The "live" UI (module badges, Reset, tabs) is only truthful once no init
+    // phase is pending: the enable proposal must have executed. An 'error' inside
+    // the init element keeps its phase for this reason — the element owns the
+    // inline error + Try again/Start over, and it must stay on screen.
+    const live = hasModules && !initFlowRunning;
+    const publicationActive = live && this.safeIntegration.hasPublicationModule();
+    const recordsActive = live && this.safeIntegration.hasRecordsModule();
 
     if (!hasCache && this.fetching) {
       return html`
@@ -728,26 +991,20 @@ export class S2SApp extends LitElement {
               ${this.safeIntegration.isConnected() ? 'Connected to Safe' : 'Not Connected'}
             </div>
             <div
-              class="pill module-badge ${this.safeIntegration.hasPublicationModule()
-                ? 'module-active'
-                : 'module-inactive'}"
+              class="pill module-badge ${publicationActive ? 'module-active' : 'module-inactive'}"
             >
               <copy-module
                 .value=${safeInfo?.s2sPublication ?? ''}
                 label="Publication Module"
               ></copy-module>
             </div>
-            <div
-              class="pill module-badge ${this.safeIntegration.hasRecordsModule()
-                ? 'module-active'
-                : 'module-inactive'}"
-            >
+            <div class="pill module-badge ${recordsActive ? 'module-active' : 'module-inactive'}">
               <copy-module
                 .value=${safeInfo?.s2sRecords ?? ''}
                 label="Records Module"
               ></copy-module>
             </div>
-            ${hasModules
+            ${live
               ? html`
                   <s2s-button
                     type="warning"
@@ -773,7 +1030,7 @@ export class S2SApp extends LitElement {
 
           <h1 class="title">${publication}</h1>
 
-          ${hasModules
+          ${live
             ? html`
                 <div class="web-status">
                   ${rootCid
@@ -794,7 +1051,7 @@ export class S2SApp extends LitElement {
             : ''}
         </div>
 
-        ${!hasModules
+        ${!live
           ? html`
               <s2s-publication-init
                 .safeIntegration=${this.safeIntegration}
@@ -805,7 +1062,7 @@ export class S2SApp extends LitElement {
               ></s2s-publication-init>
             `
           : ''}
-        ${hasModules
+        ${live
           ? html`
               <div class="tabs">
                 <button
@@ -874,6 +1131,11 @@ export class S2SApp extends LitElement {
       <s2s-init-progress-modal
         .open=${this.initModalOpen}
         .phase=${this.initPhase ?? 'creating'}
+        .message=${this.initMessage}
+        .error=${this.initError}
+        .canDismiss=${this.initPhase === 'configuring' && this.configDismissible}
+        @s2s-init-retry=${this.onInitRetry}
+        @s2s-init-dismiss=${this.onInitDismiss}
       ></s2s-init-progress-modal>
     `;
   }
