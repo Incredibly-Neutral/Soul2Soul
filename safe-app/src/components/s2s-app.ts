@@ -57,10 +57,6 @@ interface ConfigTab {
   ): Promise<string>;
 }
 
-/** Modal status while step 3's proposal sits in the Safe queue. */
-const CONFIG_WAITING_MESSAGE =
-  'Configuration proposal sent — execute it in the Safe app to finish.';
-
 /** Narrow an unknown throwable to a message for the modal's error line. */
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -168,11 +164,10 @@ export class S2SApp extends LitElement {
   // live the app simply switches to its normal UI.
   @state() private initPhase: InitPhase | null = null;
   @state() private initModalOpen = false;
-  // Status lines the host drives in the progress modal: what the flow is
-  // doing right now, and (on failure/timeout) why it stopped. The modal is the
-  // only surface for the host-owned config step, so these must be explicit —
-  // a silent skip would leave the user staring at a spinner that never ends.
-  @state() private initMessage = '';
+  // Failure/timeout reason for the progress modal, which shows only the step
+  // markers otherwise. It is the ONLY failure surface for the host-owned config
+  // step, so it must be explicit — a silent skip would leave the user staring
+  // at a spinner that never ends.
   @state() private initError = '';
 
   private unsubscribers: Array<() => void> = [];
@@ -642,9 +637,9 @@ export class S2SApp extends LitElement {
     // Bring the store up to date before the optimistic re-apply below, but
     // never at the cost of hanging the flow: the init element's complete() can
     // fire from INSIDE a refresh (its maybeResume runs off the setProtocolInfo
-    // store update), so a pass is usually already running — join it (bounded,
-    // with a visible message) or start one when there is none. Single-flight
-    // means this never doubles the pass.
+    // store update), so a pass is usually already running — join it (bounded)
+    // or start one when there is none. Single-flight means this never doubles
+    // the pass.
     await this.waitForRefresh(true);
 
     // Re-apply the pending (not-yet-executed) records on top of the chain read.
@@ -728,7 +723,6 @@ export class S2SApp extends LitElement {
     this.currentTab = 'records';
     if (phase === 'awaiting-config') {
       // Proposed but not executed — just wait for it, never duplicate it.
-      this.initMessage = CONFIG_WAITING_MESSAGE;
       await this.waitForConfigRecord();
     } else {
       await this.runConfigStep();
@@ -739,7 +733,9 @@ export class S2SApp extends LitElement {
    * Drive the config step to completion: persist 'configuring', propose the
    * config record through the records tab (its updateConfig builds + proposes
    * the config DAG), persist 'awaiting-config', then wait for the record to be
-   * recorded on-chain before clearing the session and closing the modal.
+   * recorded on-chain before clearing the session and closing the modal (see
+   * finishConfigStep: the refresh that lands the record in the store runs
+   * BEFORE the modal is cleared).
    *
    * Every failure keeps the modal OPEN with an error + Retry: the config record
    * is the last thing standing between the user and a usable publication, so
@@ -758,20 +754,18 @@ export class S2SApp extends LitElement {
       this.initPhase = 'configuring';
       this.initModalOpen = true;
       this.initError = '';
-      this.initMessage = 'Building configuration…';
       this.persistInitPhase('configuring');
       // Select the Config tab so the records tab element is actually rendered
       // (activeTabTemplate renders nothing for a non-active tab).
       this.currentTab = 'records';
-      // Courtesy join of a refresh already in flight — BOUNDED and never silent:
-      // the pass ends with the Filecoin init/list calls, which can stall on a bad
-      // network, and step 3 must not sit here with no message and no buttons.
+      // Courtesy join of a refresh already in flight — BOUNDED, so the step can
+      // never stall here: the pass ends with the Filecoin init/list calls, which
+      // can hang on a bad network.
       // Historically this wait mattered (a second initialize() blanked
       // s2sRecords and the proposal went out with `to: ''`); now that the
       // payload seam is atomic, proceeding without it is safe — the wait only
       // avoids building on a half-refreshed store.
       await this.waitForRefresh();
-      this.initMessage = 'Building configuration…';
       await this.updateComplete;
 
       const tab = this.renderRoot.querySelector('s2s-records-tab') as ConfigTab | null;
@@ -809,7 +803,6 @@ export class S2SApp extends LitElement {
       }
 
       this.initPhase = 'awaiting-config';
-      this.initMessage = CONFIG_WAITING_MESSAGE;
       this.persistInitPhase('awaiting-config');
       await this.waitForConfigRecord();
     } finally {
@@ -822,19 +815,14 @@ export class S2SApp extends LitElement {
    * modal: join the refresh in flight (or start one when `start`), for at most
    * `configRefreshJoinMs`. Courtesy, not a dependency — with the atomic payload
    * seam a concurrent pass can no longer produce a `to: ''` proposal, so if the
-   * pass overshoots its bound we simply proceed. The waiting message is set
-   * BEFORE the await: a stalled refresh must never leave the flow with no
-   * message and therefore no Retry/dismiss.
+   * pass overshoots its bound we simply proceed — the step markers keep
+   * spinning, and a stall can never leave the flow wedged.
    */
   private async waitForRefresh(start = false): Promise<boolean> {
     if (start && !this.fetchInFlight) void this.fetchFreshData();
     const pass = this.fetchInFlight;
     if (!pass) return true;
     console.log('[app] joining the refresh in flight (bounded)');
-    if (this.initModalOpen) {
-      this.initMessage = 'Waiting for the app to finish loading…';
-      await this.updateComplete;
-    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -878,7 +866,6 @@ export class S2SApp extends LitElement {
           console.error('[app] timed out waiting for the config record to be executed');
           this.initError =
             'The configuration proposal is still pending in the Safe queue. Execute it, then retry.';
-          this.initMessage = '';
           this.initModalOpen = true;
           // NOT dismissible: a Safe transaction may be queued for this record.
           this.configDismissible = false;
@@ -891,23 +878,29 @@ export class S2SApp extends LitElement {
     }
   }
 
-  /** Config record is on-chain: clear the session, close the modal, refresh so
-   * the Config tab shows the record it just built. */
+  /** Config record is on-chain: clear the session, refresh so the Config tab
+   * shows the record it just built, and only then close the modal — the modal
+   * must not disappear onto a Config tab that is still empty. */
   private async finishConfigStep(): Promise<void> {
+    // The session is done as soon as the record is on-chain: clear it first so a
+    // reload during the refresh below cannot resume a finished flow.
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
-    this.initPhase = null;
-    this.initModalOpen = false;
-    this.initMessage = '';
-    this.initError = '';
-    this.configDismissible = false;
-    // Awaited: the Config tab must render the freshly-recorded config (record
-    // value + CID) as soon as the modal closes, not a beat later. Settle any
-    // pass that started BEFORE the record landed first (bounded — a Filecoin
-    // stall must not park the refresh forever) — joining it would leave the
-    // modal closed onto a Config tab still showing the pending state — then
-    // start a fresh read of the new state.
-    await this.waitForRefresh();
-    await this.fetchFreshData();
+    try {
+      // Close only once the record is BOTH on-chain and in the store. Settle any
+      // pass that started BEFORE the record landed (bounded — a Filecoin stall
+      // must not park the refresh forever), then start a fresh read: joining the
+      // old pass would let the modal close onto a Config tab that still shows
+      // the pending state.
+      await this.waitForRefresh();
+      await this.fetchFreshData();
+    } finally {
+      // A stuck modal must never be the outcome: a failed/hung refresh still
+      // hands the page back (the Config tab re-reads on the next pass).
+      this.initPhase = null;
+      this.initModalOpen = false;
+      this.initError = '';
+      this.configDismissible = false;
+    }
   }
 
   /**
@@ -925,7 +918,6 @@ export class S2SApp extends LitElement {
     this.initPhase = 'configuring';
     this.initModalOpen = true;
     this.initError = message;
-    this.initMessage = '';
     this.configDismissible = true;
     this.persistInitPhase('configuring');
   }
@@ -948,7 +940,6 @@ export class S2SApp extends LitElement {
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
     this.initPhase = null;
     this.initModalOpen = false;
-    this.initMessage = '';
     this.initError = '';
     this.configDismissible = false;
     // Land where the user can actually act: the Config tab when it exists (fix
@@ -972,7 +963,6 @@ export class S2SApp extends LitElement {
     console.log(`[app] onInitRetry phase=${this.initPhase ?? 'none'}`);
     this.initError = '';
     if (this.initPhase === 'awaiting-config') {
-      this.initMessage = CONFIG_WAITING_MESSAGE;
       void this.waitForConfigRecord();
       return;
     }
@@ -1003,7 +993,6 @@ export class S2SApp extends LitElement {
     //     closed so it cannot cover that inline error.
     // Any other step opens the modal: it is the progress surface for both the
     // live flow and the reload-recovery.
-    this.initMessage = '';
     this.initError = '';
     if (detail.step === 'idle') {
       this.initPhase = null;
@@ -1247,7 +1236,6 @@ export class S2SApp extends LitElement {
       <s2s-init-progress-modal
         .open=${this.initModalOpen}
         .phase=${this.initPhase ?? 'creating'}
-        .message=${this.initMessage}
         .error=${this.initError}
         .canDismiss=${this.initPhase === 'configuring' && this.configDismissible}
         @s2s-init-retry=${this.onInitRetry}
