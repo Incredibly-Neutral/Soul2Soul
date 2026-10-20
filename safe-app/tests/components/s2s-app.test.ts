@@ -522,6 +522,18 @@ describe('s2s-app (shell)', () => {
     // The modules come online as the init flow completes.
     safeIntMocks.hasPublicationModule.mockReturnValue(true);
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    // Step 3 (config): the config record is a THIRD Safe execution. With the
+    // mocked records-tab having no updateConfig the build step is skipped
+    // (duck-type guard must not throw), and this mock reports the config
+    // record on-chain → the step completes and the modal closes. The chain
+    // snapshot after the flow is the records the refetch would read.
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'config' ? 'bafyconfig' : '',
+    );
+    safeIntMocks.getAllRecords.mockResolvedValue([
+      ['name', 'repo', 'branch', 'config'],
+      ['my-pub.soul2soul.eth', 'https://github.com/Joera/website-starter', 'main', 'bafyconfig'],
+    ]);
 
     init.dispatchEvent(
       new CustomEvent('s2s-init-complete', {
@@ -550,15 +562,14 @@ describe('s2s-app (shell)', () => {
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-records-tab')).toBeTruthy());
     expect(el.shadowRoot?.querySelector('#records-tab')?.classList.contains('active')).toBe(true);
 
-    // The auto config-update trigger is duck-type-guarded: the mocked
-    // records-tab has no updateConfig, so the handler must not throw.
-    await new Promise((r) => setTimeout(r, 0));
-
-    // The progress modal is closed once the init completes.
+    // Step 3 (config) ran through the host: the config record is on-chain →
+    // the modal closed and the session was cleared.
     const modal = el.shadowRoot?.querySelector(
       's2s-init-progress-modal',
     ) as S2SInitProgressModal | null;
-    expect(modal?.open).toBe(false);
+    await vi.waitFor(() => expect(modal?.open).toBe(false));
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(storeMock.store.getRecord('config')).toBe('bafyconfig');
   });
 
   // ---- Init progress modal (primary surface: live flow + reload recovery) ----
@@ -637,7 +648,39 @@ describe('s2s-app (shell)', () => {
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.phase).toBe('detecting');
     const steps = modal.shadowRoot?.querySelectorAll('.step') ?? [];
-    expect(steps.length).toBe(2);
+    expect(steps.length).toBe(3);
+  });
+
+  it('resumes a config-phase session and finishes when the config record is already on-chain', async () => {
+    // Reload happened while the host's step 3 (config) was pending, but the
+    // config record already made it on-chain → do not re-propose, just finish:
+    // clear the session + close the modal, with the Config tab showing it.
+    seedInitSession({ phase: 'awaiting-config' });
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.getRecord.mockResolvedValue('bafyconfig');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(false));
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('drops a stale config-phase session when the modules are gone (post-reset)', async () => {
+    // A config-phase session with no live modules is stale — a reset
+    // disabled the modules, so nothing can drive step 3. The recovered flow
+    // must not wedge the modal on it: drop the session silently.
+    seedInitSession({ phase: 'configuring' });
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
   it('ignores a persisted session that belongs to a different Safe', async () => {
