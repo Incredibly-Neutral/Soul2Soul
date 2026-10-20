@@ -66,6 +66,18 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Drop `undefined` entries so a spread can't overwrite a persisted/known value
+ * with `undefined` (the caller's fallback would be lost).
+ */
+function definedOnly<T extends object>(values: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [key, value] of Object.entries(values) as [keyof T, T[keyof T]][]) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 @customElement('s2s-app')
 export class S2SApp extends LitElement {
   private safeIntegration: SafeIntegration;
@@ -459,9 +471,20 @@ export class S2SApp extends LitElement {
         void this.resumeConfigStep(session.phase);
         return;
       }
-      // A config-phase session with no installed modules is stale (config
-      // implies the modules were once live — i.e. a reset wiped them). Drop it
-      // so the recovery modal doesn't wedge on a step nothing can drive.
+      // A config-phase session with no installed modules is stale on LOAD (config
+      // implies the modules were once live — i.e. a reset wiped them). Drop it so
+      // the recovery modal doesn't wedge on a step nothing can drive. Unless this
+      // page is already driving step 3: then the session is LIVE (it's the step's
+      // only record, identity included) and the missing module is what the step
+      // reports, not a reason to forget the flow.
+      if (this.initPhase !== null && isConfigPhase(this.initPhase)) {
+        console.log('[app] syncInitProgress: config step driven here -> keep the session');
+        return;
+      }
+      if (this.configStepActive || this.configWaitActive) {
+        console.log('[app] syncInitProgress: config step in flight -> keep the session');
+        return;
+      }
       console.log('[app] syncInitProgress: config session, modules dead -> drop');
       clearInitSession(window.localStorage, INIT_SESSION_KEY);
       this.initPhase = null;
@@ -497,9 +520,22 @@ export class S2SApp extends LitElement {
    * can't be lost, and its phase is persisted for reload-resume.
    */
   private readonly onInitComplete = async (e: Event): Promise<void> => {
-    const detail = (e as CustomEvent<{ name?: string; repo?: string; branch?: string } | undefined>)
-      .detail;
-    const { name, repo, branch } = detail ?? {};
+    const detail = (
+      e as CustomEvent<
+        | {
+            recordsModule?: string;
+            publicationModule?: string;
+            name?: string;
+            repo?: string;
+            branch?: string;
+            authors?: string[];
+            proposals?: string[];
+          }
+        | undefined
+      >
+    ).detail;
+    const { name, repo, branch, authors, proposals, recordsModule, publicationModule } =
+      detail ?? {};
     console.log(
       `[app] onInitComplete name=${name ?? 'undefined'} repo=${repo ?? 'undefined'} branch=${branch ?? 'undefined'}`,
     );
@@ -517,16 +553,26 @@ export class S2SApp extends LitElement {
     this.initPhase = 'configuring';
     this.initModalOpen = true;
 
-    // Persist the config phase SYNCHRONOUSLY, before anything awaits: the init
-    // element clears the session right after dispatching this event, so a
-    // reload during the refresh below would otherwise find no session at all —
-    // the live UI with no config record and no resume path.
-    this.persistInitPhase('configuring', {
-      name: name ?? '',
-      publicationName: name ?? '',
-      repo: repo ?? '',
-      branch: branch ?? '',
-    });
+    // The host OWNS the config-phase session from this moment: the init element
+    // drops its own copy around the dispatch, so there is no session on disk to
+    // merge from — every field comes from the event detail. (Optional ones are
+    // only written when present, so hasRecordsModule()/safeInfo stay the
+    // fallback.) Persisted SYNCHRONOUSLY, before anything awaits: a reload
+    // during the refresh below would otherwise find no session at all — the
+    // live UI with no config record and no resume path.
+    this.persistInitPhase(
+      'configuring',
+      definedOnly({
+        recordsModule,
+        publicationModule,
+        name: name ?? '',
+        publicationName: name ?? '',
+        repo: repo ?? '',
+        branch: branch ?? '',
+        authors,
+        proposals,
+      }),
+    );
 
     // Surface the Config tab — the immediate config build below runs there.
     this.currentTab = 'records';
@@ -551,6 +597,9 @@ export class S2SApp extends LitElement {
 
   /** Persist (or refresh) the init session with a new phase, keeping known fields. */
   private persistInitPhase(phase: InitPhase, extra: Partial<InitSession> = {}): void {
+    // `prev` is often gone (the init element clears its own session around the
+    // completion dispatch), so callers must pass what the flow needs rather than
+    // relying on a merge.
     const prev = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     const safeInfo = store.safeInfo;
     saveInitSession(window.localStorage, INIT_SESSION_KEY, {
