@@ -48,21 +48,10 @@ export class S2SRecordsTab extends LitElement {
    *  when the chain has no config yet (a queued-but-unexecuted proposal does
    *  not show up there).
    *
-   *  This deliberately does NOT read the store: `updateConfig` writes the
-   *  proposed CID into the store optimistically, before the Safe transaction
-   *  executes, so a store-only gate would hide the first-config/retry action
-   *  in exactly the post-step-3-failure case it exists for (and would offer it
-   *  for a publication whose config is on-chain but not in the store). */
+   *  This is only half of the first-config gate: the store is "chain ∪
+   *  proposed" (see firstConfigGate), and it — not this instance-scoped read —
+   *  is what survives a tab switch. */
   @state() private chainConfigCid: string | null = null;
-  /** A config CID this tab (or the host, through it) proposed to the Safe that
-   *  has **not executed yet** — invisible on chain until it does.
-   *
-   *  Tracked separately from the chain read so a chain read returning '' cannot
-   *  re-arm the first-config action while a proposal sits in the Safe queue
-   *  (which would queue a duplicate `setRecord('config', …)` for the same
-   *  record). Cleared only when a chain read returns a non-empty config, i.e.
-   *  the proposal actually executed. */
-  @state() private proposedConfigCid: string | null = null;
   /** True once the config record has been resolved from the chain, so the
    *  first-config action is never offered before we know whether one exists. */
   @state() private configRecordKnown = false;
@@ -203,8 +192,8 @@ export class S2SRecordsTab extends LitElement {
       // write-target aliases from the on-chain config record. This only reads
       // (no setAllRecords), so it is safe to run on every mount.
       void this.loadCurrentAliases();
-      // The store may hold an optimistic (never-executed) config CID, so the
-      // first-config action is gated on a fresh chain read instead.
+      // The store may hold a CID that was proposed but never executed, so the
+      // first-config gate pairs it with a fresh chain read.
       void this.refreshChainConfig();
     }
   }
@@ -229,20 +218,46 @@ export class S2SRecordsTab extends LitElement {
   /**
    * Apply the outcome of a chain read of the `config` record.
    *
-   * Non-empty → the record exists on chain, i.e. the proposal we queued has
-   * executed: drop the pending marker. Empty ('') → "not executed yet" and
-   * must NOT clear `proposedConfigCid`: a queued proposal is invisible on
-   * chain, and forgetting it would re-offer the first-config action and allow
-   * a second `setRecord('config', …)` for the same record.
+   * A non-empty value means the record exists on chain (the proposal, if any,
+   * executed); an empty value means "not executed yet" — which is NOT the same
+   * as "no proposal": a queued proposal is invisible here. That distinction is
+   * the store's job (see firstConfigGate), not this read's.
    */
   private applyChainConfig(cid: string | null | undefined): void {
-    if (cid) {
-      this.chainConfigCid = cid;
-      this.proposedConfigCid = null;
-    } else {
-      this.chainConfigCid = null;
-    }
+    this.chainConfigCid = cid || null;
     this.configRecordKnown = true;
+  }
+
+  /**
+   * Store value of the `config` record: the chain value (written by
+   * `setAllRecords`) **or** the CID a build optimistically proposed (written by
+   * `updateConfig` after `setRecord` resolved). So "set" means "proposed or
+   * executed", and — unlike instance state — it survives the tab being recreated
+   * on every tab switch.
+   *
+   * Read inside `render()`, which is refreshed by the recorded subscription to
+   * `store.subscribeToRecords` (the same one the records table rides on), so a
+   * store change flips the action/note without a remount.
+   */
+  private get storedConfigCid(): string | null {
+    return store.getRecord('config');
+  }
+
+  /**
+   * The single gate for the first-config action: we know the chain answer, the
+   * chain has no `config`, and no proposal is sitting in the Safe queue
+   * (invisible on chain until executed, but present in the store).
+   */
+  private get firstConfigGate(): boolean {
+    return this.configRecordKnown && !this.chainConfigCid && !this.storedConfigCid;
+  }
+
+  /**
+   * A proposal is queued but not executed: the store has a CID the chain does
+   * not. Served as a non-interactive note so the missing action is explained.
+   */
+  private get configProposalPending(): boolean {
+    return this.configRecordKnown && !this.chainConfigCid && !!this.storedConfigCid;
   }
 
   disconnectedCallback() {
@@ -457,7 +472,6 @@ export class S2SRecordsTab extends LitElement {
       store.getRecord('branch') ?? ((await this.safeIntegration.getRecord('branch')) || 'main');
     const publicationUrl =
       store.getRecord('name') ?? (await this.safeIntegration.getRecord('name'));
-    const pInfo = await this.protocolIntegration.getInfo();
 
     const ipfs = this.makeIPFS();
 
@@ -552,12 +566,7 @@ export class S2SRecordsTab extends LitElement {
     }
 
     // ── existing ───────────────────────────────────────────────────────
-    const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
-    // Remember the proposal: it stays invisible on chain until the Safe tx is
-    // executed, so gate the first-config action on it as well as on the chain
-    // read (a chain read returning '' must not re-offer the action).
-    this.proposedConfigCid = configCid;
     if (opts?.suppressQueueOpen !== true) {
       window.open(executionUrl, '_blank');
     }
@@ -571,7 +580,9 @@ export class S2SRecordsTab extends LitElement {
     }
     this.requestUpdate();
 
-    // Optimistic local update so the new value shows immediately
+    // Optimistic local update so the new value shows immediately. This store
+    // value is also the "proposed, not yet executed" half of the first-config
+    // gate, so it survives the tab being recreated on a tab switch.
     store.setRecord({ key: 'config', value: configCid, type: 'content' });
 
     return configCid;
@@ -773,7 +784,7 @@ export class S2SRecordsTab extends LitElement {
           <h2 class="section-title">Records (${records.length})</h2>
         </div>
 
-        ${this.configRecordKnown && !this.chainConfigCid && !this.proposedConfigCid
+        ${this.firstConfigGate
           ? html`
               <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <button
@@ -789,7 +800,7 @@ export class S2SRecordsTab extends LitElement {
               </div>
             `
           : ''}
-        ${this.configRecordKnown && !this.chainConfigCid && this.proposedConfigCid
+        ${this.configProposalPending
           ? html`
               <p id="config-pending" class="config-pending">
                 Configuration proposal pending in the Safe queue — execute it there.
