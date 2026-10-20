@@ -217,6 +217,10 @@ type RecordsTab = LitElement & {
   protocolIntegration: unknown;
   lit: unknown;
   storage: unknown;
+  updateConfig: (
+    aliasesOverride?: string[],
+    opts?: { suppressQueueOpen?: boolean },
+  ) => Promise<string>;
 };
 
 function mountTab(overrides: Partial<RecordsTab> = {}) {
@@ -562,6 +566,89 @@ describe('s2s-records-tab', () => {
       expect.any(String), // VITE_FILEBASE_TOKEN, '' when unset
       'filebase',
     );
+  });
+
+  // ── init flow step 3: queue-popup suppression + first-config entry point ──
+
+  /** Fail dagExport (the only real network call in the build) fast. */
+  function stubFailingFetch() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'stubbed',
+        text: async () => 'stubbed',
+      })),
+    );
+  }
+
+  it('updateConfig() with no opts opens the Safe queue popup and resolves to the config CID (default behaviour)', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const cid = await el.updateConfig();
+
+    expect(cid).toBe('config-cid');
+    expect(window.open).toHaveBeenCalledTimes(1);
+    expect(window.open).toHaveBeenCalledWith('https://app.safe.global/tx/0x1', '_blank');
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
+  });
+
+  it('updateConfig(undefined, { suppressQueueOpen: true }) skips window.open and still resolves to the config CID', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const cid = await el.updateConfig(undefined, { suppressQueueOpen: true });
+
+    expect(cid).toBe('config-cid');
+    expect(window.open).not.toHaveBeenCalled();
+    // Everything else in the method is unchanged: the config record is still
+    // proposed and optimistically written to the store.
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
+    expect(store.getRecord('config')).toBe('config-cid');
+  });
+
+  it('renders the Initialize configuration action only when there is no config record, and it builds the config', async () => {
+    // No `config` record => the first-config entry point is offered.
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+
+    const btn = await vi.waitFor(() => {
+      const b = el.shadowRoot!.getElementById('build-config') as HTMLButtonElement | null;
+      expect(b).not.toBeNull();
+      return b!;
+    });
+    expect(btn.textContent).toContain('Initialize configuration');
+
+    stubFailingFetch();
+    const spy = vi.spyOn(el, 'updateConfig');
+    btn.click();
+
+    await vi.waitFor(
+      () => {
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith();
+        expect(store.getRecord('config')).toBe('config-cid');
+      },
+      { timeout: 5000 },
+    );
+    // User-initiated, so the Safe queue popup is kept.
+    expect(window.open).toHaveBeenCalledTimes(1);
+    // Once the config record exists the action is gone.
+    await vi.waitFor(() => expect(el.shadowRoot!.getElementById('build-config')).toBeNull());
+  });
+
+  it('does not render the Initialize configuration action when a config record already exists', async () => {
+    seedRecords([
+      { key: 'name', value: 's3ntiment.eth', type: 'metadata' },
+      { key: 'config', value: 'bafyconfig123', type: 'content' },
+    ]);
+    const el = await mountTab();
+    await el.updateComplete;
+    expect(el.shadowRoot!.getElementById('build-config')).toBeNull();
   });
 
   it('builds the config from the repo + branch records in the store (immediate post-init update)', async () => {
