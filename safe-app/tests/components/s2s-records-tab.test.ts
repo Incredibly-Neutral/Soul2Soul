@@ -102,16 +102,18 @@ const m = vi.hoisted(() => {
     };
   };
 
+  // Simulated on-chain record values. Mutable so a test can model "the chain
+  // has no `config` record yet" (null) independently of the store — the
+  // first-config gate must read the chain, not the possibly-optimistic store.
+  const chainRecords: Record<string, string | null> = {
+    name: 's3ntiment.eth',
+    repo: 'https://github.com/acme/site',
+    config: 'bafyconfig-prev',
+  };
+
   const safeIntegration = {
     getAllRecords: vi.fn<() => Promise<[string[], string[]]>>(async () => [[], []]),
-    getRecord: vi.fn(async (key: string) => {
-      const values: Record<string, string> = {
-        name: 's3ntiment.eth',
-        repo: 'https://github.com/acme/site',
-        config: 'bafyconfig-prev',
-      };
-      return values[key] ?? null;
-    }),
+    getRecord: vi.fn(async (key: string) => m.chainRecords[key] ?? null),
     setRecord: vi.fn<() => Promise<string>>(async () => 'https://app.safe.global/tx/0x1'),
     deleteRecord: vi.fn<() => Promise<void>>(async () => {}),
     getSafeInfo: vi.fn(() => ({ safeAddress: '0xSafe', s2sPublication: '0xPub', chainId: 8453 })),
@@ -137,6 +139,7 @@ const m = vi.hoisted(() => {
 
   return {
     makeStore,
+    chainRecords,
     safeIntegration,
     protocolIntegration,
     storage,
@@ -217,7 +220,41 @@ type RecordsTab = LitElement & {
   protocolIntegration: unknown;
   lit: unknown;
   storage: unknown;
+  updateConfig: (
+    aliasesOverride?: string[],
+    opts?: { suppressQueueOpen?: boolean },
+  ) => Promise<string>;
+  /** Private entry point — exercised directly to prove the re-entrancy guard
+   *  is not merely the DOM `disabled` attribute. */
+  buildInitialConfig: () => Promise<void>;
+  /** Private state/entry points the assertions need to read or drive directly:
+   *  the chain half of the first-config gate, and refreshChainConfig so a
+   *  "subsequent chain read" can be simulated on the same instance. */
+  chainConfigCid: string | null;
+  configRecordKnown: boolean;
+  refreshChainConfig: () => Promise<void>;
 };
+
+/** The `#build-config` action in the Records section, or null when absent. */
+function buildConfigButton(el: LitElement): HTMLButtonElement | null {
+  return el.shadowRoot!.getElementById('build-config') as HTMLButtonElement | null;
+}
+
+/** The non-interactive "proposal pending in the Safe queue" note, or null. */
+function pendingNote(el: LitElement): HTMLElement | null {
+  return el.shadowRoot!.getElementById('config-pending') as HTMLElement | null;
+}
+
+/** Wait for the mount-time on-chain config read to settle. */
+async function waitForChainConfigKnown(el: RecordsTab): Promise<void> {
+  await vi.waitFor(() => expect(el.configRecordKnown).toBe(true), { timeout: 5000 });
+  await el.updateComplete;
+}
+
+/** What the simulated chain reports for a record key (null = no such record). */
+function setChainRecord(key: string, value: string | null) {
+  m.chainRecords[key] = value;
+}
 
 function mountTab(overrides: Partial<RecordsTab> = {}) {
   return mountLit<RecordsTab>('s2s-records-tab', {
@@ -315,6 +352,11 @@ describe('s2s-records-tab', () => {
     vi.clearAllMocks();
     m.buildConfigCalls = [];
     m.setTemplateCid(null);
+    m.chainRecords = {
+      name: 's3ntiment.eth',
+      repo: 'https://github.com/acme/site',
+      config: 'bafyconfig-prev',
+    };
     vi.spyOn(window, 'open').mockImplementation(() => null);
     document.body.replaceChildren();
   });
@@ -475,11 +517,13 @@ describe('s2s-records-tab', () => {
     // The alias pills (not the empty state) are shown.
     expect(el.shadowRoot!.textContent).toContain('Aliases');
     expect(el.shadowRoot!.textContent).not.toContain('No custom write-targets set');
-    // Store was populated => loadRecords (chain read) is skipped; only the
-    // alias read runs. loadCurrentAliases reads the cached config CID from
-    // the store, so no chain read happens either.
+    // Store was populated => loadRecords (chain read) is skipped; the alias
+    // read comes from the cached config CID in the store. The single chain
+    // read is the config-record gate for the first-config action (the store
+    // value may be optimistic, so the gate cannot trust it).
     expect(m.safeIntegration.getAllRecords).not.toHaveBeenCalled();
-    expect(m.safeIntegration.getRecord).not.toHaveBeenCalled();
+    expect(m.safeIntegration.getRecord).toHaveBeenCalledTimes(1);
+    expect(m.safeIntegration.getRecord).toHaveBeenCalledWith('config');
   });
 
   it('removing an alias flows the REDUCED list through buildConfig (clear-on-removal source)', async () => {
@@ -562,6 +606,249 @@ describe('s2s-records-tab', () => {
       expect.any(String), // VITE_FILEBASE_TOKEN, '' when unset
       'filebase',
     );
+  });
+
+  // ── init flow step 3: queue-popup suppression + first-config entry point ──
+
+  /** Fail dagExport (the only real network call in the build) fast. */
+  function stubFailingFetch() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'stubbed',
+        text: async () => 'stubbed',
+      })),
+    );
+  }
+
+  it('updateConfig() with no opts opens the Safe queue popup and resolves to the config CID (default behaviour)', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const cid = await el.updateConfig();
+
+    expect(cid).toBe('config-cid');
+    expect(window.open).toHaveBeenCalledTimes(1);
+    expect(window.open).toHaveBeenCalledWith('https://app.safe.global/tx/0x1', '_blank');
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
+  });
+
+  it('updateConfig(undefined, { suppressQueueOpen: true }) skips window.open and still resolves to the config CID', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const cid = await el.updateConfig(undefined, { suppressQueueOpen: true });
+
+    expect(cid).toBe('config-cid');
+    expect(window.open).not.toHaveBeenCalled();
+    // Everything else in the method is unchanged: the config record is still
+    // proposed and optimistically written to the store.
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
+    expect(store.getRecord('config')).toBe('config-cid');
+  });
+
+  it('a FRESH tab instance (tab switch) with the chain returning \'\' and the proposed CID in the store keeps the action hidden and shows the pending note', async () => {
+    // The realistic duplicate-proposal path: the tab is destroyed and recreated
+    // on every tab switch, so an instance-scoped marker would be gone — but the
+    // STORE ("chain ∪ proposed") survives, and a queued-but-unexecuted proposal
+    // is still invisible on chain ('').
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    // First instance proposes.
+    const first = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(first);
+    expect(buildConfigButton(first)).not.toBeNull();
+    await first.updateConfig(undefined, { suppressQueueOpen: true });
+    await first.updateComplete;
+    expect(store.getRecord('config')).toBe('config-cid');
+    expect(buildConfigButton(first)).toBeNull();
+    first.remove(); // leaving the Config tab destroys the element
+
+    // The proposal is still queued (not executed) — the chain answers ''.
+    setChainRecord('config', '');
+    const second = await mountTab();
+    await waitForChainConfigKnown(second);
+
+    expect(buildConfigButton(second)).toBeNull();
+    expect(pendingNote(second)?.textContent).toContain(
+      'Configuration proposal pending in the Safe queue',
+    );
+    // No second proposal was queued by the remount.
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips the action to the pending note when the store changes, without a remount (records subscription)', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    setChainRecord('config', '');
+    await el.refreshChainConfig();
+    await el.updateComplete;
+    expect(buildConfigButton(el)).not.toBeNull();
+    expect(pendingNote(el)).toBeNull();
+
+    // Someone else (the host's step 3, via this tab) proposed a config: the
+    // store gets the CID, and the same instance must re-render off the store
+    // subscription — no remount, no manual refresh.
+    store.setRecord({ key: 'config', value: 'bafyconfig-seam', type: 'content' });
+
+    await vi.waitFor(
+      () => {
+        expect(buildConfigButton(el)).toBeNull();
+        expect(pendingNote(el)?.textContent).toContain(
+          'Configuration proposal pending in the Safe queue',
+        );
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  it('hides the Initialize configuration action AND the pending note when the CHAIN has a config record', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', 'bafyconfig-onchain');
+
+    const el = await mountTab();
+    await waitForChainConfigKnown(el);
+
+    expect(el.chainConfigCid).toBe('bafyconfig-onchain');
+    expect(buildConfigButton(el)).toBeNull();
+    expect(pendingNote(el)).toBeNull();
+  });
+
+  it('offers the Initialize configuration action when neither store nor chain has a config record, and it builds on click', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    await waitForChainConfigKnown(el);
+
+    const btn = buildConfigButton(el);
+    expect(btn).not.toBeNull();
+    expect(btn!.textContent).toContain('Initialize configuration');
+    expect(pendingNote(el)).toBeNull();
+
+    stubFailingFetch();
+    const spy = vi.spyOn(el, 'updateConfig');
+    btn!.click();
+
+    await vi.waitFor(
+      () => {
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith();
+        expect(store.getRecord('config')).toBe('config-cid');
+      },
+      { timeout: 5000 },
+    );
+    // User-initiated, so the Safe queue popup is kept.
+    expect(window.open).toHaveBeenCalledTimes(1);
+  });
+
+  it('a chain read returning an EMPTY config after a proposal keeps the action hidden and shows the pending note', async () => {
+    // The queued proposal is invisible on chain (getRecord returns '') until the
+    // Safe tx executes. A chain read (e.g. the tab re-mounting on a tab switch)
+    // must not re-arm the action and offer a duplicate proposal.
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(el);
+    expect(buildConfigButton(el)).not.toBeNull();
+
+    await el.updateConfig(undefined, { suppressQueueOpen: true });
+    await el.updateComplete;
+    // The optimistic store write still shows the CID on the config row.
+    expect(store.getRecord('config')).toBe('config-cid');
+
+    setChainRecord('config', '');
+    await el.refreshChainConfig();
+    await el.updateComplete;
+
+    expect(el.chainConfigCid).toBeNull();
+    expect(buildConfigButton(el)).toBeNull();
+    expect(pendingNote(el)?.textContent).toContain(
+      'Configuration proposal pending in the Safe queue',
+    );
+  });
+
+  it('clears the pending note once a chain read returns the executed config CID', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(el);
+
+    await el.updateConfig(undefined, { suppressQueueOpen: true });
+    await el.updateComplete;
+    expect(pendingNote(el)).not.toBeNull();
+
+    // The Safe tx executed — the chain now carries the record.
+    setChainRecord('config', 'bafyconfig-executed');
+    await el.refreshChainConfig();
+    await el.updateComplete;
+
+    expect(el.chainConfigCid).toBe('bafyconfig-executed');
+    expect(pendingNote(el)).toBeNull();
+    expect(buildConfigButton(el)).toBeNull();
+  });
+
+  it('a second click while a first-config build is in flight does not queue a second setRecord(config, …)', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(el);
+
+    const btn = buildConfigButton(el)!;
+    expect(btn).not.toBeNull();
+
+    // Hold the build at its Safe proposal so the in-flight window stays open.
+    let release!: (value: string) => void;
+    const proposal = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    m.safeIntegration.setRecord.mockImplementationOnce(() => proposal);
+
+    btn.click();
+    await vi.waitFor(() => expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1));
+
+    // The action is disabled + relabelled while the build runs…
+    await el.updateComplete;
+    expect(buildConfigButton(el)!.disabled).toBe(true);
+    expect(buildConfigButton(el)!.textContent).toContain('Building configuration');
+
+    // …and the entry point itself is re-entrancy guarded, not just the DOM
+    // (a programmatic second submit must be a no-op too).
+    btn.click();
+    await el.buildInitialConfig();
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1);
+
+    release('https://app.safe.global/tx/0x1');
+
+    // Success feedback (pending approval) and the action gone — a proposal is
+    // queued but not executed, so a duplicate proposal is not offered and the
+    // pending note explains why.
+    await vi.waitFor(
+      () => {
+        expect(notificationTexts().join(' | ')).toContain(
+          'Configuration built! Transaction pending approval.',
+        );
+        expect(buildConfigButton(el)).toBeNull();
+        expect(pendingNote(el)).not.toBeNull();
+      },
+      { timeout: 5000 },
+    );
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1);
+    expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
   });
 
   it('builds the config from the repo + branch records in the store (immediate post-init update)', async () => {

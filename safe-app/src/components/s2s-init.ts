@@ -8,20 +8,19 @@
 //   1. propose create-batch  (buildCreateModuleBatch)      → Safe queue
 //   2. await execution, detect module addresses           (detectModuleAddresses)
 //   3. propose the MERGED enable+name batch (buildFinalizeBatch) → Safe queue
-//   4. await execution (modules enabled AND name recorded) → done
+//   4. await execution (modules enabled AND name recorded) → hand over
 //
-// Only two proposals, only two Safe executions. The module addresses are
+// Those are two proposals / two Safe executions, issued by this component.
+// The flow's THIRD proposal — the config record — is host-owned: once the
+// finalize batch executes the modules are live, so <s2s-app> takes over, drives
+// the build + proposal through <s2s-records-tab>.updateConfig() and waits for
+// it (see the step-3 section of init-session.ts). The module addresses are
 // unknowable until the create batch executes (plain CREATE, non-idempotent
 // factories), so a single-proposal init is impossible without a protocol
 // change; the merged finalize batch is the floor for the safe-app-only flow.
 //
-// The component deliberately drives the steps itself (rather than calling the
-// single-shot initializePublication) so each Safe-proposal queue URL can be
-// surfaced the moment it is created — a human has to open the Safe app and
-// execute each proposal before the next step can run.
-//
-// The component deliberately drives the steps itself (rather than calling the
-// single-shot initializePublication) so each Safe-proposal queue URL can be
+// The component deliberately drives its own steps itself (rather than calling
+// the single-shot initializePublication) so each Safe-proposal queue URL can be
 // surfaced the moment it is created — a human has to open the Safe app and
 // execute each proposal before the next step can run.
 //
@@ -39,8 +38,35 @@
 // learned module addresses). On connect the component restores a matching
 // session and auto-resumes the plan loop; the loop is driven by
 // `planNextAction`, which never re-proposes a batch that was already sent —
-// if a proposal is still pending it waits instead. When the flow finishes the
-// session is cleared.
+// if a proposal is still pending it waits instead. When this component's part
+// of the flow finishes, `complete()` clears ITS OWN session entry and only
+// then dispatches s2s-init-complete; the host persists the step-3
+// ('configuring') phase from that event's detail. Config-phase sessions are
+// host-owned: restorePersisted() ignores them, so this element never resumes
+// step 3.
+//
+// # Retry vs. reset
+//
+// An error (rejected signature, RPC failure, human-in-the-loop timeout) does
+// NOT mean the flow is lost: the persisted session still records every batch
+// already proposed. "Try again" therefore *retries* — it re-enters the plan
+// loop with the existing session, so `planNextAction` resumes from the
+// persisted phase and (for phases 'detecting' and 'awaiting-finalize') does
+// not re-propose a batch that is already in the Safe queue: a second create
+// batch would deploy a duplicate module pair.
+//
+// One failure mode is NOT covered: phase 'creating' means "a create proposal
+// is being sent", and `proposalProgress('creating')` reports no proposal yet.
+// If proposeBatch() throws only after the queue entry was created (timeout /
+// RPC failure on the response), retrying from 'creating' proposes a second
+// create batch. Resolving that needs a queue lookup (or an explicit user
+// confirmation) before re-proposing, which this component does not do — the
+// phase is knowingly replayed. Only "Start over" clears the session and
+// returns to the blank form.
+//
+// `start()` additionally holds a re-entrancy flag so a double click (or a
+// resume firing while a loop is already running) can never start two plan
+// loops — two loops would propose the same batch twice.
 
 import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -114,6 +140,24 @@ const WORKING_STEPS = ['creating', 'detecting', 'finalizing', 'awaiting-finalize
 
 type Step = 'idle' | (typeof WORKING_STEPS)[number] | 'done' | 'error';
 
+/** Payload of the `s2s-init-complete` event.
+ *
+ * Carries the whole identity of the finished flow so the host can persist the
+ * next phase ('configuring') from the event alone: the component clears its
+ * own session before dispatching, so by handler time the storage entry is
+ * already gone. `name` is the FULL publication name (with the
+ * .soul2soul.eth suffix), as it has always been for this event.
+ */
+interface InitCompleteDetail {
+  recordsModule?: string;
+  publicationModule?: string;
+  name?: string;
+  repo?: string;
+  branch?: string;
+  authors?: string[];
+  proposals?: string[];
+}
+
 /** Sentinel thrown when a human-in-the-loop wait timed out (fail() already ran). */
 class InitTimeoutError extends Error {}
 
@@ -136,6 +180,9 @@ export class S2SPublicationInit extends LitElement {
   /**
    * Where the flow's state is persisted between page loads (injected so unit
    * tests can pass a fake; defaults to the real localStorage).
+   *
+   * NOTE: INIT_SESSION_KEY is a single global key, shared by every Safe — two
+   * tabs (two Safes) are last-writer-wins, so clearing here clears for all.
    */
   @property({ attribute: false }) storage: InitSessionStorage = window.localStorage;
 
@@ -155,6 +202,12 @@ export class S2SPublicationInit extends LitElement {
   private session: InitSession | null = null;
   /** Guards against auto-resuming more than once per component lifetime. */
   private resumed = false;
+  /**
+   * Re-entrancy guard: true while a plan loop is running. A second start()
+   * (double click, double mount, resume racing a click) is a no-op — two
+   * loops would propose the same batch twice.
+   */
+  private running = false;
 
   static styles = [
     typograhyStyles,
@@ -282,27 +335,6 @@ export class S2SPublicationInit extends LitElement {
         }
       }
 
-      .init__proposals {
-        margin: 0.5rem 0 1rem;
-        padding: 0;
-        list-style: none;
-      }
-
-      .init__proposal {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.4rem;
-        font-size: 0.85rem;
-      }
-
-      .init__proposal a {
-        color: var(--accent);
-        font-family: var(--font-mono);
-        font-size: 0.8rem;
-        word-break: break-all;
-      }
-
       .init__error {
         display: flex;
         align-items: flex-start;
@@ -343,9 +375,35 @@ export class S2SPublicationInit extends LitElement {
     // The deps (safeIntegration / protocolInfo / safeInfo) may arrive after
     // connect (s2s-app renders this component as soon as the Safe resolves);
     // resume once everything is available.
-    if (changed.has('safeIntegration') || changed.has('protocolInfo') || changed.has('safeInfo')) {
-      this.maybeResume();
+    if (!changed.has('safeIntegration') && !changed.has('protocolInfo') && !changed.has('safeInfo'))
+      return;
+
+    // The Safe may only resolve after connect (the host mounts this element
+    // as soon as it has a Safe, and keeps it mounted when the modules are
+    // already installed), so a session that could not be matched at connect
+    // time gets another chance once safeInfo arrives. Restoring writes
+    // reactive state, so defer it out of this update cycle (writing state in
+    // updated() schedules an extra update).
+    if (changed.has('safeInfo') && !this.session && !this.resumed) {
+      queueMicrotask(() => {
+        if (this.session || this.resumed) return;
+        // Only restore onto an untouched form: a late-safeInfo restore must
+        // never overwrite values the user has already typed (name is empty
+        // when untouched; repo/branch are prefilled with the defaults).
+        if (
+          this.step !== 'idle' ||
+          this.name !== '' ||
+          this.repo !== DEFAULT_REPO ||
+          this.branch !== DEFAULT_BRANCH
+        ) {
+          return;
+        }
+        this.restorePersisted();
+        this.maybeResume();
+      });
     }
+
+    this.maybeResume();
   }
 
   private get safeAddress(): string {
@@ -387,14 +445,51 @@ export class S2SPublicationInit extends LitElement {
     void this.start();
   }
 
-  /** Reset to the form (also used as "try again" after an error). */
-  private readonly reset = (): void => {
+  /**
+   * "Start over": drop the persisted session and return to the blank form.
+   * This is the only action that clears the session, so it is also the only
+   * way to end up with a second create batch for the same Safe.
+   */
+  private readonly cancel = (): void => {
+    if (this.running) return; // a loop is still unwinding; it owns the state
     clearInitSession(this.storage, INIT_SESSION_KEY);
     this.session = null;
+    this.resumed = false;
     this.step = 'idle';
     this.error = '';
+    this.name = '';
+    this.nameError = '';
     this.proposals = [];
     this.dispatchProgress();
+  };
+
+  /**
+   * "Try again": keep the persisted session and re-enter the plan loop.
+   * `planNextAction` reads the session phase + on-chain state, so a rejected
+   * signature or a timeout resumes exactly where the flow stopped instead of
+   * starting a fresh flow (which would propose a duplicate create batch).
+   */
+  private readonly retry = (): void => {
+    if (this.running) return; // a loop is still unwinding; it owns the state
+    this.error = '';
+    if (!this.session) {
+      // The session may exist in storage but never have been restored (e.g.
+      // the failure was "no Safe yet" and safeInfo arrived afterwards): give
+      // the restore one chance first. Otherwise drop any stale session so a
+      // fresh "Create" cannot silently overwrite an unread half-finished one.
+      this.restorePersisted();
+      if (!this.session) {
+        clearInitSession(this.storage, INIT_SESSION_KEY);
+        this.step = 'idle';
+        this.dispatchProgress();
+        return;
+      }
+    }
+    // Leave the error view immediately; runAction() re-derives the step from
+    // the planned action.
+    this.step = this.session.phase === 'done' ? 'idle' : 'creating';
+    this.dispatchProgress();
+    void this.start();
   };
 
   private fail(message: string): void {
@@ -426,21 +521,38 @@ export class S2SPublicationInit extends LitElement {
     );
   }
 
-  /** Signal successful completion to the host (used by both fresh + resumed flows). */
+  /** Signal successful completion to the host (used by both fresh + resumed flows).
+   *
+   * Ownership: this component only owns ITS OWN session. Capture the identity,
+   * clear the session (and null our copy) BEFORE dispatching, then let the host
+   * persist the 'configuring' phase from the event detail. The host's handler
+   * runs `persistInitPhase('configuring', …)` synchronously at its top, so a
+   * clear after the dispatch would delete the session the host just wrote —
+   * and clearing first is safe only because the detail carries every field the
+   * host needs (it must not merge `prev` from storage).
+   */
   private complete(): void {
     this.step = 'done';
     const session = this.session;
     console.log(`[init] COMPLETE - flow finished. session=${session ? session.phase : 'null'}`);
+    const detail: InitCompleteDetail = {
+      recordsModule: session?.recordsModule,
+      publicationModule: session?.publicationModule,
+      proposals: session?.proposals ?? this.proposals,
+      // Full publication name (with the .soul2soul.eth suffix) — unchanged
+      // key/meaning, the host's existing destructuring keeps working.
+      name: session?.publicationName,
+      repo: session?.repo,
+      branch: session?.branch,
+      authors: session?.authors,
+    };
+
+    this.session = null;
+    clearInitSession(this.storage, INIT_SESSION_KEY);
+
     this.dispatchEvent(
-      new CustomEvent('s2s-init-complete', {
-        detail: {
-          recordsModule: session?.recordsModule,
-          publicationModule: session?.publicationModule,
-          proposals: this.proposals,
-          name: session?.publicationName,
-          repo: session?.repo,
-          branch: session?.branch,
-        },
+      new CustomEvent<InitCompleteDetail>('s2s-init-complete', {
+        detail,
         bubbles: true,
         composed: true,
       }),
@@ -471,7 +583,25 @@ export class S2SPublicationInit extends LitElement {
     this.authors = this.authors.filter((a) => a !== address);
   };
 
+  /**
+   * Entry point for every path into the flow (form button, retry, resume).
+   * Guarded so only one plan loop can run at a time; the loop itself lives in
+   * runFlow().
+   */
   private async start(): Promise<void> {
+    if (this.running) {
+      console.log('[init] start() ignored — a plan loop is already running');
+      return;
+    }
+    this.running = true;
+    try {
+      await this.runFlow();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async runFlow(): Promise<void> {
     const si = this.safeIntegration;
     const info = this.protocolInfo;
     const safeAddress = this.safeAddress;
@@ -510,6 +640,14 @@ export class S2SPublicationInit extends LitElement {
 
     try {
       for (;;) {
+        // The session can disappear mid-loop (defensive: cancel()/retry() are
+        // guarded by `running`, so today only a host-driven clear can do it).
+        // End in a VISIBLE state — a working step renders nothing, so a silent
+        // return would leave the user on a blank page with no actions.
+        if (!this.session) {
+          this.fail('The initialization session was cleared elsewhere — reload to continue.');
+          return;
+        }
         const action = await this.plan(si, info, safeAddress);
         console.log(`[init] plan -> ${action.type}`);
         const done = await this.runAction(action, si, info, safeAddress);
@@ -577,7 +715,9 @@ export class S2SPublicationInit extends LitElement {
     safeAddress: string,
   ): Promise<boolean> {
     const session = this.session;
-    if (!session) return false;
+    // No session: there is nothing left to drive, so tell the loop to stop
+    // (returning false would make it re-plan forever against a null session).
+    if (!session) return true;
 
     console.log(`[init] runAction ${action.type} (phase=${this.session?.phase ?? 'none'})`);
     // Populate the shared integration's module wrappers from the session so
@@ -657,11 +797,18 @@ export class S2SPublicationInit extends LitElement {
       }
 
       case 'done': {
-        // Everything is on-chain — the flow is genuinely finished. Tell the
-        // host first (reads the still-live session), then clear it.
+        // Everything is on-chain — the flow is finished. complete() captures the
+        // session identity, clears THIS component's own session entry and only
+        // then dispatches s2s-init-complete.
+        //
+        // Contract with the host (s2s-app.onInitComplete): it persists the
+        // 'configuring' phase from the event detail — it must NOT read the
+        // session from storage, which is already gone at handler time, and it
+        // must not merge a stored `prev`. Do not reverse this order: a clear
+        // after the dispatch would delete the phase the host just persisted,
+        // and clearing before the dispatch is only safe because the detail is
+        // complete.
         this.complete();
-        clearInitSession(this.storage, INIT_SESSION_KEY);
-        this.session = null;
         return true;
       }
     }
@@ -766,7 +913,10 @@ export class S2SPublicationInit extends LitElement {
         <h2>Initialization failed</h2>
         <div class="init__error">${this.error}</div>
         <div class="init__actions">
-          <button class="button" @click=${this.reset}>Try again</button>
+          <s2s-button type="primary" id="init-retry" @click=${this.retry}>Try again</s2s-button>
+          <s2s-button type="secondary" id="init-start-over" @click=${this.cancel}
+            >Start over</s2s-button
+          >
         </div>
       `;
     }
