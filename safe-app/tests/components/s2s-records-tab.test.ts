@@ -259,11 +259,6 @@ function buildConfigButton(el: LitElement): HTMLButtonElement | null {
   return el.shadowRoot!.getElementById('build-config') as HTMLButtonElement | null;
 }
 
-/** The non-interactive "proposal pending in the Safe queue" note, or null. */
-function pendingNote(el: LitElement): HTMLElement | null {
-  return el.shadowRoot!.getElementById('config-pending') as HTMLElement | null;
-}
-
 /** Wait for the mount-time on-chain config read to settle. */
 async function waitForChainConfigKnown(el: RecordsTab): Promise<void> {
   await vi.waitFor(() => expect(el.configRecordKnown).toBe(true), { timeout: 5000 });
@@ -775,7 +770,7 @@ describe('s2s-records-tab', () => {
     expect(configFailureStage(null)).toBeNull();
   });
 
-  it('a FRESH tab instance (tab switch) with the chain returning \'\' and the proposed CID in the store keeps the action hidden and shows the pending note', async () => {
+  it('a FRESH tab instance (tab switch) with the chain returning \'\' and the proposed CID in the store keeps the action hidden', async () => {
     // The realistic duplicate-proposal path: the tab is destroyed and recreated
     // on every tab switch, so an instance-scoped marker would be gone — but the
     // STORE ("chain ∪ proposed") survives, and a queued-but-unexecuted proposal
@@ -800,14 +795,14 @@ describe('s2s-records-tab', () => {
     await waitForChainConfigKnown(second);
 
     expect(buildConfigButton(second)).toBeNull();
-    expect(pendingNote(second)?.textContent).toContain(
-      'Configuration proposal pending in the Safe queue',
-    );
+    // The pending explanation was removed from the UI — the protection is the
+    // hidden action, not the sentence.
+    expect(second.shadowRoot!.getElementById('config-pending')).toBeNull();
     // No second proposal was queued by the remount.
     expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1);
   });
 
-  it('flips the action to the pending note when the store changes, without a remount (records subscription)', async () => {
+  it('hides the action when the store gains a config CID, without a remount (records subscription)', async () => {
     seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
     setChainRecord('config', null);
 
@@ -816,7 +811,7 @@ describe('s2s-records-tab', () => {
     await el.refreshChainConfig();
     await el.updateComplete;
     expect(buildConfigButton(el)).not.toBeNull();
-    expect(pendingNote(el)).toBeNull();
+    expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
 
     // Someone else (the host's step 3, via this tab) proposed a config: the
     // store gets the CID, and the same instance must re-render off the store
@@ -826,15 +821,13 @@ describe('s2s-records-tab', () => {
     await vi.waitFor(
       () => {
         expect(buildConfigButton(el)).toBeNull();
-        expect(pendingNote(el)?.textContent).toContain(
-          'Configuration proposal pending in the Safe queue',
-        );
+        expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
       },
       { timeout: 5000 },
     );
   });
 
-  it('hides the Initialize configuration action AND the pending note when the CHAIN has a config record', async () => {
+  it('hides the Initialize configuration action when the CHAIN has a config record', async () => {
     seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
     setChainRecord('config', 'bafyconfig-onchain');
 
@@ -843,7 +836,7 @@ describe('s2s-records-tab', () => {
 
     expect(el.chainConfigCid).toBe('bafyconfig-onchain');
     expect(buildConfigButton(el)).toBeNull();
-    expect(pendingNote(el)).toBeNull();
+    expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
   });
 
   it('offers the Initialize configuration action when neither store nor chain has a config record, and it builds on click', async () => {
@@ -856,7 +849,7 @@ describe('s2s-records-tab', () => {
     const btn = buildConfigButton(el);
     expect(btn).not.toBeNull();
     expect(btn!.textContent).toContain('Initialize configuration');
-    expect(pendingNote(el)).toBeNull();
+    expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
 
     stubFailingFetch();
     const spy = vi.spyOn(el, 'updateConfig');
@@ -874,7 +867,7 @@ describe('s2s-records-tab', () => {
     expect(window.open).toHaveBeenCalledTimes(1);
   });
 
-  it('a chain read returning an EMPTY config after a proposal keeps the action hidden and shows the pending note', async () => {
+  it('a chain read returning an EMPTY config after a proposal keeps the action hidden', async () => {
     // The queued proposal is invisible on chain (getRecord returns '') until the
     // Safe tx executes. A chain read (e.g. the tab re-mounting on a tab switch)
     // must not re-arm the action and offer a duplicate proposal.
@@ -897,12 +890,10 @@ describe('s2s-records-tab', () => {
 
     expect(el.chainConfigCid).toBeNull();
     expect(buildConfigButton(el)).toBeNull();
-    expect(pendingNote(el)?.textContent).toContain(
-      'Configuration proposal pending in the Safe queue',
-    );
+    expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
   });
 
-  it('clears the pending note once a chain read returns the executed config CID', async () => {
+  it('keeps the action hidden once a chain read returns the executed config CID', async () => {
     seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
     setChainRecord('config', null);
 
@@ -912,7 +903,7 @@ describe('s2s-records-tab', () => {
 
     await el.updateConfig(undefined, { suppressQueueOpen: true });
     await el.updateComplete;
-    expect(pendingNote(el)).not.toBeNull();
+    expect(buildConfigButton(el)).toBeNull();
 
     // The Safe tx executed — the chain now carries the record.
     setChainRecord('config', 'bafyconfig-executed');
@@ -920,7 +911,6 @@ describe('s2s-records-tab', () => {
     await el.updateComplete;
 
     expect(el.chainConfigCid).toBe('bafyconfig-executed');
-    expect(pendingNote(el)).toBeNull();
     expect(buildConfigButton(el)).toBeNull();
   });
 
@@ -959,15 +949,14 @@ describe('s2s-records-tab', () => {
     release('https://app.safe.global/tx/0x1');
 
     // Success feedback (pending approval) and the action gone — a proposal is
-    // queued but not executed, so a duplicate proposal is not offered and the
-    // pending note explains why.
+    // queued but not executed, so a duplicate proposal is not offered.
     await vi.waitFor(
       () => {
         expect(notificationTexts().join(' | ')).toContain(
           'Configuration built! Transaction pending approval.',
         );
         expect(buildConfigButton(el)).toBeNull();
-        expect(pendingNote(el)).not.toBeNull();
+        expect(el.shadowRoot!.getElementById('config-pending')).toBeNull();
       },
       { timeout: 5000 },
     );
