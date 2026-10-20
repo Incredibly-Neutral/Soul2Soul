@@ -106,7 +106,7 @@ export class S2SInitProgressModal extends LitElement {
     }
   `;
 
-  private renderStep(index: 1 | 2, title: string): unknown {
+  private renderStep(index: 1 | 2 | 3, title: string): unknown {
     const state = stepState(this.phase, index);
     const marker =
       state === 'done'
