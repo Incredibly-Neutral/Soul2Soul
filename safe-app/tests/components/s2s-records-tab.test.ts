@@ -137,6 +137,11 @@ const m = vi.hoisted(() => {
   // existing tests keep seeing a config with no templateCid.
   let templateCid: string | null = null;
 
+  // Build-stage failure seam: the mocked builders throw these when set, so a
+  // test can fail the build half of updateConfig without touching the proposal.
+  let assetsBuildFailure: Error | null = null;
+  let configBuildFailure: Error | null = null;
+
   return {
     makeStore,
     chainRecords,
@@ -149,6 +154,12 @@ const m = vi.hoisted(() => {
       templateCid = v;
     },
     getTemplateCid: () => templateCid,
+    setBuildFailure: (which: 'assets' | 'config', err: Error | null) => {
+      if (which === 'assets') assetsBuildFailure = err;
+      else configBuildFailure = err;
+    },
+    getAssetsBuildFailure: () => assetsBuildFailure,
+    getConfigBuildFailure: () => configBuildFailure,
   };
 });
 
@@ -159,6 +170,9 @@ vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
   ConfigBuilder: class {
     constructor() {}
     buildConfig = vi.fn(async (...args: any[]) => {
+      // Build-stage failure seam (stage tagging tests).
+      const failure = m.getConfigBuildFailure();
+      if (failure) throw failure;
       m.buildConfigCalls.push(args);
       // Echo the aliases the caller passed (mirrors the real builder, which
       // persists the supplied alias list into config.aliases).
@@ -171,7 +185,11 @@ vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
   },
   AssetsBuilder: class {
     constructor() {}
-    buildAssets = vi.fn(async () => ({ cid: 'assets-cid' }));
+    buildAssets = vi.fn(async () => {
+      const failure = m.getAssetsBuildFailure();
+      if (failure) throw failure;
+      return { cid: 'assets-cid' };
+    });
   },
   S2SIPFSMethods: class {
     constructor() {}
@@ -213,6 +231,7 @@ vi.mock('@/state/index.js', () => ({
 // Component under test (registers <s2s-records-tab> and, transitively,
 // <s2s-sliding-add-button>).
 import '../../src/components/s2s-records-tab';
+import { configFailureStage } from '../../src/components/s2s-records-tab';
 import { store } from '../../src/state/index';
 
 type RecordsTab = LitElement & {
@@ -352,6 +371,8 @@ describe('s2s-records-tab', () => {
     vi.clearAllMocks();
     m.buildConfigCalls = [];
     m.setTemplateCid(null);
+    m.setBuildFailure('assets', null);
+    m.setBuildFailure('config', null);
     m.chainRecords = {
       name: 's3ntiment.eth',
       repo: 'https://github.com/acme/site',
@@ -649,6 +670,109 @@ describe('s2s-records-tab', () => {
     // proposed and optimistically written to the store.
     expect(m.safeIntegration.setRecord).toHaveBeenCalledWith('config', 'config-cid');
     expect(store.getRecord('config')).toBe('config-cid');
+  });
+
+  // ── stage tagging: updateConfig builds AND proposes, so say which failed ──
+
+  it('tags a BUILD failure with stage "build" and preserves the message', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const boom = new Error('pinata: buildAssets failed (401)');
+    m.setBuildFailure('assets', boom);
+
+    const err = await el.updateConfig(undefined, { suppressQueueOpen: true }).then(
+      () => null,
+      (e: unknown) => e as Error & { stage?: string; cause?: unknown },
+    );
+
+    expect(err).not.toBeNull();
+    expect(err!.stage).toBe('build');
+    expect(configFailureStage(err)).toBe('build');
+    // Message preserved, original kept as cause.
+    expect(err!.message).toBe('pinata: buildAssets failed (401)');
+    expect(err!.cause).toBe(boom);
+    // Nothing was proposed.
+    expect(m.safeIntegration.setRecord).not.toHaveBeenCalled();
+  });
+
+  it('tags a CONFIG-BUILDER failure with stage "build" too (both DAG builds are the build half)', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const boom = new Error('config builder exploded');
+    m.setBuildFailure('config', boom);
+
+    const err = await el.updateConfig(undefined, { suppressQueueOpen: true }).catch(
+      (e: unknown) => e as Error & { stage?: string },
+    );
+
+    expect(err.stage).toBe('build');
+    expect(err.message).toBe('config builder exploded');
+    expect(m.safeIntegration.setRecord).not.toHaveBeenCalled();
+  });
+
+  it('tags a PROPOSAL failure with stage "propose" and preserves the message', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    // The live step-3 shape: the build succeeded, the Safe SDK rejected the tx.
+    const boom = new Error(
+      'invalid address (argument="address", value="")',
+    );
+    m.safeIntegration.setRecord.mockRejectedValueOnce(boom);
+
+    const err = await el.updateConfig(undefined, { suppressQueueOpen: true }).then(
+      () => null,
+      (e: unknown) => e as Error & { stage?: string; cause?: unknown },
+    );
+
+    expect(err).not.toBeNull();
+    expect(err!.stage).toBe('propose');
+    expect(configFailureStage(err)).toBe('propose');
+    expect(err!.message).toBe('invalid address (argument="address", value="")');
+    expect(err!.cause).toBe(boom);
+
+    // The build really did run (it is the half that succeeded) and the
+    // optimistic store write did not happen.
+    expect(m.buildConfigCalls).toHaveLength(1);
+    expect(window.open).not.toHaveBeenCalled();
+    expect(store.getRecord('config')).toBeNull();
+  });
+
+  it('the first-config action reports the failing stage, not a hedged message', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+    const el = await mountTab();
+    await waitForChainConfigKnown(el);
+    stubFailingFetch();
+
+    // Proposal failure -> "built, but the proposal failed" (build did succeed).
+    m.safeIntegration.setRecord.mockRejectedValueOnce(new Error('nope'));
+    await el.buildInitialConfig();
+    expect(
+      notificationTexts().some((t) => t.includes('Safe proposal failed')),
+    ).toBe(true);
+    expect(
+      notificationTexts().some((t) => t.includes('Failed to build configuration')),
+    ).toBe(false);
+
+    // Build failure -> the build message.
+    document.body.replaceChildren();
+    m.setBuildFailure('assets', new Error('nope'));
+    await el.buildInitialConfig();
+    expect(
+      notificationTexts().some((t) => t.includes('Failed to build configuration')),
+    ).toBe(true);
+  });
+
+  it('leaves untagged errors untagged (configFailureStage returns null)', () => {
+    expect(configFailureStage(new Error('plain'))).toBeNull();
+    expect(configFailureStage('plain')).toBeNull();
+    expect(configFailureStage(null)).toBeNull();
   });
 
   it('a FRESH tab instance (tab switch) with the chain returning \'\' and the proposed CID in the store keeps the action hidden and shows the pending note', async () => {

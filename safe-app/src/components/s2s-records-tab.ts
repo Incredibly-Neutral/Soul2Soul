@@ -19,6 +19,37 @@ import { ethers } from 'ethers';
 import { evmRead } from '../lib/evm.js';
 import { maybeVerifyDomainOwnership, DOMAIN_VALIDATION_CONFIG } from '../lib/domain-validation.js';
 
+/**
+ * Which half of `updateConfig()` failed. It builds the assets/config DAGs and
+ * proposes the `config` record in one call, so a bare rejection says nothing
+ * about the stage. Tagging it lets the host report the actual failure instead of
+ * a message that hedges both ("Building the configuration failed" for what was
+ * really a rejected Safe proposal).
+ */
+export type ConfigStepStage = 'build' | 'propose';
+
+/**
+ * Re-throw an `updateConfig()` failure with its stage attached.
+ *
+ * The original error is preserved as `cause` and its message (and name) are
+ * copied onto the returned error, so nothing is lost: callers that print or
+ * match the message keep working, and `stage` is additive.
+ */
+function withStage(err: unknown, stage: ConfigStepStage): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  // ES2022: second argument keeps the original reachable for debugging.
+  const tagged = new Error(message, { cause: err });
+  if (err instanceof Error) tagged.name = err.name;
+  (tagged as Error & { stage?: ConfigStepStage }).stage = stage;
+  return tagged;
+}
+
+/** The stage of an `updateConfig()` failure, or null if it was not tagged. */
+export function configFailureStage(err: unknown): ConfigStepStage | null {
+  const stage = (err as { stage?: unknown } | null)?.stage;
+  return stage === 'build' || stage === 'propose' ? stage : null;
+}
+
 @customElement('s2s-records-tab')
 export class S2SRecordsTab extends LitElement {
   @property({ attribute: false }) safeIntegration!: SafeIntegration;
@@ -465,6 +496,58 @@ export class S2SRecordsTab extends LitElement {
     aliasesOverride?: string[],
     opts?: { suppressQueueOpen?: boolean },
   ): Promise<string> {
+    // ── stage 1: build ─────────────────────────────────────────────────
+    // Everything up to (and including) the pins. Tagged 'build' so a failure
+    // here is not reported as a proposal failure.
+    let built: { configCid: string; repo: string };
+    try {
+      built = await this.buildConfigDag(aliasesOverride);
+    } catch (err) {
+      throw withStage(err, 'build');
+    }
+    const { configCid, repo } = built;
+
+    // ── stage 2: propose ───────────────────────────────────────────────
+    // The only Safe interaction in this flow. Tagged 'propose': reaching here
+    // means the build (both DAGs + uploads) already succeeded.
+    let executionUrl: string;
+    try {
+      executionUrl = await this.safeIntegration.setRecord('config', configCid);
+    } catch (err) {
+      throw withStage(err, 'propose');
+    }
+    if (opts?.suppressQueueOpen !== true) {
+      window.open(executionUrl, '_blank');
+    }
+
+    // Mark changed keys for yellow highlight (before store update so the first
+    // subscriber-triggered render already has the class)
+    this.changedKeys.add('config');
+    const oldRepo = store.getRecord('repo');
+    if (oldRepo !== repo) {
+      this.changedKeys.add('repo');
+    }
+    this.requestUpdate();
+
+    // Optimistic local update so the new value shows immediately. This store
+    // value is also the "proposed, not yet executed" half of the first-config
+    // gate, so it survives the tab being recreated on a tab switch.
+    store.setRecord({ key: 'config', value: configCid, type: 'content' });
+
+    return configCid;
+  }
+
+  /**
+   * Build the assets + config DAGs and fire the (non-fatal) storage uploads.
+   * Returns the new config CID plus the repo it was built from — the caller
+   * compares that against the store to mark the repo row as changed.
+   *
+   * Every failure here is a 'build' failure (see `updateConfig`): the storage
+   * side-effects are deliberately non-fatal, exactly as before.
+   */
+  private async buildConfigDag(
+    aliasesOverride?: string[],
+  ): Promise<{ configCid: string; repo: string }> {
     const existingCid =
       store.getRecord('config') ?? (await this.safeIntegration.getRecord('config'));
     const repo = store.getRecord('repo') ?? (await this.safeIntegration.getRecord('repo'));
@@ -565,27 +648,7 @@ export class S2SRecordsTab extends LitElement {
       });
     }
 
-    // ── existing ───────────────────────────────────────────────────────
-    const executionUrl = await this.safeIntegration.setRecord('config', configCid);
-    if (opts?.suppressQueueOpen !== true) {
-      window.open(executionUrl, '_blank');
-    }
-
-    // Mark changed keys for yellow highlight (before store update so the first
-    // subscriber-triggered render already has the class)
-    this.changedKeys.add('config');
-    const oldRepo = store.getRecord('repo');
-    if (oldRepo !== repo) {
-      this.changedKeys.add('repo');
-    }
-    this.requestUpdate();
-
-    // Optimistic local update so the new value shows immediately. This store
-    // value is also the "proposed, not yet executed" half of the first-config
-    // gate, so it survives the tab being recreated on a tab switch.
-    store.setRecord({ key: 'config', value: configCid, type: 'content' });
-
-    return configCid;
+    return { configCid, repo };
   }
 
   /**
@@ -606,8 +669,16 @@ export class S2SRecordsTab extends LitElement {
       await this.updateConfig();
       this.showNotification('Configuration built! Transaction pending approval.', 'success');
     } catch (err) {
-      console.error('[records] initial config build failed:', err);
-      this.showNotification('Failed to build configuration. Please try again.', 'error');
+      // `updateConfig` tags which half failed; say that instead of blaming the
+      // build for a rejected proposal.
+      const stage = configFailureStage(err);
+      console.error(`[records] initial config ${stage ?? 'run'} failed:`, err);
+      this.showNotification(
+        stage === 'propose'
+          ? 'Configuration built, but the Safe proposal failed. Please try again.'
+          : 'Failed to build configuration. Please try again.',
+        'error',
+      );
     } finally {
       this.buildingConfig = false;
     }
