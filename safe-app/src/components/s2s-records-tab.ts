@@ -44,16 +44,25 @@ export class S2SRecordsTab extends LitElement {
    *  write target). A legacy `domain`-only config is surfaced as a
    *  single-element alias list. */
   @state() private aliases: string[] = [];
-  /** The publication's `config` record CID **as known from the chain** (or, in
-   *  the window between a proposal and its Safe execution, the CID we just
-   *  proposed). Null when the publication has no config yet.
+  /** The publication's `config` record CID **as known from the chain**. Null
+   *  when the chain has no config yet (a queued-but-unexecuted proposal does
+   *  not show up there).
    *
    *  This deliberately does NOT read the store: `updateConfig` writes the
    *  proposed CID into the store optimistically, before the Safe transaction
    *  executes, so a store-only gate would hide the first-config/retry action
    *  in exactly the post-step-3-failure case it exists for (and would offer it
    *  for a publication whose config is on-chain but not in the store). */
-  @state() private configRecordCid: string | null = null;
+  @state() private chainConfigCid: string | null = null;
+  /** A config CID this tab (or the host, through it) proposed to the Safe that
+   *  has **not executed yet** — invisible on chain until it does.
+   *
+   *  Tracked separately from the chain read so a chain read returning '' cannot
+   *  re-arm the first-config action while a proposal sits in the Safe queue
+   *  (which would queue a duplicate `setRecord('config', …)` for the same
+   *  record). Cleared only when a chain read returns a non-empty config, i.e.
+   *  the proposal actually executed. */
+  @state() private proposedConfigCid: string | null = null;
   /** True once the config record has been resolved from the chain, so the
    *  first-config action is never offered before we know whether one exists. */
   @state() private configRecordKnown = false;
@@ -168,6 +177,12 @@ export class S2SRecordsTab extends LitElement {
       .alias-pill__remove:hover {
         color: var(--color-red);
       }
+
+      .config-pending {
+        color: var(--gray-400);
+        font-size: 0.8rem;
+        margin: 0 0 1rem;
+      }
     `,
   ];
 
@@ -195,20 +210,39 @@ export class S2SRecordsTab extends LitElement {
   }
 
   /**
-   * Resolve the on-chain `config` record (null when there is none). Drives the
-   * first-config action's visibility. A failed read leaves the action
-   * available — it is the recovery affordance for a publication that may have
-   * no config, so it must not be permanently hidden by a transient error.
+   * Resolve the on-chain `config` record and feed it through applyChainConfig.
+   * A failed read leaves the action available — it is the recovery affordance
+   * for a publication that may have no config, so it must not be permanently
+   * hidden by a transient error.
    */
   private async refreshChainConfig(): Promise<void> {
     try {
       const cid = await this.safeIntegration.getRecord('config');
-      this.configRecordCid = cid || null;
+      this.applyChainConfig(cid);
     } catch (error) {
       console.warn('[records] could not read the on-chain config record:', error);
     } finally {
       this.configRecordKnown = true;
     }
+  }
+
+  /**
+   * Apply the outcome of a chain read of the `config` record.
+   *
+   * Non-empty → the record exists on chain, i.e. the proposal we queued has
+   * executed: drop the pending marker. Empty ('') → "not executed yet" and
+   * must NOT clear `proposedConfigCid`: a queued proposal is invisible on
+   * chain, and forgetting it would re-offer the first-config action and allow
+   * a second `setRecord('config', …)` for the same record.
+   */
+  private applyChainConfig(cid: string | null | undefined): void {
+    if (cid) {
+      this.chainConfigCid = cid;
+      this.proposedConfigCid = null;
+    } else {
+      this.chainConfigCid = null;
+    }
+    this.configRecordKnown = true;
   }
 
   disconnectedCallback() {
@@ -252,8 +286,7 @@ export class S2SRecordsTab extends LitElement {
       this.changedKeys.clear();
       // This IS the chain read — derive the first-config gate from it rather
       // than from the (possibly optimistic) store.
-      this.configRecordCid = values[keys.indexOf('config')] || null;
-      this.configRecordKnown = true;
+      this.applyChainConfig(values[keys.indexOf('config')]);
       this.requestUpdate();
       await this.loadCurrentAliases();
     } catch (error) {
@@ -521,6 +554,10 @@ export class S2SRecordsTab extends LitElement {
     // ── existing ───────────────────────────────────────────────────────
     const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
+    // Remember the proposal: it stays invisible on chain until the Safe tx is
+    // executed, so gate the first-config action on it as well as on the chain
+    // read (a chain read returning '' must not re-offer the action).
+    this.proposedConfigCid = configCid;
     if (opts?.suppressQueueOpen !== true) {
       window.open(executionUrl, '_blank');
     }
@@ -536,12 +573,6 @@ export class S2SRecordsTab extends LitElement {
 
     // Optimistic local update so the new value shows immediately
     store.setRecord({ key: 'config', value: configCid, type: 'content' });
-
-    // The config record now exists (proposed; the Safe tx is what executes it).
-    // Record it so the first-config action cannot offer a second, duplicate
-    // proposal before the chain reflects the executed transaction.
-    this.configRecordCid = configCid;
-    this.configRecordKnown = true;
 
     return configCid;
   }
@@ -742,7 +773,7 @@ export class S2SRecordsTab extends LitElement {
           <h2 class="section-title">Records (${records.length})</h2>
         </div>
 
-        ${this.configRecordKnown && !this.configRecordCid
+        ${this.configRecordKnown && !this.chainConfigCid && !this.proposedConfigCid
           ? html`
               <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <button
@@ -756,6 +787,13 @@ export class S2SRecordsTab extends LitElement {
                   ${this.buildingConfig ? 'Building configuration…' : 'Initialize configuration'}
                 </button>
               </div>
+            `
+          : ''}
+        ${this.configRecordKnown && !this.chainConfigCid && this.proposedConfigCid
+          ? html`
+              <p id="config-pending" class="config-pending">
+                Configuration proposal pending in the Safe queue — execute it there.
+              </p>
             `
           : ''}
 

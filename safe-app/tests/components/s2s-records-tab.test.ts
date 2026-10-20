@@ -227,13 +227,24 @@ type RecordsTab = LitElement & {
   /** Private entry point — exercised directly to prove the re-entrancy guard
    *  is not merely the DOM `disabled` attribute. */
   buildInitialConfig: () => Promise<void>;
-  configRecordCid: string | null;
+  /** Private state/entry points the assertions need to read or drive directly:
+   *  the chain/proposal gate pair behind the first-config action, and
+   *  refreshChainConfig so a "subsequent chain read" (a tab switch in the app)
+   *  can be simulated on the same instance. */
+  chainConfigCid: string | null;
+  proposedConfigCid: string | null;
   configRecordKnown: boolean;
+  refreshChainConfig: () => Promise<void>;
 };
 
 /** The `#build-config` action in the Records section, or null when absent. */
 function buildConfigButton(el: LitElement): HTMLButtonElement | null {
   return el.shadowRoot!.getElementById('build-config') as HTMLButtonElement | null;
+}
+
+/** The non-interactive "proposal pending in the Safe queue" note, or null. */
+function pendingNote(el: LitElement): HTMLElement | null {
+  return el.shadowRoot!.getElementById('config-pending') as HTMLElement | null;
 }
 
 /** Wait for the mount-time on-chain config read to settle. */
@@ -682,7 +693,8 @@ describe('s2s-records-tab', () => {
     const el = await mountTab();
     await waitForChainConfigKnown(el);
 
-    expect(el.configRecordCid).toBe('bafyconfig-onchain');
+    expect(el.chainConfigCid).toBe('bafyconfig-onchain');
+    expect(el.proposedConfigCid).toBeNull();
     expect(buildConfigButton(el)).toBeNull();
   });
 
@@ -694,6 +706,59 @@ describe('s2s-records-tab', () => {
     await waitForChainConfigKnown(el);
 
     expect(buildConfigButton(el)).not.toBeNull();
+    expect(pendingNote(el)).toBeNull();
+  });
+
+  it('a chain read returning an EMPTY config after a proposal keeps the action hidden and shows the pending note', async () => {
+    // The queued proposal is invisible on chain (getRecord returns '') until the
+    // Safe tx executes. A chain read (e.g. the tab re-mounting on a tab switch)
+    // must not re-arm the action and offer a duplicate proposal.
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(el);
+    expect(buildConfigButton(el)).not.toBeNull();
+
+    await el.updateConfig(undefined, { suppressQueueOpen: true });
+    await el.updateComplete;
+    // The optimistic store write still shows the CID on the config row.
+    expect(store.getRecord('config')).toBe('config-cid');
+
+    setChainRecord('config', '');
+    await el.refreshChainConfig();
+    await el.updateComplete;
+
+    expect(el.proposedConfigCid).toBe('config-cid');
+    expect(el.chainConfigCid).toBeNull();
+    expect(buildConfigButton(el)).toBeNull();
+    expect(pendingNote(el)?.textContent).toContain(
+      'Configuration proposal pending in the Safe queue',
+    );
+  });
+
+  it('clears the pending note once a chain read returns the executed config CID', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    setChainRecord('config', null);
+
+    const el = await mountTab();
+    stubFailingFetch();
+    await waitForChainConfigKnown(el);
+
+    await el.updateConfig(undefined, { suppressQueueOpen: true });
+    await el.updateComplete;
+    expect(pendingNote(el)).not.toBeNull();
+
+    // The Safe tx executed — the chain now carries the record.
+    setChainRecord('config', 'bafyconfig-executed');
+    await el.refreshChainConfig();
+    await el.updateComplete;
+
+    expect(el.proposedConfigCid).toBeNull();
+    expect(el.chainConfigCid).toBe('bafyconfig-executed');
+    expect(pendingNote(el)).toBeNull();
+    expect(buildConfigButton(el)).toBeNull();
   });
 
   it('a second click while a first-config build is in flight does not queue a second setRecord(config, …)', async () => {
@@ -730,14 +795,16 @@ describe('s2s-records-tab', () => {
 
     release('https://app.safe.global/tx/0x1');
 
-    // Success feedback (pending approval) and the action gone — the config
-    // record now exists (proposed), so a duplicate proposal is not offered.
+    // Success feedback (pending approval) and the action gone — a proposal is
+    // queued but not executed, so a duplicate proposal is not offered and the
+    // pending note explains why.
     await vi.waitFor(
       () => {
         expect(notificationTexts().join(' | ')).toContain(
           'Configuration built! Transaction pending approval.',
         );
         expect(buildConfigButton(el)).toBeNull();
+        expect(pendingNote(el)).not.toBeNull();
       },
       { timeout: 5000 },
     );
