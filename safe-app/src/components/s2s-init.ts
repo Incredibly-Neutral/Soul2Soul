@@ -87,6 +87,8 @@ interface InitSafeIntegration {
   ): Promise<{ topics: string[] }[]>;
   readIsModuleEnabled(moduleAddress: string): Promise<boolean>;
   getRecord(key: string): Promise<string>;
+  /** Make getRecord / module reads work for freshly-created modules. */
+  adoptModules(recordsModule?: string, publicationModule?: string): void | Promise<void>;
 }
 
 /** How long to keep polling for the create-batch execution (human-in-the-loop). */
@@ -567,6 +569,12 @@ export class S2SPublicationInit extends LitElement {
     const session = this.session;
     if (!session) return false;
 
+    // Populate the shared integration's module wrappers from the session so
+    // getRecord works live (freshly-created modules postdate initialize()).
+    if (session.recordsModule || session.publicationModule) {
+      await si.adoptModules(session.recordsModule, session.publicationModule);
+    }
+
     switch (action.type) {
       case 'create': {
         this.step = 'creating';
@@ -599,6 +607,10 @@ export class S2SPublicationInit extends LitElement {
           },
         );
         this.persist('finalizing', { recordsModule, publicationModule });
+        // The created contracts now exist on-chain — expose them to the shared
+        // SafeIntegration so its getRecord/readIsModuleEnabled work live
+        // without waiting for a reload.
+        await si.adoptModules(recordsModule, publicationModule);
         return false;
       }
 
