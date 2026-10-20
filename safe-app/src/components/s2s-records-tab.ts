@@ -44,6 +44,22 @@ export class S2SRecordsTab extends LitElement {
    *  write target). A legacy `domain`-only config is surfaced as a
    *  single-element alias list. */
   @state() private aliases: string[] = [];
+  /** The publication's `config` record CID **as known from the chain** (or, in
+   *  the window between a proposal and its Safe execution, the CID we just
+   *  proposed). Null when the publication has no config yet.
+   *
+   *  This deliberately does NOT read the store: `updateConfig` writes the
+   *  proposed CID into the store optimistically, before the Safe transaction
+   *  executes, so a store-only gate would hide the first-config/retry action
+   *  in exactly the post-step-3-failure case it exists for (and would offer it
+   *  for a publication whose config is on-chain but not in the store). */
+  @state() private configRecordCid: string | null = null;
+  /** True once the config record has been resolved from the chain, so the
+   *  first-config action is never offered before we know whether one exists. */
+  @state() private configRecordKnown = false;
+  /** True while a first-config build is in flight — guards the entry point so
+   *  a double click cannot queue two `config` Safe proposals. */
+  @state() private buildingConfig = false;
   private unsubscribers: Array<() => void> = [];
 
   static styles = [
@@ -172,6 +188,26 @@ export class S2SRecordsTab extends LitElement {
       // write-target aliases from the on-chain config record. This only reads
       // (no setAllRecords), so it is safe to run on every mount.
       void this.loadCurrentAliases();
+      // The store may hold an optimistic (never-executed) config CID, so the
+      // first-config action is gated on a fresh chain read instead.
+      void this.refreshChainConfig();
+    }
+  }
+
+  /**
+   * Resolve the on-chain `config` record (null when there is none). Drives the
+   * first-config action's visibility. A failed read leaves the action
+   * available — it is the recovery affordance for a publication that may have
+   * no config, so it must not be permanently hidden by a transient error.
+   */
+  private async refreshChainConfig(): Promise<void> {
+    try {
+      const cid = await this.safeIntegration.getRecord('config');
+      this.configRecordCid = cid || null;
+    } catch (error) {
+      console.warn('[records] could not read the on-chain config record:', error);
+    } finally {
+      this.configRecordKnown = true;
     }
   }
 
@@ -214,6 +250,10 @@ export class S2SRecordsTab extends LitElement {
       );
       // Fresh chain read clears changed-state highlights
       this.changedKeys.clear();
+      // This IS the chain read — derive the first-config gate from it rather
+      // than from the (possibly optimistic) store.
+      this.configRecordCid = values[keys.indexOf('config')] || null;
+      this.configRecordKnown = true;
       this.requestUpdate();
       await this.loadCurrentAliases();
     } catch (error) {
@@ -499,21 +539,37 @@ export class S2SRecordsTab extends LitElement {
     // Optimistic local update so the new value shows immediately
     store.setRecord({ key: 'config', value: configCid, type: 'content' });
 
+    // The config record now exists (proposed; the Safe tx is what executes it).
+    // Record it so the first-config action cannot offer a second, duplicate
+    // proposal before the chain reflects the executed transaction.
+    this.configRecordCid = configCid;
+    this.configRecordKnown = true;
+
     return configCid;
   }
 
   /**
    * First-config entry point (`#build-config` in the Records section): builds
-   * and proposes the config for a publication that has no `config` record yet
-   * — e.g. one whose init flow step 3 failed. User-initiated, so the Safe
-   * queue popup is kept (no `suppressQueueOpen`).
+   * and proposes the config for a publication whose on-chain record is missing
+   * — e.g. one whose init flow step 3 failed, or whose proposal was never
+   * executed. User-initiated, so the Safe queue popup is kept (no
+   * `suppressQueueOpen`).
+   *
+   * Re-entrancy guarded: the build is a slow path (two DAG builds + uploads)
+   * ending in `setRecord('config', …)`, so a second click while it runs would
+   * queue a duplicate Safe proposal.
    */
   private async buildInitialConfig() {
+    if (this.buildingConfig) return;
+    this.buildingConfig = true;
     try {
       await this.updateConfig();
+      this.showNotification('Configuration built! Transaction pending approval.', 'success');
     } catch (err) {
       console.error('[records] initial config build failed:', err);
       this.showNotification('Failed to build configuration. Please try again.', 'error');
+    } finally {
+      this.buildingConfig = false;
     }
   }
 
@@ -688,17 +744,18 @@ export class S2SRecordsTab extends LitElement {
           <h2 class="section-title">Records (${records.length})</h2>
         </div>
 
-        ${!store.getRecord('config')
+        ${this.configRecordKnown && !this.configRecordCid
           ? html`
               <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <button
                   id="build-config"
                   class="button btn-primary thin"
+                  ?disabled=${this.buildingConfig}
                   title="Build this publication's configuration and propose the config record"
                   @click=${() => void this.buildInitialConfig()}
                 >
                   <ph-rocket size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-rocket>
-                  Initialize configuration
+                  ${this.buildingConfig ? 'Building configuration…' : 'Initialize configuration'}
                 </button>
               </div>
             `
