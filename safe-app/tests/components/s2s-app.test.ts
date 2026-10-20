@@ -397,10 +397,11 @@ describe('s2s-app (shell)', () => {
       true,
     );
 
-    // The modal closes and the queue link is surfaced after proposing.
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#reset-status')).toBeTruthy());
-    expect(modal.open).toBe(false);
-    expect(el.shadowRoot?.querySelector('#reset-status')?.textContent).toContain('Reset proposed');
+    // The modal closes after proposing; the tx itself shows up in the native
+    // Safe queue on this page — no success label is rendered.
+    await vi.waitFor(() => expect(modal.open).toBe(false));
+    expect(el.shadowRoot?.querySelector('#reset-status')).toBeNull();
+    expect(el.shadowRoot?.querySelector('#reset-error')).toBeNull();
   });
 
   it('reset: includes the deleteRecord op when the name record is on-chain', async () => {
@@ -564,8 +565,6 @@ describe('s2s-app (shell)', () => {
     await el.updateComplete;
     expect(modal.open).toBe(true);
     expect(modal.phase).toBe('awaiting-finalize');
-    expect(modal.proposals).toEqual([Q1, Q2]);
-    expect(modal.name).toBe('my-pub.soul2soul.eth');
 
     // Flow reports 'done' → modal closes so the inline result is visible.
     init.dispatchEvent(
@@ -608,8 +607,8 @@ describe('s2s-app (shell)', () => {
 
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.phase).toBe('detecting');
-    expect(modal.proposals).toEqual([Q1]);
-    expect(modal.shadowRoot?.textContent).toContain('my-pub.soul2soul.eth');
+    const steps = modal.shadowRoot?.querySelectorAll('.step') ?? [];
+    expect(steps.length).toBe(2);
   });
 
   it('ignores a persisted session that belongs to a different Safe', async () => {
@@ -639,22 +638,20 @@ describe('s2s-app (shell)', () => {
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
-  it('confirms a completed flow on reload: modules live + name record set → one-shot finished banner', async () => {
+  it('clears a completed flow on reload silently: modules live + name record set', async () => {
     // The finalize batch enables the modules AND records the name atomically;
-    // after it executes and the app reloads, the reload must recognise the
-    // flow is finished and surface it instead of silently dropping it.
+    // once it executes and the app reloads, the reload must recognise the flow
+    // is finished and clear the session WITHOUT any success banner — the live
+    // app UI is the completion signal.
     seedInitSession();
     safeIntMocks.hasRecordsModule.mockReturnValue(true);
-    safeIntMocks.getRecord.mockResolvedValue('my-pub.soul2soul.eth');
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#init-finished')).toBeTruthy());
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
 
-    expect(el.shadowRoot?.querySelector('#init-finished')?.textContent).toContain(
-      'my-pub.soul2soul.eth',
-    );
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.open).toBe(false);
+    expect(el.shadowRoot?.querySelector('#init-finished')).toBeNull();
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 });

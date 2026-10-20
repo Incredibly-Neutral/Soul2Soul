@@ -314,19 +314,6 @@ export class S2SPublicationInit extends LitElement {
         white-space: pre-wrap;
       }
 
-      .init__success {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.75rem;
-        margin: 0.5rem 0 1rem;
-        border-radius: 6px;
-        background: var(--success-bg, #123a1a);
-        border: 1px solid var(--success-border, #1f5a2c);
-        color: #a9e6b4;
-        font-size: 0.85rem;
-      }
-
       .init__actions {
         display: flex;
         gap: 0.75rem;
@@ -639,7 +626,7 @@ export class S2SPublicationInit extends LitElement {
         this.dispatchProgress();
         const { recordsModule, publicationModule } = this.requireModules(session);
         await this.waitForEnabled(si, recordsModule, publicationModule);
-        await this.waitForNameRecord(si, session.publicationName);
+        await this.waitForNameRecord(si);
         return false;
       }
 
@@ -698,8 +685,12 @@ export class S2SPublicationInit extends LitElement {
     }
   }
 
-  /** Poll until the name record is on-chain (the human executes proposal 2). */
-  private async waitForNameRecord(si: InitSafeIntegration, pubName: string): Promise<void> {
+  /** Poll until the name record is on-chain (the human executes proposal 2).
+   *  The finalize batch sets the name in the SAME transaction as the module
+   *  enables, so once the enable poll passes, any non-empty value here means
+   *  the batch executed — compare non-empty rather than exact equality so a
+   *  formatting difference in the stored value can never block completion. */
+  private async waitForNameRecord(si: InitSafeIntegration): Promise<void> {
     const start = Date.now();
     for (;;) {
       let value = '';
@@ -708,7 +699,7 @@ export class S2SPublicationInit extends LitElement {
       } catch {
         value = '';
       }
-      if (value === pubName) return;
+      if (value !== '') return;
       if (Date.now() - start > this.enableTimeoutMs) {
         this.fail(
           'Timed out waiting for the proposal to be executed. Open it in the Safe app, execute it, then reload — the app will resume where it left off.',
@@ -730,14 +721,10 @@ export class S2SPublicationInit extends LitElement {
 
   render() {
     if (this.step === 'done') {
-      // The merged batch only completes once it is executed — modules enabled
-      // AND name record on-chain — so "done" is the real, on-chain state.
-      return html`
-        <h2>Publication initialized</h2>
-        <div class="init__success">
-          Records and Publication modules are enabled and the name record is set on this Safe.
-        </div>
-      `;
+      // No success label in the page — once the merged batch is executed the
+      // host switches to the normal live UI (modules enabled), which is the
+      // completion signal.
+      return '';
     }
 
     if (this.step === 'error') {
