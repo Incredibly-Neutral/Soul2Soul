@@ -103,18 +103,22 @@ export class S2SApp extends LitElement {
   private resetPollActive = false;
   private resetPollCancelled = false;
 
-  // Host-owned config step (step 3): guards re-entry and cancels the config
-  // wait loop when the element is torn down mid-poll.
+  // Host-owned config step (step 3): one active step + one wait poll, both
+  // stopped by disconnectedCallback.
   private configStepActive = false;
   private configPollCancelled = false;
   // Guards the config-record wait loop (retry can re-enter it while the
   // previous poll is still in flight).
   private configWaitActive = false;
+  // True when the current step-3 failure is a build/propose error, i.e. nothing
+  // was queued — the user may dismiss the modal and fix the config themselves.
+  // A wait timeout is NOT dismissible: a transaction may be in the Safe queue.
+  private configDismissible = false;
 
   // Init progress: the publication-creation flow (live or recovered from local
   // storage after a reload) drives this progress modal. Both the live init
   // component (s2s-init-progress events) and the reload-recovery path open it;
-  // it closes on error/done. There is no success banner: once the modules are
+  // it closes on error/idle. There is no success banner: once the modules are
   // live the app simply switches to its normal UI.
   @state() private initPhase: InitPhase | null = null;
   @state() private initModalOpen = false;
@@ -452,13 +456,6 @@ export class S2SApp extends LitElement {
       return;
     }
 
-    if (session.phase === 'done') {
-      clearInitSession(window.localStorage, INIT_SESSION_KEY);
-      this.initPhase = null;
-      this.initModalOpen = false;
-      return;
-    }
-
     const modulesInstalled = this.safeIntegration.hasRecordsModule();
 
     if (isConfigPhase(session.phase)) {
@@ -473,16 +470,17 @@ export class S2SApp extends LitElement {
       }
       // A config-phase session with no installed modules is stale on LOAD (config
       // implies the modules were once live — i.e. a reset wiped them). Drop it so
-      // the recovery modal doesn't wedge on a step nothing can drive. Unless this
-      // page is already driving step 3: then the session is LIVE (it's the step's
-      // only record, identity included) and the missing module is what the step
-      // reports, not a reason to forget the flow.
-      if (this.initPhase !== null && isConfigPhase(this.initPhase)) {
+      // the recovery modal doesn't wedge on a step nothing can drive — but never
+      // drop a session this page is already driving: it is the step's only record
+      // (identity included), and the missing module is what the step reports.
+      // Only the "modules vanished mid-step" case reaches this: every live step
+      // has initPhase set to a config phase already, so the session is kept.
+      if (
+        (this.initPhase !== null && isConfigPhase(this.initPhase)) ||
+        this.configStepActive ||
+        this.configWaitActive
+      ) {
         console.log('[app] syncInitProgress: config step driven here -> keep the session');
-        return;
-      }
-      if (this.configStepActive || this.configWaitActive) {
-        console.log('[app] syncInitProgress: config step in flight -> keep the session');
         return;
       }
       console.log('[app] syncInitProgress: config session, modules dead -> drop');
@@ -684,6 +682,7 @@ export class S2SApp extends LitElement {
       return;
     }
     this.configStepActive = true;
+    this.configDismissible = false;
     try {
       this.initPhase = 'configuring';
       this.initModalOpen = true;
@@ -764,6 +763,8 @@ export class S2SApp extends LitElement {
             'The configuration proposal is still pending in the Safe queue. Execute it, then retry.';
           this.initMessage = '';
           this.initModalOpen = true;
+          // NOT dismissible: a Safe transaction may be queued for this record.
+          this.configDismissible = false;
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -781,16 +782,21 @@ export class S2SApp extends LitElement {
     this.initModalOpen = false;
     this.initMessage = '';
     this.initError = '';
+    this.configDismissible = false;
     // Awaited: the Config tab must render the freshly-recorded config (record
     // value + CID) as soon as the modal closes, not a beat later.
     await this.fetchFreshData();
   }
 
   /**
-   * Stop the config step WITHOUT completing it, keeping everything needed to
-   * retry: the session stays at 'configuring', the modal stays open and shows
-   * the reason. Never clears the session and never closes the modal — the
-   * publication is not usable until the config record lands.
+   * Build/propose failure of step 3. Keeps everything needed to retry — the
+   * session stays at 'configuring', the modal stays open with the reason — and
+   * additionally offers a DISMISS path: this class of failure is deterministic
+   * (bad repo URL, no assets/, wrong branch), so Retry alone can trap the user
+   * behind a full-screen overlay that covers the Config tab where the repo and
+   * branch are fixed. Nothing was queued at this point, so walking away is safe
+   * — the publication is half-initialized (modules enabled, no config record),
+   * which is exactly what the records tab's "Initialize configuration" is for.
    */
   private failConfigStep(message: string): void {
     console.error(`[app] config step failed: ${message}`);
@@ -798,8 +804,28 @@ export class S2SApp extends LitElement {
     this.initModalOpen = true;
     this.initError = message;
     this.initMessage = '';
+    this.configDismissible = true;
     this.persistInitPhase('configuring');
   }
+
+  /**
+   * Dismiss a failed step 3 and hand the user back the app. Only offered for
+   * build/propose failures (nothing queued, `configDismissible`): after the
+   * proposal was sent a pending Safe transaction must stay in sight, so the
+   * timeout state has no dismiss.
+   */
+  private readonly onInitDismiss = (): void => {
+    console.log(`[app] onInitDismiss phase=${this.initPhase ?? 'none'}`);
+    clearInitSession(window.localStorage, INIT_SESSION_KEY);
+    this.initPhase = null;
+    this.initModalOpen = false;
+    this.initMessage = '';
+    this.initError = '';
+    this.configDismissible = false;
+    // Land on the Config tab: fix repo/branch in the Records table, then run
+    // "Initialize configuration" from there.
+    this.currentTab = 'records';
+  };
 
   /**
    * Retry from the modal's Retry action. A step that already proposed its
@@ -828,22 +854,22 @@ export class S2SApp extends LitElement {
     console.log(
       `[app] onInitProgress step=${detail.step} phase=${detail.phase} name=${detail.name ?? 'undefined'}`,
     );
-    // 'error' and 'done' both close the modal so the element's own inline
-    // result is visible underneath — but they are NOT the same for the gate:
-    //   - 'done' finished the click-path work; the init element is retired.
+    // The element emits 'idle' (reset/cancel) and 'error'; it never emits a
+    // 'done' progress step — completion arrives as s2s-init-complete.
+    //   - 'idle': nothing is running, so there is nothing to show and no
+    //     overlay to keep (an overlay with no progress and no action is a dead
+    //     end over a reachable form).
     //   - 'error' is a failure INSIDE the element (e.g. waitForEnabled timed
     //     out): the element owns the only error surface (message + Try again /
     //     Start over), so its phase must be kept or the gate would unmount it
     //     and leave the user with nothing at all — in exactly the create→enable
-    //     window where the module addresses are already adopted.
-    //   - 'idle' is the element's reset/cancel signal: nothing is running, so
-    //     there is nothing to show and no overlay to keep (an overlay with no
-    //     progress and no action is a dead end over a reachable form).
+    //     window where the module addresses are already adopted. The overlay is
+    //     closed so it cannot cover that inline error.
     // Any other step opens the modal: it is the progress surface for both the
     // live flow and the reload-recovery.
     this.initMessage = '';
     this.initError = '';
-    if (detail.step === 'done' || detail.step === 'idle') {
+    if (detail.step === 'idle') {
       this.initPhase = null;
       this.initModalOpen = false;
       return;
@@ -1087,7 +1113,9 @@ export class S2SApp extends LitElement {
         .phase=${this.initPhase ?? 'creating'}
         .message=${this.initMessage}
         .error=${this.initError}
+        .canDismiss=${this.initPhase === 'configuring' && this.configDismissible}
         @s2s-init-retry=${this.onInitRetry}
+        @s2s-init-dismiss=${this.onInitDismiss}
       ></s2s-init-progress-modal>
     `;
   }

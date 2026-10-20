@@ -29,6 +29,13 @@ export class S2SInitProgressModal extends LitElement {
   @property() message = '';
   /** Failure text; when set, the modal offers Retry. */
   @property() error = '';
+  /**
+   * Offer the escape hatch for a failed step 3. The host sets it only for a
+   * build/propose failure (nothing queued): Retry re-runs the same failing
+   * build, so without this the user would be stuck behind a full-screen scrim
+   * that covers the Config tab where the repo/branch are fixed.
+   */
+  @property({ type: Boolean }) canDismiss = false;
 
   static styles = [
     buttonStyles,
@@ -139,6 +146,7 @@ export class S2SInitProgressModal extends LitElement {
 
       .init__actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 0.5rem;
       }
     `,
@@ -147,6 +155,11 @@ export class S2SInitProgressModal extends LitElement {
   /** Retry: the host re-runs (or re-waits on) the failed config step. */
   private readonly retry = (): void => {
     this.dispatchEvent(new CustomEvent('s2s-init-retry', { bubbles: true, composed: true }));
+  };
+
+  /** Dismiss a failed (nothing-queued) step 3 and hand the app back to the user. */
+  private readonly dismiss = (): void => {
+    this.dispatchEvent(new CustomEvent('s2s-init-dismiss', { bubbles: true, composed: true }));
   };
 
   private renderStep(index: 1 | 2 | 3, title: string): unknown {
@@ -191,6 +204,11 @@ export class S2SInitProgressModal extends LitElement {
                 <div class="init__error" id="init-progress-error" role="alert">${this.error}</div>
                 <div class="init__actions">
                   <button class="button" id="init-retry" @click=${this.retry}>Retry</button>
+                  ${this.canDismiss
+                    ? html`<button class="button" id="init-dismiss" @click=${this.dismiss}>
+                        Close and fix the configuration
+                      </button>`
+                    : ''}
                 </div>
               `
             : ''}
