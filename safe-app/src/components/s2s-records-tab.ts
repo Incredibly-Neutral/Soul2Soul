@@ -366,8 +366,17 @@ export class S2SRecordsTab extends LitElement {
    * immediate build right after a new publication is initialized — reads the
    * repo/branch/name from the store first (optimistic values written by the
    * init flow) and falls back to the on-chain records.
+   *
+   * Returns the proposed config CID. Pass `opts.suppressQueueOpen` to skip the
+   * Safe-queue `window.open`: inside the Safe app iframe that popup is blocked
+   * and pointless anyway — the SDK's own prompt is the signature moment, and
+   * the host (init flow step 3) waits for the `config` record on-chain instead
+   * of for a tab.
    */
-  async updateConfig(aliasesOverride?: string[]) {
+  async updateConfig(
+    aliasesOverride?: string[],
+    opts?: { suppressQueueOpen?: boolean },
+  ): Promise<string> {
     const existingCid =
       store.getRecord('config') ?? (await this.safeIntegration.getRecord('config'));
     const repo = store.getRecord('repo') ?? (await this.safeIntegration.getRecord('repo'));
@@ -474,7 +483,9 @@ export class S2SRecordsTab extends LitElement {
     // ── existing ───────────────────────────────────────────────────────
     const oldConfigCid = store.getRecord('config');
     const executionUrl = await this.safeIntegration.setRecord('config', configCid);
-    window.open(executionUrl, '_blank');
+    if (opts?.suppressQueueOpen !== true) {
+      window.open(executionUrl, '_blank');
+    }
 
     // Mark changed keys for yellow highlight (before store update so the first
     // subscriber-triggered render already has the class)
@@ -487,6 +498,23 @@ export class S2SRecordsTab extends LitElement {
 
     // Optimistic local update so the new value shows immediately
     store.setRecord({ key: 'config', value: configCid, type: 'content' });
+
+    return configCid;
+  }
+
+  /**
+   * First-config entry point (`#build-config` in the Records section): builds
+   * and proposes the config for a publication that has no `config` record yet
+   * — e.g. one whose init flow step 3 failed. User-initiated, so the Safe
+   * queue popup is kept (no `suppressQueueOpen`).
+   */
+  private async buildInitialConfig() {
+    try {
+      await this.updateConfig();
+    } catch (err) {
+      console.error('[records] initial config build failed:', err);
+      this.showNotification('Failed to build configuration. Please try again.', 'error');
+    }
   }
 
   /**
@@ -659,6 +687,22 @@ export class S2SRecordsTab extends LitElement {
         <div class="list_header" style="margin-top: 2rem;">
           <h2 class="section-title">Records (${records.length})</h2>
         </div>
+
+        ${!store.getRecord('config')
+          ? html`
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <button
+                  id="build-config"
+                  class="button btn-primary thin"
+                  title="Build this publication's configuration and propose the config record"
+                  @click=${() => void this.buildInitialConfig()}
+                >
+                  <ph-rocket size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-rocket>
+                  Initialize configuration
+                </button>
+              </div>
+            `
+          : ''}
 
         ${records.length > 0
           ? html`
