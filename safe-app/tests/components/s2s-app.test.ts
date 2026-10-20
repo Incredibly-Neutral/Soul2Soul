@@ -259,6 +259,37 @@ function seedInitSession(overrides: Partial<InitSession> = {}): void {
   });
 }
 
+/**
+ * Drive <s2s-app> into step 3 with `updateConfig()` rejecting with `err` (the
+ * modules are deployed but not installed at mount, then go live around the
+ * completion), and return the modal plus the rendered error text.
+ */
+async function mountAndFailConfigStep(err: unknown): Promise<{
+  modal: S2SInitProgressModal;
+  errorText: string;
+}> {
+  safeIntMocks.hasPublicationModule.mockReturnValue(false);
+  safeIntMocks.hasRecordsModule.mockReturnValue(false);
+  safeIntMocks.getRecord.mockResolvedValue('');
+  recordsTabMocks.updateConfig.mockRejectedValueOnce(err);
+
+  const el = await mountLit<S2SApp>('s2s-app', {});
+  await vi.waitFor(() => expect(el.shadowRoot?.querySelector('s2s-publication-init')).toBeTruthy());
+  const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+  // The create batch executed and was adopted → the Config tab renders and the
+  // step reaches updateConfig — which throws.
+  safeIntMocks.hasPublicationModule.mockReturnValue(true);
+  safeIntMocks.hasRecordsModule.mockReturnValue(true);
+  init.dispatchEvent(initComplete());
+
+  const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+  await vi.waitFor(() =>
+    expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
+  );
+  const errorText = modal.shadowRoot?.querySelector('#init-progress-error')?.textContent ?? '';
+  return { modal, errorText };
+}
+
 describe('s2s-app (shell)', () => {
   beforeEach(() => {
     storeMock.store.__reset();
@@ -989,7 +1020,11 @@ describe('s2s-app (shell)', () => {
       expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),
     );
     const errorText = modal.shadowRoot?.querySelector('#init-progress-error')?.textContent ?? '';
-    expect(errorText).toContain('Building the configuration failed');
+    // Untagged rejection (an older tab, or a throwable from somewhere else): the
+    // message must not claim a stage it does not know.
+    expect(errorText).toContain('Building or proposing the configuration record failed');
+    expect(errorText).not.toContain('Building the configuration failed');
+    expect(errorText).not.toContain('Proposing the configuration record failed');
     // The underlying reason is surfaced, not swallowed into a bare spinner.
     expect(errorText).toContain('no assets/ directory in the base repo');
     // Modal stays open (the step is not done) and the session is retryable.
@@ -1009,6 +1044,68 @@ describe('s2s-app (shell)', () => {
       suppressQueueOpen: true,
     });
     await vi.waitFor(() => expect(modal.phase).toBe('awaiting-config'));
+  });
+
+  it('names the build stage when the rejection is tagged build (and says what to check)', async () => {
+    // updateConfig() tags its rethrow with the stage it failed at. Untagged is
+    // handled above; here the source knows it was the build.
+    const err = Object.assign(new Error('no assets/ directory in the base repo'), {
+      stage: 'build',
+      cause: new Error('404'),
+    });
+    const { modal, errorText } = await mountAndFailConfigStep(err);
+
+    expect(errorText).toContain('Building the configuration failed');
+    expect(errorText).toContain('no assets/ directory in the base repo');
+    // The hint names the whole stage (the reason is the authority), not just the
+    // repo — build also covers chain reads and IPFS uploads.
+    expect(errorText).toContain('repo/branch/assets');
+    expect(errorText).toContain('chain reads');
+    expect(errorText).toContain('IPFS uploads');
+    expect(errorText).toContain('fix what the reason says');
+    // Not the proposal wording: nothing was sent.
+    expect(errorText).not.toContain('Proposing the configuration record failed');
+    expect(errorText).not.toContain('queued transaction');
+    // Still a retryable, dismissible failure at 'configuring'.
+    expect(modal.open).toBe(true);
+    expect(modal.phase).toBe('configuring');
+    expect(modal.canDismiss).toBe(true);
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the proposal stage when the rejection is tagged propose (and does not over-claim)', async () => {
+    const err = Object.assign(new Error('Request failed'), {
+      stage: 'propose',
+      cause: new Error('invalid address'),
+    });
+    const { modal, errorText } = await mountAndFailConfigStep(err);
+
+    expect(errorText).toContain('Proposing the configuration record failed');
+    expect(errorText).toContain('Request failed');
+    // The Safe app may have accepted the proposal before the promise rejected,
+    // so the message must not promise that nothing is queued.
+    expect(errorText).toContain('If the Safe app shows no queued transaction, Retry re-sends it.');
+    expect(errorText).not.toContain('Nothing is queued');
+    expect(errorText).not.toContain('Building the configuration failed');
+    // Retry must not duplicate a proposal that never happened.
+    expect(modal.open).toBe(true);
+    expect(modal.phase).toBe('configuring');
+    expect(modal.canDismiss).toBe(true);
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+    expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays neutral for a rejection tagged with an unknown stage', async () => {
+    const err = Object.assign(new Error('unexpected'), { stage: 'detect' });
+    const { modal, errorText } = await mountAndFailConfigStep(err);
+
+    expect(errorText).toContain('Building or proposing the configuration record failed');
+    expect(errorText).toContain('unexpected');
+    expect(errorText).not.toContain('Building the configuration failed');
+    expect(errorText).not.toContain('Proposing the configuration record failed');
+    expect(modal.open).toBe(true);
+    expect(modal.canDismiss).toBe(true);
   });
 
   it('lets the user dismiss a deterministic build failure and lands on the Config tab', async () => {
@@ -1080,6 +1177,100 @@ describe('s2s-app (shell)', () => {
     expect(modal.phase).toBe('configuring');
     expect(modal.open).toBe(true);
     expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+  });
+
+  it('never builds the config on top of an in-flight refresh: the completion joins it', async () => {
+    // Live bug: the init element's complete() fired from INSIDE the first
+    // fetchFreshData (its maybeResume runs off the setProtocolInfo store
+    // update), so onInitComplete started step 3 while that refresh was still
+    // reading. Its own fetchFreshData() then ran initialize() a SECOND time,
+    // which transiently blanks safeInfo.s2sRecords — the config
+    // setRecord('config', …) in flight got `to: ''` and the Safe SDK rejected
+    // it ("invalid address"). Single-flight: the completion must join the
+    // running refresh and only build once it has settled.
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+
+    // A refresh we control: the mount's pass gets past initialize() (so the
+    // form renders) and parks inside the records read.
+    let releaseRefresh!: (recs: [string[], string[]]) => void;
+    const hanging = new Promise<[string[], string[]]>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    safeIntMocks.getAllRecords.mockReturnValueOnce(hanging);
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    // The mount's refresh is parked inside getAllRecords().
+    await vi.waitFor(() => expect(safeIntMocks.getAllRecords).toHaveBeenCalledTimes(1));
+    await el.updateComplete;
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    expect(init).toBeTruthy();
+
+    // Complete the flow while that refresh is still running.
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    // Give the completion every chance to run: it must not start a second
+    // pass and must not build while the first refresh is parked.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(safeIntMocks.initialize).toHaveBeenCalledTimes(1);
+    expect(safeIntMocks.getAllRecords).toHaveBeenCalledTimes(1);
+    expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+    // The session is already persisted (step 3 is claimed), so a reload here
+    // still resumes — the step just has not built anything yet.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('configuring');
+
+    // Release the refresh: the completion's own fetch joins it, and only then
+    // does the config step build.
+    releaseRefresh([[], []]);
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1));
+    expect(recordsTabMocks.updateConfig).toHaveBeenLastCalledWith(undefined, {
+      suppressQueueOpen: true,
+    });
+    // Exactly one refresh pass for the whole overlap — no second initialize()
+    // and no second read pass.
+    expect(safeIntMocks.initialize).toHaveBeenCalledTimes(1);
+    expect(safeIntMocks.getAllRecords).toHaveBeenCalledTimes(1);
+  });
+
+  it('says what it is waiting for and proceeds after the bounded join (stalled refresh)', async () => {
+    // The join is a courtesy now that initialize() is atomic, and the refresh
+    // ends with the Filecoin init/list calls which can STALL rather than fail.
+    // Step 3 must never sit behind that with no message (no message ⇒ no Retry,
+    // no dismiss, reload re-enters the same wait).
+    safeIntMocks.hasPublicationModule.mockReturnValue(false);
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    safeIntMocks.getRecord.mockResolvedValue('');
+    // A refresh that never settles — it is parked inside getAllRecords forever.
+    safeIntMocks.getAllRecords.mockReturnValueOnce(new Promise<[string[], string[]]>(() => {}));
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(safeIntMocks.getAllRecords).toHaveBeenCalledTimes(1));
+    await el.updateComplete;
+    // Shorten the bound so the test does not wait 20 s.
+    (el as unknown as { configRefreshJoinMs: number }).configRefreshJoinMs = 50;
+
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    init.dispatchEvent(initComplete());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    // Visible signal while it waits (the modal is already open on step 3).
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+    expect(modal.shadowRoot?.querySelector('#init-progress-message')?.textContent).toContain(
+      'Waiting for the app to finish loading',
+    );
+    expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();
+
+    // …and it proceeds anyway instead of hanging forever.
+    await vi.waitFor(() => expect(recordsTabMocks.updateConfig).toHaveBeenCalledTimes(1), {
+      timeout: 5000,
+    });
+    expect(safeIntMocks.initialize).toHaveBeenCalledTimes(1);
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
   });
 
   it('treats an empty config CID as "nothing was proposed": fails at configuring and Retry rebuilds', async () => {
