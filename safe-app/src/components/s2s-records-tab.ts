@@ -44,6 +44,16 @@ function withStage(err: unknown, stage: ConfigStepStage): Error {
   return tagged;
 }
 
+/**
+ * How long the propose stage waits for the Safe app to answer.
+ *
+ * `@safe-global/safe-apps-sdk`'s `txs.send` posts to the parent and awaits a
+ * response keyed by message id with no timeout of its own, so a Safe dialog
+ * that dies (app.safe.global's "Error loading preview" leaves it unusable)
+ * would hang the caller forever: no error, no Retry, reload-or-nothing.
+ */
+const PROPOSE_TIMEOUT_MS = 5 * 60_000;
+
 /** The stage of an `updateConfig()` failure, or null if it was not tagged. */
 export function configFailureStage(err: unknown): ConfigStepStage | null {
   const stage = (err as { stage?: unknown } | null)?.stage;
@@ -496,11 +506,26 @@ export class S2SRecordsTab extends LitElement {
     // ── stage 2: propose ───────────────────────────────────────────────
     // The only Safe interaction in this flow. Tagged 'propose': reaching here
     // means the build (both DAGs + uploads) already succeeded.
+    //
+    // Bounded: the SDK await has no timeout, and a proposal that never answers
+    // must surface as a retryable failure instead of a dead modal.
     let executionUrl: string;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      executionUrl = await this.safeIntegration.setRecord('config', configCid);
+      const send = this.safeIntegration.setRecord('config', configCid);
+      const tooSlow = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          // The send is still out there and may reject after we have given up;
+          // a no-op handler keeps that late rejection from going unhandled.
+          send.catch(() => {});
+          reject(new Error('The Safe app never confirmed the proposal (waited 5 minutes)'));
+        }, PROPOSE_TIMEOUT_MS);
+      });
+      executionUrl = await Promise.race([send, tooSlow]);
     } catch (err) {
       throw withStage(err, 'propose');
+    } finally {
+      clearTimeout(timer);
     }
     if (opts?.suppressQueueOpen !== true) {
       window.open(executionUrl, '_blank');
