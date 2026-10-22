@@ -15,6 +15,33 @@ import { Document } from 'yaml';
  * Keys already present keep their position; new keys are appended. The body is
  * preserved verbatim.
  */
+/**
+ * Frontmatter key holding the CID of the last upload — the value `propose`
+ * offers on-chain. Written back by `upload`; overridable with `--cid`.
+ *
+ * Ephemeral by nature: it names one upload of one revision of the note, so it
+ * is rewritten on every upload and goes stale as soon as the body is edited.
+ * That staleness is only *detectable* by the binary (it owns the file), which
+ * is why the value lives here rather than in an editor's session state.
+ */
+export const KUBO_CID_KEY = 'kubo_cid';
+
+/**
+ * Resolve the content CID for `propose`: an explicit `--cid` wins, else the
+ * `kubo_cid` written back by the last `upload`. Returns `undefined` when
+ * neither is available (the caller turns that into a usage error).
+ */
+export function resolveKuboCid(
+  explicit: string | undefined,
+  frontmatter: Record<string, unknown>,
+): string | undefined {
+  if (explicit) return explicit;
+  const stored = frontmatter[KUBO_CID_KEY];
+  if (typeof stored !== 'string') return undefined;
+  const trimmed = stored.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 export function upsertFrontmatter(raw: string, updates: Record<string, string>): string {
   const { frontmatter, body } = extractFrontmatter(raw);
   const doc = new Document(frontmatter);

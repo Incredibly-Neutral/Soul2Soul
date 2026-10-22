@@ -34,7 +34,7 @@ publication), `publication` (publication lifecycle), and `config` (CLI settings)
 
 ```
 s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
-s2s author propose   <note> --cid <kuboCid> [--publication <ens>] [--json]  # on-chain offer only
+s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + preview render (off-chain)
 s2s author publish   <note> [--publication <ens>] [--json]        # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]        # on-chain retract + remove re-render
@@ -50,7 +50,9 @@ The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pin
 legs, and writes `genesis`/`author` back — but **never touches the chain**. The on-chain
 `makeOffer` is the separate **`propose`** step, which takes the `kuboCid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
-`content_id`, mirroring neutralpress' revoke genesis resolution). `publish` remains the
+`content_id`, mirroring neutralpress' revoke genesis resolution). `upload` also writes the
+CID it just produced into the frontmatter as `kubo_cid`, so `propose` works with no flags
+after an upload; `--cid` overrides. `publish` remains the
 one-shot convenience that does upload + propose + prod render + pins together.
 
 Global flags parse anywhere in the argv:
@@ -61,7 +63,7 @@ Global flags parse anywhere in the argv:
 | `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). |
 | `--version` | Print `s2s v<version>` and exit 0. |
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. |
-| `--cid <kuboCid>` | (propose) The content CID reported by `s2s author upload` — required. |
+| `--cid <kuboCid>` | (propose) Explicit content CID. Defaults to the `kubo_cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
 | `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
 | `--author <addr>,...` | (new) Initial author set; defaults to the EOA address. |
@@ -176,7 +178,7 @@ s2s <group> <action> [positionals…] [flags…]
 { action: 'upload'; note: string; publication: string; subdomain: string;
   objectId: string; kuboCid: string; frontmatterWritten: boolean }          // no txHash
 
-// s2s author propose <note> --cid <kuboCid> [--publication <ens>] [--json] — on-chain offer only
+// s2s author propose <note> [--cid <kuboCid>] [--publication <ens>] [--json] — on-chain offer only
 { action: 'propose'; note: string; publication: string; subdomain: string;
   objectId: string; kuboCid: string; txHash: string }
 
@@ -207,7 +209,7 @@ Shared field meanings:
 | `kuboCid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
 | `txHash` | L2 transaction hash of the on-chain action. |
 | `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
-| `frontmatterWritten` | True when upload wrote `genesis`/`author` back to the note. |
+| `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author` on first publish, `kubo_cid` and `modified_date` always). |
 
 ### `publication` group — result types
 
@@ -322,9 +324,12 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   when present, else the signed item's objectId. `genesis` is written back to the note's frontmatter
   (`upsertFrontmatter`) when it was missing.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
-  `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends the
-  `makeOffer(objectId, kuboCid)` for the `--cid` it was given; it expects `upload` to have run first
-  (genesis must exist, or it errors with a pointer to `s2s author upload`).
+  It writes `kubo_cid` into the frontmatter (the CID of that upload — ephemeral: the next
+  upload overwrites it, and it describes the note as of that upload, not current edits).
+  `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
+  the `makeOffer(objectId, kuboCid)` for `--cid` if given, else the stored `kubo_cid`; it
+  expects `upload` to have run first (no genesis, or no CID and no `--cid`, → usage error
+  pointing at `s2s author upload`).
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
   signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.

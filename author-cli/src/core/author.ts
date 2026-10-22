@@ -25,7 +25,7 @@ import {
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
-import { upsertFrontmatter } from '../lib/frontmatter';
+import { KUBO_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
 import { UsageError } from '../lib/errors';
 import { requireSetting } from './config';
 import type { CliContext } from './context';
@@ -141,9 +141,11 @@ export async function authorWrite(
     ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
   }
 
-  // Frontmatter write-back: genesis+author on first publish; modified_date always.
+  // Frontmatter write-back: genesis+author on first publish; modified_date and
+  // the last upload's CID always (the CID is what `propose` offers on-chain).
   const updates: Record<string, string> = {
     modified_date: new Date().toISOString().slice(0, 19),
+    [KUBO_CID_KEY]: kuboCid,
   };
   if (!parsed.genesis) {
     updates.genesis = objectId;
@@ -186,15 +188,16 @@ export interface ProposeResult {
 
 /**
  * On-chain offer only — the `propose` step split out of `upload`. The content
- * must already be on IPFS (run `upload` first: it writes `genesis` back to the
- * note and reports `kuboCid`). No re-upload, no render, no durability, no
- * frontmatter write.
+ * must already be on IPFS (run `upload` first: it writes `genesis` and
+ * `kubo_cid` back to the note). `kuboCid` is the explicit `--cid` when given,
+ * else the CID `upload` stored in the note's frontmatter. No re-upload, no
+ * render, no durability, no frontmatter write.
  */
 export async function proposeContent(
   ctx: CliContext,
   notePath: string,
   publication: string,
-  kuboCid: string,
+  kuboCidFlag: string | undefined,
 ): Promise<ProposeResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, notePath);
@@ -203,6 +206,13 @@ export async function proposeContent(
   if (!objectId) {
     throw new UsageError(
       `cannot propose ${notePath}: no on-chain identity (frontmatter \`genesis\` or \`content_id\`). Run \`s2s author upload\` first.`,
+    );
+  }
+
+  const kuboCid = resolveKuboCid(kuboCidFlag, parsed.frontmatter);
+  if (!kuboCid) {
+    throw new UsageError(
+      `cannot propose ${notePath}: no content CID (no \`--cid\` given and no \`${KUBO_CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
     );
   }
 
