@@ -126,16 +126,121 @@ secrets in the user config or gitignore `.s2sconfig.json`).
 { "ok": false, "error": "unknown author action 'bogus'" }
 ```
 
-Success results are flat, typed objects per action (see `src/commands/*.ts`):
-
-- `upload`: `{ action, note, publication, subdomain, objectId, kuboCid, frontmatterWritten }` — **no** `txHash` (off-chain).
-- `propose`: `{ action, note, publication, subdomain, objectId, kuboCid, txHash }` — the on-chain offer for an already-uploaded CID.
-- `preview`: `{ action, note, publication, subdomain, objectId, kuboCid, render: { cid, path, previewUrl } }` — no `txHash`.
-- `publish`: `{ action, note, publication, subdomain, objectId, kuboCid, txHash, render: { cid, path, previewUrl, prodUrl } }`
-- `revoke`: `{ action, note, publication, subdomain, objectId, txHash, render? }`
-- `new`: `{ action, name, safeAddress, configCid, owners, authors, devRepository, branch, feed }`
+Success results are flat, typed objects per action — enumerated exactly in
+[Binary API reference](#binary-api-reference-machine-contract) below.
 
 Help/version in `--json` mode are also JSON (`{ "help": "…" }` / `{ "name": "s2s", "version": "…" }`).
+
+## Binary API reference (machine contract)
+
+The stable, machine-facing interface of the binary. Hosts (the Neovim plugin, scripts)
+build against **this section only**. All shapes below are the single JSON document on
+stdout when `--json` is passed; field types are TS-style. This is the load-bearing
+contract — change it only by deliberate API change, and update this section in the same
+commit.
+
+### Invocation & framing
+
+```
+s2s <group> <action> [positionals…] [flags…]
+```
+
+- Flags parse **anywhere** in the argv; `--flag value` and `--flag=value` both work;
+  `-h` is a single-letter boolean; `--` stops flag parsing (the rest are positionals).
+- `--json` is **always boolean** — it never consumes the next token.
+- **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
+  carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
+- Failure in `--json` mode puts a single envelope on stdout and nothing else:
+
+  ```json
+  { "ok": false, "error": "unknown author action 'bogus'" }
+  ```
+
+- **Exit codes:** `0` success · `1` runtime failure (missing env, RPC/render failure) ·
+  `2` usage error (unknown group/action, missing argument, bad flag value).
+
+### Global documents
+
+| Invocation | stdout (`--json`) | exit |
+|---|---|---|
+| `s2s --version` | `{ "name": "s2s", "version": "0.1.0" }` | 0 |
+| `s2s` / `s2s --help` | `{ "help": "<top help>" }` | 0 |
+| `s2s <group> --help` | `{ "help": "<group help>" }` | 0 |
+| `s2s <group> <action> --help` | `{ "help": "<usage + summary>" }` | 0 |
+| any failure (`--json`) | `{ "ok": false, "error": "<msg>" }` | 1 or 2 |
+
+### `author` group — result types
+
+```ts
+// s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
+{ action: 'upload'; note: string; publication: string; subdomain: string;
+  objectId: string; kuboCid: string; frontmatterWritten: boolean }          // no txHash
+
+// s2s author propose <note> --cid <kuboCid> [--publication <ens>] [--json] — on-chain offer only
+{ action: 'propose'; note: string; publication: string; subdomain: string;
+  objectId: string; kuboCid: string; txHash: string }
+
+// s2s author preview <note> [--publication <ens>] [--json]    — ipfs + preview render (off-chain)
+{ action: 'preview'; note: string; publication: string; subdomain: string;
+  objectId: string; kuboCid: string;
+  render?: { cid: string; path: string; previewUrl: string } }
+
+// s2s author publish <note> [--publication <ens>] [--json]    — all-in-one: upload + offer + render + pins
+{ action: 'publish'; note: string; publication: string; subdomain: string;
+  objectId: string; kuboCid: string; txHash: string;
+  render?: { cid: string; path: string; previewUrl: string; prodUrl: string } }
+
+// s2s author revoke <note> [--publication <ens>] [--json]     — on-chain retract + remove re-render
+{ action: 'revoke'; note: string; publication: string; subdomain: string;
+  objectId: string; txHash: string;
+  render?: { cid: string; path: string; previewUrl: string } }
+```
+
+Shared field meanings:
+
+| Field | Meaning |
+|---|---|
+| `note` | Path to the note (frontmatter + body). |
+| `publication` | Resolved publication ENS (flag, else first `--s2s` frontmatter tag). |
+| `subdomain` | Publication subdomain (bytes32 → string via shared `subdomainOf`). |
+| `objectId` | Stable on-chain content identity (frontmatter `genesis`, else signed item id). |
+| `kuboCid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
+| `txHash` | L2 transaction hash of the on-chain action. |
+| `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
+| `frontmatterWritten` | True when upload wrote `genesis`/`author` back to the note. |
+
+### `publication` group — result types
+
+```ts
+// s2s publication new <name> --repo <owner/repo> [--branch <b>] [--author <a>,…] [--owner <o>,…] [--json]
+{ action: 'new'; name: string; safeAddress: string;
+  configCid: string | null; owners: string[]; authors: string[];
+  devRepository: string; branch: string; feed: string }
+```
+
+`feed` is the zero address when Lens feed wiring is not present (current stub).
+
+### `config` group — result types (no private key / RPC required)
+
+```ts
+// s2s config set <key> <value> [--local] [--json]
+{ action: 'config.set'; key: string; file: string; local: boolean }
+
+// s2s config get <key> [--json]        — value is the *effective* value (env may win); null when unset
+{ key: string; value: string | null }   // secrets masked
+
+// s2s config unset <key> [--local] [--json]
+{ action: 'config.unset'; key: string; file: string; local: boolean }
+
+// s2s config list [--json]             — all effective values; secrets masked
+{ config: Record<string, string> }
+
+// s2s config path [--local] [--json]
+{ path: string }
+```
+
+Config keys are the flat camelCase forms of the env surface (see below); precedence is
+env > project file > user file > defaults; `--local` targets `./.s2sconfig.json`.
 
 ## Environment surface
 
