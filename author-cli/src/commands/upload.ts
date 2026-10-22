@@ -39,7 +39,7 @@ export const upload: CommandSpec = {
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
         `  kubo cid    : ${result.kuboCid}`,
-        `  offer       : not proposed on-chain — run: s2s author propose ${notePath} --cid ${result.kuboCid}`,
+        `  offer       : not proposed on-chain — run: s2s author propose ${notePath}${result.frontmatterWritten ? '' : ` --cid ${result.kuboCid}`}`,
       ].join('\n'),
     );
   },
