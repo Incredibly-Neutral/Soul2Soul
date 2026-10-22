@@ -667,6 +667,120 @@ describe('s2s-records-tab', () => {
     expect(store.getRecord('config')).toBe('config-cid');
   });
 
+  // ── the propose stage is bounded ──────────────────────────────────────────
+  // `@safe-global/safe-apps-sdk`'s txs.send posts to the parent and awaits a
+  // response keyed by message id with NO timeout, so a Safe dialog that dies
+  // (app.safe.global's "Error loading preview" leaves it unusable) would leave
+  // updateConfig pending forever: no error, no Retry, reload-or-nothing.
+
+  /** Drain microtasks / zero-delay timers until `cond()` holds (fake timers). */
+  async function flushUntil(cond: () => boolean, cap = 500): Promise<void> {
+    for (let i = 0; i < cap; i++) {
+      if (cond()) return;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    if (!cond()) throw new Error('flushUntil: condition never became true');
+  }
+
+  it('times out the propose stage after 5 minutes when the Safe dialog never answers', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    // The dialog died mid-signature: the send's promise is never settled.
+    let lateReject!: (err: unknown) => void;
+    m.safeIntegration.setRecord.mockImplementationOnce(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          lateReject = reject;
+        }),
+    );
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: PromiseRejectionEvent) => {
+      unhandled.push(e.reason);
+      // Handled here, so the browser must not report it as a page error.
+      e.preventDefault();
+    };
+    window.addEventListener('unhandledrejection', onUnhandled);
+
+    vi.useFakeTimers();
+    try {
+      const before = store.getRecord('config');
+      const outcome = el
+        .updateConfig(undefined, { suppressQueueOpen: true })
+        .then((value) => ({ value }), (err: Error) => ({ err }));
+
+      // The build runs first; only then is the proposal timer armed.
+      await flushUntil(() => vi.getTimerCount() > 0);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      const settled = await outcome;
+      expect('err' in settled).toBe(true);
+      const err = (settled as { err: Error }).err;
+      expect(err).toBeInstanceOf(Error);
+      expect(configFailureStage(err)).toBe('propose');
+      expect(err.message).toContain('The Safe app never confirmed the proposal');
+      expect(err.message).toContain('5 minutes');
+
+      // Nothing downstream of the proposal ran: no popup, no yellow highlight
+      // bookkeeping, and above all no optimistic store write (which is the
+      // "proposed but not executed" half of the first-config gate).
+      expect(window.open).not.toHaveBeenCalled();
+      expect(store.getRecord('config')).toBe(before);
+
+      // The abandoned send rejecting after we gave up must not surface as an
+      // unhandled rejection — the timeout path attaches a no-op handler.
+      lateReject(new Error('invalid address (argument="address", value="")'));
+      await vi.advanceTimersByTimeAsync(60_000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(unhandled).toEqual([]);
+    } finally {
+      window.removeEventListener('unhandledrejection', onUnhandled);
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fire the propose timeout when the Safe answers normally', async () => {
+    seedRecords([{ key: 'name', value: 's3ntiment.eth', type: 'metadata' }]);
+    const el = await mountTab();
+    stubFailingFetch();
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: PromiseRejectionEvent) => {
+      unhandled.push(e.reason);
+      e.preventDefault();
+    };
+    window.addEventListener('unhandledrejection', onUnhandled);
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const pending = el
+        .updateConfig(undefined, { suppressQueueOpen: true })
+        .finally(() => {
+          settled = true;
+        });
+
+      await flushUntil(() => settled);
+      await expect(pending).resolves.toBe('config-cid');
+
+      // Success path unchanged: optimistic write, CID returned, popup skipped.
+      expect(store.getRecord('config')).toBe('config-cid');
+      expect(window.open).not.toHaveBeenCalled();
+      // The timer was cleared in the finally — nothing is left armed to fire a
+      // spurious timeout over a proposal that already went through.
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(unhandled).toEqual([]);
+      expect(m.safeIntegration.setRecord).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('unhandledrejection', onUnhandled);
+      vi.useRealTimers();
+    }
+  });
+
   // ── stage tagging: updateConfig builds AND proposes, so say which failed ──
 
   it('tags a BUILD failure with stage "build" and preserves the message', async () => {
