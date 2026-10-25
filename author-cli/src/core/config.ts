@@ -136,6 +136,18 @@ function listValue(value: string | undefined): string[] {
     : [];
 }
 
+/**
+ * Normalize an secp256k1 private key to the 0x-prefixed form viem requires.
+ * Keys pasted from `.env` files and wallets are routinely 64 bare hex chars;
+ * viem's `privateKeyToAccount` rejects those ("expected hex or 32 bytes, got
+ * string"), so the prefix is added here rather than at every consumer.
+ */
+export function hexKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return /^[0-9a-fA-F]{64}$/.test(trimmed) ? `0x${trimmed}` : trimmed;
+}
+
 /** Enum fields fall back to the default when given an unrecognized value. */
 function enumValue<T extends string>(field: ConfigField, fallback: T, value: string | undefined): T {
   if (value !== undefined && field.enumValues?.includes(value)) {
@@ -153,8 +165,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
 
   return {
     environment: enumValue(field('environment'), 'prod', resolve(field('environment'))),
-    privateKey: resolve(field('privateKey')),
-    litAccountKey: resolve(field('litAccountKey')),
+    privateKey: hexKey(resolve(field('privateKey'))),
+    litAccountKey: hexKey(resolve(field('litAccountKey'))),
     litUsageKey: resolve(field('litUsageKey')),
     githubToken: resolve(field('githubToken')),
     kuboGateway: resolve(field('kuboGateway')) ?? def('kuboGateway'),
