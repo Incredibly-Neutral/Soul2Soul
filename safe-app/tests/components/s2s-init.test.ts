@@ -114,7 +114,9 @@ function makeSafeIntegration(
   };
 
   const isCreateBatch = (txs: MetaTransactionData[]) =>
-    txs.length === 2 && txs[0] !== undefined && txs[0].to.toLowerCase() === RECORDS_FACTORY.toLowerCase();
+    txs.length === 2 &&
+    txs[0] !== undefined &&
+    txs[0].to.toLowerCase() === RECORDS_FACTORY.toLowerCase();
 
   /** The registry/wrapper reads readEnsRegistration makes. */
   const evmRead = vi.fn(
@@ -196,6 +198,7 @@ function seedSession(overrides: Partial<InitSession> = {}): void {
     branch: 'main',
     authors: [OWNER_A, OWNER_B],
     proposals: [],
+    updatedAt: Date.now(),
     ...overrides,
   });
 }
@@ -464,7 +467,7 @@ describe('s2s-publication-init', () => {
     startOverBtn!.click();
     await el.updateComplete;
     expect(bodyText(el)).toContain('New publication');
-    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect((el as unknown as { session: unknown }).session).toBeNull();
   });
 
   it('retry keeps the session and resumes from the persisted phase (no duplicate create)', async () => {
@@ -1144,9 +1147,9 @@ describe('s2s-publication-init', () => {
     expect(si.createProposals()).toHaveLength(1);
     // Nothing was adopted from the scan: only complete pairs are ever adopted
     // (the runAction session adoption later on always carries both).
-    expect(si.adoptModules.mock.calls.every(([records, publication]) => records && publication)).toBe(
-      true,
-    );
+    expect(
+      si.adoptModules.mock.calls.every(([records, publication]) => records && publication),
+    ).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -1162,12 +1165,7 @@ describe('s2s-publication-init', () => {
     pair: { recordsModule?: string; publicationModule?: string },
   ) => {
     si.fetchFactoryModuleCreatedLogs = vi.fn(
-      async (
-        factoryAddress: string,
-        _safe?: string,
-        _topic0?: string,
-        fromBlock?: number,
-      ) => {
+      async (factoryAddress: string, _safe?: string, _topic0?: string, fromBlock?: number) => {
         if ((fromBlock ?? HEAD_BLOCK) > HEAD_BLOCK - depth) return [];
         const addr =
           factoryAddress === RECORDS_FACTORY ? pair.recordsModule : pair.publicationModule;
@@ -1226,12 +1224,7 @@ describe('s2s-publication-init', () => {
     const si = makeSafeIntegration({ enabled: true });
     const base = si.fetchFactoryModuleCreatedLogs.getMockImplementation()!;
     si.fetchFactoryModuleCreatedLogs = vi.fn(
-      async (
-        factoryAddress: string,
-        _safe?: string,
-        _topic0?: string,
-        fromBlock?: number,
-      ) => {
+      async (factoryAddress: string, _safe?: string, _topic0?: string, fromBlock?: number) => {
         // Public RPCs often cap getLogs ranges — the wide window is rejected.
         if ((fromBlock ?? HEAD_BLOCK) <= HEAD_BLOCK - 250_000) {
           throw new Error('getLogs range too large');
@@ -1254,12 +1247,7 @@ describe('s2s-publication-init', () => {
   it('completes a partial narrow hit with the wide scan instead of re-creating', async () => {
     const si = makeSafeIntegration({ enabled: false });
     si.fetchFactoryModuleCreatedLogs = vi.fn(
-      async (
-        factoryAddress: string,
-        _safe?: string,
-        _topic0?: string,
-        fromBlock?: number,
-      ) => {
+      async (factoryAddress: string, _safe?: string, _topic0?: string, fromBlock?: number) => {
         const wide = (fromBlock ?? HEAD_BLOCK) <= HEAD_BLOCK - 250_000;
         if (factoryAddress === RECORDS_FACTORY) {
           // Young records module: found by the narrow pass.
@@ -1326,7 +1314,10 @@ describe('s2s-publication-init', () => {
   });
 
   it('still proposes the create batch when both factories have code', async () => {
-    const si = makeSafeIntegration({ enabled: true, factoryCode: { records: 4000, publication: 5000 } });
+    const si = makeSafeIntegration({
+      enabled: true,
+      factoryCode: { records: 4000, publication: 5000 },
+    });
 
     const { el, complete } = await mountWithListener(si);
     setInput(el, '#init-name', 'my-publication');
@@ -1429,9 +1420,13 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     await flush();
 
     // The registry was read on chain 1, with the session's label.
-    expect(si.evmRead).toHaveBeenCalledWith(1, ENS_REGISTRY, expect.anything(), 'registeredSubdomains', [
-      'my-publication',
-    ]);
+    expect(si.evmRead).toHaveBeenCalledWith(
+      1,
+      ENS_REGISTRY,
+      expect.anything(),
+      'registeredSubdomains',
+      ['my-publication'],
+    );
     // Nothing was proposed for the name and the flow went straight to the modules.
     expect(ensProposals(si)).toHaveLength(0);
     expect(events.some((d) => d.phase === 'awaiting-ens')).toBe(false);
@@ -1565,7 +1560,11 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     expect(si.proposeBatch).not.toHaveBeenCalled();
   });
 
-  it('resumes a session persisted at awaiting-ens by waiting, never re-proposing', async () => {    seedSession({ chainId: 1, phase: 'awaiting-ens', proposals: [QUEUE_URL] });
+  it('does not re-show the manual call for a chain-1 Safe whose step-1 tx is queued', async () => {
+    // Resumed at awaiting-ens on chain 1: the registerSubdomain tx is IN this
+    // Safe's queue. Rebuilding the to/data next to the queue URL invites a
+    // second identical registration (or a revert once the first lands).
+    seedSession({ chainId: 1, phase: 'awaiting-ens', ensProposed: true, proposals: [QUEUE_URL] });
     const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
     const el = await mount({
       safeIntegration: si,
@@ -1573,16 +1572,35 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
       ensPollIntervalMs: 5,
     });
 
-    // The rebuilt call is exposed again (a reloaded session has no memory of it).
-    await vi.waitFor(() =>
-      expect((el as unknown as { ensCall?: { to: string } }).ensCall?.to).toBe(ENS_REGISTRY),
-    );
+    // Wait for the resume's first L1 poll (where the call used to be rebuilt).
+    await vi.waitFor(() => expect(si.evmRead).toHaveBeenCalled());
+    await flush();
+    expect((el as unknown as { ensCall?: { to: string } }).ensCall).toBeUndefined();
     expect(si.proposeBatch).not.toHaveBeenCalled();
     expect(JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!).phase).toBe('awaiting-ens');
 
     si.ens.owner = SAFE_ADDRESS;
     si.ens.registered = true;
     await vi.waitFor(() => expect(si.createProposals()).toHaveLength(1));
+    expect(ensProposals(si)).toHaveLength(0);
+  });
+
+  it('re-shows the manual call when the Safe cannot propose it (not on chain 1)', async () => {
+    // From another chain the app cannot propose the L1 tx at all, so the human
+    // needs the exact to/data even though step 1 was already announced.
+    seedSession({
+      chainId: 8453,
+      phase: 'awaiting-ens',
+      ensProposed: true,
+      proposals: [QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({ safeIntegration: si, ensPollIntervalMs: 5 });
+
+    await vi.waitFor(() =>
+      expect((el as unknown as { ensCall?: { to: string } }).ensCall?.to).toBe(ENS_REGISTRY),
+    );
+    expect(si.proposeBatch).not.toHaveBeenCalled();
     expect(ensProposals(si)).toHaveLength(0);
   });
 });
@@ -1766,5 +1784,4 @@ describe('s2s-publication-init — ENS step hardening', () => {
 
     expect(bodyText(el)).not.toContain('Initialization failed');
   });
-
 });

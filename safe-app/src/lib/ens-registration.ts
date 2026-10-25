@@ -281,9 +281,7 @@ export function buildRegisterSubdomainCall(
   owner: string,
 ): RegisterSubdomainCall {
   if (!isValidSubdomainLabel(label)) {
-    throw new Error(
-      subdomainLabelError(label) || `“${label}” is not a valid ENS subdomain label.`,
-    );
+    throw new Error(subdomainLabelError(label) || `“${label}” is not a valid ENS subdomain label.`);
   }
   return {
     to: registry,

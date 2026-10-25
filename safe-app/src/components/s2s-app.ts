@@ -19,7 +19,11 @@ import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { buildDeletePublicationBatch } from '../lib/publication-init.js';
-import { readEnsRegistration, subdomainLabelError, suffixOfPublicationName } from '../lib/ens-registration.js';
+import {
+  readEnsRegistration,
+  subdomainLabelError,
+  suffixOfPublicationName,
+} from '../lib/ens-registration.js';
 import { ENS_REGISTRY_ADDRESS } from '../lib/domain-validation.js';
 import {
   INIT_SESSION_KEY,
@@ -618,24 +622,40 @@ export class S2SApp extends LitElement {
    * desynced registry entry is a chain-1 repair no flow can make — both are
    * logged and otherwise left alone.
    */
-  private async maybeRepairEnsRegistration(safeInfo: {
-    chainId: number;
-    safeAddress: string;
-    s2sRecords?: string;
-    s2sPublication?: string;
-  }): Promise<void> {
+  private async maybeRepairEnsRegistration(
+    safeInfo: {
+      chainId: number;
+      safeAddress: string;
+      s2sRecords?: string;
+      s2sPublication?: string;
+    },
+    opts: {
+      /** The caller IS the config step's tail (see finishConfigStep): it has
+       *  already cleared the session and the modal, and its own flags are still
+       *  set until it returns. */
+      fromFinishedConfigStep?: boolean;
+    } = {},
+  ): Promise<void> {
     if (this.initPhase !== null) return; // a live flow (or step 3) owns the modal
     // A config-phase session is host-owned and is being resumed right now; the
     // repair would overwrite its phase with 'ens' before resumeConfigStep gets
     // to set initPhase, and (with the module pair mid-enable) could read a
     // fresh, not-yet-executed name as a "legacy publication".
-    if (this.configStepActive || this.configWaitActive || this.configResumePending) return;
+    if (
+      !opts.fromFinishedConfigStep &&
+      (this.configStepActive || this.configWaitActive || this.configResumePending)
+    ) {
+      return;
+    }
     if (this.ensRepairSuppressed) return;
     const key = `${safeInfo.chainId}:${safeInfo.safeAddress.toLowerCase()}`;
     if (this.ensRepairDone.has(key)) return;
-    // Recorded before anything can fail: a repair is attempted once, not on
-    // every refresh pass.
-    this.ensRepairDone.add(key);
+
+    // Every return below is a "not this pass" answer, so the key is NOT
+    // recorded yet: a legacy publication whose config step is still finishing on
+    // this page load (or whose registry read was rate-limited) must still get
+    // its step 1 once the obstruction is gone. Only an actual verdict about the
+    // name (owned / needs no registration / seeded) is recorded.
 
     // Any session on disk belongs to some flow: the same Safe's is already
     // owned by the init component / step 3 above, and another Safe's must not be
@@ -687,7 +707,10 @@ export class S2SApp extends LitElement {
       console.log(`[app] ens repair skipped: ENS read failed (${describeError(e)})`);
       return;
     }
-    if (state.ownedBySafe) return;
+    if (state.ownedBySafe) {
+      this.ensRepairDone.add(key);
+      return;
+    }
     if (!state.needsRegistration) {
       // Desynced, or owned by somebody else: not the state this repair exists
       // for. Seeding here would open the recovery modal on a name this Safe can
@@ -695,9 +718,13 @@ export class S2SApp extends LitElement {
       console.log(
         `[app] ens repair skipped: ${state.name} needs no registration (registered=${String(state.registered)} owner=${state.owner})`,
       );
+      this.ensRepairDone.add(key);
       return;
     }
 
+    // Decided: seed once per Safe per page load (until a config step finishes
+    // and clears the mark — see finishConfigStep).
+    this.ensRepairDone.add(key);
     console.log(
       `[app] ens repair: ${state.name} is not owned by this Safe (owner=${state.owner}) -> seeding the flow at step 1`,
     );
@@ -813,7 +840,9 @@ export class S2SApp extends LitElement {
       console.log('[app] onInitComplete: config record already on-chain -> flow complete');
       await this.finishConfigStep();
       return;
-    }    // Bring the store up to date before the optimistic re-apply below, but
+    }
+
+    // Bring the store up to date before the optimistic re-apply below, but
     // never at the cost of hanging the flow: the init element's complete() can
     // fire from INSIDE a refresh (its maybeResume runs off the setProtocolInfo
     // store update), so a pass is usually already running — join it (bounded)
@@ -843,6 +872,13 @@ export class S2SApp extends LitElement {
     // `prev` is often gone (the init element clears its own session around the
     // completion dispatch), so callers must pass what the flow needs rather than
     // relying on a merge.
+    //
+    // DELIBERATELY NOT MONOTONIC (unlike the init component's `persist`, which
+    // applies `maxPhase`): this writer records FAILURE states, where moving a
+    // step back is the point — a failed config build must say 'configuring'
+    // ("nothing is queued, retry rebuilds") instead of a forward-only
+    // 'awaiting-config' that claims a proposal exists. See the contract in
+    // `lib/init-session.ts`.
     const prev = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     const safeInfo = store.safeInfo;
     saveInitSession(window.localStorage, INIT_SESSION_KEY, {
@@ -1064,6 +1100,11 @@ export class S2SApp extends LitElement {
     // The session is done as soon as the record is on-chain: clear it first so a
     // reload during the refresh below cannot resume a finished flow.
     clearInitSession(window.localStorage, INIT_SESSION_KEY);
+    // A repair skipped earlier in this page load (the config step owned the
+    // session then) must get its chance now: the flow is over and the refresh
+    // below will run the repair again. Without this a legacy publication whose
+    // config step finished late never reaches its ENS step until a reload.
+    this.ensRepairDone.clear();
     try {
       // Close only once the record is BOTH on-chain and in the store. Settle any
       // pass that started BEFORE the record landed (bounded — a Filecoin stall
@@ -1079,6 +1120,15 @@ export class S2SApp extends LitElement {
       this.initModalOpen = false;
       this.initError = '';
       this.configDismissible = false;
+    }
+    // The refresh above ran while this step still owned the modal (`initPhase`
+    // is only cleared in the finally), so the ENS repair could not run in it.
+    // Now that the flow is over, give the repair its chance: this is the last
+    // step, so a publication created before the ENS step existed would otherwise
+    // never reach step 1 until a reload.
+    const safeInfo = store.safeInfo;
+    if (safeInfo) {
+      await this.maybeRepairEnsRegistration(safeInfo, { fromFinishedConfigStep: true });
     }
   }
 

@@ -228,9 +228,11 @@ describe('readEnsRegistration', () => {
     // A transient RPC failure on the nameWrapper read used to read back as the
     // zero address => "registered with no owner" => the fatal half-written
     // verdict, telling the human the chain is corrupt when it is an RPC blip.
-    const deps = makeDeps(
-      { registered: true, owner: SAFE, nameWrapperError: new Error('429 Too Many Requests') },
-    );
+    const deps = makeDeps({
+      registered: true,
+      owner: SAFE,
+      nameWrapperError: new Error('429 Too Many Requests'),
+    });
     await expect(
       readEnsRegistration(deps, { label: 'polyphony', safeAddress: SAFE }),
     ).rejects.toThrow(/429/);
@@ -294,9 +296,7 @@ describe('isValidSubdomainLabel / subdomainLabelError', () => {
 
 describe('suffixOfPublicationName', () => {
   it('extracts the parent of a full publication name', () => {
-    expect(suffixOfPublicationName('polyphony.soul2soul.eth', 'polyphony')).toBe(
-      'soul2soul.eth',
-    );
+    expect(suffixOfPublicationName('polyphony.soul2soul.eth', 'polyphony')).toBe('soul2soul.eth');
   });
 
   it('returns nothing when the name does not carry the label', () => {

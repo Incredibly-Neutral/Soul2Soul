@@ -58,6 +58,8 @@
 // execution). Its phases live here so the step is persisted + surfaced in the
 // progress modal exactly like the others.
 
+import { isValidSubdomainLabel } from './ens-registration';
+
 /** Phases of the init flow, in execution order. 'ens'/'creating'/'finalizing'/
  * 'configuring' are the transient "proposing in progress" states;
  * 'awaiting-ens' / 'detecting' / 'awaiting-finalize' / 'awaiting-config' are
@@ -104,7 +106,11 @@ export interface InitSession {
    *  surfaced for a manual registration). Kept SEPARATE from `phase`: step 1
    *  can re-enter from a later phase (the name was released/transferred on L1
    *  mid-flow), and a phase write must never erase the fact that the create
-   *  batch is already queued — the factories use plain CREATE. */
+   *  batch is already queued — the factories use plain CREATE.
+   *
+   *  It is read together with the Safe's chain: on a chain-1 Safe it means "the
+   *  tx is in this Safe's queue", so no manual to/data is rebuilt. From another
+   *  chain the app cannot propose at all, so the call must always be surfaced. */
   ensProposed?: boolean;
   /** Step 1 is VERIFIED done: the subnode resolved to this Safe. Once set, the
    *  flow never reads L1 again, so steps 2–4 do not depend on a reachable L1
@@ -204,10 +210,7 @@ export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 | 3 | 4 {
  * Checklist state for a given step row: 'done' (its proposal already sent),
  * 'current' (the flow is waiting on this proposal), or 'pending'.
  */
-export function stepState(
-  phase: InitPhase,
-  index: 1 | 2 | 3 | 4,
-): 'done' | 'current' | 'pending' {
+export function stepState(phase: InitPhase, index: 1 | 2 | 3 | 4): 'done' | 'current' | 'pending' {
   const current = currentStepIndex(phase);
   if (current === 0) return 'done';
   if (index < current) return 'done';
@@ -316,6 +319,23 @@ export function planNextAction(session: InitSession, checks: ResumeChecks): Resu
  * Anything else (v1, an unknown/future version, a corrupt body, an unknown
  * phase) is rejected: the phase drives `proposalProgress()`, which has no
  * default branch.
+ *
+ * A migratable session must also carry a registrable `name`: it predates step 1,
+ * so its `name` is the label the whole flow was queued under. Without a usable
+ * one it cannot be resumed — step 1 would throw a label error the user cannot
+ * fix in place, and re-opening the form would replay later phases under a
+ * different label than the queued batch — so it is treated as corrupt and
+ * dropped (along with its legacy key).
+ *
+ * PHASE MONOTONICITY CONTRACT (see `maxPhase`): the INIT COMPONENT writes
+ * phases monotonically — `maxPhase(previous, next)` — so a step-1 write can
+ * never downgrade `creating`/`detecting` and forget a batch that was already
+ * sent. The HOST (`S2SApp.persistInitPhase`) deliberately writes `phase`
+ * verbatim: it records failure states, where moving back is the point (`a
+ * failed config build` must be able to say 'configuring' = "nothing is
+ * queued, retry rebuilds" instead of a forward-only 'awaiting-config' that
+ * claims a proposal exists). Neither writer may be replaced by the other's
+ * rule.
  */
 export function loadInitSession(storage: InitSessionStorage, key: string): InitSession | null {
   let raw = storage.getItem(key);
@@ -371,6 +391,13 @@ export function loadInitSession(storage: InitSessionStorage, key: string): InitS
       ...(parsed.ensResolved === true ? { ensResolved: true } : {}),
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     };
+    // A migratable session cannot be resumed without the label its batch was
+    // queued for (see the docstring): drop it, and do not leave the legacy
+    // entry behind for a later page load to trip over.
+    if (migratable && !isValidSubdomainLabel(session.name.trim())) {
+      if (fromLegacyKey) storage.removeItem(fromLegacyKey);
+      return null;
+    }
     // Migrated from a legacy key: persist the upgraded session at the current
     // key and drop the old entry, so a v2 flow is never read (or resumed) twice.
     if (parsed.version !== INIT_SESSION_VERSION) {

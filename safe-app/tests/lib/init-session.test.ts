@@ -145,6 +145,52 @@ describe('init-session persistence', () => {
     expect(storage.data['s2s.publication-init.v2']).toBeUndefined();
   });
 
+  it('drops a migratable v2 session that carries no registrable label', () => {
+    // A v2 session predates step 1, so its `name` is the label the queued batch
+    // was for. Without a usable one it can never be resumed (step 1 would throw
+    // a label error the user cannot fix in place, and the form would replay the
+    // later phases under a DIFFERENT label), so it is treated as corrupt — and
+    // the legacy entry is removed with it rather than left to be re-read.
+    for (const name of [
+      undefined,
+      '',
+      '   ',
+      'My-Publication',
+      'my_publication',
+      `${'a'.repeat(64)}`,
+    ]) {
+      const storage = makeStorage({
+        's2s.publication-init.v2': JSON.stringify({
+          version: 2,
+          chainId: 8453,
+          safeAddress: SAFE,
+          phase: 'detecting',
+          ...(name === undefined ? {} : { name }),
+          publicationName: 'my-publication.soul2soul.eth',
+        }),
+      });
+
+      expect(loadInitSession(storage, INIT_SESSION_KEY)).toBeNull();
+      expect(storage.data[INIT_SESSION_KEY]).toBeUndefined();
+      expect(storage.data['s2s.publication-init.v2']).toBeUndefined();
+    }
+  });
+
+  it('accepts a v2 session whose label is registrable', () => {
+    const storage = makeStorage({
+      's2s.publication-init.v2': JSON.stringify({
+        version: 2,
+        chainId: 8453,
+        safeAddress: SAFE,
+        phase: 'detecting',
+        name: 'my-publication-2',
+        publicationName: 'my-publication-2.soul2soul.eth',
+      }),
+    });
+
+    expect(loadInitSession(storage, INIT_SESSION_KEY)?.name).toBe('my-publication-2');
+  });
+
   it('leaves a v2 session that needs step 1 pointing at the ENS step', () => {
     // The migrated session never had the ENS step, so `ensResolved` is absent
     // and the plan prepends it — even though its phase says "modules pending".
@@ -154,6 +200,7 @@ describe('init-session persistence', () => {
         chainId: 8453,
         safeAddress: SAFE,
         phase: 'detecting',
+        name: 'my-publication',
         publicationName: 'my-publication.soul2soul.eth',
       }),
     });
