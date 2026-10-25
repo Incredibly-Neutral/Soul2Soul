@@ -45,6 +45,16 @@ export const newPublication: CommandSpec = {
     const branch = flagString(args.flags, 'branch');
     const authors = flagList(args.flags, 'author');
     const owners = flagList(args.flags, 'owner');
+    // The EntryPoint version picks the Safe4337Module inside each Safe's
+    // initializer — i.e. it is part of the Safe's address. 0.6 is only sane
+    // for a bundler that cannot speak 0.7, and the plugin would then get a
+    // different publication Safe, so say so out loud.
+    if (ctx.config.bundler.entryPoint !== '0.7') {
+      ctx.out.warn(
+        `entryPoint ${ctx.config.bundler.entryPoint} — the publication Safes will not match the plugin (which pins 0.7)`,
+      );
+    }
+
     // Endpoints are per-chain: a Pimlico key yields one URL per chain id.
     const l1Endpoints = bundlerEndpoints(ctx.config, mainnet.id);
     const l2Endpoints = bundlerEndpoints(ctx.config, base.id);

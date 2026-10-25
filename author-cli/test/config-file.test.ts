@@ -34,7 +34,7 @@ describe('config file layer', () => {
     expect(withEmpty.kuboGateway).toBe('ipfs.transport-union.dev');
     expect(withEmpty.runnerUrl).toBe('https://run.transport-union.dev/run');
     expect(withEmpty.filecoin.rpcUrl).toBe('https://api.node.glif.io/rpc/v1');
-    expect(withEmpty.bundler.entryPoint).toBe('0.6');
+    expect(withEmpty.bundler.entryPoint).toBe('0.7');
     // Spot-check the sensitive leaves are registry-backed too.
     for (const key of ['privateKey', 'litAccountKey', 'litUsageKey', 'kuboToken']) {
       expect(CONFIG_FIELD[key], key).toBeDefined();

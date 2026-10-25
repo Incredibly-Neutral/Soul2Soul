@@ -81,8 +81,8 @@ async function authorSafeRunner(
     paymasterUrl: endpoints?.paymasterUrl,
     // Pinned, not config-driven: 0xobsidian hardcodes EntryPoint v0.7, and the
     // 4337 module address is part of the Safe's initializer — so the entry
-    // point changes the counterfactual address. A different version here would
-    // predict a different "author" than the plugin deploys.
+    // point changes the counterfactual address. An override here would predict
+    // a different "author" than the plugin deploys.
     entryPointVersion: AUTHOR_SAFE_ENTRY_POINT,
     safeVersion: AUTHOR_SAFE_VERSION,
     safeSingletonAddress: SAFE_L2_SINGLETON,

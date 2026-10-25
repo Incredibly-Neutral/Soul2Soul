@@ -27,8 +27,8 @@ describe('author Safe derivation is pinned to 0xobsidian', () => {
     expect(m.SAFE_L2_SINGLETON).toBe('0x29fcB43b46531BcA003ddC8FCB67FFE91900C762');
     expect(m.SAFE_PROXY_FACTORY).toBe('0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67');
     expect(m.AUTHOR_SAFE_VERSION).toBe('1.4.1');
-    // Pinned, not config-driven: the default `entryPoint` config value is 0.6,
-    // but the 4337 module address is part of the Safe initializer.
+    // Pinned, not config-driven: the 4337 module address is part of the Safe
+    // initializer, so a different entry point means a different author id.
     expect(m.AUTHOR_SAFE_ENTRY_POINT).toBe('0.7');
   });
 });
