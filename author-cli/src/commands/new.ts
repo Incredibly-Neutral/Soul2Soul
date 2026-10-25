@@ -30,6 +30,7 @@ import { flagList, flagString, type ParsedArgs } from '../lib/args';
 import { UsageError } from '../lib/errors';
 import type { CommandSpec } from '../lib/command';
 import type { CliContext } from '../core/context';
+import { authorSafeState } from '../core/author-safe';
 import { bundlerEndpoints } from '../core/config';
 
 const ENS_SUFFIX = '.soul2soul.eth';
@@ -68,7 +69,10 @@ export const newPublication: CommandSpec = {
     const l2Rpc = ctx.rpcs.L2[0];
     if (!l1Rpc || !l2Rpc) throw new Error('missing L1/L2 RPC endpoints');
 
-    ctx.out.log(`creating publication ${name} (Safe: ${ctx.eoaAddress})…`);
+    // The author id is the author Safe (mirrors 0xobsidian's `user.safe`, which
+    // neutralpress' new-publication modal pre-fills as the default author).
+    const author = await authorSafeState(ctx);
+    ctx.out.log(`creating publication ${name} (author ${author.address})…`);
 
     const safeVersion: '1.4.1' | '1.5.0' = '1.4.1';
     const l1Runner = await createSafeRunner({
@@ -93,7 +97,7 @@ export const newPublication: CommandSpec = {
     const publication: S2SPublication = {
       name,
       owners,
-      authors: authors.length > 0 ? authors : [ctx.eoaAddress],
+      authors: authors.length > 0 ? authors : [author.address],
       devRepository: repo,
       branch: branch ?? '',
     };
