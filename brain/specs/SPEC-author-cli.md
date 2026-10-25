@@ -33,6 +33,8 @@ Top-level bin `s2s`; three groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
+s2s author address   [--json]                                     # author id: the Safe (predicted, no deployment)
+s2s author init      [--json]                                     # deploy the author Safe (idempotent)
 s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
 s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + preview render (off-chain)
@@ -93,10 +95,33 @@ from a completely unprovisioned machine.
 
 Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
 `privateKey`, … — `s2s config list` shows the full set). Read-only derived keys are also accepted by `config get`:
-`address` (the EOA that signs authoring actions, computed from `privateKey` locally — no RPC),
-which is how a user learns or quotes their authoring identity. List keys (`rpcL1`,
+`eoa` (the signing account, computed from `privateKey` locally — no RPC). Note that the
+**author id is not the EOA**: it is the author Safe (`s2s author address`), which is
+counterfactual and therefore needs an L2 read. List keys (`rpcL1`,
 `rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
+
+### The author identity: a counterfactual Safe
+
+`upload` signs with the EOA, but the manuscript's owner — the author id written
+into the signed item — is the **Safe** that the EOA owns, exactly as in
+0xobsidian/neutralpress (`user.safe`). Its address is counterfactual, so it can
+be quoted before anything is deployed:
+
+```
+salt      = "s2s_" + eoa
+saltNonce = keccak256(salt)                 # unmasked, no chain id in the salt
+Safe      = SafeL2 v1.4.1, owners [eoa], threshold 1, EntryPoint v0.7
+            singleton 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762
+            factory   0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67
+```
+
+Because the salt excludes the chain, the same author has one address on L1 and
+L2. The Safe is deployed on Base on first use (`s2s author init`) and left
+undeployed on mainnet until a publication needs it — the plugin's asymmetry,
+reproduced deliberately. `author init` is idempotent and is where modules get
+installed later; today it only deploys. Both steps need an L2 RPC; `init` also
+needs a bundler (`S2S_BUNDLER_URL`, plus `S2S_PAYMASTER_URL` to sponsor gas).
 
 The env files exist because **the CLI ships to people who do not have this
 repo**: `~/.config/s2s/.env` is the primary configuration surface for an
@@ -198,6 +223,14 @@ s2s <group> <action> [positionals…] [flags…]
 ### `author` group — result types
 
 ```ts
+// s2s author address [--json]      — the author id (Safe), predicted; no tx
+{ action: 'author.address'; address: string; eoa: string; salt: string;
+  chain: 'base'; deployed: boolean }
+
+// s2s author init [--json]         — deploy the author Safe if not deployed
+{ action: 'author.init'; address: string; eoa: string; salt: string;
+  chain: 'base'; deployed: boolean; txHash: string | null }
+
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
 { action: 'upload'; note: string; publication: string; subdomain: string;
   objectId: string; kuboCid: string; frontmatterWritten: boolean }          // no txHash
@@ -253,13 +286,13 @@ Shared field meanings:
 { action: 'config.set'; key: string; file: string; local: boolean }
 
 // s2s config get <key> [--json]        — value is the *effective* value (env may win); null when unset
-{ key: string; value: string | null }   // secrets masked; `address` is derived, not stored
+{ key: string; value: string | null }   // secrets masked; `eoa` is derived, not stored
 
 // s2s config unset <key> [--local] [--json]
 { action: 'config.unset'; key: string; file: string; local: boolean }
 
 // s2s config list [--json]             — all effective values; secrets masked
-{ config: Record<string, string> }       // plus the derived `address` when privateKey is set
+{ config: Record<string, string> }       // plus the derived `eoa` when privateKey is set
 
 // s2s config path [--local] [--json]
 { path: string; env: { user: string; userExists: boolean; project: string | null } }
