@@ -55,6 +55,13 @@ CID it just produced into the frontmatter as `kubo_cid`, so `propose` works with
 after an upload; `--cid` overrides. `publish` remains the
 one-shot convenience that does upload + propose + prod render + pins together.
 
+**`upload` does not resolve the publication on-chain.** The publication contributes only its
+name (the `subdomain` label of the ENS name, derived locally), so an upload succeeds for a
+publication that has not been created yet or whose ENS name has no address record. Only
+`propose` / `publish` / `revoke` (and the Filecoin durability leg) resolve the Safe and its
+modules. The Filecoin leg is the one deferred lookup: it runs after the pins, and a
+publication it cannot resolve degrades to a warning rather than failing the upload.
+
 Global flags parse anywhere in the argv:
 
 | Flag | Meaning |
@@ -345,6 +352,8 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   when present, else the signed item's objectId. `genesis` is written back to the note's frontmatter
   (`upsertFrontmatter`) when it was missing.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
+  It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
+  only the name label, taken from the ENS name itself.
   It writes `kubo_cid` into the frontmatter (the CID of that upload — ephemeral: the next
   upload overwrites it, and it describes the note as of that upload, not current edits).
   `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
@@ -356,7 +365,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
 - **Durability** (upload and publish only, never preview): fire-and-forget
   `backupToProviders` (filebase + pinata) plus the Filecoin leg (`runFilecoinLeg`) with
-  `onFilecoinMismatch` CID reporting.
+  `onFilecoinMismatch` CID reporting. The Filecoin leg needs the publication's Safe for the CAR
+  recipients, so it resolves the publication lazily inside its own callback — after the Kubo and
+  pin work is already done — and reports a warning when the publication cannot be resolved.
 - **Revoke**: on-chain `retract` **first** (author-caller full withdrawal), then a remove-plumbing
   re-render so the revoked path stops resolving. Revoke-path derivation honors the real on-chain
   `localePaths` (read via Records `getRecord('config')` → config CID → mapping), falling back to
