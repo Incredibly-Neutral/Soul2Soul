@@ -585,12 +585,7 @@ export class S2SPublicationInit extends LitElement {
     // modal's step markers should show until the plan re-runs) — 'creating' is
     // only the fallback for a phase that has no working step of its own.
     const phase = this.session.phase;
-    this.step =
-      phase === 'done'
-        ? 'idle'
-        : this.isWorkingStep(phase)
-          ? phase
-          : 'creating';
+    this.step = phase === 'done' ? 'idle' : this.isWorkingStep(phase) ? phase : 'creating';
     this.dispatchProgress();
     void this.start();
   };
@@ -932,6 +927,17 @@ export class S2SPublicationInit extends LitElement {
         this.ensCall = { to: call.to, data: call.data };
         const chainId = this.safeInfo?.chainId ?? session.chainId;
         if (chainId === ENS_L1_CHAIN_ID) {
+          // "Start over" / a host-side clear can land while the L1 read above is
+          // in flight (four RPC round trips): without a session nothing records
+          // this tx, so the human's only trace of it would be the Safe queue.
+          // Never propose into a flow that no longer exists.
+          if (!this.session) {
+            console.log('[init] ens: session cleared before proposeBatch -> not proposing');
+            this.step = 'idle';
+            this.ensCall = undefined;
+            this.dispatchProgress();
+            return true;
+          }
           const url = await si.proposeBatch([call]);
           // Append: the array may already hold a create/finalize URL from an
           // earlier step of this session (a re-entered step 1 must not erase
@@ -980,9 +986,14 @@ export class S2SPublicationInit extends LitElement {
           // Same fatal states as 'ens' — a resumed poll must not sit out the whole
           // timeout on a name this Safe can never own.
           if (!state.ownedBySafe) this.assertEnsClaimable(state);
-          // A resumed session has no in-memory call: rebuild it so the human still
-          // gets the exact to/data to execute on chain 1.
-          if (!this.ensCall && (state.needsRegistration || state.desynced)) {
+          // A resumed session has no in-memory call, so it may have to be
+          // rebuilt for the human to execute on chain 1. Only when THIS Safe
+          // cannot propose it: a chain-1 Safe with `ensProposed` already has the
+          // tx in its queue (URL and all), and re-showing the to/data would
+          // invite a second, identical registration.
+          const chainId = this.safeInfo?.chainId ?? session.chainId;
+          const cannotPropose = chainId !== ENS_L1_CHAIN_ID || session.ensProposed !== true;
+          if (cannotPropose && !this.ensCall && (state.needsRegistration || state.desynced)) {
             const call = buildRegisterSubdomainCall(state.registry, session.name, safeAddress);
             this.ensCall = { to: call.to, data: call.data };
           }

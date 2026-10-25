@@ -43,6 +43,7 @@ const safeIntMocks = vi.hoisted(() => ({
   getRecord: vi.fn(),
   readIsModuleEnabled: vi.fn(),
   fetchFactoryModuleCreatedLogs: vi.fn(),
+  contractCodeSize: vi.fn(),
   getProvider: vi.fn(),
   adoptModules: vi.fn(),
   evmRead: vi.fn(),
@@ -156,6 +157,7 @@ vi.mock('@/lib/safe-integration.js', () => ({
     getRecord = safeIntMocks.getRecord;
     readIsModuleEnabled = safeIntMocks.readIsModuleEnabled;
     fetchFactoryModuleCreatedLogs = safeIntMocks.fetchFactoryModuleCreatedLogs;
+    contractCodeSize = safeIntMocks.contractCodeSize;
     getProvider = safeIntMocks.getProvider;
     adoptModules = safeIntMocks.adoptModules;
     evmRead = safeIntMocks.evmRead;
@@ -335,6 +337,11 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.getRecord.mockResolvedValue('');
     safeIntMocks.readIsModuleEnabled.mockResolvedValue(false);
     safeIntMocks.fetchFactoryModuleCreatedLogs.mockResolvedValue([]);
+    // The factories have code on the Safe's chain: the create/detect paths reach
+    // their own logic instead of failing the "factory has no code" guard (which
+    // would hide a duplicate create batch behind an unrelated error).
+    safeIntMocks.contractCodeSize.mockReset();
+    safeIntMocks.contractCodeSize.mockResolvedValue(4321);
     safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
     safeIntMocks.adoptModules.mockReset();
     safeIntMocks.adoptModules.mockResolvedValue(undefined);
@@ -768,9 +775,7 @@ describe('s2s-app (shell)', () => {
       return 'bafyconfig';
     });
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
-      key === 'config' && recordsTabMocks.updateConfig.mock.calls.length > 0
-        ? 'bafyconfig'
-        : '',
+      key === 'config' && recordsTabMocks.updateConfig.mock.calls.length > 0 ? 'bafyconfig' : '',
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
@@ -999,7 +1004,9 @@ describe('s2s-app (shell)', () => {
             // First read = the repair (no subnode yet); every later read = the
             // human registered it from the L1 Safe in between.
             ownerReads += 1;
-            return ownerReads > 1 ? SAFE_INFO.safeAddress : '0x0000000000000000000000000000000000000000';
+            return ownerReads > 1
+              ? SAFE_INFO.safeAddress
+              : '0x0000000000000000000000000000000000000000';
           default:
             throw new Error(`unexpected EVM read: ${method}`);
         }
@@ -1007,18 +1014,39 @@ describe('s2s-app (shell)', () => {
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
-    await vi.waitFor(() => expect(modal.open).toBe(true));
 
+    // THE property, asserted before anything else can fail: whatever the flow
+    // does, it must never propose the 2-tx create batch to the module factories.
     // The modules are DEPLOYED but not enabled — invisible to
     // hasRecordsModule() and (deep history) to the ModuleCreated scan, while the
-    // factories use plain CREATE. A seeded session without the addresses would
-    // plan step 2 and deploy a SECOND pair over the live publication.
+    // factories use plain CREATE, so a seeded session without their addresses
+    // would plan step 2 and deploy a SECOND pair over the live publication.
+    await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalled(), {
+      timeout: 5_000,
+    });
+    await flush();
+    const batches = () =>
+      safeIntMocks.proposeBatch.mock.calls.map(([txs]) => txs as Array<{ to: string }>);
+    expect(batches().filter((txs) => txs.length === 2)).toEqual([]);
+
+    // …and it is the merged enable+record batch: 2 Safe self-calls + the name
+    // record, all from the modules the session was seeded with.
+    expect(batches()).toHaveLength(1);
+    expect(
+      batches()[0]
+        .slice(0, 2)
+        .every((tx) => tx.to === SAFE_INFO.safeAddress),
+    ).toBe(true);
+    expect(
+      batches()[0]
+        .slice(2)
+        .every((tx) => tx.to === SAFE_INFO.s2sRecords),
+    ).toBe(true);
+
+    // The seed is what makes that possible.
     const seeded = loadInitSession(window.localStorage, INIT_SESSION_KEY)!;
     expect(seeded.recordsModule).toBe(SAFE_INFO.s2sRecords);
     expect(seeded.publicationModule).toBe(SAFE_INFO.s2sPublication);
-
-    // The resumed flow passes step 1 and goes straight to the merged batch.
     await vi.waitFor(
       () =>
         expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)!.phase).toBe(
@@ -1026,17 +1054,6 @@ describe('s2s-app (shell)', () => {
         ),
       { timeout: 5_000 },
     );
-
-    // Exactly one batch went out, and it is the merged enable+record batch (2
-    // Safe self-calls + the name record) — no 2-tx create batch to the
-    // factories was ever proposed.
-    const batches = safeIntMocks.proposeBatch.mock.calls.map(
-      ([txs]) => txs as Array<{ to: string }>,
-    );
-    expect(batches).toHaveLength(1);
-    expect(batches.filter((txs) => txs.length === 2)).toEqual([]);
-    expect(batches[0].slice(0, 2).every((tx) => tx.to === SAFE_INFO.safeAddress)).toBe(true);
-    expect(batches[0].slice(2).every((tx) => tx.to === SAFE_INFO.s2sRecords)).toBe(true);
   });
 
   it('reads the ENS registry from the protocol info instead of a hardcoded address', async () => {
@@ -1122,9 +1139,7 @@ describe('s2s-app (shell)', () => {
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
     await vi.waitFor(() =>
-      expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)!.phase).toBe(
-        'awaiting-config',
-      ),
+      expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)!.phase).toBe('awaiting-config'),
     );
 
     // The session is untouched: same flow, same publication, same step.
@@ -1136,6 +1151,212 @@ describe('s2s-app (shell)', () => {
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.phase).not.toBe('ens');
     expect(safeIntMocks.evmRead).not.toHaveBeenCalled();
+  });
+
+  it('retries the repair after the config step finishes in the same page load', async () => {
+    // Ordering: the config step owns the session and the modal on load, so the
+    // repair must stand down — but only for THAT pass. A repair skipped (or a
+    // registry read rate-limited) once must not poison the rest of the page
+    // load, or a legacy publication whose config step finishes later never gets
+    // its step 1 until a reload.
+    seedInitSession({ phase: 'awaiting-config' });
+    safeIntMocks.hasRecordsModule.mockReturnValue(true);
+    safeIntMocks.hasPublicationModule.mockReturnValue(true);
+    // The config record lands AFTER the first refresh pass: that is the real
+    // ordering (the resume polls the queue while the pass finishes), and it keeps
+    // finishConfigStep outside the pass so its refresh can start a new one.
+    let configOnChain = false;
+    safeIntMocks.getRecord.mockImplementation(async (key: string) => {
+      if (key === 'config') return configOnChain ? 'bafyconfig' : '';
+      if (key === 'name') return 'polyphony.soul2soul.eth';
+      return '';
+    });
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    // First pass: the config step owns the session, so the repair stands down.
+    await vi.waitFor(() => expect(safeIntMocks.getAllRecords).toHaveBeenCalled());
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
+    expect(safeIntMocks.evmRead).not.toHaveBeenCalled();
+
+    // The queued config tx is executed on Base → the step finishes and its
+    // refresh must give the earlier skipped repair a second chance.
+    configOnChain = true;
+    await vi.waitFor(
+      () => expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('ens'),
+      { timeout: 10_000 },
+    );
+    const seeded = loadInitSession(window.localStorage, INIT_SESSION_KEY)!;
+    expect(seeded.name).toBe('polyphony');
+    expect(seeded.recordsModule).toBe(SAFE_INFO.s2sRecords);
+    expect(seeded.publicationModule).toBe(SAFE_INFO.s2sPublication);
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+    expect(modal.phase).toBe('ens');
+  });
+
+  it('the repair stands down on both config flags even with no session on disk', async () => {
+    // Discriminates the flags from the "any session on disk" guard: here there is
+    // none, so only `configResumePending` / `configWaitActive` can save the page
+    // from a step-1 modal.
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const probe = el as unknown as {
+      initPhase: InitPhase | null;
+      configResumePending: boolean;
+      configWaitActive: boolean;
+      ensRepairSuppressed: boolean;
+      ensRepairDone: Set<string>;
+      maybeRepairEnsRegistration: (i: typeof SAFE_INFO) => Promise<void>;
+    };
+    // Back to the moment before the pass: no flow of our own, no verdict, no
+    // session. Everything a repair needs to seed except the config flags.
+    const run = async (): Promise<void> => {
+      probe.initPhase = null;
+      probe.initModalOpen = false;
+      probe.ensRepairSuppressed = false;
+      probe.ensRepairDone.clear();
+      window.localStorage.clear();
+      safeIntMocks.evmRead.mockClear();
+      await probe.maybeRepairEnsRegistration(SAFE_INFO);
+    };
+
+    // Sanity: with no flag set and no session, this fixture DOES seed.
+    await run();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+
+    probe.configResumePending = true;
+    await run();
+    expect(safeIntMocks.evmRead).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    probe.configResumePending = false;
+
+    probe.configWaitActive = true;
+    await run();
+    expect(safeIntMocks.evmRead).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    probe.configWaitActive = false;
+
+    // Both flags down again: the repair is retried, not written off.
+    await run();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).not.toBeNull();
+  });
+
+  it('retries the repair on a later pass after a failed registry read', async () => {
+    // A 429 during the repair's L1 batch is not a verdict about the name: the
+    // pass must not be written off for the rest of the page load.
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    let failReads = true;
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        if (failReads) throw new Error('429 Too Many Requests');
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(safeIntMocks.evmRead).toHaveBeenCalled());
+    // No verdict: no step-1 modal, no session, and the key is not burnt.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)).toBeNull();
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBeFalsy();
+    const probe = el as unknown as { ensRepairDone: Set<string> };
+    expect([...probe.ensRepairDone]).toEqual([]);
+
+    // The registry recovers: any later refresh (a tab action, a config retry —
+    // in the test: one more pass) seeds step 1.
+    failReads = false;
+    await (el as unknown as { fetchFreshData: () => Promise<void> }).fetchFreshData();
+    await vi.waitFor(
+      () => expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('ens'),
+      { timeout: 5_000 },
+    );
+  });
+
+  it('the host writer moves the phase BACK on a failure (the documented exception)', async () => {
+    // Monotonicity belongs to the init component. This writer records failures,
+    // where going back is the point: 'configuring' says "nothing is queued, the
+    // Retry rebuilds", while a forward-only 'awaiting-config' would claim a
+    // proposal exists and make Retry wait 10 minutes for a tx that never was.
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    seedInitSession({ phase: 'awaiting-config' });
+    (
+      el as unknown as { persistInitPhase: (p: InitPhase, e?: Partial<InitSession>) => void }
+    ).persistInitPhase('configuring', { proposals: [] });
+
+    const after = loadInitSession(window.localStorage, INIT_SESSION_KEY)!;
+    expect(after.phase).toBe('configuring');
+    // …without losing what the earlier phase had written.
+    expect(after.name).toBe('my-pub');
+    expect(after.recordsModule).toBe(SAFE_INFO.s2sRecords);
+    expect(after.proposals).toEqual([]);
   });
 
   it('leaves a name owned by a third party alone (no step-1 modal, no session)', async () => {
