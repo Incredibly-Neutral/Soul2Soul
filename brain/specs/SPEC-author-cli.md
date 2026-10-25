@@ -49,7 +49,9 @@ s2s config path      [--local] [--json]                          # print the con
 ```
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
-legs, and writes `genesis`/`author` back — but **never touches the chain**. The on-chain
+legs, and writes `genesis`/`author` back — but **never writes to the chain**. `author`
+in that frontmatter is the **author Safe** (`did:ethr:<safe>`), not the signing EOA;
+`author` sits inside the EIP-712 signing view, so it is part of `genesis`. The on-chain
 `makeOffer` is the separate **`propose`** step, which takes the `kuboCid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
 `content_id`, mirroring neutralpress' revoke genesis resolution). `upload` also writes the
