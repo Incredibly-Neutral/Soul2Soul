@@ -18,7 +18,7 @@ describe('loadConfig', () => {
     expect(config.rpc).toEqual({ L1: [], L2: [] });
     expect(config.filecoin.chain).toBe('mainnet');
     expect(config.filecoin.rpcUrl).toBe('https://api.node.glif.io/rpc/v1');
-    expect(config.bundler.entryPoint).toBe('0.6');
+    expect(config.bundler.entryPoint).toBe('0.7');
     expect(config.bundler.baseUrl).toBeUndefined();
   });
 

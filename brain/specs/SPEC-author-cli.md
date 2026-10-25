@@ -337,7 +337,7 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 | `S2S_PIMLICO_KEY` | `new`, `author init` | — | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler *and* paymaster. |
 | `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch: explicit bundler RPC, overriding the derived Pimlico URL. On its own it means no sponsorship. |
 | `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch: explicit paymaster RPC, overriding the Pimlico one. |
-| `S2S_ENTRY_POINT` | — | `0.6` | EntryPoint version the bundler serves (`0.6`/`0.7`). |
+| `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 
 ## Architecture (blank-slate host)
