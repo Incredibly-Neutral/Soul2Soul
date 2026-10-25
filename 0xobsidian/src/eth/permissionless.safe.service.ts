@@ -14,6 +14,17 @@ import { createGasPriceFetcher, warmUpPimlico, isRealApiKey, GasPriceResult } fr
 
 const ENTRYPOINT_ADDRESS_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
+// Pinned Safe-account parameters. These are NOT free choices: the entry point
+// selects the Safe4337Module that the Safe's initializer installs, and the
+// initializer is the CREATE2 input — so all of it determines the counterfactual
+// address. Leaving them to permissionless' defaults lets a dependency bump
+// silently move every author's Safe (and invalidate stored `user.safe` values).
+// Same version/addresses as author-cli's `author-safe.ts`.
+const SAFE_VERSION = "1.4.1" as const;
+const SAFE_ENTRY_POINT = { address: ENTRYPOINT_ADDRESS_V07, version: "0.7" } as const;
+const SAFE_SINGLETON_L2 = "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762" as const; // SafeL2 v1.4.1
+const SAFE_PROXY_FACTORY = "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67" as const;
+
 interface InternalTransaction {
   contractAddress: `0x${string}`;
   from: string;
@@ -173,10 +184,11 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
         client: this.publicClient,
         owners: [this.signer],
         threshold: 1n,
-        version: "1.4.1",
+        version: SAFE_VERSION,
+        entryPoint: SAFE_ENTRY_POINT,
         saltNonce: BigInt(keccak256(toBytes(salt))),
-        safeSingletonAddress: "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762", // SafeL2 v1.4.1 on Base
-        safeProxyFactoryAddress: "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+        safeSingletonAddress: SAFE_SINGLETON_L2, // SafeL2 v1.4.1 on Base
+        safeProxyFactoryAddress: SAFE_PROXY_FACTORY
       });
 
     return await this.setSafe(smartAccount);
@@ -189,10 +201,11 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
       client: this.publicClient,
       owners: [this.signer], 
       threshold: 1n,
-      version: "1.4.1",
+      version: SAFE_VERSION,
+      entryPoint: SAFE_ENTRY_POINT,
       address: safe_address, 
-      safeSingletonAddress: "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762", // SafeL2 v1.4.1 on Base
-      // safeProxyFactoryAddress: "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+      safeSingletonAddress: SAFE_SINGLETON_L2, // SafeL2 v1.4.1 on Base
+      // safeProxyFactoryAddress: SAFE_PROXY_FACTORY
     });
 
     return await this.setSafe(smartAccount);
@@ -217,12 +230,19 @@ export class PermissionlessSafeService implements IPermissionlessSafeService {
 
   async getSafeAddress(salt: string): Promise<`0x${string}`> {
 
+    // Predict the same address connectToFreshSafe would deploy: same pinned
+    // version/entry point/singleton/factory (omitting any of them falls back to
+    // permissionless' defaults, which are the L1 singleton for 1.4.1 and thus a
+    // different address).
     const tempAccount = await toSafeSmartAccount({
       client: this.publicClient,
       owners: [this.signer],
       threshold: 1n,
-      version: "1.4.1",
+      version: SAFE_VERSION,
+      entryPoint: SAFE_ENTRY_POINT,
       saltNonce: BigInt(keccak256(toBytes(salt))),
+      safeSingletonAddress: SAFE_SINGLETON_L2,
+      safeProxyFactoryAddress: SAFE_PROXY_FACTORY,
     });
         
     return tempAccount.address;

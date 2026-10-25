@@ -97,6 +97,21 @@ describe('PermissionlessSafeService', { timeout: 30_000 }, () => {
       expect(addr2).toBe(addr1);
     });
 
+    it('should predict the deployment address with getSafeAddress', async () => {
+      if (!ready) return;
+
+      const { svc } = makeSvc();
+      await svc.updateSigner(testPk!);
+      const deployed = await svc.connectToFreshSafe(testSalt);
+      const predicted = await svc.getSafeAddress(testSalt);
+
+      // getSafeAddress must agree with connectToFreshSafe: both pin the same
+      // version, entry point, SafeL2 singleton and proxy factory. If the
+      // prediction omits any of them (e.g. the singleton), it silently falls
+      // back to permissionless' 1.4.1 defaults and returns a different address.
+      expect(predicted.toLowerCase()).toBe(deployed.toLowerCase());
+    });
+
     it('should derive different addresses for different salts', async () => {
       if (!ready) return;
 
