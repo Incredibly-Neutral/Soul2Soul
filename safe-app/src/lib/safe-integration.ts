@@ -212,6 +212,26 @@ export class SafeIntegration {
   }
 
   /**
+   * Size in bytes of the code deployed at `address` on the Safe's chain
+   * (0 when the account has no contract).
+   *
+   * The init flow uses this to prove the module factories exist on the chain
+   * the Safe lives on BEFORE proposing the create batch. A call to an address
+   * with no code does not revert: the Safe tx SUCCEEDS as a no-op, nothing is
+   * deployed, and no ModuleCreated log is ever emitted — so the flow would poll
+   * for a deployment that can never happen. The factories are read from
+   * on-chain protocol state through the Base provider (shared/src/protocol), so
+   * pointing them at another chain (e.g. a mainnet Safe) is exactly that case.
+   */
+  async contractCodeSize(address: string): Promise<number> {
+    const provider = this.getProvider();
+    const code: string = await provider.getCode(address);
+    // eth_getCode returns '0x' for an account without code: 2 hex chars per
+    // byte once the 0x prefix is dropped.
+    return Math.max(0, (code.length - 2) / 2);
+  }
+
+  /**
    * Fetch raw factory `ModuleCreated` logs for a given safe address.
    * topic[1] is the padded indexed safe address (bytes32). Returns the raw
    * log objects, which carry `.topics`.
