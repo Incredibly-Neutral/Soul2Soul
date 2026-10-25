@@ -45,6 +45,7 @@ const safeIntMocks = vi.hoisted(() => ({
   fetchFactoryModuleCreatedLogs: vi.fn(),
   getProvider: vi.fn(),
   adoptModules: vi.fn(),
+  evmRead: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -152,6 +153,7 @@ vi.mock('@/lib/safe-integration.js', () => ({
     fetchFactoryModuleCreatedLogs = safeIntMocks.fetchFactoryModuleCreatedLogs;
     getProvider = safeIntMocks.getProvider;
     adoptModules = safeIntMocks.adoptModules;
+    evmRead = safeIntMocks.evmRead;
   },
 }));
 
@@ -206,6 +208,10 @@ import '../../src/components/s2s-app';
 
 const NAV_TABS = ['deals-tab', 'whitelist-tab', 'records-tab', 'storage-tab', 'website-tree-tab'];
 
+const ENS_REGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e';
+const NAME_WRAPPER = '0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401';
+const ENS_PARENT_NODE = '0x' + '1'.repeat(64);
+
 const Q1 =
   'https://app.safe.global/transactions/queue?safe=8453:0x00000000000000000000000000000000000000A1';
 const Q2 =
@@ -242,7 +248,7 @@ function initComplete(
 /** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
 function seedInitSession(overrides: Partial<InitSession> = {}): void {
   saveInitSession(window.localStorage, INIT_SESSION_KEY, {
-    version: 2,
+    version: 3,
     chainId: 8453,
     safeAddress: SAFE_INFO.safeAddress,
     phase: 'awaiting-finalize',
@@ -322,6 +328,25 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
     safeIntMocks.adoptModules.mockReset();
     safeIntMocks.adoptModules.mockResolvedValue(undefined);
+    // L1 ENS reads: default = the subnode is registered to THIS Safe, i.e. the
+    // publication's ENS step is already done (the repair path stays quiet).
+    safeIntMocks.evmRead.mockReset();
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'registeredSubdomains':
+            return true;
+          case 'ownerOf':
+            return SAFE_INFO.safeAddress;
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
     recordsTabMocks.updateConfig.mockReset();
     recordsTabMocks.updateConfig.mockResolvedValue('bafyconfig');
     protocolMocks.initialize.mockResolvedValue(undefined);
@@ -836,7 +861,88 @@ describe('s2s-app (shell)', () => {
     const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
     expect(modal.phase).toBe('detecting');
     const steps = modal.shadowRoot?.querySelectorAll('.step') ?? [];
-    expect(steps.length).toBe(3);
+    expect(steps.length).toBe(4);
+  });
+
+  it('seeds step 1 for a publication whose ENS name was never registered', async () => {
+    // The pre-ENS publication: both modules installed, name record on-chain,
+    // but no `polyphony.soul2soul.eth` subnode — the name resolves to 0x0 and
+    // nothing would ever notice (no session, modules live).
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+
+    // The flow is seeded at step 1, for THIS Safe, with the label from the name
+    // record and the full name kept for the records steps.
+    expect(modal.phase).toBe('ens');
+    expect(
+      modal.shadowRoot?.querySelector('[data-step="1"]')?.classList.contains('step--current'),
+    ).toBe(true);
+    const session = loadInitSession(window.localStorage, INIT_SESSION_KEY);
+    expect(session).toMatchObject({
+      version: 3,
+      phase: 'ens',
+      chainId: 8453,
+      safeAddress: SAFE_INFO.safeAddress,
+      name: 'polyphony',
+      publicationName: 'polyphony.soul2soul.eth',
+    });
+    // The repair only seeds the flow — it proposes nothing itself.
+    expect(safeIntMocks.proposeBatch).not.toHaveBeenCalled();
+
+    // The element's step-1 call is forwarded to the modal, which renders it.
+    const init = el.shadowRoot?.querySelector('s2s-publication-init') as HTMLElement;
+    init.dispatchEvent(
+      new CustomEvent('s2s-init-progress', {
+        detail: {
+          step: 'awaiting-ens',
+          phase: 'awaiting-ens',
+          proposals: [],
+          ensCall: { to: ENS_REGISTRY, data: '0xdeadbeef' },
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    await el.updateComplete;
+    await modal.updateComplete;
+    expect(modal.ensCall).toEqual({ to: ENS_REGISTRY, data: '0xdeadbeef' });
+    expect(modal.shadowRoot?.querySelector('#init-ens-call')?.textContent).toContain(ENS_REGISTRY);
+  });
+
+  it('leaves a publication alone when its ENS name already resolves to this Safe', async () => {
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    // beforeEach's evmRead default: registered + ownedBySafe.
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+    expect(safeIntMocks.getRecord).toHaveBeenCalledWith('name');
   });
 
   it('resumes a config-phase session and finishes when the config record is already on-chain', async () => {
@@ -944,10 +1050,10 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(true);
     await vi.waitFor(() =>
       expect(
-        modal.shadowRoot?.querySelector('[data-step="3"]')?.classList.contains('step--current'),
+        modal.shadowRoot?.querySelector('[data-step="4"]')?.classList.contains('step--current'),
       ).toBe(true),
     );
-    expect(modal.shadowRoot?.querySelector('[data-step="3"] .step__marker--spinner')).toBeTruthy();
+    expect(modal.shadowRoot?.querySelector('[data-step="4"] .step__marker--spinner')).toBeTruthy();
     expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)?.phase).toBe('awaiting-config');
   });
 
@@ -1319,7 +1425,7 @@ describe('s2s-app (shell)', () => {
     await vi.waitFor(() => expect(modal.open).toBe(true));
     await vi.waitFor(() =>
       expect(
-        modal.shadowRoot?.querySelector('[data-step="3"]')?.classList.contains('step--current'),
+        modal.shadowRoot?.querySelector('[data-step="4"]')?.classList.contains('step--current'),
       ).toBe(true),
     );
     expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
@@ -1405,7 +1511,7 @@ describe('s2s-app (shell)', () => {
       );
       await vi.waitFor(() =>
         expect(
-          modal.shadowRoot?.querySelector('[data-step="3"]')?.classList.contains('step--current'),
+          modal.shadowRoot?.querySelector('[data-step="4"]')?.classList.contains('step--current'),
         ).toBe(true),
       );
       expect(recordsTabMocks.updateConfig).not.toHaveBeenCalled();

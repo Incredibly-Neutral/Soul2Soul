@@ -7,9 +7,9 @@
 // so the user cannot lose track of it).
 //
 // It is CONTROLLED: the host binds `.open` / `.phase` / `.error` /
-// `.canDismiss` and the modal never flips `open` itself. It shows only the three
-// step markers (spinner for the current step, check for done, dot for pending)
-// and — when there is a failure — the red error block. When the host reports an
+// `.canDismiss` / `.ensCall` and the modal never flips `open` itself. It shows
+// only the step markers (spinner for the current step, check for done, dot for
+// pending) and — when there is a failure — the red error block. When the host reports an
 // error it offers up to two actions: Retry, and — only for a failure that
 // queued nothing (a build/propose error, where retrying the same input cannot
 // work) — "Close and fix the configuration", which dismisses the flow and
@@ -39,6 +39,15 @@ export class S2SInitProgressModal extends LitElement {
    * that covers the Config tab where the repo/branch are fixed.
    */
   @property({ type: Boolean }) canDismiss = false;
+
+  /**
+   * Step 1's write, when it has to be executed OUTSIDE this Safe: the ENS
+   * registry lives on Ethereum L1, so `registerSubdomain` is a transaction on
+   * chain 1 that this Base-embedded app cannot propose. The host passes the
+   * ready-to-send call and the modal shows `to` + `data` for the human to
+   * execute from the L1 Safe. Undefined for every other step.
+   */
+  @property({ attribute: false }) ensCall?: { to: string; data: string };
 
   static styles = [
     buttonStyles,
@@ -145,6 +154,64 @@ export class S2SInitProgressModal extends LitElement {
         flex-wrap: wrap;
         gap: 0.5rem;
       }
+
+      .ens {
+        margin: 0 0 1rem;
+        padding: 0.75rem;
+        border-radius: 6px;
+        background: var(--gray-900, #1b1815);
+        border: 1px solid var(--gray-600, #5f564b);
+      }
+
+      .ens__headline {
+        margin: 0 0 0.5rem;
+        font-size: 0.8rem;
+        letter-spacing: 0.04em;
+        color: var(--gray-300, #bdb3a0);
+      }
+
+      .ens__row {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+        margin-top: 0.35rem;
+      }
+
+      .ens__label {
+        flex-shrink: 0;
+        width: 2.5rem;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--gray-400, #8f8474);
+        padding-top: 0.15rem;
+      }
+
+      .ens__value {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--gray-50, #f5f1e8);
+        word-break: break-all;
+        white-space: pre-wrap;
+        user-select: all;
+      }
+
+      .ens__copy {
+        flex-shrink: 0;
+        padding: 0.15rem 0.45rem;
+        font-size: 0.7rem;
+        background: transparent;
+        border: 1px solid var(--gray-600, #5f564b);
+        border-radius: 4px;
+        color: var(--gray-300, #bdb3a0);
+        cursor: pointer;
+      }
+
+      .ens__copy:hover {
+        color: var(--gray-50, #f5f1e8);
+      }
     `,
   ];
 
@@ -158,7 +225,18 @@ export class S2SInitProgressModal extends LitElement {
     this.dispatchEvent(new CustomEvent('s2s-init-dismiss', { bubbles: true, composed: true }));
   };
 
-  private renderStep(index: 1 | 2 | 3, title: string): unknown {
+  /** Copy a value to the clipboard. Never throws: a denied clipboard (no
+   *  permission, insecure context) must not break the dialog — the value is
+   *  selectable in the <code> regardless. Dispatches nothing. */
+  private async copy(value: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // Nothing to surface: the text is on screen and selectable.
+    }
+  }
+
+  private renderStep(index: 1 | 2 | 3 | 4, title: string): unknown {
     const state = stepState(this.phase, index);
     const marker =
       state === 'done'
@@ -172,6 +250,24 @@ export class S2SInitProgressModal extends LitElement {
         <span class="step__marker">${marker}</span>
         <span>${title}</span>
       </li>
+    `;
+  }
+
+  /** One `label + <code> + copy` row of the ENS block. */
+  private renderEnsRow(label: string, value: string): unknown {
+    return html`
+      <div class="ens__row">
+        <span class="ens__label">${label}</span>
+        <code class="ens__value" data-ens="${label}">${value}</code>
+        <button
+          class="ens__copy"
+          data-copy="${label}"
+          aria-label="Copy ${label}"
+          @click=${() => void this.copy(value)}
+        >
+          Copy
+        </button>
+      </div>
     `;
   }
 
@@ -192,6 +288,15 @@ export class S2SInitProgressModal extends LitElement {
             ${INIT_STEPS.map((row) => this.renderStep(row.index, row.title))}
           </ul>
 
+          ${this.ensCall
+            ? html`
+                <div class="ens" id="init-ens-call">
+                  <div class="ens__headline">Register on the L1 Safe (chain 1)</div>
+                  ${this.renderEnsRow('to', this.ensCall.to)}
+                  ${this.renderEnsRow('data', this.ensCall.data)}
+                </div>
+              `
+            : ''}
           ${this.error
             ? html`
                 <div class="init__error" id="init-progress-error" role="alert">${this.error}</div>

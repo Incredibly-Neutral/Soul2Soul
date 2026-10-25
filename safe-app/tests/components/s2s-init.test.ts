@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Interface } from 'ethers';
+import { Interface, namehash } from 'ethers';
 import type { S2SPublicationInit } from '../../src/components/s2s-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
 import { INIT_SESSION_KEY, saveInitSession, type InitSession } from '../../src/lib/init-session';
@@ -29,9 +29,15 @@ const SAFE_INFO = {
   threshold: 1,
 };
 
+const ENS_REGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e';
+const NAME_WRAPPER = '0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ENS_PARENT_NODE = namehash('soul2soul.eth');
+
 const PROTOCOL_INFO = {
   recordsFactory: RECORDS_FACTORY,
   publicationFactory: PUB_FACTORY,
+  ensRegistry: ENS_REGISTRY,
 };
 
 /** Left-pad an address to the 32-byte indexed-topic form (publication-init.ts). */
@@ -70,8 +76,20 @@ function makeSafeIntegration(
     existing?: { recordsModule?: string; publicationModule?: string };
     /** Byte size of each factory's code on this chain; 0 models "wrong chain". */
     factoryCode?: { records?: number; publication?: number };
+    /**
+     * ENS (step 1) state on L1. The default models the happy legacy/hand-made
+     * case — the subnode is already registered to THIS Safe — so the module
+     * steps start immediately and pre-ENS expectations keep their shape. The
+     * object is captured by reference: a test can flip `owner` mid-flow to
+     * model the human executing the registration.
+     */
+    ens?: { owner?: string; registered?: boolean };
   } = {},
 ) {
+  const ens = {
+    owner: opts.ens?.owner ?? SAFE_ADDRESS,
+    registered: opts.ens?.registered ?? true,
+  };
   let enableProposed = false;
   let nameProposed = false;
   let createProposed = false;
@@ -98,8 +116,35 @@ function makeSafeIntegration(
   const isCreateBatch = (txs: MetaTransactionData[]) =>
     txs.length === 2 && txs[0] !== undefined && txs[0].to.toLowerCase() === RECORDS_FACTORY.toLowerCase();
 
+  /** The four L1 registry/wrapper reads readEnsRegistration makes. */
+  const evmRead = vi.fn(
+    async (
+      _chainId: number,
+      _contract: string,
+      _abi: unknown,
+      method: string,
+      _args: unknown[],
+    ) => {
+      switch (method) {
+        case 'parentNode':
+          return ENS_PARENT_NODE;
+        case 'nameWrapper':
+          return NAME_WRAPPER;
+        case 'registeredSubdomains':
+          return ens.registered;
+        case 'ownerOf':
+          return ens.owner;
+        default:
+          throw new Error(`unexpected EVM read: ${method}`);
+      }
+    },
+  );
+
   return {
     proposeBatch,
+    evmRead,
+    /** Mutable ENS state (see the `ens` option). */
+    ens,
     /** Calls that proposed the (non-idempotent) create batch. */
     createProposals: () =>
       proposeBatch.mock.calls
@@ -136,7 +181,7 @@ function makeSafeIntegration(
 /** Seed an in-flight session into localStorage so the next mount resumes it. */
 function seedSession(overrides: Partial<InitSession> = {}): void {
   saveInitSession(window.localStorage, INIT_SESSION_KEY, {
-    version: 2,
+    version: 3,
     chainId: 8453,
     safeAddress: SAFE_ADDRESS,
     phase: 'detecting',
@@ -1323,5 +1368,216 @@ describe('s2s-publication-init', () => {
     expect(error).toContain(
       `(chain 8453, factories ${RECORDS_FACTORY}/${PUB_FACTORY}, blocks 11990000-12000000, last poll: 0/0 logs)`,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 1 — ENS registration (the registry lives on L1 only, so it is its own
+// proposal and is never batched with the Base module txs).
+// ---------------------------------------------------------------------------
+
+const REGISTER_SUBDOMAIN = new Interface([
+  'function registerSubdomain(string label, address owner)',
+]);
+const MAINNET_SAFE = { ...SAFE_INFO, chainId: 1, network: 'ethereum' };
+
+/** Capture every `s2s-init-progress` detail dispatched from now on. */
+function trackProgress(el: S2SPublicationInit): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  el.addEventListener('s2s-init-progress', (e) => {
+    events.push((e as CustomEvent).detail as Record<string, unknown>);
+  });
+  return events;
+}
+
+function decodeRegisterSubdomain(call: { to: string; data: string }): {
+  label: string;
+  owner: string;
+} {
+  const parsed = REGISTER_SUBDOMAIN.parseTransaction({ data: call.data });
+  return { label: String(parsed!.args[0]), owner: String(parsed!.args[1]) };
+}
+
+/** Single-transaction batches targeting the L1 registry (the ENS proposal). */
+function ensProposals(si: ReturnType<typeof makeSafeIntegration>): MetaTransactionData[][] {
+  return si.proposeBatch.mock.calls
+    .map(([txs]) => txs as MetaTransactionData[])
+    .filter((txs) => txs.length === 1 && txs[0].to.toLowerCase() === ENS_REGISTRY.toLowerCase());
+}
+
+describe('s2s-publication-init — ENS step (step 1)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('skips step 1 with no proposal when the name is already owned by this Safe', async () => {
+    const si = makeSafeIntegration({ enabled: true });
+    const el = await mount({ safeIntegration: si });
+    const events = trackProgress(el);
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await complete;
+    await flush();
+
+    // The registry was read on chain 1, with the session's label.
+    expect(si.evmRead).toHaveBeenCalledWith(
+      1,
+      ENS_REGISTRY,
+      expect.anything(),
+      'registeredSubdomains',
+      ['my-publication'],
+      undefined,
+    );
+    // Nothing was proposed for the name and the flow went straight to the modules.
+    expect(ensProposals(si)).toHaveLength(0);
+    expect(events.some((d) => d.phase === 'awaiting-ens')).toBe(false);
+    expect(si.createProposals()).toHaveLength(1);
+  });
+
+  it('surfaces the L1 call and never proposes it from Base, then continues once the owner is the Safe', async () => {
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({ safeIntegration: si, ensPollIntervalMs: 5 });
+    const events = trackProgress(el);
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(events.some((d) => d.phase === 'awaiting-ens')).toBe(true));
+    const detail = events.find((d) => d.phase === 'awaiting-ens')!;
+    const call = detail.ensCall as { to: string; data: string };
+    expect(call).toBeTruthy();
+    expect(call.to).toBe(ENS_REGISTRY);
+    expect(decodeRegisterSubdomain(call)).toEqual({
+      label: 'my-publication',
+      owner: SAFE_ADDRESS,
+    });
+
+    // The Safe is on Base: the registry has no code here, so the batch must
+    // never be proposed from this Safe.
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    // Step 1 is persisted as "proposed" so a reload resumes the wait instead.
+    expect(JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!).phase).toBe('awaiting-ens');
+
+    // The human executes registerSubdomain from the L1 twin Safe → the poll
+    // sees the subnode owned by this Safe and the flow carries on.
+    si.ens.owner = SAFE_ADDRESS;
+    si.ens.registered = true;
+    await complete;
+    await flush();
+
+    expect(si.createProposals()).toHaveLength(1);
+    expect(events.at(-1)?.ensCall).toBeUndefined();
+  });
+
+  it('proposes exactly one registerSubdomain tx from the L1 Safe (chain 1)', async () => {
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({
+      safeIntegration: si,
+      safeInfo: MAINNET_SAFE,
+      ensPollIntervalMs: 5,
+    });
+
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(ensProposals(si)).toHaveLength(1));
+    const [batch] = ensProposals(si);
+    expect(batch).toHaveLength(1);
+    expect(batch[0].value).toBe('0');
+    expect(decodeRegisterSubdomain(batch[0])).toEqual({
+      label: 'my-publication',
+      owner: SAFE_ADDRESS,
+    });
+    // The selector is derived by encoding, never hardcoded.
+    expect(batch[0].data.slice(0, 10)).toBe(
+      REGISTER_SUBDOMAIN.getFunction('registerSubdomain')!.selector,
+    );
+
+    si.ens.owner = SAFE_ADDRESS;
+    si.ens.registered = true;
+    await complete;
+    await flush();
+
+    // One ENS proposal, then the module flow as usual.
+    expect(ensProposals(si)).toHaveLength(1);
+    expect(si.createProposals()).toHaveLength(1);
+  });
+
+  it('times out with the exact L1 command to run when the name never resolves', async () => {
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({ safeIntegration: si, ensTimeoutMs: 40, ensPollIntervalMs: 10 });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() =>
+      expect(bodyText(el)).toContain('Timed out waiting for my-publication.soul2soul.eth'),
+    );
+    expect(bodyText(el)).toContain(
+      `Register it from the L1 Safe (${SAFE_ADDRESS}) on chain 1: ${ENS_REGISTRY}.registerSubdomain("my-publication", "${SAFE_ADDRESS}").`,
+    );
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('fails when the name is already owned by a third party, without retrying', async () => {
+    const si = makeSafeIntegration({ ens: { owner: OWNER_A } });
+    const el = await mount({ safeIntegration: si });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(bodyText(el)).toContain(
+      `${PUB_NAME} is already owned by ${OWNER_A.toLowerCase()}, not this Safe — the publication cannot use this name.`,
+    );
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    // No auto-retry: the owner was read exactly once.
+    expect(si.evmRead.mock.calls.filter(([, , , method]) => method === 'ownerOf')).toHaveLength(1);
+  });
+
+  it('fails on a half-written registration (registry says taken, no owner)', async () => {
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: true } });
+    const el = await mount({ safeIntegration: si });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(bodyText(el)).toContain(
+      `The ENS registry reports ${PUB_NAME} as taken but the name has no owner — this half-written state needs fixing on chain 1 before the flow can continue.`,
+    );
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('resumes a session persisted at awaiting-ens by waiting, never re-proposing', async () => {
+    seedSession({ chainId: 1, phase: 'awaiting-ens', proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({
+      safeIntegration: si,
+      safeInfo: MAINNET_SAFE,
+      ensPollIntervalMs: 5,
+    });
+
+    // The rebuilt call is exposed again (a reloaded session has no memory of it).
+    await vi.waitFor(() =>
+      expect((el as unknown as { ensCall?: { to: string } }).ensCall?.to).toBe(ENS_REGISTRY),
+    );
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!).phase).toBe('awaiting-ens');
+
+    si.ens.owner = SAFE_ADDRESS;
+    si.ens.registered = true;
+    await vi.waitFor(() => expect(si.createProposals()).toHaveLength(1));
+    expect(ensProposals(si)).toHaveLength(0);
   });
 });
