@@ -38,6 +38,18 @@
 // readIsModuleEnabled / getRecord) so component tests can hand-roll a mock —
 // the same pattern as the other tabs.
 //
+// # Chain guard
+//
+// `protocolInfo.recordsFactory` / `publicationFactory` are read from on-chain
+// protocol state through the L2 provider (shared/src/protocol), i.e. they are
+// Base (8453) deployments. On any other chain createModule targets an address
+// with no code: the Safe tx SUCCEEDS as a no-op, nothing is deployed, no
+// ModuleCreated log is emitted, and detection polls a filter that can never
+// match — a live mainnet-Safe bug that looked like "modules never appear".
+// Both the create and the detect step therefore check that both factories have
+// code on the Safe's chain FIRST and throw a real error instead (before any
+// proposal is sent, and before a pointless timeout wait).
+//
 // # Crash-safe resume (init-session.ts)
 //
 // The flow is human-in-the-loop, so the page can reload at any point (the
@@ -124,6 +136,8 @@ interface InitSafeIntegration {
   ): Promise<{ topics: string[] }[]>;
   readIsModuleEnabled(moduleAddress: string): Promise<boolean>;
   getRecord(key: string): Promise<string>;
+  /** Byte size of the code at an address on the Safe's chain (0 = no contract). */
+  contractCodeSize(address: string): Promise<number>;
   /** Make getRecord / module reads work for freshly-created modules. */
   adoptModules(recordsModule?: string, publicationModule?: string): void | Promise<void>;
 }
@@ -186,6 +200,11 @@ export class S2SPublicationInit extends LitElement {
 
   /** Deployed factory addresses (recordsFactory + publicationFactory). */
   @property({ attribute: false }) protocolInfo?: ProtocolInfo;
+
+  /** How long to poll for the create batch's ModuleCreated logs. */
+  @property({ type: Number }) detectionTimeoutMs = DEFAULT_DETECTION_TIMEOUT_MS;
+  /** Poll interval while waiting for the create batch's ModuleCreated logs. */
+  @property({ type: Number }) detectionPollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
 
   /** How long to wait for the enable batch to be executed in the Safe app. */
   @property({ type: Number }) enableTimeoutMs = DEFAULT_ENABLE_TIMEOUT_MS;
@@ -810,6 +829,20 @@ export class S2SPublicationInit extends LitElement {
           }
         }
 
+        // The factories are read from on-chain protocol state through the Base
+        // provider (shared/src/protocol), i.e. they are Base (8453)
+        // deployments. On any other chain the create batch is a call to an
+        // address with no code: the Safe tx SUCCEEDS as a no-op, nothing is
+        // deployed, no ModuleCreated log is ever emitted and detection polls a
+        // filter that can never match. Refuse to propose that no-op tx — and
+        // do it before the fields are used by the finalize batch below too.
+        await this.assertFactoriesHaveCode(
+          si,
+          info,
+          this.safeInfo?.chainId ?? session.chainId,
+          'create',
+        );
+
         if (existing.recordsModule && existing.publicationModule) {
           console.log(
             `[init] create: modules already exist for this Safe, skipping the create batch (records=${existing.recordsModule} publication=${existing.publicationModule})`,
@@ -839,21 +872,65 @@ export class S2SPublicationInit extends LitElement {
       case 'detect': {
         this.step = 'detecting';
         this.dispatchProgress();
-        const { recordsModule, publicationModule } = await detectModuleAddresses(
-          {
-            fetchModuleCreatedLogs: (factoryAddress, safe, topic0, fromBlock) =>
-              si.fetchFactoryModuleCreatedLogs(factoryAddress, safe, topic0, fromBlock),
-            safeAddress,
+        const chainId = this.safeInfo?.chainId ?? session.chainId;
+
+        // Same chain check as create, run ONCE before the polling loop (never
+        // per poll): when a factory has no code here the create batch was a
+        // no-op and no ModuleCreated log can ever appear, so polling would
+        // just hang for the whole timeout. Fail now, with the actionable
+        // message instead.
+        await this.assertFactoriesHaveCode(si, info, chainId, 'detect');
+
+        // Last observed poll, carried into the timeout message: "polls until
+        // it gives up" is far easier to diagnose when the error names the
+        // chain, the factories, the block window and the log counts.
+        const lastPoll = { block: 0, fromBlock: 0, counts: new Map<string, number>() };
+        const detectDeps = {
+          fetchModuleCreatedLogs: async (
+            factoryAddress: string,
+            safe: string,
+            topic0: string,
+            fromBlock: number,
+          ) => {
+            const logs = await si.fetchFactoryModuleCreatedLogs(
+              factoryAddress,
+              safe,
+              topic0,
+              fromBlock,
+            );
+            lastPoll.fromBlock = fromBlock;
+            lastPoll.counts.set(factoryAddress.toLowerCase(), logs.length);
+            return logs;
+          },
+          safeAddress,
+          recordsFactory: info.recordsFactory,
+          publicationFactory: info.publicationFactory,
+          getBlockNumber: async () => {
+            const block = await si.getProvider().getBlockNumber();
+            lastPoll.block = block;
+            return block;
+          },
+        };
+
+        let detected: { recordsModule: string; publicationModule: string };
+        try {
+          detected = await detectModuleAddresses(detectDeps, {
+            timeoutMs: this.detectionTimeoutMs,
+            pollIntervalMs: this.detectionPollIntervalMs,
+            lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
+          });
+        } catch (e) {
+          throw this.describeDetectFailure(e, {
+            chainId,
             recordsFactory: info.recordsFactory,
             publicationFactory: info.publicationFactory,
-            getBlockNumber: () => si.getProvider().getBlockNumber(),
-          },
-          {
-            timeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
-            pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
-            lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
-          },
-        );
+            block: lastPoll.block,
+            fromBlock: lastPoll.fromBlock,
+            counts: lastPoll.counts,
+          });
+        }
+
+        const { recordsModule, publicationModule } = detected;
         this.persist('finalizing', { recordsModule, publicationModule });
         // The created contracts now exist on-chain — expose them to the shared
         // SafeIntegration so its getRecord/readIsModuleEnabled work live
@@ -906,6 +983,78 @@ export class S2SPublicationInit extends LitElement {
         return true;
       }
     }
+  }
+
+  /**
+   * Refuse to use the module factories on a chain where they do not exist.
+   *
+   * `protocolInfo.recordsFactory` / `publicationFactory` come from on-chain
+   * protocol state read through the L2 provider (shared/src/protocol
+   * getProtocolInfo), i.e. they are Base (8453) deployments. On any other chain
+   * a createModule call to them hits an address with no code: the Safe tx
+   * SUCCEEDS as a no-op, no module is deployed, no ModuleCreated log is emitted
+   * — and the flow used to poll a filter that could never match for ten
+   * minutes. Throwing here (before any proposeBatch) is the guard.
+   *
+   * `phase` is only used for the log line, so a create run and a detect run are
+   * distinguishable in the console.
+   */
+  private async assertFactoriesHaveCode(
+    si: InitSafeIntegration,
+    info: ProtocolInfo,
+    chainId: number,
+    phase: 'create' | 'detect',
+  ): Promise<void> {
+    const [recordsBytes, publicationBytes] = await Promise.all([
+      si.contractCodeSize(info.recordsFactory),
+      si.contractCodeSize(info.publicationFactory),
+    ]);
+    console.log(
+      `[init] ${phase}: factory code records=${recordsBytes} publication=${publicationBytes} chain=${chainId}`,
+    );
+
+    const missing =
+      recordsBytes === 0
+        ? info.recordsFactory
+        : publicationBytes === 0
+          ? info.publicationFactory
+          : '';
+    if (!missing) return;
+
+    throw new Error(
+      `The S2S module factories have no code on this Safe's chain (${chainId}): ${missing}. They are deployed on Base (8453) — this Safe must be on chain 8453 for the publication init to work.`,
+    );
+  }
+
+  /**
+   * Append the polling context to a detection timeout.
+   *
+   * The message itself is built by detectModuleAddresses (publication-init, a
+   * pure lib this component must not own), so the diagnostics are appended at
+   * the call site: the original prefix is preserved verbatim, and only real
+   * detection timeouts are rewritten — any other failure propagates untouched.
+   */
+  private describeDetectFailure(
+    error: unknown,
+    ctx: {
+      chainId: number;
+      recordsFactory: string;
+      publicationFactory: string;
+      block: number;
+      fromBlock: number;
+      counts: Map<string, number>;
+    },
+  ): unknown {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('Timed out after ') || !message.includes('module deployment logs')) {
+      return error;
+    }
+    const count = (factory: string) => ctx.counts.get(factory.toLowerCase()) ?? 0;
+    const detail =
+      `(chain ${ctx.chainId}, factories ${ctx.recordsFactory}/${ctx.publicationFactory}, ` +
+      `blocks ${ctx.fromBlock}-${ctx.block}, ` +
+      `last poll: ${count(ctx.recordsFactory)}/${count(ctx.publicationFactory)} logs)`;
+    return new Error(`${message} ${detail}`);
   }
 
   /**
