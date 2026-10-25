@@ -156,3 +156,26 @@ describe('hexKey normalization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('derived config keys', () => {
+  it('derives the author address from a 0x-less private key', async () => {
+    const { derivedConfigValue, isDerivedKey } = await import('../src/commands/config');
+    expect(isDerivedKey('address')).toBe(true);
+    expect(isDerivedKey('privateKey')).toBe(false);
+    // Requires the developer's real config to be out of the picture: use a
+    // private key value that resolves from the process env instead.
+    const prev = process.env.S2S_PRIVATE_KEY;
+    process.env.S2S_PRIVATE_KEY = '00'.repeat(31) + '01';
+    try {
+      expect(derivedConfigValue('address')).toBe('0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
+    } finally {
+      if (prev === undefined) delete process.env.S2S_PRIVATE_KEY;
+      else process.env.S2S_PRIVATE_KEY = prev;
+    }
+  });
+
+  it('returns null for an unknown derived key and for a missing key', async () => {
+    const { derivedConfigValue } = await import('../src/commands/config');
+    expect(derivedConfigValue('nope')).toBeNull();
+  });
+});
