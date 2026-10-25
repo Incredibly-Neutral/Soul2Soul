@@ -228,6 +228,26 @@ export async function createSafeRunner<
 
   await rebuild();
 
+  /**
+   * Fee overrides for a userOp. With a paymaster, viem asks for paymaster stub
+   * data *before* gas estimation and omits maxFeePerGas/maxPriorityFeePerGas
+   * from that request — Pimlico's schema rejects the call then ("method does
+   * not exist" with a zod detail naming maxFeePerGas). 0xobsidian sidesteps it
+   * by passing explicit gas prices on every send; do the same. Without a
+   * paymaster the normal estimation path works, so add nothing.
+   */
+  const feeOverrides = async (): Promise<{
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
+  }> => {
+    if (!paymaster) return {};
+    const gasPrice = await paymaster.getUserOperationGasPrice();
+    return {
+      maxFeePerGas: gasPrice.fast.maxFeePerGas,
+      maxPriorityFeePerGas: gasPrice.fast.maxPriorityFeePerGas,
+    };
+  };
+
   return {
     address: (): Address => smartAccount.address,
     isDeployed: async (): Promise<boolean> => {
@@ -236,7 +256,12 @@ export async function createSafeRunner<
     },
     deploy: async (): Promise<string> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
-      return client.sendTransaction({ to: smartAccount.address, data: '0x', value: 0n } as never);
+      return client.sendTransaction({
+        to: smartAccount.address,
+        data: '0x',
+        value: 0n,
+        ...(await feeOverrides()),
+      } as never);
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);
@@ -265,7 +290,7 @@ export async function createSafeRunner<
     ): Promise<string> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
       const data = encodeFunctionData({ abi: parseAbi(abi), functionName: method, args });
-      return client.sendTransaction({ to: address, data } as never);
+      return client.sendTransaction({ to: address, data, ...(await feeOverrides()) } as never);
     },
     batchGenericTx: async (calls: TxCall[]): Promise<string[]> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
@@ -276,7 +301,13 @@ export async function createSafeRunner<
           functionName: call.method,
           args: call.args,
         });
-        hashes.push(await client.sendTransaction({ to: call.address, data } as never));
+        hashes.push(
+          await client.sendTransaction({
+            to: call.address,
+            data,
+            ...(await feeOverrides()),
+          } as never),
+        );
       }
       return hashes;
     },
