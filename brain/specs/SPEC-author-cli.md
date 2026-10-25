@@ -92,7 +92,9 @@ from a completely unprovisioned machine.
 | project env file | `./.env` (cwd, optional) | by hand |
 
 Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
-`privateKey`, … — `s2s config list` shows the full set). List keys (`rpcL1`,
+`privateKey`, … — `s2s config list` shows the full set). Read-only derived keys are also accepted by `config get`:
+`address` (the EOA that signs authoring actions, computed from `privateKey` locally — no RPC),
+which is how a user learns or quotes their authoring identity. List keys (`rpcL1`,
 `rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
 
@@ -251,13 +253,13 @@ Shared field meanings:
 { action: 'config.set'; key: string; file: string; local: boolean }
 
 // s2s config get <key> [--json]        — value is the *effective* value (env may win); null when unset
-{ key: string; value: string | null }   // secrets masked
+{ key: string; value: string | null }   // secrets masked; `address` is derived, not stored
 
 // s2s config unset <key> [--local] [--json]
 { action: 'config.unset'; key: string; file: string; local: boolean }
 
 // s2s config list [--json]             — all effective values; secrets masked
-{ config: Record<string, string> }
+{ config: Record<string, string> }       // plus the derived `address` when privateKey is set
 
 // s2s config path [--local] [--json]
 { path: string; env: { user: string; userExists: boolean; project: string | null } }

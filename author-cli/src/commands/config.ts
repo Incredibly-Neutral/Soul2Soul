@@ -15,6 +15,9 @@
 
 import { existsSync } from 'node:fs';
 
+import { privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
+
 import type { ParsedArgs } from '../lib/args';
 import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
@@ -27,7 +30,29 @@ import {
   writeConfigValue,
   type ConfigField,
 } from '../core/configfile';
-import { configKeyValue } from '../core/config';
+import { configKeyValue, hexKey } from '../core/config';
+
+/**
+ * Read-only pseudo-keys derived from the config — never stored, never written.
+ * `address` is the EOA that signs authoring actions, derived from `privateKey`
+ * locally (no RPC): the identity a user has to quote to an editor or a Safe.
+ */
+export const DERIVED_KEYS = ['address'] as const;
+
+export function isDerivedKey(key: string): boolean {
+  return (DERIVED_KEYS as readonly string[]).includes(key);
+}
+
+export function derivedConfigValue(key: string): string | null {
+  if (key !== 'address') return null;
+  const privateKey = hexKey(configKeyValue('privateKey'));
+  if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) return null;
+  try {
+    return privateKeyToAccount(privateKey as Hex).address;
+  } catch {
+    return null;
+  }
+}
 
 export interface ConfigCommandSpec {
   name: string;
@@ -37,7 +62,7 @@ export interface ConfigCommandSpec {
 }
 
 function knownKeys(): string {
-  return CONFIG_FIELDS.map((f) => f.key).join(' ');
+  return [...CONFIG_FIELDS.map((f) => f.key), `${DERIVED_KEYS.join(' ')} (derived)`].join(' ');
 }
 
 function requireField(args: ParsedArgs): ConfigField {
@@ -92,6 +117,12 @@ function setCommand(out: CliOut, args: ParsedArgs): void {
 }
 
 function getCommand(out: CliOut, args: ParsedArgs): void {
+  const requested = args.positionals[0];
+  if (requested !== undefined && isDerivedKey(requested)) {
+    const value = derivedConfigValue(requested);
+    out.result({ key: requested, value }, `${requested}: ${value ?? '(unset)'}`);
+    return;
+  }
   const field = requireField(args);
   const value = configKeyValue(field.key);
   const shown = field.secret && value !== undefined ? maskSecret(value) : value;
@@ -118,6 +149,8 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
+  const address = derivedConfigValue('address');
+  const derived = [`address: ${address ?? '(unset — needs privateKey)'}`].join('\n');
   const userEnv = userEnvPath();
   const projectEnv = projectEnvPath();
   const envNotes = [
@@ -125,8 +158,8 @@ function listCommand(out: CliOut): void {
     `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
   ].join('\n');
   out.result(
-    { config: Object.fromEntries(entries) },
-    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
+    { config: Object.fromEntries([...entries, ['address', address] as const].filter(([, v]) => v !== null)) },
+    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }
 
