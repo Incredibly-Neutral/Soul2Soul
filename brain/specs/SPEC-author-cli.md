@@ -121,7 +121,10 @@ L2. The Safe is deployed on Base on first use (`s2s author init`) and left
 undeployed on mainnet until a publication needs it — the plugin's asymmetry,
 reproduced deliberately. `author init` is idempotent and is where modules get
 installed later; today it only deploys. Both steps need an L2 RPC; `init` also
-needs a bundler (`S2S_BUNDLER_URL`, plus `S2S_PAYMASTER_URL` to sponsor gas).
+needs an ERC-4337 endpoint: `S2S_PIMLICO_KEY` (what the plugin stores as
+`pimlico_key`) is enough — the per-chain Pimlico URL is derived and doubles as
+bundler and paymaster. `S2S_BUNDLER_URL` / `S2S_PAYMASTER_URL` remain as
+escape hatches for a different bundler.
 
 The env files exist because **the CLI ships to people who do not have this
 repo**: `~/.config/s2s/.env` is the primary configuration surface for an
@@ -331,8 +334,9 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 | `S2S_FILECOIN_RPC` | filecoin | `https://api.node.glif.io/rpc/v1` | Filecoin JSON-RPC. |
 | `S2S_FILECOIN_SESSION_KEY` | filecoin (protocol-payer) | — | Path to a `session-key.json`. Mutually exclusive with private key. |
 | `S2S_FILECOIN_PRIVATE_KEY` | filecoin (direct) | — | Direct Filecoin signer key. Mutually exclusive with session key. |
-| `S2S_BUNDLER_URL` | `new` | — | Pimlico/ERC-4337 bundler RPC (Safe userOps). |
-| `S2S_PAYMASTER_URL` | `new` (optional) | — | Pimlico paymaster (gas sponsorship). |
+| `S2S_PIMLICO_KEY` | `new`, `author init` | — | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler *and* paymaster. |
+| `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch: explicit bundler RPC, overriding the derived Pimlico URL. On its own it means no sponsorship. |
+| `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch: explicit paymaster RPC, overriding the Pimlico one. |
 | `S2S_ENTRY_POINT` | — | `0.6` | EntryPoint version the bundler serves (`0.6`/`0.7`). |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 
@@ -407,7 +411,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   re-render so the revoked path stops resolving. Revoke-path derivation honors the real on-chain
   `localePaths` (read via Records `getRecord('config')` → config CID → mapping), falling back to
   the legacy `/${locale}` prefix scheme when the map can't be resolved.
-- **new**: requires `--repo` + `S2S_BUNDLER_URL`. `createFeed` is a **stub returning the zero
+- **new**: requires `--repo` + an ERC-4337 endpoint (`S2S_PIMLICO_KEY`). `createFeed` is a **stub returning the zero
   address** — Lens feed creation is not wired headless (see gaps).
 
 ## Known gaps / follow-ups
