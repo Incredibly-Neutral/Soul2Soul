@@ -5,6 +5,7 @@ import {
   clearInitSession,
   currentStepIndex,
   loadInitSession,
+  maxPhase,
   planNextAction,
   proposalProgress,
   saveInitSession,
@@ -81,18 +82,6 @@ describe('init-session persistence', () => {
   });
 
   it('returns null for a wrong-version or incomplete session', () => {
-    // v2 sessions (3 steps, no ENS step) carry stale step semantics — dropped.
-    const oldV2 = makeStorage({
-      [INIT_SESSION_KEY]: JSON.stringify({
-        version: 2,
-        chainId: 8453,
-        safeAddress: SAFE,
-        phase: 'detecting',
-        publicationName: 'my-publication.soul2soul.eth',
-      }),
-    });
-    expect(loadInitSession(oldV2, INIT_SESSION_KEY)).toBeNull();
-
     // v1 sessions from the old 3-proposal flow are incompatible with the
     // merged direct sequence — they must be dropped, not resumed.
     const oldV1 = makeStorage({
@@ -110,10 +99,55 @@ describe('init-session persistence', () => {
       [INIT_SESSION_KEY]: JSON.stringify({ version: 3, phase: 'detecting' }),
     });
     expect(loadInitSession(missingName, INIT_SESSION_KEY)).toBeNull();
+
+    // An unknown phase is fatal for the planner (proposalProgress has no
+    // default branch), so it is rejected at the door rather than at plan time.
+    const unknownPhase = makeStorage({
+      [INIT_SESSION_KEY]: JSON.stringify({
+        version: 3,
+        chainId: 8453,
+        safeAddress: SAFE,
+        phase: 'awaiting-name',
+        publicationName: 'my-publication.soul2soul.eth',
+      }),
+    });
+    expect(loadInitSession(unknownPhase, INIT_SESSION_KEY)).toBeNull();
   });
 
-  it('uses the v3 storage key so a v2 session is never picked up', () => {
-    expect(INIT_SESSION_KEY).toBe('s2s.publication-init.v3');
+  it('migrates a v2 session from the legacy key, keeping every field', () => {
+    // A v2 session is NOT dropped: its phases and fields are a subset of v3
+    // (v3 only prepends the ENS step), and its create batch may already be
+    // queued — dropping it strands a flow whose modules are deployed but not
+    // yet enabled (invisible to hasRecordsModule()).
+    const v2 = {
+      version: 2,
+      chainId: 8453,
+      safeAddress: SAFE,
+      phase: 'detecting',
+      name: 'my-publication',
+      publicationName: 'my-publication.soul2soul.eth',
+      repo: 'https://github.com/Joera/website-starter',
+      branch: 'main',
+      authors: ['0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc'],
+      proposals: ['url-1'],
+      recordsModule: '0x90F79bf6EB2c4f870365E785982E1f101E93b906',
+      publicationModule: '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65',
+      updatedAt: 1_700_000_000_000,
+    };
+    const storage = makeStorage({ 's2s.publication-init.v2': JSON.stringify(v2) });
+
+    const loaded = loadInitSession(storage, INIT_SESSION_KEY);
+
+    expect(loaded).toEqual({ ...v2, version: 3 });
+    // Written back under the current key and dropped from the legacy one, so the
+    // same v2 flow can never be resumed twice.
+    expect(storage.data[INIT_SESSION_KEY]).toBe(JSON.stringify({ ...v2, version: 3 }));
+    expect(storage.data['s2s.publication-init.v2']).toBeUndefined();
+  });
+
+  it('leaves a v2 session that needs step 1 pointing at the ENS step', () => {
+    // The migrated session never had the ENS step, so `ensResolved` is absent
+    // and the plan prepends it — even though its phase says "modules pending".
     const storage = makeStorage({
       's2s.publication-init.v2': JSON.stringify({
         version: 2,
@@ -123,7 +157,20 @@ describe('init-session persistence', () => {
         publicationName: 'my-publication.soul2soul.eth',
       }),
     });
-    expect(loadInitSession(storage, INIT_SESSION_KEY)).toBeNull();
+    const loaded = loadInitSession(storage, INIT_SESSION_KEY)!;
+
+    expect(loaded.ensResolved).toBeUndefined();
+    expect(loaded.ensProposed).toBeUndefined();
+    expect(
+      planNextAction(loaded, {
+        ensResolved: false,
+        recordsKnown: false,
+        publicationKnown: false,
+        recordsEnabled: false,
+        publicationEnabled: false,
+        nameRecorded: false,
+      }),
+    ).toEqual({ type: 'ens' });
   });
 
   it('tolerates malformed optional fields and drops non-string members', () => {
@@ -159,6 +206,19 @@ describe('init-session persistence', () => {
     clearInitSession(storage, INIT_SESSION_KEY);
     expect(loadInitSession(storage, INIT_SESSION_KEY)).toBeNull();
     noop();
+  });
+});
+
+describe('maxPhase', () => {
+  it('keeps the later phase in flow order, whichever side it is on', () => {
+    // Step 1 can re-enter from a later phase; the phase write must not go back.
+    expect(maxPhase('detecting', 'awaiting-ens')).toBe('detecting');
+    expect(maxPhase('awaiting-ens', 'detecting')).toBe('detecting');
+    expect(maxPhase('ens', 'awaiting-ens')).toBe('awaiting-ens');
+    expect(maxPhase('ens', 'creating')).toBe('creating');
+    expect(maxPhase('awaiting-finalize', 'creating')).toBe('awaiting-finalize');
+    expect(maxPhase('done', 'ens')).toBe('done');
+    expect(maxPhase('detecting', 'detecting')).toBe('detecting');
   });
 });
 
@@ -311,6 +371,26 @@ describe('planNextAction', () => {
     // name resolves to 0x0 and nothing else would be reachable.
     const stale = makeSession({ phase: 'awaiting-finalize' });
     expect(planNextAction(stale, { ...known, ensResolved: false })).toEqual({ type: 'ens' });
+  });
+
+  it('a step-1 re-entry from a later phase keeps the phase, so no duplicate create', () => {
+    // The name was released/transferred on L1 after the create batch went out.
+    // `ensProposed` is its own bit precisely so the phase can keep saying
+    // "detecting" (create already queued) while step 1 is pending — the plan
+    // must wait for the neighbour to execute, never re-propose the create.
+    const stale = makeSession({ phase: 'detecting', ensProposed: true });
+    expect(planNextAction(stale, { ...known, ensResolved: false })).toEqual({
+      type: 'await-ens',
+    });
+    // And once the name resolves, the very same session goes back to detect
+    // (create:true from its phase) instead of proposing a second batch.
+    expect(
+      planNextAction(stale, {
+        ...known,
+        recordsKnown: false,
+        publicationKnown: false,
+      }),
+    ).toEqual({ type: 'detect' });
   });
 
   it('once the ENS name is registered the module plan is unchanged', () => {

@@ -116,7 +116,7 @@ function makeSafeIntegration(
   const isCreateBatch = (txs: MetaTransactionData[]) =>
     txs.length === 2 && txs[0] !== undefined && txs[0].to.toLowerCase() === RECORDS_FACTORY.toLowerCase();
 
-  /** The four L1 registry/wrapper reads readEnsRegistration makes. */
+  /** The registry/wrapper reads readEnsRegistration makes. */
   const evmRead = vi.fn(
     async (
       _chainId: number,
@@ -128,11 +128,16 @@ function makeSafeIntegration(
       switch (method) {
         case 'parentNode':
           return ENS_PARENT_NODE;
+        case 'isParentWrapped':
+          return true;
         case 'nameWrapper':
           return NAME_WRAPPER;
+        case 'ens':
+          return ENS_REGISTRY;
         case 'registeredSubdomains':
           return ens.registered;
         case 'ownerOf':
+        case 'owner':
           return ens.owner;
         default:
           throw new Error(`unexpected EVM read: ${method}`);
@@ -1424,14 +1429,9 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     await flush();
 
     // The registry was read on chain 1, with the session's label.
-    expect(si.evmRead).toHaveBeenCalledWith(
-      1,
-      ENS_REGISTRY,
-      expect.anything(),
-      'registeredSubdomains',
-      ['my-publication'],
-      undefined,
-    );
+    expect(si.evmRead).toHaveBeenCalledWith(1, ENS_REGISTRY, expect.anything(), 'registeredSubdomains', [
+      'my-publication',
+    ]);
     // Nothing was proposed for the name and the flow went straight to the modules.
     expect(ensProposals(si)).toHaveLength(0);
     expect(events.some((d) => d.phase === 'awaiting-ens')).toBe(false);
@@ -1483,6 +1483,7 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
       safeInfo: MAINNET_SAFE,
       ensPollIntervalMs: 5,
     });
+    const events = trackProgress(el);
 
     const complete = new Promise<CustomEvent>((resolve) => {
       el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
@@ -1491,6 +1492,11 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     clickInit(el);
 
     await vi.waitFor(() => expect(ensProposals(si)).toHaveLength(1));
+    // The tx is IN the Safe queue now: the manual to/data (and the modal's
+    // "execute this from the L1 Safe" block) is redundant and must be gone.
+    await vi.waitFor(() =>
+      expect(events.some((d) => d.step === 'awaiting-ens' && d.ensCall === undefined)).toBe(true),
+    );
     const [batch] = ensProposals(si);
     expect(batch).toHaveLength(1);
     expect(batch[0].value).toBe('0');
@@ -1559,8 +1565,7 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     expect(si.proposeBatch).not.toHaveBeenCalled();
   });
 
-  it('resumes a session persisted at awaiting-ens by waiting, never re-proposing', async () => {
-    seedSession({ chainId: 1, phase: 'awaiting-ens', proposals: [QUEUE_URL] });
+  it('resumes a session persisted at awaiting-ens by waiting, never re-proposing', async () => {    seedSession({ chainId: 1, phase: 'awaiting-ens', proposals: [QUEUE_URL] });
     const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
     const el = await mount({
       safeIntegration: si,
@@ -1580,4 +1585,186 @@ describe('s2s-publication-init — ENS step (step 1)', () => {
     await vi.waitFor(() => expect(si.createProposals()).toHaveLength(1));
     expect(ensProposals(si)).toHaveLength(0);
   });
+});
+
+describe('s2s-publication-init — ENS step hardening', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('rejects a label the L1 registry would revert on, before any L1 read or write', async () => {
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({ safeIntegration: si, safeInfo: MAINNET_SAFE, ensPollIntervalMs: 5 });
+
+    setInput(el, '#init-name', 'My_Publication');
+    clickInit(el);
+    await flush();
+
+    // ENSOpenSubdomainRegistry.validSubdomain reverts outside [a-z0-9-]: the
+    // form is the only place the human can still fix it, and a reverting Safe
+    // tx from the L1 twin costs real gas.
+    expect(bodyText(el)).toContain('lowercase letters');
+    expect(si.evmRead).not.toHaveBeenCalled();
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+
+    // A hyphen at either end is rejected too (the contract's _isValidLabel).
+    setInput(el, '#init-name', '-leading');
+    clickInit(el);
+    await flush();
+    expect(bodyText(el)).toContain('not a hyphen');
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('re-enters step 1 from a later phase without downgrading it or dropping the queued batch links', async () => {
+    // The name was released on L1 (or the registry read disagreed) after the
+    // create batch went out: step 1 has to run again, but the session must keep
+    // saying "the create batch is queued" (`phase: detecting`), or the next
+    // plan proposes a second, non-idempotent create batch.
+    seedSession({
+      phase: 'detecting',
+      proposals: [QUEUE_URL],
+      recordsModule: undefined,
+      publicationModule: undefined,
+    });
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({ safeIntegration: si, ensPollIntervalMs: 5 });
+    const events = trackProgress(el);
+
+    // Step 1 is surfaced (the Safe is on Base, so the L1 call is shown, not sent).
+    await vi.waitFor(() => expect(events.some((d) => d.step === 'awaiting-ens')).toBe(true));
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.phase).toBe('detecting');
+    expect(persisted.ensProposed).toBe(true);
+    // The queue link the user is following survives the step-1 write.
+    expect(persisted.proposals).toEqual([QUEUE_URL]);
+    // ...and the modal still renders step 1 as the current step (the phase in
+    // the event detail is a display concern; the PERSISTED one above is the
+    // resumed state).
+    expect(events.find((d) => d.step === 'awaiting-ens')!.phase).toBe('awaiting-ens');
+
+    // Step 2 is NOT proposed while the name is missing (the modules are
+    // unreachable through a 0x0 resolver).
+    expect(si.createProposals()).toHaveLength(0);
+  });
+
+  it('never touches L1 again once step 1 is verified (a resolver outage must not stop steps 2-4)', async () => {
+    // Everything is on-chain (an earlier run finished the flow); the session
+    // only says so. `ensResolved` is the memo that makes this possible without
+    // a single L1 read — the registry RPC being down must change nothing.
+    seedSession({
+      phase: 'awaiting-finalize',
+      ensResolved: true,
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      proposals: [QUEUE_URL],
+    });
+    const si = makeSafeIntegration({ enabled: true });
+    si.getRecord.mockImplementation(async (key: string) => (key === 'name' ? PUB_NAME : ''));
+    // Every L1 read fails: the flow must not depend on chain 1 any more.
+    si.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        throw new Error(`L1 is down (${method})`);
+      },
+    );
+
+    const el = await mount({ safeIntegration: si });
+    const done = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    await done;
+    await flush();
+
+    expect(si.evmRead).not.toHaveBeenCalled();
+    expect(bodyText(el)).not.toContain('Initialization failed');
+  });
+
+  it('does not re-propose the step-1 tx by itself when the proposal rejects', async () => {
+    // Regression guard: a rejected L1 proposal surfaces the error and stops.
+    // Re-proposing is an explicit user action (Retry), so a single run can
+    // never queue two identical registerSubdomain transactions.
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    si.proposeBatch = vi.fn(async () => {
+      throw new Error('user rejected');
+    });
+    const el = await mount({ safeIntegration: si, safeInfo: MAINNET_SAFE, ensPollIntervalMs: 5 });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    // Nothing is queued, so the flow must not pretend to be waiting on L1.
+    expect(el.shadowRoot!.querySelector('#init-retry')).not.toBeNull();
+    expect(window.localStorage.getItem(INIT_SESSION_KEY) ?? '').not.toContain('awaiting-ens');
+  });
+
+  it('retry from a failed step-1 wait resumes at that step, not at the module step', async () => {
+    // The generic retry used to reset the view to 'creating' (step 2) for every
+    // phase: a step-1 timeout then looked like a module-creation failure and
+    // the modal's step markers jumped past the L1 registration.
+    seedSession({ chainId: 1, phase: 'awaiting-ens', ensProposed: true, proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const el = await mount({
+      safeIntegration: si,
+      safeInfo: MAINNET_SAFE,
+      ensPollIntervalMs: 10,
+      ensTimeoutMs: 30,
+    });
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Timed out waiting'));
+    el.ensTimeoutMs = 5_000;
+    el.ensPollIntervalMs = 5;
+    const events = trackProgress(el);
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+    expect(events[0].step).toBe('awaiting-ens');
+
+    si.ens.owner = SAFE_ADDRESS;
+    si.ens.registered = true;
+    await vi.waitFor(() => expect(si.createProposals()).toHaveLength(1));
+  });
+
+  it('rides out a resolver outage during the wait instead of failing the flow', async () => {
+    // A resumed step-1 wait with the L1 RPC down: a failed read is "the chain
+    // has not answered yet", not a dead flow. The wait must keep polling (the
+    // human may already have executed registerSubdomain) instead of failing
+    // with the raw transport error.
+    seedSession({ chainId: 1, phase: 'awaiting-ens', ensProposed: true, proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration({ ens: { owner: ZERO_ADDRESS, registered: false } });
+    const inner = si.evmRead.getMockImplementation()!;
+    let failing = true;
+    si.evmRead.mockImplementation(
+      async (chainId: number, contract: string, abi: unknown, method: string, args: unknown[]) => {
+        if (failing) {
+          throw Object.assign(new Error('429 Too Many Requests'), { code: 'SERVER_ERROR' });
+        }
+        return inner(chainId, contract, abi, method, args);
+      },
+    );
+
+    const el = await mount({
+      safeIntegration: si,
+      safeInfo: MAINNET_SAFE,
+      ensPollIntervalMs: 10,
+      ensTimeoutMs: 5_000,
+    });
+    const done = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+
+    // The RPC recovers and the human's registration lands.
+    await new Promise((r) => setTimeout(r, 60));
+    failing = false;
+    si.ens.owner = SAFE_ADDRESS;
+    si.ens.registered = true;
+    await done;
+    await flush();
+
+    expect(bodyText(el)).not.toContain('Initialization failed');
+  });
+
 });

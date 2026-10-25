@@ -64,6 +64,7 @@ const filecoinMocks = vi.hoisted(() => ({
 const storeMock = vi.hoisted(() => {
   class MockStore {
     safeInfo: unknown = undefined;
+    protocolInfo: unknown = undefined;
     private root: string | null = null;
     private records: Array<{ key: string; value: string; type: string }> = [];
     private pieces: unknown[] = [];
@@ -100,7 +101,10 @@ const storeMock = vi.hoisted(() => {
         this.notify('safe');
       }
     }
-    setProtocolInfo(_info: unknown) {}
+    setProtocolInfo(info: unknown) {
+      this.protocolInfo = info;
+      this.notify('protocol');
+    }
     setPieces(p: unknown[]) {
       this.pieces = p;
     }
@@ -129,6 +133,7 @@ const storeMock = vi.hoisted(() => {
     }
     __reset() {
       this.safeInfo = undefined;
+      this.protocolInfo = undefined;
       this.root = null;
       this.records = [];
       this.pieces = [];
@@ -245,6 +250,11 @@ function initComplete(
   return new CustomEvent('s2s-init-complete', { detail, bubbles: true, composed: true });
 }
 
+/** Wait for the element's async flow to settle (next microtask flush). */
+async function flush(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 /** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
 function seedInitSession(overrides: Partial<InitSession> = {}): void {
   saveInitSession(window.localStorage, INIT_SESSION_KEY, {
@@ -336,11 +346,16 @@ describe('s2s-app (shell)', () => {
         switch (method) {
           case 'parentNode':
             return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
           case 'nameWrapper':
             return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
           case 'registeredSubdomains':
             return true;
           case 'ownerOf':
+          case 'owner':
             return SAFE_INFO.safeAddress;
           default:
             throw new Error(`unexpected EVM read: ${method}`);
@@ -676,9 +691,11 @@ describe('s2s-app (shell)', () => {
 
     // Step 3 (config): the config record is a THIRD Safe execution. The stub
     // records tab implements the pinned contract, and this mock reports the
-    // config record on-chain afterwards → the step completes, the modal closes.
+    // config record on-chain once the step proposed it → the step completes,
+    // the modal closes. (Not before: onInitComplete checks for an EXISTING
+    // record first and would otherwise complete a publication with no config.)
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
-      key === 'config' ? 'bafyconfig' : '',
+      key === 'config' && recordsTabMocks.updateConfig.mock.calls.length > 0 ? 'bafyconfig' : '',
     );
     safeIntMocks.getAllRecords.mockResolvedValue([
       ['name', 'repo', 'branch', 'config'],
@@ -751,7 +768,9 @@ describe('s2s-app (shell)', () => {
       return 'bafyconfig';
     });
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
-      key === 'config' ? 'bafyconfig' : '',
+      key === 'config' && recordsTabMocks.updateConfig.mock.calls.length > 0
+        ? 'bafyconfig'
+        : '',
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
@@ -876,11 +895,16 @@ describe('s2s-app (shell)', () => {
         switch (method) {
           case 'parentNode':
             return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
           case 'nameWrapper':
             return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
           case 'registeredSubdomains':
             return false;
           case 'ownerOf':
+          case 'owner':
             return '0x0000000000000000000000000000000000000000';
           default:
             throw new Error(`unexpected EVM read: ${method}`);
@@ -943,6 +967,289 @@ describe('s2s-app (shell)', () => {
     expect(modal.open).toBe(false);
     expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
     expect(safeIntMocks.getRecord).toHaveBeenCalledWith('name');
+  });
+
+  it('seeds the repair session with the installed module addresses, so the resumed flow cannot re-create the pair', async () => {
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    // A resolvable protocol info: the resumed flow needs it to run.
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      ensRecords: '0x00000000000000000000000000000000000000ee',
+      recordsFactory: '0x00000000000000000000000000000000000000f1',
+      publicationFactory: '0x00000000000000000000000000000000000000f2',
+    });
+    let ownerReads = 0;
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return ownerReads > 0;
+          case 'ownerOf':
+          case 'owner':
+            // First read = the repair (no subnode yet); every later read = the
+            // human registered it from the L1 Safe in between.
+            ownerReads += 1;
+            return ownerReads > 1 ? SAFE_INFO.safeAddress : '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+
+    // The modules are DEPLOYED but not enabled — invisible to
+    // hasRecordsModule() and (deep history) to the ModuleCreated scan, while the
+    // factories use plain CREATE. A seeded session without the addresses would
+    // plan step 2 and deploy a SECOND pair over the live publication.
+    const seeded = loadInitSession(window.localStorage, INIT_SESSION_KEY)!;
+    expect(seeded.recordsModule).toBe(SAFE_INFO.s2sRecords);
+    expect(seeded.publicationModule).toBe(SAFE_INFO.s2sPublication);
+
+    // The resumed flow passes step 1 and goes straight to the merged batch.
+    await vi.waitFor(
+      () =>
+        expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)!.phase).toBe(
+          'awaiting-finalize',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // Exactly one batch went out, and it is the merged enable+record batch (2
+    // Safe self-calls + the name record) — no 2-tx create batch to the
+    // factories was ever proposed.
+    const batches = safeIntMocks.proposeBatch.mock.calls.map(
+      ([txs]) => txs as Array<{ to: string }>,
+    );
+    expect(batches).toHaveLength(1);
+    expect(batches.filter((txs) => txs.length === 2)).toEqual([]);
+    expect(batches[0].slice(0, 2).every((tx) => tx.to === SAFE_INFO.safeAddress)).toBe(true);
+    expect(batches[0].slice(2).every((tx) => tx.to === SAFE_INFO.s2sRecords)).toBe(true);
+  });
+
+  it('reads the ENS registry from the protocol info instead of a hardcoded address', async () => {
+    // The registry address is deployment-specific; the repair must read the one
+    // the protocol integration just resolved (it runs BEFORE the repair for
+    // exactly this reason).
+    const CUSTOM_REGISTRY = '0x2222222222222222222222222222222222222222';
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: CUSTOM_REGISTRY,
+      ensRecords: '0x00000000000000000000000000000000000000ee',
+      recordsFactory: '0x00000000000000000000000000000000000000f1',
+      publicationFactory: '0x00000000000000000000000000000000000000f2',
+    });
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    await vi.waitFor(() => expect(modal.open).toBe(true));
+
+    expect(safeIntMocks.evmRead).toHaveBeenCalledWith(
+      1,
+      CUSTOM_REGISTRY,
+      expect.anything(),
+      'registeredSubdomains',
+      ['polyphony'],
+    );
+  });
+
+  it('does not seed step 1 over a config-phase session (that step owns the modal)', async () => {
+    // Reload after the finalize batch executed but before the config record: the
+    // host resumes step 3. The name is not registered on L1 in this fixture, so
+    // a repair that runs in the window before `initPhase` is set would overwrite
+    // the session with a step-1 flow and strand the config step.
+    seedInitSession({ phase: 'awaiting-config' });
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    await vi.waitFor(() =>
+      expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)!.phase).toBe(
+        'awaiting-config',
+      ),
+    );
+
+    // The session is untouched: same flow, same publication, same step.
+    expect(loadInitSession(window.localStorage, INIT_SESSION_KEY)).toMatchObject({
+      phase: 'awaiting-config',
+      name: 'my-pub',
+      publicationName: 'my-pub.soul2soul.eth',
+    });
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.phase).not.toBe('ens');
+    expect(safeIntMocks.evmRead).not.toHaveBeenCalled();
+  });
+
+  it('leaves a name owned by a third party alone (no step-1 modal, no session)', async () => {
+    const THIRD_PARTY = '0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc';
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return true;
+          case 'ownerOf':
+          case 'owner':
+            return THIRD_PARTY;
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    // Wait for the repair to actually read L1 (otherwise the assertions below
+    // would pass before it ever ran).
+    await vi.waitFor(() => expect(safeIntMocks.evmRead).toHaveBeenCalled());
+    await flush();
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('leaves a half-written (desynced) registration alone instead of opening a dead step 1', async () => {
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return true; // the registry flag says registered…
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000'; // …but nobody owns it
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    await vi.waitFor(() => expect(safeIntMocks.evmRead).toHaveBeenCalled());
+    await flush();
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
+  });
+
+  it('treats an unreadable ENS registry as "unknown" and leaves the publication alone', async () => {
+    // A 429 on the L1 read used to surface as "registered, no owner" → a fatal
+    // desync verdict for a page that is perfectly fine.
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        if (method === 'nameWrapper') {
+          throw Object.assign(new Error('429 Too Many Requests'), { code: 'SERVER_ERROR' });
+        }
+        switch (method) {
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return true;
+          case 'ownerOf':
+          case 'owner':
+            return SAFE_INFO.safeAddress;
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    await vi.waitFor(() => expect(safeIntMocks.evmRead).toHaveBeenCalled());
+    await flush();
+
+    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    expect(modal.open).toBe(false);
+    expect(window.localStorage.getItem(INIT_SESSION_KEY)).toBeNull();
   });
 
   it('resumes a config-phase session and finishes when the config record is already on-chain', async () => {

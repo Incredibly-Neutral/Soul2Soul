@@ -113,6 +113,9 @@ import { ENS_L1_CHAIN_ID, ENS_REGISTRY_ADDRESS, ZERO_ADDRESS } from '../lib/doma
 import {
   buildRegisterSubdomainCall,
   readEnsRegistration,
+  subdomainLabelError,
+  SOUL2SOUL_SUFFIX,
+  suffixOfPublicationName,
   type EnsRegistrationState,
 } from '../lib/ens-registration.js';
 import {
@@ -120,6 +123,7 @@ import {
   clearInitSession,
   isConfigPhase,
   loadInitSession,
+  maxPhase,
   planNextAction,
   saveInitSession,
   type InitPhase,
@@ -190,7 +194,7 @@ const DEFAULT_ENS_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_ENS_POLL_INTERVAL_MS = 5_000;
 
 /** Suffix appended to the publication name (displayed and recorded). */
-const SOUL2SOUL_ETH = '.soul2soul.eth';
+const SOUL2SOUL_ETH = `.${SOUL2SOUL_SUFFIX}`;
 
 /** Starter template the config build pulls from (prefilled, overridable). */
 const DEFAULT_REPO = 'https://github.com/Joera/website-starter';
@@ -284,8 +288,6 @@ export class S2SPublicationInit extends LitElement {
    * `s2s-init-progress` detail; cleared once the subnode resolves to this Safe.
    */
   @state() private ensCall?: { to: string; data: string };
-  /** `${label}.soul2soul.eth` — for logs and the timeout message. */
-  @state() private ensName = '';
 
   /** The persisted flow session (null when no flow is in progress). */
   private session: InitSession | null = null;
@@ -501,7 +503,7 @@ export class S2SPublicationInit extends LitElement {
     return this.safeInfo?.safeAddress ?? '';
   }
 
-  private isWorkingStep(step: Step): boolean {
+  private isWorkingStep(step: string): step is (typeof WORKING_STEPS)[number] {
     return (WORKING_STEPS as readonly string[]).includes(step);
   }
 
@@ -579,8 +581,16 @@ export class S2SPublicationInit extends LitElement {
       }
     }
     // Leave the error view immediately; runAction() re-derives the step from
-    // the planned action.
-    this.step = this.session.phase === 'done' ? 'idle' : 'creating';
+    // the planned action. A waiting phase keeps its own step (it is what the
+    // modal's step markers should show until the plan re-runs) — 'creating' is
+    // only the fallback for a phase that has no working step of its own.
+    const phase = this.session.phase;
+    this.step =
+      phase === 'done'
+        ? 'idle'
+        : this.isWorkingStep(phase)
+          ? phase
+          : 'creating';
     this.dispatchProgress();
     void this.start();
   };
@@ -591,10 +601,16 @@ export class S2SPublicationInit extends LitElement {
     this.dispatchProgress();
   }
 
-  /** Persist the current session with a new phase (and optional field updates). */
+  /** Persist the current session with a new phase (and optional field updates).
+   *
+   * The phase is MONOTONIC (`maxPhase`): step 1 can re-enter from a later phase
+   * (the name was released/transferred on L1 mid-flow), and writing
+   * 'awaiting-ens' over 'detecting' would erase "the create batch is queued" —
+   * the next plan would then propose a second, non-idempotent create batch. */
   private persist(phase: InitPhase, extra: Partial<InitSession> = {}): void {
     if (!this.session) return;
-    this.session = { ...this.session, ...extra, phase, updatedAt: Date.now() };
+    const next = maxPhase(this.session.phase, phase);
+    this.session = { ...this.session, ...extra, phase: next, updatedAt: Date.now() };
     saveInitSession(this.storage, INIT_SESSION_KEY, this.session);
   }
 
@@ -604,7 +620,7 @@ export class S2SPublicationInit extends LitElement {
       new CustomEvent('s2s-init-progress', {
         detail: {
           step: this.step,
-          phase: this.session?.phase ?? 'creating',
+          phase: this.displayPhase,
           proposals: this.proposals,
           name: this.session?.publicationName ?? this.name,
           ensCall: this.ensCall,
@@ -613,6 +629,20 @@ export class S2SPublicationInit extends LitElement {
         composed: true,
       }),
     );
+  }
+
+  /**
+   * The phase the progress modal should render its step markers from.
+   *
+   * Normally the persisted phase — but step 1 renders as step 1 while its L1
+   * transaction is pending, even when the session has already reached a later
+   * phase. The two differ on purpose: the session's phase is monotonic (a
+   * re-entered step 1 must not forget a queued create batch — see persist),
+   * while the modal has to say what the human is actually waiting for.
+   */
+  private get displayPhase(): InitPhase {
+    if (this.step === 'ens' || this.step === 'awaiting-ens') return this.step;
+    return this.session?.phase ?? 'creating';
   }
 
   /** Signal successful completion to the host (used by both fresh + resumed flows).
@@ -708,8 +738,12 @@ export class S2SPublicationInit extends LitElement {
     // Fresh start (user clicked "Create"): validate the form and open a session.
     if (!this.session) {
       const label = this.name.trim();
-      if (!label) {
-        this.nameError = 'Publication name is required.';
+      // Validated here as well as in `buildRegisterSubdomainCall`: the registry
+      // reverts outside this alphabet, and a reverting L1 Safe tx costs real
+      // gas. Failing on the form is the only place the user can still fix it.
+      const labelError = subdomainLabelError(label);
+      if (labelError) {
+        this.nameError = labelError;
         return;
       }
       this.error = '';
@@ -767,13 +801,34 @@ export class S2SPublicationInit extends LitElement {
     const session = this.session;
     if (!session) return { type: 'ens' };
 
-    // Step 1: the ENS subnode. Read FIRST (and on every plan): until the name
-    // resolves to this Safe every module step is pointless — the publication is
-    // unreachable by name. The read is cached for the action that follows so a
-    // single loop iteration never hits L1 twice for the same answer.
-    const ens = await this.readEns(si, info, session);
-    this.ensState = ens;
-    const ensResolved = ens.ownedBySafe;
+    // Step 1: the ENS subnode. Read ONCE per flow: as soon as the subnode is
+    // seen owned by this Safe, `ensResolved` is persisted, and from then on no
+    // plan iteration touches L1 — steps 2–4 have nothing to do with ENS, so an
+    // L1 RPC outage must not stop a create/detect/finalize run (or a resumed
+    // one: the phase passed step 1 only because it resolved).
+    let ens = this.ensState;
+    let ensResolved = session.ensResolved === true;
+    if (!ensResolved) {
+      const step1Proposed = session.ensProposed === true || session.phase === 'awaiting-ens';
+      try {
+        ens = await this.readEns(si, info, session);
+        this.ensState = ens;
+        ensResolved = ens.ownedBySafe;
+        if (ensResolved) this.persistEnsResolved();
+      } catch (e) {
+        // A step-1 read that fails AFTER the L1 tx was proposed is "not
+        // answered yet", not a dead flow: the `await-ens` action re-reads it
+        // and the poll already treats a failed read as "keep waiting". Failing
+        // here would kill the wait on a single rate-limited RPC response.
+        if (!step1Proposed) throw e;
+        console.log(
+          `[init] plan: ENS read failed (${e instanceof Error ? e.message : String(e)}), waiting anyway`,
+        );
+      }
+    }
+    const ensDetail = ens
+      ? `${ens.name} owner=${ens.owner}`
+      : `${session.publicationName} (verified earlier)`;
 
     const recordsModule = session.recordsModule;
     const publicationModule = session.publicationModule;
@@ -807,9 +862,16 @@ export class S2SPublicationInit extends LitElement {
       nameRecorded,
     });
     console.log(
-      `[init] plan checks { ens:${String(ensResolved)} (${ens.name} owner=${ens.owner}), known:${String(recordsKnown)}/${String(publicationKnown)}, enabled:${String(recordsEnabled)}/${String(publicationEnabled)}, nameRecorded:${String(nameRecorded)} } -> ${action.type}`,
+      `[init] plan checks { ens:${String(ensResolved)} (${ensDetail}), known:${String(recordsKnown)}/${String(publicationKnown)}, enabled:${String(recordsEnabled)}/${String(publicationEnabled)}, nameRecorded:${String(nameRecorded)} } -> ${action.type}`,
     );
     return action;
+  }
+
+  /** Record that step 1 is verified done (the subnode resolves to this Safe). */
+  private persistEnsResolved(): void {
+    const phase = this.session?.phase;
+    if (!phase) return;
+    this.persist(phase, { ensResolved: true });
   }
 
   /** Execute one planned action; returns true when the flow is finished. */
@@ -841,9 +903,8 @@ export class S2SPublicationInit extends LitElement {
 
         const state = this.ensState ?? (await this.readEns(si, info, session));
         this.ensState = state;
-        this.ensName = state.name;
         console.log(
-          `[init] ens: ${state.name} registered=${String(state.registered)} owner=${state.owner} registry=${state.registry}`,
+          `[init] ens: ${state.name} registered=${String(state.registered)} owner=${state.owner} registry=${state.registry} wrapped=${String(state.parentWrapped)}`,
         );
 
         // Already registered to this Safe (an earlier run, or a registration
@@ -851,7 +912,10 @@ export class S2SPublicationInit extends LitElement {
         if (state.ownedBySafe) {
           console.log(`[init] ens: ${state.name} already owned by this Safe`);
           this.ensCall = undefined;
-          this.persist('creating');
+          // `persist` is monotonic: when the session already sits at a later
+          // phase (a name released on L1 after the create batch went out) the
+          // phase is kept — downgrading it would forget that batch.
+          this.persist('creating', { ensResolved: true });
           this.step = 'creating';
           this.dispatchProgress();
           return false;
@@ -869,8 +933,15 @@ export class S2SPublicationInit extends LitElement {
         const chainId = this.safeInfo?.chainId ?? session.chainId;
         if (chainId === ENS_L1_CHAIN_ID) {
           const url = await si.proposeBatch([call]);
-          this.proposals = [url];
-          this.persist('awaiting-ens', { proposals: [url] });
+          // Append: the array may already hold a create/finalize URL from an
+          // earlier step of this session (a re-entered step 1 must not erase
+          // the queue links the user is following).
+          this.proposals = [...this.proposals, url];
+          this.persist('awaiting-ens', { proposals: this.proposals, ensProposed: true });
+          // The tx is IN the Safe queue now, so the manual to/data is redundant
+          // — and the modal's "execute this from the L1 Safe" block would sit
+          // next to the very proposal it duplicates.
+          this.ensCall = undefined;
           console.log(
             `[init] ens: proposed registerSubdomain(${session.name}, ${safeAddress}) on chain ${chainId} -> ${url}`,
           );
@@ -878,7 +949,7 @@ export class S2SPublicationInit extends LitElement {
           // Not on L1: never propose (the registry is not deployed here). The
           // call is surfaced so the human can register the name from the L1
           // twin Safe; the poll below picks the subnode up once they do.
-          this.persist('awaiting-ens');
+          this.persist('awaiting-ens', { ensProposed: true });
           console.log(
             `[init] ens: ${state.name} needs registration on chain 1 — not proposing from chain ${chainId}`,
           );
@@ -890,21 +961,38 @@ export class S2SPublicationInit extends LitElement {
 
       case 'await-ens': {
         this.step = 'awaiting-ens';
-        const state = this.ensState ?? (await this.readEns(si, info, session));
-        this.ensState = state;
-        this.ensName = state.name;
-        // Same fatal states as 'ens' — a resumed poll must not sit out the whole
-        // timeout on a name this Safe can never own.
-        if (!state.ownedBySafe) this.assertEnsClaimable(state);
-        // A resumed session has no in-memory call: rebuild it so the human still
-        // gets the exact to/data to execute on chain 1.
-        if (!this.ensCall && (state.needsRegistration || state.desynced)) {
-          const call = buildRegisterSubdomainCall(state.registry, session.name, safeAddress);
-          this.ensCall = { to: call.to, data: call.data };
+        // A resumed session has no in-memory state: read once so the fatal
+        // states are caught immediately and the call can be rebuilt. A failed
+        // read is NOT fatal here — the poll below retries it and treats a
+        // failed read as "not answered yet".
+        let state = this.ensState;
+        if (!state) {
+          try {
+            state = await this.readEns(si, info, session);
+            this.ensState = state;
+          } catch (e) {
+            console.log(
+              `[init] await-ens: initial read failed (${e instanceof Error ? e.message : String(e)}), polling anyway`,
+            );
+          }
+        }
+        if (state) {
+          // Same fatal states as 'ens' — a resumed poll must not sit out the whole
+          // timeout on a name this Safe can never own.
+          if (!state.ownedBySafe) this.assertEnsClaimable(state);
+          // A resumed session has no in-memory call: rebuild it so the human still
+          // gets the exact to/data to execute on chain 1.
+          if (!this.ensCall && (state.needsRegistration || state.desynced)) {
+            const call = buildRegisterSubdomainCall(state.registry, session.name, safeAddress);
+            this.ensCall = { to: call.to, data: call.data };
+          }
         }
         this.dispatchProgress();
         await this.waitForEnsRegistration(si, info, session);
         this.ensCall = undefined;
+        // Verified: the subnode resolves to this Safe. Persist it so no later
+        // step (this run or after a reload) needs L1 again.
+        this.persistEnsResolved();
         this.dispatchProgress();
         return false;
       }
@@ -1143,7 +1231,9 @@ export class S2SPublicationInit extends LitElement {
    *
    * Every read goes through the injected `si.evmRead` on chain 1, so nothing
    * here touches a real RPC in tests — the same injection seam as
-   * ens-registration.ts itself.
+   * ens-registration.ts itself. The display suffix comes from the session's own
+   * publication name, so a registry with a different parent is not labelled
+   * `.soul2soul.eth`.
    */
   private readEns(
     si: InitSafeIntegration,
@@ -1152,13 +1242,14 @@ export class S2SPublicationInit extends LitElement {
   ): Promise<EnsRegistrationState> {
     return readEnsRegistration(
       {
-        evmRead: (chainId, contractAddress, abi, method, args, rpcs) =>
-          si.evmRead(chainId, contractAddress, abi, method, args, rpcs),
+        evmRead: (chainId, contractAddress, abi, method, args) =>
+          si.evmRead(chainId, contractAddress, abi, method, args),
       },
       {
         registry: this.ensRegistry(info),
         label: session.name,
         safeAddress: this.safeAddress || session.safeAddress,
+        suffix: suffixOfPublicationName(session.publicationName, session.name) || undefined,
       },
     );
   }
@@ -1189,6 +1280,11 @@ export class S2SPublicationInit extends LitElement {
    * registration from the twin Safe). Timeout fails with the exact command to
    * run: the registry is permissionless while the parent is wrapped, so a
    * manual registration is always a viable escape hatch.
+   *
+   * A FAILED read is not a flow failure: public L1 RPCs rate-limit (429), time
+   * out, or briefly disagree, and none of that means the registration the human
+   * is executing did not land. Treat it as "not answered yet" and keep polling
+   * until the timeout.
    */
   private async waitForEnsRegistration(
     si: InitSafeIntegration,
@@ -1200,14 +1296,28 @@ export class S2SPublicationInit extends LitElement {
     const label = session.name;
     const safeAddress = this.safeAddress || session.safeAddress;
     for (;;) {
-      const state = await this.readEns(si, info, session);
-      this.ensState = state;
-      this.ensName = state.name;
-      console.log(`[init] ens poll owner=${state.owner} registered=${String(state.registered)}`);
-      if (state.ownedBySafe) return;
+      let state: EnsRegistrationState | null = null;
+      try {
+        state = await this.readEns(si, info, session);
+      } catch (e) {
+        console.log(
+          `[init] ens poll failed (${e instanceof Error ? e.message : String(e)}), retrying until the timeout`,
+        );
+      }
+      if (state) {
+        this.ensState = state;
+        console.log(`[init] ens poll owner=${state.owner} registered=${String(state.registered)}`);
+        if (state.ownedBySafe) return;
+        // A state that turned fatal DURING the wait (desynced, or somebody else
+        // registered the label) fails now with the actionable message instead
+        // of burning the whole timeout on a registration this Safe can never
+        // land.
+        if (!state.needsRegistration) this.assertEnsClaimable(state);
+      }
       if (Date.now() - start > this.ensTimeoutMs) {
+        const name = session.publicationName || `${label}${SOUL2SOUL_ETH}`;
         const message =
-          `Timed out waiting for ${state.name} to resolve to this Safe. Register it from the ` +
+          `Timed out waiting for ${name} to resolve to this Safe. Register it from the ` +
           `L1 Safe (${safeAddress}) on chain 1: ` +
           `${registry}.registerSubdomain("${label}", "${safeAddress}").`;
         this.fail(message);

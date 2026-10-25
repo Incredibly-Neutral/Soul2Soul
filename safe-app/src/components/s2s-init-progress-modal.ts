@@ -41,11 +41,12 @@ export class S2SInitProgressModal extends LitElement {
   @property({ type: Boolean }) canDismiss = false;
 
   /**
-   * Step 1's write, when it has to be executed OUTSIDE this Safe: the ENS
-   * registry lives on Ethereum L1, so `registerSubdomain` is a transaction on
-   * chain 1 that this Base-embedded app cannot propose. The host passes the
-   * ready-to-send call and the modal shows `to` + `data` for the human to
-   * execute from the L1 Safe. Undefined for every other step.
+   * Step 1's write, when the human has to execute it themselves: the ENS
+   * registry lives on Ethereum L1 only. When this app is embedded in a Safe on
+   * another chain it cannot propose the transaction, so it hands the ready-to-
+   * send call over and the modal shows `to` + `data` to execute from the L1
+   * Safe. When the Safe IS on chain 1 the app proposes it itself and clears
+   * this (the queue URL is the surface then). Undefined for every other step.
    */
   @property({ attribute: false }) ensCall?: { to: string; data: string };
 
@@ -170,6 +171,13 @@ export class S2SInitProgressModal extends LitElement {
         color: var(--gray-300, #bdb3a0);
       }
 
+      .ens__hint {
+        margin: 0 0 0.6rem;
+        font-size: 0.78rem;
+        line-height: 1.4;
+        color: var(--gray-400, #9c9282);
+      }
+
       .ens__row {
         display: flex;
         align-items: flex-start;
@@ -292,6 +300,10 @@ export class S2SInitProgressModal extends LitElement {
             ? html`
                 <div class="ens" id="init-ens-call">
                   <div class="ens__headline">Register on the L1 Safe (chain 1)</div>
+                  <div class="ens__hint">
+                    Execute this from the Safe on chain 1 — it is its own transaction, never batched
+                    with the module steps.
+                  </div>
                   ${this.renderEnsRow('to', this.ensCall.to)}
                   ${this.renderEnsRow('data', this.ensCall.data)}
                 </div>
