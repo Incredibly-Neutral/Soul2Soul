@@ -12,14 +12,24 @@
 // touching `window`/`localStorage` directly, so it is unit-testable in node
 // with a hand-rolled fake.
 //
-// The flow is the DIRECT SEQUENCE (PR #158): two proposals, not three. The
-// module addresses are unknowable until the create batch executes (the
-// factories use plain CREATE), but once they are known the enable step and the
-// name-record step are merged into ONE atomic batch (setRecord is onlySafe on
-// the records module and does not need the module enabled, so there is no
-// reason to split them). The persisted phases therefore describe the proposal
-// round-trips:
+// The flow is the DIRECT SEQUENCE (PR #158) plus the ENS step (4 steps):
 //
+//   1. Register ENS name   — proposable by anyone while the parent is wrapped,
+//                            but the registry lives on L1 ONLY, so this is its
+//                            OWN Safe tx, proposed from the L1 twin Safe and
+//                            never batched with the Base module txs.
+//   2. Create modules      — module addresses are unknowable until the create
+//                            batch executes (the factories use plain CREATE).
+//   3. Enable + record name — once the addresses are known these are merged
+//                            into ONE atomic batch (setRecord is onlySafe on the
+//                            records module and does not need it enabled, so
+//                            there is no reason to split them).
+//   4. Initialize configuration — host-owned (see below).
+//
+// The persisted phases therefore describe the proposal round-trips:
+//
+//   ens       → transient: proposing the L1 registerSubdomain tx
+//   awaiting-ens → registration proposed, waiting for execution
 //   creating  → transient: proposing the create batch
 //   detecting → create proposed, waiting for execution
 //   finalizing → transient: proposing the merged enable+name batch
@@ -33,6 +43,14 @@
 // returns the single next action. The component then just runs that loop:
 // propose -> persist the waiting phase -> poll -> propose -> ... -> done.
 //
+// Two invariants keep that "never re-propose" promise true when step 1 re-enters
+// from a later phase (the name was released/transferred on L1 mid-flow, or a
+// session was migrated from v2):
+//   - phase writes are MONOTONIC (`maxPhase`), so 'awaiting-ens' can never
+//     overwrite 'detecting' and erase "the create batch is queued";
+//   - "step 1 was proposed" and "step 1 is verified done" are their own flags
+//     (`ensProposed` / `ensResolved`), not phase values.
+//
 // The config step ('configuring'/'awaiting-config') is NOT driven by
 // s2s-publication-init: once the finalize batch executes the modules are live
 // and the component unmounts, so the host (<s2s-app>) drives it instead
@@ -40,11 +58,16 @@
 // execution). Its phases live here so the step is persisted + surfaced in the
 // progress modal exactly like the others.
 
-/** Phases of the init flow, in execution order. 'creating'/'finalizing'/
+import { isValidSubdomainLabel } from './ens-registration';
+
+/** Phases of the init flow, in execution order. 'ens'/'creating'/'finalizing'/
  * 'configuring' are the transient "proposing in progress" states;
- * 'detecting' / 'awaiting-finalize' / 'awaiting-config' are the "proposal
- * sent, waiting for the human to execute it in the Safe app" states. */
+ * 'awaiting-ens' / 'detecting' / 'awaiting-finalize' / 'awaiting-config' are
+ * the "proposal sent, waiting for the human to execute it in the Safe app"
+ * states. */
 export type InitPhase =
+  | 'ens'
+  | 'awaiting-ens'
   | 'creating'
   | 'detecting'
   | 'finalizing'
@@ -62,7 +85,7 @@ export function isConfigPhase(
 
 /** Everything worth persisting to resume a flow after a reload. */
 export interface InitSession {
-  version: 2;
+  version: 3;
   chainId: number;
   safeAddress: string;
   /** The last phase the flow reached (what has been proposed so far). */
@@ -79,23 +102,53 @@ export interface InitSession {
   /** Learned on-chain module addresses (set once the create batch executed). */
   recordsModule?: string;
   publicationModule?: string;
+  /** Step 1's L1 `registerSubdomain` tx was proposed (or its `to`/`data` was
+   *  surfaced for a manual registration). Kept SEPARATE from `phase`: step 1
+   *  can re-enter from a later phase (the name was released/transferred on L1
+   *  mid-flow), and a phase write must never erase the fact that the create
+   *  batch is already queued — the factories use plain CREATE.
+   *
+   *  It is read together with the Safe's chain: on a chain-1 Safe it means "the
+   *  tx is in this Safe's queue", so no manual to/data is rebuilt. From another
+   *  chain the app cannot propose at all, so the call must always be surfaced. */
+  ensProposed?: boolean;
+  /** Step 1 is VERIFIED done: the subnode resolved to this Safe. Once set, the
+   *  flow never reads L1 again, so steps 2–4 do not depend on a reachable L1
+   *  RPC. Absent on a session that has not confirmed step 1 yet (and on a
+   *  session migrated from v2, which never had the step). */
+  ensResolved?: boolean;
   updatedAt: number;
 }
 
 /** The narrow storage surface the session lib needs (subset of Storage). */
 export type InitSessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-export const INIT_SESSION_KEY = 's2s.publication-init.v2';
+export const INIT_SESSION_KEY = 's2s.publication-init.v3';
 
-/** The three checklist rows the progress modal renders. */
+/** Keys written by earlier versions. A v2 session is MIGRATED, not dropped: it
+ *  has the same phases and the same fields (v3 only prepends the ENS step and
+ *  adds two flags), so dropping it strands a flow whose create batch may
+ *  already be queued — the modules are deployed but not yet enabled, which
+ *  `hasRecordsModule()` cannot see, so nothing could resume it. The
+ *  `ensResolved` gate then prepends step 1 to it, exactly like a fresh flow. */
+export const LEGACY_INIT_SESSION_KEYS: readonly string[] = ['s2s.publication-init.v2'];
+
+/** Bumped to 3 for the ENS step (see `LEGACY_INIT_SESSION_KEYS`). */
+export const INIT_SESSION_VERSION = 3 as const;
+
+/** Versions `loadInitSession` can migrate from. */
+const MIGRATABLE_VERSIONS = [2] as const;
+
+/** The four checklist rows the progress modal renders. */
 export interface InitStepRow {
-  index: 1 | 2 | 3;
+  index: 1 | 2 | 3 | 4;
   title: string;
 }
 export const INIT_STEPS: InitStepRow[] = [
-  { index: 1, title: 'Create modules' },
-  { index: 2, title: 'Enable + record name' },
-  { index: 3, title: 'Initialize configuration' },
+  { index: 1, title: 'Register ENS name' },
+  { index: 2, title: 'Create modules' },
+  { index: 3, title: 'Enable + record name' },
+  { index: 4, title: 'Initialize configuration' },
 ];
 
 /** Which of the proposals/records have been PROPOSED at a given phase. */
@@ -106,17 +159,48 @@ export interface ProposalProgress {
 }
 
 /** The proposal the flow is currently waiting on (0 = nothing, all done). */
-export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 | 3 {
+const PHASE_ORDER: readonly InitPhase[] = [
+  'ens',
+  'awaiting-ens',
+  'creating',
+  'detecting',
+  'finalizing',
+  'awaiting-finalize',
+  'configuring',
+  'awaiting-config',
+  'done',
+];
+
+export function isInitPhase(value: unknown): value is InitPhase {
+  return typeof value === 'string' && (PHASE_ORDER as readonly string[]).includes(value);
+}
+
+/**
+ * The later of two phases in flow order. Phase writes must stay MONOTONIC: the
+ * step-1 ENS action can run from a phase it has already passed (a name that was
+ * released/transferred on L1 mid-flow, or a registry read that disagreed with
+ * the earlier mount), and writing 'awaiting-ens' over 'detecting' would erase
+ * "the create batch is already queued". The next plan would then propose a
+ * second, non-idempotent create batch.
+ */
+export function maxPhase(a: InitPhase, b: InitPhase): InitPhase {
+  return PHASE_ORDER.indexOf(a) >= PHASE_ORDER.indexOf(b) ? a : b;
+}
+
+export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 | 3 | 4 {
   switch (phase) {
+    case 'ens':
+    case 'awaiting-ens':
+      return 1;
     case 'creating':
     case 'detecting':
-      return 1;
+      return 2;
     case 'finalizing':
     case 'awaiting-finalize':
-      return 2;
+      return 3;
     case 'configuring':
     case 'awaiting-config':
-      return 3;
+      return 4;
     case 'done':
       return 0;
   }
@@ -126,7 +210,7 @@ export function currentStepIndex(phase: InitPhase): 0 | 1 | 2 | 3 {
  * Checklist state for a given step row: 'done' (its proposal already sent),
  * 'current' (the flow is waiting on this proposal), or 'pending'.
  */
-export function stepState(phase: InitPhase, index: 1 | 2 | 3): 'done' | 'current' | 'pending' {
+export function stepState(phase: InitPhase, index: 1 | 2 | 3 | 4): 'done' | 'current' | 'pending' {
   const current = currentStepIndex(phase);
   if (current === 0) return 'done';
   if (index < current) return 'done';
@@ -136,6 +220,11 @@ export function stepState(phase: InitPhase, index: 1 | 2 | 3): 'done' | 'current
 
 export function proposalProgress(phase: InitPhase): ProposalProgress {
   switch (phase) {
+    // The ENS registration is its own L1 proposal, tracked by the phase alone
+    // (and gated by `ResumeChecks.ensResolved`), not by this record.
+    case 'ens':
+    case 'awaiting-ens':
+      return { create: false, finalize: false, config: false };
     case 'creating':
       return { create: false, finalize: false, config: false };
     case 'detecting':
@@ -165,6 +254,10 @@ export function proposalProgress(phase: InitPhase): ProposalProgress {
  * batch executed — enable + name are atomic).
  */
 export interface ResumeChecks {
+  /** The publication's ENS subnode is registered (L1 registry flag set) — step 1
+   *  done. Checked FIRST: without it the name resolves to 0x0 and the modules
+   *  are unreachable, so the module steps must not start. */
+  ensResolved: boolean;
   recordsKnown: boolean;
   publicationKnown: boolean;
   recordsEnabled: boolean;
@@ -174,6 +267,8 @@ export interface ResumeChecks {
 
 /** The next action to take, given a persisted session + on-chain checks. */
 export type ResumeAction =
+  | { type: 'ens' }
+  | { type: 'await-ens' }
   | { type: 'create' }
   | { type: 'detect' }
   | { type: 'finalize' }
@@ -188,6 +283,15 @@ export type ResumeAction =
  */
 export function planNextAction(session: InitSession, checks: ResumeChecks): ResumeAction {
   const proposed = proposalProgress(session.phase);
+
+  // 0. ENS name not registered yet → the L1 registerSubdomain tx is the pending
+  //    step, before any Base module work (the name is what resolves to the Safe).
+  //    "Already proposed" is its own bit, not the phase: the phase may sit at a
+  //    LATER step (see maxPhase), and it must keep saying what it says.
+  if (!checks.ensResolved) {
+    const ensProposed = session.ensProposed === true || session.phase === 'awaiting-ens';
+    return ensProposed ? { type: 'await-ens' } : { type: 'ens' };
+  }
 
   // 1. Module addresses not learned yet → the create batch is the pending step.
   if (!checks.recordsKnown || !checks.publicationKnown) {
@@ -206,23 +310,63 @@ export function planNextAction(session: InitSession, checks: ResumeChecks): Resu
   return { type: 'done' };
 }
 
-/** Parse a persisted session, tolerating missing/corrupt entries. */
+/**
+ * Parse a persisted session, tolerating missing/corrupt entries.
+ *
+ * A v2 session at the legacy key is MIGRATED to v3 (same phases, same fields —
+ * step 1 is prepended by the `ensResolved` gate, which is absent on it) and
+ * written back under `key` so the stale entry cannot be picked up twice.
+ * Anything else (v1, an unknown/future version, a corrupt body, an unknown
+ * phase) is rejected: the phase drives `proposalProgress()`, which has no
+ * default branch.
+ *
+ * A migratable session must also carry a registrable `name`: it predates step 1,
+ * so its `name` is the label the whole flow was queued under. Without a usable
+ * one it cannot be resumed — step 1 would throw a label error the user cannot
+ * fix in place, and re-opening the form would replay later phases under a
+ * different label than the queued batch — so it is treated as corrupt and
+ * dropped (along with its legacy key).
+ *
+ * PHASE MONOTONICITY CONTRACT (see `maxPhase`): the INIT COMPONENT writes
+ * phases monotonically — `maxPhase(previous, next)` — so a step-1 write can
+ * never downgrade `creating`/`detecting` and forget a batch that was already
+ * sent. The HOST (`S2SApp.persistInitPhase`) deliberately writes `phase`
+ * verbatim: it records failure states, where moving back is the point (`a
+ * failed config build` must be able to say 'configuring' = "nothing is
+ * queued, retry rebuilds" instead of a forward-only 'awaiting-config' that
+ * claims a proposal exists). Neither writer may be replaced by the other's
+ * rule.
+ */
 export function loadInitSession(storage: InitSessionStorage, key: string): InitSession | null {
-  const raw = storage.getItem(key);
+  let raw = storage.getItem(key);
+  let fromLegacyKey: string | null = null;
+  if (!raw && key === INIT_SESSION_KEY) {
+    for (const legacy of LEGACY_INIT_SESSION_KEYS) {
+      const candidate = storage.getItem(legacy);
+      if (candidate) {
+        raw = candidate;
+        fromLegacyKey = legacy;
+        break;
+      }
+    }
+  }
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<InitSession>;
+    const parsed = JSON.parse(raw) as Partial<InitSession> & { version?: unknown };
+    const migratable =
+      typeof parsed.version === 'number' &&
+      (MIGRATABLE_VERSIONS as readonly number[]).includes(parsed.version);
     if (
-      parsed.version !== 2 ||
+      (parsed.version !== INIT_SESSION_VERSION && !migratable) ||
       typeof parsed.chainId !== 'number' ||
       typeof parsed.safeAddress !== 'string' ||
-      typeof parsed.phase !== 'string' ||
+      !isInitPhase(parsed.phase) ||
       typeof parsed.publicationName !== 'string'
     ) {
       return null;
     }
-    return {
-      version: 2,
+    const session: InitSession = {
+      version: INIT_SESSION_VERSION,
       chainId: parsed.chainId,
       safeAddress: parsed.safeAddress,
       phase: parsed.phase,
@@ -239,8 +383,28 @@ export function loadInitSession(storage: InitSessionStorage, key: string): InitS
       recordsModule: typeof parsed.recordsModule === 'string' ? parsed.recordsModule : undefined,
       publicationModule:
         typeof parsed.publicationModule === 'string' ? parsed.publicationModule : undefined,
+      // Step-1 flags. A session written before they existed tells us the same
+      // thing through its phase: 'awaiting-ens' means the L1 tx was proposed.
+      ...(parsed.ensProposed === true || parsed.phase === 'awaiting-ens'
+        ? { ensProposed: true }
+        : {}),
+      ...(parsed.ensResolved === true ? { ensResolved: true } : {}),
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     };
+    // A migratable session cannot be resumed without the label its batch was
+    // queued for (see the docstring): drop it, and do not leave the legacy
+    // entry behind for a later page load to trip over.
+    if (migratable && !isValidSubdomainLabel(session.name.trim())) {
+      if (fromLegacyKey) storage.removeItem(fromLegacyKey);
+      return null;
+    }
+    // Migrated from a legacy key: persist the upgraded session at the current
+    // key and drop the old entry, so a v2 flow is never read (or resumed) twice.
+    if (parsed.version !== INIT_SESSION_VERSION) {
+      saveInitSession(storage, key, session);
+      if (fromLegacyKey) storage.removeItem(fromLegacyKey);
+    }
+    return session;
   } catch {
     return null;
   }
