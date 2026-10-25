@@ -68,6 +68,8 @@ function makeSafeIntegration(
   opts: {
     enabled?: boolean;
     existing?: { recordsModule?: string; publicationModule?: string };
+    /** Byte size of each factory's code on this chain; 0 models "wrong chain". */
+    factoryCode?: { records?: number; publication?: number };
   } = {},
 ) {
   let enableProposed = false;
@@ -111,6 +113,14 @@ function makeSafeIntegration(
     getProvider: vi.fn(() => ({
       getBlockNumber: vi.fn(async () => 12_000_000),
     })),
+    /** eth_getCode on the Safe's chain: the factory byte sizes declared above. */
+    contractCodeSize: vi.fn(async (address: string) => {
+      const code = opts.factoryCode ?? {};
+      const addr = address.toLowerCase();
+      if (addr === RECORDS_FACTORY.toLowerCase()) return code.records ?? 4321;
+      if (addr === PUB_FACTORY.toLowerCase()) return code.publication ?? 5432;
+      return 0;
+    }),
     fetchFactoryModuleCreatedLogs: vi.fn(async (factoryAddress: string) =>
       factoryAddress === RECORDS_FACTORY
         ? logsFor(opts.existing?.recordsModule, RECORDS_MODULE)
@@ -1223,5 +1233,95 @@ describe('s2s-publication-init', () => {
     // Narrow records + wide publication are merged into one complete pair.
     expect(si.createProposals()).toEqual([]);
     expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
+  });
+
+  // -------------------------------------------------------------------------
+  // Chain guard: the module factories come from on-chain protocol state read
+  // through the Base provider, so they only have code on Base (8453). On any
+  // other chain a createModule call is a no-op to a codeless address: the Safe
+  // tx SUCCEEDS, no ModuleCreated log is ever emitted, and detection polls a
+  // filter that can never match (the live mainnet-Safe "polls forever" bug).
+  // -------------------------------------------------------------------------
+
+  const MAINNET_SAFE_INFO = { ...SAFE_INFO, chainId: 1, network: 'ethereum' };
+  const NO_CODE_MESSAGE = (chainId: number, address: string) =>
+    `The S2S module factories have no code on this Safe's chain (${chainId}): ${address}. They are deployed on Base (8453) — this Safe must be on chain 8453 for the publication init to work.`;
+
+  it('refuses to propose the create batch when the factories have no code on this chain', async () => {
+    const si = makeSafeIntegration({ enabled: true, factoryCode: { records: 0, publication: 0 } });
+    const el = await mount({ safeIntegration: si, safeInfo: MAINNET_SAFE_INFO });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(bodyText(el)).toContain(NO_CODE_MESSAGE(1, RECORDS_FACTORY));
+    // Both factories are checked, and NOTHING was proposed: the no-op tx is never
+    // sent, so the Safe queue cannot collect a transaction that does nothing.
+    expect(si.contractCodeSize).toHaveBeenCalledWith(RECORDS_FACTORY);
+    expect(si.contractCodeSize).toHaveBeenCalledWith(PUB_FACTORY);
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('names the publication factory when only it has no code', async () => {
+    const si = makeSafeIntegration({ enabled: true, factoryCode: { publication: 0 } });
+    const el = await mount({ safeIntegration: si, safeInfo: MAINNET_SAFE_INFO });
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(bodyText(el)).toContain(NO_CODE_MESSAGE(1, PUB_FACTORY));
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('still proposes the create batch when both factories have code', async () => {
+    const si = makeSafeIntegration({ enabled: true, factoryCode: { records: 4000, publication: 5000 } });
+
+    const { el, complete } = await mountWithListener(si);
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    const evt = await complete;
+    await flush();
+
+    expect(si.contractCodeSize).toHaveBeenCalledWith(RECORDS_FACTORY);
+    expect(si.contractCodeSize).toHaveBeenCalledWith(PUB_FACTORY);
+    expect(si.createProposals()).toHaveLength(1);
+    expect(evt.detail.recordsModule).toBe(RECORDS_MODULE);
+  });
+
+  it('fails detect immediately instead of polling when a factory has no code', async () => {
+    seedSession({ chainId: 1, phase: 'detecting', proposals: [QUEUE_URL] });
+    const si = makeSafeIntegration({ enabled: true, factoryCode: { records: 0 } });
+    const el = await mount({ safeIntegration: si, safeInfo: MAINNET_SAFE_INFO });
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    expect(bodyText(el)).toContain(NO_CODE_MESSAGE(1, RECORDS_FACTORY));
+    // The guard runs BEFORE the polling loop: not a single log fetch, no wait.
+    expect(si.fetchFactoryModuleCreatedLogs).not.toHaveBeenCalled();
+    expect(si.proposeBatch).not.toHaveBeenCalled();
+  });
+
+  it('names chain, factories, block window and log counts in the detect timeout', async () => {
+    seedSession({ phase: 'detecting', proposals: [QUEUE_URL] });
+    // Factories have code (a correct chain) but no ModuleCreated log ever shows
+    // up — the message must carry enough context to diagnose why.
+    const si = makeSafeIntegration({ enabled: true });
+    si.fetchFactoryModuleCreatedLogs = vi.fn(async () => []);
+    const el = await mount({
+      safeIntegration: si,
+      detectionTimeoutMs: 30,
+      detectionPollIntervalMs: 5,
+    });
+
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+    const error = el.shadowRoot!.querySelector('.init__error')!.textContent ?? '';
+    expect(error).toContain('Timed out after 30ms waiting for module deployment logs');
+    expect(error).toContain('missing module: records, publication');
+    // chainId, both factories, the scanned window and the last poll's counts.
+    expect(error).toContain(
+      `(chain 8453, factories ${RECORDS_FACTORY}/${PUB_FACTORY}, blocks 11990000-12000000, last poll: 0/0 logs)`,
+    );
   });
 });
