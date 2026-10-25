@@ -28,6 +28,7 @@ import type { Address } from 'viem';
 import { createFilecoinStorage } from '../adapters/filecoin';
 import { KUBO_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
 import { UsageError } from '../lib/errors';
+import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -115,6 +116,16 @@ export async function authorWrite(
   const custom = { ...parsed.custom };
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
 
+  // The author id is the author Safe, not the EOA — that is what the plugin
+  // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
+  // The proof.signer inside the item still records the EOA that signed it.
+  const author = await authorSafeState(ctx);
+  if (!author.deployed) {
+    ctx.out.warn(
+      `author Safe ${author.address} is not deployed — run \`s2s author init\` (the id is still valid, but nothing can verify ownership yet)`,
+    );
+  }
+
   const signedItem = await buildSignedContentItem(
     {
       specVersion: '1',
@@ -132,7 +143,7 @@ export async function authorWrite(
     { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
     ctx.signer,
     noOpEncrypt,
-    toDidEthr(ctx.eoaAddress),
+    toDidEthr(author.address),
   );
 
   const objectId = parsed.genesis ?? signedItem.objectId;
