@@ -52,6 +52,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
   { key: 'filecoinRpc', env: ['S2S_FILECOIN_RPC'], default: 'https://api.node.glif.io/rpc/v1' },
   { key: 'filecoinSessionKey', env: ['S2S_FILECOIN_SESSION_KEY'] },
   { key: 'filecoinPrivateKey', env: ['S2S_FILECOIN_PRIVATE_KEY'], secret: true },
+  { key: 'pimlicoKey', env: ['S2S_PIMLICO_KEY', 'PIMLICO_KEY', 'PIMLICO_API_KEY'], secret: true },
   { key: 'bundlerUrl', env: ['S2S_BUNDLER_URL'] },
   { key: 'paymasterUrl', env: ['S2S_PAYMASTER_URL'] },
   { key: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.6', enumValues: ['0.6', '0.7'] },

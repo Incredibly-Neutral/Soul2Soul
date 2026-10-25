@@ -21,7 +21,7 @@ import type { Address } from 'viem';
 
 import { createSafeRunner, type SafeRunnerHandle } from '../adapters/tx-runner';
 import { UsageError } from '../lib/errors';
-import type { CliConfig } from './config';
+import { bundlerEndpoints, type CliConfig } from './config';
 import type { CliContext } from './context';
 
 /** Salt prefix 0xobsidian uses for an author's personal Safe. */
@@ -66,10 +66,10 @@ async function authorSafeRunner(
   rpcUrl: string,
   requireBundler: boolean,
 ): Promise<SafeRunnerHandle> {
-  const bundlerUrl = config.bundler.baseUrl;
-  if (requireBundler && !bundlerUrl) {
+  const endpoints = bundlerEndpoints(config, base.id);
+  if (requireBundler && !endpoints) {
     throw new UsageError(
-      'deploying the author Safe needs an ERC-4337 bundler — set S2S_BUNDLER_URL (e.g. a Pimlico endpoint)',
+      'deploying the author Safe needs an ERC-4337 bundler — set S2S_PIMLICO_KEY (or S2S_BUNDLER_URL)',
     );
   }
 
@@ -77,8 +77,8 @@ async function authorSafeRunner(
     chain: base,
     rpcUrl,
     privateKey: config.privateKey as `0x${string}`,
-    bundlerUrl: bundlerUrl ?? 'http://127.0.0.1:0',
-    paymasterUrl: config.bundler.paymasterUrl,
+    bundlerUrl: endpoints?.bundlerUrl ?? 'http://127.0.0.1:0',
+    paymasterUrl: endpoints?.paymasterUrl,
     // Pinned, not config-driven: 0xobsidian hardcodes EntryPoint v0.7, and the
     // 4337 module address is part of the Safe's initializer — so the entry
     // point changes the counterfactual address. A different version here would

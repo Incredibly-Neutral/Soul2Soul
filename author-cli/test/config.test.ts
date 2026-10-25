@@ -51,6 +51,29 @@ describe('loadConfig', () => {
     expect(config.rpc.L2).toEqual(['z']);
   });
 
+  it('derives per-chain Pimlico endpoints from a bare API key', async () => {
+    const { bundlerEndpoints } = await import('../src/core/config');
+    const config = loadConfig({ S2S_PIMLICO_KEY: 'pk_123' }, noFiles);
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+      paymasterUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+    });
+    // Same key, different chain → different endpoint (one key, not one URL).
+    expect(bundlerEndpoints(config, 1)?.bundlerUrl).toBe(
+      'https://api.pimlico.io/v2/1/rpc?apikey=pk_123',
+    );
+  });
+
+  it('lets an explicit bundler URL win and drops sponsorship unless asked', async () => {
+    const { bundlerEndpoints } = await import('../src/core/config');
+    const config = loadConfig({ S2S_BUNDLER_URL: 'https://bundler.example' }, noFiles);
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://bundler.example',
+      paymasterUrl: undefined,
+    });
+    expect(bundlerEndpoints(loadConfig({}, noFiles), 8453)).toBeUndefined();
+  });
+
   it('reads LIT_* and S2S_GITHUB_TOKEN aliases', () => {
     const config = loadConfig({ LIT_ACCOUNT_KEY: 'la', LIT_USAGE_KEY: 'lu', S2S_GITHUB_TOKEN: 'gt' });
     expect(config.litAccountKey).toBe('la');

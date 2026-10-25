@@ -35,12 +35,44 @@ export interface FilecoinConfig {
 }
 
 export interface BundlerConfig {
-  /** Pimlico/ERC-4337 bundler RPC URL (required for `new`). */
+  /**
+   * Pimlico API key. This is what the plugin (0xobsidian `pimlico_key`) holds:
+   * one key, and the endpoint is derived per chain. The key serves as bundler
+   * *and* paymaster — Pimlico exposes both on the same RPC URL.
+   */
+  pimlicoKey: string | undefined;
+  /** Explicit bundler URL — escape hatch for a non-Pimlico bundler. */
   baseUrl: string | undefined;
-  /** Pimlico paymaster RPC URL (optional — gas sponsorship). */
+  /** Explicit paymaster URL — escape hatch / to disable sponsorship. */
   paymasterUrl: string | undefined;
   /** EntryPoint version the bundler serves. */
   entryPoint: EntryPointVersion;
+}
+
+/** Pimlico's ERC-4337 endpoint for a chain — bundler and paymaster in one URL. */
+export function pimlicoRpcUrl(apiKey: string, chainId: number): string {
+  return `https://api.pimlico.io/v2/${chainId}/rpc?apikey=${apiKey}`;
+}
+
+export interface BundlerEndpoints {
+  bundlerUrl: string;
+  paymasterUrl: string | undefined;
+}
+
+/**
+ * Resolve the ERC-4337 endpoints for one chain. Endpoints are per-chain, so a
+ * bare Pimlico key yields a different URL for mainnet and Base; an explicit
+ * `bundlerUrl` wins and, on its own, means "no sponsorship".
+ */
+export function bundlerEndpoints(
+  config: CliConfig,
+  chainId: number,
+): BundlerEndpoints | undefined {
+  const key = config.bundler.pimlicoKey;
+  const pimlico = key ? pimlicoRpcUrl(key, chainId) : undefined;
+  const bundlerUrl = config.bundler.baseUrl ?? pimlico;
+  if (!bundlerUrl) return undefined;
+  return { bundlerUrl, paymasterUrl: config.bundler.paymasterUrl ?? pimlico };
 }
 
 export interface CliConfig {
@@ -187,6 +219,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
       privateKey: resolve(field('filecoinPrivateKey')),
     },
     bundler: {
+      pimlicoKey: resolve(field('pimlicoKey')),
       baseUrl: resolve(field('bundlerUrl')),
       paymasterUrl: resolve(field('paymasterUrl')),
       entryPoint: enumValue(field('entryPoint'), '0.6', resolve(field('entryPoint'))),
