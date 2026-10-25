@@ -9,9 +9,19 @@ import { preview } from './preview';
 import { publish } from './publish';
 import { revoke } from './revoke';
 import { newPublication } from './new';
+import { authorAddress } from './address';
+import { authorInit } from './init';
 
 /** `s2s author` — content actions on an existing publication. */
-export const authorCommands: CommandSpec[] = [upload, propose, preview, publish, revoke];
+export const authorCommands: CommandSpec[] = [
+  upload,
+  propose,
+  preview,
+  publish,
+  revoke,
+  authorAddress,
+  authorInit,
+];
 
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];

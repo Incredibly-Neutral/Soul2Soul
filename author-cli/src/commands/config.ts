@@ -34,17 +34,18 @@ import { configKeyValue, hexKey } from '../core/config';
 
 /**
  * Read-only pseudo-keys derived from the config — never stored, never written.
- * `address` is the EOA that signs authoring actions, derived from `privateKey`
- * locally (no RPC): the identity a user has to quote to an editor or a Safe.
+ * `eoa` is the signing account derived from `privateKey` locally (no RPC).
+ * It is NOT the author id: the author id is the Safe (see `s2s author address`,
+ * which is counterfactual and needs an L2 read).
  */
-export const DERIVED_KEYS = ['address'] as const;
+export const DERIVED_KEYS = ['eoa'] as const;
 
 export function isDerivedKey(key: string): boolean {
   return (DERIVED_KEYS as readonly string[]).includes(key);
 }
 
 export function derivedConfigValue(key: string): string | null {
-  if (key !== 'address') return null;
+  if (key !== 'eoa') return null;
   const privateKey = hexKey(configKeyValue('privateKey'));
   if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) return null;
   try {
@@ -149,8 +150,8 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
-  const address = derivedConfigValue('address');
-  const derived = [`address: ${address ?? '(unset — needs privateKey)'}`].join('\n');
+  const eoa = derivedConfigValue('eoa');
+  const derived = [`eoa: ${eoa ?? '(unset — needs privateKey)'}`].join('\n');
   const userEnv = userEnvPath();
   const projectEnv = projectEnvPath();
   const envNotes = [
@@ -158,7 +159,7 @@ function listCommand(out: CliOut): void {
     `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
   ].join('\n');
   out.result(
-    { config: Object.fromEntries([...entries, ['address', address] as const].filter(([, v]) => v !== null)) },
+    { config: Object.fromEntries([...entries, ['eoa', eoa] as const].filter(([, v]) => v !== null)) },
     `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }

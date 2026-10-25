@@ -137,12 +137,25 @@ export interface SafeRunnerOptions<
   entryPointVersion: TEntry;
   /** Safe proxy implementation version. */
   safeVersion: '1.4.1' | '1.5.0';
+  /**
+   * Safe singleton + proxy factory. Leave undefined to use the library's
+   * defaults *for that version* — which are NOT the addresses 0xobsidian uses:
+   * it pins the SafeL2 v1.4.1 singleton (0x29fc…) while permissionless defaults
+   * to the L1 singleton (0x4167…) for 1.4.1. The singleton is part of the
+   * CREATE2 input, so getting this wrong changes the Safe address.
+   */
+  safeSingletonAddress?: Address;
+  safeProxyFactoryAddress?: Address;
 }
 
-/** Deterministic salt-nonce from a human salt string (same on L1 and L2). */
+/**
+ * Deterministic salt-nonce from a human salt string (same on L1 and L2).
+ * Mirrors 0xobsidian's `PermissionlessSafeService`: the full unmasked keccak
+ * of the salt. Masking any bits changes the CREATE2 input and therefore the
+ * counterfactual address, so the CLI and the plugin must agree exactly.
+ */
 export function saltNonceFor(salt: string): bigint {
-  const hash = keccak256(toBytes(salt));
-  return BigInt(hash) & BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+  return BigInt(keccak256(toBytes(salt)));
 }
 
 /**
@@ -151,12 +164,24 @@ export function saltNonceFor(salt: string): bigint {
  * `connectToExistingSafe` re-targets an already-deployed Safe. `genericTx`
  * submits a userOp through the bundler (paymaster-sponsored when configured).
  */
+export interface SafeRunnerHandle extends TxRunner {
+  /** The counterfactual (not yet deployed) or connected Safe address. */
+  address(): Address;
+  /** Whether bytecode exists at the Safe address. */
+  isDeployed(): Promise<boolean>;
+  /**
+   * Deploy the counterfactual Safe by sending a self-call userOp — the Safe
+   * factory runs in the userOp's initCode. Returns the userOp/transaction hash.
+   */
+  deploy(): Promise<string>;
+}
+
 export async function createSafeRunner<
   TChain extends Chain,
   TEntry extends EntryPointVersion,
 >(
   opts: SafeRunnerOptions<TChain, TEntry>,
-): Promise<TxRunner> {
+): Promise<SafeRunnerHandle> {
   const publicClient = createPublicClient({ chain: opts.chain, transport: http(opts.rpcUrl) });
   const entryPoint = {
     address: opts.entryPointVersion === '0.7' ? entryPoint07Address : entryPoint06Address,
@@ -185,6 +210,10 @@ export async function createSafeRunner<
       owners: [owner],
       version: opts.safeVersion,
       entryPoint,
+      ...(opts.safeSingletonAddress ? { safeSingletonAddress: opts.safeSingletonAddress } : {}),
+      ...(opts.safeProxyFactoryAddress
+        ? { safeProxyFactoryAddress: opts.safeProxyFactoryAddress }
+        : {}),
       ...(targetAddress ? { address: targetAddress } : {}),
       ...(saltNonce !== undefined ? { saltNonce } : {}),
     });
@@ -200,6 +229,15 @@ export async function createSafeRunner<
   await rebuild();
 
   return {
+    address: (): Address => smartAccount.address,
+    isDeployed: async (): Promise<boolean> => {
+      const code = await publicClient.getBytecode({ address: smartAccount.address });
+      return code !== undefined && code !== '0x' && code.length > 2;
+    },
+    deploy: async (): Promise<string> => {
+      if (!client) throw new Error('SafeRunner not initialised — call connect first');
+      return client.sendTransaction({ to: smartAccount.address, data: '0x', value: 0n } as never);
+    },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);
       return rebuild();
