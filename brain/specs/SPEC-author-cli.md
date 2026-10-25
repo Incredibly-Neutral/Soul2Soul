@@ -81,17 +81,32 @@ from a completely unprovisioned machine.
 |---|---|---|
 | user config | `~/.config/s2s/config.json` (`XDG_CONFIG_HOME` honored) | `s2s config set` (default), mode `0600` |
 | project config | `./.s2sconfig.json` (cwd) | `s2s config set --local` |
+| user env file | `~/.config/s2s/.env` (`XDG_CONFIG_HOME` honored) | by hand, mode `0600` |
+| project env file | `./.env` (cwd, optional) | by hand |
 
 Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
 `privateKey`, … — `s2s config list` shows the full set). List keys (`rpcL1`,
 `rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
 
-**Precedence** (git-style, env is the 12-factor escape hatch):
+The env files exist because **the CLI ships to people who do not have this
+repo**: `~/.config/s2s/.env` is the primary configuration surface for an
+installed CLI, and `./.env` is an optional per-project refinement (a project may
+pin its own publication or key without touching the global file). Both are
+loaded once at startup by `loadEnvFiles()` (`src/lib/env.ts`).
+
+**Precedence** (git-style, env is the 12-factor escape hatch; most specific wins):
 
 ```
-env vars (incl. cwd .env) > project config > user config > built-in defaults
+real env vars > ./.env > ~/.config/s2s/.env > project config > user config > defaults
 ```
+
+Within the env layer, a key is only filled from a file when it is unset (or
+blank) at every higher level, so nothing below can shadow a shell export. Values
+that a file supplies therefore behave exactly like exported ones for
+`loadConfig()`, which reads `process.env` only. `XDG_CONFIG_HOME` is honored for
+both the env file and the config file, and a blank `XDG_CONFIG_HOME` falls back
+to `~/.config`.
 
 Examples:
 
@@ -238,15 +253,21 @@ Shared field meanings:
 { config: Record<string, string> }
 
 // s2s config path [--local] [--json]
-{ path: string }
+{ path: string; env: { user: string; userExists: boolean; project: string | null } }
 ```
+
+`path` is the config file (`--local` → the project file); `env` reports the two
+env-file locations so a caller can see where credentials are expected.
 
 Config keys are the flat camelCase forms of the env surface (see below); precedence is
 env > project file > user file > defaults; `--local` targets `./.s2sconfig.json`.
 
 ## Environment surface
 
-`.env` in the CWD is loaded by the entrypoint (`dotenv/config`) before config resolution. All
+`.env` files are loaded by the entrypoint (`loadEnvFiles()`, `src/lib/env.ts`) before config
+resolution, in the order `./.env` then `~/.config/s2s/.env`, each filling only keys that are
+still unset. Real environment variables always win. The user-level file is the primary surface
+for an installed CLI — a user has no repo `.env` — and `$XDG_CONFIG_HOME` is honored. All
 settings flow through `loadConfig()` into a single `CliConfig` (`src/core/config.ts`), which
 merges the two config-file layers beneath the env layer (see **Config file** above). The table
 lists the env names; every one is also settable via `s2s config set <key>` with a flat camelCase key.

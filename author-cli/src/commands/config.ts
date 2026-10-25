@@ -13,7 +13,10 @@
 // without a private key or any RPC endpoint.
 // ============================================================================
 
+import { existsSync } from 'node:fs';
+
 import type { ParsedArgs } from '../lib/args';
+import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import {
@@ -115,15 +118,37 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
+  const userEnv = userEnvPath();
+  const projectEnv = projectEnvPath();
+  const envNotes = [
+    `user env: ${userEnv}${existsSync(userEnv) ? '' : ' [not found]'}`,
+    `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
+  ].join('\n');
   out.result(
     { config: Object.fromEntries(entries) },
-    `Effective configuration (env > project > user > defaults):\n\n${table}\n\nManage with: s2s config set <key> <value> [--local]`,
+    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }
 
 function pathCommand(out: CliOut, args: ParsedArgs): void {
   const target = writeTarget(args);
-  out.result({ path: target.file }, target.file);
+  const userEnv = userEnvPath();
+  const projectEnv = projectEnvPath();
+  const userEnvExists = existsSync(userEnv);
+  const projectEnvExists = existsSync(projectEnv);
+  const env = {
+    user: userEnv,
+    userExists: userEnvExists,
+    project: projectEnvExists ? projectEnv : null,
+  };
+  out.result(
+    { path: target.file, env },
+    [
+      `${target.label} config: ${target.file}`,
+      `env file (user):    ${userEnv}${userEnvExists ? '' : '  [not found]'}`,
+      `env file (project): ${projectEnv}${projectEnvExists ? '' : '  [not found]'}`,
+    ].join('\n'),
+  );
 }
 
 export const configCommands: readonly ConfigCommandSpec[] = [
@@ -175,6 +200,7 @@ Flags:
   --json    emit the result as JSON on stdout (machine-readable)
 
 Precedence: environment vars > project config > user config > defaults.
+Env file:   $XDG_CONFIG_HOME/s2s/.env (default ~/.config/s2s/.env), then ./.env.
 Known keys: ${knownKeys()}
 
 Run "s2s config <action> --help" for details on an action.`;
