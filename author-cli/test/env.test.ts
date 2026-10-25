@@ -127,3 +127,32 @@ describe('loadEnvFiles', () => {
     expect(env.S2S_PRIVATE_KEY).toBe('0xabc');
   });
 });
+
+describe('hexKey normalization', () => {
+  it('prefixes a bare 64-hex private key', async () => {
+    const { hexKey } = await import('../src/core/config');
+    expect(hexKey('54'.repeat(32))).toBe(`0x${'54'.repeat(32)}`);
+  });
+
+  it('leaves an already-prefixed key alone', async () => {
+    const { hexKey } = await import('../src/core/config');
+    expect(hexKey(`0x${'ab'.repeat(32)}`)).toBe(`0x${'ab'.repeat(32)}`);
+  });
+
+  it('does not touch malformed or absent values', async () => {
+    const { hexKey } = await import('../src/core/config');
+    expect(hexKey(undefined)).toBeUndefined();
+    expect(hexKey('not-a-key')).toBe('not-a-key');
+    expect(hexKey('abcd')).toBe('abcd');
+  });
+
+  it('reachable through loadConfig from a file value', async () => {
+    const { loadConfig } = await import('../src/core/config');
+    const dir = mkdtempSync(join(tmpdir(), 's2s-hex-'));
+    const userConfigPath = join(dir, 'config.json');
+    writeFileSync(userConfigPath, JSON.stringify({ privateKey: '11'.repeat(32) }));
+    const cfg = loadConfig({}, { userConfigPath, projectConfigPath: join(dir, 'none.json') });
+    expect(cfg.privateKey).toBe(`0x${'11'.repeat(32)}`);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

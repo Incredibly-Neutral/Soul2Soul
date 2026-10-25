@@ -3,8 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig, requireSetting } from '../src/core/config';
 
 describe('loadConfig', () => {
+  // Isolate from the developer's real ~/.config/s2s/config.json — a machine with a
+  // configured CLI must behave exactly like a blank one for these assertions.
+  const noFiles = {
+    userConfigPath: '/nonexistent/s2s/config.json',
+    projectConfigPath: '/nonexistent/.s2sconfig.json',
+  };
+
   it('applies defaults for an empty environment', () => {
-    const config = loadConfig({});
+    const config = loadConfig({}, noFiles);
     expect(config.environment).toBe('prod');
     expect(config.kuboGateway).toBe('ipfs.transport-union.dev');
     expect(config.runnerUrl).toBe('https://run.transport-union.dev/run');
