@@ -19,6 +19,7 @@ import {
   renderwithLitActions,
   revokedPathFor,
   runFilecoinLeg,
+  subdomainOf,
   toDidEthr,
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
@@ -91,17 +92,24 @@ export async function authorWrite(
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, notePath);
 
-  const service = await PublicationService.init(
-    {
-      l1: ctx.l1,
-      l2: ctx.l2,
-      l2Runner: ctx.l2Runner,
-      ensRegistry: ctx.ensRegistry,
-      ipfs: ctx.ipfs,
-    },
-    publication,
-  );
-  const authorSafeAddress = service.getMultiSig();
+  // `upload` is off-chain: the publication contributes only its name, which is
+  // derived locally. Resolving the Safe + modules is needed to offer on-chain
+  // or to render — so a publication that does not exist yet (or an ENS name
+  // with no address record) must not block an upload.
+  const needsChain = opts.offer || opts.render;
+  const service = needsChain
+    ? await PublicationService.init(
+        {
+          l1: ctx.l1,
+          l2: ctx.l2,
+          l2Runner: ctx.l2Runner,
+          ensRegistry: ctx.ensRegistry,
+          ipfs: ctx.ipfs,
+        },
+        publication,
+      )
+    : undefined;
+  const subdomain = service?.subdomain ?? subdomainOf(publication);
 
   const now = Math.floor(Date.now() / 1000);
   const custom = { ...parsed.custom };
@@ -114,7 +122,7 @@ export async function authorWrite(
       mediaType: 'text/markdown',
       parent: String(parsed.parent),
       position: String(parsed.position),
-      publication: service.subdomain,
+      publication: subdomain,
       locale: parsed.locale,
       createdAt: now,
       base: parsed.slug,
@@ -131,14 +139,15 @@ export async function authorWrite(
   // 2-space JSON.stringify is load-bearing: filecoin-pin builds the CAR from
   // the same serialized bytes, so Kubo CID == Filecoin rootCid (CID parity).
   const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
-  ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${service.subdomain})`);
+  ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${subdomain})`);
 
   // On-chain append only when asked (`propose`/`publish`). A bare `upload`
   // stays off-chain — ipfs + pins only; the offer is a separate step.
   let txHash: string | undefined;
   if (opts.offer) {
+    if (!service) throw new Error('internal: on-chain offer requested without a resolved publication');
     txHash = await service.makeOffer(objectId, kuboCid);
-    ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+    ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash.slice(0, 12)}…)`);
   }
 
   // Frontmatter write-back: genesis+author on first publish; modified_date and
@@ -155,11 +164,13 @@ export async function authorWrite(
 
   // Durability — real upload/publish only (never preview-only renders).
   if (opts.publish) {
-    scheduleDurability(ctx, service, signedItem, kuboCid);
+    scheduleDurability(ctx, publication, signedItem, kuboCid);
   }
 
   let render: RenderOutcome | undefined;
   if (opts.render) {
+    if (!service) throw new Error('internal: render requested without a resolved publication');
+    const authorSafeAddress = service.getMultiSig();
     render = await renderContent(ctx, service, publication, objectId, authorSafeAddress, opts);
   }
 
@@ -167,7 +178,7 @@ export async function authorWrite(
     objectId,
     kuboCid,
     publication,
-    subdomain: service.subdomain,
+    subdomain,
     txHash,
     render,
     frontmatterWritten,
@@ -298,7 +309,7 @@ async function renderContent(
  */
 function scheduleDurability(
   ctx: CliContext,
-  service: PublicationService,
+  publication: string,
   signedItem: unknown,
   kuboCid: string,
 ): void {
@@ -307,19 +318,41 @@ function scheduleDurability(
       const result = await ctx.ipfs.backupToProviders(kuboCid, {
         providers: ['filebase', 'pinata'],
         filecoin: (_cid) =>
-          runFilecoinLeg('article', async () => {
-            const storage = await createFilecoinStorage(ctx.config);
-            if (!storage) {
-              throw new Error(
-                'Filecoin storage not configured — set S2S_FILECOIN_SESSION_KEY or S2S_FILECOIN_PRIVATE_KEY',
+          runFilecoinLeg(
+            'article',
+            async () => {
+              const storage = await createFilecoinStorage(ctx.config);
+              if (!storage) {
+                throw new Error(
+                  'Filecoin storage not configured — set S2S_FILECOIN_SESSION_KEY or S2S_FILECOIN_PRIVATE_KEY',
+                );
+              }
+              // The Filecoin CAR is keyed by the publication's Safe, so this is
+              // the one durability leg that needs on-chain resolution. Resolve
+              // it here (not up front) so an upload to a publication that does
+              // not exist yet still completes its pins.
+              const service = await PublicationService.init(
+                {
+                  l1: ctx.l1,
+                  l2: ctx.l2,
+                  l2Runner: ctx.l2Runner,
+                  ensRegistry: ctx.ensRegistry,
+                  ipfs: ctx.ipfs,
+                },
+                publication,
               );
-            }
-            return storage.uploadJson(signedItem, [service.getMultiSig(), ctx.eoaAddress], 'article');
-          }, {
-            onFailure: (message) => {
-              ctx.out.warn(`Filecoin backup failed: ${message}`);
+              return storage.uploadJson(
+                signedItem,
+                [service.getMultiSig(), ctx.eoaAddress],
+                'article',
+              );
             },
-          }),
+            {
+              onFailure: (message) => {
+                ctx.out.warn(`Filecoin backup failed: ${message}`);
+              },
+            },
+          ),
         onFilecoinMismatch: (rootCid) => {
           ctx.out.warn(
             `Filecoin CID mismatch: kubo ${kuboCid.slice(0, 12)}… ≠ filecoin ${rootCid.slice(0, 12)}…`,
