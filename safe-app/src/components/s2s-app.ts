@@ -19,6 +19,8 @@ import { mainStyles } from '@/styles/main-styles.js';
 import { pillStyles } from '@/styles/pill-styles.js';
 import { buttonStyles } from '@/styles/button-styles.js';
 import { buildDeletePublicationBatch } from '../lib/publication-init.js';
+import { readEnsRegistration } from '../lib/ens-registration.js';
+import { ENS_REGISTRY_ADDRESS } from '../lib/domain-validation.js';
 import {
   INIT_SESSION_KEY,
   clearInitSession,
@@ -164,11 +166,20 @@ export class S2SApp extends LitElement {
   // live the app simply switches to its normal UI.
   @state() private initPhase: InitPhase | null = null;
   @state() private initModalOpen = false;
+  /** Step 1's L1 call, forwarded from the init component so the modal can show
+   *  the exact `to`/`data` the human has to execute from the L1 twin Safe. */
+  @state() private ensCall?: { to: string; data: string };
   // Failure/timeout reason for the progress modal, which shows only the step
   // markers otherwise. It is the ONLY failure surface for the host-owned config
   // step, so it must be explicit — a silent skip would leave the user staring
   // at a spinner that never ends.
   @state() private initError = '';
+
+  /** Safes whose pre-ENS publication has already been checked by the repair
+   *  path in this page load (one check per Safe, whatever its outcome). */
+  private ensRepairDone = new Set<string>();
+  /** Set once the user dismissed an init flow: never re-seed a repair over it. */
+  private ensRepairSuppressed = false;
 
   private unsubscribers: Array<() => void> = [];
 
@@ -276,6 +287,11 @@ export class S2SApp extends LitElement {
       // If a publication-init session was persisted, surface its progress (or
       // clear it once everything is on-chain).
       this.syncInitProgress(safeInfo);
+
+      // A publication created BEFORE the ENS step existed has modules + a name
+      // record but no registrable subnode: seed the flow at step 1 so the name
+      // can start resolving (see maybeRepairEnsRegistration).
+      await this.maybeRepairEnsRegistration(safeInfo);
 
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
@@ -565,6 +581,89 @@ export class S2SApp extends LitElement {
   }
 
   /**
+   * Repair path for a publication created before the ENS step existed.
+   *
+   * Such a publication has both modules installed and its name/config records
+   * on Base, but no `registerSubdomain` call ever went out (the registry has
+   * code on ETH L1 only, and the old flow never proposed it). `ownerOf` on the
+   * subnode is therefore 0x0, `resolvePublicationSafe` returns 0x0 and the
+   * publication is unreachable by name — with no session to resume and the
+   * modules live, nothing would ever notice.
+   *
+   * When exactly that state is detected the flow is seeded at step 1 and the
+   * progress modal opens; the init component then proposes (on L1) or surfaces
+   * the call, and polls until the name resolves to this Safe.
+   *
+   * Deliberately narrow: one check per Safe per page load, never while a flow is
+   * active, never after the user dismissed one, never without a name record, and
+   * never on a failed read — an unrequested repair must not hijack the page.
+   */
+  private async maybeRepairEnsRegistration(safeInfo: {
+    chainId: number;
+    safeAddress: string;
+  }): Promise<void> {
+    if (this.initPhase !== null) return; // a live flow (or step 3) owns the modal
+    if (this.ensRepairSuppressed) return;
+    const key = `${safeInfo.chainId}:${safeInfo.safeAddress.toLowerCase()}`;
+    if (this.ensRepairDone.has(key)) return;
+    // Recorded before anything can fail: a repair is attempted once, not on
+    // every refresh pass.
+    this.ensRepairDone.add(key);
+
+    if (!this.safeIntegration.hasRecordsModule() || !this.safeIntegration.hasPublicationModule()) {
+      return;
+    }
+
+    let publicationName = '';
+    try {
+      publicationName = await this.safeIntegration.getRecord('name');
+    } catch {
+      return;
+    }
+    const label = (publicationName.split('.')[0] ?? '').trim();
+    if (!label) return;
+
+    let state;
+    try {
+      state = await readEnsRegistration(
+        {
+          evmRead: (chainId, contractAddress, abi, method, args) =>
+            this.safeIntegration.evmRead(chainId, contractAddress, abi, method, args),
+        },
+        {
+          registry: store.protocolInfo?.ensRegistry ?? ENS_REGISTRY_ADDRESS,
+          label,
+          safeAddress: safeInfo.safeAddress,
+        },
+      );
+    } catch (e) {
+      console.log(`[app] ens repair skipped: ENS read failed (${describeError(e)})`);
+      return;
+    }
+    if (state.ownedBySafe) return;
+
+    console.log(
+      `[app] ens repair: ${state.name} is not owned by this Safe (owner=${state.owner}) -> seeding the flow at step 1`,
+    );
+    saveInitSession(window.localStorage, INIT_SESSION_KEY, {
+      version: 3,
+      chainId: safeInfo.chainId,
+      safeAddress: safeInfo.safeAddress,
+      phase: 'ens',
+      name: label,
+      publicationName: publicationName.trim(),
+      repo: '',
+      branch: '',
+      authors: [],
+      proposals: [],
+      updatedAt: Date.now(),
+    });
+    this.ensCall = undefined;
+    this.initPhase = 'ens';
+    this.initModalOpen = true;
+  }
+
+  /**
    * Fresh publication proposed by the init flow. The name/repo/branch records
    * are proposed but still pending Safe execution, so the chain read in
    * fetchFreshData cannot see them yet — write them to the store optimistically
@@ -667,7 +766,7 @@ export class S2SApp extends LitElement {
     const prev = loadInitSession(window.localStorage, INIT_SESSION_KEY);
     const safeInfo = store.safeInfo;
     saveInitSession(window.localStorage, INIT_SESSION_KEY, {
-      version: 2,
+      version: 3,
       chainId: safeInfo?.chainId ?? 0,
       safeAddress: safeInfo?.safeAddress ?? '',
       name: '',
@@ -942,6 +1041,10 @@ export class S2SApp extends LitElement {
     this.initModalOpen = false;
     this.initError = '';
     this.configDismissible = false;
+    this.ensCall = undefined;
+    // Dismissed means the user does not want this flow driven: do not re-seed
+    // an ENS repair over it until the page is reloaded.
+    this.ensRepairSuppressed = true;
     // Land where the user can actually act: the Config tab when it exists (fix
     // repo/branch in the Records table, then re-run the config from there),
     // else the first tab that renders — 'records' renders nothing without the
@@ -973,7 +1076,14 @@ export class S2SApp extends LitElement {
   private readonly onInitProgress = (e: Event): void => {
     const detail = (
       e as CustomEvent<
-        { step: string; phase: InitPhase; proposals: string[]; name?: string } | undefined
+        | {
+            step: string;
+            phase: InitPhase;
+            proposals: string[];
+            name?: string;
+            ensCall?: { to: string; data: string };
+          }
+        | undefined
       >
     ).detail;
     if (!detail) return;
@@ -994,7 +1104,12 @@ export class S2SApp extends LitElement {
     // Any other step opens the modal: it is the progress surface for both the
     // live flow and the reload-recovery.
     this.initError = '';
+    this.ensCall = detail.ensCall;
     if (detail.step === 'idle') {
+      // The user walked away from the flow (Start over / cancel): never re-seed
+      // a repair over their decision in this page load.
+      this.ensRepairSuppressed = true;
+      this.ensCall = undefined;
       this.initPhase = null;
       this.initModalOpen = false;
       return;
@@ -1237,6 +1352,7 @@ export class S2SApp extends LitElement {
         .open=${this.initModalOpen}
         .phase=${this.initPhase ?? 'creating'}
         .error=${this.initError}
+        .ensCall=${this.ensCall}
         .canDismiss=${this.initPhase === 'configuring' && this.configDismissible}
         @s2s-init-retry=${this.onInitRetry}
         @s2s-init-dismiss=${this.onInitDismiss}

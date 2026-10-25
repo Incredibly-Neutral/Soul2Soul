@@ -39,15 +39,16 @@ describe('s2s-init-progress-modal', () => {
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(3);
+    expect(steps.length).toBe(4);
 
-    // Create already sent + executed → done (check). Finalize waiting → current
-    // (spinner). Config not reached yet → pending (dot).
+    // ENS + create already sent + executed → done (check). Finalize waiting →
+    // current (spinner). Config not reached yet → pending (dot).
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
-    expect(steps[1]?.classList.contains('step--current')).toBe(true);
-    expect(steps[2]?.classList.contains('step--pending')).toBe(true);
+    expect(steps[1]?.classList.contains('step--done')).toBe(true);
+    expect(steps[2]?.classList.contains('step--current')).toBe(true);
+    expect(steps[3]?.classList.contains('step--pending')).toBe(true);
     expect(steps[0]?.querySelector('ph-check')).toBeTruthy();
-    expect(steps[1]?.querySelector('.step__marker--spinner')).toBeTruthy();
+    expect(steps[2]?.querySelector('.step__marker--spinner')).toBeTruthy();
 
     // No explanatory copy below the checklist — the native Safe queue on this
     // page is the surface that shows the pending transactions.
@@ -62,26 +63,105 @@ describe('s2s-init-progress-modal', () => {
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(3);
-    expect(steps[0]?.classList.contains('step--done')).toBe(true);
-    expect(steps[1]?.classList.contains('step--done')).toBe(true);
-    expect(steps[2]?.classList.contains('step--done')).toBe(true);
+    expect(steps.length).toBe(4);
+    for (const step of steps) expect(step.classList.contains('step--done')).toBe(true);
     expect(text(el)).not.toContain('Publication initialized');
   });
 
-  it('highlights the config step (step 3) as current while the config record is proposed', async () => {
+  it('highlights the config step (step 4) as current while the config record is proposed', async () => {
     const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
       open: true,
       phase: 'awaiting-config',
     });
 
     const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
-    expect(steps.length).toBe(3);
+    expect(steps.length).toBe(4);
     expect(steps[0]?.classList.contains('step--done')).toBe(true);
     expect(steps[1]?.classList.contains('step--done')).toBe(true);
-    expect(steps[2]?.classList.contains('step--current')).toBe(true);
-    expect(steps[2]?.querySelector('.step__marker--spinner')).toBeTruthy();
+    expect(steps[2]?.classList.contains('step--done')).toBe(true);
+    expect(steps[3]?.classList.contains('step--current')).toBe(true);
+    expect(steps[3]?.querySelector('.step__marker--spinner')).toBeTruthy();
     expect(text(el)).toContain('Initialize configuration');
+  });
+
+  it('marks the ENS step (step 1) current while the name is being registered', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'awaiting-ens',
+    });
+
+    const steps = el.shadowRoot?.querySelectorAll<HTMLElement>('.step') ?? [];
+    expect(steps.length).toBe(4);
+    expect(steps[0]?.classList.contains('step--current')).toBe(true);
+    expect(steps[0]?.textContent).toContain('Register ENS name');
+    expect(steps[1]?.classList.contains('step--pending')).toBe(true);
+    expect(steps[2]?.classList.contains('step--pending')).toBe(true);
+    expect(steps[3]?.classList.contains('step--pending')).toBe(true);
+  });
+
+  it('renders the L1 registration call (to + data) with copy buttons when bound', async () => {
+    const writeText = vi.fn(async () => {});
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+        open: true,
+        phase: 'awaiting-ens',
+        ensCall: { to: '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e', data: '0xdeadbeef' },
+      });
+
+      const block = el.shadowRoot?.querySelector('#init-ens-call') as HTMLElement;
+      expect(block).toBeTruthy();
+      expect(block.textContent).toContain('Register on the L1 Safe (chain 1)');
+      expect(block.querySelector('[data-ens="to"]')?.textContent).toBe(
+        '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e',
+      );
+      expect(block.querySelector('[data-ens="data"]')?.textContent).toBe('0xdeadbeef');
+      // Wrapped monospace values (a long data blob must not widen the dialog).
+      const code = block.querySelector('[data-ens="data"]') as HTMLElement;
+      expect(code.tagName.toLowerCase()).toBe('code');
+      expect(code.classList.contains('ens__value')).toBe(true);
+      expect(getComputedStyle(code).wordBreak).toBe('break-all');
+
+      (block.querySelector('[data-copy="data"]') as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('0xdeadbeef'));
+
+      // The block disappears as soon as the host clears the call.
+      el.ensCall = undefined;
+      await el.updateComplete;
+      expect(el.shadowRoot?.querySelector('#init-ens-call')).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as unknown as Record<string, unknown>).clipboard;
+    }
+  });
+
+  it('never throws when the clipboard write is denied', async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => {
+          throw new Error('denied');
+        }),
+      },
+    });
+    try {
+      const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+        open: true,
+        phase: 'awaiting-ens',
+        ensCall: { to: '0xabc', data: '0xdef' },
+      });
+      (el.shadowRoot?.querySelector('[data-copy="to"]') as HTMLButtonElement).click();
+      await el.updateComplete;
+      expect(el.shadowRoot?.querySelector('#init-ens-call')).toBeTruthy();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as unknown as Record<string, unknown>).clipboard;
+    }
   });
 
   it('shows only the step markers: no status line under the checklist', async () => {
@@ -133,7 +213,7 @@ describe('s2s-init-progress-modal', () => {
     await el.updateComplete;
     expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
     expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
-    expect(el.shadowRoot?.querySelectorAll('.step').length).toBe(3);
+    expect(el.shadowRoot?.querySelectorAll('.step').length).toBe(4);
   });
 
   it('offers "Close and fix the configuration" only when the host marks the failure dismissible', async () => {
