@@ -21,6 +21,10 @@ local defaults = {
   confirm_revoke = true,
   confirm_save = true,
   abbrev = true,
+  -- A browser cannot resolve `name.eth`, so the binary's prodUrl is rewritten
+  -- through a public ENS gateway before it is shown or opened. 'limo' | 'link'
+  -- (or false to display exactly what the binary returned).
+  gateway = 'limo',
   timeout = nil,
 }
 
@@ -133,25 +137,30 @@ local function sync_note(buf, result)
   end)
 end
 
--- Only ever open a URL the binary actually returned in render.*.
-local function maybe_open(action, result)
-  if not opts.open then
-    return
-  end
+--- The link to show: the binary's render URL, `.eth` rewritten through the
+--- configured gateway so it is openable. nil when there is no render URL.
+local function link_target(action, result)
   if action ~= 'preview' and action ~= 'publish' then
-    return
+    return nil
   end
   local ok, target = pcall(function()
-    return require('s2s.format').open_target(result)
+    return require('s2s.format').open_target(result, opts.gateway)
   end)
   if not ok or type(target) ~= 'table' or type(target.url) ~= 'string' then
-    return
+    return nil
   end
   local render = type(result.render) == 'table' and result.render or {}
-  if target.url ~= render.previewUrl and target.url ~= render.prodUrl then
+  if target.raw_url ~= render.previewUrl and target.raw_url ~= render.prodUrl then
+    return nil
+  end
+  return target
+end
+
+local function maybe_open(action, result, link)
+  if not opts.open or not link then
     return
   end
-  pcall(vim.ui.open, target.url)
+  pcall(vim.ui.open, link.url)
 end
 
 local function copy_cid(action, result)
@@ -247,16 +256,24 @@ local function finish(buf, action, started, payload, path, before)
   end
 
   if code == 0 and not is_failure(result, code) then
+    local link = link_target(action, result)
     if buf then
-      state.set(buf, { action = action, result = result, code = code, at = os.time(), ms = ms })
+      state.set(buf, {
+        action = action,
+        result = result,
+        code = code,
+        at = os.time(),
+        ms = ms,
+        link = link,
+      })
     end
     if opts.notify then
-      ui.result(buf, action, result, code, ms)
+      ui.result(buf, action, result, code, ms, link)
     end
     verify_writeback(path, before, result)
     sync_note(buf, result)
     copy_cid(action, result)
-    maybe_open(action, result)
+    maybe_open(action, result, link)
     return
   end
 
@@ -507,6 +524,7 @@ function M.help()
     string.format('  confirm_revoke = %s', tostring(opts.confirm_revoke)),
     string.format('  confirm_save   = %s', tostring(opts.confirm_save)),
     string.format('  abbrev         = %s', tostring(opts.abbrev)),
+    string.format('  gateway        = %s', tostring(opts.gateway)),
     string.format('  timeout        = %s', tostring(opts.timeout)),
     '',
     'No default keymaps — see <Plug>(s2s_*).',

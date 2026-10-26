@@ -132,6 +132,12 @@ This is the only place the plugin cares that the note is also a file on disk.
   buffer number + action so two actions on two buffers don't fight.
 - **Success**: one notify, ≤4 lines. Line 1 verb + note basename + human duration. Then the identity
   fields that matter for the action. Never the whole result.
+- **The link**: `render.prodUrl` is `https://<publication>/<path>`, which no browser can
+  resolve (`name.eth` has no DNS). `format.resolve_url()` inserts the configured gateway suffix
+  after a bare `.eth` host, path/query/fragment untouched; `open_target(result, gateway)`
+  applies it and keeps `raw_url` as returned. Displayed and opened only for publish/preview,
+  and only when the URL came from `render.*`. Non-`.eth` hosts and already-gated URLs pass
+  through unchanged, so this cannot double-suffix.
 - **Detail float** (`:S2S last` / `<Plug>(s2s_detail)`): full known set + pass-through extras, one
   `key: value` per line, `q` to close. This is where "everything else" goes so the notify stays small.
 - **Open**: `preview` → open `previewUrl` when `opts.open`; `publish` → open `prodUrl`. `upload`
@@ -182,6 +188,7 @@ require('s2s').setup({
   confirm_revoke = true,
   confirm_save = true,    -- ask when the buffer has unsaved edits / is not on disk
   abbrev = true,          -- `:s2s` on the command line expands to `:S2S`
+  gateway = 'limo',       -- 'limo' | 'link' | false — ENS gateway for prodUrl
   timeout = nil,          -- ms; nil = no timeout
 })
 ```

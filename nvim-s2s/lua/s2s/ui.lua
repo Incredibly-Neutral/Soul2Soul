@@ -93,13 +93,17 @@ local function basename(path)
   return vim.fn.fnamemodify(path, ':t')
 end
 
---- Success: at most four lines — head, summary, then the first known fields.
+-- What the link line is called, per action.
+local LINK_LABEL = { publish = 'live', preview = 'preview' }
+
+--- Success: at most four lines — head, link, summary, then known fields.
 ---@param buf integer|nil
 ---@param action string
 ---@param result table
 ---@param code integer
 ---@param ms integer|nil
-function M.result(buf, action, result, code, ms)
+---@param link { url: string, path?: string }|nil
+function M.result(buf, action, result, code, ms, link)
   local head = string.format('s2s %s ok', tostring(action))
   local name = basename(type(result) == 'table' and result.note or nil)
   if name then
@@ -110,6 +114,9 @@ function M.result(buf, action, result, code, ms)
   end
 
   local lines = { head }
+  if type(link) == 'table' and type(link.url) == 'string' then
+    lines[#lines + 1] = string.format('%s : %s', LINK_LABEL[action] or 'link', link.url)
+  end
   local summary = call('summary', result)
   if type(summary) == 'string' and summary ~= '' then
     lines[#lines + 1] = summary
@@ -216,6 +223,9 @@ local function detail_lines(entry)
     head = head .. ' · ' .. os.date('%H:%M:%S', entry.at)
   end
   lines[#lines + 1] = head
+  if type(entry.link) == 'table' and type(entry.link.url) == 'string' then
+    lines[#lines + 1] = string.format('%s : %s', LINK_LABEL[entry.action] or 'link', entry.link.url)
+  end
 
   local body = call('report', result)
   if type(body) ~= 'table' or #body == 0 then

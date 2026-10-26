@@ -84,6 +84,7 @@ require('s2s').setup({
   confirm_revoke = true,  -- :S2S revoke asks first
   confirm_save = true,    -- ask before uploading when the buffer has unsaved edits
   abbrev = true,          -- `:s2s …` expands to `:S2S …`
+  gateway = 'limo',       -- 'limo' | 'link' | false; see "The link" below
   timeout = nil,          -- ms; nil = no timeout (uploads can take a minute)
 })
 ```
@@ -141,8 +142,16 @@ Every `<Plug>` is just `<Cmd>S2S <verb><CR>`, so anything you can type you can m
 
 - **Busy**: one notify per (buffer, action) — `s2s: uploading…` — replaced in place by the
   result. No floats, no timers.
-- **Success**: ≤4 lines (verb + note + duration, then the fields that matter). The **detail
-  float** (`:S2S last`) has everything, including fields this plugin does not know yet.
+- **Success**: ≤4 lines — verb + note + duration, the link (preview/publish), then the fields
+  that matter. The **detail float** (`:S2S last`) has everything, including fields this plugin
+  does not know yet.
+- **The link**: publish's `render.prodUrl` is `https://<publication>/<path>`, and a browser
+  cannot resolve `name.eth` at all. So the plugin inserts a public gateway before the path —
+  `https://polyphony.eth` + `/introduction` → `https://polyphony.eth.limo/introduction` — and
+  shows/opens that. `gateway = 'link'` gives `.eth.link` instead; `gateway = false` shows
+  exactly what the binary returned. Only a bare `.eth` host is touched: preview URLs (already
+  on a gateway host) and anything not ending in `.eth` are left alone, so nothing gets
+  double-suffixed.
 - **Failure**: the envelope `error` verbatim at WARN (exit 2, usage) or ERROR. Never raw
   stdout, never a Lua traceback.
 - **Frontmatter**: when the binary rewrites the note's frontmatter, an unmodified buffer is

@@ -306,6 +306,67 @@ eq(format.open_target(publish).path, publish.render.path, 'open_target: path')
 eq(format.open_target(preview).url, preview.render.previewUrl, 'open_target: preview → previewUrl')
 eq(format.open_target(upload), {}, 'open_target: upload has nothing to open')
 ok(format.open_target(publish).url ~= nil, 'open_target: returned url exists')
+eq(format.open_target(publish, nil).url, publish.render.prodUrl, 'open_target: no gateway → raw prodUrl')
+
+-- ---------------------------------------------------------------------------
+-- resolve_url() — a browser cannot resolve `name.eth`
+-- ---------------------------------------------------------------------------
+
+eq(
+  format.resolve_url('https://polyphony.eth/introduction', 'limo'),
+  'https://polyphony.eth.limo/introduction',
+  'resolve_url: limo before path'
+)
+eq(
+  format.resolve_url('https://polyphony.eth/introduction', 'link'),
+  'https://polyphony.eth.link/introduction',
+  'resolve_url: link before path'
+)
+eq(
+  format.resolve_url('https://Polyphony.ETH/introduction', 'LIMO'),
+  'https://Polyphony.ETH.limo/introduction',
+  'resolve_url: case-insensitive, host case preserved'
+)
+eq(
+  format.resolve_url('https://polyphony.eth', 'limo'),
+  'https://polyphony.eth.limo',
+  'resolve_url: no path'
+)
+eq(
+  format.resolve_url('https://polyphony.eth/a/b/?q=1#frag', 'limo'),
+  'https://polyphony.eth.limo/a/b/?q=1#frag',
+  'resolve_url: query and fragment preserved'
+)
+eq(format.resolve_url('https://polyphony.eth.limo/x', 'limo'), nil, 'resolve_url: already gated')
+eq(format.resolve_url('https://polyphony.eth.link/x', 'limo'), nil, 'resolve_url: already gated (link)')
+eq(format.resolve_url('https://example.com/x', 'limo'), nil, 'resolve_url: not a .eth host')
+eq(format.resolve_url('https://my.eth.example/x', 'limo'), nil, 'resolve_url: .eth not the TLD')
+eq(format.resolve_url('ipfs://bafy/x', 'limo'), nil, 'resolve_url: not http(s)')
+eq(format.resolve_url(nil, 'limo'), nil, 'resolve_url: nil url')
+eq(format.resolve_url('https://polyphony.eth/x', nil), nil, 'resolve_url: no gateway configured')
+eq(format.resolve_url('https://polyphony.eth/x', 'nope'), nil, 'resolve_url: unknown gateway')
+
+-- open_target() with a gateway: rewrite the live site, keep the preview alone.
+local pub_limo = format.open_target(publish, 'limo')
+eq(
+  pub_limo.url,
+  'https://joera.soul2soul.eth.limo/hello-s2s/',
+  'open_target: publish prodUrl rewritten'
+)
+eq(pub_limo.raw_url, publish.render.prodUrl, 'open_target: raw_url preserved')
+eq(pub_limo.gateway, 'limo', 'open_target: gateway recorded')
+eq(pub_limo.path, publish.render.path, 'open_target: path survives the rewrite')
+eq(
+  format.open_target(publish, 'link').url,
+  'https://joera.soul2soul.eth.link/hello-s2s/',
+  'open_target: link gateway'
+)
+eq(
+  format.open_target(preview, 'limo').url,
+  preview.render.previewUrl,
+  'open_target: preview url already resolvable, untouched'
+)
+eq(format.open_target(preview, 'limo').gateway, nil, 'open_target: no gateway applied to preview')
 
 -- ---------------------------------------------------------------------------
 -- exit_kind()

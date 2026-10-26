@@ -469,8 +469,45 @@ function M.error_message(result)
   return 's2s failed (no error message returned)'
 end
 
---- The openable target, from `render` only. Never synthesizes a URL.
-function M.open_target(result)
+-- Public ENS gateways. A browser cannot resolve `name.eth` at all, so the
+-- binary's prodUrl (`https://<publication>/<path>`) only opens through one of
+-- these suffixes.
+local GATEWAYS = { limo = 'limo', link = 'link' }
+
+--- Insert a gateway suffix after a bare `.eth` host, path untouched:
+---   https://polyphony.eth/introduction -> https://polyphony.eth.limo/introduction
+--- Returns nil when the URL is not http(s) or the host is not a bare `.eth`
+--- name (already-gated URLs are left alone rather than double-suffixed).
+---@param url string|nil
+---@param gateway string|nil  'limo' | 'link' (case-insensitive)
+---@return string|nil
+function M.resolve_url(url, gateway)
+  if type(url) ~= 'string' or url == '' then
+    return nil
+  end
+  if type(gateway) ~= 'string' then
+    return nil
+  end
+  local suffix = GATEWAYS[gateway:lower()]
+  if not suffix then
+    return nil
+  end
+  local scheme, host, rest = url:match('^(https?://)([^/?#]+)(.*)$')
+  if not scheme then
+    return nil
+  end
+  if host:sub(-4):lower() ~= '.eth' then
+    return nil
+  end
+  return scheme .. host .. '.' .. suffix .. rest
+end
+
+--- The openable target, from `render` only. Never synthesizes a URL; at most it
+--- rewrites a bare `.eth` host through the configured gateway so the link is
+--- actually resolvable. `raw_url` keeps what the binary returned.
+---@param result table
+---@param gateway string|nil  nil/false leaves the URL exactly as returned
+function M.open_target(result, gateway)
   local target = {}
   if type(result) ~= 'table' or type(result.render) ~= 'table' then
     return target
@@ -484,7 +521,9 @@ function M.open_target(result)
     url = url or scalar(r[key])
   end
   if url then
-    target.url = url
+    target.url = M.resolve_url(url, gateway) or url
+    target.raw_url = url
+    target.gateway = target.url ~= url and gateway or nil
   end
   local path = scalar(r.path)
   if path then
