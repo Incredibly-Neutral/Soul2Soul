@@ -4,6 +4,7 @@ import { customElement, state } from 'lit/decorators.js';
 import { SafeIntegration } from '../lib/safe-integration.js';
 import './s2s-deals-tab.js';
 import './s2s-init.js';
+import './ens-name-step.js';
 import './s2s-button.js';
 import './s2s-confirm-modal.js';
 import './s2s-init-progress-modal.js';
@@ -23,7 +24,9 @@ import {
   readEnsRegistration,
   subdomainLabelError,
   suffixOfPublicationName,
+  type EnsRegistrationState,
 } from '../lib/ens-registration.js';
+import { findPublicationName } from '../lib/ens-step.js';
 import { ENS_REGISTRY_ADDRESS } from '../lib/domain-validation.js';
 import {
   INIT_SESSION_KEY,
@@ -190,6 +193,18 @@ export class S2SApp extends LitElement {
   /** Set once the user dismissed an init flow: never re-seed a repair over it. */
   private ensRepairSuppressed = false;
 
+  /** The standalone ENS step's L1 read for this page's Safe. Set once per Safe
+   *  per page load by maybeCheckEnsStep; the card owns polling after that. */
+  @state() private ensStepState: EnsRegistrationState | null = null;
+  /** Safes whose standalone ENS step has already been read this page load. */
+  private ensStepChecked = new Set<string>();
+  /** True once the standalone step has a verdict for this Safe. The init-flow
+   *  repair must then defer to it instead of seeding step 1 over a live
+   *  publication (the two surfaces answer the same question). */
+  private ensStepClaimed = false;
+  /** The user closed the card: keep it closed for the rest of this page load. */
+  private ensStepDismissed = false;
+
   private unsubscribers: Array<() => void> = [];
 
   static styles = [
@@ -301,14 +316,6 @@ export class S2SApp extends LitElement {
       store.setProtocolInfo(protocolInfo);
       console.log(protocolInfo);
 
-      // A publication created BEFORE the ENS step existed has modules + a name
-      // record but no registrable subnode: seed the flow at step 1 so the name
-      // can start resolving (see maybeRepairEnsRegistration). Runs AFTER the
-      // protocol info is in the store — the repair reads the ENS registry through
-      // it, and a hardcoded fallback there would repair against the wrong
-      // registry on any deployment whose registry address differs.
-      await this.maybeRepairEnsRegistration(safeInfo);
-
       const [keys, values] = await this.safeIntegration.getAllRecords();
       store.setAllRecords(
         keys.map((key: string, index: number) => ({
@@ -317,6 +324,21 @@ export class S2SApp extends LitElement {
           type: 'metadata',
         })),
       );
+
+      // The standalone ENS step for an ALREADY LIVE publication. Deliberately
+      // AFTER the record load: the optional card must never hold the app's
+      // first paint behind a chain read nobody asked for. Reads the name
+      // cross-chain (Base modules) and the L1 registration once per Safe per
+      // page load, then gives the legacy repair path the same chance.
+      await this.maybeCheckEnsStep(safeInfo, store.getRecord('name') ?? '');
+
+      // A publication created BEFORE the ENS step existed has modules + a name
+      // record but no registrable subnode: seed the flow at step 1 so the name
+      // can start resolving (see maybeRepairEnsRegistration). Runs AFTER the
+      // protocol info is in the store — the repair reads the ENS registry through
+      // it, and a hardcoded fallback there would repair against the wrong
+      // registry on any deployment whose registry address differs.
+      await this.maybeRepairEnsRegistration(safeInfo);
 
       const publication = store.getRecord('name');
 
@@ -516,6 +538,11 @@ export class S2SApp extends LitElement {
     window.location.reload();
   }
 
+  /** This app's own URL, for the "same Safe + app on mainnet" deep link. */
+  private get ensStepAppUrl(): string {
+    return `${window.location.origin}${window.location.pathname}`;
+  }
+
   /**
    * Drive the init progress modal from a persisted session. Called once on
    * page load (after the Safe is connected). Opens the modal for a
@@ -599,6 +626,112 @@ export class S2SApp extends LitElement {
     this.initPhase = session.phase;
   }
 
+  /** The card hid itself because the subnode now reads back as this Safe. */
+  private readonly onEnsStepDone = (): void => {
+    this.ensStepState = null;
+  };
+
+  /** The user dismissed the card: keep it closed for this page load. */
+  private readonly onEnsStepDismiss = (): void => {
+    this.ensStepState = null;
+    this.ensStepDismissed = true;
+  };
+
+  /**
+   * Read the standalone ENS step for a live publication.
+   *
+   * Deliberately independent of any init session and of the session's chain:
+   * the publication's name is read from its modules on Base, so this works on
+   * the L1 twin Safe too (where the module list is empty). The `checked` key
+   * is recorded only after a COMPLETED read: a 429/transport failure must not
+   * suppress the card for the rest of the page load.
+   */
+  private async maybeCheckEnsStep(
+    safeInfo: { chainId: number; safeAddress: string },
+    expectedName: string,
+  ): Promise<void> {
+    // An init flow / host-owned config step owns the modal: it always wins.
+    // Or the user closed the card for this page load.
+    if (
+      this.ensStepDismissed ||
+      this.initPhase !== null ||
+      this.configResumePending ||
+      this.configStepActive ||
+      this.configWaitActive
+    ) {
+      return;
+    }
+
+    // The protocol registry is required: this card sends a real L1 transaction.
+    // Never propose against the hardcoded constant when the deployment's
+    // registry could not be read (ProtocolIntegration returns undefined).
+    const registry = store.protocolInfo?.ensRegistry;
+    if (!registry) {
+      console.log('[app] ens step skipped: protocol registry is not available');
+      return;
+    }
+
+    // Scope the cache by publication name AND registry too: an in-page
+    // rename/reconfigure must get a fresh read, while a plain refresh of the
+    // same publication does not touch the chain again.
+    const key = `${safeInfo.chainId}:${safeInfo.safeAddress.toLowerCase()}:${registry.toLowerCase()}:${expectedName
+      .trim()
+      .toLowerCase()}`;
+    if (this.ensStepChecked.has(key)) return;
+
+    let publicationName = '';
+    try {
+      publicationName = await findPublicationName(
+        (chainId, contractAddress, abi, method, args) =>
+          this.safeIntegration.evmRead(chainId, contractAddress, abi, method, args),
+        safeInfo.safeAddress,
+        { expectedName, throwOnError: true },
+      );
+    } catch (e) {
+      // Do NOT record the key: a later refresh may get a clean read.
+      console.log(`[app] ens step skipped: publication name read failed (${describeError(e)})`);
+      return;
+    }
+
+    publicationName = (publicationName ?? '').trim();
+    if (!publicationName) {
+      this.ensStepChecked.add(key);
+      return;
+    }
+    const label = (publicationName.split('.')[0] ?? '').trim();
+    if (!label || subdomainLabelError(label)) {
+      this.ensStepChecked.add(key);
+      return;
+    }
+
+    let state: EnsRegistrationState;
+    try {
+      state = await readEnsRegistration(
+        {
+          evmRead: (chainId, contractAddress, abi, method, args) =>
+            this.safeIntegration.evmRead(chainId, contractAddress, abi, method, args),
+        },
+        {
+          registry,
+          label,
+          safeAddress: safeInfo.safeAddress,
+          suffix: suffixOfPublicationName(publicationName, label) || undefined,
+        },
+      );
+    } catch (e) {
+      // Do NOT record the key: an L1 429 must not hide the step until reload.
+      console.log(`[app] ens step skipped: ENS read failed (${describeError(e)})`);
+      return;
+    }
+
+    this.ensStepChecked.add(key);
+    this.ensStepClaimed = true;
+    this.ensStepState = state;
+    console.log(
+      `[app] ens step: ${state.name} registered=${String(state.registered)} owner=${state.owner} chain=${safeInfo.chainId}`,
+    );
+  }
+
   /**
    * Repair path for a publication created before the ENS step existed.
    *
@@ -637,6 +770,10 @@ export class S2SApp extends LitElement {
     } = {},
   ): Promise<void> {
     if (this.initPhase !== null) return; // a live flow (or step 3) owns the modal
+    // The standalone ENS step already has a verdict for this Safe: it is the
+    // first-class surface for a live publication, and seeding step 1 over it
+    // would replace the card with the old propose-only modal.
+    if (this.ensStepClaimed) return;
     // A config-phase session is host-owned and is being resumed right now; the
     // repair would overwrite its phase with 'ens' before resumeConfigStep gets
     // to set initPhase, and (with the module pair mid-enable) could read a
@@ -1401,6 +1538,21 @@ export class S2SApp extends LitElement {
             : ''}
         </div>
 
+        ${this.initPhase === null &&
+        !this.configStepActive &&
+        !this.configResumePending &&
+        this.resetState === 'idle'
+          ? html`
+              <s2s-ens-step
+                .state=${this.ensStepState}
+                .safeInfo=${safeInfo}
+                .safeIntegration=${this.safeIntegration}
+                .appUrl=${this.ensStepAppUrl}
+                @s2s-ens-done=${this.onEnsStepDone}
+                @s2s-ens-dismiss=${this.onEnsStepDismiss}
+              ></s2s-ens-step>
+            `
+          : ''}
         ${!live
           ? html`
               <s2s-publication-init

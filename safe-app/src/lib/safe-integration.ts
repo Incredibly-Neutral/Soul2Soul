@@ -212,8 +212,9 @@ export class SafeIntegration {
   }
 
   /**
-   * Size in bytes of the code deployed at `address` on the Safe's chain
-   * (0 when the account has no contract).
+   * Size in bytes of the code deployed at `address` on `chainId` (the Safe's
+   * chain by default; pass 1 to check whether the same address is a Safe on
+   * mainnet). 0 when the account has no contract.
    *
    * The init flow uses this to prove the module factories exist on the chain
    * the Safe lives on BEFORE proposing the create batch. A call to an address
@@ -223,8 +224,9 @@ export class SafeIntegration {
    * on-chain protocol state through the Base provider (shared/src/protocol), so
    * pointing them at another chain (e.g. a mainnet Safe) is exactly that case.
    */
-  async contractCodeSize(address: string): Promise<number> {
-    const provider = this.getProvider();
+  async contractCodeSize(address: string, chainId?: number): Promise<number> {
+    const provider =
+      chainId === undefined ? this.getProvider() : this.evmSetup(address, [], chainId).provider;
     const code: string = await provider.getCode(address);
     // eth_getCode returns '0x' for an account without code: 2 hex chars per
     // byte once the 0x prefix is dropped.
