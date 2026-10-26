@@ -180,6 +180,47 @@ eq(res.json, nil, 'empty stdout: json is nil')
 ok(res.parse_error ~= nil, 'empty stdout: parse_error set')
 
 -- ---------------------------------------------------------------------------
+-- stdout with stray progress around the result document
+--
+-- The binary's durability legs are fire-and-forget and can leak a line onto
+-- stdout; the result document is still the last well-formed object.
+-- ---------------------------------------------------------------------------
+
+local function noisy_case(fixture, label)
+  local r = invoke(opts('upload', fixture, 0))
+  ok(r and type(r.json) == 'table', label .. ': json decoded')
+  eq(r and r.json and r.json.action, 'upload', label .. ': action preserved')
+  eq(r and r.parse_error, nil, label .. ': no parse_error')
+end
+
+noisy_case('prefixed', 'stdout prefix')
+noisy_case('suffixed', 'stdout suffix')
+noisy_case('braces', 'stdout junk with braces')
+
+-- ---------------------------------------------------------------------------
+-- extract_json directly (pure, no child process)
+-- ---------------------------------------------------------------------------
+
+if type(spawn.extract_json) == 'function' then
+  local doc = '{"action":"upload","ok":true}'
+  ok(spawn.extract_json(doc) ~= nil, 'extract: bare document')
+  ok(spawn.extract_json('log line\n' .. doc) ~= nil, 'extract: after a log line')
+  ok(spawn.extract_json(doc .. '\ntrailing log') ~= nil, 'extract: before a log line')
+  ok(
+    spawn.extract_json('a {b} c\n' .. doc .. '\nd {"e":1}') ~= nil,
+    'extract: surrounded by objects'
+  )
+  ok(spawn.extract_json('{"s":') == nil, 'extract: truncated document rejected')
+  ok(spawn.extract_json('no json here') == nil, 'extract: plain text rejected')
+  eq(spawn.extract_json(''), nil, 'extract: empty input')
+  -- A brace inside a JSON string must not confuse the scanner.
+  local nested = spawn.extract_json('junk\n{"note":"a{b}c","action":"upload"}\n')
+  eq(nested and nested.action, 'upload', 'extract: braces inside strings')
+else
+  print('SKIP spawn_e2e extract_json: not exported')
+end
+
+-- ---------------------------------------------------------------------------
 -- argv shape
 -- ---------------------------------------------------------------------------
 

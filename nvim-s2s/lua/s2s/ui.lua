@@ -225,6 +225,24 @@ local function detail_lines(entry)
     lines[#lines + 1] = tostring(body[i])
   end
 
+  -- Raw capture: only when the plugin could not read a result envelope, which
+  -- is exactly when somebody needs to see what the binary actually printed.
+  if type(entry.raw_stdout) == 'string' and entry.raw_stdout ~= '' and #body == 0 then
+    lines[#lines + 1] = string.format('--- stdout (%d bytes) ---', #entry.raw_stdout)
+    local shown = 0
+    for line in entry.raw_stdout:gmatch('[^\r\n]+') do
+      if shown >= 12 then
+        lines[#lines + 1] = '…'
+        break
+      end
+      lines[#lines + 1] = line
+      shown = shown + 1
+    end
+  end
+  if entry.dump then
+    lines[#lines + 1] = 'raw dump: ' .. tostring(entry.dump)
+  end
+
   lines[#lines + 1] = ''
   lines[#lines + 1] = 'q: close   y: copy value'
   return lines
@@ -243,7 +261,11 @@ end
 function M.detail(buf)
   buf = (buf and buf > 0) and buf or api.nvim_get_current_buf()
   local entry = require('s2s.state').get(buf)
-  if not entry or type(entry.result) ~= 'table' then
+  if not entry then
+    M.notify('s2s: no result for this buffer yet', levels.INFO)
+    return false
+  end
+  if type(entry.result) ~= 'table' and type(entry.raw_stdout) ~= 'string' then
     M.notify('s2s: no result for this buffer yet', levels.INFO)
     return false
   end

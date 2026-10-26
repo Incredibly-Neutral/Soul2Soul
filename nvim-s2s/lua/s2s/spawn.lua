@@ -58,15 +58,117 @@ function M.resolve_cwd(note_path)
   return vim.fn.getcwd()
 end
 
+-- Top-level `{...}` spans in a text, respecting strings/escapes. The binary is
+-- allowed to put human progress on stdout by accident (its durability legs run
+-- fire-and-forget), so the result document is located, not assumed to be the
+-- whole buffer.
+---@param text string
+---@return string[]
+local function top_level_objects(text)
+  local out = {}
+  local depth, start, in_str, esc = 0, nil, false, false
+  for i = 1, #text do
+    local c = text:sub(i, i)
+    if in_str then
+      if esc then
+        esc = false
+      elseif c == '\\' then
+        esc = true
+      elseif c == '"' then
+        in_str = false
+      end
+    elseif c == '"' then
+      in_str = true
+    elseif c == '{' then
+      if depth == 0 then
+        start = i
+      end
+      depth = depth + 1
+    elseif c == '}' then
+      if depth > 0 then
+        depth = depth - 1
+        if depth == 0 and start then
+          out[#out + 1] = text:sub(start, i)
+          start = nil
+        end
+      end
+    end
+  end
+  return out
+end
+
+local function decode_object(text)
+  if type(text) ~= 'string' or text == '' then
+    return nil
+  end
+  local ok, decoded = pcall(vim.json.decode, text)
+  if ok and type(decoded) == 'table' then
+    return decoded
+  end
+  return nil
+end
+
+--- The result document inside stdout: the whole buffer, or the most
+--- result-shaped JSON object in it. Stray log objects (a durability leg
+--- reporting `{"leg":…}`) are outranked by anything carrying a result field.
+---@param text string
+---@return table|nil
+function M.extract_json(text)
+  if type(text) ~= 'string' or text:match('^%s*$') then
+    return nil
+  end
+  local whole = decode_object(text)
+  if whole then
+    return whole
+  end
+  local found = top_level_objects(text)
+  local best, best_score = nil, -1
+  for i = #found, 1, -1 do
+    local decoded = decode_object(found[i])
+    if decoded then
+      local score = 0
+      if decoded.action ~= nil then
+        score = 3
+      elseif decoded.error ~= nil or decoded.ok ~= nil then
+        score = 2
+      elseif decoded.config ~= nil or decoded.version ~= nil or decoded.help ~= nil then
+        score = 2
+      end
+      if score > best_score or (score == best_score and best == nil) then
+        best, best_score = decoded, score
+      end
+    end
+  end
+  return best
+end
+
+local function first_line(text)
+  if type(text) ~= 'string' then
+    return nil
+  end
+  for line in text:gmatch('[^\r\n]+') do
+    if not line:match('^%s*$') then
+      local trimmed = line:gsub('^%s+', '')
+      return #trimmed > 120 and (trimmed:sub(1, 117) .. '...') or trimmed
+    end
+  end
+  return nil
+end
+
 local function parse_stdout(stdout)
   if type(stdout) ~= 'string' or stdout:match('^%s*$') then
     return nil, 'no JSON result on stdout (empty output)'
   end
-  local ok, decoded = pcall(vim.json.decode, stdout)
-  if not ok or type(decoded) ~= 'table' then
-    return nil, 'not a JSON result — is `bin` the s2s binary?'
+  local decoded = M.extract_json(stdout)
+  if decoded then
+    return decoded, nil
   end
-  return decoded, nil
+  return nil,
+    string.format(
+      'stdout was not JSON (%d bytes): %s — is `bin` the s2s binary?',
+      #stdout,
+      tostring(first_line(stdout))
+    )
 end
 
 --- Run one invocation. on_done always fires exactly once, in a scheduled
@@ -103,6 +205,7 @@ function M.run(spec, on_done)
     finish({
       code = code,
       signal = obj.signal,
+      argv = argv,
       stdout = stdout,
       stderr = stderr,
       json = json,
@@ -113,6 +216,8 @@ function M.run(spec, on_done)
   if not ok then
     finish({
       code = -1,
+      signal = nil,
+      argv = argv,
       stdout = '',
       stderr = '',
       json = nil,

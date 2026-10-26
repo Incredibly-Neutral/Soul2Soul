@@ -132,6 +132,11 @@ Full set: `s2s_upload`, `s2s_propose`, `s2s_preview`, `s2s_publish`, `s2s_revoke
   stdout, never a Lua traceback.
 - **Frontmatter**: when the binary rewrites the note's frontmatter, an unmodified buffer is
   silently reloaded; a modified buffer gets a one-time warning instead of losing your edits.
+- **Noisy stdout**: stdout is supposed to be one JSON document, but the binary's
+  fire-and-forget durability legs have leaked lines onto it. The plugin therefore locates the
+  result document in stdout instead of demanding that the whole buffer be JSON. If nothing
+  parses, the raw stdout and stderr of that run are written to
+  `stdpath('cache')/nvim-s2s/last-failure.log` and the path appears in the `:S2sLast` float.
 
 ## Testing
 

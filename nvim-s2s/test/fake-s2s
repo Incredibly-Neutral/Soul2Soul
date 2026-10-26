@@ -25,6 +25,22 @@ case "$fixture" in
   raw)
     printf 'this is not a json document\n'
     ;;
+  prefixed)
+    # Progress leaked onto stdout, then the result document.
+    printf 'uploading note.md → polyphony.eth\n'
+    cat "$here/fixtures/upload.json"
+    ;;
+  suffixed)
+    # Result document first, then a stray log line (fire-and-forget legs).
+    cat "$here/fixtures/upload.json"
+    printf '{"leg":"filebase","ok":true}\n'
+    ;;
+  braces)
+    # Junk that itself contains braces, on both sides of the result.
+    printf 'start {not json} here\n'
+    cat "$here/fixtures/upload.json"
+    printf 'end {still not json}\n'
+    ;;
   empty)
     :
     ;;

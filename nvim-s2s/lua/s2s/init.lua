@@ -152,6 +152,33 @@ local function finish(buf, action, started, payload)
 
   -- Keep failures inspectable: `:S2sLast` is often wanted right after a red
   -- notify, and the envelope (or the "not JSON" diagnostic) is what to read.
+  local function dump_raw()
+    local ok, path = pcall(function()
+      local dir = vim.fn.stdpath('cache') .. '/nvim-s2s'
+      vim.fn.mkdir(dir, 'p')
+      local p = dir .. '/last-failure.log'
+      local fd = io.open(p, 'w')
+      if not fd then
+        return nil
+      end
+      fd:write(
+        string.format(
+          '# s2s %s — exit %s — %s\n# argv: %s\n\n--- stdout (%d bytes) ---\n%s\n\n--- stderr ---\n%s\n',
+          tostring(action),
+          tostring(code),
+          os.date('%Y-%m-%d %H:%M:%S'),
+          table.concat(payload.argv or {}, ' '),
+          #(payload.stdout or ''),
+          payload.stdout or '',
+          payload.stderr or ''
+        )
+      )
+      fd:close()
+      return p
+    end)
+    return ok and path or nil
+  end
+
   local function remember_failure(stored)
     if not buf then
       return
@@ -162,7 +189,16 @@ local function finish(buf, action, started, payload)
         error = payload.parse_error or string.format('s2s exited %s', tostring(code)),
       }
     end
-    state.set(buf, { action = action, result = stored, code = code, at = os.time(), ms = ms })
+    state.set(buf, {
+      action = action,
+      result = stored,
+      code = code,
+      at = os.time(),
+      ms = ms,
+      raw_stdout = payload.stdout,
+      raw_stderr = payload.stderr,
+      dump = dump_raw(),
+    })
   end
 
   if type(result) ~= 'table' then
