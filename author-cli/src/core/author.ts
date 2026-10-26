@@ -93,6 +93,17 @@ export async function authorWrite(
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, notePath);
 
+  // The author id is the author Safe, not the EOA — that is what the plugin
+  // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
+  // The proof.signer inside the item still records the EOA that signed it.
+  // Resolved before the service so an on-chain append can be sent by the Safe.
+  const author = await authorSafeState(ctx);
+  if (!author.deployed) {
+    ctx.out.warn(
+      `author Safe ${author.address} is not deployed — run \`s2s author init\` (the id is still valid, but nothing can verify ownership yet)`,
+    );
+  }
+
   // `upload` is off-chain: the publication contributes only its name, which is
   // derived locally. Resolving the Safe + modules is needed to offer on-chain
   // or to render — so a publication that does not exist yet (or an ENS name
@@ -106,6 +117,12 @@ export async function authorWrite(
           l2Runner: ctx.l2Runner,
           ensRegistry: ctx.ensRegistry,
           ipfs: ctx.ipfs,
+          // Only the append is an author write, and it must carry the Safe as
+          // msg.sender — so the bundler-backed runner is only built when the
+          // run actually offers on chain.
+          ...(opts.offer
+            ? { author: { address: author.address, runner: await ctx.authorRunner() } }
+            : {}),
         },
         publication,
       )
@@ -115,16 +132,6 @@ export async function authorWrite(
   const now = Math.floor(Date.now() / 1000);
   const custom = { ...parsed.custom };
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
-
-  // The author id is the author Safe, not the EOA — that is what the plugin
-  // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
-  // The proof.signer inside the item still records the EOA that signed it.
-  const author = await authorSafeState(ctx);
-  if (!author.deployed) {
-    ctx.out.warn(
-      `author Safe ${author.address} is not deployed — run \`s2s author init\` (the id is still valid, but nothing can verify ownership yet)`,
-    );
-  }
 
   const signedItem = await buildSignedContentItem(
     {
@@ -175,14 +182,16 @@ export async function authorWrite(
 
   // Durability — real upload/publish only (never preview-only renders).
   if (opts.publish) {
-    scheduleDurability(ctx, publication, signedItem, kuboCid);
+    scheduleDurability(ctx, publication, signedItem, kuboCid, author.address);
   }
 
   let render: RenderOutcome | undefined;
   if (opts.render) {
     if (!service) throw new Error('internal: render requested without a resolved publication');
-    const authorSafeAddress = service.getMultiSig();
-    render = await renderContent(ctx, service, publication, objectId, authorSafeAddress, opts);
+    // The render action's `authorSafeAddress` is the AUTHOR Safe (neutralpress
+    // passes `user.safe`); passing the publication Safe makes the action check
+    // `isOwner` on the wrong contract.
+    render = await renderContent(ctx, service, publication, objectId, author.address, opts);
   }
 
   return {
@@ -238,6 +247,16 @@ export async function proposeContent(
     );
   }
 
+  // The write is sent by the author Safe: the module keys genesisAuthor and the
+  // whitelist on it, and the plugin does the same (`user.safe`).
+  const author = await authorSafeState(ctx);
+  if (!author.deployed) {
+    throw new UsageError(
+      `cannot propose ${notePath}: the author Safe ${author.address} is not deployed — run \`s2s author init\` first`,
+    );
+  }
+  warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
+
   const service = await PublicationService.init(
     {
       l1: ctx.l1,
@@ -245,6 +264,7 @@ export async function proposeContent(
       l2Runner: ctx.l2Runner,
       ensRegistry: ctx.ensRegistry,
       ipfs: ctx.ipfs,
+      author: { address: author.address, runner: await ctx.authorRunner() },
     },
     publication,
   );
@@ -323,6 +343,8 @@ function scheduleDurability(
   publication: string,
   signedItem: unknown,
   kuboCid: string,
+  /** The author Safe — the Filecoin piece's author attribution, not the EOA. */
+  authorSafe: Address,
 ): void {
   void (async () => {
     try {
@@ -354,7 +376,9 @@ function scheduleDurability(
               );
               return storage.uploadJson(
                 signedItem,
-                [service.getMultiSig(), ctx.eoaAddress],
+                // Both identities, and both Safes: the piece is attributed to the
+                // publication and to the author — never to the signing EOA.
+                [service.getMultiSig(), authorSafe],
                 'article',
               );
             },
@@ -412,6 +436,10 @@ export async function revokeContent(
     throw new Error(`note ${notePath} has no genesis — nothing to revoke on-chain`);
   }
 
+  // `retract` is authorized as the genesis author, i.e. the author Safe.
+  const author = await authorSafeState(ctx);
+  warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
+
   const service = await PublicationService.init(
     {
       l1: ctx.l1,
@@ -419,10 +447,11 @@ export async function revokeContent(
       l2Runner: ctx.l2Runner,
       ensRegistry: ctx.ensRegistry,
       ipfs: ctx.ipfs,
+      author: { address: author.address, runner: await ctx.authorRunner() },
     },
     publication,
   );
-  const authorSafeAddress = service.getMultiSig();
+  const authorSafeAddress = author.address;
 
   // 1. Retract first — removes the version from deals/offers.
   const txHash = await service.retract(genesis);
@@ -454,6 +483,27 @@ export async function revokeContent(
 // ===========================================================================
 // Internal helper
 // ===========================================================================
+
+/**
+ * The frontmatter `author:` is the author Safe (`did:ethr:0x…`). A note whose
+ * recorded author is a different address can still be *uploaded*, but the module
+ * will only accept the write from its `genesisAuthor`, so say so up front rather
+ * than let `OnlySafe()` explain it after a failed send.
+ */
+function warnOnAuthorMismatch(
+  ctx: CliContext,
+  notePath: string,
+  declaredAuthor: unknown,
+  authorSafe: Address,
+): void {
+  if (typeof declaredAuthor !== 'string') return;
+  const declared = declaredAuthor.replace(/^did:ethr:/i, '');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(declared)) return;
+  if (declared.toLowerCase() === authorSafe.toLowerCase()) return;
+  ctx.out.warn(
+    `note ${notePath} records author ${declared}, but this machine's author Safe is ${authorSafe} — the module only accepts writes from the genesis author`,
+  );
+}
 
 function writeNoteFrontmatter(notePath: string, updates: Record<string, string>): boolean {
   const raw = readFileSync(notePath, 'utf8');

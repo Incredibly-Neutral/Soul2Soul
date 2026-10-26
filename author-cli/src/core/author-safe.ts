@@ -69,7 +69,7 @@ async function authorSafeRunner(
   const endpoints = bundlerEndpoints(config, base.id);
   if (requireBundler && !endpoints) {
     throw new UsageError(
-      'deploying the author Safe needs an ERC-4337 bundler — set S2S_PIMLICO_KEY (or S2S_BUNDLER_URL)',
+      'author writes (and deploying the author Safe) need an ERC-4337 bundler — set S2S_PIMLICO_KEY (or S2S_BUNDLER_URL)',
     );
   }
 
@@ -90,6 +90,30 @@ async function authorSafeRunner(
   });
   await runner.connectToFreshSafe(authorSafeSalt(eoa));
   return runner;
+}
+
+/**
+ * The runner for AUTHOR WRITES — `makeOffer` / `retract` — bound to the author
+ * Safe on Base (ERC-4337, Pimlico bundler + paymaster).
+ *
+ * This exists because the author identity on chain is the Safe, not the EOA:
+ * 0xobsidian sends the same writes through `ctrlr.account[L2]`, a
+ * `PermissionlessSafeService` connected to `user.safe`, so `msg.sender` is the
+ * Safe and `genesisAuthor[genesis]` becomes the Safe. `S2SPublicationModuleV2`
+ * then refuses anything else: a first append requires `canPublish(msg.sender)`
+ * (safe ∨ whitelisted), and appending to an existing genesis requires
+ * `msg.sender == genesisAuthor` (or the publication Safe). Sending from the
+ * EOA therefore reverts `OnlySafe()` on any document the whitelist was not
+ * told about — and permanently locks the Safe out of any genesis the EOA
+ * created first. One document, one author address: the Safe.
+ */
+export async function createAuthorWriteRunner(opts: {
+  config: CliConfig;
+  /** The Safe's owner and sole signer. Never the identity itself. */
+  eoa: Address;
+  rpcUrl: string;
+}): Promise<SafeRunnerHandle> {
+  return authorSafeRunner(opts.config, opts.eoa, opts.rpcUrl, true);
 }
 
 /**
