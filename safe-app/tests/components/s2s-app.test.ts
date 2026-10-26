@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { S2SApp } from '../../src/components/s2s-app';
 import type { S2SConfirmModal } from '../../src/components/s2s-confirm-modal';
 import type { S2SInitProgressModal } from '../../src/components/s2s-init-progress-modal';
+import type { S2SEnsStep } from '../../src/components/ens-name-step';
 import {
   INIT_SESSION_KEY,
   loadInitSession,
@@ -216,6 +217,9 @@ import '../../src/components/s2s-app';
 const NAV_TABS = ['deals-tab', 'whitelist-tab', 'records-tab', 'storage-tab', 'website-tree-tab'];
 
 const ENS_REGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e';
+const LIVE_NAME = 'polyphony.soul2soul.eth';
+const RECORDS_MODULE = '0x3333333333333333333333333333333333333333';
+const MODULE_SENTINEL = '0x0000000000000000000000000000000000000001';
 const NAME_WRAPPER = '0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401';
 const ENS_PARENT_NODE = '0x' + '1'.repeat(64);
 
@@ -255,6 +259,44 @@ function initComplete(
 /** Wait for the element's async flow to settle (next microtask flush). */
 async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
+}
+
+/** Make the publication live with an ENS name that is free on L1.
+ *  `modulesThrow` is consulted on every module-list read, so a test can fail
+ *  the first read and let the next one succeed. */
+function mockLiveUnregisteredEns(
+  options: { modulesThrow?: () => boolean; name?: string } = {},
+): void {
+  const name = options.name ?? LIVE_NAME;
+  safeIntMocks.getRecord.mockImplementation(async (key: string) => (key === 'name' ? name : ''));
+  safeIntMocks.evmRead.mockImplementation(
+    async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+      switch (method) {
+        case 'getModulesPaginated':
+          if (options.modulesThrow?.()) throw new Error('429 Too Many Requests');
+          return [[RECORDS_MODULE], MODULE_SENTINEL];
+        case 'NAME':
+          return 'S2S Records Module';
+        case 'getRecord':
+          return name;
+        case 'parentNode':
+          return ENS_PARENT_NODE;
+        case 'isParentWrapped':
+          return true;
+        case 'nameWrapper':
+          return NAME_WRAPPER;
+        case 'ens':
+          return ENS_REGISTRY;
+        case 'registeredSubdomains':
+          return false;
+        case 'ownerOf':
+        case 'owner':
+          return '0x0000000000000000000000000000000000000000';
+        default:
+          throw new Error(`unexpected EVM read: ${method}`);
+      }
+    },
+  );
 }
 
 /** Seed an in-flight session into localStorage matching SAFE_INFO's Safe. */
@@ -886,6 +928,188 @@ describe('s2s-app (shell)', () => {
     expect(modal.phase).toBe('detecting');
     const steps = modal.shadowRoot?.querySelectorAll('.step') ?? [];
     expect(steps.length).toBe(4);
+  });
+
+  it('shows the standalone ENS step for a live publication whose L1 subnode is unregistered', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    const recordsModule = RECORDS_MODULE;
+    const moduleSentinel = MODULE_SENTINEL;
+    safeIntMocks.getRecord.mockImplementation(async (key: string) =>
+      key === 'name' ? 'polyphony.soul2soul.eth' : '',
+    );
+    safeIntMocks.evmRead.mockImplementation(
+      async (chainId: number, contract: string, _abi: unknown, method: string) => {
+        switch (method) {
+          // Publication lookup: the name record lives on the Base modules, even
+          // when this page's Safe is on chain 1.
+          case 'getModulesPaginated':
+            expect(chainId).toBe(8453);
+            expect(contract).toBe(SAFE_INFO.safeAddress);
+            return [[recordsModule], moduleSentinel];
+          case 'NAME':
+            return 'S2S Records Module';
+          case 'getRecord':
+            return 'polyphony.soul2soul.eth';
+          // L1 registration read: free subnode.
+          case 'parentNode':
+            return ENS_PARENT_NODE;
+          case 'isParentWrapped':
+            return true;
+          case 'nameWrapper':
+            return NAME_WRAPPER;
+          case 'ens':
+            return ENS_REGISTRY;
+          case 'registeredSubdomains':
+            return false;
+          case 'ownerOf':
+          case 'owner':
+            return '0x0000000000000000000000000000000000000000';
+          default:
+            throw new Error(`unexpected EVM read: ${method}`);
+        }
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
+    await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-step')).toBeTruthy());
+    expect(step.shadowRoot?.querySelector('#ens-name')?.textContent).toBe(
+      'polyphony.soul2soul.eth',
+    );
+    // Live publication: the card, not the old step-1 repair modal.
+    expect(
+      (el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal | null)
+        ?.open,
+    ).toBe(false);
+  });
+
+  it('clears the standalone step when the card reports done', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    mockLiveUnregisteredEns();
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
+    await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-step')).toBeTruthy());
+
+    step.dispatchEvent(new CustomEvent('s2s-ens-done', { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(step.shadowRoot?.querySelector('#ens-step')).toBeNull());
+  });
+
+  it('keeps the step dismissed after a publication-scope change', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    mockLiveUnregisteredEns();
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
+    await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-step')).toBeTruthy());
+    (step.shadowRoot?.querySelector('#ens-dismiss') as HTMLElement).click();
+    await vi.waitFor(() => expect(step.shadowRoot?.querySelector('#ens-step')).toBeNull());
+    await vi.waitFor(() => expect((el as unknown as { fetching: boolean }).fetching).toBe(false));
+
+    const RENAMED = 'renamed.soul2soul.eth';
+    mockLiveUnregisteredEns({ name: RENAMED });
+    // A later pass for a scope that WOULD be checked (new publication name)
+    // must still be suppressed by the dismiss. Without ensStepDismissed this
+    // call sets a fresh state for the renamed publication.
+    await (
+      el as unknown as {
+        maybeCheckEnsStep: (safe: typeof SAFE_INFO, name: string) => Promise<void>;
+      }
+    ).maybeCheckEnsStep(SAFE_INFO, RENAMED);
+    expect((el as unknown as { ensStepState: unknown }).ensStepState).toBeNull();
+    expect(step.shadowRoot?.querySelector('#ens-step')).toBeNull();
+  });
+
+  it('proposes the ENS registration from a chain-1 Safe', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    safeIntMocks.initialize.mockResolvedValue({ ...SAFE_INFO, chainId: 1 });
+    mockLiveUnregisteredEns();
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
+    await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-propose')).toBeTruthy());
+
+    (step.shadowRoot?.querySelector('#ens-propose') as HTMLElement).click();
+    await vi.waitFor(() => expect(safeIntMocks.proposeBatch).toHaveBeenCalledTimes(1));
+
+    const batch = safeIntMocks.proposeBatch.mock.calls[0][0] as Array<{
+      to: string;
+      value: string;
+      data: string;
+    }>;
+    expect(batch).toHaveLength(1);
+    expect(batch[0].to).toBe(ENS_REGISTRY);
+    expect(batch[0].value).toBe('0');
+    expect(batch[0].data).toMatch(/^0x[0-9a-f]+$/i);
+  });
+
+  it('does not cache a failed name read as "no publication"', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    let throwOnce = true;
+    mockLiveUnregisteredEns({
+      modulesThrow: () => {
+        if (!throwOnce) return false;
+        throwOnce = false;
+        return true;
+      },
+    });
+    // Keep the LEGACY repair path quiet (it reads this separate method) so the
+    // assertion is about the card's own retry, not about step 1 taking over.
+    safeIntMocks.getRecord.mockResolvedValue('');
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    expect(el.shadowRoot?.querySelector('s2s-ens-step #ens-step')).toBeNull();
+    // Let the FAILED pass settle; a concurrent fetch would join it (single-flight).
+    await vi.waitFor(() => expect((el as unknown as { fetching: boolean }).fetching).toBe(false));
+
+    // A later refresh (records event / manual) makes a clean read and shows it.
+    await (el as unknown as { fetchFreshData: () => Promise<void> }).fetchFreshData();
+    await vi.waitFor(() => {
+      const host = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep | null;
+      expect(host?.shadowRoot?.querySelector('#ens-step')).toBeTruthy();
+    });
+  });
+
+  it('does not show the standalone card when the protocol registry is unknown', async () => {
+    // No fallback to the hardcoded registry for a REAL transaction: the legacy
+    // repair path may still explain the state, but this card stays out of it.
+    protocolMocks.initialize.mockResolvedValue(undefined);
+    mockLiveUnregisteredEns();
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    // Let the post-records check settle: asserting before it runs would pass
+    // even with the hardcoded fallback restored.
+    await vi.waitFor(() => expect((el as unknown as { fetching: boolean }).fetching).toBe(false));
+
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep | null;
+    expect(step?.shadowRoot?.querySelector('#ens-step') ?? null).toBeNull();
+    expect((el as unknown as { ensStepState: unknown }).ensStepState).toBeNull();
+  });
+
+  it('loads the publication records without waiting for the ENS lookup', async () => {
+    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    mockLiveUnregisteredEns();
+    safeIntMocks.getAllRecords.mockResolvedValue([['name'], [LIVE_NAME]]);
+    // Never answer the module list: the optional ENS step must not hold paint.
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        if (method === 'getModulesPaginated') return new Promise<never>(() => {});
+        throw new Error(`unexpected EVM read: ${method}`);
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    // The records must be in the store before the hung lookup can finish; the
+    // title is what proves getAllRecords ran, not merely that the tab exists.
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('.title')?.textContent?.trim()).toBe(LIVE_NAME),
+    );
+    expect(el.shadowRoot?.querySelector('s2s-ens-step #ens-step')).toBeNull();
   });
 
   it('seeds step 1 for a publication whose ENS name was never registered', async () => {
