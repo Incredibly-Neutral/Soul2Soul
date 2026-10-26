@@ -45,10 +45,17 @@ require('s2s').setup()
 ### Trying it without touching your config
 
 ```sh
-nvim --cmd "set rtp+=~/code/s2s/nvim-s2s" ~/notes/some-note.md
+nvim -u /home/joera/code/wt-nvim-core/nvim-s2s/dev/init.lua some-note.md
 ```
 
-Two commands that exercise a full round-trip and change nothing:
+`dev/init.lua` prepends this checkout to the runtimepath and calls `setup()`, nothing else.
+
+**Do not use `--cmd "set rtp+=…"` if you run a plugin manager.** lazy.nvim rebuilds the
+runtimepath during startup, so the entry is gone by the time plugins are sourced and every
+`:S2s*` command is `E492`. A `-u` config is read before plugins load, which is why it works;
+alternatively install properly with the `dir` spec above.
+
+Three commands that exercise a full round-trip and change nothing:
 
 - `:S2sConfig list` — a real success envelope (17 keys, secrets masked by the binary).
 - `:S2sConfig path` — path + env-file locations.
