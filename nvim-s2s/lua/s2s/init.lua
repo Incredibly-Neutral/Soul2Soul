@@ -20,6 +20,7 @@ local defaults = {
   copy_cid = false,
   confirm_revoke = true,
   confirm_save = true,
+  abbrev = true,
   timeout = nil,
 }
 
@@ -50,7 +51,9 @@ function M.setup(user_opts)
   o.bin = resolve_bin(o.bin)
   opts = o
   pcall(function()
-    require('s2s.commands').define()
+    local commands = require('s2s.commands')
+    commands.define()
+    commands.set_abbrev(o.abbrev ~= false)
   end)
   return o
 end
@@ -322,46 +325,6 @@ local function ensure_saved(buf, path, proceed)
   end)
 end
 
-local spawn_note
-
-local function run(buf, group, action)
-  buf = buf or api.nvim_get_current_buf()
-  local path = note_path(buf)
-  if not path then
-    ui.warn('s2s: this buffer has no file — save the note first')
-    return
-  end
-  if state.is_busy(buf) then
-    ui.warn(string.format('s2s: %s is already running for this buffer', action))
-    return
-  end
-
-  ensure_saved(buf, path, function()
-    spawn_note(buf, group, action, path)
-  end)
-end
-
-function spawn_note(buf, group, action, path)
-  local started = uv.hrtime()
-  local spec = {
-    bin = opts.bin,
-    group = group,
-    action = action,
-    note = path,
-    cwd = cwd_for(path),
-    timeout = opts.timeout,
-    buf = buf,
-  }
-
-  local before = uv.fs_stat(path)
-  state.set_busy(buf, true)
-  ui.busy(buf, action)
-  spawn.run(spec, function(payload)
-    finish(buf, action, started, payload, path, before)
-  end)
-end
-
--- Buffer-less pass-through commands (`publication new`, `config …`).
 local function split_args(args)
   if args == nil then
     return {}
@@ -380,6 +343,49 @@ local function split_args(args)
   return out
 end
 
+local spawn_note
+
+local function run(buf, group, action, args)
+  buf = buf or api.nvim_get_current_buf()
+  local path = note_path(buf)
+  if not path then
+    ui.warn('s2s: this buffer has no file — save the note first')
+    return
+  end
+  if state.is_busy(buf) then
+    ui.warn(string.format('s2s: %s is already running for this buffer', action))
+    return
+  end
+
+  ensure_saved(buf, path, function()
+    spawn_note(buf, group, action, path, args)
+  end)
+end
+
+function spawn_note(buf, group, action, path, args)
+  local started = uv.hrtime()
+  local spec = {
+    bin = opts.bin,
+    group = group,
+    action = action,
+    note = path,
+    args = split_args(args),
+    cwd = cwd_for(path),
+    timeout = opts.timeout,
+    buf = buf,
+  }
+
+  local before = uv.fs_stat(path)
+  state.set_busy(buf, true)
+  if opts.notify then
+    ui.busy(buf, action)
+  end
+  spawn.run(spec, function(payload)
+    finish(buf, action, started, payload, path, before)
+  end)
+end
+
+-- Buffer-less pass-through commands (`publication new`, `config …`).
 local function run_raw(label, group, action, args)
   local argv = split_args(args)
   local started = uv.hrtime()
@@ -392,38 +398,44 @@ local function run_raw(label, group, action, args)
     timeout = opts.timeout,
   }
 
-  ui.busy(0, label)
+  if opts.notify then
+    ui.busy(0, label)
+  end
   spawn.run(spec, function(payload)
     finish(nil, label, started, payload, nil, nil)
   end)
 end
 
 ---@param buf integer|nil
-function M.upload(buf)
-  run(buf, 'author', 'upload')
+---@param args string|string[]|nil flags forwarded to the binary (e.g. --publication <ens>)
+function M.upload(buf, args)
+  run(buf, 'author', 'upload', args)
 end
 
 ---@param buf integer|nil
-function M.propose(buf)
-  run(buf, 'author', 'propose')
+---@param args string|string[]|nil
+function M.propose(buf, args)
+  run(buf, 'author', 'propose', args)
 end
 
 ---@param buf integer|nil
-function M.preview(buf)
-  run(buf, 'author', 'preview')
+---@param args string|string[]|nil
+function M.preview(buf, args)
+  run(buf, 'author', 'preview', args)
 end
 
 ---@param buf integer|nil
-function M.publish(buf)
-  run(buf, 'author', 'publish')
+---@param args string|string[]|nil
+function M.publish(buf, args)
+  run(buf, 'author', 'publish', args)
 end
 
 --- Destructive (retracts on-chain): confirms first, opt-out via confirm_revoke.
 ---@param buf integer|nil
-function M.revoke(buf)
+function M.revoke(buf, args)
   buf = buf or api.nvim_get_current_buf()
   local function go()
-    run(buf, 'author', 'revoke')
+    run(buf, 'author', 'revoke', args)
   end
   if not opts.confirm_revoke then
     go()
@@ -439,12 +451,10 @@ function M.revoke(buf)
   end)
 end
 
---- `:S2sNew <name> --repo <o/r> …` — args go through verbatim.
+--- `:S2S new <name> --repo <o/r> …` — args go through verbatim.
 ---@param args string|string[]|nil
 function M.new(args)
-  local argv = split_args(args)
-  local action = table.remove(argv, 1) or 'new'
-  run_raw('new', 'publication', action, argv)
+  run_raw('new', 'publication', 'new', split_args(args))
 end
 
 --- `:S2sConfig <set|get|unset|list|path> …` — args go through verbatim.
@@ -474,17 +484,19 @@ function M.help()
   local lines = {
     's2s — Soul2Soul from Neovim (thin wrapper over the s2s binary)',
     '',
-    'Commands:',
-    '  :S2sUpload    author upload  (IPFS + pins)',
-    '  :S2sPropose   author propose (on-chain offer)',
-    '  :S2sPreview   author preview (render + URL)',
-    '  :S2sPublish   author publish (all-in-one)',
-    '  :S2sRevoke    author revoke  (confirms first)',
-    '  :S2sNew <name> --repo <o/r> …',
-    '  :S2sConfig <set|get|unset|list|path> …',
-    '  :S2sLast      last result for this buffer',
-    '  :S2sHealth    :checkhealth s2s',
-    '  :S2sHelp      this text',
+    'Commands (:s2s expands to :S2S):',
+    '  :S2S upload [--publication <ens>]   author upload  (IPFS + pins)',
+    '  :S2S propose                        author propose (on-chain offer)',
+    '  :S2S preview                        author preview (render + URL)',
+    '  :S2S publish                        author publish (all-in-one)',
+    '  :S2S revoke                         author revoke  (confirms first)',
+    '  :S2S new <name> --repo <o/r> …      publication new',
+    '  :S2S config <set|get|unset|list|path> …',
+    '  :S2S last                           last result for this buffer',
+    '  :S2S health                         :checkhealth s2s',
+    '  :S2S help                           this text',
+    '',
+    'Short forms resolve on unique prefix: up, prop, prev, pub, rev, cfg, …',
     '',
     'setup():',
     string.format('  bin            = %s', tostring(opts.bin)),
@@ -493,11 +505,109 @@ function M.help()
     string.format('  open           = %s', tostring(opts.open)),
     string.format('  copy_cid       = %s', tostring(opts.copy_cid)),
     string.format('  confirm_revoke = %s', tostring(opts.confirm_revoke)),
+    string.format('  confirm_save   = %s', tostring(opts.confirm_save)),
+    string.format('  abbrev         = %s', tostring(opts.abbrev)),
     string.format('  timeout        = %s', tostring(opts.timeout)),
     '',
     'No default keymaps — see <Plug>(s2s_*).',
   }
   ui.notify(table.concat(lines, '\n'))
+end
+
+-- ===========================================================================
+-- :S2S dispatcher
+-- ===========================================================================
+
+--- Words accepted by `:S2S`, long form included. Short forms are aliases.
+local ACTION_ALIASES = {
+  upload = 'upload',
+  up = 'upload',
+  propose = 'propose',
+  prop = 'propose',
+  preview = 'preview',
+  prev = 'preview',
+  publish = 'publish',
+  pub = 'publish',
+  revoke = 'revoke',
+  rev = 'revoke',
+  new = 'new',
+  config = 'config',
+  cfg = 'config',
+  conf = 'config',
+  last = 'last',
+  result = 'last',
+  health = 'health',
+  check = 'health',
+  help = 'help',
+  ['?'] = 'help',
+}
+
+local ACTION_NAMES = {
+  'upload',
+  'propose',
+  'preview',
+  'publish',
+  'revoke',
+  'new',
+  'config',
+  'last',
+  'health',
+  'help',
+}
+
+--- Resolve one dispatcher word: alias, exact name, or a unique prefix.
+---@param word string|nil
+---@return string|nil action
+function M.resolve_action(word)
+  if type(word) ~= 'string' or word == '' then
+    return nil
+  end
+  local low = word:lower()
+  local alias = ACTION_ALIASES[low]
+  if alias then
+    return alias
+  end
+  local matches = {}
+  for _, name in ipairs(ACTION_NAMES) do
+    if name:sub(1, #low) == low then
+      matches[#matches + 1] = name
+    end
+  end
+  if #matches == 1 then
+    return matches[1]
+  end
+  return nil
+end
+
+local BUFFER_ACTIONS = { upload = true, propose = true, preview = true, publish = true, revoke = true }
+
+--- `:S2S <action> [args]` — the single entry point behind every mapping.
+---@param args string|string[]|nil
+function M.dispatch(args)
+  local argv = split_args(args)
+  local word = table.remove(argv, 1)
+  if word == nil then
+    M.help()
+    return
+  end
+  local action = M.resolve_action(word)
+  if not action then
+    ui.warn(string.format('s2s: unknown action %q — try :S2S help', word))
+    return
+  end
+  if BUFFER_ACTIONS[action] then
+    M[action](nil, argv)
+  elseif action == 'new' then
+    M.new(argv)
+  elseif action == 'config' then
+    M.config(argv)
+  elseif action == 'last' then
+    M.last()
+  elseif action == 'health' then
+    M.health()
+  else
+    M.help()
+  end
 end
 
 return M

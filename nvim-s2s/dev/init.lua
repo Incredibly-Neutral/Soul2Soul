@@ -15,7 +15,7 @@ vim.opt.signcolumn = 'yes'
 vim.opt.laststatus = 2
 
 -- setup() is optional (s2s on PATH works), but call it so the resolved binary
--- and the defaults are visible in :S2sHelp.
+-- and the defaults are visible in :S2S help.
 local ok, err = pcall(function()
   require('s2s').setup({ open = false })
 end)

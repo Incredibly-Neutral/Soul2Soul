@@ -36,7 +36,7 @@ Locked 2026-10-22 (the handoff's open §0 questions):
 | 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter.** `upload` writes `kubo_cid` back; `propose` falls back to it, `--cid` overrides. The plugin holds **no** CID state. |
 | 2 | Neovim runtime floor | **0.10** (`vim.system`, `vim.ui.open`, `vim.notify` with replaceable id). No `jobstart` fallback. The dev VM runs **0.12.6**. |
 | 3 | Where the plugin lives | **`nvim-s2s/` at the s2s repo root**, pure Lua, no build step, `dir`-installable. Not a pnpm workspace package. |
-| 4 | CID prefill UX | Moot — there is no prefill. `:S2sPropose` needs no prompt after `:S2sUpload`. |
+| 4 | CID prefill UX | Moot — there is no prefill. `:S2S propose` needs no prompt after `:S2S upload`. |
 | 5 | Who reads the `.md` | **Only the binary.** Lua hands over an absolute path. Non-negotiable — see [Hard rules](#hard-rules). |
 | 6 | Result-shape tolerance | Results are an **open shape**: format known fields, pass unknown scalars through, never reject extras. |
 | 7 | `schema: 1` in the JSON envelope | **Deferred** (not built). Version check is `s2s --version` only, for now. |
@@ -45,7 +45,7 @@ Decision 1 detail: `kubo_cid` is *ephemeral* — it names one upload of one revi
 by the next upload, and describes the note as of that upload. That staleness is only detectable by
 the binary, which is why the value lives in the note it belongs to rather than in an editor
 session. Consequence for the plugin: **no `changedtick` guard, no buffer cache** — a stale upload
-is the user's business, and the fix is `:S2sUpload`, not a plugin heuristic.
+is the user's business, and the fix is `:S2S upload`, not a plugin heuristic.
 
 ## Package layout
 
@@ -88,7 +88,7 @@ One action = one process:
 |---|---|---|
 | `0` | result on stdout | `format.lua` → notify INFO (+ store in `state.lua`) |
 | `1` | runtime failure | envelope `error` → notify ERROR (+ `vim.diagnostic` on the note if the message names a frontmatter field) |
-| `2` | usage error | notify WARN, message points at `:S2sHelp` / the binary's own `-h` |
+| `2` | usage error | notify WARN, message points at `:S2S help` / the binary's own `-h` |
 | other | killed / crash | notify ERROR with the signal and stderr tail |
 
 stderr is **never** logged raw and never parsed — it is human progress. The one exception is
@@ -132,7 +132,7 @@ This is the only place the plugin cares that the note is also a file on disk.
   buffer number + action so two actions on two buffers don't fight.
 - **Success**: one notify, ≤4 lines. Line 1 verb + note basename + human duration. Then the identity
   fields that matter for the action. Never the whole result.
-- **Detail float** (`:S2sLast` / `<Plug>(s2s_detail)`): full known set + pass-through extras, one
+- **Detail float** (`:S2S last` / `<Plug>(s2s_detail)`): full known set + pass-through extras, one
   `key: value` per line, `q` to close. This is where "everything else" goes so the notify stays small.
 - **Open**: `preview` → open `previewUrl` when `opts.open`; `publish` → open `prodUrl`. `upload`
   and `propose` have nothing to open. **No URLs are invented** — only `render.*` fields the binary
@@ -147,24 +147,28 @@ This is the only place the plugin cares that the note is also a file on disk.
 
 | Command | Binary call |
 |---|---|
-| `:S2sUpload` | `author upload <note> --json` |
-| `:S2sPropose` | `author propose <note> --json` (CID from frontmatter) |
-| `:S2sPreview` | `author preview <note> --json` |
-| `:S2sPublish` | `author publish <note> --json` |
-| `:S2sRevoke` | `author revoke <note> --json` (confirms first — it retracts on-chain) |
-| `:S2sNew <name> --repo <o/r> …` | `publication new <name> --repo … --json` |
-| `:S2sConfig` | `config <set\|get\|unset\|list\|path> … --json` |
-| `:S2sLast` | no spawn — formats `state.last[buf]` |
-| `:S2sHealth` | no spawn — `health.lua` |
-| `:S2sHelp` | no spawn — prints `setup` opts + command list |
+| `:S2S upload` | `author upload <note> --json` |
+| `:S2S propose` | `author propose <note> --json` (CID from frontmatter) |
+| `:S2S preview` | `author preview <note> --json` |
+| `:S2S publish` | `author publish <note> --json` |
+| `:S2S revoke` | `author revoke <note> --json` (confirms first — it retracts on-chain) |
+| `:S2S new <name> --repo <o/r> …` | `publication new <name> --repo … --json` |
+| `:S2S config` | `config <set\|get\|unset\|list\|path> … --json` |
+| `:S2S last` | no spawn — formats `state.last[buf]` |
+| `:S2S health` | no spawn — `health.lua` |
+| `:S2S help` | no spawn — prints `setup` opts + command list |
 
-- `:S2sNew` and `:S2sConfig*` pass trailing args through to the binary verbatim (no flag
+- One interface: `:S2S <action> [args]`, with a `cnoreabbrev` so `:s2s <action>` works too (a
+  user command must begin with an uppercase letter, so `:s2s` cannot be a command itself). The
+  camelCase commands of the first cut remain as aliases.
+- Every `<Plug>(s2s_*)` is `<Cmd>S2S <verb><CR>`.
+- `:S2S new` and `:S2S config*` pass trailing args through to the binary verbatim (no flag
   re-implementation, no validation); `flag completion` is read from the binary's `-h` output once
   per session and cached in memory.
 - `<Plug>` mappings for all of the above; **no default keymaps** (users pick their leader).
-- `:S2sRevoke` is the only destructive command and the only one with a confirmation
+- `:S2S revoke` is the only destructive command and the only one with a confirmation
   (`vim.ui.select`), because the binary-side arg `--publication` is easy to get wrong silently.
-- Commands error clearly when the current buffer has no file (`:S2sUpload` on a scratch buffer).
+- Commands error clearly when the current buffer has no file (`:S2S upload` on a scratch buffer).
 
 ## setup()
 
@@ -177,6 +181,7 @@ require('s2s').setup({
   copy_cid = false,       -- put upload's kuboCid in the + register
   confirm_revoke = true,
   confirm_save = true,    -- ask when the buffer has unsaved edits / is not on disk
+  abbrev = true,          -- `:s2s` on the command line expands to `:S2S`
   timeout = nil,          -- ms; nil = no timeout
 })
 ```
@@ -201,7 +206,7 @@ anything that would (publication, keys, RPC) is `s2s config`'s job and stays the
 | `format.lua` | Pure table-in/strings-out tests. Fixtures: one canned result per action (`upload`, `propose`, `preview`, `publish`, `revoke`, `publication new`), the failure envelope, an empty `{}`, and a **future-shaped** result with unknown scalars + an unknown nested object (must not error, must pass the scalars through, must drop the nested one). |
 | `spawn.lua` | Integration against a **fake `s2s`** shell script on `PATH` (or `bin = <script>`): ok / exit 1 / exit 2 / exit 3 / non-JSON stdout / empty stdout / huge stdout. Assert argv shape (note is absolute, `--json` present, trailing args in order) and cwd. No live chain, no real binary. |
 | `state.lua` | last-result-per-buffer + busy flag lifecycle (set on spawn, cleared on exit, survives buffer switch, dropped on `BufWipeout`). |
-| manual smoke | `:S2sUpload` on a fixture note against the real binary, to the point it fails on missing env (exit 1) → clean ERROR notify, no stack trace. Then `:S2sPropose` / `:S2sPreview` the same way. |
+| manual smoke | `:S2S upload` on a fixture note against the real binary, to the point it fails on missing env (exit 1) → clean ERROR notify, no stack trace. Then `:S2S propose` / `:S2S preview` the same way. |
 
 Test runner: `plenary.nvim`'s busted shim, invoked as `nvim --headless -l test/run.lua`
 (`-l` needs 0.9+, fine at the 0.10 floor); no external test dependency in the plugin's own runtime
@@ -224,7 +229,7 @@ path. CI is out of scope for now — the gate is "runs in this VM's 0.12.6".
 - Editing s2s content inside Neovim beyond the note buffer the user already has open.
 - A publication/chain browser, CID viewer, or deal ledger (that is `cid-mirror` / `0xobsidian`).
 - Rendering markdown, previewing HTML inside Neovim, or managing IPFS pins.
-- Any s2s state machine (upload→propose orchestration prompts). `:S2sUpload` then `:S2sPropose`
+- Any s2s state machine (upload→propose orchestration prompts). `:S2S upload` then `:S2S propose`
   is two commands; the binary already made them two steps on purpose.
 - Windows. (No `spawn` abstraction beyond `vim.system`.)
 
@@ -237,7 +242,7 @@ path. CI is out of scope for now — the gate is "runs in this VM's 0.12.6".
 - **`schema: 1` envelope field** — deferred. If the binary ever returns a shape the plugin cannot
   interpret at all, this is what should be added first (then `format.lua` gets exactly one strict
   check: `schema == 1`).
-- **`:S2sNew` UX** — the flag surface (`--repo`, `--branch`, `--author`, `--owner`) is wide. Current
+- **`:S2S new` UX** — the flag surface (`--repo`, `--branch`, `--author`, `--owner`) is wide. Current
   answer is raw pass-through; a `vim.ui.input` sequence is a later nicety, and it would need the
   binary's validation messages to be good enough to drive it.
 
@@ -246,6 +251,6 @@ path. CI is out of scope for now — the gate is "runs in this VM's 0.12.6".
 - `format.lua` tests pass for all six result shapes + failure envelope + open-shape case.
 - `spawn.lua` tests pass for ok / 1 / 2 / other / non-JSON / empty / large stdout.
 - `:checkhealth s2s` runs clean on this VM (0.12.6, real binary present).
-- Manual smoke: `:S2sUpload` surfaces the missing-env failure as a single clean ERROR notify; no
+- Manual smoke: `:S2S upload` surfaces the missing-env failure as a single clean ERROR notify; no
   Lua stack trace, no raw stdout, no hung busy notify.
 - `pnpm test` in `author-cli` and the plugin's own tests both green; no change to the binary's gates.
