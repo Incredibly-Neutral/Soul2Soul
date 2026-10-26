@@ -254,6 +254,50 @@ eq(line_for(report, 'revision'), '3', 'report: extras last')
 ok(#report > #format.lines(future) + #extras, 'report: includes everything')
 
 -- ---------------------------------------------------------------------------
+-- action-less shapes: the config group and --version
+-- (these carry no `action` field; they are routed by shape)
+-- ---------------------------------------------------------------------------
+
+local cfg_list = fixture('config-list')
+eq(format.is_failure(cfg_list), false, 'config list: not a failure')
+eq(format.summary(cfg_list), '6 config keys', 'config list: summary counts keys')
+local cl = format.lines(cfg_list)
+eq(line_for(cl, 'pinataGateway'), 'neutralpress.mypinata.cloud', 'config list: value rendered')
+eq(line_for(cl, 'kuboToken'), 'dd…fc51', 'config list: masked secret passes through as-is')
+ok(has_key(cl, 'eoa'), 'config list: derived eoa listed')
+ok(cl[1]:match('^environment') ~= nil, 'config list: keys sorted')
+ok(not has_key(cl, 'config'), 'config list: nested record not rendered as text')
+local cl_report = format.report(cfg_list)
+eq(cl_report[1], format.summary(cfg_list), 'config list report: summary first')
+eq(#format.extras(cfg_list), 0, 'config list: no duplicate extras')
+
+local cfg_path = fixture('config-path')
+eq(
+  format.summary(cfg_path),
+  'config path /home/joera/.config/s2s/config.json',
+  'config path: summary'
+)
+local cp = format.lines(cfg_path)
+eq(line_for(cp, 'path'), '/home/joera/.config/s2s/config.json', 'config path: path line')
+eq(line_for(cp, 'env.userExists'), 'no', 'config path: boolean env flag')
+eq(line_for(cp, 'env.project'), '(unset)', 'config path: JSON null → (unset)')
+eq(#format.extras(cfg_path), 0, 'config path: no duplicate extras')
+
+local cfg_get = fixture('config-get')
+eq(
+  format.summary(cfg_get),
+  'pinataGateway = neutralpress.mypinata.cloud',
+  'config get: summary'
+)
+eq(#format.lines(cfg_get), 0, 'config get: key/value folded into the summary only')
+eq(#format.extras(cfg_get), 0, 'config get: no duplicate extras')
+eq(format.summary({ key = 'filebaseToken', value = vim.NIL }), 'filebaseToken = (unset)', 'config get: null value')
+
+local ver = fixture('version')
+eq(format.summary(ver), 's2s 0.1.0', 'version: summary')
+eq(#format.report(ver), 1, 'version: report is only the summary')
+
+-- ---------------------------------------------------------------------------
 -- open_target()
 -- ---------------------------------------------------------------------------
 

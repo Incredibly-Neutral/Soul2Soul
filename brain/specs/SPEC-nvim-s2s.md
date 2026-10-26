@@ -1,10 +1,16 @@
 # SPEC-nvim-s2s — the Neovim plugin wrapper over the `s2s` binary
 
 > **Type:** host specification — describes the `nvim-s2s/` package, the *editor* host that drives
-> the headless binary from [SPEC-author-cli](./SPEC-author-cli.md). Nothing is built yet.
+> the headless binary from [SPEC-author-cli](./SPEC-author-cli.md). The package exists under
+> `nvim-s2s/` and is green against its own tests.
 >
-> **Status:** DESIGN — decisions taken 2026-10-22 (see [Decisions](#decisions)). Next gate is the
-> scaffold + the fake-binary test harness; no Lua exists in the repo yet.
+> **Status:** BUILT (2026-10-26, awaiting first hands-on test) — decisions taken 2026-10-22 (see
+> [Decisions](#decisions)); the code landed 2026-10-26. Gates: `nvim --headless -l test/run.lua`
+> → 136 assertions, 0 failures (format, state, spawn e2e against a fake binary); `:checkhealth
+> s2s` clean on 0.12.6 with `s2s v0.1.0`; the config group and the failure paths driven against
+> the real binary. **Not yet proven:** a real `upload`/`preview`/`publish` round-trip (they hit
+> live IPFS + pins), so the success formatting is fixture-verified only, and the frontmatter
+> reload path has not been exercised against a real rewrite.
 >
 > **Companion:** [SPEC-author-cli](./SPEC-author-cli.md) — the **Binary API reference** section is
 > the fixed contract this plugin is built against. Where the two disagree, the binary wins.

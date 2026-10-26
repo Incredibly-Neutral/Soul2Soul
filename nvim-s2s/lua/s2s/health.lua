@@ -68,14 +68,16 @@ end
 
 local function check_version(bin)
   local ok, obj = pcall(function()
-    return vim.system({ bin, '--version' }, { text = true, timeout = 5000 }):wait(5000)
+    return vim.system({ bin, '--version', '--json' }, { text = true, timeout = 5000 }):wait(5000)
   end)
   if not ok or type(obj) ~= 'table' then
-    health.warn('`s2s --version` could not be run')
+    health.warn('`s2s --version --json` could not be run')
     return
   end
   if obj.code ~= 0 then
-    health.warn(string.format('`s2s --version` exited %d — %s', obj.code or -1, first_line(obj.stderr) or 'no stderr'))
+    health.warn(
+      string.format('`s2s --version --json` exited %d — %s', obj.code or -1, first_line(obj.stderr) or 'no stderr')
+    )
     return
   end
 
@@ -84,7 +86,7 @@ local function check_version(bin)
   local parsed = version and parse_semver(version) or nil
   if not parsed then
     health.warn(
-      '`s2s --version` did not return a parseable JSON version',
+      '`s2s --version --json` did not return a parseable JSON version',
       { 'got: ' .. tostring(first_line(obj.stdout) or '(empty)') }
     )
     return

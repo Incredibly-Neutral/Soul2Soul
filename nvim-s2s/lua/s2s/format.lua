@@ -36,6 +36,26 @@ local KNOWN = {
 -- `render` sub-keys, in display order.
 local RENDER_KEYS = { 'cid', 'path', 'previewUrl', 'prodUrl' }
 
+-- Action-less result shapes: the `config` group and the global documents carry
+-- no `action` field, so they are detected by shape instead.
+KNOWN['config.list'] = { 'config' }
+KNOWN['config.path'] = { 'path', 'env' }
+KNOWN['config.get'] = {} -- summary carries `key = value`; no duplicated rows
+KNOWN['version'] = {} -- summary carries name + version
+KNOWN['help'] = { 'help' }
+
+local UNSET = '(unset)'
+
+-- Fields that a shape folds into its summary line, so they must not reappear as
+-- pass-through extras.
+local FOLDED = {
+  ['config.get'] = { key = true, value = true },
+  ['config.list'] = { config = true },
+  ['config.path'] = { path = true, env = true },
+  ['version'] = { name = true, version = true },
+  ['help'] = { help = true },
+}
+
 -- Envelope/metadata keys that are never "extras" (they are either rendered
 -- elsewhere or are transport bookkeeping).
 local RESERVED = { ok = true, action = true, error = true }
@@ -93,12 +113,59 @@ local function action_key(result)
     return nil
   end
   local a = result.action
-  if type(a) ~= 'string' or a == '' then
-    return nil
+  if type(a) == 'string' and a ~= '' then
+    -- Tolerate `publication.new` / `publication new` spellings.
+    return (a:gsub('^publication[%s%.]+', ''))
   end
-  -- Tolerate `publication.new` / `publication new` spellings.
-  a = a:gsub('^publication[%s%.]+', '')
-  return a
+  -- Shape fallback: config results and global documents have no `action`.
+  if type(result.config) == 'table' then
+    return 'config.list'
+  end
+  if type(result.path) == 'string' and type(result.env) == 'table' then
+    return 'config.path'
+  end
+  if type(result.key) == 'string' then
+    return 'config.get'
+  end
+  if type(result.help) == 'string' then
+    return 'help'
+  end
+  if type(result.version) == 'string' then
+    return 'version'
+  end
+  return nil
+end
+
+-- A decoded JSON null is userdata (vim.NIL) in Neovim; treat it as unset.
+local function is_null(v)
+  return v == nil or type(v) == 'userdata'
+end
+
+-- Sorted `key : value` pairs from a flat record, with an optional prefix.
+local function record_pairs(record, prefix)
+  local out = {}
+  if type(record) ~= 'table' then
+    return out
+  end
+  local keys = {}
+  for key, value in pairs(record) do
+    if type(key) == 'string' and type(value) ~= 'table' then
+      keys[#keys + 1] = key
+    end
+  end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    local v
+    if is_null(record[key]) then
+      v = UNSET
+    else
+      v = scalar(record[key])
+    end
+    if v then
+      out[#out + 1] = { (prefix or '') .. key, v }
+    end
+  end
+  return out
 end
 
 -- ---------------------------------------------------------------------------
@@ -139,6 +206,18 @@ local function known_pairs(result)
           end
         end
       end
+    elseif key == 'config' or key == 'env' then
+      local prefix = key == 'env' and 'env.' or nil
+      for _, p in ipairs(record_pairs(result[key], prefix)) do
+        out[#out + 1] = p
+      end
+    elseif key == 'value' and is_null(result.value) then
+      out[#out + 1] = { 'value', UNSET }
+    elseif key == 'help' then
+      local first = scalar(result.help)
+      if first then
+        out[#out + 1] = { 'help', (first:match('^[^\r\n]+') or first) }
+      end
     else
       local v
       if key == 'owners' or key == 'authors' then
@@ -173,6 +252,7 @@ local function extras_pairs(result)
     return out
   end
   local known = {}
+  local folded = FOLDED[action_key(result) or ''] or {}
   local spec = KNOWN[action_key(result) or '']
   if spec then
     for _, key in ipairs(spec) do
@@ -183,6 +263,7 @@ local function extras_pairs(result)
   for key, value in pairs(result) do
     if
       type(key) == 'string'
+      and not folded[key]
       and not known[key]
       and not RESERVED[key]
       and scalar(value) ~= nil
@@ -260,6 +341,57 @@ function M.summary(result)
       parts[#parts + 1] = safe
     end
     return table.concat(parts, ' · ')
+  end
+
+  if key == 'config.list' then
+    local total, unset = 0, 0
+    for _, p in ipairs(record_pairs(result.config)) do
+      total = total + 1
+      if p[2] == UNSET then
+        unset = unset + 1
+      end
+    end
+    if total == 0 then
+      return 'no config values'
+    end
+    local line = string.format('%d config keys', total)
+    if unset > 0 then
+      line = line .. string.format(' · %d unset', unset)
+    end
+    return line
+  end
+
+  if key == 'config.path' then
+    local path = scalar(result.path)
+    return path and ('config path ' .. path) or nil
+  end
+
+  if key == 'config.get' then
+    local name = scalar(result.key)
+    if not name then
+      return nil
+    end
+    local value
+    if is_null(result.value) then
+      value = UNSET
+    else
+      value = scalar(result.value) or UNSET
+    end
+    return string.format('%s = %s', name, value)
+  end
+
+  if key == 'version' then
+    local v = scalar(result.version)
+    local n = scalar(result.name) or 's2s'
+    return v and (n .. ' ' .. v) or nil
+  end
+
+  if key == 'help' then
+    local text = scalar(result.help)
+    if not text then
+      return nil
+    end
+    return text:match('^[^\r\n]+')
   end
 
   local parts = { (VERBS[key] or key) }

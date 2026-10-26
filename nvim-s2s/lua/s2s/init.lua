@@ -150,6 +150,21 @@ local function finish(buf, action, started, payload)
     state.set_busy(buf, false)
   end
 
+  -- Keep failures inspectable: `:S2sLast` is often wanted right after a red
+  -- notify, and the envelope (or the "not JSON" diagnostic) is what to read.
+  local function remember_failure(stored)
+    if not buf then
+      return
+    end
+    if type(stored) ~= 'table' then
+      stored = {
+        ok = false,
+        error = payload.parse_error or string.format('s2s exited %s', tostring(code)),
+      }
+    end
+    state.set(buf, { action = action, result = stored, code = code, at = os.time(), ms = ms })
+  end
+
   if type(result) ~= 'table' then
     ui.failure(buf, action, {
       code = code,
@@ -157,6 +172,7 @@ local function finish(buf, action, started, payload)
       parse_error = payload.parse_error or 'not a JSON result — is `bin` the s2s binary?',
       signal = payload.signal,
     })
+    remember_failure(nil)
     return
   end
 
@@ -179,6 +195,7 @@ local function finish(buf, action, started, payload)
     stderr = (code == 1 or code == 2) and nil or payload.stderr,
     signal = payload.signal,
   })
+  remember_failure(result)
 end
 
 local function run(buf, group, action, note)

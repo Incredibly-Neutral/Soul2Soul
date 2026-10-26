@@ -42,6 +42,10 @@ merge(run_spec('format_spec', function()
   return dofile(TEST_DIR .. '/format_spec.lua')
 end), 'format_spec')
 
+merge(run_spec('state_spec', function()
+  return dofile(TEST_DIR .. '/state_spec.lua')
+end), 'state_spec')
+
 local has_spawn = pcall(require, 's2s.spawn')
 if has_spawn then
   merge(run_spec('spawn_e2e', function()

@@ -5,8 +5,9 @@
 (`author-cli`): spawn the binary, parse its `--json` stdout, format the result for the
 buffer/UI, and drive the flows from normal-mode commands. **No reimplementation of s2s
 logic in Lua.**
-**Status:** Architecture proposed below; **nothing built yet**. The binary (author-cli)
-and its `config` group are committed and green — the plugin is the next work item.
+**Status:** **Superseded by [SPEC-nvim-s2s](../specs/SPEC-nvim-s2s.md)** and built (2026-10-26).
+The seven open questions in §0 were answered in that spec's Decisions table; `nvim-s2s/` exists
+and its tests are green. Keep this file for the reasoning trail, not as the current plan.
 **Consumes:** `brain/specs/SPEC-author-cli.md` — especially the **Binary API reference
 (machine contract)** section, which is the fixed interface this plugin is built against.
 
