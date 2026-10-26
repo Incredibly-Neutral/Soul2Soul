@@ -52,9 +52,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
   { key: 'filecoinRpc', env: ['S2S_FILECOIN_RPC'], default: 'https://api.node.glif.io/rpc/v1' },
   { key: 'filecoinSessionKey', env: ['S2S_FILECOIN_SESSION_KEY'] },
   { key: 'filecoinPrivateKey', env: ['S2S_FILECOIN_PRIVATE_KEY'], secret: true },
+  { key: 'pimlicoKey', env: ['S2S_PIMLICO_KEY', 'PIMLICO_KEY', 'PIMLICO_API_KEY'], secret: true },
   { key: 'bundlerUrl', env: ['S2S_BUNDLER_URL'] },
   { key: 'paymasterUrl', env: ['S2S_PAYMASTER_URL'] },
-  { key: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.6', enumValues: ['0.6', '0.7'] },
+  // Not a free choice: the EntryPoint version selects the Safe4337Module
+  // installed by the Safe's initializer, so it is part of the counterfactual
+  // address. 0.7 matches the plugin (0xobsidian hardcodes ENTRYPOINT v0.7).
+  { key: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.7', enumValues: ['0.6', '0.7'] },
 ];
 
 /** Typed key→field lookup (property access is non-optional — built from the array). */

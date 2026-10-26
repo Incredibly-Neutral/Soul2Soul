@@ -1,11 +1,16 @@
 // ============================================================================
 // TxRunner adapters — the two execution modes the CLI needs (SPEC-hosts AD-1):
 //
-//   EoaRunner     — direct EOA transactions (viem wallet). Used for the author
-//                   flows: upload / preview / publish / revoke. The publication
-//                   Safe is the actor on chain only for `new`/module installs;
-//                   author flows need just an EOA (genesisAuthor = EOA, INV-10),
-//                   and makeOffer/retract are sent as plain txs from the owner.
+//   EoaRunner     — direct EOA transactions (viem wallet). Signs and pays, and
+//                   is used for READS. It is deliberately NOT used for author
+//                   writes (`makeOffer`/`retract`): the on-chain author is the
+//                   author Safe, so those go through the SafeRunner. The
+//                   earlier note here claimed "author flows need just an EOA
+//                   (genesisAuthor = EOA, INV-10)" — that is wrong against the
+//                   deployed module, which raises OnlySafe() for a first append
+//                   from anyone that is neither the publication Safe nor
+//                   whitelisted, and refuses an existing genesis from anyone
+//                   but its genesisAuthor.
 //
 //   SafeRunner    — ERC-4337 smart account via permissionless `toSafeSmartAccount`
 //                   + Pimlico bundler/paymaster (all HTTP). Used for `new`:
@@ -137,12 +142,25 @@ export interface SafeRunnerOptions<
   entryPointVersion: TEntry;
   /** Safe proxy implementation version. */
   safeVersion: '1.4.1' | '1.5.0';
+  /**
+   * Safe singleton + proxy factory. Leave undefined to use the library's
+   * defaults *for that version* — which are NOT the addresses 0xobsidian uses:
+   * it pins the SafeL2 v1.4.1 singleton (0x29fc…) while permissionless defaults
+   * to the L1 singleton (0x4167…) for 1.4.1. The singleton is part of the
+   * CREATE2 input, so getting this wrong changes the Safe address.
+   */
+  safeSingletonAddress?: Address;
+  safeProxyFactoryAddress?: Address;
 }
 
-/** Deterministic salt-nonce from a human salt string (same on L1 and L2). */
+/**
+ * Deterministic salt-nonce from a human salt string (same on L1 and L2).
+ * Mirrors 0xobsidian's `PermissionlessSafeService`: the full unmasked keccak
+ * of the salt. Masking any bits changes the CREATE2 input and therefore the
+ * counterfactual address, so the CLI and the plugin must agree exactly.
+ */
 export function saltNonceFor(salt: string): bigint {
-  const hash = keccak256(toBytes(salt));
-  return BigInt(hash) & BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+  return BigInt(keccak256(toBytes(salt)));
 }
 
 /**
@@ -151,12 +169,24 @@ export function saltNonceFor(salt: string): bigint {
  * `connectToExistingSafe` re-targets an already-deployed Safe. `genericTx`
  * submits a userOp through the bundler (paymaster-sponsored when configured).
  */
+export interface SafeRunnerHandle extends TxRunner {
+  /** The counterfactual (not yet deployed) or connected Safe address. */
+  address(): Address;
+  /** Whether bytecode exists at the Safe address. */
+  isDeployed(): Promise<boolean>;
+  /**
+   * Deploy the counterfactual Safe by sending a self-call userOp — the Safe
+   * factory runs in the userOp's initCode. Returns the userOp/transaction hash.
+   */
+  deploy(): Promise<string>;
+}
+
 export async function createSafeRunner<
   TChain extends Chain,
   TEntry extends EntryPointVersion,
 >(
   opts: SafeRunnerOptions<TChain, TEntry>,
-): Promise<TxRunner> {
+): Promise<SafeRunnerHandle> {
   const publicClient = createPublicClient({ chain: opts.chain, transport: http(opts.rpcUrl) });
   const entryPoint = {
     address: opts.entryPointVersion === '0.7' ? entryPoint07Address : entryPoint06Address,
@@ -185,6 +215,10 @@ export async function createSafeRunner<
       owners: [owner],
       version: opts.safeVersion,
       entryPoint,
+      ...(opts.safeSingletonAddress ? { safeSingletonAddress: opts.safeSingletonAddress } : {}),
+      ...(opts.safeProxyFactoryAddress
+        ? { safeProxyFactoryAddress: opts.safeProxyFactoryAddress }
+        : {}),
       ...(targetAddress ? { address: targetAddress } : {}),
       ...(saltNonce !== undefined ? { saltNonce } : {}),
     });
@@ -199,7 +233,41 @@ export async function createSafeRunner<
 
   await rebuild();
 
+  /**
+   * Fee overrides for a userOp. With a paymaster, viem asks for paymaster stub
+   * data *before* gas estimation and omits maxFeePerGas/maxPriorityFeePerGas
+   * from that request — Pimlico's schema rejects the call then ("method does
+   * not exist" with a zod detail naming maxFeePerGas). 0xobsidian sidesteps it
+   * by passing explicit gas prices on every send; do the same. Without a
+   * paymaster the normal estimation path works, so add nothing.
+   */
+  const feeOverrides = async (): Promise<{
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
+  }> => {
+    if (!paymaster) return {};
+    const gasPrice = await paymaster.getUserOperationGasPrice();
+    return {
+      maxFeePerGas: gasPrice.fast.maxFeePerGas,
+      maxPriorityFeePerGas: gasPrice.fast.maxPriorityFeePerGas,
+    };
+  };
+
   return {
+    address: (): Address => smartAccount.address,
+    isDeployed: async (): Promise<boolean> => {
+      const code = await publicClient.getBytecode({ address: smartAccount.address });
+      return code !== undefined && code !== '0x' && code.length > 2;
+    },
+    deploy: async (): Promise<string> => {
+      if (!client) throw new Error('SafeRunner not initialised — call connect first');
+      return client.sendTransaction({
+        to: smartAccount.address,
+        data: '0x',
+        value: 0n,
+        ...(await feeOverrides()),
+      } as never);
+    },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);
       return rebuild();
@@ -227,7 +295,7 @@ export async function createSafeRunner<
     ): Promise<string> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
       const data = encodeFunctionData({ abi: parseAbi(abi), functionName: method, args });
-      return client.sendTransaction({ to: address, data } as never);
+      return client.sendTransaction({ to: address, data, ...(await feeOverrides()) } as never);
     },
     batchGenericTx: async (calls: TxCall[]): Promise<string[]> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
@@ -238,7 +306,13 @@ export async function createSafeRunner<
           functionName: call.method,
           args: call.args,
         });
-        hashes.push(await client.sendTransaction({ to: call.address, data } as never));
+        hashes.push(
+          await client.sendTransaction({
+            to: call.address,
+            data,
+            ...(await feeOverrides()),
+          } as never),
+        );
       }
       return hashes;
     },

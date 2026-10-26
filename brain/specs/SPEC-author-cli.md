@@ -33,6 +33,8 @@ Top-level bin `s2s`; three groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
+s2s author address   [--json]                                     # author id: the Safe (predicted, no deployment)
+s2s author init      [--json]                                     # deploy the author Safe (idempotent)
 s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
 s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + preview render (off-chain)
@@ -47,13 +49,22 @@ s2s config path      [--local] [--json]                          # print the con
 ```
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
-legs, and writes `genesis`/`author` back — but **never touches the chain**. The on-chain
+legs, and writes `genesis`/`author` back — but **never writes to the chain**. `author`
+in that frontmatter is the **author Safe** (`did:ethr:<safe>`), not the signing EOA;
+`author` sits inside the EIP-712 signing view, so it is part of `genesis`. The on-chain
 `makeOffer` is the separate **`propose`** step, which takes the `kuboCid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
 `content_id`, mirroring neutralpress' revoke genesis resolution). `upload` also writes the
 CID it just produced into the frontmatter as `kubo_cid`, so `propose` works with no flags
 after an upload; `--cid` overrides. `publish` remains the
 one-shot convenience that does upload + propose + prod render + pins together.
+
+**`upload` does not resolve the publication on-chain.** The publication contributes only its
+name (the `subdomain` label of the ENS name, derived locally), so an upload succeeds for a
+publication that has not been created yet or whose ENS name has no address record. Only
+`propose` / `publish` / `revoke` (and the Filecoin durability leg) resolve the Safe and its
+modules. The Filecoin leg is the one deferred lookup: it runs after the pins, and a
+publication it cannot resolve degrades to a warning rather than failing the upload.
 
 Global flags parse anywhere in the argv:
 
@@ -81,17 +92,60 @@ from a completely unprovisioned machine.
 |---|---|---|
 | user config | `~/.config/s2s/config.json` (`XDG_CONFIG_HOME` honored) | `s2s config set` (default), mode `0600` |
 | project config | `./.s2sconfig.json` (cwd) | `s2s config set --local` |
+| user env file | `~/.config/s2s/.env` (`XDG_CONFIG_HOME` honored) | by hand, mode `0600` |
+| project env file | `./.env` (cwd, optional) | by hand |
 
 Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
-`privateKey`, … — `s2s config list` shows the full set). List keys (`rpcL1`,
+`privateKey`, … — `s2s config list` shows the full set). Read-only derived keys are also accepted by `config get`:
+`eoa` (the signing account, computed from `privateKey` locally — no RPC). Note that the
+**author id is not the EOA**: it is the author Safe (`s2s author address`), which is
+counterfactual and therefore needs an L2 read. List keys (`rpcL1`,
 `rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
 
-**Precedence** (git-style, env is the 12-factor escape hatch):
+### The author identity: a counterfactual Safe
+
+`upload` signs with the EOA, but the manuscript's owner — the author id written
+into the signed item — is the **Safe** that the EOA owns, exactly as in
+0xobsidian/neutralpress (`user.safe`). Its address is counterfactual, so it can
+be quoted before anything is deployed:
 
 ```
-env vars (incl. cwd .env) > project config > user config > built-in defaults
+salt      = "s2s_" + eoa
+saltNonce = keccak256(salt)                 # unmasked, no chain id in the salt
+Safe      = SafeL2 v1.4.1, owners [eoa], threshold 1, EntryPoint v0.7
+            singleton 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762
+            factory   0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67
 ```
+
+Because the salt excludes the chain, the same author has one address on L1 and
+L2. The Safe is deployed on Base on first use (`s2s author init`) and left
+undeployed on mainnet until a publication needs it — the plugin's asymmetry,
+reproduced deliberately. `author init` is idempotent and is where modules get
+installed later; today it only deploys. Both steps need an L2 RPC; `init` also
+needs an ERC-4337 endpoint: `S2S_PIMLICO_KEY` (what the plugin stores as
+`pimlico_key`) is enough — the per-chain Pimlico URL is derived and doubles as
+bundler and paymaster. `S2S_BUNDLER_URL` / `S2S_PAYMASTER_URL` remain as
+escape hatches for a different bundler.
+
+The env files exist because **the CLI ships to people who do not have this
+repo**: `~/.config/s2s/.env` is the primary configuration surface for an
+installed CLI, and `./.env` is an optional per-project refinement (a project may
+pin its own publication or key without touching the global file). Both are
+loaded once at startup by `loadEnvFiles()` (`src/lib/env.ts`).
+
+**Precedence** (git-style, env is the 12-factor escape hatch; most specific wins):
+
+```
+real env vars > ./.env > ~/.config/s2s/.env > project config > user config > defaults
+```
+
+Within the env layer, a key is only filled from a file when it is unset (or
+blank) at every higher level, so nothing below can shadow a shell export. Values
+that a file supplies therefore behave exactly like exported ones for
+`loadConfig()`, which reads `process.env` only. `XDG_CONFIG_HOME` is honored for
+both the env file and the config file, and a blank `XDG_CONFIG_HOME` falls back
+to `~/.config`.
 
 Examples:
 
@@ -174,6 +228,14 @@ s2s <group> <action> [positionals…] [flags…]
 ### `author` group — result types
 
 ```ts
+// s2s author address [--json]      — the author id (Safe), predicted; no tx
+{ action: 'author.address'; address: string; eoa: string; salt: string;
+  chain: 'base'; deployed: boolean }
+
+// s2s author init [--json]         — deploy the author Safe if not deployed
+{ action: 'author.init'; address: string; eoa: string; salt: string;
+  chain: 'base'; deployed: boolean; txHash: string | null }
+
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
 { action: 'upload'; note: string; publication: string; subdomain: string;
   objectId: string; kuboCid: string; frontmatterWritten: boolean }          // no txHash
@@ -229,24 +291,30 @@ Shared field meanings:
 { action: 'config.set'; key: string; file: string; local: boolean }
 
 // s2s config get <key> [--json]        — value is the *effective* value (env may win); null when unset
-{ key: string; value: string | null }   // secrets masked
+{ key: string; value: string | null }   // secrets masked; `eoa` is derived, not stored
 
 // s2s config unset <key> [--local] [--json]
 { action: 'config.unset'; key: string; file: string; local: boolean }
 
 // s2s config list [--json]             — all effective values; secrets masked
-{ config: Record<string, string> }
+{ config: Record<string, string> }       // plus the derived `eoa` when privateKey is set
 
 // s2s config path [--local] [--json]
-{ path: string }
+{ path: string; env: { user: string; userExists: boolean; project: string | null } }
 ```
+
+`path` is the config file (`--local` → the project file); `env` reports the two
+env-file locations so a caller can see where credentials are expected.
 
 Config keys are the flat camelCase forms of the env surface (see below); precedence is
 env > project file > user file > defaults; `--local` targets `./.s2sconfig.json`.
 
 ## Environment surface
 
-`.env` in the CWD is loaded by the entrypoint (`dotenv/config`) before config resolution. All
+`.env` files are loaded by the entrypoint (`loadEnvFiles()`, `src/lib/env.ts`) before config
+resolution, in the order `./.env` then `~/.config/s2s/.env`, each filling only keys that are
+still unset. Real environment variables always win. The user-level file is the primary surface
+for an installed CLI — a user has no repo `.env` — and `$XDG_CONFIG_HOME` is honored. All
 settings flow through `loadConfig()` into a single `CliConfig` (`src/core/config.ts`), which
 merges the two config-file layers beneath the env layer (see **Config file** above). The table
 lists the env names; every one is also settable via `s2s config set <key>` with a flat camelCase key.
@@ -268,9 +336,10 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 | `S2S_FILECOIN_RPC` | filecoin | `https://api.node.glif.io/rpc/v1` | Filecoin JSON-RPC. |
 | `S2S_FILECOIN_SESSION_KEY` | filecoin (protocol-payer) | — | Path to a `session-key.json`. Mutually exclusive with private key. |
 | `S2S_FILECOIN_PRIVATE_KEY` | filecoin (direct) | — | Direct Filecoin signer key. Mutually exclusive with session key. |
-| `S2S_BUNDLER_URL` | `new` | — | Pimlico/ERC-4337 bundler RPC (Safe userOps). |
-| `S2S_PAYMASTER_URL` | `new` (optional) | — | Pimlico paymaster (gas sponsorship). |
-| `S2S_ENTRY_POINT` | — | `0.6` | EntryPoint version the bundler serves (`0.6`/`0.7`). |
+| `S2S_PIMLICO_KEY` | `new`, `author init` | — | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler *and* paymaster. |
+| `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch: explicit bundler RPC, overriding the derived Pimlico URL. On its own it means no sponsorship. |
+| `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch: explicit paymaster RPC, overriding the Pimlico one. |
+| `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 
 ## Architecture (blank-slate host)
@@ -324,6 +393,8 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   when present, else the signed item's objectId. `genesis` is written back to the note's frontmatter
   (`upsertFrontmatter`) when it was missing.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
+  It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
+  only the name label, taken from the ENS name itself.
   It writes `kubo_cid` into the frontmatter (the CID of that upload — ephemeral: the next
   upload overwrites it, and it describes the note as of that upload, not current edits).
   `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
@@ -335,12 +406,14 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
 - **Durability** (upload and publish only, never preview): fire-and-forget
   `backupToProviders` (filebase + pinata) plus the Filecoin leg (`runFilecoinLeg`) with
-  `onFilecoinMismatch` CID reporting.
+  `onFilecoinMismatch` CID reporting. The Filecoin leg needs the publication's Safe for the CAR
+  recipients, so it resolves the publication lazily inside its own callback — after the Kubo and
+  pin work is already done — and reports a warning when the publication cannot be resolved.
 - **Revoke**: on-chain `retract` **first** (author-caller full withdrawal), then a remove-plumbing
   re-render so the revoked path stops resolving. Revoke-path derivation honors the real on-chain
   `localePaths` (read via Records `getRecord('config')` → config CID → mapping), falling back to
   the legacy `/${locale}` prefix scheme when the map can't be resolved.
-- **new**: requires `--repo` + `S2S_BUNDLER_URL`. `createFeed` is a **stub returning the zero
+- **new**: requires `--repo` + an ERC-4337 endpoint (`S2S_PIMLICO_KEY`). `createFeed` is a **stub returning the zero
   address** — Lens feed creation is not wired headless (see gaps).
 
 ## Known gaps / follow-ups

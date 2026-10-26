@@ -30,6 +30,8 @@ import { flagList, flagString, type ParsedArgs } from '../lib/args';
 import { UsageError } from '../lib/errors';
 import type { CommandSpec } from '../lib/command';
 import type { CliContext } from '../core/context';
+import { authorSafeState } from '../core/author-safe';
+import { bundlerEndpoints } from '../core/config';
 
 const ENS_SUFFIX = '.soul2soul.eth';
 
@@ -44,10 +46,22 @@ export const newPublication: CommandSpec = {
     const branch = flagString(args.flags, 'branch');
     const authors = flagList(args.flags, 'author');
     const owners = flagList(args.flags, 'owner');
-    const bundlerUrl = ctx.config.bundler.baseUrl;
-    if (!bundlerUrl) {
+    // The EntryPoint version picks the Safe4337Module inside each Safe's
+    // initializer — i.e. it is part of the Safe's address. 0.6 is only sane
+    // for a bundler that cannot speak 0.7, and the plugin would then get a
+    // different publication Safe, so say so out loud.
+    if (ctx.config.bundler.entryPoint !== '0.7') {
+      ctx.out.warn(
+        `entryPoint ${ctx.config.bundler.entryPoint} — the publication Safes will not match the plugin (which pins 0.7)`,
+      );
+    }
+
+    // Endpoints are per-chain: a Pimlico key yields one URL per chain id.
+    const l1Endpoints = bundlerEndpoints(ctx.config, mainnet.id);
+    const l2Endpoints = bundlerEndpoints(ctx.config, base.id);
+    if (!l1Endpoints || !l2Endpoints) {
       throw new Error(
-        '`new` needs an ERC-4337 bundler URL — set S2S_BUNDLER_URL (e.g. a Pimlico bundler endpoint).',
+        '`new` needs an ERC-4337 bundler — set S2S_PIMLICO_KEY (or S2S_BUNDLER_URL).',
       );
     }
 
@@ -55,15 +69,18 @@ export const newPublication: CommandSpec = {
     const l2Rpc = ctx.rpcs.L2[0];
     if (!l1Rpc || !l2Rpc) throw new Error('missing L1/L2 RPC endpoints');
 
-    ctx.out.log(`creating publication ${name} (Safe: ${ctx.eoaAddress})…`);
+    // The author id is the author Safe (mirrors 0xobsidian's `user.safe`, which
+    // neutralpress' new-publication modal pre-fills as the default author).
+    const author = await authorSafeState(ctx);
+    ctx.out.log(`creating publication ${name} (author ${author.address})…`);
 
     const safeVersion: '1.4.1' | '1.5.0' = '1.4.1';
     const l1Runner = await createSafeRunner({
       chain: mainnet,
       rpcUrl: l1Rpc,
       privateKey: requirePrivateKey(ctx),
-      bundlerUrl,
-      paymasterUrl: ctx.config.bundler.paymasterUrl,
+      bundlerUrl: l1Endpoints.bundlerUrl,
+      paymasterUrl: l1Endpoints.paymasterUrl,
       entryPointVersion: ctx.config.bundler.entryPoint,
       safeVersion,
     });
@@ -71,8 +88,8 @@ export const newPublication: CommandSpec = {
       chain: base,
       rpcUrl: l2Rpc,
       privateKey: requirePrivateKey(ctx),
-      bundlerUrl,
-      paymasterUrl: ctx.config.bundler.paymasterUrl,
+      bundlerUrl: l2Endpoints.bundlerUrl,
+      paymasterUrl: l2Endpoints.paymasterUrl,
       entryPointVersion: ctx.config.bundler.entryPoint,
       safeVersion,
     });
@@ -80,7 +97,7 @@ export const newPublication: CommandSpec = {
     const publication: S2SPublication = {
       name,
       owners,
-      authors: authors.length > 0 ? authors : [ctx.eoaAddress],
+      authors: authors.length > 0 ? authors : [author.address],
       devRepository: repo,
       branch: branch ?? '',
     };

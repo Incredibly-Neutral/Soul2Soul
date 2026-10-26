@@ -13,7 +13,13 @@
 // without a private key or any RPC endpoint.
 // ============================================================================
 
+import { existsSync } from 'node:fs';
+
+import { privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
+
 import type { ParsedArgs } from '../lib/args';
+import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import {
@@ -24,7 +30,30 @@ import {
   writeConfigValue,
   type ConfigField,
 } from '../core/configfile';
-import { configKeyValue } from '../core/config';
+import { configKeyValue, hexKey } from '../core/config';
+
+/**
+ * Read-only pseudo-keys derived from the config — never stored, never written.
+ * `eoa` is the signing account derived from `privateKey` locally (no RPC).
+ * It is NOT the author id: the author id is the Safe (see `s2s author address`,
+ * which is counterfactual and needs an L2 read).
+ */
+export const DERIVED_KEYS = ['eoa'] as const;
+
+export function isDerivedKey(key: string): boolean {
+  return (DERIVED_KEYS as readonly string[]).includes(key);
+}
+
+export function derivedConfigValue(key: string): string | null {
+  if (key !== 'eoa') return null;
+  const privateKey = hexKey(configKeyValue('privateKey'));
+  if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) return null;
+  try {
+    return privateKeyToAccount(privateKey as Hex).address;
+  } catch {
+    return null;
+  }
+}
 
 export interface ConfigCommandSpec {
   name: string;
@@ -34,7 +63,7 @@ export interface ConfigCommandSpec {
 }
 
 function knownKeys(): string {
-  return CONFIG_FIELDS.map((f) => f.key).join(' ');
+  return [...CONFIG_FIELDS.map((f) => f.key), `${DERIVED_KEYS.join(' ')} (derived)`].join(' ');
 }
 
 function requireField(args: ParsedArgs): ConfigField {
@@ -89,6 +118,12 @@ function setCommand(out: CliOut, args: ParsedArgs): void {
 }
 
 function getCommand(out: CliOut, args: ParsedArgs): void {
+  const requested = args.positionals[0];
+  if (requested !== undefined && isDerivedKey(requested)) {
+    const value = derivedConfigValue(requested);
+    out.result({ key: requested, value }, `${requested}: ${value ?? '(unset)'}`);
+    return;
+  }
   const field = requireField(args);
   const value = configKeyValue(field.key);
   const shown = field.secret && value !== undefined ? maskSecret(value) : value;
@@ -115,15 +150,39 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
+  const eoa = derivedConfigValue('eoa');
+  const derived = [`eoa: ${eoa ?? '(unset — needs privateKey)'}`].join('\n');
+  const userEnv = userEnvPath();
+  const projectEnv = projectEnvPath();
+  const envNotes = [
+    `user env: ${userEnv}${existsSync(userEnv) ? '' : ' [not found]'}`,
+    `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
+  ].join('\n');
   out.result(
-    { config: Object.fromEntries(entries) },
-    `Effective configuration (env > project > user > defaults):\n\n${table}\n\nManage with: s2s config set <key> <value> [--local]`,
+    { config: Object.fromEntries([...entries, ['eoa', eoa] as const].filter(([, v]) => v !== null)) },
+    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }
 
 function pathCommand(out: CliOut, args: ParsedArgs): void {
   const target = writeTarget(args);
-  out.result({ path: target.file }, target.file);
+  const userEnv = userEnvPath();
+  const projectEnv = projectEnvPath();
+  const userEnvExists = existsSync(userEnv);
+  const projectEnvExists = existsSync(projectEnv);
+  const env = {
+    user: userEnv,
+    userExists: userEnvExists,
+    project: projectEnvExists ? projectEnv : null,
+  };
+  out.result(
+    { path: target.file, env },
+    [
+      `${target.label} config: ${target.file}`,
+      `env file (user):    ${userEnv}${userEnvExists ? '' : '  [not found]'}`,
+      `env file (project): ${projectEnv}${projectEnvExists ? '' : '  [not found]'}`,
+    ].join('\n'),
+  );
 }
 
 export const configCommands: readonly ConfigCommandSpec[] = [
@@ -175,6 +234,7 @@ Flags:
   --json    emit the result as JSON on stdout (machine-readable)
 
 Precedence: environment vars > project config > user config > defaults.
+Env file:   $XDG_CONFIG_HOME/s2s/.env (default ~/.config/s2s/.env), then ./.env.
 Known keys: ${knownKeys()}
 
 Run "s2s config <action> --help" for details on an action.`;

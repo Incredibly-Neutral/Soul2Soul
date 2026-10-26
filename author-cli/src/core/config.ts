@@ -35,12 +35,44 @@ export interface FilecoinConfig {
 }
 
 export interface BundlerConfig {
-  /** Pimlico/ERC-4337 bundler RPC URL (required for `new`). */
+  /**
+   * Pimlico API key. This is what the plugin (0xobsidian `pimlico_key`) holds:
+   * one key, and the endpoint is derived per chain. The key serves as bundler
+   * *and* paymaster — Pimlico exposes both on the same RPC URL.
+   */
+  pimlicoKey: string | undefined;
+  /** Explicit bundler URL — escape hatch for a non-Pimlico bundler. */
   baseUrl: string | undefined;
-  /** Pimlico paymaster RPC URL (optional — gas sponsorship). */
+  /** Explicit paymaster URL — escape hatch / to disable sponsorship. */
   paymasterUrl: string | undefined;
   /** EntryPoint version the bundler serves. */
   entryPoint: EntryPointVersion;
+}
+
+/** Pimlico's ERC-4337 endpoint for a chain — bundler and paymaster in one URL. */
+export function pimlicoRpcUrl(apiKey: string, chainId: number): string {
+  return `https://api.pimlico.io/v2/${chainId}/rpc?apikey=${apiKey}`;
+}
+
+export interface BundlerEndpoints {
+  bundlerUrl: string;
+  paymasterUrl: string | undefined;
+}
+
+/**
+ * Resolve the ERC-4337 endpoints for one chain. Endpoints are per-chain, so a
+ * bare Pimlico key yields a different URL for mainnet and Base; an explicit
+ * `bundlerUrl` wins and, on its own, means "no sponsorship".
+ */
+export function bundlerEndpoints(
+  config: CliConfig,
+  chainId: number,
+): BundlerEndpoints | undefined {
+  const key = config.bundler.pimlicoKey;
+  const pimlico = key ? pimlicoRpcUrl(key, chainId) : undefined;
+  const bundlerUrl = config.bundler.baseUrl ?? pimlico;
+  if (!bundlerUrl) return undefined;
+  return { bundlerUrl, paymasterUrl: config.bundler.paymasterUrl ?? pimlico };
 }
 
 export interface CliConfig {
@@ -136,6 +168,18 @@ function listValue(value: string | undefined): string[] {
     : [];
 }
 
+/**
+ * Normalize an secp256k1 private key to the 0x-prefixed form viem requires.
+ * Keys pasted from `.env` files and wallets are routinely 64 bare hex chars;
+ * viem's `privateKeyToAccount` rejects those ("expected hex or 32 bytes, got
+ * string"), so the prefix is added here rather than at every consumer.
+ */
+export function hexKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return /^[0-9a-fA-F]{64}$/.test(trimmed) ? `0x${trimmed}` : trimmed;
+}
+
 /** Enum fields fall back to the default when given an unrecognized value. */
 function enumValue<T extends string>(field: ConfigField, fallback: T, value: string | undefined): T {
   if (value !== undefined && field.enumValues?.includes(value)) {
@@ -153,8 +197,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
 
   return {
     environment: enumValue(field('environment'), 'prod', resolve(field('environment'))),
-    privateKey: resolve(field('privateKey')),
-    litAccountKey: resolve(field('litAccountKey')),
+    privateKey: hexKey(resolve(field('privateKey'))),
+    litAccountKey: hexKey(resolve(field('litAccountKey'))),
     litUsageKey: resolve(field('litUsageKey')),
     githubToken: resolve(field('githubToken')),
     kuboGateway: resolve(field('kuboGateway')) ?? def('kuboGateway'),
@@ -175,6 +219,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
       privateKey: resolve(field('filecoinPrivateKey')),
     },
     bundler: {
+      pimlicoKey: resolve(field('pimlicoKey')),
       baseUrl: resolve(field('bundlerUrl')),
       paymasterUrl: resolve(field('paymasterUrl')),
       entryPoint: enumValue(field('entryPoint'), '0.6', resolve(field('entryPoint'))),

@@ -3,15 +3,22 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig, requireSetting } from '../src/core/config';
 
 describe('loadConfig', () => {
+  // Isolate from the developer's real ~/.config/s2s/config.json — a machine with a
+  // configured CLI must behave exactly like a blank one for these assertions.
+  const noFiles = {
+    userConfigPath: '/nonexistent/s2s/config.json',
+    projectConfigPath: '/nonexistent/.s2sconfig.json',
+  };
+
   it('applies defaults for an empty environment', () => {
-    const config = loadConfig({});
+    const config = loadConfig({}, noFiles);
     expect(config.environment).toBe('prod');
     expect(config.kuboGateway).toBe('ipfs.transport-union.dev');
     expect(config.runnerUrl).toBe('https://run.transport-union.dev/run');
     expect(config.rpc).toEqual({ L1: [], L2: [] });
     expect(config.filecoin.chain).toBe('mainnet');
     expect(config.filecoin.rpcUrl).toBe('https://api.node.glif.io/rpc/v1');
-    expect(config.bundler.entryPoint).toBe('0.6');
+    expect(config.bundler.entryPoint).toBe('0.7');
     expect(config.bundler.baseUrl).toBeUndefined();
   });
 
@@ -42,6 +49,29 @@ describe('loadConfig', () => {
     const config = loadConfig({ S2S_RPC_L1: 'a, b , c', BASE_RPC_URL: 'z' });
     expect(config.rpc.L1).toEqual(['a', 'b', 'c']);
     expect(config.rpc.L2).toEqual(['z']);
+  });
+
+  it('derives per-chain Pimlico endpoints from a bare API key', async () => {
+    const { bundlerEndpoints } = await import('../src/core/config');
+    const config = loadConfig({ S2S_PIMLICO_KEY: 'pk_123' }, noFiles);
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+      paymasterUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+    });
+    // Same key, different chain → different endpoint (one key, not one URL).
+    expect(bundlerEndpoints(config, 1)?.bundlerUrl).toBe(
+      'https://api.pimlico.io/v2/1/rpc?apikey=pk_123',
+    );
+  });
+
+  it('lets an explicit bundler URL win and drops sponsorship unless asked', async () => {
+    const { bundlerEndpoints } = await import('../src/core/config');
+    const config = loadConfig({ S2S_BUNDLER_URL: 'https://bundler.example' }, noFiles);
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://bundler.example',
+      paymasterUrl: undefined,
+    });
+    expect(bundlerEndpoints(loadConfig({}, noFiles), 8453)).toBeUndefined();
   });
 
   it('reads LIT_* and S2S_GITHUB_TOKEN aliases', () => {

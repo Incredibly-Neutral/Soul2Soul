@@ -8,10 +8,9 @@
 // result (Neovim plugin contract). Human progress always goes to stderr.
 // ============================================================================
 
-import 'dotenv/config';
-
 import { parseArgs } from './lib/args';
 import { CliError, UsageError } from './lib/errors';
+import { loadEnvFiles } from './lib/env';
 import { createOut } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
@@ -127,6 +126,11 @@ async function main(argv: string[]): Promise<number> {
   await command.run(context, { flags, positionals: positionals.slice(2) });
   return 0;
 }
+
+// Layer the env files before anything reads the environment: the user's own
+// ~/.config/s2s/.env is the primary surface (end users have no repo .env), an
+// optional cwd .env refines it, and the real environment beats both.
+loadEnvFiles();
 
 void main(process.argv.slice(2))
   .then((code) => {
