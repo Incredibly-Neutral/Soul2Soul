@@ -1,11 +1,16 @@
 // ============================================================================
 // TxRunner adapters — the two execution modes the CLI needs (SPEC-hosts AD-1):
 //
-//   EoaRunner     — direct EOA transactions (viem wallet). Used for the author
-//                   flows: upload / preview / publish / revoke. The publication
-//                   Safe is the actor on chain only for `new`/module installs;
-//                   author flows need just an EOA (genesisAuthor = EOA, INV-10),
-//                   and makeOffer/retract are sent as plain txs from the owner.
+//   EoaRunner     — direct EOA transactions (viem wallet). Signs and pays, and
+//                   is used for READS. It is deliberately NOT used for author
+//                   writes (`makeOffer`/`retract`): the on-chain author is the
+//                   author Safe, so those go through the SafeRunner. The
+//                   earlier note here claimed "author flows need just an EOA
+//                   (genesisAuthor = EOA, INV-10)" — that is wrong against the
+//                   deployed module, which raises OnlySafe() for a first append
+//                   from anyone that is neither the publication Safe nor
+//                   whitelisted, and refuses an existing genesis from anyone
+//                   but its genesisAuthor.
 //
 //   SafeRunner    — ERC-4337 smart account via permissionless `toSafeSmartAccount`
 //                   + Pimlico bundler/paymaster (all HTTP). Used for `new`:

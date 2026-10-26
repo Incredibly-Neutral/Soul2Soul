@@ -17,6 +17,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { TxRunner } from '@s2s/soul2soul-shared';
 
 import { createEoaRunner } from '../adapters/tx-runner';
+import { createAuthorWriteRunner } from './author-safe';
 import { createLitService } from '../adapters/lit';
 import { createIpfs } from '../adapters/ipfs';
 import { buildRpcEndpoints, type RpcEndpoints } from '../adapters/rpc';
@@ -42,8 +43,20 @@ export interface CliContext {
   ipfs: S2SIPFSMethods;
   signer: ViemTypedDataSigner;
   eoaAddress: Address;
-  /** EOA runner for author flows on L2. */
+  /**
+   * EOA runner for L2. Reads and non-identity work ONLY — it is never used for
+   * an author write, because the on-chain author is the Safe (see
+   * `authorRunner` and `S2SPublicationModuleV2._append`). The EOA's only roles
+   * are signing (EIP-712 content item, `lit actions auth`) and owning the Safe.
+   */
   l2Runner: TxRunner;
+  /**
+   * Runner for author writes (`makeOffer` / `retract`): the author Safe via
+   * ERC-4337, so `msg.sender` — and therefore `genesisAuthor` — is the Safe.
+   * Lazily built and memoised: commands that never write on chain (upload,
+   * preview, address, config) must not need a bundler or a Safe.
+   */
+  authorRunner: () => Promise<TxRunner>;
   /** ENS registry address for publication resolution. */
   ensRegistry: Address;
 }
@@ -80,6 +93,16 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const ipfs = createIpfs(config);
   const l2Runner = createEoaRunner({ chain: base, rpcUrl: l2Rpc, privateKey: privateKey as `0x${string}` });
 
+  let authorRunnerPromise: Promise<TxRunner> | undefined;
+  const authorRunner = (): Promise<TxRunner> => {
+    authorRunnerPromise ??= createAuthorWriteRunner({
+      config,
+      eoa: account.address,
+      rpcUrl: l2Rpc,
+    });
+    return authorRunnerPromise;
+  };
+
   return {
     config,
     out,
@@ -92,6 +115,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
     signer,
     eoaAddress: account.address,
     l2Runner,
+    authorRunner,
     ensRegistry,
   };
 }
