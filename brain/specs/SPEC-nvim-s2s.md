@@ -176,6 +176,7 @@ require('s2s').setup({
   open = true,            -- open render URLs on preview/publish
   copy_cid = false,       -- put upload's kuboCid in the + register
   confirm_revoke = true,
+  confirm_save = true,    -- ask when the buffer has unsaved edits / is not on disk
   timeout = nil,          -- ms; nil = no timeout
 })
 ```

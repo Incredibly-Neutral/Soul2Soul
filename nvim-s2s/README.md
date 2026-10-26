@@ -82,6 +82,7 @@ require('s2s').setup({
   open = true,            -- open render URLs after preview/publish
   copy_cid = false,       -- put upload's kuboCid in the + register
   confirm_revoke = true,  -- :S2sRevoke asks first
+  confirm_save = true,    -- ask before uploading when the buffer has unsaved edits
   timeout = nil,          -- ms; nil = no timeout (uploads can take a minute)
 })
 ```
@@ -135,6 +136,9 @@ Full set: `s2s_upload`, `s2s_propose`, `s2s_preview`, `s2s_publish`, `s2s_revoke
   the change being lost. If the binary *says* it wrote the frontmatter but the file's mtime and
   size are unchanged, you get an explicit error naming the file — that is a binary-side
   write-back failure, not a reload the plugin could have done.
+- **Unsaved buffers**: `s2s` reads the note from disk, never from the buffer. A note that was
+  never written gets "save it first?" instead of a confusing failure, and a dirty buffer gets
+  "save before uploading?" — the on-disk version is not what's on your screen.
 - **Noisy stdout**: stdout is supposed to be one JSON document, but the binary's
   fire-and-forget durability legs have leaked lines onto it. The plugin therefore locates the
   result document in stdout instead of demanding that the whole buffer be JSON. If nothing

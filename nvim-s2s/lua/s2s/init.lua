@@ -19,6 +19,7 @@ local defaults = {
   open = true,
   copy_cid = false,
   confirm_revoke = true,
+  confirm_save = true,
   timeout = nil,
 }
 
@@ -265,7 +266,65 @@ local function finish(buf, action, started, payload, path, before)
   remember_failure(result)
 end
 
-local function run(buf, group, action, note)
+--- s2s only ever sees the file on disk, never the buffer. So: a new note has to
+--- be written before anything can be uploaded, and unsaved edits mean the
+--- version on screen is *not* what gets uploaded. Both are asked about, not
+--- guessed at (`confirm_save = false` opts out and always uses the disk file).
+---@param buf integer
+---@param path string
+---@param proceed fun()
+local function ensure_saved(buf, path, proceed)
+  local exists = uv.fs_stat(path) ~= nil
+  local dirty = vim.bo[buf].modified == true
+  if exists and not dirty then
+    proceed()
+    return
+  end
+  if not exists and not dirty then
+    -- Named but empty and never written: there is nothing to send either way.
+    ui.warn('s2s: this note is not on disk yet — write it first')
+    return
+  end
+  if opts.confirm_save ~= true then
+    proceed()
+    return
+  end
+
+  local name = vim.fn.fnamemodify(path, ':t')
+  local choices, prompt
+  if not exists then
+    choices = { 'Save, then continue', 'Cancel' }
+    prompt = string.format('s2s: %s is not on disk yet — save it first?', name)
+  else
+    choices = {
+      'Save, then continue',
+      'Continue with the file on disk',
+      'Cancel',
+    }
+    prompt = string.format('s2s: %s has unsaved changes — save before uploading?', name)
+  end
+
+  vim.ui.select(choices, { prompt = prompt }, function(choice)
+    if choice == 'Save, then continue' then
+      local saved = pcall(function()
+        api.nvim_buf_call(buf, function()
+          vim.cmd('silent write')
+        end)
+      end)
+      if not saved or uv.fs_stat(path) == nil then
+        ui.error(string.format('s2s: could not save %s — nothing uploaded', name))
+        return
+      end
+      proceed()
+    elseif choice == 'Continue with the file on disk' then
+      proceed()
+    end
+  end)
+end
+
+local spawn_note
+
+local function run(buf, group, action)
   buf = buf or api.nvim_get_current_buf()
   local path = note_path(buf)
   if not path then
@@ -277,6 +336,12 @@ local function run(buf, group, action, note)
     return
   end
 
+  ensure_saved(buf, path, function()
+    spawn_note(buf, group, action, path)
+  end)
+end
+
+function spawn_note(buf, group, action, path)
   local started = uv.hrtime()
   local spec = {
     bin = opts.bin,
