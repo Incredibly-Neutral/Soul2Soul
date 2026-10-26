@@ -131,7 +131,10 @@ Full set: `s2s_upload`, `s2s_propose`, `s2s_preview`, `s2s_publish`, `s2s_revoke
 - **Failure**: the envelope `error` verbatim at WARN (exit 2, usage) or ERROR. Never raw
   stdout, never a Lua traceback.
 - **Frontmatter**: when the binary rewrites the note's frontmatter, an unmodified buffer is
-  silently reloaded; a modified buffer gets a one-time warning instead of losing your edits.
+  silently reloaded (`:edit!`); a modified buffer gets a one-time error-level warning instead of
+  the change being lost. If the binary *says* it wrote the frontmatter but the file's mtime and
+  size are unchanged, you get an explicit error naming the file — that is a binary-side
+  write-back failure, not a reload the plugin could have done.
 - **Noisy stdout**: stdout is supposed to be one JSON document, but the binary's
   fire-and-forget durability legs have leaked lines onto it. The plugin therefore locates the
   result document in stdout instead of demanding that the whole buffer be JSON. If nothing

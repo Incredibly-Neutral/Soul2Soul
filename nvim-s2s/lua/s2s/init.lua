@@ -79,6 +79,34 @@ end
 -- One WARN per buffer, ever, about frontmatter we refused to reload.
 local frontmatter_warned = {}
 
+--- The binary says it rewrote the note's frontmatter. Check that the file on
+--- disk actually changed during the run: if it didn't, the write-back failed on
+--- the binary's side (or a formatter/`fsync` race), and no reload can help.
+local function verify_writeback(path, before, result)
+  if type(result) ~= 'table' or result.frontmatterWritten ~= true then
+    return
+  end
+  if type(path) ~= 'string' or path == '' or type(before) ~= 'table' then
+    return
+  end
+  local after = uv.fs_stat(path)
+  if type(after) ~= 'table' then
+    ui.error(string.format('s2s: reported a frontmatter write-back but %s is gone', path))
+    return
+  end
+  local same = after.mtime and before.mtime and after.mtime.sec == before.mtime.sec
+    and after.mtime.nsec == before.mtime.nsec
+    and after.size == before.size
+  if same then
+    ui.error(
+      string.format(
+        's2s: the binary reported a frontmatter write-back but %s did not change on disk',
+        vim.fn.fnamemodify(path, ':t')
+      )
+    )
+  end
+end
+
 local function sync_note(buf, result)
   if type(result) ~= 'table' or result.frontmatterWritten ~= true then
     return
@@ -89,13 +117,15 @@ local function sync_note(buf, result)
   if vim.bo[buf].modified then
     if not frontmatter_warned[buf] then
       frontmatter_warned[buf] = true
-      ui.warn("s2s: the note's frontmatter changed on disk — `:e!` to take it, or `:w` will clobber it")
+      ui.error(
+        "s2s: the note's frontmatter changed on disk — `:e!` to take it, `:w` now will clobber it"
+      )
     end
     return
   end
   frontmatter_warned[buf] = nil
   pcall(api.nvim_buf_call, buf, function()
-    vim.cmd('silent! edit')
+    vim.cmd('silent! edit!')
   end)
 end
 
@@ -141,7 +171,7 @@ local function is_failure(result, code)
 end
 
 --- Handle one finished invocation. buf == nil for buffer-less commands.
-local function finish(buf, action, started, payload)
+local function finish(buf, action, started, payload, path, before)
   local code = payload.code
   local result = payload.json
   local ms = math.floor((uv.hrtime() - started) / 1e6)
@@ -219,6 +249,7 @@ local function finish(buf, action, started, payload)
     if opts.notify then
       ui.result(buf, action, result, code, ms)
     end
+    verify_writeback(path, before, result)
     sync_note(buf, result)
     copy_cid(action, result)
     maybe_open(action, result)
@@ -257,10 +288,11 @@ local function run(buf, group, action, note)
     buf = buf,
   }
 
+  local before = uv.fs_stat(path)
   state.set_busy(buf, true)
   ui.busy(buf, action)
   spawn.run(spec, function(payload)
-    finish(buf, action, started, payload)
+    finish(buf, action, started, payload, path, before)
   end)
 end
 
@@ -297,7 +329,7 @@ local function run_raw(label, group, action, args)
 
   ui.busy(0, label)
   spawn.run(spec, function(payload)
-    finish(nil, label, started, payload)
+    finish(nil, label, started, payload, nil, nil)
   end)
 end
 
