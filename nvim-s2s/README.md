@@ -27,11 +27,17 @@ Pure Lua, no build step. With lazy.nvim, point it at the directory:
 {
   dir = vim.fn.expand('~/code/s2s/nvim-s2s'),
   name = 'nvim-s2s',
+  lazy = false, -- see the note below
   config = function()
     require('s2s').setup()
   end,
 }
 ```
+
+**`lazy = false` is not optional if your config sets `defaults = { lazy = true }`** (NvChad
+does). Otherwise the spec has no trigger, lazy defers it, `config` never runs, and every
+`:S2s*` command is `E492` — the plugin is installed, just never loaded. Confirm with
+`:Lazy` (the plugin should show as loaded) or `:S2sHealth`.
 
 Or without a plugin manager:
 
