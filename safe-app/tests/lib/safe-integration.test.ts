@@ -50,7 +50,9 @@ const eth = vi.hoisted(() => {
   const contractCtorArgs: unknown[][] = [];
   const browserProviderCalls: unknown[] = [];
   const getLogsCalls: unknown[] = [];
+  const getCodeCalls: unknown[] = [];
   let getLogsResult: unknown = [];
+  let codeResults: Record<string, string> = {};
 
   function JsonRpcProvider(this: any, url: string) {
     rpcUrls.push(url);
@@ -58,6 +60,10 @@ const eth = vi.hoisted(() => {
     this.getLogs = async (args: unknown) => {
       getLogsCalls.push(args);
       return getLogsResult;
+    };
+    this.getCode = async (address: string) => {
+      getCodeCalls.push(address);
+      return codeResults[address.toLowerCase()] ?? '0x';
     };
   }
   function BrowserProvider(this: any, ethObj: unknown) {
@@ -90,10 +96,13 @@ const eth = vi.hoisted(() => {
   }
   return {
     contractStubs, directCalls, rpcUrls, contractCtorArgs, browserProviderCalls, getLogsCalls,
-    JsonRpcProvider, BrowserProvider, Contract,
+    getCodeCalls, JsonRpcProvider, BrowserProvider, Contract,
     // Accessors so tests can set the result the getLogs mock will return.
     get getLogsResult() { return getLogsResult; },
     set getLogsResult(v: unknown) { getLogsResult = v; },
+    // Accessors for the eth_getCode mock (address → hex code).
+    get codeResults() { return codeResults; },
+    set codeResults(v: Record<string, string>) { codeResults = v; },
   };
 });
 
@@ -142,6 +151,8 @@ beforeEach(() => {
   eth.browserProviderCalls.length = 0;
   eth.getLogsCalls.length = 0;
   eth.getLogsResult = [];
+  eth.getCodeCalls.length = 0;
+  eth.codeResults = {};
   for (const k of Object.keys(eth.directCalls)) delete eth.directCalls[k];
 
   (globalThis as any).window = { ethers: eth, ethereum: '0xETHEREUM' };
@@ -483,6 +494,36 @@ describe('fetchFactoryModuleCreatedLogs — factory ModuleCreated log reads', ()
       toBlock: 'latest',
     }]);
     expect(result).toEqual([log]);
+  });
+});
+
+describe('contractCodeSize — factory code check (wrong-chain guard)', () => {
+  it('returns 0 when the account has no code (the wrong-chain case)', async () => {
+    eth.codeResults = { [R_ADDR.toLowerCase()]: '0x' };
+    const si = await initInstance();
+
+    await expect(si.contractCodeSize(R_ADDR)).resolves.toBe(0);
+  });
+
+  it('returns the byte length of the deployed code', async () => {
+    // 100 bytes of code -> 200 hex chars after the 0x prefix.
+    eth.codeResults = { [P_ADDR.toLowerCase()]: '0x' + '60'.repeat(100) };
+    const si = await initInstance();
+
+    await expect(si.contractCodeSize(P_ADDR)).resolves.toBe(100);
+  });
+
+  it('reads through the provider for the Safe chain and logs nothing', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    eth.codeResults = { [R_ADDR.toLowerCase()]: '0x6080' };
+    const si = await initInstance();
+    log.mockClear();
+
+    await expect(si.contractCodeSize(R_ADDR)).resolves.toBe(2);
+
+    expect(eth.getCodeCalls).toEqual([R_ADDR]);
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 });
 
