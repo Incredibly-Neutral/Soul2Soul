@@ -1,7 +1,9 @@
 import { evmRead } from './evm';
 import { catFile } from './ipfs.factory';
+import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import type {
   S2SContentItem,
+  S2SPublicContent,
   DataAvailabilityEntry,
 } from '@s2s/soul2soul-shared/lit-actions';
 
@@ -75,12 +77,64 @@ const toEntry = (e: any): Entry => ({
   timestamp: Number(e.timestamp),
 });
 
+/**
+ * A content item as read from IPFS.
+ *
+ * Newer items are the full canonical S2SContentItem (objectId/proof plus
+ * public.plaintextHash/specVersion/mediaType). Legacy items predate that
+ * envelope, so those identity fields are OPTIONAL here while the fields the
+ * render path has always read (public.author …) stay required.
+ */
+export type StoredContentItem = Omit<S2SContentItem, 'objectId' | 'proof' | 'public'> & {
+  objectId?: string;
+  proof?: S2SContentItem['proof'];
+  public: Partial<Omit<S2SPublicContent, 'author'>> & Pick<S2SPublicContent, 'author'>;
+};
+
+/** Anything carrying a plaintext hash: the canonical item or a flat toBody body. */
+export interface PlaintextHashCarrier {
+  public?: { plaintextHash?: string } | null;
+  plaintextHash?: string;
+}
+
+/**
+ * The stored body does not hash to the author-signed `public.plaintextHash`.
+ * Thrown by the direct read path (fetchItemById/fetchById); callers must fail
+ * the job instead of rendering or republishing unverified content.
+ */
+export class ContentIntegrityError extends Error {
+  readonly genesis: string;
+  readonly cid: string;
+
+  constructor(message: string, genesis: string, cid: string) {
+    super(message);
+    this.name = 'ContentIntegrityError';
+    this.genesis = genesis;
+    this.cid = cid;
+  }
+}
+
 // ── Adapter: S2SContentItem (IPFS) → flat S2SBody (what the pipeline expects) ──
 // Mirrors the old lens formatSingle: encrypted → body carries the ciphertext;
 // plain → spread the parsed body. Keeps downstream (data.ctrlr, decrypt,
 // config.ctrl) unchanged.
-export const toBody = (entry: Entry, item: any): any => {
+//
+// IDENTITY IS CARRIED ALONGSIDE the legacy flat fields (additively — every
+// pre-existing field keeps its name and value): a page must be able to say
+// WHICH version (cid/objectId) and WHICH plaintext (plaintextHash) it renders.
+// Legacy items may omit objectId/proof/plaintextHash/specVersion/mediaType; a
+// missing identity field is simply absent from the result, never thrown on and
+// never defaulted (the schema check stays where it is).
+export const toBody = (entry: Entry, item: StoredContentItem): any => {
   const p = item.public;
+  const identity = {
+    cid: entry.cid, // REAL deal cid — never a bytes32 id
+    objectId: item.objectId,
+    plaintextHash: p.plaintextHash,
+    specVersion: p.specVersion,
+    mediaType: p.mediaType,
+    proof: item.proof,
+  };
   const base = {
     id: entry.genesis, // job identity is the genesis
     author: p.author, // did:ethr:0x... — pass through from IPFS
@@ -94,6 +148,7 @@ export const toBody = (entry: Entry, item: any): any => {
     attributes: p.attributes,
     publication: p.publication,
     base: p.base,
+    ...identity,
   };
 
   if (item.encryption) {
@@ -147,17 +202,82 @@ export const getDeals = async (
 
 // ── Drop-in replacements for lens.factory ─────────────────────────────────
 
-/** Replaces lens.factory `fetchById`. Reads latest cid from the module, cats from IPFS. */
+/**
+ * Read the latest version of a document as BOTH its deal entry and its full
+ * content item — exactly ONE cat per fetch.
+ *
+ * Integrity (direct read path): when the item is plaintext (`encryption ===
+ * false`) the stored `body` IS the canonical plaintext JSON the author signed
+ * over (`public.plaintextHash`), so it is verified here. A mismatch throws
+ * {@link ContentIntegrityError}: the caller must fail the job rather than
+ * render (or republish) a body the author never signed. Items with no
+ * `plaintextHash` (legacy, pre-specVersion-1) are not failed — there is
+ * nothing to check against.
+ *
+ * Encrypted items store ciphertext, so the plaintext cannot be checked here;
+ * use {@link verifyDecryptedBody} once the body has been decrypted.
+ */
+export const fetchItemById = async (
+  genesis: string,
+  publicationModule: string,
+  rpcs?: string[],
+  gateway?: string,
+): Promise<{ entry: Entry; item: StoredContentItem } | undefined> => {
+  const entry = await getLatestEntry(genesis, publicationModule, rpcs);
+  if (!entry.cid) return undefined;
+  const item = JSON.parse(await catFile(gateway!, entry.cid)) as StoredContentItem;
+
+  if (item.encryption === false && item.public?.plaintextHash) {
+    if (!verifyBodyHash(item.body, item.public.plaintextHash)) {
+      throw new ContentIntegrityError(
+        `plaintext hash mismatch for ${genesis} (cid ${entry.cid}): the body does not match public.plaintextHash`,
+        genesis,
+        entry.cid,
+      );
+    }
+  }
+
+  return { entry, item };
+};
+
+/**
+ * Replaces lens.factory `fetchById`. Reads latest cid from the module, cats
+ * from IPFS once (via fetchItemById, which also verifies a plaintext body's
+ * hash), and flattens with toBody. Same return shape as before.
+ */
 export const fetchById = async (
   genesis: string,
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
 ): Promise<any> => {
-  const entry = await getLatestEntry(genesis, publicationModule, rpcs);
-  if (!entry.cid) return undefined;
-  const item = JSON.parse(await catFile(gateway!, entry.cid));
-  return toBody(entry, item);
+  const res = await fetchItemById(genesis, publicationModule, rpcs, gateway);
+  if (!res) return undefined;
+  return toBody(res.entry, res.item);
+};
+
+/**
+ * Verify a DECRYPTED body against the item's signed `plaintextHash`.
+ *
+ * The direct read path can only check plaintext items in situ (the stored body
+ * is the canonical JSON). For encrypted items the check moves to the first
+ * point the plaintext exists — right after decryption — and this helper is
+ * called with the decrypted JSON. Accepts the canonical content item
+ * (`item.public.plaintextHash`) or a flat fetch body (which toBody now carries
+ * `plaintextHash` on).
+ *
+ * Returns true when there is nothing to check (legacy item: no plaintextHash),
+ * so callers can use it unconditionally without failing old content.
+ */
+export const verifyDecryptedBody = (
+  item: PlaintextHashCarrier,
+  decryptedJson: unknown,
+): boolean => {
+  const expected = item.public?.plaintextHash ?? item.plaintextHash;
+  if (!expected) return true;
+  const json = typeof decryptedJson === 'string' ? decryptedJson : JSON.stringify(decryptedJson);
+  if (typeof json !== 'string') return false;
+  return verifyBodyHash(json, expected);
 };
 
 /**

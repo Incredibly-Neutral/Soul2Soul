@@ -12,7 +12,7 @@ import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { evmRead } from '../libs/evm';
-import { fetchById } from '../libs/module.factory';
+import { fetchById, verifyDecryptedBody } from '../libs/module.factory';
 
 import { getConfig } from './config.ctrl';
 import {
@@ -69,6 +69,32 @@ export async function isRevokedByDealState(
 // The render only reads; the dedicated maintain-cache action owns the pointer
 // write (setText), so setText is intentionally not included here.
 const RECORDS_CONTRACT_ABI = ['function getText(bytes32 node, string key) view returns (string)'];
+
+type AuthorProof = NonNullable<NonNullable<S2SContentInfo['author']>['proof']>;
+
+/**
+ * Project an item's `proof` onto the metadata author proof, but ONLY when it is
+ * a complete EIP-712 author proof (type + signer + signature). Legacy items
+ * without a proof contribute nothing — a half-formed proof is not emitted.
+ */
+const toAuthorProof = (proof: unknown): AuthorProof | undefined => {
+  if (proof == null || typeof proof !== 'object') return undefined;
+  const p = proof as {
+    type?: unknown;
+    objectId?: unknown;
+    signer?: unknown;
+    signature?: unknown;
+  };
+  if (p.type !== 'eip712' || typeof p.signer !== 'string' || typeof p.signature !== 'string') {
+    return undefined;
+  }
+  return {
+    type: 'eip712',
+    ...(typeof p.objectId === 'string' ? { objectId: p.objectId } : {}),
+    signer: p.signer,
+    signature: p.signature,
+  };
+};
 
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
@@ -321,6 +347,25 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   });
                   return null;
                 }
+                // Integrity: the decrypted plaintext must hash to the
+                // author-signed plaintextHash (the stored body is ciphertext, so
+                // the direct check in fetchItemById cannot apply). A mismatch is
+                // handled exactly like a decrypt failure — non-fatal to the page
+                // (the item is dropped), because the remaining collections can
+                // still render honestly. The unverified plaintext is NEVER used.
+                if (!verifyDecryptedBody(item, d)) {
+                  const errorMsg = `Plaintext hash mismatch for item ${item.id || 'unknown'}${item.cid ? ` (${item.cid})` : ''}: decrypted body does not match the author-signed plaintextHash`;
+                  console.log(errorMsg);
+                  errors.push(errorMsg);
+                  availability.push({
+                    kind: 'data',
+                    genesis: item.id,
+                    cid: item.cid,
+                    reason: errorMsg,
+                    fatal: false,
+                  });
+                  return null;
+                }
                 const obj = mergeDecrypted(item, d);
                 return obj;
               } catch (error) {
@@ -379,17 +424,27 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         let t5 = Date.now();
         trace.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
-        // Build content info from actual data
+        // Build content info from actual data — identity comes from the ITEM
+        // that was fetched, never from guesswork. `body.cid` is the real deal
+        // CID carried by toBody (the old `body.cid || body.id` fallback emitted
+        // `ipfs://0x…` for the bytes32 genesis, which is not a CID).
+        const authorProof = toAuthorProof(body.proof);
         const metadata: S2SContentInfo = {
           author: {
             did: body.author || '',
             createdAt: body.creationDate || '',
+            ...(authorProof ? { proof: authorProof } : {}),
           },
           publisher: {
             did: signerAddress ? `did:ethr:0x${signerAddress.replace('0x', '')}` : '',
             url: body.publication || '',
+            ...(authorSafeAddress ? { safe: authorSafeAddress } : {}),
           },
-          contentCid: body.cid || body.id || '',
+          contentGenesis: job.id,
+          contentCid: body.cid,
+          plaintextHash: body.plaintextHash,
+          mediaType: body.mediaType,
+          specVersion: body.specVersion,
           licenseContract: publicationModule,
           isBasedOn: body.parent
             ? {
