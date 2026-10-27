@@ -34,6 +34,7 @@ const sampleEndpoints = {
 // ── Mock the entire dependency tree ──────────────────────────────────────
 
 vi.mock('../libs/decrypt', () => ({
+  decryptRaw: vi.fn(),
   decrypt: vi.fn(),
 }));
 vi.mock('../libs/ens.factory', () => ({
@@ -279,8 +280,8 @@ describe('render action — availability classification', () => {
       drift: null,
       skips: [],
     });
-    const { decrypt } = await import('../libs/decrypt');
-    (decrypt as any).mockRejectedValue(new Error('Decryption failed: wrong key'));
+    const { decryptRaw } = await import('../libs/decrypt');
+    (decryptRaw as any).mockRejectedValue(new Error('Decryption failed: wrong key'));
 
     const result = await main(baseInput);
 
