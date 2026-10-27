@@ -100,11 +100,17 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     // is exactly the injection this gate exists to block.
     let deals: any[] = [];
     let needsFetch: any[] = [];
+    let integrityIssues: { genesis: string; code: string; reason: string }[] = [];
     try {
       const archive = parseArchive(await catFile(gateway!, archiveCid));
       deals = await getDeals(publicationModule, rpcs?.L2);
       const rc = reconcile(deals, archive);
       needsFetch = rc.needsFetch;
+      // A seed archive containing a forged/tampered entry is REJECTED as a
+      // distinct failure from "incomplete": the two need different operator
+      // responses (rebuild the archive vs find the forger), and reporting an
+      // integrity rejection as "N/M deals uncovered" misdiagnoses it.
+      integrityIssues = rc.integrityIssues;
     } catch (e) {
       throw `seed archive rejected (cat/parse/reconcile failed): ${
         e instanceof Error ? e.message : String(e)
@@ -114,7 +120,16 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
       stage: 'seed-validate',
       deals: deals.length,
       needsFetch: needsFetch.length,
+      integrityIssues: integrityIssues.length,
+      integrityCodes: [...new Set(integrityIssues.map((i) => i.code))],
     });
+    if (integrityIssues.length > 0) {
+      throw `seed archive REJECTED: ${integrityIssues.length} item(s) failed integrity (${[
+        ...new Set(integrityIssues.map((i) => i.code)),
+      ].join(', ')}) — refusing to point at a tampered archive: ${integrityIssues
+        .map((i) => i.genesis)
+        .join(', ')}`;
+    }
     if (needsFetch.length > 0) {
       throw `seed archive INCOMPLETE: ${needsFetch.length}/${deals.length} deals uncovered — refusing to write`;
     }

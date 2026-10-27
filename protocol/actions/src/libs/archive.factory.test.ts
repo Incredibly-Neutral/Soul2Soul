@@ -1,8 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { Wallet, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers';
 import {
   ARCHIVE_FORMAT,
+  addressOf,
   checkItemBodyIntegrity,
+  inspectItemIntegrity,
+  isValidContentItem,
+  judgeRefetchedItem,
   parseArchive,
   reconcile,
   mergeArchive,
@@ -12,81 +16,152 @@ import {
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { jcs } from '@s2s/soul2soul-shared/lit-actions';
 import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
+// The mint and the signing view come from shared (out of scope for edits, so
+// deep-imported exactly like the module under test deep-imports them).
+import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).
 //
 // Correctness home of the archive: classify fresh/miss/stale against the
-// freshness oracle (getDeals), merge refreshed items back in, and never throw
-// on a corrupt/cached blob (fail open to an empty archive).
+// freshness oracle (getDeals), merge refreshed items back in, never throw on a
+// corrupt/cached blob (fail open to an empty archive), and NEVER serve an item
+// that fails the integrity verdict.
 //
-// Each stored entry carries the FULL canonical content item (S2SContentItem),
-// validated against the existing shared content-item schema; reconcile()'s
-// OUTPUT stays the flat toBody bodies for the filter/sort chain.
+// Fixtures are MINTED, not hand-shaped: plaintextHash/objectId/proof.signature
+// are produced the way the real mint produces them (JCS body → keccak256 →
+// EIP-712 digest → real signature), so the tests exercise the same bytes a
+// publication actually stores. An item built with JSON.stringify would not.
 // ============================================================================
 
-const mkEntry = (genesis: string, cid: string): Entry => ({
+// The ambient ethers v5 global a Lit Action provides (`ethers.utils`). It is
+// absent under vitest, so the signature checks would downgrade to
+// 'signature-unrecoverable'; stub the two functions the verdict uses, backed by
+// ethers v6 (identical EIP-712/ecrecover semantics).
+beforeAll(() => {
+  vi.stubGlobal('ethers', {
+    utils: {
+      _TypedDataEncoder: { hash: TypedDataEncoder.hash },
+      recoverAddress,
+    },
+  });
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
+
+const AUTHOR = new Wallet('0x' + '11'.repeat(32));
+const ATTACKER = new Wallet('0x' + '22'.repeat(32));
+
+const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address): Entry => ({
   genesis,
-  author: '0xauthor',
+  author, // getDeals() returns a plain address, NOT a did:ethr
   cid,
   timestamp: 1234,
 });
 
-/** Honest plaintext body for a genesis (the bytes plaintextHash is taken over). */
-const plainBody = (genesis: string): string =>
-  JSON.stringify({
-    title: `title-${genesis}`,
-    slug: `slug-${genesis}`,
-    content: `content-${genesis}`,
-  });
+const bodyOf = (genesis: string) => ({
+  title: `title-${genesis}`,
+  slug: `slug-${genesis}`,
+  content: `content-${genesis}`,
+});
+
+/** Honest plaintext body bytes for a genesis (what plaintextHash is taken over). */
+const plainBody = (genesis: string): string => jcs(bodyOf(genesis));
 
 const hashOf = (body: string): string => keccak256(toUtf8Bytes(body));
 
 interface ItemOpts {
   encryption?: boolean;
-  /** Override the body (defaults to the honest plaintext / ciphertext body). */
+  /** Mint with a different signing key (still records ITS address as author by default). */
+  signer?: Wallet;
+  /** Author identity in `public` (defaults to the signer's). */
+  author?: string;
+  /** Body object to mint (defaults to the honest body for the genesis). */
+  bodyObject?: Record<string, unknown>;
+  /** Override the STORED body string (the forged-body lever). */
   body?: string;
   /** Override public.plaintextHash; `null` omits it entirely (legacy item). */
   plaintextHash?: string | null;
+  /** Omit specVersion too (true legacy item: pre-EIP-712 shape). */
+  legacy?: boolean;
+  /** Corrupt objectId after minting. */
+  objectId?: string;
+  /** Omit the proof entirely. */
+  noProof?: boolean;
+  /** Override proof.signer after minting. */
+  proofSigner?: string;
 }
 
-/** A schema-valid canonical content item (plain by default; encrypted on demand). */
+/**
+ * Mint a genuine content item: JCS body → plaintextHash → EIP-712 digest
+ * (= objectId) → real signature over the signing view. Everything is produced
+ * the way buildSignedContentItem produces it, so 'verified' means "the real
+ * mint verifies", not "the fixture was shaped to pass".
+ *
+ * Tampering levers (plaintextHash/legacy/objectId/proof/body) are applied
+ * AFTER minting, exactly like an attacker rewriting the stored blob — a public
+ * block with a non-bytes32 hash could not have been signed at all.
+ */
 const mkItem = (genesis: string, opts?: ItemOpts): S2SContentItem => {
+  const signer = opts?.signer ?? AUTHOR;
   const encryption = opts?.encryption ?? false;
-  const body = opts?.body ?? (encryption ? `ciphertext-${genesis}` : plainBody(genesis));
-  // Honest default: the hash of the body it carries. Encrypted items carry a
-  // ciphertext body, so their plaintextHash is (correctly) unrelated to it.
-  const plaintextHash =
-    opts?.plaintextHash === null
-      ? undefined
-      : (opts?.plaintextHash ?? (encryption ? '0x' + '0'.repeat(64) : hashOf(body)));
+  const bodyObj = opts?.bodyObject ?? bodyOf(genesis);
+  const bodyJson = jcs(bodyObj);
+  const plaintextHash = hashOf(bodyJson);
 
-  return {
-    public: {
-      specVersion: '1',
-      author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
-      postType: 'post',
-      mediaType: 'text/markdown',
-      parent: '',
-      position: '0',
-      publication: 'pub',
-      locale: 'en',
-      createdAt: 1234,
-      base: '',
-      tags: [],
-      attributes: {},
-      ...(plaintextHash === undefined ? {} : { plaintextHash }),
-    },
-    objectId: '0x' + '1'.repeat(64),
+  const pub: Record<string, unknown> = {
+    specVersion: '1',
+    author: opts?.author ?? toDidEthr(signer.address),
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '0',
+    publication: 'pub',
+    locale: 'en',
+    createdAt: 1234,
+    base: '',
+    tags: [],
+    attributes: {},
+    plaintextHash,
+  };
+
+  const digest = TypedDataEncoder.hash(
+    S2S_DOMAIN as any,
+    S2S_TYPES as any,
+    buildSigningView(pub as any),
+  );
+  const signature = signer.signingKey.sign(digest).serialized;
+
+  const item: Record<string, any> = {
+    public: pub,
+    objectId: digest,
     proof: {
-      type: 'eip712',
-      signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
-      signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
+      type: 'eip712' as const,
+      signer: signer.address,
+      signature,
     },
     encryption,
-    body,
-  } as unknown as S2SContentItem;
+    // Encrypted items store ciphertext (the plaintextHash covers the plaintext).
+    body: encryption ? `ciphertext-${genesis}` : bodyJson,
+  };
+
+  // ── tampering levers ──
+  if (opts?.plaintextHash === null) delete item.public.plaintextHash;
+  else if (opts?.plaintextHash !== undefined) item.public.plaintextHash = opts.plaintextHash;
+  if (opts?.legacy) {
+    delete item.public.specVersion;
+    delete item.public.plaintextHash;
+  }
+  if (opts?.objectId !== undefined) item.objectId = opts.objectId;
+  if (opts?.noProof) delete item.proof;
+  else if (opts?.proofSigner !== undefined) item.proof.signer = opts.proofSigner;
+  if (opts?.body !== undefined) item.body = opts.body;
+
+  return item as unknown as S2SContentItem;
 };
 
 const mkArchive = (items: Record<string, any>): Archive => ({
@@ -201,7 +276,7 @@ describe('reconcile', () => {
     expect(plain.title).toBe('title-g1');
     expect(plain.slug).toBe('slug-g1');
     expect(plain.content).toBe('content-g1');
-    expect(plain.author).toBe('did:ethr:0x' + 'a'.repeat(40));
+    expect(plain.author).toBe(toDidEthr(AUTHOR.address));
     expect(plain.postType).toBe('post');
     expect(plain.publication).toBe('pub');
 
@@ -260,86 +335,281 @@ describe('reconcile', () => {
   });
 });
 
-describe('archive read-path integrity (plaintextHash check)', () => {
-  it('serves an honest archive item (body hashes to its own plaintextHash)', () => {
-    const deals = [mkEntry('g1', 'cid1')];
+describe('archive integrity verdict (bound to the on-chain deal author)', () => {
+  it('serves an honest, minted archive item (verified, no issues, no fetch)', () => {
+    const deal = mkEntry('g1', 'cid1');
     const item = mkItem('g1');
-    expect(checkItemBodyIntegrity(item)).toBe('verified');
-    const { fresh, needsFetch, integrityFailures } = reconcile(
-      deals,
+    expect(inspectItemIntegrity(item, deal.author)).toEqual({
+      level: 'verified',
+      code: 'verified',
+      reason: '',
+    });
+    const { fresh, needsFetch, integrityIssues } = reconcile(
+      [deal],
       mkArchive({ g1: { cid: 'cid1', item } }),
     );
-    expect(fresh.get('g1')).toEqual(toBody(deals[0], item));
+    expect(fresh.get('g1')).toEqual(toBody(deal, item));
     expect(needsFetch).toEqual([]);
-    expect(integrityFailures).toEqual([]);
+    expect(integrityIssues).toEqual([]);
   });
 
-  it('FORGED item (real deal cid, fake body, another body’s honest hash) is NOT served — refetched', () => {
+  it('REFUSES a whole-item forgery: attacker’s own public block (author, hash, proof) at a real deal cid', () => {
+    // The attack the previous round could not catch: every check inside the
+    // blob is self-consistent — attacker's author, attacker's plaintextHash,
+    // attacker's valid signature, correct objectId. Only the on-chain deal
+    // author can refute it.
     const deal = mkEntry('g1', 'cid1');
-    // The attacker writes the cache pointer with a schema-valid item claiming
-    // the real deal cid, carrying a fake body while reusing the plaintextHash
-    // of a genuinely authored body (so the item LOOKS honest).
-    const forged: S2SContentItem = {
-      ...mkItem('g1'),
-      body: JSON.stringify({ title: 'pwned', slug: 'pwned', content: '<script>x</script>' }),
-      public: { ...mkItem('g1').public, plaintextHash: mkItem('other').public.plaintextHash },
-    };
-    expect(checkItemBodyIntegrity(forged)).toBe('mismatch');
+    const forged = mkItem('g1', {
+      signer: ATTACKER,
+      bodyObject: { title: 'pwned', slug: 'pwned', content: '<script>x</script>' },
+    });
+    // self-consistent in isolation …
+    expect(forged.public.plaintextHash).toBe(hashOf(forged.body));
+    // … but not authored by the deal's author
+    expect(inspectItemIntegrity(forged, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'author-mismatch',
+    });
+    // (and it IS what the old, author-blind check called 'verified')
+    expect(checkItemBodyIntegrity(forged)).toBe('verified');
 
-    const { fresh, needsFetch, integrityFailures } = reconcile(
+    const { fresh, needsFetch, integrityIssues } = reconcile(
       [deal],
       mkArchive({ g1: { cid: 'cid1', item: forged } }),
     );
-    // never served …
     expect(fresh.size).toBe(0);
-    expect(fresh.has('g1')).toBe(false);
-    // … and classified MISS so the caller refetches from the on-chain cid,
-    // with the tamper evidence surfaced.
     expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
-    expect(needsFetch[0].cid).toBe('cid1');
-    expect(integrityFailures.map((e) => e.genesis)).toEqual(['g1']);
+    expect(integrityIssues.map((i) => [i.genesis, i.code])).toEqual([['g1', 'author-mismatch']]);
   });
 
-  it('does NOT reject an encrypted archive item (ciphertext body — checked post-decrypt)', () => {
-    const deals = [mkEntry('g1', 'cid1')];
-    // plaintextHash is unrelated to the ciphertext body by construction.
-    const item = mkItem('g1', { encryption: true });
-    expect(checkItemBodyIntegrity(item)).toBe('unverifiable');
-    const { fresh, needsFetch, integrityFailures } = reconcile(
-      deals,
+  it('REFUSES a forged body that reuses an honest item’s plaintextHash', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const honest = mkItem('other');
+    const forged = mkItem('g1', {
+      body: jcs({ title: 'pwned', slug: 'pwned', content: 'pwned' }),
+      plaintextHash: honest.public.plaintextHash,
+    });
+    expect(inspectItemIntegrity(forged, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'hash-mismatch',
+    });
+    const { fresh, integrityIssues } = reconcile(
+      [deal],
+      mkArchive({ g1: { cid: 'cid1', item: forged } }),
+    );
+    expect(fresh.size).toBe(0);
+    expect(integrityIssues.map((i) => i.code)).toEqual(['hash-mismatch']);
+  });
+
+  it('REFUSES an item whose public.author is not the deal author (did:ethr vs plain address normalised)', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { author: toDidEthr(ATTACKER.address) });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'author-mismatch',
+    });
+    // sanity: did:ethr and plain forms normalise to the same address
+    expect(addressOf(toDidEthr(AUTHOR.address))).toBe(addressOf(AUTHOR.address));
+    expect(addressOf('did:ethr:0Xnothex')).toBeNull();
+  });
+
+  it('REFUSES a stripped hash on a specVersion item (the field cannot be deleted to opt out)', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const stripped = mkItem('g1', { plaintextHash: null });
+    expect(stripped.public.specVersion).toBe('1');
+    expect(inspectItemIntegrity(stripped, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'hash-missing',
+    });
+    const { fresh, needsFetch } = reconcile(
+      [deal],
+      mkArchive({ g1: { cid: 'cid1', item: stripped } }),
+    );
+    expect(fresh.size).toBe(0);
+    expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
+  });
+
+  it('does NOT lose content permanently on a MALFORMED hash: unverifiable + served, no refetch', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { plaintextHash: '0xzz' });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'unverifiable',
+      code: 'hash-malformed',
+    });
+    const { fresh, needsFetch, integrityIssues } = reconcile(
+      [deal],
       mkArchive({ g1: { cid: 'cid1', item } }),
     );
-    expect(fresh.get('g1')).toEqual(toBody(deals[0], item));
+    // served …
+    expect(fresh.get('g1')).toEqual(toBody(deal, item));
+    // … and NOT pushed into a refetch loop that can never converge (the
+    // refetched item carries the same bad hash) and never reported as tampering.
     expect(needsFetch).toEqual([]);
-    expect(integrityFailures).toEqual([]);
+    expect(integrityIssues).toEqual([]);
   });
 
-  it('serves a LEGACY item without plaintextHash (unverifiable, not invalid)', () => {
-    const deals = [mkEntry('g1', 'cid1')];
-    const legacy = mkItem('g1', { plaintextHash: null });
-    expect(checkItemBodyIntegrity(legacy)).toBe('unverifiable');
+  it('serves a LEGACY item (no specVersion, no plaintextHash) author-bound only', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const legacy = mkItem('g1', { legacy: true });
+    expect(legacy.public.specVersion).toBeUndefined();
+    expect(inspectItemIntegrity(legacy, deal.author)).toMatchObject({
+      level: 'unverifiable',
+      code: 'legacy-item',
+    });
+    // a legacy item with the WRONG author is still refused
+    const legacyWrongAuthor = mkItem('g2', { legacy: true, author: toDidEthr(ATTACKER.address) });
+    expect(inspectItemIntegrity(legacyWrongAuthor, ATTACKER.address)).toMatchObject({
+      level: 'unverifiable',
+    });
+    expect(inspectItemIntegrity(legacyWrongAuthor, mkEntry('g2', 'cid2').author)).toMatchObject({
+      level: 'mismatch',
+      code: 'author-mismatch',
+    });
 
-    // reconcile serves it straight from a hand-built archive …
-    const { fresh, needsFetch, integrityFailures } = reconcile(
-      deals,
+    const { fresh, needsFetch, integrityIssues } = reconcile(
+      [deal],
       mkArchive({ g1: { cid: 'cid1', item: legacy } }),
     );
-    expect(fresh.get('g1')).toEqual(toBody(deals[0], legacy));
+    expect(fresh.get('g1')).toEqual(toBody(deal, legacy));
     expect(needsFetch).toEqual([]);
-    expect(integrityFailures).toEqual([]);
+    expect(integrityIssues).toEqual([]);
 
     // … and parseArchive does not drop it (the shared schema requires the
-    // field; legacy absence is tolerated as unverifiable).
+    // fields; legacy absence is tolerated as unverifiable).
     const parsed = parseArchive(serialize(mkArchive({ g1: { cid: 'cid1', item: legacy } })));
     expect(parsed.items.g1.item).toEqual(legacy);
     expect(parsed.items.g1.item.public.plaintextHash).toBeUndefined();
+    expect(parsed.items.g1.item.public.specVersion).toBeUndefined();
+  });
+
+  it('does NOT hash-check an encrypted body, but still binds it to the author', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { encryption: true });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'unverifiable',
+      code: 'encrypted',
+    });
+    const ok = reconcile([deal], mkArchive({ g1: { cid: 'cid1', item } }));
+    expect(ok.fresh.get('g1')).toEqual(toBody(deal, item));
+    expect(ok.needsFetch).toEqual([]);
+
+    // Anyone can encrypt their own plaintext to the publication PKP, so the
+    // author binding is the only check that runs here — and it must.
+    const forged = mkItem('g1', { encryption: true, signer: ATTACKER });
+    expect(inspectItemIntegrity(forged, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'author-mismatch',
+    });
+    expect(reconcile([deal], mkArchive({ g1: { cid: 'cid1', item: forged } })).fresh.size).toBe(0);
+  });
+
+  it('REFUSES an item whose objectId is not the EIP-712 digest of its public block', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { objectId: '0x' + '9'.repeat(64) });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'objectid-mismatch',
+    });
+  });
+
+  it('REFUSES an item whose recovered signer contradicts proof.signer', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { proofSigner: ATTACKER.address });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'proof-signer-mismatch',
+    });
+  });
+
+  it('REFUSES a specVersion item with no proof at all', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const item = mkItem('g1', { noProof: true });
+    expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
+      level: 'mismatch',
+      code: 'proof-missing',
+    });
+  });
+
+  it('RESIDUAL: a stolen author + attacker signature is served (unverifiable), never verified', () => {
+    // Documented residual (see the module header): a Safe/contract-authored item
+    // is signed by an owner EOA, so "recovered != author" cannot be treated as
+    // fraud without an on-chain isOwner read. The verdict must say so instead of
+    // claiming 'verified'; closing this needs the RPC follow-up.
+    const deal = mkEntry('g1', 'cid1');
+    const impersonation = mkItem('g1', {
+      signer: ATTACKER,
+      author: toDidEthr(AUTHOR.address),
+      bodyObject: { title: 'pwned', slug: 'pwned', content: 'pwned' },
+    });
+    const verdict = inspectItemIntegrity(impersonation, deal.author);
+    expect(verdict.level).toBe('unverifiable');
+    expect(verdict.code).toBe('signature-not-author');
+    expect(verdict.reason).toMatch(/contract-authored|author-bound only/);
+  });
+
+  it('without a typed-data signer in the runtime, hash + author binding still apply', () => {
+    vi.unstubAllGlobals();
+    try {
+      const deal = mkEntry('g1', 'cid1');
+      expect(inspectItemIntegrity(mkItem('g1'), deal.author)).toMatchObject({
+        level: 'unverifiable',
+        code: 'signature-unrecoverable',
+      });
+      // a body/hash mismatch is still refused without any signature machinery
+      expect(
+        inspectItemIntegrity(
+          mkItem('g1', { body: jcs({ title: 'x', slug: 'x', content: 'x' }) }),
+          deal.author,
+        ),
+      ).toMatchObject({ level: 'mismatch', code: 'hash-mismatch' });
+    } finally {
+      vi.stubGlobal('ethers', {
+        utils: { _TypedDataEncoder: { hash: TypedDataEncoder.hash }, recoverAddress },
+      });
+    }
+  });
+});
+
+describe('refetched-item policy (judgeRefetchedItem)', () => {
+  it('is the one shared verdict: shape → author binding → hash → digest → proof', () => {
+    const deal = mkEntry('g1', 'cid1');
+    const honest = judgeRefetchedItem(mkItem('g1'), deal.author, 'g1', 'cid1');
+    expect(honest.usable).toBe(true);
+    expect(honest.integrity.level).toBe('verified');
+
+    for (const bad of [null, [], 'a string', 42]) {
+      const v = judgeRefetchedItem(bad, deal.author, 'g1', 'cid1');
+      expect(v.usable).toBe(false);
+      expect(v.integrity.code).toBe('malformed-item');
+      expect(v.integrity.reason).toContain('not a valid content item');
+    }
+
+    const forged = judgeRefetchedItem(
+      mkItem('g1', { signer: ATTACKER }),
+      deal.author,
+      'g1',
+      'cid1',
+    );
+    expect(forged.usable).toBe(false);
+    expect(forged.integrity.code).toBe('author-mismatch');
+  });
+});
+
+describe('isValidContentItem (shape gate)', () => {
+  it('accepts a minted item and tolerates a legacy item only when nothing else is wrong', () => {
+    expect(isValidContentItem(mkItem('g1'))).toBe(true);
+    expect(isValidContentItem(mkItem('g1', { legacy: true }))).toBe(true);
+    expect(s2sContentItemSchema.safeParse(mkItem('g1', { legacy: true })).success).toBe(false);
+    expect(isValidContentItem({ ...mkItem('g1', { legacy: true }), public: {} })).toBe(false);
+    expect(isValidContentItem(null)).toBe(false);
   });
 
   it('still rejects a legacy-SHAPED item that is malformed for another reason', () => {
     const broken = {
-      ...mkItem('g1', { plaintextHash: null }),
-      public: { ...mkItem('g1').public, author: 'not-a-did' },
+      ...mkItem('g1', { legacy: true }),
+      public: { ...(mkItem('g1', { legacy: true }).public as any), author: 'not-a-did' },
     } as unknown as S2SContentItem;
+    expect(isValidContentItem(broken)).toBe(false);
     const { fresh, needsFetch } = reconcile(
       [mkEntry('g1', 'cid1')],
       mkArchive({ g1: { cid: 'cid1', item: broken } }),

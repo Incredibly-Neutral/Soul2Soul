@@ -11,7 +11,14 @@ import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
-import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
+import {
+  judgeRefetchedItem,
+  parseArchive,
+  reconcile,
+  mergeArchive,
+  serialize,
+  type ItemIssueCode,
+} from '../libs/archive.factory';
 import { canPublish, extractSignerAddress } from '../libs/gates';
 import { requireFields, setRpcAuth } from '../libs/helpers';
 
@@ -118,11 +125,13 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
     // Re-derive the drift: freshness oracle (getDeals) + archive cat + reconcile.
     const deals: Entry[] = await getDeals(publicationModule, rpcs?.L2);
     const archive = archiveCid ? parseArchive(await catFile(gateway!, archiveCid)) : null;
-    const { needsFetch } = reconcile(deals, archive);
+    const { needsFetch, integrityIssues } = reconcile(deals, archive);
     trace.push({
       cache: 'reconcile',
       deals: deals.length,
       needsFetch: needsFetch.length,
+      integrityIssues: integrityIssues.length,
+      integrityCodes: [...new Set(integrityIssues.map((i) => i.code))],
       archive: archiveCid ? 'present' : '(null seed)',
     });
 
@@ -144,29 +153,67 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
 
     // Fetch the FULL canonical items for the drift entries (cat each cid) and
     // merge them into the archive — same as writeBackArchiveCache.
+    //
+    // ONE POLICY, SHARED WITH THE RENDER: every refetched item goes through
+    // judgeRefetchedItem() (shape → author binding → plaintextHash → objectId →
+    // proof signer), the same verdict the render read path applies before it
+    // serves an item. A 'mismatch' is NEVER cached: caching it would both serve
+    // it to readers later and, because a re-serialised archive gets a new CID,
+    // turn every invocation into another pin + setText write for an item that
+    // can never become valid (an unbounded write loop). Rejected items are
+    // reported in the trace and left out of the next snapshot.
     const refreshed = new Map<string, S2SContentItem>();
+    const rejected: { genesis: string; cid: string; code: ItemIssueCode; reason: string }[] = [];
     await Promise.all(
       needsFetch.map(async (entry) => {
+        let item: unknown;
         try {
-          const item = JSON.parse(await catFile(gateway!, entry.cid)) as S2SContentItem;
-          refreshed.set(entry.genesis, item);
+          item = JSON.parse(await catFile(gateway!, entry.cid));
         } catch (e) {
           console.warn(
             `[maintain-cache] drift fetch failed for ${entry.genesis} (${entry.cid}):`,
             e,
           );
+          return;
         }
+        const verdict = judgeRefetchedItem(item, entry.author, entry.genesis, entry.cid);
+        if (!verdict.usable) {
+          console.warn(
+            `[maintain-cache] refusing to cache ${entry.genesis} (${entry.cid}): ${verdict.integrity.code}`,
+            verdict.integrity.reason,
+          );
+          rejected.push({
+            genesis: entry.genesis,
+            cid: entry.cid,
+            code: verdict.integrity.code,
+            reason: verdict.integrity.reason,
+          });
+          return;
+        }
+        refreshed.set(entry.genesis, item as S2SContentItem);
       }),
     );
 
-    // Nothing fetchable and nothing already present ⇒ nothing to merge/write.
+    if (rejected.length > 0) {
+      trace.push({ cache: 'writeback', stage: 'integrity', rejected });
+    }
+
+    // Nothing fetchable/acceptable and nothing already present ⇒ nothing to
+    // merge/write. This is also what bounds the write loop: a corrupt item (in
+    // the archive or at its deal cid) is rejected every time and never causes a
+    // new pin/setText, so a bad publication reaches steady state instead of
+    // rewriting forever.
     if (refreshed.size === 0) {
       trace.push({
         cache: 'writeback',
         stage: 'merge',
         skipped: true,
-        reason: 'no fetchable drift',
+        reason:
+          rejected.length > 0
+            ? 'no acceptable drift (all refetched items rejected)'
+            : 'no fetchable drift',
         refreshedSize: 0,
+        rejected: rejected.length,
       });
       return { ok: true, action: ACTION, data: { cid: '', wrote: false }, trace };
     }
