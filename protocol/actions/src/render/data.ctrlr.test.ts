@@ -823,6 +823,8 @@ describe('fetchCollections: archive read-path integrity', () => {
     // (non-fatal — the page is served from the refetch)
     expect(result.skips).toHaveLength(1);
     expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
+    // same failure taxonomy as the direct read path
+    expect(result.skips[0].cause).toBe('integrity');
     expect(result.collections.posts).toHaveLength(1);
   });
 
@@ -860,6 +862,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
     expect(result.skips[1]).toMatchObject({ genesis: 'g1', cid: 'cid1' });
     expect(result.skips[1].reason).toMatch(/refetched item rejected \(hash-mismatch\)/);
+    expect(result.skips[1].cause).toBe('integrity');
     // a mismatching refetch is NEVER cached into the next archive snapshot
     expect(result.drift!.fetchedItems.has('g1')).toBe(false);
   });
@@ -878,6 +881,8 @@ describe('fetchCollections: archive read-path integrity', () => {
     expect(result.skips).toHaveLength(1);
     expect(result.skips[0].reason).toMatch(/refetched item rejected \(malformed-item\)/);
     expect(result.skips[0].reason).not.toMatch(/retrieval failed/);
+    // a malformed item is "could not be read", NOT "signed and then altered"
+    expect(result.skips[0].cause).toBe('unavailable');
     expect(result.drift!.fetchedItems.has('g1')).toBe(false);
   });
 
