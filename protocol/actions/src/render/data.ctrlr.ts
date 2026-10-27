@@ -8,7 +8,12 @@ import {
   type Entry,
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
-import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
+import {
+  checkItemBodyIntegrity,
+  parseArchive,
+  reconcile,
+  type Archive,
+} from '../libs/archive.factory';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
@@ -288,11 +293,15 @@ export const shouldWriteBackCache = (
  *   fetched  = cat + toBody each needsFetch entry (bounded — the drift)
  *   bodies   = bodiesFromReconcile(deals, fresh, needsFetch, fetched)
  *
- * The archive's stored bodies ARE the flat toBody output, so the returned
- * bodies feed filterCollection/sortCollection byte-identically to today.
- * Encrypted items arrive as their encrypted toBody shape (meta + ciphertext)
- * and are decrypted downstream in render/main.ts — the archive never bypasses
- * decryption and never stores decrypted plaintext.
+ * The archive's stored items are flattened per deal through `toBody(deal, item)`
+ * inside reconcile() — so archive-served bodies carry exactly the same shape
+ * (including the identity fields toBody emits) as the cold path's. Plaintext
+ * items pass a plaintextHash integrity check before being served; a mismatch is
+ * NEVER served and is refetched from the on-chain deal cid, surfacing as a
+ * non-fatal `skips` entry if the refetch is bad too. Encrypted items arrive as
+ * their encrypted toBody shape (meta + ciphertext) and are decrypted downstream
+ * in render/main.ts — the archive never bypasses decryption and never stores
+ * decrypted plaintext, so their hash check happens after decryption.
  *
  * Alongside the bodies it surfaces the observed `drift` (deals + needsFetch +
  * the FULL fetched items) for the T4 write-back — see CollectionsDrift. On
@@ -328,7 +337,20 @@ const fetchCollectionsFromArchive = async (
   }
 
   const deals = await getDeals(publicationModule, rpcs);
-  const { fresh, needsFetch } = reconcile(deals, archive);
+  const { fresh, needsFetch, integrityFailures } = reconcile(deals, archive);
+
+  // Tamper evidence: archive entries whose plaintext body did not hash to its
+  // own author-signed plaintextHash. They are NEVER served — they land in
+  // `needsFetch` below and are refetched from the content-addressed on-chain
+  // cid (which cannot be forged). One bounded warning per render, no per-item
+  // spam; if the refetch is also bad the genesis ends up in `skips`.
+  if (integrityFailures.length > 0) {
+    console.warn(
+      `archive integrity: ${String(integrityFailures.length)} archive item(s) failed plaintextHash verification; refetching from the on-chain cid: ${integrityFailures
+        .map((e) => e.genesis)
+        .join(', ')}`,
+    );
+  }
 
   // Track the FULL canonical items fetched fresh for the drift entries, keyed
   // by genesis — the T4 write-back merges these into the next archive
@@ -339,6 +361,17 @@ const fetchCollectionsFromArchive = async (
     needsFetch.map(async (entry) => {
       try {
         const item = JSON.parse(await catFile(gateway!, entry.cid));
+        // The refetched item is from the content-addressed cid, but its BODY is
+        // still only bound to the author's signature through plaintextHash —
+        // verify it too. A cat is not proof of authorship.
+        if (checkItemBodyIntegrity(item as S2SContentItem) === 'mismatch') {
+          const reason = `plaintextHash mismatch: refetched body does not match public.plaintextHash (${entry.cid})`;
+          console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
+          // NEVER cached: a mismatching refetch must not enter the next archive
+          // snapshot (fetchedItems is what mergeArchive stores).
+          skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
+          return null;
+        }
         fetchedItems.set(entry.genesis, item as S2SContentItem);
         return toBody(entry, item);
       } catch (e) {
