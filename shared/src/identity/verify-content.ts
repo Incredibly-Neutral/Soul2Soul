@@ -82,6 +82,36 @@ export async function verifyAuthorship(
 }
 
 // ============================================================================
+// verifyBodyHash — keccak256 of a plaintext body vs an expected hex digest
+// ============================================================================
+
+/**
+ * True when keccak256(utf8(bodyJson)) equals `expectedHex` (case-insensitive).
+ *
+ * `bodyJson` MUST be the exact body string that was stored and hashed — the
+ * `jcs(body)` output an item was built from: sign-content.ts sets
+ * `bodyContent = jcs(body)` and then keccak256s precisely those bytes. Do not
+ * re-serialise a parsed object into this function; `JSON.stringify` of a parsed
+ * object is not canonical and will not reproduce the digest.
+ *
+ * This deliberately does NOT canonicalise its input: the contract is "hash
+ * these bytes", and a caller that has the stored string must be able to check
+ * it without guessing which canonical form the writer used.
+ *
+ * Never throws: malformed hex, non-body input or any internal error yields
+ * false, because a caller cannot distinguish "unparseable" from "not the same
+ * bytes" in any useful way.
+ */
+export function verifyBodyHash(bodyJson: string, expectedHex: string): boolean {
+  try {
+    const computed = utils.keccak256(utils.toUtf8Bytes(bodyJson));
+    return computed.toLowerCase() === expectedHex.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
 // verifyPlaintextHash — fast check, no signature recovery
 // ============================================================================
 
