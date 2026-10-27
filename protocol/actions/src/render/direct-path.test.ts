@@ -66,6 +66,12 @@ import {
 import { addAndSignMetadata } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
 import type { SingleInput, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
+// The render action runs with the ambient ethers v5 global, so the integrity
+// verdict CAN compute the EIP-712 digest and recover a signer here. The stored
+// item must therefore be MINTED (JCS body → keccak → digest → signature): a
+// hand-shaped objectId/proof is, correctly, a forgery the read path refuses.
+import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -73,8 +79,9 @@ const GENESIS = '0x' + '9a'.repeat(32);
 const DEAL_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const ENCRYPTED_CID = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy';
 const PUBLICATION = 'test.soul2soul.eth';
-const AUTHOR = 'did:ethr:0x' + 'a'.repeat(40);
-const AUTHOR_SIGNER = '0x' + 'b'.repeat(40);
+const AUTHOR_WALLET = new ethers.Wallet('0x' + '11'.repeat(32));
+const AUTHOR = toDidEthr(AUTHOR_WALLET.address);
+const AUTHOR_SIGNER = AUTHOR_WALLET.address;
 const SIGNER = '0xSigner';
 const AUTHOR_SAFE = '0xAuthorSafe';
 const SIGNATURE = '0x' + 'ab'.repeat(65);
@@ -102,9 +109,14 @@ const input = (collections: S2STemplateConfig['collections'] = []): SingleInput 
   },
 });
 
-/** The canonical content item stored at the deal cid. */
-const contentItem = (body = PLAINTEXT) => ({
-  public: {
+/**
+ * The canonical content item stored at the deal cid — minted the way the real
+ * mint produces it (public → EIP-712 digest = objectId → author signature).
+ * `body` can be swapped to simulate a forged body: `plaintextHash` and the
+ * signature stay the author's, so only the body is wrong (a hash-mismatch).
+ */
+const contentItem = (body = PLAINTEXT) => {
+  const pub = {
     specVersion: '1',
     author: AUTHOR,
     postType: 'post',
@@ -114,14 +126,27 @@ const contentItem = (body = PLAINTEXT) => ({
     publication: PUBLICATION,
     locale: 'en',
     createdAt: SIGNED_CREATED_AT,
-    tags: [],
+    tags: [] as string[],
     plaintextHash: PLAINTEXT_HASH,
-  },
-  objectId: '0x' + 'de'.repeat(32),
-  proof: { type: 'eip712', signer: AUTHOR_SIGNER, signature: SIGNATURE },
-  encryption: false,
-  body,
-});
+  };
+  const digest = ethers.utils._TypedDataEncoder.hash(
+    S2S_DOMAIN as never,
+    S2S_TYPES as never,
+    buildSigningView(pub as never),
+  );
+  return {
+    public: pub,
+    objectId: digest,
+    proof: {
+      type: 'eip712' as const,
+      signer: AUTHOR_SIGNER,
+      // ethers v5: joinSignature(signDigest(...)) — v5's Signature has no `.serialized`
+      signature: ethers.utils.joinSignature(AUTHOR_WALLET._signingKey().signDigest(digest)),
+    },
+    encryption: false,
+    body,
+  };
+};
 
 function setupHappyDeps() {
   vi.mocked(extractSignerAddress).mockReturnValue(SIGNER);
@@ -176,7 +201,7 @@ function setupHappyDeps() {
     if (fn === 'getLatest') {
       return Promise.resolve({
         genesis: GENESIS,
-        author: '0xauthor',
+        author: AUTHOR_WALLET.address,
         cid: DEAL_CID,
         timestamp: SIGNED_CREATED_AT,
       });
@@ -206,7 +231,7 @@ describe('render action — plaintext integrity (direct read path)', () => {
     const failure = result as { ok: boolean; error?: string };
 
     expect(failure.ok).toBe(false);
-    expect(failure.error).toContain('plaintext hash mismatch');
+    expect(failure.error).toContain('hash-mismatch');
     expect(failure.error).toContain(DEAL_CID);
     // Never fall back to rendering the unverified body.
     expect(vi.mocked(renderHTML)).not.toHaveBeenCalled();

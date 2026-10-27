@@ -11,14 +11,8 @@ import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
-import {
-  judgeRefetchedItem,
-  parseArchive,
-  reconcile,
-  mergeArchive,
-  serialize,
-  type ItemIssueCode,
-} from '../libs/archive.factory';
+import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
+import { judgeRefetchedItem, type ItemIssueCode } from '../libs/item-integrity';
 import { canPublish, extractSignerAddress } from '../libs/gates';
 import { requireFields, setRpcAuth } from '../libs/helpers';
 

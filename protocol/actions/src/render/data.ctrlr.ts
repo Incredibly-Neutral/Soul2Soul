@@ -13,13 +13,14 @@ import {
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
 import {
-  inspectItemIntegrity,
-  judgeRefetchedItem,
   parseArchive,
   reconcile,
   type Archive,
   type IntegrityIssue,
 } from '../libs/archive.factory';
+// The verdict itself lives in its own module now (shared with the direct read
+// path); the archive module re-exports it, but consumers import the source.
+import { inspectItemIntegrity, judgeRefetchedItem } from '../libs/item-integrity';
 import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';

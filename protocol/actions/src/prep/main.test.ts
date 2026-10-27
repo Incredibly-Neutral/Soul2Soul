@@ -31,20 +31,32 @@ import { catFile } from '../libs/ipfs.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { getConfig, getTaskConfig } from '../render/config.ctrl';
 import type { PrepInput } from '@s2s/soul2soul-shared/lit-actions';
+// prep runs with the ambient ethers v5 global, so the integrity verdict CAN
+// compute the EIP-712 digest and recover a signer. The stored item is therefore
+// MINTED (public → digest = objectId → author signature): a hand-shaped
+// objectId/proof is a forgery the read path refuses.
+import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
 
 const FORGED_GENESIS = '0x' + '11'.repeat(32);
 const GOOD_GENESIS = '0x' + '22'.repeat(32);
 const FORGED_CID = 'bafyforged';
 const GOOD_CID = 'bafygood';
 const PUBLICATION = 'test.soul2soul.eth';
-const AUTHOR = 'did:ethr:0x' + 'a'.repeat(40);
+const AUTHOR_WALLET = new ethers.Wallet('0x' + '11'.repeat(32));
+const AUTHOR = toDidEthr(AUTHOR_WALLET.address);
 
 const PLAINTEXT = JSON.stringify({ content: 'Hello', slug: 'hello', title: 'Hello' });
 const PLAINTEXT_HASH = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(PLAINTEXT));
 const FORGED_PLAINTEXT = JSON.stringify({ content: 'FORGED', slug: 'hello', title: 'Hello' });
 
-const item = (body: string) => ({
-  public: {
+/**
+ * Mint the item the way the real mint does (public → EIP-712 digest = objectId →
+ * author signature). `body` is swappable so the hash check can be exercised
+ * without touching the signed `public` block.
+ */
+const item = (body: string) => {
+  const pub = {
     specVersion: '1',
     author: AUTHOR,
     postType: 'post',
@@ -54,14 +66,27 @@ const item = (body: string) => ({
     publication: PUBLICATION,
     locale: 'en',
     createdAt: 1700000000,
-    tags: [],
+    tags: [] as string[],
     plaintextHash: PLAINTEXT_HASH,
-  },
-  objectId: '0x' + 'de'.repeat(32),
-  proof: { type: 'eip712', signer: '0x' + 'b'.repeat(40), signature: '0x' + 'cc'.repeat(65) },
-  encryption: false,
-  body,
-});
+  };
+  const digest = ethers.utils._TypedDataEncoder.hash(
+    S2S_DOMAIN as never,
+    S2S_TYPES as never,
+    buildSigningView(pub as never),
+  );
+  return {
+    public: pub,
+    objectId: digest,
+    proof: {
+      type: 'eip712' as const,
+      signer: AUTHOR_WALLET.address,
+      // ethers v5: joinSignature(signDigest(...)) — v5's Signature has no `.serialized`
+      signature: ethers.utils.joinSignature(AUTHOR_WALLET._signingKey().signDigest(digest)),
+    },
+    encryption: false,
+    body,
+  };
+};
 
 const input = (contentIds: string[]): PrepInput => ({
   publication: PUBLICATION,
@@ -95,7 +120,12 @@ beforeEach(() => {
     if (fn === 'getLatest') {
       const genesis = String((args ?? [])[0]);
       const cid = genesis === FORGED_GENESIS ? FORGED_CID : GOOD_CID;
-      return Promise.resolve({ genesis, author: '0xauthor', cid, timestamp: 1700000000 });
+      return Promise.resolve({
+        genesis,
+        author: AUTHOR_WALLET.address,
+        cid,
+        timestamp: 1700000000,
+      });
     }
     if (fn === 'getVersionCount') return Promise.resolve(1);
     if (fn === 'getText') return Promise.resolve('');
@@ -123,7 +153,7 @@ describe('prep — one forged item does not abort the batch', () => {
     expect(skipped).toHaveLength(1);
     expect(skipped?.[0].genesis).toBe(FORGED_GENESIS);
     expect(skipped?.[0].cid).toBe(FORGED_CID);
-    expect(skipped?.[0].reason).toContain('plaintext hash mismatch');
+    expect(skipped?.[0].reason).toContain('hash-mismatch');
   });
 
   it('still fails the invocation when the content is genuinely absent', async () => {

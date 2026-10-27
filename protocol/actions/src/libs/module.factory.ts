@@ -1,5 +1,6 @@
 import { evmRead } from './evm';
 import { catFile } from './ipfs.factory';
+import { inspectItemIntegrity, type ItemIssueCode } from './item-integrity';
 import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import type {
   S2SContentItem,
@@ -98,9 +99,11 @@ export interface PlaintextHashCarrier {
 }
 
 /**
- * The stored body does not hash to the author-signed `public.plaintextHash`.
- * Thrown by the direct read path (fetchItemById/fetchById); callers must fail
- * the job instead of rendering or republishing unverified content.
+ * The stored item failed the integrity verdict — it is not what the author
+ * signed (see item-integrity.ts: author binding, plaintextHash, objectId
+ * digest, proof signer). Thrown by the direct read path
+ * (fetchItemById/fetchById); callers must fail the job instead of rendering or
+ * republishing unverified content. The message names the verdict code.
  *
  * Collection paths do NOT throw — they return an {@link ItemSkip} instead, so
  * one bad item cannot take a whole page down.
@@ -119,12 +122,18 @@ export class ContentIntegrityError extends Error {
 
 /** Why a single stored item could not be used. */
 export type ItemFailureKind =
-  /** The stored bytes are not the bytes the author signed (hash mismatch). */
+  /**
+   * The item arrived and failed the integrity verdict: a hash / author /
+   * objectId / proof check did not hold. Never served; see item-integrity.ts.
+   */
   | 'integrity'
   /** The item could not be read at all (IPFS cat, JSON parse, malformed item). */
   | 'unavailable';
 
-export type ItemCheck = { ok: true } | { ok: false; reason: string };
+export type ItemCheck =
+  | { ok: true }
+  /** `code` is the exact integrity verdict bucket (see item-integrity.ts). */
+  | { ok: false; code: ItemIssueCode; reason: string };
 
 export type ItemRead =
   | { ok: true; item: StoredContentItem }
@@ -137,45 +146,86 @@ export type ItemSkip = Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>
 
 /**
  * The ONE definition of "this item is plaintext" — shared by toBody (how the
- * body is flattened) and checkItemIntegrity (whether the stored body can be
- * hashed). An item that omits `encryption` is plaintext, exactly as toBody has
- * always treated it; keeping two predicates is how a body gets flattened as
- * plaintext yet never checked.
+ * body is flattened) and the integrity verdict (whether the stored body can be
+ * hashed at all, or must be checked after decryption). An item that omits
+ * `encryption` is plaintext, exactly as toBody has always treated it; keeping
+ * two predicates is how a body gets flattened as plaintext yet never checked.
  */
 export const isPlaintextItem = (item: { encryption?: unknown }): boolean => !item.encryption;
 
 /**
- * Verify a stored item's plaintext body against its own signed
- * `public.plaintextHash`.
+ * Items the direct path serves WITHOUT a full proof — one log line per verdict
+ * code per invocation (a Lit Action module is created per render, so this is
+ * per render, not per item).
+ */
+const warnedWeakVerdicts = new Set<ItemIssueCode>();
+
+/**
+ * Inspect a stored item with the ONE verdict definition shared with the archive
+ * read path ({@link inspectItemIntegrity} in item-integrity.ts), bound to the
+ * deal author from the chain.
  *
- * - Encrypted items store CIPHERTEXT: nothing to check here (verify after
- *   decryption with {@link verifyDecryptedBody}).
- * - Items with no `plaintextHash` (legacy, pre-specVersion-1) are accepted
- *   unverified **by design** — verification is opt-in on the item's own
- *   self-declared hash, so "every rendered body was hash-checked" is NOT true
- *   for legacy content.
- * - A plaintext item whose `body` is not a string, or is not the exact bytes
- *   that hash to `plaintextHash`, fails with kind `integrity`.
+ * WHY THE DIRECT PATH NOW RUNS THE FULL VERDICT. It used to check only
+ * `plaintextHash`, i.e. "this body matches the hash inside this blob" — which a
+ * forger satisfies by hashing their own body. The check that actually means
+ * something is the author binding, and the direct path had none. Both paths read
+ * the same publication, so both must answer "may this item be served?" the same
+ * way; otherwise the cheap read (archive) is stronger than the authoritative
+ * one.
  *
- * The hash is taken over the STORED STRING, never a re-serialisation: that is
- * the only way to assert "the bytes the author hashed".
+ * WHAT THE DIRECT PATH IS / IS NOT RELYING ON. The bytes come from a
+ * content-addressed cid, so a gateway cannot substitute another item without
+ * breaking the multihash; here the verdict is defence in depth (a poisoned
+ * gateway or a lying open() response). On the archive path the same verdict is
+ * the PRIMARY control, because the pointer is writeable. That asymmetry is the
+ * only reason the two paths may treat a verdict differently — and they do not:
+ * 'mismatch' is refused by both.
+ *
+ * WEAKER PATH, BY DESIGN (served, logged once per code per invocation):
+ *   - 'encrypted'            — ciphertext body; check the plaintext after
+ *                              decryption ({@link verifyDecryptedBody});
+ *   - 'legacy-item'          — no specVersion: the EIP-712 digest is not
+ *                              reproducible, so only the author binds it;
+ *   - 'hash-malformed' / 'objectid-malformed' — present but not a digest: a
+ *                              third-party writer with another encoding must not
+ *                              have their content erased forever;
+ *   - 'signature-unrecoverable' / 'signature-not-author' — contract wallet or
+ *                              no typed-data signer in this runtime (closing the
+ *                              latter needs an on-chain isOwner read).
+ * Those items are served and reported as doubts, never as tampering. A
+ * 'mismatch' is never served: collections skip it (kind 'integrity'), and
+ * fetchById/fetchItemById throw {@link ContentIntegrityError}.
  */
 export const checkItemIntegrity = (entry: Entry, item: StoredContentItem): ItemCheck => {
-  const expected = item.public.plaintextHash;
-  if (!expected) return { ok: true };
-  if (!isPlaintextItem(item)) return { ok: true };
-  const where = `${entry.genesis} (cid ${entry.cid})`;
-  if (typeof item.body !== 'string') {
-    return { ok: false, reason: `plaintext body missing for ${where}: item.body is not a string` };
-  }
-  if (!verifyBodyHash(item.body, expected)) {
+  const verdict = inspectItemIntegrity(item, entry.author);
+
+  if (verdict.level === 'mismatch') {
     return {
       ok: false,
-      reason: `plaintext hash mismatch for ${where}: the stored body does not match public.plaintextHash`,
+      code: verdict.code,
+      reason: `integrity check failed for ${entry.genesis} (cid ${entry.cid}): ${verdict.code} — ${verdict.reason}`,
     };
   }
+
+  if (verdict.level === 'unverifiable') {
+    // Bounded noise: one line per code per invocation, with the first genesis
+    // that hit it — the per-item detail is on the body/skip that carries it.
+    if (!warnedWeakVerdicts.has(verdict.code)) {
+      warnedWeakVerdicts.add(verdict.code);
+      console.warn(
+        `item integrity: serving ${entry.genesis} unverified (${verdict.code}): ${verdict.reason}`,
+      );
+    }
+  }
+
   return { ok: true };
 };
+
+/**
+ * Clear the once-per-code warning latch. A Lit Action module is instantiated
+ * per render so production never needs this; tests share one module instance.
+ */
+export const resetIntegrityWarningLatch = (): void => warnedWeakVerdicts.clear();
 
 /** Enough of a parsed IPFS body to flatten safely (the public envelope). */
 const isStoredContentItem = (value: unknown): value is StoredContentItem => {
@@ -218,7 +268,16 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
   const item = parsed;
 
   const check = checkItemIntegrity(entry, item);
-  if (!check.ok) return { ok: false, kind: 'integrity', reason: check.reason };
+  if (!check.ok) {
+    // Same taxonomy as the archive path (data.ctrlr causeOf): an item that
+    // cannot be read (malformed) is 'unavailable'; an item that arrived and is
+    // not what the author signed is 'integrity'.
+    return {
+      ok: false,
+      kind: check.code === 'malformed-item' ? 'unavailable' : 'integrity',
+      reason: check.reason,
+    };
+  }
 
   if (isPlaintextItem(item)) {
     try {
