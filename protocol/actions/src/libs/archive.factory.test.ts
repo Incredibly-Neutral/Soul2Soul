@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { keccak256, toUtf8Bytes } from 'ethers';
 import {
   ARCHIVE_FORMAT,
+  checkItemBodyIntegrity,
   parseArchive,
   reconcile,
   mergeArchive,
@@ -31,38 +33,61 @@ const mkEntry = (genesis: string, cid: string): Entry => ({
   timestamp: 1234,
 });
 
+/** Honest plaintext body for a genesis (the bytes plaintextHash is taken over). */
+const plainBody = (genesis: string): string =>
+  JSON.stringify({
+    title: `title-${genesis}`,
+    slug: `slug-${genesis}`,
+    content: `content-${genesis}`,
+  });
+
+const hashOf = (body: string): string => keccak256(toUtf8Bytes(body));
+
+interface ItemOpts {
+  encryption?: boolean;
+  /** Override the body (defaults to the honest plaintext / ciphertext body). */
+  body?: string;
+  /** Override public.plaintextHash; `null` omits it entirely (legacy item). */
+  plaintextHash?: string | null;
+}
+
 /** A schema-valid canonical content item (plain by default; encrypted on demand). */
-const mkItem = (genesis: string, opts?: { encryption?: boolean }): S2SContentItem => ({
-  public: {
-    specVersion: '1',
-    author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
-    postType: 'post',
-    mediaType: 'text/markdown',
-    parent: '',
-    position: '0',
-    publication: 'pub',
-    locale: 'en',
-    createdAt: 1234,
-    base: '',
-    tags: [],
-    attributes: {},
-    plaintextHash: '0x' + '0'.repeat(64),
-  },
-  objectId: '0x' + '1'.repeat(64),
-  proof: {
-    type: 'eip712',
-    signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
-    signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
-  },
-  encryption: opts?.encryption ?? false,
-  body: opts?.encryption
-    ? `ciphertext-${genesis}`
-    : JSON.stringify({
-        title: `title-${genesis}`,
-        slug: `slug-${genesis}`,
-        content: `content-${genesis}`,
-      }),
-});
+const mkItem = (genesis: string, opts?: ItemOpts): S2SContentItem => {
+  const encryption = opts?.encryption ?? false;
+  const body = opts?.body ?? (encryption ? `ciphertext-${genesis}` : plainBody(genesis));
+  // Honest default: the hash of the body it carries. Encrypted items carry a
+  // ciphertext body, so their plaintextHash is (correctly) unrelated to it.
+  const plaintextHash =
+    opts?.plaintextHash === null
+      ? undefined
+      : (opts?.plaintextHash ?? (encryption ? '0x' + '0'.repeat(64) : hashOf(body)));
+
+  return {
+    public: {
+      specVersion: '1',
+      author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
+      postType: 'post',
+      mediaType: 'text/markdown',
+      parent: '',
+      position: '0',
+      publication: 'pub',
+      locale: 'en',
+      createdAt: 1234,
+      base: '',
+      tags: [],
+      attributes: {},
+      ...(plaintextHash === undefined ? {} : { plaintextHash }),
+    },
+    objectId: '0x' + '1'.repeat(64),
+    proof: {
+      type: 'eip712',
+      signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
+      signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
+    },
+    encryption,
+    body,
+  } as unknown as S2SContentItem;
+};
 
 const mkArchive = (items: Record<string, any>): Archive => ({
   format: ARCHIVE_FORMAT,
@@ -232,6 +257,95 @@ describe('reconcile', () => {
     const { fresh, needsFetch } = reconcile([], null);
     expect(fresh.size).toBe(0);
     expect(needsFetch).toEqual([]);
+  });
+});
+
+describe('archive read-path integrity (plaintextHash check)', () => {
+  it('serves an honest archive item (body hashes to its own plaintextHash)', () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const item = mkItem('g1');
+    expect(checkItemBodyIntegrity(item)).toBe('verified');
+    const { fresh, needsFetch, integrityFailures } = reconcile(
+      deals,
+      mkArchive({ g1: { cid: 'cid1', item } }),
+    );
+    expect(fresh.get('g1')).toEqual(toBody(deals[0], item));
+    expect(needsFetch).toEqual([]);
+    expect(integrityFailures).toEqual([]);
+  });
+
+  it('FORGED item (real deal cid, fake body, another body’s honest hash) is NOT served — refetched', () => {
+    const deal = mkEntry('g1', 'cid1');
+    // The attacker writes the cache pointer with a schema-valid item claiming
+    // the real deal cid, carrying a fake body while reusing the plaintextHash
+    // of a genuinely authored body (so the item LOOKS honest).
+    const forged: S2SContentItem = {
+      ...mkItem('g1'),
+      body: JSON.stringify({ title: 'pwned', slug: 'pwned', content: '<script>x</script>' }),
+      public: { ...mkItem('g1').public, plaintextHash: mkItem('other').public.plaintextHash },
+    };
+    expect(checkItemBodyIntegrity(forged)).toBe('mismatch');
+
+    const { fresh, needsFetch, integrityFailures } = reconcile(
+      [deal],
+      mkArchive({ g1: { cid: 'cid1', item: forged } }),
+    );
+    // never served …
+    expect(fresh.size).toBe(0);
+    expect(fresh.has('g1')).toBe(false);
+    // … and classified MISS so the caller refetches from the on-chain cid,
+    // with the tamper evidence surfaced.
+    expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
+    expect(needsFetch[0].cid).toBe('cid1');
+    expect(integrityFailures.map((e) => e.genesis)).toEqual(['g1']);
+  });
+
+  it('does NOT reject an encrypted archive item (ciphertext body — checked post-decrypt)', () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    // plaintextHash is unrelated to the ciphertext body by construction.
+    const item = mkItem('g1', { encryption: true });
+    expect(checkItemBodyIntegrity(item)).toBe('unverifiable');
+    const { fresh, needsFetch, integrityFailures } = reconcile(
+      deals,
+      mkArchive({ g1: { cid: 'cid1', item } }),
+    );
+    expect(fresh.get('g1')).toEqual(toBody(deals[0], item));
+    expect(needsFetch).toEqual([]);
+    expect(integrityFailures).toEqual([]);
+  });
+
+  it('serves a LEGACY item without plaintextHash (unverifiable, not invalid)', () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const legacy = mkItem('g1', { plaintextHash: null });
+    expect(checkItemBodyIntegrity(legacy)).toBe('unverifiable');
+
+    // reconcile serves it straight from a hand-built archive …
+    const { fresh, needsFetch, integrityFailures } = reconcile(
+      deals,
+      mkArchive({ g1: { cid: 'cid1', item: legacy } }),
+    );
+    expect(fresh.get('g1')).toEqual(toBody(deals[0], legacy));
+    expect(needsFetch).toEqual([]);
+    expect(integrityFailures).toEqual([]);
+
+    // … and parseArchive does not drop it (the shared schema requires the
+    // field; legacy absence is tolerated as unverifiable).
+    const parsed = parseArchive(serialize(mkArchive({ g1: { cid: 'cid1', item: legacy } })));
+    expect(parsed.items.g1.item).toEqual(legacy);
+    expect(parsed.items.g1.item.public.plaintextHash).toBeUndefined();
+  });
+
+  it('still rejects a legacy-SHAPED item that is malformed for another reason', () => {
+    const broken = {
+      ...mkItem('g1', { plaintextHash: null }),
+      public: { ...mkItem('g1').public, author: 'not-a-did' },
+    } as unknown as S2SContentItem;
+    const { fresh, needsFetch } = reconcile(
+      [mkEntry('g1', 'cid1')],
+      mkArchive({ g1: { cid: 'cid1', item: broken } }),
+    );
+    expect(fresh.size).toBe(0);
+    expect(needsFetch.map((e) => e.genesis)).toEqual(['g1']);
   });
 });
 
