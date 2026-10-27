@@ -8,6 +8,7 @@ import {
   toBody,
   verifyDecryptedBody,
   type Entry,
+  type ItemFailureKind,
   type StoredContentItem,
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
@@ -464,6 +465,23 @@ export const shouldWriteBackCache = (
 ): drift is CollectionsDrift =>
   maintainCache === true && !preview && !!drift && drift.needsFetch.length > 0;
 
+/**
+ * One skipped item on the collection read path.
+ *
+ * The shape is module.factory's ItemSkip minus the parts the availability
+ * channel does not use: `cause` mirrors the direct read path's classification
+ * ('unavailable' = could not be read/malformed, 'integrity' = arrived and is
+ * not what the author signed), so a consumer sees ONE taxonomy no matter which
+ * read path produced the skip.
+ */
+type CollectionSkip = Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'> & {
+  cause?: ItemFailureKind;
+};
+
+/** Mirror of module.factory's classification for a rejected refetch. */
+const causeOf = (code: string): ItemFailureKind =>
+  code === 'malformed-item' ? 'unavailable' : 'integrity';
+
 /** One-line tally of integrity issue codes (bounded log, no per-item spam). */
 const summariseIssues = (issues: IntegrityIssue[]): string => {
   const counts = new Map<string, number>();
@@ -507,7 +525,7 @@ const fetchCollectionsFromArchive = async (
 ): Promise<{
   bodies: any[];
   drift: CollectionsDrift | null;
-  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+  skips: CollectionSkip[];
 }> => {
   // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
   // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
@@ -536,7 +554,7 @@ const fetchCollectionsFromArchive = async (
   // genesis that is then successfully refetched is still served — the note says
   // the archive entry was refused, which is exactly the signal an operator
   // needs to repoint the pointer.
-  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
+  const skips: CollectionSkip[] = [];
   if (integrityIssues.length > 0) {
     console.warn(
       `archive integrity: ${String(integrityIssues.length)} archive item(s) REJECTED (${summariseIssues(
@@ -547,6 +565,7 @@ const fetchCollectionsFromArchive = async (
       skips.push({
         genesis: issue.genesis,
         cid: issue.cid,
+        cause: causeOf(issue.code),
         reason: `archive integrity (${issue.code}): ${issue.reason} — entry refused, refetched from the on-chain cid`,
       });
     }
@@ -566,7 +585,7 @@ const fetchCollectionsFromArchive = async (
         // arrived and are bad", which is reported below with its own reason.
         const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
-        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
+        skips.push({ genesis: entry.genesis, cid: entry.cid, cause: 'unavailable', reason });
         return null;
       }
       // Shape first, then integrity — the same policy maintain-cache uses
@@ -580,7 +599,12 @@ const fetchCollectionsFromArchive = async (
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
         // NEVER cached: a rejected refetch must not enter the next archive
         // snapshot (fetchedItems is what mergeArchive stores).
-        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
+        skips.push({
+          genesis: entry.genesis,
+          cid: entry.cid,
+          cause: causeOf(verdict.integrity.code),
+          reason,
+        });
         return null;
       }
       fetchedItems.set(entry.genesis, item as S2SContentItem);
@@ -603,11 +627,11 @@ export const fetchCollections = async (
 ): Promise<{
   collections: Record<string, any[]>;
   drift: CollectionsDrift | null;
-  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+  skips: CollectionSkip[];
 }> => {
   const collections: any = {};
   let drift: CollectionsDrift | null = null;
-  let skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
+  let skips: CollectionSkip[] = [];
 
   // Fetch all deals once — every collection filters the same set.
   let allDeals: any[] = [];
