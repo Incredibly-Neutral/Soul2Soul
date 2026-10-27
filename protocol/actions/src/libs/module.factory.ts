@@ -101,6 +101,9 @@ export interface PlaintextHashCarrier {
  * The stored body does not hash to the author-signed `public.plaintextHash`.
  * Thrown by the direct read path (fetchItemById/fetchById); callers must fail
  * the job instead of rendering or republishing unverified content.
+ *
+ * Collection paths do NOT throw — they return an {@link ItemSkip} instead, so
+ * one bad item cannot take a whole page down.
  */
 export class ContentIntegrityError extends Error {
   readonly genesis: string;
@@ -113,6 +116,125 @@ export class ContentIntegrityError extends Error {
     this.cid = cid;
   }
 }
+
+/** Why a single stored item could not be used. */
+export type ItemFailureKind =
+  /** The stored bytes are not the bytes the author signed (hash mismatch). */
+  | 'integrity'
+  /** The item could not be read at all (IPFS cat, JSON parse, malformed item). */
+  | 'unavailable';
+
+export type ItemCheck = { ok: true } | { ok: false; reason: string };
+
+export type ItemRead =
+  | { ok: true; item: StoredContentItem }
+  | { ok: false; kind: ItemFailureKind; reason: string; error?: unknown };
+
+/** A skipped collection item: the availability shape plus its failure kind. */
+export type ItemSkip = Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'> & {
+  cause: ItemFailureKind;
+};
+
+/**
+ * The ONE definition of "this item is plaintext" — shared by toBody (how the
+ * body is flattened) and checkItemIntegrity (whether the stored body can be
+ * hashed). An item that omits `encryption` is plaintext, exactly as toBody has
+ * always treated it; keeping two predicates is how a body gets flattened as
+ * plaintext yet never checked.
+ */
+export const isPlaintextItem = (item: { encryption?: unknown }): boolean => !item.encryption;
+
+/**
+ * Verify a stored item's plaintext body against its own signed
+ * `public.plaintextHash`.
+ *
+ * - Encrypted items store CIPHERTEXT: nothing to check here (verify after
+ *   decryption with {@link verifyDecryptedBody}).
+ * - Items with no `plaintextHash` (legacy, pre-specVersion-1) are accepted
+ *   unverified **by design** — verification is opt-in on the item's own
+ *   self-declared hash, so "every rendered body was hash-checked" is NOT true
+ *   for legacy content.
+ * - A plaintext item whose `body` is not a string, or is not the exact bytes
+ *   that hash to `plaintextHash`, fails with kind `integrity`.
+ *
+ * The hash is taken over the STORED STRING, never a re-serialisation: that is
+ * the only way to assert "the bytes the author hashed".
+ */
+export const checkItemIntegrity = (entry: Entry, item: StoredContentItem): ItemCheck => {
+  const expected = item.public.plaintextHash;
+  if (!expected) return { ok: true };
+  if (!isPlaintextItem(item)) return { ok: true };
+  const where = `${entry.genesis} (cid ${entry.cid})`;
+  if (typeof item.body !== 'string') {
+    return { ok: false, reason: `plaintext body missing for ${where}: item.body is not a string` };
+  }
+  if (!verifyBodyHash(item.body, expected)) {
+    return {
+      ok: false,
+      reason: `plaintext hash mismatch for ${where}: the stored body does not match public.plaintextHash`,
+    };
+  }
+  return { ok: true };
+};
+
+/** Enough of a parsed IPFS body to flatten safely (the public envelope). */
+const isStoredContentItem = (value: unknown): value is StoredContentItem => {
+  if (value == null || typeof value !== 'object') return false;
+  const pub = (value as { public?: unknown }).public;
+  return pub != null && typeof pub === 'object';
+};
+
+/**
+ * THE choke point for reading one stored item: exactly one cat, then parse,
+ * shape check, integrity check, and a parse of the plaintext body (so a
+ * successful read is guaranteed to flatten with toBody). Every entry point —
+ * `fetchById`, `fetchItemById`, `fetchByPublicationWithSkips`,
+ * `fetchByPublicationDetailed` — goes through here, so no path can serve an
+ * unverified body. Callers that cannot fail (collections) turn a `!ok` result
+ * into an {@link ItemSkip}; the direct path turns `integrity` into a
+ * {@link ContentIntegrityError}.
+ */
+export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<ItemRead> => {
+  let parsed: unknown;
+  try {
+    // `gateway ?? ''` rather than `gateway!`: a missing gateway must fail the
+    // cat (→ unavailable) instead of stringifying to `undefined/api/v0/cat`.
+    parsed = JSON.parse(await catFile(gateway ?? '', entry.cid));
+  } catch (e) {
+    return {
+      ok: false,
+      kind: 'unavailable',
+      reason: `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`,
+      error: e,
+    };
+  }
+  if (!isStoredContentItem(parsed)) {
+    return {
+      ok: false,
+      kind: 'unavailable',
+      reason: `malformed content item ${entry.genesis} (cid ${entry.cid}): no public envelope`,
+    };
+  }
+  const item = parsed;
+
+  const check = checkItemIntegrity(entry, item);
+  if (!check.ok) return { ok: false, kind: 'integrity', reason: check.reason };
+
+  if (isPlaintextItem(item)) {
+    try {
+      JSON.parse(item.body);
+    } catch (e) {
+      return {
+        ok: false,
+        kind: 'unavailable',
+        reason: `stored body is not valid plaintext JSON for ${entry.genesis} (cid ${entry.cid}): ${e instanceof Error ? e.message : String(e)}`,
+        error: e,
+      };
+    }
+  }
+
+  return { ok: true, item };
+};
 
 // ── Adapter: S2SContentItem (IPFS) → flat S2SBody (what the pipeline expects) ──
 // Mirrors the old lens formatSingle: encrypted → body carries the ciphertext;
@@ -151,7 +273,7 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     ...identity,
   };
 
-  if (item.encryption) {
+  if (!isPlaintextItem(item)) {
     // content is the ciphertext string; decrypt.ts does JSON.parse(body.content)
     return { ...base, encryption: true, content: item.body };
   }
@@ -225,19 +347,17 @@ export const fetchItemById = async (
 ): Promise<{ entry: Entry; item: StoredContentItem } | undefined> => {
   const entry = await getLatestEntry(genesis, publicationModule, rpcs);
   if (!entry.cid) return undefined;
-  const item = JSON.parse(await catFile(gateway!, entry.cid)) as StoredContentItem;
 
-  if (item.encryption === false && item.public?.plaintextHash) {
-    if (!verifyBodyHash(item.body, item.public.plaintextHash)) {
-      throw new ContentIntegrityError(
-        `plaintext hash mismatch for ${genesis} (cid ${entry.cid}): the body does not match public.plaintextHash`,
-        genesis,
-        entry.cid,
-      );
+  const read = await readItemByEntry(entry, gateway);
+  if (!read.ok) {
+    if (read.kind === 'integrity') {
+      throw new ContentIntegrityError(read.reason, entry.genesis, entry.cid);
     }
+    // Unchanged behaviour: a cat/parse failure propagates to the caller.
+    if (read.error instanceof Error) throw read.error;
+    throw new Error(read.reason);
   }
-
-  return { entry, item };
+  return { entry, item: read.item };
 };
 
 /**
@@ -260,24 +380,27 @@ export const fetchById = async (
  * Verify a DECRYPTED body against the item's signed `plaintextHash`.
  *
  * The direct read path can only check plaintext items in situ (the stored body
- * is the canonical JSON). For encrypted items the check moves to the first
+ * IS the canonical JSON). For encrypted items the check moves to the first
  * point the plaintext exists — right after decryption — and this helper is
- * called with the decrypted JSON. Accepts the canonical content item
+ * called with the decryptor's RAW string (see decryptRaw in libs/decrypt.ts),
+ * never with a re-serialisation. Accepts the canonical content item
  * (`item.public.plaintextHash`) or a flat fetch body (which toBody now carries
  * `plaintextHash` on).
  *
  * Returns true when there is nothing to check (legacy item: no plaintextHash),
  * so callers can use it unconditionally without failing old content.
  */
-export const verifyDecryptedBody = (
-  item: PlaintextHashCarrier,
-  decryptedJson: unknown,
-): boolean => {
+export const verifyDecryptedBody = (item: PlaintextHashCarrier, raw: unknown): boolean => {
   const expected = item.public?.plaintextHash ?? item.plaintextHash;
-  if (!expected) return true;
-  const json = typeof decryptedJson === 'string' ? decryptedJson : JSON.stringify(decryptedJson);
-  if (typeof json !== 'string') return false;
-  return verifyBodyHash(json, expected);
+  if (!expected) return true; // legacy: nothing was signed to compare against
+  // Only the decryptor's own STRING can be checked. A parsed object would have
+  // to be re-serialised first, and JSON.stringify(parsed) is NOT the bytes the
+  // author hashed: JCS orders integer-like keys lexically ({"10":…,"2":…}) while
+  // JSON.stringify emits them numerically ({"2":…,"10":…}). That both rejects
+  // correctly signed items and accepts differently-formatted forgeries, so a
+  // non-string is treated as unverifiable (fail closed).
+  if (typeof raw !== 'string') return false;
+  return verifyBodyHash(raw, expected);
 };
 
 /**
@@ -294,6 +417,54 @@ export const fetchByPublication = async (
 };
 
 /**
+ * ONE pass over a publication's deals: getDeals → readItemByEntry (the single
+ * cat + integrity choke point) → toBody. Bodies come out in DEAL ORDER and a
+ * bad item becomes an {@link ItemSkip} (never an exception, never a rendered
+ * body), carrying `cause` so a caller can tell a hash mismatch from an
+ * unavailable blob.
+ *
+ * Both collection readers and the archive drift refetch must use this (or
+ * readItemByEntry directly) — a cat+toBody pair anywhere else is a hole: a
+ * forged body would flow straight into filter/sort and onto the page.
+ */
+const readPublicationItems = async (
+  caller: string,
+  publicationModule: string,
+  rpcs?: string[],
+  gateway?: string,
+): Promise<{
+  bodies: any[];
+  items: Map<string, S2SContentItem>;
+  entries: Entry[];
+  skips: ItemSkip[];
+}> => {
+  const entries = await getDeals(publicationModule, rpcs);
+  const reads = await Promise.all(entries.map((entry) => readItemByEntry(entry, gateway)));
+
+  const bodies: any[] = [];
+  const items = new Map<string, S2SContentItem>();
+  const skips: ItemSkip[] = [];
+  entries.forEach((entry, i) => {
+    const read = reads[i];
+    if (!read.ok) {
+      console.warn(`${caller}: skip ${entry.genesis} (${entry.cid})`, read.reason);
+      skips.push({
+        genesis: entry.genesis,
+        cid: entry.cid,
+        reason: read.reason,
+        cause: read.kind,
+      });
+      return;
+    }
+    // read.item is the same object read off IPFS; the map is the archive seed
+    // (canonical items), so keep its declared type.
+    items.set(entry.genesis, read.item as S2SContentItem);
+    bodies.push(toBody(entry, read.item));
+  });
+  return { bodies, items, entries, skips };
+};
+
+/**
  * Variant of fetchByPublication that also collects structured skip records for
  * the data-availability report. Callers that need availability classification
  * (render action) use this directly; callers that don't (prep) keep using
@@ -303,21 +474,12 @@ export const fetchByPublicationWithSkips = async (
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
-): Promise<{ bodies: any[]; skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] }> => {
-  const entries = await getDeals(publicationModule, rpcs);
-  const bodies: any[] = [];
-  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
-  await Promise.all(
-    entries.map(async (entry) => {
-      try {
-        const item = JSON.parse(await catFile(gateway!, entry.cid));
-        bodies.push(toBody(entry, item));
-      } catch (e) {
-        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
-        console.warn(`fetchByPublication: skip ${entry.genesis} (${entry.cid})`, reason);
-        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
-      }
-    }),
+): Promise<{ bodies: any[]; skips: ItemSkip[] }> => {
+  const { bodies, skips } = await readPublicationItems(
+    'fetchByPublication',
+    publicationModule,
+    rpcs,
+    gateway,
   );
   return { bodies, skips };
 };
@@ -343,24 +505,13 @@ export const fetchByPublicationDetailed = async (
   bodies: any[];
   items: Map<string, S2SContentItem>;
   entries: Entry[];
-  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+  skips: ItemSkip[];
 }> => {
-  const entries = await getDeals(publicationModule, rpcs);
-  const bodies: any[] = [];
-  const items = new Map<string, S2SContentItem>();
-  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
-  await Promise.all(
-    entries.map(async (entry) => {
-      try {
-        const item = JSON.parse(await catFile(gateway!, entry.cid));
-        items.set(entry.genesis, item as S2SContentItem);
-        bodies.push(toBody(entry, item));
-      } catch (e) {
-        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
-        console.warn(`fetchByPublicationDetailed: skip ${entry.genesis} (${entry.cid})`, reason);
-        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
-      }
-    }),
+  const { bodies, skips, entries, items } = await readPublicationItems(
+    'fetchByPublicationDetailed',
+    publicationModule,
+    rpcs,
+    gateway,
   );
   return { bodies, items, entries, skips };
 };

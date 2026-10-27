@@ -10,8 +10,15 @@
  *   - fetchById is fetchItemById + toBody (one cat, undefined when no cid);
  *   - a plaintext body that does not hash to public.plaintextHash THROWS
  *     ContentIntegrityError (the caller must fail the job, never render it);
- *   - a legacy item without plaintextHash is NOT failed;
- *   - verifyDecryptedBody checks decrypted plaintext against the signed hash.
+ *   - a legacy item without plaintextHash is NOT failed (opt-in by design);
+ *   - the COLLECTION readers (fetchByPublication*, incl. the archive drift
+ *     refetch) go through the same choke point: a forged body is never a body,
+ *     only an ItemSkip whose `cause` distinguishes integrity from unavailable;
+ *   - one predicate decides what is plaintext (an item that omits `encryption`
+ *     is plaintext, exactly as toBody flattens it);
+ *   - verifyDecryptedBody hashes the decryptor's RAW STRING — never a
+ *     re-serialisation, which both rejects JCS-ordered items with integer-like
+ *     keys and accepts differently formatted forgeries.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as ethers from 'ethers5';
@@ -24,7 +31,10 @@ import { catFile } from './ipfs.factory';
 import {
   ContentIntegrityError,
   fetchById,
+  fetchByPublicationDetailed,
+  fetchByPublicationWithSkips,
   fetchItemById,
+  isPlaintextItem,
   toBody,
   verifyDecryptedBody,
   type Entry,
@@ -247,38 +257,148 @@ describe('fetchById', () => {
   });
 });
 
-describe('verifyDecryptedBody', () => {
-  const decrypted = JSON.parse(PLAINTEXT) as Record<string, unknown>;
-
-  it('accepts decrypted plaintext that hashes to the signed plaintextHash (canonical item)', () => {
-    expect(verifyDecryptedBody(mkItem(), decrypted)).toBe(true);
-  });
-
-  it('accepts a flat toBody body (identity carried on the flat shape)', () => {
-    expect(
-      verifyDecryptedBody(toBody(ENTRY, mkItem({ encryption: true, body: 'ct' })), decrypted),
-    ).toBe(true);
-  });
-
-  it('accepts the raw JSON string when the caller still has it', () => {
+describe('verifyDecryptedBody — raw bytes only', () => {
+  it('accepts the raw plaintext string that hashes to the signed plaintextHash', () => {
     expect(verifyDecryptedBody(mkItem(), PLAINTEXT)).toBe(true);
   });
 
+  it('accepts a flat toBody body (identity carried on the flat shape)', () => {
+    expect(verifyDecryptedBody(toBody(ENTRY, mkItem({ encryption: true, body: 'ct' })), PLAINTEXT)).toBe(
+      true,
+    );
+  });
+
+  it('accepts JCS-ordered plaintext with integer-like keys that JSON.stringify would reorder', () => {
+    // JCS sorts keys lexically: "10" before "2". JSON.stringify emits them
+    // numerically ("2" before "10"), so hashing a re-serialisation would FAIL a
+    // correctly signed item. Raw bytes are the only thing that passes.
+    const jcsBody = '{"content":"x","custom":{"10":"a","2":"b"}}';
+    const jcsHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(jcsBody));
+    expect(JSON.stringify(JSON.parse(jcsBody))).not.toBe(jcsBody); // the trap is real
+    expect(verifyDecryptedBody({ public: { plaintextHash: jcsHash } }, jcsBody)).toBe(true);
+  });
+
+  it('rejects differently formatted but equivalent plaintext (pretty-printed)', () => {
+    const pretty = JSON.stringify(JSON.parse(PLAINTEXT), null, 2);
+    expect(pretty).not.toBe(PLAINTEXT);
+    // same object, different bytes ⇒ not the bytes the author hashed
+    expect(verifyDecryptedBody(mkItem(), pretty)).toBe(false);
+  });
+
   it('rejects decrypted plaintext that does not match the signed hash', () => {
-    expect(verifyDecryptedBody(mkItem(), { ...decrypted, content: 'EXPLOIT' })).toBe(false);
+    const forged = JSON.stringify({ ...JSON.parse(PLAINTEXT), content: 'EXPLOIT' });
+    expect(verifyDecryptedBody(mkItem(), forged)).toBe(false);
   });
 
   it('returns true (nothing to check) for a legacy item without a plaintextHash', () => {
-    expect(verifyDecryptedBody(legacyItem(), decrypted)).toBe(true);
+    expect(verifyDecryptedBody(legacyItem(), undefined)).toBe(true);
+    expect(verifyDecryptedBody(legacyItem(), 'anything')).toBe(true);
   });
 
-  it('rejects a null/garbage decrypted value when a hash is expected', () => {
+  it('fails closed for a parsed object / null / undefined when a hash is expected', () => {
+    const parsed = JSON.parse(PLAINTEXT) as Record<string, unknown>;
+    expect(verifyDecryptedBody(mkItem(), parsed)).toBe(false);
     expect(verifyDecryptedBody(mkItem(), undefined)).toBe(false);
     expect(verifyDecryptedBody(mkItem(), null)).toBe(false);
   });
 
   it('is case-insensitive on the expected hex digest', () => {
     const upper = PLAINTEXT_HASH.toUpperCase().replace('0X', '0x');
-    expect(verifyDecryptedBody({ public: { plaintextHash: upper } }, decrypted)).toBe(true);
+    expect(verifyDecryptedBody({ public: { plaintextHash: upper } }, PLAINTEXT)).toBe(true);
+  });
+});
+
+describe('isPlaintextItem — the one predicate', () => {
+  it('treats a missing `encryption` field as plaintext, like toBody always has', () => {
+    expect(isPlaintextItem({})).toBe(true);
+    expect(isPlaintextItem({ encryption: false })).toBe(true);
+    expect(isPlaintextItem({ encryption: true })).toBe(false);
+  });
+
+  it('checks an item that omits `encryption` but carries a plaintextHash (C3)', async () => {
+    vi.mocked(evmRead).mockResolvedValue(ENTRY);
+    const { encryption: _dropped, ...noFlag } = mkItem({
+      body: JSON.stringify({ content: 'FORGED' }),
+    });
+    void _dropped;
+    expect('encryption' in noFlag).toBe(false);
+    vi.mocked(catFile).mockResolvedValue(JSON.stringify(noFlag));
+
+    await expect(
+      fetchItemById(GENESIS, PUBLICATION_MODULE, undefined, GATEWAY),
+    ).rejects.toBeInstanceOf(ContentIntegrityError);
+  });
+});
+
+describe('collection readers — the same choke point (C1)', () => {
+  const GOOD_GENESIS = '0x' + '22'.repeat(32);
+  const FORGED_GENESIS = '0x' + '33'.repeat(32);
+  const GONE_GENESIS = '0x' + '44'.repeat(32);
+  const GOOD_CID = 'bafygood';
+  const FORGED_CID = 'bafyforged';
+  const GONE_CID = 'bafygone';
+
+  const deal = (genesis: string, cid: string): Entry => ({
+    genesis,
+    author: '0xauthor',
+    cid,
+    timestamp: 1700000000,
+  });
+
+  beforeEach(() => {
+    vi.mocked(evmRead).mockResolvedValue([
+      deal(GOOD_GENESIS, GOOD_CID),
+      deal(FORGED_GENESIS, FORGED_CID),
+      deal(GONE_GENESIS, GONE_CID),
+    ] as never);
+    vi.mocked(catFile).mockImplementation(((gateway: string, cid: string) => {
+      if (cid === GOOD_CID) return Promise.resolve(JSON.stringify(mkItem()));
+      if (cid === FORGED_CID) {
+        return Promise.resolve(
+          JSON.stringify(mkItem({ body: JSON.stringify({ content: 'FORGED' }) })),
+        );
+      }
+      return Promise.reject(new Error('gateway 504'));
+    }) as never);
+  });
+
+  it('never returns a forged body: it becomes a skip with cause integrity', async () => {
+    const { bodies, skips } = await fetchByPublicationWithSkips(PUBLICATION_MODULE, [], GATEWAY);
+
+    expect(bodies.map((b) => b.content)).toEqual(['Hello']); // deal order, forged one absent
+    expect(skips).toHaveLength(2);
+
+    const forged = skips.find((s) => s.cid === FORGED_CID);
+    expect(forged?.genesis).toBe(FORGED_GENESIS);
+    expect(forged?.cause).toBe('integrity');
+    expect(forged?.reason).toContain('plaintext hash mismatch');
+    expect(forged?.reason).toContain(FORGED_CID);
+
+    const gone = skips.find((s) => s.cid === GONE_CID);
+    expect(gone?.cause).toBe('unavailable');
+    expect(gone?.reason).toContain('IPFS retrieval failed');
+  });
+
+  it('applies the same rule to fetchByPublicationDetailed (bootstrap path)', async () => {
+    const { bodies, items, entries, skips } = await fetchByPublicationDetailed(
+      PUBLICATION_MODULE,
+      [],
+      GATEWAY,
+    );
+
+    expect(entries).toHaveLength(3);
+    expect(bodies.map((b) => b.content)).toEqual(['Hello']);
+    // the archive seed must never receive a forged item either
+    expect([...items.keys()]).toEqual([GOOD_GENESIS]);
+    expect(skips.map((s) => s.cause).sort()).toEqual(['integrity', 'unavailable']);
+  });
+
+  it('keeps legacy items (no plaintextHash) — verified by design is opt-in', async () => {
+    vi.mocked(catFile).mockResolvedValue(JSON.stringify(legacyItem()));
+
+    const { bodies, skips } = await fetchByPublicationWithSkips(PUBLICATION_MODULE, [], GATEWAY);
+
+    expect(skips).toEqual([]);
+    expect(bodies).toHaveLength(3);
   });
 });
