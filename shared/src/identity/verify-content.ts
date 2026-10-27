@@ -3,9 +3,15 @@
 // ============================================================================
 
 import { utils } from 'ethers';
-import { jcs } from './jcs';
+import { jcs, keccakOfJson } from './jcs';
 import { buildSigningView } from './signing-view';
-import { type S2SContentItem, S2S_DOMAIN, S2S_TYPES, eoaOf } from '../protocol/types';
+import {
+  type S2SContentItem,
+  type S2SPublicContent,
+  S2S_DOMAIN,
+  S2S_TYPES,
+  eoaOf,
+} from '../protocol/types';
 
 // ============================================================================
 // verifyAuthorship — called by decryptors before rendering
@@ -76,6 +82,36 @@ export async function verifyAuthorship(
 }
 
 // ============================================================================
+// verifyBodyHash — keccak256 of a plaintext body vs an expected hex digest
+// ============================================================================
+
+/**
+ * True when keccak256(utf8(bodyJson)) equals `expectedHex` (case-insensitive).
+ *
+ * `bodyJson` MUST be the exact body string that was stored and hashed — the
+ * `jcs(body)` output an item was built from: sign-content.ts sets
+ * `bodyContent = jcs(body)` and then keccak256s precisely those bytes. Do not
+ * re-serialise a parsed object into this function; `JSON.stringify` of a parsed
+ * object is not canonical and will not reproduce the digest.
+ *
+ * This deliberately does NOT canonicalise its input: the contract is "hash
+ * these bytes", and a caller that has the stored string must be able to check
+ * it without guessing which canonical form the writer used.
+ *
+ * Never throws: malformed hex, non-body input or any internal error yields
+ * false, because a caller cannot distinguish "unparseable" from "not the same
+ * bytes" in any useful way.
+ */
+export function verifyBodyHash(bodyJson: string, expectedHex: string): boolean {
+  try {
+    const computed = utils.keccak256(utils.toUtf8Bytes(bodyJson));
+    return computed.toLowerCase() === expectedHex.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
 // verifyPlaintextHash — fast check, no signature recovery
 // ============================================================================
 
@@ -90,29 +126,6 @@ export function verifyPlaintextHash(
   const computedHash = utils.keccak256(utils.toUtf8Bytes(plaintextJson));
   return computedHash === item.public.plaintextHash;
 }
-
-// ============================================================================
-// verifyBodyHash — keccak256 of a plaintext body vs an expected hex digest
-// ============================================================================
-
-/**
- * True when keccak256(utf8(bodyJson)) equals `expectedHex` (case-insensitive).
- *
- * Used to check a page's `plaintextHash` against the body it claims to
- * describe. Never throws: malformed hex, non-body input or any internal error
- * yields false, because a caller cannot distinguish "unparseable" from
- * "not the same bytes" in any useful way.
- */
-export function verifyBodyHash(bodyJson: string, expectedHex: string): boolean {
-  try {
-    if (typeof bodyJson !== 'string' || typeof expectedHex !== 'string') return false;
-    const computed = utils.keccak256(utils.toUtf8Bytes(bodyJson));
-    return computed.toLowerCase() === expectedHex.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
 // ============================================================================
 
 /**
@@ -132,27 +145,29 @@ export interface VersionRecord {
 /**
  * Resolve the latest (non-tombstone) version of a document.
  *
- * @param _genesis - the document's persistent identity (its first objectId)
+ * @param genesis - the document's persistent identity (its first objectId)
  * @returns the latest version record, or null if the document doesn't exist or is tombstoned
  *
  * NOTE: This is a type stub. The real implementation queries the append-log contract
  * (see §4 of the handoff). The contract provides ordered, gated appends and public reads.
  */
-export function resolveLatest(
-  _genesis: string,
+export async function resolveLatest(
+  genesis: string,
   /* contract reader dependency would go here */
 ): Promise<VersionRecord | null> {
   // TODO: Implement when the append-log contract is deployed.
   // For now this is a placeholder that always returns null,
   // signalling "not yet implemented" rather than "not found."
   console.warn('resolveLatest: not yet implemented (append-log contract pending)');
-  return Promise.resolve(null);
+  return null;
 }
 
 /**
  * Get the full version history for a document.
  */
-export function getHistory(_genesis: string): Promise<VersionRecord[]> {
+export async function getHistory(
+  genesis: string,
+): Promise<VersionRecord[]> {
   console.warn('getHistory: not yet implemented (append-log contract pending)');
-  return Promise.resolve([]);
+  return [];
 }

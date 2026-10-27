@@ -134,6 +134,46 @@ describe('legacy pages — byte-identical verification', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('rejects a marker-less page carrying a fabricated author.proof (fail closed)', async () => {
+    // The reviewer's exploit: the legacy canonicaliser signs a *skeleton* of
+    // `author`, so an attacker can graft an arbitrary attestation onto an
+    // already-signed page and it verifies. The marker decides the scheme, so a
+    // page that carries specVersion-1 terms without it must be refused outright
+    // rather than downgraded to the blind path.
+    const forged = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
+      schema.author.proof = {
+        type: 'eip712',
+        objectId: '0x' + 'de'.repeat(32),
+        signer: '0x9999999999999999999999999999999999999999',
+        signature: '0xforged',
+      };
+    });
+    await expect(
+      verifyProvenance(publish(forged), LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
+    ).rejects.toThrow(/Refusing page carrying specVersion-1 terms/);
+  });
+
+  it('rejects a marker-less page carrying an sdContent node (fail closed)', async () => {
+    const forged = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
+      schema.sdContent = {
+        '@type': 'CreativeWork',
+        identifier: '0x' + 'ab'.repeat(32),
+        digestMethod: 'keccak256',
+      };
+    });
+    await expect(
+      verifyProvenance(publish(forged), LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
+    ).rejects.toThrow(/Refusing page carrying specVersion-1 terms/);
+  });
+
+  it('still accepts the unmodified marker-less page (no specVersion-1 terms)', async () => {
+    // Backward compatibility is the whole point of keeping LEGACY around: the
+    // fail-closed rule must not reject the pages that are already published.
+    await expect(
+      verifyProvenance(legacyCid, LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
+    ).resolves.toBeUndefined();
+  });
+
   it('rejects the legacy page under the wrong PKP', async () => {
     await expect(
       verifyProvenance(legacyCid, LEGACY_GENESIS, PKP, gateway),
@@ -186,10 +226,10 @@ describe('JCS pages — render → verify round-trip', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('rejects a nested-only tamper (sdContent.sha256)', async () => {
+  it('rejects a nested-only tamper (sdContent.identifier)', async () => {
     const html = await renderPage(contentInfo());
     const tampered = rewriteJsonLd(html, (schema) => {
-      schema.sdContent.sha256 = 'ff'.repeat(32);
+      schema.sdContent.identifier = '0x' + 'ff'.repeat(32);
     });
     await expect(
       verifyProvenance(publish(tampered), '0x' + '77'.repeat(32), PKP, gateway),
@@ -214,6 +254,48 @@ describe('JCS pages — render → verify round-trip', () => {
     await expect(
       verifyProvenance(publish(tampered), '0x' + '77'.repeat(32), PKP, gateway),
     ).rejects.toThrow(/Provenance sig mismatch/);
+  });
+
+  it('accepts a freshly rendered page with no <html> tag', async () => {
+    // The signed region and the verified region must be the same bytes even
+    // when the whole document is the region (the block is prepended there).
+    const html = await addAndSignMetadata('0x' + '77'.repeat(32), '<div>fragment</div>', PROTOCOL_INFO, contentInfo());
+    await expect(
+      verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts a freshly rendered page with a doctype but no <html> tag', async () => {
+    const html = await addAndSignMetadata(
+      '0x' + '77'.repeat(32),
+      '<!DOCTYPE html><body>fragment</body>',
+      PROTOCOL_INFO,
+      contentInfo(),
+    );
+    expect(jsonLdOf(html)).toHaveProperty('proof');
+    await expect(
+      verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts a page rendered with an undefined optional field', async () => {
+    // JCS throws on undefined and the renderer's catch-all would have emitted
+    // NO JSON-LD, which the update gate can never accept — so the page would be
+    // un-updatable forever. Asserting verification closes that loop.
+    const html = await addAndSignMetadata(
+      '0x' + '77'.repeat(32),
+      PAGE,
+      PROTOCOL_INFO,
+      contentInfo({
+        isBasedOn: {
+          genesis: '0x' + '44'.repeat(32),
+          timestamp: '2025-01-01T00:00:00.000Z',
+        } as unknown as S2SContentInfo['isBasedOn'],
+      }),
+    );
+    await expect(
+      verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
+    ).resolves.toBeUndefined();
   });
 
   it('still enforces the html sha256 and genesis gates', async () => {

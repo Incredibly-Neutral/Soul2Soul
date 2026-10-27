@@ -4,13 +4,24 @@ import { fetchWithTimeout } from '../libs/helpers';
 import {
   canonicalizeProofPayload,
   canonicalizeProofPayloadLegacy,
+  extractHashableHtml,
+  hasSpecV1Terms,
   proofCanonicalizationOf,
+  PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 
 // Tree-mutation integrity gate — PKP provenance verification
 // Canonicalisation + HTML extraction are shared with render/metadata.ts
-// (shared/src/metadata/proof-canonicalization.ts), so signer and verifier can
-// never drift.
+// (shared/src/metadata/proof-canonicalization.ts, .../html-block.ts), so signer
+// and verifier can never drift.
+//
+// NOTE (pre-existing, out of scope here): the page proof is not a conformant
+// W3C Data Integrity proof — `cryptosuite: ecdsa-secp256k1-2019` is not a
+// registered suite, the digest is keccak256 rather than the suite's SHA-256, and
+// `proofValue` is not multibase-encoded. Likewise the specVersion-1 JSON-LD
+// terms (sdContent, author.proof) have no @context definitions, and `proof` on a
+// Person node collides with the DI term — sdPublisher already had the same
+// shape, so a context redesign is a separate decision.
 //
 // Verify three invariants before any tree mutation:
 //   1. Sig — recover address from `proof.proofValue` over
@@ -26,16 +37,6 @@ function extractSchema(html: string): any {
   const match = /<script type="application\/ld\+json">\s*([\s\S]*?)<\/script>/i.exec(html);
   if (!match) throw 'No JSON-LD schema found in HTML';
   return JSON.parse(match[1]);
-}
-
-/**
- * Extract the <html>…</html> block for hashing (must match render/metadata.ts).
- * Normalises \r\n → \n so IPFS gateway line-ending transforms don't break the hash.
- */
-function extractHtmlBody(html: string): string {
-  const htmlMatch = /<html[^>]*>([\s\S]*)<\/html>/i.exec(html);
-  const body = htmlMatch?.[0] || html;
-  return body.replace(/\r\n/g, '\n');
 }
 
 /**
@@ -86,9 +87,23 @@ export async function verifyProvenance(
 
   // Old pages carry no `canonicalization` marker and MUST verify under the
   // legacy (recursive key-whitelist) canonicaliser, byte-identically.
+  //
+  // Fail closed on the marker: the legacy scheme signs a *skeleton* of nested
+  // objects, so a page carrying specVersion-1 terms without the JCS marker could
+  // have anything inside `author.proof` / `sdContent` blessed by a signature
+  // that never covered it. Marker-less pages are therefore only accepted while
+  // they also carry neither term; anything else is rejected, never downgraded.
   const canonicalization = proofCanonicalizationOf(proofOptions);
+  if (canonicalization !== PROOF_CANONICALIZATION_JCS && hasSpecV1Terms(dataSchema)) {
+    throw (
+      'Refusing page carrying specVersion-1 terms (sdContent/author.proof) ' +
+      'without proof.canonicalization = "' +
+      PROOF_CANONICALIZATION_JCS +
+      '" — those terms cannot be covered by the legacy canonicalisation'
+    );
+  }
   const toSign =
-    canonicalization === 'JCS-RFC8785'
+    canonicalization === PROOF_CANONICALIZATION_JCS
       ? canonicalizeProofPayload(dataSchema, proofOptions)
       : canonicalizeProofPayloadLegacy(dataSchema, proofOptions);
   const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
@@ -104,8 +119,9 @@ export async function verifyProvenance(
     );
   }
 
-  // 2. Sha256 check — recompute over HTML body
-  const htmlBody = extractHtmlBody(html);
+  // 2. Sha256 check — recompute over HTML body (the region shared with
+  //    render/metadata.ts, so signer and verifier agree by construction)
+  const htmlBody = extractHashableHtml(html);
   const htmlBytes = ethers.utils.toUtf8Bytes(htmlBody);
   const computedSha256 = ethers.utils.sha256(htmlBytes).replace('0x', '');
   if (computedSha256 !== (schema.encoding?.sha256 || '')) {
