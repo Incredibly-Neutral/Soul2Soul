@@ -10,7 +10,7 @@
  *
  * IPFS is replaced with a local HTTP stub for /api/v0/cat; no network.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as ethers from 'ethers5';
@@ -20,7 +20,8 @@ import {
   type S2SContentInfo,
   type S2SProtocolInfo,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { verifyProvenance } from './verify';
+import { extractHashableHtml } from '@s2s/soul2soul-shared/lit-actions';
+import { pageIdentityOf, verifyPathAvailable, verifyProvenance } from './verify';
 import { addAndSignMetadata } from '../render/metadata';
 import {
   LEGACY_FIXTURE_HTML,
@@ -66,9 +67,23 @@ const pages = new Map<string, string>();
 let server: http.Server;
 let gateway: string;
 
+/** MFS tree for the path gate (files/read). */
+const mfs = new Map<string, string>();
+
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname === '/api/v0/files/read') {
+      const body = mfs.get(url.searchParams.get('arg') ?? '');
+      if (body === undefined) {
+        res.statusCode = 500;
+        res.end('no such path');
+        return;
+      }
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(body);
+      return;
+    }
     if (url.pathname === '/api/v0/cat') {
       const body = pages.get(url.searchParams.get('arg') ?? '');
       if (body === undefined) {
@@ -113,14 +128,17 @@ describe('legacy pages — byte-identical verification', () => {
 
   it('the legacy helper reproduces the exact bytes the old renderer signed', () => {
     expect(
-      canonicalizeProofPayloadLegacy(LEGACY_FIXTURE_SCHEMA_WITHOUT_PROOF, LEGACY_FIXTURE_PROOF_OPTIONS),
+      canonicalizeProofPayloadLegacy(
+        LEGACY_FIXTURE_SCHEMA_WITHOUT_PROOF,
+        LEGACY_FIXTURE_PROOF_OPTIONS,
+      ),
     ).toBe(LEGACY_FIXTURE_TO_SIGN);
   });
 
   it('verifyProvenance still accepts an already-published page', async () => {
     await expect(
       verifyProvenance(legacyCid, LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('documents the legacy blind spot: a nested-only tamper goes undetected', async () => {
@@ -131,7 +149,7 @@ describe('legacy pages — byte-identical verification', () => {
     });
     await expect(
       verifyProvenance(publish(tampered), LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('rejects a marker-less page carrying a fabricated author.proof (fail closed)', async () => {
@@ -171,19 +189,151 @@ describe('legacy pages — byte-identical verification', () => {
     // fail-closed rule must not reject the pages that are already published.
     await expect(
       verifyProvenance(legacyCid, LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('rejects the legacy page under the wrong PKP', async () => {
-    await expect(
-      verifyProvenance(legacyCid, LEGACY_GENESIS, PKP, gateway),
-    ).rejects.toThrow(/Provenance sig mismatch/);
+    await expect(verifyProvenance(legacyCid, LEGACY_GENESIS, PKP, gateway)).rejects.toThrow(
+      /Provenance sig mismatch/,
+    );
   });
 
   it('rejects the legacy page under the wrong genesis', async () => {
     await expect(
       verifyProvenance(legacyCid, '0x' + '99'.repeat(32), LEGACY_FIXTURE_PKP, gateway),
     ).rejects.toThrow(/Genesis mismatch/);
+  });
+});
+
+// ── The legacy page as a reusable CARRIER — the update gate ─────────────────
+//
+// The blind spot above is not merely "a nested field goes unchecked": because
+// the body and the author DID are outside the legacy signed bytes, a legacy page
+// is a reusable carrier. An attacker takes the already-signed page, rewrites the
+// body inside the hashed region, recomputes encoding.sha256, repoints
+// author.identifier.value at a victim, and verifyProvenance still passes (the
+// signature covers a skeleton). update/main.ts takes jobs verbatim behind
+// canPublish only, and verifyPathAvailable used to allow a same-genesis
+// overwrite — so ANY whitelisted publisher could graft arbitrary content onto a
+// page claiming another author's DID.
+//
+// The gate now refuses to write a legacy-signed page at all: a free path may not
+// receive one, and a legacy carrier already at the path may only be replaced by
+// a CONTENT-BOUND (JCS) page for the same identifier. These are the reviewer's
+// two probes, plus the rules around them.
+
+describe('legacy carrier — the update gate refuses grafted content', () => {
+  const DEST = '/pub/some/page/index.html';
+  // Never reached by these cases (every rule fires before the hasDeal RPC), but
+  // the gate needs a module address.
+  const PUB_MODULE = '0x' + '11'.repeat(20);
+
+  /** Recompute the schema's claimed body digest after a body rewrite. */
+  const rehash = (html: string): string => {
+    const digest = ethers.utils
+      .sha256(ethers.utils.toUtf8Bytes(extractHashableHtml(html)))
+      .replace('0x', '');
+    return rewriteJsonLd(html, (schema) => {
+      schema.encoding.sha256 = digest;
+    });
+  };
+
+  beforeEach(() => {
+    mfs.set(DEST, LEGACY_FIXTURE_HTML);
+  });
+
+  it('PROBE 1 — verifyProvenance still passes a swapped body (the hole is in verify, not here)', async () => {
+    const swapped = rehash(
+      LEGACY_FIXTURE_HTML.replace('<h1>Hello</h1>', '<h1>Attacker content</h1>'),
+    );
+    // The signature covers a skeleton: the body rewrite is invisible to it.
+    await expect(
+      verifyProvenance(publish(swapped), LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
+    ).resolves.toMatchObject({ signed: true, canonicalization: 'LEGACY' });
+  });
+
+  it('PROBE 1 — the gate refuses that body swap', async () => {
+    const swapped = rehash(
+      LEGACY_FIXTURE_HTML.replace('<h1>Hello</h1>', '<h1>Attacker content</h1>'),
+    );
+    const incoming = pageIdentityOf(jsonLdOf(swapped));
+    await expect(
+      verifyPathAvailable(gateway, DEST, LEGACY_GENESIS, PUB_MODULE, [], incoming),
+    ).rejects.toThrow(/legacy-signed page/);
+  });
+
+  it('PROBE 2 — verifyProvenance still passes an author-DID swap', async () => {
+    const swappedAuthor = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
+      schema.author.identifier.value = 'did:ethr:0x9999999999999999999999999999999999999999';
+    });
+    // author.identifier.value is not in the legacy signed bytes either.
+    await expect(
+      verifyProvenance(publish(swappedAuthor), LEGACY_GENESIS, LEGACY_FIXTURE_PKP, gateway),
+    ).resolves.toMatchObject({ signed: true, canonicalization: 'LEGACY' });
+  });
+
+  it('PROBE 2 — the gate refuses that author-DID swap', async () => {
+    const swappedAuthor = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
+      schema.author.identifier.value = 'did:ethr:0x9999999999999999999999999999999999999999';
+    });
+    const incoming = pageIdentityOf(jsonLdOf(swappedAuthor));
+    await expect(
+      verifyPathAvailable(gateway, DEST, LEGACY_GENESIS, PUB_MODULE, [], incoming),
+    ).rejects.toThrow(/legacy-signed page/);
+  });
+
+  it('refuses a DIFFERENT content item over a legacy carrier (no deal check needed)', async () => {
+    // A distinct genesis at a path occupied by a legacy page: previously allowed
+    // whenever the old genesis had no active deal, i.e. the legacy page could be
+    // replaced by arbitrary new content.
+    await expect(
+      verifyPathAvailable(gateway, DEST, '0x' + '99'.repeat(32), PUB_MODULE, [], null),
+    ).rejects.toThrow(/immutable carrier/);
+  });
+
+  it('refuses to introduce a legacy-signed page on a FREE path', async () => {
+    const incoming = pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML));
+    await expect(
+      verifyPathAvailable(
+        gateway,
+        '/pub/empty/page/index.html',
+        LEGACY_GENESIS,
+        PUB_MODULE,
+        [],
+        incoming,
+      ),
+    ).rejects.toThrow(/Refusing to write a legacy-signed page/);
+  });
+
+  it('accepts a content-bound (JCS) re-render of the same content item', async () => {
+    // The migration path must stay open: a legacy page may be replaced by the
+    // SAME content item rendered today (JCS covers identifier, author and body).
+    const html = await addAndSignMetadata(LEGACY_GENESIS, PAGE, PROTOCOL_INFO, contentInfo());
+    const incoming = pageIdentityOf(jsonLdOf(html));
+    expect(incoming.canonicalization).toBe('JCS-RFC8785');
+    await expect(
+      verifyPathAvailable(gateway, DEST, LEGACY_GENESIS, PUB_MODULE, [], incoming),
+    ).resolves.toBeUndefined();
+  });
+
+  it('still allows an ordinary JCS overwrite of an ordinary page (no legacy in play)', async () => {
+    const html = await addAndSignMetadata(
+      '0x' + '77'.repeat(32),
+      PAGE,
+      PROTOCOL_INFO,
+      contentInfo(),
+    );
+    mfs.set(DEST, html);
+    await expect(
+      verifyPathAvailable(
+        gateway,
+        DEST,
+        '0x' + '77'.repeat(32),
+        PUB_MODULE,
+        [],
+        pageIdentityOf(jsonLdOf(html)),
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -205,7 +355,10 @@ const contentInfo = (overrides: Partial<S2SContentInfo> = {}): S2SContentInfo =>
       signature: '0xsig',
     },
   },
-  publisher: { did: 'did:ethr:0x2222222222222222222222222222222222222222', url: 'https://example.org' },
+  publisher: {
+    did: 'did:ethr:0x2222222222222222222222222222222222222222',
+    url: 'https://example.org',
+  },
   contentCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   plaintextHash: '0x' + 'ab'.repeat(32),
   mediaType: 'text/markdown',
@@ -223,7 +376,7 @@ describe('JCS pages — render → verify round-trip', () => {
     expect(jsonLdOf(html).sdContent).toBeDefined();
     await expect(
       verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('rejects a nested-only tamper (sdContent.identifier)', async () => {
@@ -259,10 +412,15 @@ describe('JCS pages — render → verify round-trip', () => {
   it('accepts a freshly rendered page with no <html> tag', async () => {
     // The signed region and the verified region must be the same bytes even
     // when the whole document is the region (the block is prepended there).
-    const html = await addAndSignMetadata('0x' + '77'.repeat(32), '<div>fragment</div>', PROTOCOL_INFO, contentInfo());
+    const html = await addAndSignMetadata(
+      '0x' + '77'.repeat(32),
+      '<div>fragment</div>',
+      PROTOCOL_INFO,
+      contentInfo(),
+    );
     await expect(
       verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('accepts a freshly rendered page with a doctype but no <html> tag', async () => {
@@ -275,7 +433,7 @@ describe('JCS pages — render → verify round-trip', () => {
     expect(jsonLdOf(html)).toHaveProperty('proof');
     await expect(
       verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('accepts a page rendered with an undefined optional field', async () => {
@@ -295,7 +453,7 @@ describe('JCS pages — render → verify round-trip', () => {
     );
     await expect(
       verifyProvenance(publish(html), '0x' + '77'.repeat(32), PKP, gateway),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ signed: true });
   });
 
   it('still enforces the html sha256 and genesis gates', async () => {

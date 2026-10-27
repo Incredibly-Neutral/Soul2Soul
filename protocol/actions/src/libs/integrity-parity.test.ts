@@ -20,7 +20,7 @@ import {
   serialize,
   type Archive,
 } from './archive.factory';
-import { inspectItemIntegrity } from './item-integrity';
+import { SKIP_REASON_RE, inspectItemIntegrity } from './item-integrity';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { jcs } from '@s2s/soul2soul-shared/lit-actions';
 import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
@@ -155,20 +155,33 @@ const mockChain = (entry: Entry): void => {
   }) as never);
 };
 
-/** DIRECT reader: exactly what render/main.ts calls for a page body. */
+/**
+ * DIRECT reader: exactly what render/main.ts calls for a page body.
+ *
+ * A refusal is classified through the SAME greppable skip-reason format the
+ * collection paths emit (`integrity(<code>): …` / `unavailable: …`), so this
+ * file also pins review item #3: every refusal on both doors is machine-
+ * readable, and a shape defect never gets filed as a proven forgery.
+ */
 const readDirect = async (
   item: unknown,
   entry: Entry = mkEntry(),
-): Promise<{ served: boolean; code: string | null }> => {
+): Promise<{ served: boolean; code: string | null; cause: 'integrity' | 'unavailable' | null }> => {
   mockChain(entry);
   vi.mocked(catFile).mockResolvedValue(JSON.stringify(item));
   try {
     const body = await fetchById(GENESIS, PUBLICATION, [], GATEWAY);
-    return { served: body != null, code: body == null ? null : 'served' };
+    return { served: body != null, code: body == null ? null : 'served', cause: null };
   } catch (e) {
-    if (!(e instanceof ContentIntegrityError)) throw e;
-    const m = /\(([a-z-]+)\)|: ([a-z-]+) —/.exec((e as Error).message);
-    return { served: false, code: m?.[1] ?? m?.[2] ?? null };
+    const message = e instanceof Error ? e.message : String(e);
+    const m = SKIP_REASON_RE.exec(message);
+    expect(m, `refusal not tagged with a skip code: ${message}`).not.toBeNull();
+    const cause = m![1] === 'unavailable' ? 'unavailable' : 'integrity';
+    const code = m![2] ?? (/malformed content item/.test(message) ? 'malformed-item' : null);
+    // An integrity refusal MUST go through the typed error: the render caller
+    // distinguishes it from a transport failure to decide fail-the-job vs skip.
+    if (cause === 'integrity') expect(e).toBeInstanceOf(ContentIntegrityError);
+    return { served: false, code, cause };
   }
 };
 
@@ -269,12 +282,16 @@ describe('parity: the two read paths agree about the same item', () => {
     const item = mkItem({ noProof: true });
     const { direct, archive } = await both(item);
 
-    // Both refuse. The CODE is only available on the direct path, and that is a
-    // named, deliberate difference: an archive can never STORE a schema-invalid
-    // item (parseArchive/mergeArchive shape-gate drops it), so on the archive
-    // path this item is simply "no entry" — a MISS with nothing to classify.
+    // Both refuse — and now for the SAME stated reason: `proof` is required by
+    // the shared content-item schema, so BOTH doors stop at the shape gate
+    // ('malformed-item', cause 'unavailable') before any integrity verdict runs.
+    // The CODE is only available on the direct path, which is a named,
+    // deliberate difference: an archive can never STORE a schema-invalid item
+    // (parseArchive/mergeArchive shape-gate drops it), so on the archive path
+    // this item is simply "no entry" — a MISS with nothing to classify.
     expect(direct.served).toBe(false);
-    expect(direct.code).toBe('proof-missing');
+    expect(direct.code).toBe('malformed-item');
+    expect(direct.cause).toBe('unavailable');
     expect(archive.served).toBe(false);
     expect(archive.code).toBeNull();
     expect(parseArchive(serialize(mkArchive(item))).items).toEqual({});
@@ -377,5 +394,113 @@ describe('checkItemIntegrity is the shared verdict, bound to the deal author', (
     expect(lines.filter((l) => l.includes('(legacy-item)'))).toHaveLength(1);
     expect(lines.filter((l) => l.includes('(encrypted)'))).toHaveLength(1);
     warn.mockRestore();
+  });
+});
+
+// ============================================================================
+// Review item #2 — the two doors share ONE shape gate.
+//
+// Before this the direct door accepted "anything with a `public` object" while
+// the archive door required a schema-valid content item, so the SAME bytes could
+// be served by one door and refused by the other. A shape defect is a doubt
+// ('unavailable'), never a proven forgery ('integrity').
+// ============================================================================
+
+describe('parity: the shared shape gate (review item #2)', () => {
+  it('missing public.tags — refused by both, as unavailable', async () => {
+    const item = mkItem() as any;
+    delete item.public.tags;
+
+    const { direct, archive } = await both(item);
+
+    expect(direct.served).toBe(false);
+    expect(direct.code).toBe('malformed-item');
+    expect(direct.cause).toBe('unavailable');
+    // The archive cannot STORE it either: parseArchive's shape gate drops it, so
+    // the archive door sees "no entry" and asks for the on-chain refetch — where
+    // judgeRefetchedItem reaches the identical verdict.
+    expect(archive.served).toBe(false);
+    expect(archive.needsFetch).toBe(1);
+  });
+
+  it('public.author = "nobody" — refused by both, as unavailable', async () => {
+    const item = mkItem({ author: 'nobody' as never });
+
+    const { direct, archive } = await both(item);
+
+    expect(direct.served).toBe(false);
+    expect(direct.code).toBe('malformed-item');
+    expect(direct.cause).toBe('unavailable');
+    expect(archive.served).toBe(false);
+    expect(archive.needsFetch).toBe(1);
+  });
+
+  it('a LEGACY item (no specVersion envelope) is NOT malformed — both serve it', async () => {
+    // The shape gate must not turn "old" into "broken": it validates a
+    // specVersion-less item against the fields that existed then.
+    const { direct, archive } = await both(mkItem({ legacy: true }));
+
+    expect(direct.served).toBe(true);
+    expect(archive.served).toBe(true);
+    expect(archive.code).toBeNull();
+  });
+});
+
+// ============================================================================
+// Review item #3 — the skip taxonomy survives the shared envelope gap.
+//
+// `DataAvailabilityEntry` (shared/protocol/types.ts, off-limits) has no `cause`
+// and no `code`, so the collection skips projected into a render's availability
+// list lose the type that `ItemSkip`/`CollectionSkip` carry internally. Every
+// reason string therefore carries the code in one stable, greppable form:
+//
+//   integrity(<code>): <human detail>
+//   unavailable: <human detail>
+//
+// SKIP_REASON_RE is the single definition; both read paths build their reasons
+// through skipReason(). The clean follow-up is adding `cause` + `code` to the
+// envelope.
+// ============================================================================
+
+describe('skip reasons are machine-greppable on both paths (review item #3)', () => {
+  it('every collection skip reason matches SKIP_REASON_RE', async () => {
+    // three items: one forged (integrity), one malformed (unavailable), one whose
+    // cat fails (unavailable transport).
+    const forged = mkItem({ body: jcs({ title: 't', slug: 's', content: 'PWNED' }) });
+    const malformed = mkItem() as any;
+    delete malformed.public.tags;
+    const gone = 'bafygone';
+
+    vi.mocked(evmRead).mockResolvedValue([
+      { genesis: 'g-forged', author: AUTHOR.address, cid: 'bafyforged', timestamp: 1 },
+      { genesis: 'g-bad', author: AUTHOR.address, cid: 'bafybad', timestamp: 2 },
+      { genesis: 'g-gone', author: AUTHOR.address, cid: gone, timestamp: 3 },
+    ] as never);
+    vi.mocked(catFile).mockImplementation(((gateway: string, cid: string) => {
+      if (cid === 'bafyforged') return Promise.resolve(JSON.stringify(forged));
+      if (cid === 'bafybad') return Promise.resolve(JSON.stringify(malformed));
+      return Promise.reject(new Error('gateway 504'));
+    }) as never);
+
+    const { skips } = await import('./module.factory').then((m) =>
+      m.fetchByPublicationWithSkips(PUBLICATION, [], GATEWAY),
+    );
+
+    expect(skips).toHaveLength(3);
+    for (const skip of skips) {
+      expect(SKIP_REASON_RE.test(skip.reason), skip.reason).toBe(true);
+    }
+    expect(skips.find((s) => s.genesis === 'g-forged')?.cause).toBe('integrity');
+    expect(skips.find((s) => s.genesis === 'g-bad')?.cause).toBe('unavailable');
+    expect(skips.find((s) => s.genesis === 'g-gone')?.cause).toBe('unavailable');
+  });
+
+  it('the code in the reason is the verdict code', () => {
+    const m = SKIP_REASON_RE.exec('integrity(hash-mismatch): body does not hash');
+    expect(m?.[1]).toBe('integrity(hash-mismatch)');
+    expect(m?.[2]).toBe('hash-mismatch');
+    expect(SKIP_REASON_RE.exec('unavailable: gateway 504')?.[2]).toBeUndefined();
+    // and it does NOT match a message that forgot the tag
+    expect(SKIP_REASON_RE.test('body does not hash to public.plaintextHash')).toBe(false);
   });
 });

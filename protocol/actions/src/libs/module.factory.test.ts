@@ -261,15 +261,18 @@ describe('fetchById', () => {
   });
 });
 
-describe('verifyDecryptedBody — raw bytes only', () => {
+describe('verifyDecryptedBody — raw bytes only, verdict not boolean', () => {
+  // The verdict is the SAME vocabulary the archive / item verdict uses, so the
+  // render page path can distinguish "tampered" (fail the job) from "cannot
+  // check" (a doubt: warn and render) exactly as data.ctrlr does.
   it('accepts the raw plaintext string that hashes to the signed plaintextHash', () => {
-    expect(verifyDecryptedBody(mkItem(), PLAINTEXT)).toBe(true);
+    expect(verifyDecryptedBody(mkItem(), PLAINTEXT)).toBe('verified');
   });
 
   it('accepts a flat toBody body (identity carried on the flat shape)', () => {
     expect(
       verifyDecryptedBody(toBody(ENTRY, mkItem({ encryption: true, body: 'ct' })), PLAINTEXT),
-    ).toBe(true);
+    ).toBe('verified');
   });
 
   it('accepts JCS-ordered plaintext with integer-like keys that JSON.stringify would reorder', () => {
@@ -279,36 +282,46 @@ describe('verifyDecryptedBody — raw bytes only', () => {
     const jcsBody = '{"content":"x","custom":{"10":"a","2":"b"}}';
     const jcsHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(jcsBody));
     expect(JSON.stringify(JSON.parse(jcsBody))).not.toBe(jcsBody); // the trap is real
-    expect(verifyDecryptedBody({ public: { plaintextHash: jcsHash } }, jcsBody)).toBe(true);
+    expect(verifyDecryptedBody({ public: { plaintextHash: jcsHash } }, jcsBody)).toBe('verified');
   });
 
   it('rejects differently formatted but equivalent plaintext (pretty-printed)', () => {
     const pretty = JSON.stringify(JSON.parse(PLAINTEXT), null, 2);
     expect(pretty).not.toBe(PLAINTEXT);
     // same object, different bytes ⇒ not the bytes the author hashed
-    expect(verifyDecryptedBody(mkItem(), pretty)).toBe(false);
+    expect(verifyDecryptedBody(mkItem(), pretty)).toBe('mismatch');
   });
 
   it('rejects decrypted plaintext that does not match the signed hash', () => {
     const forged = JSON.stringify({ ...JSON.parse(PLAINTEXT), content: 'EXPLOIT' });
-    expect(verifyDecryptedBody(mkItem(), forged)).toBe(false);
+    expect(verifyDecryptedBody(mkItem(), forged)).toBe('mismatch');
   });
 
-  it('returns true (nothing to check) for a legacy item without a plaintextHash', () => {
-    expect(verifyDecryptedBody(legacyItem(), undefined)).toBe(true);
-    expect(verifyDecryptedBody(legacyItem(), 'anything')).toBe(true);
+  it("returns 'uncheckable' (nothing to check) for a legacy item without a plaintextHash", () => {
+    expect(verifyDecryptedBody(legacyItem(), undefined)).toBe('uncheckable');
+    expect(verifyDecryptedBody(legacyItem(), 'anything')).toBe('uncheckable');
+  });
+
+  it("returns 'weak' for a plaintextHash that is not a keccak digest (a doubt, not a forgery)", () => {
+    // Same carve-out as inspectItemIntegrity: a third-party hash algorithm is
+    // 'hash-malformed' there and served as unverifiable. Failing it here would
+    // drop such an item from collections AND fail the page job — the two paths
+    // would disagree about the same item.
+    expect(verifyDecryptedBody({ public: { plaintextHash: 'sha256:abc' } }, PLAINTEXT)).toBe(
+      'weak',
+    );
   });
 
   it('fails closed for a parsed object / null / undefined when a hash is expected', () => {
     const parsed = JSON.parse(PLAINTEXT) as Record<string, unknown>;
-    expect(verifyDecryptedBody(mkItem(), parsed)).toBe(false);
-    expect(verifyDecryptedBody(mkItem(), undefined)).toBe(false);
-    expect(verifyDecryptedBody(mkItem(), null)).toBe(false);
+    expect(verifyDecryptedBody(mkItem(), parsed)).toBe('mismatch');
+    expect(verifyDecryptedBody(mkItem(), undefined)).toBe('mismatch');
+    expect(verifyDecryptedBody(mkItem(), null)).toBe('mismatch');
   });
 
   it('is case-insensitive on the expected hex digest', () => {
     const upper = PLAINTEXT_HASH.toUpperCase().replace('0X', '0x');
-    expect(verifyDecryptedBody({ public: { plaintextHash: upper } }, PLAINTEXT)).toBe(true);
+    expect(verifyDecryptedBody({ public: { plaintextHash: upper } }, PLAINTEXT)).toBe('verified');
   });
 });
 
@@ -319,7 +332,11 @@ describe('isPlaintextItem — the one predicate', () => {
     expect(isPlaintextItem({ encryption: true })).toBe(false);
   });
 
-  it('checks an item that omits `encryption` but carries a plaintextHash (C3)', async () => {
+  it('an item that omits `encryption` is MALFORMED, not a plaintext body (the shared shape gate)', async () => {
+    // `encryption` is required by s2sContentItemSchema, and the archive door has
+    // always refused an item without it. The direct door now runs the SAME gate
+    // instead of quietly treating the missing flag as "plaintext" and hashing
+    // `body` — which would make the two doors disagree about the same bytes.
     vi.mocked(evmRead).mockResolvedValue(ENTRY);
     const { encryption: _dropped, ...noFlag } = mkItem({
       body: JSON.stringify({ content: 'FORGED' }),
@@ -328,9 +345,25 @@ describe('isPlaintextItem — the one predicate', () => {
     expect('encryption' in noFlag).toBe(false);
     vi.mocked(catFile).mockResolvedValue(JSON.stringify(noFlag));
 
-    await expect(
-      fetchItemById(GENESIS, PUBLICATION_MODULE, undefined, GATEWAY),
-    ).rejects.toBeInstanceOf(ContentIntegrityError);
+    // Direct door: refused, and the failure is 'unavailable' (a shape defect),
+    // NOT 'integrity' (a proven forgery).
+    await expect(fetchItemById(GENESIS, PUBLICATION_MODULE, undefined, GATEWAY)).rejects.toThrow(
+      /unavailable: malformed content item/,
+    );
+
+    // Collection door: the same item becomes a skip with the SAME cause —
+    // 'unavailable' (shape), never 'integrity' (proven forgery) — and is never
+    // handed to the caller as a body.
+    vi.mocked(evmRead).mockResolvedValue([
+      { genesis: GENESIS, author: '0xauthor', cid: CID, timestamp: 1700000000 },
+    ] as never);
+    const { bodies, skips } = await fetchByPublicationWithSkips(PUBLICATION_MODULE, [], GATEWAY);
+
+    expect(bodies).toEqual([]);
+    expect(skips).toHaveLength(1);
+    expect(skips[0].genesis).toBe(GENESIS);
+    expect(skips[0].cause).toBe('unavailable');
+    expect(skips[0].reason).toMatch(/^unavailable: malformed content item/);
   });
 });
 

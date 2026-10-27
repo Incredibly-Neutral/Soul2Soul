@@ -523,16 +523,36 @@ describe('initTemplateData: post-decryption integrity', () => {
 
   it('resolves the hash from the on-chain cid when the flat body lacks it (the only extra-read path)', async () => {
     const item = mkItem('g1', { encryption: true });
+    // The fallback is pinned to the body's OWN deal cid: if the deal advanced
+    // mid-render, the chain's hash belongs to the NEXT version and must not be
+    // compared against this body.
     (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
     (getLatestEntry as any).mockResolvedValue(mkEntry('g1', 'cid1'));
     (catFile as any).mockResolvedValue(JSON.stringify(item));
 
-    const data = await runInit(encBody({ plaintextHash: undefined }));
+    const data = await runInit(encBody({ plaintextHash: undefined, cid: 'cid1' }));
 
     expect(data.content).toBe('content-g1');
     // this IS the documented fallback: one RPC + one cat
     expect(getLatestEntry).toHaveBeenCalledWith('g1', 'module', ['rpc']);
     expect(catFile).toHaveBeenCalledWith('gateway', 'cid1');
+  });
+
+  it('refuses the chain fallback when the deal advanced past the rendered cid', async () => {
+    // The chain's hash belongs to the NEXT version of the content. Comparing it
+    // against THIS body would fail a good body (or validate it against a hash it
+    // was never signed under), so the fallback refuses and the page renders
+    // unverified instead.
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockResolvedValue(mkEntry('g1', 'cid2'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ plaintextHash: undefined, cid: 'cid1' }));
+
+    expect(data.content).toBe('content-g1');
+    expect(catFile).not.toHaveBeenCalled();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('deal advanced'))).toBe(true);
+    warn.mockRestore();
   });
 
   it('an UNRESOLVABLE hash warns and renders unverified (never silently pretends, never throws)', async () => {
@@ -822,7 +842,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     // tamper evidence reaches the caller: the refused archive entry is reported
     // (non-fatal — the page is served from the refetch)
     expect(result.skips).toHaveLength(1);
-    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-mismatch\): /);
     // same failure taxonomy as the direct read path
     expect(result.skips[0].cause).toBe('integrity');
     expect(result.collections.posts).toHaveLength(1);
@@ -843,7 +863,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     // because the on-chain deal author is somebody else
     expect(JSON.stringify(result.collections.posts)).not.toContain('pwned');
     expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
-    expect(result.skips[0].reason).toMatch(/archive integrity \(author-mismatch\)/);
+    expect(result.skips[0].reason).toMatch(/^integrity\(author-mismatch\): /);
   });
 
   it('refetched item that ALSO mismatches produces a non-fatal skip with a reason (never renders it)', async () => {
@@ -859,9 +879,9 @@ describe('fetchCollections: archive read-path integrity', () => {
     expect(result.collections.posts).toEqual([]);
     // two entries: the archive item was refused, and the refetched bytes were refused
     expect(result.skips).toHaveLength(2);
-    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-mismatch\): /);
     expect(result.skips[1]).toMatchObject({ genesis: 'g1', cid: 'cid1' });
-    expect(result.skips[1].reason).toMatch(/refetched item rejected \(hash-mismatch\)/);
+    expect(result.skips[1].reason).toMatch(/^integrity\(hash-mismatch\): refetched item rejected/);
     expect(result.skips[1].cause).toBe('integrity');
     // a mismatching refetch is NEVER cached into the next archive snapshot
     expect(result.drift!.fetchedItems.has('g1')).toBe(false);
@@ -879,7 +899,9 @@ describe('fetchCollections: archive read-path integrity', () => {
 
     expect(result.collections.posts).toEqual([]);
     expect(result.skips).toHaveLength(1);
-    expect(result.skips[0].reason).toMatch(/refetched item rejected \(malformed-item\)/);
+    expect(result.skips[0].reason).toMatch(
+      /^unavailable: refetched item rejected: refetched content is not a valid content item/,
+    );
     expect(result.skips[0].reason).not.toMatch(/retrieval failed/);
     // a malformed item is "could not be read", NOT "signed and then altered"
     expect(result.skips[0].cause).toBe('unavailable');
@@ -947,7 +969,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
 
     expect(result.collections.posts).toEqual([]);
-    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-missing\)/);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-missing\): /);
   });
 
   it('binds an ENCRYPTED archive item to the author (the ciphertext itself is not checked)', async () => {
@@ -963,6 +985,6 @@ describe('fetchCollections: archive read-path integrity', () => {
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
 
     expect(result.collections.posts).toEqual([]);
-    expect(result.skips[0].reason).toMatch(/archive integrity \(author-mismatch\)/);
+    expect(result.skips[0].reason).toMatch(/^integrity\(author-mismatch\): /);
   });
 });

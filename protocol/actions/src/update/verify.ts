@@ -7,6 +7,7 @@ import {
   extractHashableHtml,
   hasSpecV1Terms,
   proofCanonicalizationOf,
+  type ProofCanonicalization,
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 
@@ -40,6 +41,54 @@ function extractSchema(html: string): any {
 }
 
 /**
+ * What a rendered page says about itself, as far as the tree gate can trust it.
+ *
+ *  - `signed`          — the page carries `proof.proofValue`, i.e. it is (or
+ *                        claims to be) a PKP-signed page. A page with no
+ *                        signature can never have been produced by the
+ *                        renderer, and — crucially — cannot be *reused* as a
+ *                        carrier (see verifyPathAvailable's LEGACY rule).
+ *  - `canonicalization` — which scheme the signature covers. `LEGACY` pages
+ *                        sign a SKELETON of the document (see
+ *                        shared/src/metadata/proof-canonicalization.ts), so
+ *                        `encoding.sha256` (the body) and
+ *                        `author.identifier.value` (the claimed author) are
+ *                        OUTSIDE the signed bytes.
+ *  - `identifier`      — schema.identifier (the genesis the page claims).
+ *  - `authorDid`       — the claimed author DID (unsigned on a LEGACY page).
+ *  - `sha256`          — the claimed digest of the hashed body region
+ *                        (unsigned on a LEGACY page).
+ */
+export interface PageIdentity {
+  identifier: string | null;
+  authorDid: string | null;
+  canonicalization: ProofCanonicalization;
+  signed: boolean;
+  sha256: string | null;
+}
+
+const firstString = (value: unknown): string | null => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const hit = value.find((v) => typeof v === 'string');
+    return typeof hit === 'string' ? hit : null;
+  }
+  return null;
+};
+
+/** Read a page's self-description out of its JSON-LD schema (pure). */
+export const pageIdentityOf = (schema: any): PageIdentity => {
+  const proof = schema?.proof;
+  return {
+    identifier: typeof schema?.identifier === 'string' ? schema.identifier : null,
+    authorDid: firstString(schema?.author?.identifier?.value),
+    canonicalization: proofCanonicalizationOf(proof ?? {}),
+    signed: typeof proof?.proofValue === 'string' && proof.proofValue !== '',
+    sha256: typeof schema?.encoding?.sha256 === 'string' ? schema.encoding.sha256 : null,
+  };
+};
+
+/**
  * Verify that the HTML at `htmlCid` carries a valid PKP provenance signature.
  *
  * 1. Cat the HTML from IPFS.
@@ -56,7 +105,7 @@ export async function verifyProvenance(
   pkpEthAddress: string,
   gateway: string,
   trace?: any[],
-): Promise<void> {
+): Promise<PageIdentity> {
   // Fetch the HTML content from IPFS
   const resp = await fetchWithTimeout(
     `${gateway}/api/v0/cat?arg=${htmlCid}`,
@@ -147,6 +196,12 @@ export async function verifyProvenance(
       `Genesis mismatch: schema.identifier ${schema.identifier}, ` + `expected ${expectedGenesis}`
     );
   }
+
+  // The parsed identity is returned so the caller (update/main.ts) does not have
+  // to cat the page a second time to know WHICH canonicalisation signed it, what
+  // identifier/author it claims, or what digest it asserts. The tree gate needs
+  // all of that (see verifyPathAvailable).
+  return pageIdentityOf(schema);
 }
 
 /** Path-level helpers for the remove loop. */
@@ -249,12 +304,52 @@ export async function verifyRevocable(
 }
 
 /**
- * Before overwriting an existing path in the tree, check that the existing content
- * is not under an active deal with a different genesis. If it is, the overwrite
- * would silently replace deal-protected content — reject.
+ * Parse the page at an MFS path into a {@link PageIdentity}, or null when there
+ * is no page there / it has no parseable JSON-LD schema (a free path).
+ */
+export async function readPageIdentity(
+  gateway: string,
+  mfsPath: string,
+): Promise<PageIdentity | null> {
+  try {
+    const resp = await fetchWithTimeout(
+      `${gateway}/api/v0/files/read?arg=${encodeURIComponent(mfsPath)}`,
+      { method: 'POST' },
+      30_000,
+    );
+    if (!resp.ok) return null;
+    return pageIdentityOf(extractSchema(await resp.text()));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Before writing a job's page over an existing path, decide whether the write is
+ * allowed.
  *
- * Throws if the existing content at `destPath` has an active deal and its genesis
- * differs from `incomingGenesis`.
+ * THREE RULES, in this order:
+ *
+ * 1. A LEGACY-signed page may never be introduced as NEW content. The legacy
+ *    canonicaliser signs a recursive key whitelist, so `encoding.sha256` (the
+ *    body) and `author.identifier.value` (the claimed author) are outside the
+ *    signed bytes: such a page is indistinguishable from arbitrary content
+ *    wearing a valid PKP signature. Rewriting the body, recomputing sha256 and
+ *    pointing the author DID at a victim still verifies — so the update gate
+ *    must not be the thing that puts one on the tree.
+ * 2. A LEGACY-signed page already AT the destination is an immutable carrier:
+ *    its signature can be reused over changed content. Only a replacement that
+ *    is content-bound may take its place — the same identifier (the same content
+ *    item, i.e. a re-render of it) signed under JCS, which covers everything.
+ *    Anything else would be new content grafted onto a carrier that cannot bind
+ *    it. (An UNSIGNED page at the destination is not a carrier: no signature
+ *    means no reusable signing material, and it cannot have come from the
+ *    renderer at all.)
+ * 3. Otherwise: the existing content must not be under an active deal with a
+ *    different genesis (a deal-protected page must never be silently replaced).
+ *
+ * `incoming` is the identity of the page being written (what verifyProvenance
+ * just parsed). Callers that omit it get rules 2 (identifier only) and 3.
  */
 export async function verifyPathAvailable(
   gateway: string,
@@ -262,17 +357,47 @@ export async function verifyPathAvailable(
   incomingGenesis: string,
   publicationModule: string,
   rpcs: string[] | undefined,
+  incoming?: PageIdentity | null,
 ): Promise<void> {
-  let existingGenesis: string;
-  try {
-    existingGenesis = await readGenesisAtMfsPath(gateway, destPath);
-  } catch {
-    // No existing content or no parseable schema — path is free
+  const existing = await readPageIdentity(gateway, destPath);
+
+  if (!existing || existing.identifier === null) {
+    // Free path (no page, or no parseable schema on it) — rule 1.
+    if (incoming?.canonicalization === 'LEGACY') {
+      throw (
+        `Refusing to write a legacy-signed page to ${destPath}: its signature covers ` +
+        `only a skeleton of the document (not the body, not the author DID), so it ` +
+        `cannot vouch for the content it would publish. Re-render the content under ` +
+        `specVersion 1 (JCS) and publish that instead.`
+      );
+    }
     return;
   }
 
+  // Rule 2 — a signed, LEGACY-canonicalised page already at the destination.
+  if (existing.signed && existing.canonicalization === 'LEGACY') {
+    if (existing.identifier !== incomingGenesis) {
+      throw (
+        `Refusing to replace the legacy-signed page at ${destPath} ` +
+        `(genesis ${existing.identifier.slice(0, 12)}…) with a different content item ` +
+        `(${incomingGenesis.slice(0, 12)}…): a legacy page is an immutable carrier — its ` +
+        `signature covers the document skeleton only, so the new body would be unsigned. ` +
+        `Re-render the existing content under specVersion 1 (JCS) instead.`
+      );
+    }
+    if (incoming && incoming.canonicalization === 'LEGACY') {
+      throw (
+        `Refusing to replace the legacy-signed page at ${destPath} with another ` +
+        `legacy-signed page: neither signature covers the body or the author DID, so the ` +
+        `write would only graft content that no signature binds. Re-render it under ` +
+        `specVersion 1 (JCS) first.`
+      );
+    }
+  }
+
   // Same genesis overwriting itself (re-render of the same page) — always allowed
-  if (existingGenesis === incomingGenesis) return;
+  if (existing.identifier === incomingGenesis) return;
+  const existingGenesis = existing.identifier;
 
   // Different genesis — check if existing content has an active deal
   const bytes32Genesis = HEX32_RE.test(existingGenesis)

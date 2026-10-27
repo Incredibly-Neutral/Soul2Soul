@@ -649,6 +649,45 @@ describe('mergeArchive', () => {
     expect(merged.publication).toBe('');
   });
 
+  it('EVICTS a flagged genesis so tampering cannot be re-reported forever (self-heal)', () => {
+    // Carry-forward used to copy every still-dealt genesis verbatim, so a flagged
+    // item survived every rebuild: each render re-detected it, refetched it, and
+    // re-reported the same skip. A flagged genesis is dropped instead (unless it
+    // is the only deal — see the next test).
+    const prev = mkArchive({
+      g1: { cid: 'cid1', item: mkItem('g1') },
+      g2: { cid: 'cid2', item: mkItem('g2') },
+    });
+    const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')];
+    const refreshed = new Map<string, S2SContentItem>();
+
+    const merged = mergeArchive(prev, deals, refreshed, new Set(['g1']));
+
+    expect(merged.items.g1).toBeUndefined(); // evicted: the next render refetches it
+    expect(merged.items.g2).toEqual({ cid: 'cid2', item: mkItem('g2') });
+  });
+
+  it('KEEPS a flagged genesis when it is the only deal (never publish an empty archive)', () => {
+    // With one deal the eviction would leave nothing to serve on the next render
+    // and nothing to carry, so the entry is kept and simply re-flagged. Documented
+    // caveat: a single-item publication can re-report the same skip every render.
+    const prev = mkArchive({ g1: { cid: 'cid1', item: mkItem('g1') } });
+    const merged = mergeArchive(prev, [mkEntry('g1', 'cid1')], new Map(), new Set(['g1']));
+    expect(merged.items.g1).toEqual({ cid: 'cid1', item: mkItem('g1') });
+  });
+
+  it('a flagged genesis that was REFRESHED is kept (the fresh bytes replace the bad ones)', () => {
+    const prev = mkArchive({ g1: { cid: 'cid1-old', item: mkItem('g1-old') } });
+    const fresh = mkItem('g1-new');
+    const merged = mergeArchive(
+      prev,
+      [mkEntry('g1', 'cid1-new'), mkEntry('g2', 'cid2')],
+      new Map([['g1', fresh]]),
+      new Set(['g1']),
+    );
+    expect(merged.items.g1).toEqual({ cid: 'cid1-new', item: fresh });
+  });
+
   it('deal-but-not-refreshed genesis stays as-is (absent if never present)', () => {
     const prev = mkArchive({ g1: { cid: 'cid1', item: mkItem('g1') } });
     const deals = [mkEntry('g1', 'cid1'), mkEntry('g2', 'cid2')]; // g2 dealt but not refreshed

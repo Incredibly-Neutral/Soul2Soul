@@ -229,9 +229,13 @@ describe('addAndSignMetadata — contentUrl', () => {
 });
 
 describe('addAndSignMetadata — author proof nesting', () => {
+  // THE REAL SHAPE: a minted item's proof is {type, signer, signature}; the
+  // objectId is a SIBLING field on the item. Fixtures used to put objectId
+  // inside proof, which pinned a shape production never emits (and hid the
+  // fact that the page never carried the digest at all).
+  const ITEM_OBJECT_ID = '0x' + 'de'.repeat(32);
   const authorProof = {
     type: 'eip712' as const,
-    objectId: '0x' + 'de'.repeat(32),
     signer: '0x9999999999999999999999999999999999999999',
     signature: '0xsig',
   };
@@ -239,6 +243,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
   it('nests the author EIP-712 proof on the author node', async () => {
     const { schema } = await render(
       contentInfo({
+        objectId: ITEM_OBJECT_ID,
         author: {
           did: 'did:ethr:0x1111111111111111111111111111111111111111',
           createdAt: '2025-01-02T03:04:05.000Z',
@@ -248,13 +253,34 @@ describe('addAndSignMetadata — author proof nesting', () => {
     );
     expect(schema.author.proof).toEqual({
       type: 'eip712',
-      objectId: authorProof.objectId,
+      objectId: ITEM_OBJECT_ID,
       signer: authorProof.signer,
       signature: authorProof.signature,
     });
     expect(schema.author.identifier.value).toBe(
       'did:ethr:0x1111111111111111111111111111111111111111',
     );
+  });
+
+  it('lets the page carry the item digest even without a proof.objectId', async () => {
+    // What render/main.ts hands over: proof from the item (no objectId) plus
+    // the sibling objectId. A reader must be able to recover the digest.
+    const { schema } = await render(
+      contentInfo({
+        objectId: ITEM_OBJECT_ID,
+        author: { did: 'did:ethr:0x1111111111111111111111111111111111111111', proof: authorProof },
+      }),
+    );
+    expect(schema.author.proof.objectId).toBe(ITEM_OBJECT_ID);
+  });
+
+  it('omits the digest when neither the proof nor the item carries one', async () => {
+    const { schema } = await render(
+      contentInfo({
+        author: { did: 'did:ethr:0x1111111111111111111111111111111111111111', proof: authorProof },
+      }),
+    );
+    expect(schema.author.proof).not.toHaveProperty('objectId');
   });
 
   it('leaves the top-level proof as the PKP DataIntegrityProof only', async () => {

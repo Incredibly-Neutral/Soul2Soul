@@ -31,13 +31,14 @@ import { buildSigningView } from '../../../../shared/dist/identity/signing-view'
 //     repaired) while the direct path has nothing to refetch — the content IS
 //     the cid — so it fails the page (fetchById/fetchItemById throw
 //     ContentIntegrityError) or drops the item (collections return an ItemSkip).
-//  2. WHAT THE AUTHOR BINDING IS WORTH. It is the PRIMARY control on the
-//     archive path: the pointer `content_cache_<publication>` is writeable and
-//     is the only thing standing between a reader and an attacker's blob. On
-//     the direct path the bytes come from a content-addressed cid, so gateway
-//     substitution breaks the multihash before the item reaches this code; the
-//     author binding there is defence in depth. That asymmetry justifies one
-//     extra rule on the direct path — see checkItemIntegrity in module.factory.
+//  2. NOTHING ELSE. In particular the direct path is NOT protected by
+//     content-addressing: `catFile` is an HTTP GET to `endpoints.ipfsGateway`
+//     and NO code on either path recomputes the multihash over the bytes it
+//     received. A substituted blob therefore arrives looking exactly like a
+//     real deal's item, and these checks are the SOLE control on both paths.
+//     That is why the residual below (signature-not-author) is live for anyone
+//     who controls the gateway, and why the verdict is not "defence in depth"
+//     anywhere: it is the defence, everywhere.
 //
 // INTEGRITY — what inspectItemIntegrity() actually proves
 // ------------------------------------------------------
@@ -135,8 +136,35 @@ export interface ItemIntegrity {
   reason: string;
 }
 
+/**
+ * How a failure kind is spelled at the boundary. `DataAvailabilityEntry` (the
+ * cross-action skip type) carries no `cause` field, so the KIND and the CODE
+ * have to survive inside the free-text `reason` — prose alone left a client
+ * unable to tell "forged" from "gateway was down" except by parsing English.
+ *
+ * Every skip reason produced by ANY read path (direct collection fetch, archive
+ * read, refetch rejection) is therefore built by {@link skipReason} and starts
+ * with one of exactly two prefixes:
+ *
+ *     integrity(<code>): <detail>      e.g. integrity(hash-mismatch): …
+ *     unavailable: <detail>
+ *
+ * `<code>` is an {@link ItemIssueCode}. Grep it, or match
+ * `/^(integrity\(([a-z-]+)\)|unavailable): /`. Adding `cause?: ItemFailureKind`
+ * (plus `code?: ItemIssueCode`) to `DataAvailabilityEntry` is the clean fix and
+ * needs a change to shared/** — deliberately not done here.
+ */
+export type SkipCause = 'integrity' | 'unavailable';
+
+export const SKIP_REASON_RE = /^(integrity\(([a-z-]+)\)|unavailable): /;
+
+export const skipReason = (cause: SkipCause, code: ItemIssueCode | null, detail: string): string =>
+  cause === 'integrity' ? `integrity(${code ?? 'unknown'}): ${detail}` : `unavailable: ${detail}`;
+
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-const HASH32_RE = /^0x[0-9a-fA-F]{64}$/;
+/** 32-byte hex digest. Shared with verifyDecryptedBody so the at-rest and
+ * post-decryption gates agree about what "a hash we can check" means. */
+export const HASH32_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /**
  * Normalise an address-shaped string to a lowercase 0x address. Accepts both a
@@ -354,6 +382,8 @@ export const checkItemBodyIntegrity = (
 // which requires both fields. Never stored or returned.
 const LEGACY_HASH_PLACEHOLDER = '0x' + '0'.repeat(64);
 const LEGACY_SPEC_VERSION = '0';
+const LEGACY_OBJECT_ID = '0x' + '0'.repeat(64);
+const LEGACY_SIGNER = '0x' + '0'.repeat(40);
 
 /** True when the item carries a non-empty `public.plaintextHash` to check against. */
 const hasPlaintextHash = (item: unknown): boolean => {
@@ -365,11 +395,13 @@ const hasPlaintextHash = (item: unknown): boolean => {
  * True when `item` is a structurally valid S2SContentItem per the shared
  * content-item schema (the shape gate, BEFORE any integrity verdict).
  *
- * LEGACY TOLERANCE: the shared schema requires `public.specVersion` and
- * `public.plaintextHash`; an item minted before those fields existed is
- * UNVERIFIABLE, not invalid. When the only things missing are those two fields,
- * the item is re-validated with placeholders and accepted (inspectItemIntegrity
- * then reports 'legacy-item'). Any other schema failure still rejects it.
+ * LEGACY TOLERANCE: the shared schema requires `public.specVersion`,
+ * `public.mediaType` and `public.plaintextHash`; an item minted before those
+ * fields existed is UNVERIFIABLE, not invalid. When the item carries no
+ * `specVersion` at all, it is re-validated with those three fields filled in and
+ * accepted (inspectItemIntegrity then reports 'legacy-item'). An item WITH a
+ * specVersion must satisfy the schema as written — a missing field there is a
+ * shape defect, and any other schema failure still rejects.
  */
 export const isValidContentItem = (item: unknown): item is S2SContentItem => {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
@@ -381,7 +413,28 @@ export const isValidContentItem = (item: unknown): item is S2SContentItem => {
     public: { ...(pub as Record<string, unknown>) },
   };
   if (typeof patched.public.specVersion !== 'string' || patched.public.specVersion === '') {
+    // Legacy shape: validate it against the fields that existed BEFORE the
+    // specVersion-1 envelope, not against today's required set. `specVersion`
+    // and `plaintextHash` are filled in so the shared schema's required-ness
+    // does not reject every old item; `mediaType` is the one other field the
+    // envelope added, and an item without a specVersion cannot have been minted
+    // with it.
+    //
+    // This patch is used ONLY for validation — the object that gets served is
+    // always the caller's own, never this copy.
     patched.public.specVersion = LEGACY_SPEC_VERSION;
+    if (typeof patched.public.mediaType !== 'string' || patched.public.mediaType === '') {
+      patched.public.mediaType = 'application/octet-stream';
+    }
+    // `objectId` and `proof` arrived with the same envelope; without them an item
+    // is legacy by definition (and there is nothing for the digest/signer checks
+    // to run on — inspectItemIntegrity stops at 'legacy-item').
+    if (typeof patched.objectId !== 'string' || patched.objectId === '') {
+      patched.objectId = LEGACY_OBJECT_ID;
+    }
+    if (!patched.proof || typeof patched.proof !== 'object') {
+      patched.proof = { type: 'eip712', signer: LEGACY_SIGNER, signature: LEGACY_OBJECT_ID };
+    }
   }
   if (!hasPlaintextHash(item)) patched.public.plaintextHash = LEGACY_HASH_PLACEHOLDER;
   return s2sContentItemSchema.safeParse(patched).success;

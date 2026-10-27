@@ -212,7 +212,18 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
       return { ok: true, action: ACTION, data: { cid: '', wrote: false }, trace };
     }
 
-    const next = mergeArchive(archive, deals, refreshed);
+    // SELF-HEAL: evict every carried-forward genesis reconcile just flagged, so
+    // the new snapshot stops re-reporting the same tampering. A genesis that
+    // refetched cleanly is already in `refreshed` and is re-added by
+    // mergeArchive, so this only removes entries that are still bad.
+    const flagged = new Set(integrityIssues.map((i) => i.genesis));
+    const next = mergeArchive(archive, deals, refreshed, flagged);
+    trace.push({
+      cache: 'writeback',
+      stage: 'self-heal',
+      evicted: [...flagged].filter((g) => !refreshed.has(g)),
+      keptOnlyDeal: deals.length <= 1 && flagged.size > 0,
+    });
     const newCid = await uploadFile(gateway!, serialize(next));
     trace.push({ cache: 'writeback', stage: 'pin', newCid });
 

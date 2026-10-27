@@ -9,6 +9,11 @@ export interface S2SContentInfo {
      */
     proof?: {
       type: 'eip712';
+      /**
+       * EIP-712 digest the author signed — the content item's `objectId`. It is
+       * a SIBLING of `proof` on a real item, so render/main.ts copies it in from
+       * there; a reader recovers the item digest from the page here.
+       */
       objectId?: string;
       signer: string;
       signature: string;
@@ -21,6 +26,13 @@ export interface S2SContentInfo {
   };
   /** bytes32 genesis / objectId of the document — the stable document identity. */
   contentGenesis?: string;
+  /**
+   * EIP-712 digest of the content item's `public` block (the item's `objectId`
+   * sibling field). Distinct from contentGenesis (the on-chain deal id) and from
+   * plaintextHash (the body). Emitted on the page as author.proof.objectId so a
+   * reader can check the author's signature without re-fetching the item.
+   */
+  objectId?: string;
   /** The real IPFS deal CID of the encrypted content item (NOT a bytes32 id). */
   contentCid?: string;
   /** 0x-prefixed keccak256 of the canonical plaintext body JSON. */
