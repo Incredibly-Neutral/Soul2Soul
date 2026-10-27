@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { Wallet, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers';
 import {
   createPath,
   sortCollection,
@@ -16,7 +16,20 @@ import {
   getDeals,
   toBody,
 } from '../libs/module.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+
+// The ambient ethers v5 global a Lit Action provides; stub the two functions
+// the integrity verdict uses (identical EIP-712/ecrecover semantics in v6).
+beforeAll(() => {
+  vi.stubGlobal('ethers', {
+    utils: { _TypedDataEncoder: { hash: TypedDataEncoder.hash }, recoverAddress },
+  });
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 // Mock the I/O boundaries so fetchCollections' archive path can be exercised
 // without a chain/IPFS. The pure helpers above (createPath, sortCollection,
@@ -303,9 +316,12 @@ describe('sortCollection: defensive missing/null fields', () => {
 // byte-identical input to the no-archive `fetchByPublication` path.
 // ============================================================================
 
-const mkEntry = (genesis: string, cid: string) => ({
+const AUTHOR = new Wallet('0x' + '11'.repeat(32));
+const ATTACKER = new Wallet('0x' + '22'.repeat(32));
+
+const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address) => ({
   genesis,
-  author: '0xauthor',
+  author, // getDeals() returns a plain address, NOT a did:ethr
   cid,
   timestamp: 1,
 });
@@ -316,58 +332,84 @@ const mkBody = (genesis: string) => ({
   encryption: false,
 });
 
-/** Honest plaintext body for a genesis (the bytes plaintextHash is taken over). */
-const plainBody = (genesis: string): string =>
-  JSON.stringify({
-    title: `title-${genesis}`,
-    slug: `slug-${genesis}`,
-    content: `content-${genesis}`,
-  });
+const bodyObject = (genesis: string) => ({
+  title: `title-${genesis}`,
+  slug: `slug-${genesis}`,
+  content: `content-${genesis}`,
+});
+
+/** Honest plaintext body bytes for a genesis (what plaintextHash is taken over). */
+const plainBody = (genesis: string): string => jcs(bodyObject(genesis));
 
 const hashOf = (body: string): string => keccak256(toUtf8Bytes(body));
 
 interface ItemOpts {
   encryption?: boolean;
-  /** Override the body (defaults to the honest plaintext / ciphertext body). */
+  /** Mint with a different signing key (records ITS address as author). */
+  signer?: Wallet;
+  /** Override the author identity in `public` (defaults to the signer's). */
+  author?: string;
+  /** Replace the body AFTER minting (the forged-body lever). */
   body?: string;
-  /** Override public.plaintextHash; `null` omits it entirely (legacy item). */
+  /** Override public.plaintextHash; `null` removes it (specVersion item ⇒ refused). */
   plaintextHash?: string | null;
+  /** Also drop specVersion (true legacy item: author-bound only). */
+  legacy?: boolean;
 }
 
-/** A schema-valid canonical content item (plain by default; encrypted on demand). */
+/**
+ * Mint a genuine item the way buildSignedContentItem does (JCS body →
+ * plaintextHash → EIP-712 digest/objectId → real signature), then apply the
+ * tampering lever. A hand-shaped item would not exercise the real checks.
+ */
 const mkItem = (genesis: string, opts?: ItemOpts) => {
+  const signer = opts?.signer ?? AUTHOR;
   const encryption = opts?.encryption ?? false;
-  const body = opts?.body ?? (encryption ? `ciphertext-${genesis}` : plainBody(genesis));
-  const plaintextHash =
-    opts?.plaintextHash === null
-      ? undefined
-      : (opts?.plaintextHash ?? (encryption ? '0x' + '0'.repeat(64) : hashOf(body)));
+  const body = encryption ? `ciphertext-${genesis}` : plainBody(genesis);
+  const plaintextHash = hashOf(jcs(bodyObject(genesis)));
 
-  return {
-    public: {
-      specVersion: '1',
-      author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
-      postType: 'post',
-      mediaType: 'text/markdown',
-      parent: '',
-      position: '0',
-      publication: 'pub',
-      locale: 'en',
-      createdAt: 1234,
-      base: '',
-      tags: [],
-      attributes: {},
-      ...(plaintextHash === undefined ? {} : { plaintextHash }),
-    },
-    objectId: '0x' + '1'.repeat(64),
+  const pub: Record<string, unknown> = {
+    specVersion: '1',
+    author: opts?.author ?? toDidEthr(signer.address),
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '0',
+    publication: 'pub',
+    locale: 'en',
+    createdAt: 1234,
+    base: '',
+    tags: [],
+    attributes: {},
+    plaintextHash,
+  };
+  const digest = TypedDataEncoder.hash(
+    S2S_DOMAIN as any,
+    S2S_TYPES as any,
+    buildSigningView(pub as any),
+  );
+
+  const item: Record<string, any> = {
+    public: pub,
+    objectId: digest,
     proof: {
       type: 'eip712',
-      signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
-      signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
+      signer: signer.address,
+      signature: signer.signingKey.sign(digest).serialized,
     },
     encryption,
     body,
-  } as unknown as S2SContentItem;
+  };
+
+  if (opts?.plaintextHash === null) delete item.public.plaintextHash;
+  else if (opts?.plaintextHash !== undefined) item.public.plaintextHash = opts.plaintextHash;
+  if (opts?.legacy) {
+    delete item.public.specVersion;
+    delete item.public.plaintextHash;
+  }
+  if (opts?.body !== undefined) item.body = opts.body;
+
+  return item as unknown as S2SContentItem;
 };
 
 describe('bodiesFromReconcile', () => {
@@ -599,14 +641,14 @@ const mkArchiveJson = (items: Record<string, { cid: string; item: unknown }>) =>
     items,
   });
 
-/** Schema-valid, real-cid, FAKE body, carrying another body's honest hash. */
-const forgedItem = (genesis: string) => ({
-  ...mkItem(genesis, { body: JSON.stringify({ title: 'pwned', slug: 'pwned', content: 'pwned' }) }),
-  public: {
-    ...mkItem(genesis).public,
-    plaintextHash: mkItem('some-other-genesis').public.plaintextHash,
-  },
-});
+const PWNED_BODY = jcs({ title: 'pwned', slug: 'pwned', content: 'pwned' });
+
+/** Real deal cid, FAKE body, honest `public` block (so only the hash check catches it). */
+const forgedItem = (genesis: string) => mkItem(genesis, { body: PWNED_BODY });
+
+/** Whole-item forgery: the attacker's OWN public block (author, hash, proof, objectId). */
+const forgedWholeItem = (genesis: string) =>
+  mkItem(genesis, { signer: ATTACKER, body: PWNED_BODY });
 
 describe('fetchCollections: archive read-path integrity', () => {
   beforeEach(() => {
@@ -632,8 +674,29 @@ describe('fetchCollections: archive read-path integrity', () => {
     expect(result.drift!.needsFetch.map((e) => e.genesis)).toEqual(['g1']);
     // … the write-back stores the HONEST refetched item, not the forged one.
     expect(result.drift!.fetchedItems.get('g1')).toEqual(honest);
-    // a successful refetch is not an availability failure
-    expect(result.skips).toEqual([]);
+    // tamper evidence reaches the caller: the refused archive entry is reported
+    // (non-fatal — the page is served from the refetch)
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
+    expect(result.collections.posts).toHaveLength(1);
+  });
+
+  it('does NOT serve a WHOLE-ITEM forgery (attacker’s own public block) — refetched too', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const honest = mkItem('g1');
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedWholeItem('g1') } }))
+      .mockResolvedValueOnce(JSON.stringify(honest));
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // internally self-consistent (own hash + own valid signature) and still refused,
+    // because the on-chain deal author is somebody else
+    expect(JSON.stringify(result.collections.posts)).not.toContain('pwned');
+    expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
+    expect(result.skips[0].reason).toMatch(/archive integrity \(author-mismatch\)/);
   });
 
   it('refetched item that ALSO mismatches produces a non-fatal skip with a reason (never renders it)', async () => {
@@ -647,10 +710,29 @@ describe('fetchCollections: archive read-path integrity', () => {
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
 
     expect(result.collections.posts).toEqual([]);
-    expect(result.skips).toHaveLength(1);
-    expect(result.skips[0]).toMatchObject({ genesis: 'g1', cid: 'cid1' });
-    expect(result.skips[0].reason).toMatch(/plaintextHash mismatch/);
+    // two entries: the archive item was refused, and the refetched bytes were refused
+    expect(result.skips).toHaveLength(2);
+    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-mismatch\)/);
+    expect(result.skips[1]).toMatchObject({ genesis: 'g1', cid: 'cid1' });
+    expect(result.skips[1].reason).toMatch(/refetched item rejected \(hash-mismatch\)/);
     // a mismatching refetch is NEVER cached into the next archive snapshot
+    expect(result.drift!.fetchedItems.has('g1')).toBe(false);
+  });
+
+  it('a refetched item that is not a content item at all is reported distinctly (not "retrieval failed")', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({})) // archive has nothing for g1
+      .mockResolvedValueOnce('{"not":"an item"}');
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0].reason).toMatch(/refetched item rejected \(malformed-item\)/);
+    expect(result.skips[0].reason).not.toMatch(/retrieval failed/);
     expect(result.drift!.fetchedItems.has('g1')).toBe(false);
   });
 
@@ -689,7 +771,7 @@ describe('fetchCollections: archive read-path integrity', () => {
 
   it('serves a LEGACY archive item without plaintextHash (unverifiable, not invalid)', async () => {
     const deals = [mkEntry('g1', 'cid1')];
-    const legacy = mkItem('g1', { plaintextHash: null });
+    const legacy = mkItem('g1', { legacy: true });
     (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: legacy } }));
     (getDeals as any).mockResolvedValue(deals);
 
@@ -699,5 +781,38 @@ describe('fetchCollections: archive read-path integrity', () => {
     expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
     expect(result.drift!.needsFetch).toEqual([]);
     expect(result.skips).toEqual([]);
+    // only the archive was catted — a legacy item is served, not refetched
+    expect(catFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT serve a specVersion item whose plaintextHash was stripped (refuses the opt-out)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const stripped = mkItem('g1', { plaintextHash: null });
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: stripped } }))
+      .mockResolvedValueOnce(''); // refetch fails → nothing served
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips[0].reason).toMatch(/archive integrity \(hash-missing\)/);
+  });
+
+  it('binds an ENCRYPTED archive item to the author (the ciphertext itself is not checked)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (catFile as any).mockResolvedValueOnce(
+      mkArchiveJson({
+        g1: { cid: 'cid1', item: mkItem('g1', { encryption: true, signer: ATTACKER }) },
+      }),
+    );
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips[0].reason).toMatch(/archive integrity \(author-mismatch\)/);
   });
 });
