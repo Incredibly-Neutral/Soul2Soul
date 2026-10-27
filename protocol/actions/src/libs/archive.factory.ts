@@ -227,24 +227,42 @@ export function reconcile(
  *  - start from prev (or an empty archive if null);
  *  - DROP any item whose genesis has no deal (deal-set floor — geneses that
  *    disappeared on-chain are pruned);
- *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, item }`;
+ *  - DROP any carried-forward item named in `drop` (see SELF-HEALING below) —
+ *    unless it is the publication's ONLY deal, in which case the snapshot keeps
+ *    it so the archive stays complete for a single-deal publication (the read
+ *    path refuses it either way, so nothing forged is served);
+ *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, item }` (a
+ *    dropped genesis that refetches cleanly comes back through here);
  *  - deal'd-but-not-refreshed geneses stay as-is (absent if never present) —
  *    lazy, slow convergence is intended;
  *  - stamp `format`, `publication` (from prev) and `built` (now).
+ *
+ * SELF-HEALING: reconcile() re-derives the SAME integrity issue for a tampered
+ * snapshot entry on every invocation, so carrying that entry forward would make
+ * the pointer re-report it forever and never converge. `drop` is how the
+ * write-back evicts it: the entry is not copied, the snapshot gets a new cid,
+ * and the next reconcile has nothing to flag (the deal is then a plain MISS and
+ * is refetched from the on-chain cid, which is where the real item lives).
  */
 export function mergeArchive(
   prev: Archive | null,
   deals: Entry[],
   refreshed: Map<string, S2SContentItem>,
+  drop: Iterable<string> = [],
 ): Archive {
   const dealSet = new Set(deals.map((d) => d.genesis));
+  const dropped = new Set(drop);
+  // Never write an archive that forgets the publication's only deal: an empty
+  // snapshot for a live publication is a worse failure mode than a cached blob
+  // the reader knows how to reject.
+  const evict = deals.length > 1;
   const items: Record<string, ArchiveItem> = {};
 
   if (prev && prev.items) {
     for (const [genesis, item] of Object.entries(prev.items)) {
-      if (dealSet.has(genesis)) {
-        items[genesis] = item;
-      }
+      if (!dealSet.has(genesis)) continue;
+      if (evict && dropped.has(genesis)) continue;
+      items[genesis] = item;
     }
   }
 

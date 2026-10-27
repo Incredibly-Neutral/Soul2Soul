@@ -1,6 +1,12 @@
 import { evmRead } from './evm';
 import { catFile } from './ipfs.factory';
-import { inspectItemIntegrity, type ItemIssueCode } from './item-integrity';
+import {
+  HASH32_RE as INTEGRITY_HASH32_RE,
+  inspectItemIntegrity,
+  isValidContentItem,
+  skipReason,
+  type ItemIssueCode,
+} from './item-integrity';
 import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import type {
   S2SContentItem,
@@ -173,13 +179,16 @@ const warnedWeakVerdicts = new Set<ItemIssueCode>();
  * way; otherwise the cheap read (archive) is stronger than the authoritative
  * one.
  *
- * WHAT THE DIRECT PATH IS / IS NOT RELYING ON. The bytes come from a
- * content-addressed cid, so a gateway cannot substitute another item without
- * breaking the multihash; here the verdict is defence in depth (a poisoned
- * gateway or a lying open() response). On the archive path the same verdict is
- * the PRIMARY control, because the pointer is writeable. That asymmetry is the
- * only reason the two paths may treat a verdict differently — and they do not:
- * 'mismatch' is refused by both.
+ * WHAT THE DIRECT PATH RELIES ON. Nothing but this verdict. `catFile` is an
+ * HTTP GET to `endpoints.ipfsGateway`, and NOTHING on either read path
+ * recomputes the multihash over the bytes it received — so a gateway that
+ * substitutes a blob (or a lying `/api/v0/cat` response) is indistinguishable
+ * from an honest one *before* these checks. The archive path is not weaker
+ * here either: its pointer is writeable AND its bytes come from the same
+ * gateway. Both paths therefore rest on the same three things — the author
+ * binding from the chain, the author's signature, and the plaintext hash — and
+ * on neither is the check "defence in depth". That is why 'signature-not-author'
+ * is a live residual for anyone who controls the gateway (see item-integrity.ts).
  *
  * WEAKER PATH, BY DESIGN (served, logged once per code per invocation):
  *   - 'encrypted'            — ciphertext body; check the plaintext after
@@ -227,13 +236,6 @@ export const checkItemIntegrity = (entry: Entry, item: StoredContentItem): ItemC
  */
 export const resetIntegrityWarningLatch = (): void => warnedWeakVerdicts.clear();
 
-/** Enough of a parsed IPFS body to flatten safely (the public envelope). */
-const isStoredContentItem = (value: unknown): value is StoredContentItem => {
-  if (value == null || typeof value !== 'object') return false;
-  const pub = (value as { public?: unknown }).public;
-  return pub != null && typeof pub === 'object';
-};
-
 /**
  * THE choke point for reading one stored item: exactly one cat, then parse,
  * shape check, integrity check, and a parse of the plaintext body (so a
@@ -254,15 +256,29 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
     return {
       ok: false,
       kind: 'unavailable',
-      reason: `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`,
+      reason: skipReason(
+        'unavailable',
+        null,
+        `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`,
+      ),
       error: e,
     };
   }
-  if (!isStoredContentItem(parsed)) {
+  // SHAPE GATE FIRST, and the SAME one the archive path applies (parseArchive →
+  // isValidContentItem). It used to be "anything with a public object", so the
+  // two doors disagreed about the same bytes: an item missing `public.tags`, or
+  // carrying `public.author = 'nobody'`, was served by fetchById and refused by
+  // reconcile. A malformed item is 'unavailable' on both paths — the bytes
+  // could not be read as an item, which is not the same claim as "forged".
+  if (!isValidContentItem(parsed)) {
     return {
       ok: false,
       kind: 'unavailable',
-      reason: `malformed content item ${entry.genesis} (cid ${entry.cid}): no public envelope`,
+      reason: skipReason(
+        'unavailable',
+        null,
+        `malformed content item ${entry.genesis} (cid ${entry.cid}): not a valid S2SContentItem`,
+      ),
     };
   }
   const item = parsed;
@@ -275,7 +291,11 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
     return {
       ok: false,
       kind: check.code === 'malformed-item' ? 'unavailable' : 'integrity',
-      reason: check.reason,
+      reason: skipReason(
+        check.code === 'malformed-item' ? 'unavailable' : 'integrity',
+        check.code,
+        check.reason,
+      ),
     };
   }
 
@@ -286,7 +306,11 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
       return {
         ok: false,
         kind: 'unavailable',
-        reason: `stored body is not valid plaintext JSON for ${entry.genesis} (cid ${entry.cid}): ${e instanceof Error ? e.message : String(e)}`,
+        reason: skipReason(
+          'unavailable',
+          null,
+          `stored body is not valid plaintext JSON for ${entry.genesis} (cid ${entry.cid}): ${e instanceof Error ? e.message : String(e)}`,
+        ),
         error: e,
       };
     }
@@ -449,17 +473,31 @@ export const fetchById = async (
  * Returns true when there is nothing to check (legacy item: no plaintextHash),
  * so callers can use it unconditionally without failing old content.
  */
-export const verifyDecryptedBody = (item: PlaintextHashCarrier, raw: unknown): boolean => {
+export type DecryptedBodyVerdict = 'verified' | 'weak' | 'uncheckable' | 'mismatch';
+
+export const verifyDecryptedBody = (
+  item: PlaintextHashCarrier,
+  raw: unknown,
+): DecryptedBodyVerdict => {
   const expected = item.public?.plaintextHash ?? item.plaintextHash;
-  if (!expected) return true; // legacy: nothing was signed to compare against
+  // No hash: nothing was signed to compare against. `uncheckable` (NOT
+  // `verified`) so a caller can log the doubt instead of claiming a check it
+  // could not run.
+  if (!expected) return 'uncheckable';
+  // Present but not a digest. inspectItemIntegrity deliberately treats this as a
+  // DOUBT ('hash-malformed', served) rather than tampering; mirroring it here
+  // keeps the post-decryption gate from being strictly harder than the at-rest
+  // one, which would drop a third-party-hash-encoded encrypted item from every
+  // collection and fail the page job.
+  if (!INTEGRITY_HASH32_RE.test(expected)) return 'weak';
   // Only the decryptor's own STRING can be checked. A parsed object would have
   // to be re-serialised first, and JSON.stringify(parsed) is NOT the bytes the
   // author hashed: JCS orders integer-like keys lexically ({"10":…,"2":…}) while
   // JSON.stringify emits them numerically ({"2":…,"10":…}). That both rejects
   // correctly signed items and accepts differently-formatted forgeries, so a
-  // non-string is treated as unverifiable (fail closed).
-  if (typeof raw !== 'string') return false;
-  return verifyBodyHash(raw, expected);
+  // non-string fails closed as 'mismatch'.
+  if (typeof raw !== 'string') return 'mismatch';
+  return verifyBodyHash(raw, expected) ? 'verified' : 'mismatch';
 };
 
 /**

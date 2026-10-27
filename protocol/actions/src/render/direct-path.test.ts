@@ -259,7 +259,11 @@ describe('render action — plaintext integrity (direct read path)', () => {
     expect(metadata?.specVersion).toBe('1');
     expect(metadata?.author?.did).toBe(AUTHOR);
     expect(metadata?.author?.createdAt).toBe(String(SIGNED_CREATED_AT));
-    expect(metadata?.author?.proof).toEqual(contentItem().proof);
+    // proof is projected from the item's SIBLING objectId (a real item carries
+    // {type, signer, signature}; the digest is not inside proof).
+    const item = contentItem();
+    expect(metadata?.author?.proof).toEqual({ ...item.proof, objectId: item.objectId });
+    expect(metadata?.objectId).toBe(item.objectId);
     expect(metadata?.publisher?.did).toBe(`did:ethr:${SIGNER}`);
     expect(metadata?.publisher?.url).toBe(PUBLICATION);
     expect(metadata?.publisher?.safe).toBe(AUTHOR_SAFE);

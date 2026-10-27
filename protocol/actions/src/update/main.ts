@@ -13,6 +13,7 @@ import {
   sanitizeRemovePath,
   verifyRevocable,
   verifyPathAvailable,
+  type PageIdentity,
 } from './verify';
 
 const ACTION = 'evm-update';
@@ -35,7 +36,7 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const ALIASES_TRACKING_KEY = 'aliases';
 
 /** Dedupe preserving first-seen order. */
-const dedupe = <T,>(xs: T[]): T[] => [...new Set(xs)];
+const dedupe = <T>(xs: T[]): T[] => [...new Set(xs)];
 
 /**
  * Resolve the ENS write-target node list from the publication config.
@@ -54,15 +55,11 @@ function resolveWriteTargets(
 ): { nodes: string[]; isLegacyDomain: boolean } {
   const aliases =
     Array.isArray(config?.aliases) && (config!.aliases as string[]).length > 0
-      ? (config!.aliases as string[]).filter(
-          (a) => typeof a === 'string' && a.trim() !== '',
-        )
+      ? (config!.aliases as string[]).filter((a) => typeof a === 'string' && a.trim() !== '')
       : undefined;
   if (aliases && aliases.length > 0) {
     return {
-      nodes: dedupe([publication, ...aliases]).map((n) =>
-        ethers.utils.namehash(n),
-      ),
+      nodes: dedupe([publication, ...aliases]).map((n) => ethers.utils.namehash(n)),
       isLegacyDomain: false,
     };
   }
@@ -185,8 +182,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         [canonicalNode, ALIASES_TRACKING_KEY],
         rpcs?.L2,
       );
-      const parsed =
-        typeof prevAliasJson === 'string' ? JSON.parse(prevAliasJson) : null;
+      const parsed = typeof prevAliasJson === 'string' ? JSON.parse(prevAliasJson) : null;
       if (Array.isArray(parsed)) {
         prevAliases = parsed.filter((a: unknown) => typeof a === 'string');
       }
@@ -230,10 +226,21 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         const destPath = `${mfsPath}/${filePath}`;
         const sourceCid = job.html;
 
-        // Provenance verification gate — reject unverified content
+        // Provenance verification gate — reject unverified content.
+        // The gate RETURNS the page's self-description (identifier, claimed
+        // author, canonicalisation, claimed body digest) so the tree rules below
+        // can tell a content-bound JCS page from a legacy one whose signature
+        // covers only a document skeleton.
+        let incomingPageIdentity: PageIdentity | null = null;
         if (!preview) {
           try {
-            await verifyProvenance(sourceCid, job.id, protocolInfo.pkp!, gateway!, trace);
+            incomingPageIdentity = await verifyProvenance(
+              sourceCid,
+              job.id,
+              protocolInfo.pkp!,
+              gateway!,
+              trace,
+            );
           } catch (e) {
             throw `Rejected ${job.path}: provenance verify failed — ${typeof e === 'string' ? e : String(e)}`;
           }
@@ -259,12 +266,23 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           return;
         }
 
+        // Path gate — ALWAYS, not only when something is already there: a
+        // legacy-signed page must not be introduced onto a free path either
+        // (its signature does not bind the body it publishes). See
+        // verifyPathAvailable for the three rules.
+        if (!preview) {
+          await verifyPathAvailable(
+            gateway!,
+            destPath,
+            job.id,
+            publicationModule,
+            rpcs?.L2,
+            incomingPageIdentity,
+          );
+        }
+
         // Remove existing entry so cp can overwrite
         if (prevHash) {
-          // Check existing content isn't under an active deal with a different genesis
-          if (!preview) {
-            await verifyPathAvailable(gateway!, destPath, job.id, publicationModule, rpcs?.L2);
-          }
           await fetchWithTimeout(
             `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(destPath)}`,
             { method: 'POST' },
@@ -412,9 +430,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         // is what getText returns for an unset record). The canonical
         // publication node is NEVER cleared by this mechanism.
         const clearNodes = dedupe(
-          prevAliases
-            .filter((a) => !newAliases.includes(a))
-            .map((a) => ethers.utils.namehash(a)),
+          prevAliases.filter((a) => !newAliases.includes(a)).map((a) => ethers.utils.namehash(a)),
         ).filter((n) => n !== canonicalNode);
         if (clearNodes.length > 0) {
           trace.push(`clearing ${clearNodes.length} removed alias node(s)`);

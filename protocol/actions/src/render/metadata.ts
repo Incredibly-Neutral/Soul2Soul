@@ -73,9 +73,15 @@ export const addAndSignMetadata = async (
 
       if (contentInfo.author.proof) {
         const authorProof = contentInfo.author.proof;
+        // The item's `objectId` is a SIBLING of `proof`, not part of it (a real
+        // mint emits proof = {type, signer, signature}). Render copies it onto
+        // the nested proof — falling back to the contentInfo sibling here — so
+        // the page carries the exact digest the author signed and a reader can
+        // verify the attestation without re-fetching the item.
+        const objectId = authorProof.objectId ?? contentInfo.objectId;
         author.proof = {
           type: authorProof.type,
-          ...(authorProof.objectId ? { objectId: authorProof.objectId } : {}),
+          ...(objectId ? { objectId } : {}),
           signer: authorProof.signer,
           signature: authorProof.signature,
         };

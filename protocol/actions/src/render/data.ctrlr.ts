@@ -20,7 +20,7 @@ import {
 } from '../libs/archive.factory';
 // The verdict itself lives in its own module now (shared with the direct read
 // path); the archive module re-exports it, but consumers import the source.
-import { inspectItemIntegrity, judgeRefetchedItem } from '../libs/item-integrity';
+import { inspectItemIntegrity, judgeRefetchedItem, skipReason } from '../libs/item-integrity';
 import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
@@ -141,9 +141,11 @@ export const verifyDecrypted = (
 ): DecryptedVerdict => {
   if (!expectedHash) return 'legacy';
   if (decrypted.rawFromDecryptor) {
-    return verifyDecryptedBody({ plaintextHash: expectedHash }, decrypted.raw)
-      ? 'verified'
-      : 'mismatch';
+    // One helper, one verdict: 'uncheckable' only happens when the item carries
+    // no hash (already handled above), and 'weak' means the hash is present but
+    // not a digest we can check — a doubt, exactly as at rest.
+    const verdict = verifyDecryptedBody({ plaintextHash: expectedHash }, decrypted.raw);
+    return verdict === 'uncheckable' ? 'legacy' : verdict;
   }
   try {
     // NOT JSON.stringify: JCS orders integer-like keys lexically, so
@@ -184,6 +186,19 @@ const resolvePlaintextHash = async (
   }
   try {
     const entry = await getLatestEntry(body.id, publicationModule, rpcs);
+    // PIN THE VERSION. The deal can advance mid-render, so `getLatestEntry` may
+    // return a NEWER cid than the body being rendered; comparing this body's
+    // plaintext against the next version's hash would fail a perfectly good
+    // body (or, worse, "verify" it against a hash it was never signed under).
+    // The body carries the cid it was read from (toBody), so refuse the
+    // fallback unless the chain still points at exactly that version.
+    const bodyCid = typeof body?.cid === 'string' ? body.cid : null;
+    if (!bodyCid || bodyCid !== entry.cid) {
+      console.warn(
+        `post-decryption verification unavailable for ${String(body?.id)}: deal advanced past the rendered cid (${String(bodyCid)} -> ${entry.cid})`,
+      );
+      return null;
+    }
     const item = JSON.parse(await catFile(gateway!, entry.cid));
     const verdict = inspectItemIntegrity(item, entry.author);
     if (verdict.level === 'mismatch') {
@@ -567,7 +582,11 @@ const fetchCollectionsFromArchive = async (
         genesis: issue.genesis,
         cid: issue.cid,
         cause: causeOf(issue.code),
-        reason: `archive integrity (${issue.code}): ${issue.reason} — entry refused, refetched from the on-chain cid`,
+        reason: skipReason(
+          causeOf(issue.code),
+          issue.code,
+          `${issue.reason} — archive entry refused, refetched from the on-chain cid`,
+        ),
       });
     }
   }
@@ -584,7 +603,11 @@ const fetchCollectionsFromArchive = async (
       } catch (e) {
         // Genuinely unavailable: gateway/IPFS failure. Distinct from "the bytes
         // arrived and are bad", which is reported below with its own reason.
-        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
+        const reason = skipReason(
+          'unavailable',
+          null,
+          `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
         skips.push({ genesis: entry.genesis, cid: entry.cid, cause: 'unavailable', reason });
         return null;
@@ -596,14 +619,19 @@ const fetchCollectionsFromArchive = async (
       // served, even from the content-addressed cid: a cat is not authorship.
       const verdict = judgeRefetchedItem(item, entry.author, entry.genesis, entry.cid);
       if (!verdict.usable) {
-        const reason = `refetched item rejected (${verdict.integrity.code}): ${verdict.integrity.reason}`;
+        const cause = causeOf(verdict.integrity.code);
+        const reason = skipReason(
+          cause,
+          verdict.integrity.code,
+          `refetched item rejected: ${verdict.integrity.reason}`,
+        );
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
         // NEVER cached: a rejected refetch must not enter the next archive
         // snapshot (fetchedItems is what mergeArchive stores).
         skips.push({
           genesis: entry.genesis,
           cid: entry.cid,
-          cause: causeOf(verdict.integrity.code),
+          cause,
           reason,
         });
         return null;
