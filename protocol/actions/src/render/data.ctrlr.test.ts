@@ -5,15 +5,19 @@ import {
   sortCollection,
   bodiesFromReconcile,
   fetchCollections,
+  initTemplateData,
+  verifyDecrypted,
   shouldWriteBackCache,
   type CollectionsDrift,
 } from './data.ctrlr';
+import { decryptRaw } from '../libs/decrypt';
 import { catFile } from '../libs/ipfs.factory';
 import {
   fetchByPublication,
   fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
   getDeals,
+  getLatestEntry,
   toBody,
 } from '../libs/module.factory';
 import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
@@ -38,11 +42,19 @@ vi.mock('../libs/ipfs.factory', () => ({
   catFile: vi.fn(),
 }));
 
+// The Lit decrypt call is an I/O boundary; the post-decryption gate itself is
+// pure and is what these tests pin.
+vi.mock('../libs/decrypt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/decrypt')>();
+  return { ...actual, decryptRaw: vi.fn(), decrypt: vi.fn() };
+});
+
 vi.mock('../libs/module.factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/module.factory')>();
   return {
     ...actual,
     getDeals: vi.fn(),
+    getLatestEntry: vi.fn(),
     fetchByPublication: vi.fn(),
     fetchByPublicationWithSkips: vi.fn(),
     fetchByPublicationDetailed: vi.fn(),
@@ -411,6 +423,139 @@ const mkItem = (genesis: string, opts?: ItemOpts) => {
 
   return item as unknown as S2SContentItem;
 };
+
+// ============================================================================
+// initTemplateData: post-decryption integrity gate.
+//
+// The stored encrypted body is ciphertext, so nothing can be checked at rest.
+// The decryptor's RAW STRING is hashed against the author-signed plaintextHash
+// (verifyDecrypted → module.factory.verifyDecryptedBody, the same function the
+// collection path in render/main.ts uses). Mismatch fails the job; a decryptor
+// that returns a parsed object falls back to JCS re-canonicalisation (weaker:
+// semantic, not byte, equivalence) and must WARN, never throw.
+// ============================================================================
+
+const PLAIN = plainBody('g1');
+const PARSED = JSON.parse(PLAIN) as Record<string, unknown>;
+
+const decryptedRaw = (raw: string) => ({
+  raw,
+  parsed: JSON.parse(raw),
+  rawFromDecryptor: true,
+});
+const decryptedParsed = (parsed: unknown) => ({
+  raw: JSON.stringify(parsed), // best effort only, and deliberately not signed
+  parsed: parsed as Record<string, unknown>,
+  rawFromDecryptor: false,
+});
+
+const encBody = (overrides: Record<string, unknown> = {}) =>
+  ({
+    id: 'g1',
+    author: toDidEthr(AUTHOR.address),
+    locale: 'en',
+    parent: '',
+    position: '',
+    postType: 'post',
+    creationDate: '2026-08-13',
+    modifiedDate: '2026-08-13',
+    tags: [],
+    publication: 'pub',
+    encryption: true,
+    content: 'ciphertext-g1',
+    plaintextHash: hashOf(PLAIN),
+    ...overrides,
+  }) as any;
+
+const renderTpl = { reference: 'post', file: 'post', path: '/{slug}/' } as any;
+
+const runInit = (body: any) =>
+  initTemplateData(
+    { pkp: 'pkp', gateway: 'gateway' } as any,
+    AUTHOR.address,
+    AUTHOR.address,
+    renderTpl,
+    body,
+    'module',
+    ['rpc'],
+  );
+
+describe('initTemplateData: post-decryption integrity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('verifies the decryptor’s RAW string and does ZERO extra reads (hash rides on toBody)', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+
+    const data = await runInit(encBody());
+
+    expect(data.content).toBe('content-g1');
+    expect(data.revoked).toBe(false);
+    // the hash was already on the flat body — no getLatestEntry, no extra cat
+    expect(getLatestEntry).not.toHaveBeenCalled();
+    expect(catFile).not.toHaveBeenCalled();
+  });
+
+  it('FAILS THE JOB when the decrypted raw string does not hash to plaintextHash', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PWNED_BODY));
+
+    await expect(runInit(encBody())).rejects.toThrow(/body integrity: decrypted content/);
+  });
+
+  it('PARSED-object decryptor: falls back to JCS, renders, and warns instead of throwing', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedParsed(PARSED));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ id: 'g-parsed' }));
+
+    expect(data.content).toBe('content-g1');
+    expect(data.revoked).toBe(false);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('verified by JCS'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('PARSED-object decryptor whose value does not match still fails the job', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedParsed(JSON.parse(PWNED_BODY)));
+
+    await expect(runInit(encBody())).rejects.toThrow(/body integrity: decrypted content/);
+  });
+
+  it('resolves the hash from the on-chain cid when the flat body lacks it (the only extra-read path)', async () => {
+    const item = mkItem('g1', { encryption: true });
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockResolvedValue(mkEntry('g1', 'cid1'));
+    (catFile as any).mockResolvedValue(JSON.stringify(item));
+
+    const data = await runInit(encBody({ plaintextHash: undefined }));
+
+    expect(data.content).toBe('content-g1');
+    // this IS the documented fallback: one RPC + one cat
+    expect(getLatestEntry).toHaveBeenCalledWith('g1', 'module', ['rpc']);
+    expect(catFile).toHaveBeenCalledWith('gateway', 'cid1');
+  });
+
+  it('an UNRESOLVABLE hash warns and renders unverified (never silently pretends, never throws)', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockRejectedValue(new Error('rpc down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ plaintextHash: undefined }));
+
+    expect(data.content).toBe('content-g1');
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('could not be verified'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('verifyDecrypted buckets: verified / weak / legacy / mismatch', () => {
+    const hash = hashOf(PLAIN);
+    expect(verifyDecrypted(decryptedRaw(PLAIN), hash)).toBe('verified');
+    expect(verifyDecrypted(decryptedRaw(PWNED_BODY), hash)).toBe('mismatch');
+    expect(verifyDecrypted(decryptedParsed(PARSED), hash)).toBe('weak');
+    expect(verifyDecrypted(decryptedParsed(JSON.parse(PWNED_BODY)), hash)).toBe('mismatch');
+    expect(verifyDecrypted(decryptedRaw(PLAIN), null)).toBe('legacy');
+  });
+});
 
 describe('bodiesFromReconcile', () => {
   it('emits bodies in deal order, mixing fresh archive bodies and fetched drift', () => {
