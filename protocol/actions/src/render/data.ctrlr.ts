@@ -1,19 +1,32 @@
-import { decrypt } from '../libs/decrypt';
+import { decryptRaw, type DecryptedPlaintext } from '../libs/decrypt';
 import {
   fetchByPublication,
   fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
   getDeals,
+  getLatestEntry,
   toBody,
+  verifyDecryptedBody,
   type Entry,
+  type ItemFailureKind,
+  type StoredContentItem,
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
-import { parseArchive, reconcile, type Archive } from '../libs/archive.factory';
+import {
+  parseArchive,
+  reconcile,
+  type Archive,
+  type IntegrityIssue,
+} from '../libs/archive.factory';
+// The verdict itself lives in its own module now (shared with the direct read
+// path); the archive module re-exports it, but consumers import the source.
+import { inspectItemIntegrity, judgeRefetchedItem, skipReason } from '../libs/item-integrity';
+import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
-import { S2SBodyEncrypted, S2SBodyPlain } from '../../../../shared/dist/protocol/types';
+import { S2SBodyEncrypted, S2SBodyPlain, S2SProof } from '../../../../shared/dist/protocol/types';
 
 export const createPath = (
   body: S2SBody,
@@ -32,7 +45,46 @@ export const createPath = (
   return path;
 };
 
-export const mergeDecrypted = (body: S2SBodyEncrypted, decrypted: any): S2SBodyPlain => {
+/**
+ * Identity fields that belong to the signed content item and must survive the
+ * encrypted → decrypted transition: `plaintextHash` is the author-signed digest
+ * of the body (what the post-decryption check compares against), and
+ * `objectId`/`cid`/`specVersion`/`mediaType`/`proof` are what a verifier or the
+ * render result needs to describe the item it actually rendered.
+ *
+ * Declared LOCALLY on purpose: `S2SBodyPlain`/`S2SBodyEncrypted` live in
+ * shared/src/protocol/types.ts (out of scope) and widening them would churn
+ * every consumer. `toBody()` will carry these fields once the direct-read
+ * branch lands; until then they are simply absent and every copy is a no-op.
+ */
+export interface S2SBodyIdentity {
+  cid?: string;
+  objectId?: string;
+  plaintextHash?: string;
+  specVersion?: string;
+  mediaType?: string;
+  proof?: S2SProof;
+}
+
+export type S2SBodyPlainWithIdentity = S2SBodyPlain & S2SBodyIdentity;
+export type S2SBodyEncryptedWithIdentity = S2SBodyEncrypted & S2SBodyIdentity;
+
+/** Copy only the identity fields that are actually present (never fabricate). */
+const copyIdentity = (body: S2SBodyIdentity): S2SBodyIdentity => {
+  const out: S2SBodyIdentity = {};
+  if (body.cid !== undefined) out.cid = body.cid;
+  if (body.objectId !== undefined) out.objectId = body.objectId;
+  if (body.plaintextHash !== undefined) out.plaintextHash = body.plaintextHash;
+  if (body.specVersion !== undefined) out.specVersion = body.specVersion;
+  if (body.mediaType !== undefined) out.mediaType = body.mediaType;
+  if (body.proof !== undefined) out.proof = body.proof;
+  return out;
+};
+
+export const mergeDecrypted = (
+  body: S2SBodyEncryptedWithIdentity,
+  decrypted: any,
+): S2SBodyPlainWithIdentity => {
   return {
     id: body.id,
     author: body.author,
@@ -45,6 +97,7 @@ export const mergeDecrypted = (body: S2SBodyEncrypted, decrypted: any): S2SBodyP
     tags: body.tags,
     attributes: body.attributes,
     publication: body.publication,
+    ...copyIdentity(body),
     base: decrypted.base || undefined,
     encryption: false as const,
     content: decrypted.content,
@@ -55,6 +108,112 @@ export const mergeDecrypted = (body: S2SBodyEncrypted, decrypted: any): S2SBodyP
         ? JSON.parse(decrypted.custom || '{}')
         : decrypted.custom || {},
   };
+};
+
+/**
+ * Outcome of checking a decrypted body against the author-signed
+ * `public.plaintextHash`.
+ *
+ *  - 'verified' — the decryptor handed back a STRING and it hashes to the
+ *                 author's digest: byte equivalence with what was signed.
+ *  - 'weak'     — the decryptor handed back a parsed object, so only its JCS
+ *                 re-canonicalisation could be hashed. That proves SEMANTIC
+ *                 equivalence of the parsed value (two identical parse trees
+ *                 render identically), not byte equivalence — weaker as
+ *                 evidence, still sufficient to render.
+ *  - 'legacy'   — nothing was signed to compare against (no plaintextHash).
+ *  - 'mismatch' — the bytes/values do NOT hash to the author's digest.
+ */
+export type DecryptedVerdict = 'verified' | 'weak' | 'legacy' | 'mismatch';
+
+/**
+ * Verify a DECRYPTED body against the author-signed plaintextHash.
+ *
+ * The raw branch delegates to `verifyDecryptedBody` (module.factory) — the SAME
+ * function the collection path in render/main.ts calls — so the page body and a
+ * collection item are always judged by identical byte semantics. Only the
+ * weaker object branch lives here, for the case where the decryptor returns a
+ * parsed value instead of the plaintext string (`rawFromDecryptor === false`).
+ */
+export const verifyDecrypted = (
+  decrypted: Pick<DecryptedPlaintext, 'raw' | 'parsed' | 'rawFromDecryptor'>,
+  expectedHash: string | null,
+): DecryptedVerdict => {
+  if (!expectedHash) return 'legacy';
+  if (decrypted.rawFromDecryptor) {
+    // One helper, one verdict: 'uncheckable' only happens when the item carries
+    // no hash (already handled above), and 'weak' means the hash is present but
+    // not a digest we can check — a doubt, exactly as at rest.
+    const verdict = verifyDecryptedBody({ plaintextHash: expectedHash }, decrypted.raw);
+    return verdict === 'uncheckable' ? 'legacy' : verdict;
+  }
+  try {
+    // NOT JSON.stringify: JCS orders integer-like keys lexically, so
+    // stringify(parsed) is neither what the author hashed nor canonical.
+    return verifyBodyHash(jcs(decrypted.parsed), expectedHash) ? 'weak' : 'mismatch';
+  } catch {
+    return 'mismatch';
+  }
+};
+
+/**
+ * One-shot warning latch for the weak branch (the Lit Action module is
+ * re-created per invocation, so this is per render, not per process).
+ */
+let warnedNonRawPlaintext = false;
+
+/**
+ * Resolve the author-signed `public.plaintextHash` for a body being rendered.
+ *
+ * Preferred source — and the only one taken on any normal render — is the flat
+ * body itself: `toBody()` carries `plaintextHash`, so the hash is already in
+ * hand and NO I/O happens. The re-read below is a fallback for a caller that
+ * hands us a body without the identity fields (a hand-built or pre-identity
+ * body): it pays one getLatestEntry + one cat, and integrity-binds the item to
+ * its deal author before trusting the hash, exactly as the archive path does.
+ * Returns null when the hash cannot be resolved (RPC/gateway failure, or an item
+ * that genuinely has no hash): the caller must then say so instead of pretending
+ * the body was verified.
+ */
+const resolvePlaintextHash = async (
+  body: any,
+  publicationModule: string,
+  rpcs?: string[],
+  gateway?: string,
+): Promise<string | null> => {
+  if (typeof body?.plaintextHash === 'string' && body.plaintextHash !== '') {
+    return body.plaintextHash;
+  }
+  try {
+    const entry = await getLatestEntry(body.id, publicationModule, rpcs);
+    // PIN THE VERSION. The deal can advance mid-render, so `getLatestEntry` may
+    // return a NEWER cid than the body being rendered; comparing this body's
+    // plaintext against the next version's hash would fail a perfectly good
+    // body (or, worse, "verify" it against a hash it was never signed under).
+    // The body carries the cid it was read from (toBody), so refuse the
+    // fallback unless the chain still points at exactly that version.
+    const bodyCid = typeof body?.cid === 'string' ? body.cid : null;
+    if (!bodyCid || bodyCid !== entry.cid) {
+      console.warn(
+        `post-decryption verification unavailable for ${String(body?.id)}: deal advanced past the rendered cid (${String(bodyCid)} -> ${entry.cid})`,
+      );
+      return null;
+    }
+    const item = JSON.parse(await catFile(gateway!, entry.cid));
+    const verdict = inspectItemIntegrity(item, entry.author);
+    if (verdict.level === 'mismatch') {
+      throw new Error(`item failed integrity (${verdict.code}): ${verdict.reason}`);
+    }
+    const hash = item?.public?.plaintextHash;
+    return typeof hash === 'string' && hash !== '' ? hash : null;
+  } catch (e) {
+    console.warn(
+      `post-decryption verification unavailable for ${String(body?.id)}: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return null;
+  }
 };
 
 export const pathsForCollections = (item: any, config: any) => {
@@ -110,7 +269,7 @@ export const initTemplateData = async (
   localePaths?: Record<string, string>,
 ) => {
   if (body.encryption) {
-    const decrypted = await decrypt(
+    const decrypted = await decryptRaw(
       protocolInfo.pkp,
       body,
       authorSafeAddress,
@@ -126,7 +285,51 @@ export const initTemplateData = async (
         content: '',
         revoked: true,
       };
-    body = mergeDecrypted(body, decrypted);
+
+    // ── Post-decryption integrity ──
+    // Decryption proves nothing about authorship: anyone may encrypt to the
+    // publication PKP (only DECRYPTION is gated by canRead), so an attacker can
+    // ship their own plaintext under a real deal's identity. The encrypted body
+    // could not be hash-checked at rest (it is ciphertext), so this is the one
+    // place the plaintext exists: bind it to the author-signed plaintextHash
+    // before it reaches the template.
+    //
+    // The page body is THE content, so a mismatch FAILS THE JOB (throw) — the
+    // collection path in render/main.ts handles the same verdict non-fatally
+    // (one item dropped, page still renders) because there the item is one of
+    // many. Both hash with the SAME helper (verifyDecrypted → the raw branch
+    // delegates to module.factory.verifyDecryptedBody), so the two paths cannot
+    // drift apart on what "verified" means.
+    const expectedHash = await resolvePlaintextHash(
+      body,
+      publicationModule,
+      rpcs,
+      protocolInfo?.gateway,
+    );
+    const verdict = verifyDecrypted(decrypted, expectedHash);
+    if (verdict === 'mismatch') {
+      throw new Error(
+        `body integrity: decrypted content does not match public.plaintextHash for ${String(body.id)} (expected ${String(expectedHash)})`,
+      );
+    }
+    if (verdict === 'legacy') {
+      // Nothing signed to compare against (legacy item) or the hash could not
+      // be resolved. Do not pretend: record it and continue unverified.
+      console.warn(
+        `body integrity: ${String(body.id)} could not be verified after decryption (no plaintextHash available)`,
+      );
+    }
+    if (verdict === 'weak' && !warnedNonRawPlaintext) {
+      // The decryptor returned a parsed object instead of the plaintext string.
+      // Weaker evidence, but a decryptor CHANGE must not take every encrypted
+      // page down — warn once and render, rather than throw.
+      warnedNonRawPlaintext = true;
+      console.warn(
+        `body integrity: decryptor returned a parsed plaintext (not a string) for ${String(body.id)}; verified by JCS re-canonicalisation only (semantic, not byte, equivalence)`,
+      );
+    }
+
+    body = mergeDecrypted(body, decrypted.parsed);
   }
 
   return buildTemplateData(body, templateConfig, protocolInfo, localePaths);
@@ -279,6 +482,30 @@ export const shouldWriteBackCache = (
   maintainCache === true && !preview && !!drift && drift.needsFetch.length > 0;
 
 /**
+ * One skipped item on the collection read path.
+ *
+ * The shape is module.factory's ItemSkip minus the parts the availability
+ * channel does not use: `cause` mirrors the direct read path's classification
+ * ('unavailable' = could not be read/malformed, 'integrity' = arrived and is
+ * not what the author signed), so a consumer sees ONE taxonomy no matter which
+ * read path produced the skip.
+ */
+type CollectionSkip = Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'> & {
+  cause?: ItemFailureKind;
+};
+
+/** Mirror of module.factory's classification for a rejected refetch. */
+const causeOf = (code: string): ItemFailureKind =>
+  code === 'malformed-item' ? 'unavailable' : 'integrity';
+
+/** One-line tally of integrity issue codes (bounded log, no per-item spam). */
+const summariseIssues = (issues: IntegrityIssue[]): string => {
+  const counts = new Map<string, number>();
+  for (const i of issues) counts.set(i.code, (counts.get(i.code) ?? 0) + 1);
+  return [...counts.entries()].map(([code, n]) => `${code}×${String(n)}`).join(', ');
+};
+
+/**
  * Archive-backed collection source: one cat of the archive + a bounded drift
  * refetch, instead of N cats per deal'd item.
  *
@@ -288,11 +515,18 @@ export const shouldWriteBackCache = (
  *   fetched  = cat + toBody each needsFetch entry (bounded — the drift)
  *   bodies   = bodiesFromReconcile(deals, fresh, needsFetch, fetched)
  *
- * The archive's stored bodies ARE the flat toBody output, so the returned
- * bodies feed filterCollection/sortCollection byte-identically to today.
- * Encrypted items arrive as their encrypted toBody shape (meta + ciphertext)
- * and are decrypted downstream in render/main.ts — the archive never bypasses
- * decryption and never stores decrypted plaintext.
+ * The archive's stored items are flattened per deal through `toBody(deal, item)`
+ * inside reconcile() — so archive-served bodies carry exactly the same shape
+ * (including the identity fields toBody emits) as the cold path's. Every item is
+ * run through the shared integrity verdict (inspectItemIntegrity, bound to the
+ * on-chain deal author) before being served; a 'mismatch' is NEVER served, is
+ * reported through `skips`, and is refetched from the on-chain deal cid (where
+ * the same verdict gate applies again via judgeRefetchedItem — a cat is not
+ * authorship). Encrypted items are only author-bound here (their body is
+ * ciphertext). The plaintext is verified at the first point it exists: the page
+ * body in initTemplateData below, and every encrypted COLLECTION item in
+ * render/main.ts (both hash the decryptor's raw string through
+ * module.factory.verifyDecryptedBody).
  *
  * Alongside the bodies it surfaces the observed `drift` (deals + needsFetch +
  * the FULL fetched items) for the T4 write-back — see CollectionsDrift. On
@@ -307,7 +541,7 @@ const fetchCollectionsFromArchive = async (
 ): Promise<{
   bodies: any[];
   drift: CollectionsDrift | null;
-  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+  skips: CollectionSkip[];
 }> => {
   // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
   // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
@@ -328,25 +562,82 @@ const fetchCollectionsFromArchive = async (
   }
 
   const deals = await getDeals(publicationModule, rpcs);
-  const { fresh, needsFetch } = reconcile(deals, archive);
+  const { fresh, needsFetch, integrityIssues } = reconcile(deals, archive);
+
+  // Tamper evidence reaches the CALLER, not just the action log: the same
+  // `skips` channel (non-fatal `availability` entries) that reports a failed
+  // refetch also reports "the cache pointer was serving a rejected item". A
+  // genesis that is then successfully refetched is still served — the note says
+  // the archive entry was refused, which is exactly the signal an operator
+  // needs to repoint the pointer.
+  const skips: CollectionSkip[] = [];
+  if (integrityIssues.length > 0) {
+    console.warn(
+      `archive integrity: ${String(integrityIssues.length)} archive item(s) REJECTED (${summariseIssues(
+        integrityIssues,
+      )}); refetching from the on-chain cid: ${integrityIssues.map((i) => i.genesis).join(', ')}`,
+    );
+    for (const issue of integrityIssues) {
+      skips.push({
+        genesis: issue.genesis,
+        cid: issue.cid,
+        cause: causeOf(issue.code),
+        reason: skipReason(
+          causeOf(issue.code),
+          issue.code,
+          `${issue.reason} — archive entry refused, refetched from the on-chain cid`,
+        ),
+      });
+    }
+  }
 
   // Track the FULL canonical items fetched fresh for the drift entries, keyed
   // by genesis — the T4 write-back merges these into the next archive
   // snapshot. The flat bodies below keep the read path byte-identical.
   const fetchedItems = new Map<string, S2SContentItem>();
-  const skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
   const fetched = await Promise.all(
     needsFetch.map(async (entry) => {
+      let item: unknown;
       try {
-        const item = JSON.parse(await catFile(gateway!, entry.cid));
-        fetchedItems.set(entry.genesis, item as S2SContentItem);
-        return toBody(entry, item);
+        item = JSON.parse(await catFile(gateway!, entry.cid));
       } catch (e) {
-        const reason = `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`;
+        // Genuinely unavailable: gateway/IPFS failure. Distinct from "the bytes
+        // arrived and are bad", which is reported below with its own reason.
+        const reason = skipReason(
+          'unavailable',
+          null,
+          `IPFS retrieval failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
         console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
-        skips.push({ genesis: entry.genesis, cid: entry.cid, reason });
+        skips.push({ genesis: entry.genesis, cid: entry.cid, cause: 'unavailable', reason });
         return null;
       }
+      // Shape first, then integrity — the same policy maintain-cache uses
+      // (judgeRefetchedItem). A null/array/string cat result must not be
+      // mislabelled "retrieval failed", and a body that is not bound to the
+      // author (author binding + plaintextHash + objectId + proof) is never
+      // served, even from the content-addressed cid: a cat is not authorship.
+      const verdict = judgeRefetchedItem(item, entry.author, entry.genesis, entry.cid);
+      if (!verdict.usable) {
+        const cause = causeOf(verdict.integrity.code);
+        const reason = skipReason(
+          cause,
+          verdict.integrity.code,
+          `refetched item rejected: ${verdict.integrity.reason}`,
+        );
+        console.warn(`fetchCollections archive: skip ${entry.genesis} (${entry.cid})`, reason);
+        // NEVER cached: a rejected refetch must not enter the next archive
+        // snapshot (fetchedItems is what mergeArchive stores).
+        skips.push({
+          genesis: entry.genesis,
+          cid: entry.cid,
+          cause,
+          reason,
+        });
+        return null;
+      }
+      fetchedItems.set(entry.genesis, item as S2SContentItem);
+      return toBody(entry, item as StoredContentItem);
     }),
   );
   return {
@@ -365,11 +656,11 @@ export const fetchCollections = async (
 ): Promise<{
   collections: Record<string, any[]>;
   drift: CollectionsDrift | null;
-  skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[];
+  skips: CollectionSkip[];
 }> => {
   const collections: any = {};
   let drift: CollectionsDrift | null = null;
-  let skips: Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>[] = [];
+  let skips: CollectionSkip[] = [];
 
   // Fetch all deals once — every collection filters the same set.
   let allDeals: any[] = [];
