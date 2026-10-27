@@ -44,6 +44,11 @@ export {
   type ProofCanonicalization,
   isIpfsCid,
   ipfsContentUrl,
+  extractHashableHtml,
+  hasHtmlBlock,
+  insertJsonLdScript,
+  stripUndefinedDeep,
+  hasSpecV1Terms,
 } from './metadata';
 
 // Identity — JCS canonical JSON + body-hash verification. Both are dependency

@@ -65,17 +65,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * Which canonicalisation a page was signed with.
  *
- * The marker lives on the proof (`proof.canonicalization`), i.e. in the proof
- * options. This accepts either the proof options themselves or a full schema
- * that carries a `proof` node, so callers can hand over whichever they have.
- * Anything without the exact marker is LEGACY — old pages must never be read
- * as JCS.
+ * The marker lives in exactly one place: the proof options object
+ * (`proof.canonicalization`, with `proofValue` removed). Read from the proof
+ * options only — a second lookup path (e.g. accepting a whole schema) just
+ * invites the signer and the verifier to disagree about where the marker is.
+ * Anything without the exact marker is LEGACY: old pages must never be read as
+ * JCS.
  */
-export function proofCanonicalizationOf(source: object): ProofCanonicalization {
-  const record = asRecord(source);
-  if (!record) return 'LEGACY';
-  const holder = asRecord(record.proof) ?? record;
-  return holder.canonicalization === PROOF_CANONICALIZATION_JCS
+export function proofCanonicalizationOf(proofOptions: object): ProofCanonicalization {
+  const record = asRecord(proofOptions);
+  return record?.canonicalization === PROOF_CANONICALIZATION_JCS
     ? PROOF_CANONICALIZATION_JCS
     : 'LEGACY';
 }

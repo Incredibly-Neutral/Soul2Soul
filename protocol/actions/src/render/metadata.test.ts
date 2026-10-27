@@ -3,9 +3,12 @@
  *
  * Contract under test (specVersion "1"):
  *   - identifier stays the genesis `id` argument
- *   - encoding.sha256 is SHA-256 of the <html>…</html> block (\r\n → \n)
- *   - encoding/sdContent contentUrl only for a real IPFS CID, never ipfs://0x…
- *   - sdContent carries plaintextHash + mediaType + specVersion
+ *   - encoding.sha256 is SHA-256 of the hashed region (\r\n → \n), and encoding
+ *     carries no contentUrl: its digest is of THIS html, not of the item
+ *   - the item CID lives on sdContent only, paired with the plaintext hash;
+ *     only real CIDs become ipfs:// URLs, never ipfs://0x…
+ *   - sdContent carries plaintextHash (as identifier, with digestMethod) +
+ *     mediaType + specVersion
  *   - author.proof (EIP-712) nests on the author node; top-level proof stays
  *     the PKP DataIntegrityProof
  *   - signing uses JCS-RFC8785, and the emitted page verifies byte-for-byte
@@ -16,6 +19,8 @@ import * as ethers from 'ethers5';
 import {
   canonicalizeProofPayload,
   canonicalizeProofPayloadLegacy,
+  extractHashableHtml,
+  jcs,
   verifyBodyHash,
   type S2SContentInfo,
   type S2SProtocolInfo,
@@ -33,6 +38,7 @@ const PKP = ethers.utils.computeAddress(new ethers.utils.SigningKey(PRIV).public
 const GENESIS = '0x' + '55'.repeat(32);
 const PLAINTEXT_HASH = '0x' + 'ab'.repeat(32);
 const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+const PEER_ID = '12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN';
 
 const PROTOCOL_INFO = {
   pkp: PKP,
@@ -67,11 +73,8 @@ function jsonLdOf(html: string): JsonLd {
   return JSON.parse(match[1]) as JsonLd;
 }
 
-/** Same extraction/normalisation the verifier uses. */
-function htmlBody(html: string): string {
-  const match = /<html[^>]*>([\s\S]*)<\/html>/i.exec(html);
-  return (match?.[0] ?? html).replace(/\r\n/g, '\n');
-}
+const sha256Of = (value: string): string =>
+  ethers.utils.sha256(ethers.utils.toUtf8Bytes(value)).replace('0x', '');
 
 function proofOptionsOf(proof: JsonLd): Record<string, string> {
   const out: Record<string, string> = {};
@@ -86,32 +89,37 @@ function withoutProof(schema: JsonLd): JsonLd {
   return data;
 }
 
+const payloadOf = (schema: JsonLd): string =>
+  canonicalizeProofPayload(withoutProof(schema), proofOptionsOf(schema.proof));
+
 function recover(toSign: string, signature: string): string {
   const hash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
   return ethers.utils.recoverAddress(ethers.utils.arrayify(hash), signature);
 }
 
-async function render(info: S2SContentInfo, html: string = PAGE): Promise<{ html: string; schema: JsonLd }> {
+async function render(
+  info: S2SContentInfo,
+  html: string = PAGE,
+): Promise<{ html: string; schema: JsonLd }> {
   const out = await addAndSignMetadata(GENESIS, html, PROTOCOL_INFO, info);
   return { html: out, schema: jsonLdOf(out) };
 }
 
 describe('addAndSignMetadata — identity, encoding and signing', () => {
-  it('keeps identifier = genesis and hashes the <html> body with SHA-256', async () => {
-    const { html, schema } = await render(contentInfo());
+  it('keeps identifier = genesis, marks JCS, and digests the hashed region', async () => {
+    const { schema } = await render(contentInfo());
     expect(schema.identifier).toBe(GENESIS);
+    expect(schema.proof.canonicalization).toBe('JCS-RFC8785');
     expect(schema.encoding['@type']).toBe('MediaObject');
-    const expected = ethers.utils.sha256(ethers.utils.toUtf8Bytes(htmlBody(html))).replace('0x', '');
-    expect(schema.encoding.sha256).toBe(expected);
+    // Oracle = the INPUT page, not the emitted one, so a drift in what
+    // metadata.ts hashes shows up here.
+    expect(schema.encoding.sha256).toBe(sha256Of(extractHashableHtml(PAGE)));
   });
 
-  it('signs with JCS-RFC8785 and the emitted page verifies byte-for-byte', async () => {
+  it('signs so that the JCS payload recovers the PKP', async () => {
     const { schema } = await render(contentInfo());
-    expect(schema.proof.canonicalization).toBe('JCS-RFC8785');
     expect(schema.proof.verificationMethod).toBe(`did:pkh:eip155:8453:${PKP}`);
-
-    const toSign = canonicalizeProofPayload(withoutProof(schema), proofOptionsOf(schema.proof));
-    expect(recover(toSign, schema.proof.proofValue)).toBe(PKP);
+    expect(recover(payloadOf(schema), schema.proof.proofValue)).toBe(PKP);
   });
 
   it('the LEGACY canonicalisation no longer reproduces the signature (nested fields now count)', async () => {
@@ -128,36 +136,40 @@ describe('addAndSignMetadata — identity, encoding and signing', () => {
     }
     expect(legacyRecovered).not.toBe(PKP);
     // Sanity: the two payloads genuinely differ (the bug being fixed).
-    expect(legacyToSign).not.toBe(
-      canonicalizeProofPayload(withoutProof(schema), proofOptionsOf(schema.proof)),
-    );
+    expect(legacyToSign).not.toBe(payloadOf(schema));
   });
 
   it('a nested-only metadata change moves the signed payload', async () => {
-    const { schema: a } = await render(contentInfo());
-    const { schema: b } = await render(contentInfo({ plaintextHash: '0x' + 'cd'.repeat(32) }));
-    const payloadOf = (s: JsonLd) =>
-      canonicalizeProofPayload(withoutProof(s), proofOptionsOf(s.proof));
-    expect(payloadOf(a)).not.toBe(payloadOf(b));
-    expect(schemaIdentifier(a)).toBe(schemaIdentifier(b));
+    // Render ONCE and mutate the parsed schema: comparing two renders would
+    // also differ in proof.created, which proves nothing.
+    const { schema } = await render(contentInfo());
+    const before = payloadOf(schema);
 
-    function schemaIdentifier(s: JsonLd): string {
-      return s.identifier as string;
-    }
+    const tampered = JSON.parse(JSON.stringify(schema)) as JsonLd;
+    tampered.sdContent.identifier = '0x' + 'cd'.repeat(32);
+    const after = payloadOf(tampered);
+
+    expect(after).not.toBe(before);
+    expect(tampered.identifier).toBe(schema.identifier);
+    // …and only the nested value changed.
+    expect(payloadOf({ ...schema, sdContent: schema.sdContent })).toBe(before);
   });
 });
 
 describe('addAndSignMetadata — sdContent', () => {
-  it('emits sdContent when plaintextHash is present', async () => {
+  it('emits sdContent keyed on the plaintext hash with an explicit digestMethod', async () => {
     const { schema } = await render(contentInfo());
     expect(schema.sdContent).toEqual({
       '@type': 'CreativeWork',
       identifier: PLAINTEXT_HASH,
-      sha256: PLAINTEXT_HASH.replace(/^0x/, ''),
+      digestMethod: 'keccak256',
       encodingFormat: 'text/markdown',
       version: '1',
       contentUrl: `ipfs://${CID}`,
     });
+    // Two algorithms must never share one schema.org term: sdContent carries a
+    // keccak256 identifier, encoding.sha256 carries a real SHA-256.
+    expect(schema.sdContent).not.toHaveProperty('sha256');
   });
 
   it('omits sdContent entirely when plaintextHash is absent', async () => {
@@ -165,15 +177,15 @@ describe('addAndSignMetadata — sdContent', () => {
     expect(schema).not.toHaveProperty('sdContent');
   });
 
-  it('sdContent.identifier is the keccak256 of the canonical plaintext body', async () => {
-    const body = JSON.stringify({ text: 'hello', tags: ['a'] });
-    const hash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(body));
+  it('sdContent.identifier is the keccak256 of the canonical body', async () => {
+    const body = { text: 'hello', tags: ['a'] };
+    const bodyJson = jcs(body); // what sign-content.ts stores and hashes
+    const hash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(bodyJson));
     const { schema } = await render(contentInfo({ plaintextHash: hash }));
 
     expect(schema.sdContent.identifier).toBe(hash);
-    expect(schema.sdContent.sha256).toBe(hash.slice(2));
-    expect(verifyBodyHash(body, schema.sdContent.identifier)).toBe(true);
-    expect(verifyBodyHash(body + ' ', schema.sdContent.identifier)).toBe(false);
+    expect(verifyBodyHash(bodyJson, schema.sdContent.identifier)).toBe(true);
+    expect(verifyBodyHash(bodyJson + ' ', schema.sdContent.identifier)).toBe(false);
   });
 
   it('omits optional sdContent fields that were not supplied', async () => {
@@ -183,16 +195,18 @@ describe('addAndSignMetadata — sdContent', () => {
     expect(schema.sdContent).toEqual({
       '@type': 'CreativeWork',
       identifier: PLAINTEXT_HASH,
-      sha256: PLAINTEXT_HASH.replace(/^0x/, ''),
+      digestMethod: 'keccak256',
     });
   });
 });
 
 describe('addAndSignMetadata — contentUrl', () => {
-  it('emits ipfs://<cid> for a real CID on both nodes', async () => {
+  it('pairs the item CID with the plaintext hash on sdContent only', async () => {
     const { schema } = await render(contentInfo());
-    expect(schema.encoding.contentUrl).toBe(`ipfs://${CID}`);
     expect(schema.sdContent.contentUrl).toBe(`ipfs://${CID}`);
+    // encoding asserts a digest of this HTML; nothing is retrievable at the
+    // item CID with that digest, so it must not claim a URL.
+    expect(schema.encoding).not.toHaveProperty('contentUrl');
   });
 
   it('omits contentUrl entirely for a bytes32 contentCid (never ipfs://0x…)', async () => {
@@ -205,6 +219,11 @@ describe('addAndSignMetadata — contentUrl', () => {
   it('omits contentUrl when no CID is supplied', async () => {
     const { schema } = await render(contentInfo({ contentCid: '' }));
     expect(schema.encoding).not.toHaveProperty('contentUrl');
+    expect(schema.sdContent).not.toHaveProperty('contentUrl');
+  });
+
+  it('omits contentUrl for a libp2p peer id (a multihash is not content)', async () => {
+    const { schema } = await render(contentInfo({ contentCid: PEER_ID }));
     expect(schema.sdContent).not.toHaveProperty('contentUrl');
   });
 });
@@ -259,17 +278,21 @@ describe('addAndSignMetadata — author proof nesting', () => {
   });
 
   it('keeps the nested author proof inside the signed bytes', async () => {
-    const withProof = await render(
-      contentInfo({
-        author: { did: 'did:ethr:0x1111', proof: authorProof },
-      }),
+    // One render, then remove the attestation from a copy: the payload must
+    // move. (Two renders would differ in proof.created and prove nothing.)
+    const { schema } = await render(
+      contentInfo({ author: { did: 'did:ethr:0x1111', proof: authorProof } }),
     );
-    const without = await render(contentInfo({ author: { did: 'did:ethr:0x1111' } }));
-    expect(
-      canonicalizeProofPayload(withoutProof(withProof.schema), proofOptionsOf(withProof.schema.proof)),
-    ).not.toBe(
-      canonicalizeProofPayload(withoutProof(without.schema), proofOptionsOf(without.schema.proof)),
-    );
+    const before = payloadOf(schema);
+
+    const stripped = JSON.parse(JSON.stringify(schema)) as JsonLd;
+    delete stripped.author.proof;
+    expect(payloadOf(stripped)).not.toBe(before);
+
+    // Tampering with the attestation also moves it.
+    const forged = JSON.parse(JSON.stringify(schema)) as JsonLd;
+    forged.author.proof.signature = '0xdeadbeef';
+    expect(payloadOf(forged)).not.toBe(before);
   });
 });
 
@@ -302,9 +325,38 @@ describe('addAndSignMetadata — structural invariants', () => {
     expect(schema.mainEntityOfPage['@id']).toBe('https://example.org');
   });
 
-  it('does not let the embedded script tag change the hashed html body', async () => {
+  it('injects the block outside the hashed region', async () => {
     const { html } = await render(contentInfo());
-    // The script is injected before <html>, so the <html>…</html> block is intact.
-    expect(htmlBody(html)).toBe(htmlBody(PAGE));
+    // Same extraction on the way in and on the way out.
+    expect(extractHashableHtml(html)).toBe(extractHashableHtml(PAGE));
+    expect(extractHashableHtml(html)).not.toContain('application/ld+json');
+  });
+
+  it('still emits a signed block when an optional field is undefined at runtime', async () => {
+    // JCS throws on undefined where JSON.stringify drops it: before the strip,
+    // this produced a page with NO JSON-LD at all (un-updatable forever).
+    const { schema } = await render(
+      contentInfo({
+        isBasedOn: {
+          genesis: '0x' + '44'.repeat(32),
+          timestamp: '2025-01-01T00:00:00.000Z',
+        } as unknown as S2SContentInfo['isBasedOn'],
+      }),
+    );
+    expect(schema.proof.proofValue).toMatch(/^0x[0-9a-f]+$/i);
+    expect(schema.isBasedOn).toEqual({
+      '@type': 'CreativeWork',
+      identifier: '0x' + '44'.repeat(32),
+      dateModified: '2025-01-01T00:00:00.000Z',
+    });
+    expect(recover(payloadOf(schema), schema.proof.proofValue)).toBe(PKP);
+  });
+
+  it('hashes exactly the region the verifier will re-derive, with no <html> tag', async () => {
+    const fragment = `<div>no html tag here</div>`;
+    const { html, schema } = await render(contentInfo(), fragment);
+    expect(schema.encoding.sha256).toBe(sha256Of(fragment));
+    expect(extractHashableHtml(html)).toBe(fragment);
+    expect(recover(payloadOf(schema), schema.proof.proofValue)).toBe(PKP);
   });
 });
