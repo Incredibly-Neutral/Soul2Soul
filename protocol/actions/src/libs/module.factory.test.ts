@@ -8,9 +8,13 @@
  *   - legacy items (no identity envelope) neither throw nor get identity fields;
  *   - fetchItemById performs exactly ONE cat and returns entry + item;
  *   - fetchById is fetchItemById + toBody (one cat, undefined when no cid);
- *   - a plaintext body that does not hash to public.plaintextHash THROWS
- *     ContentIntegrityError (the caller must fail the job, never render it);
- *   - a legacy item without plaintextHash is NOT failed (opt-in by design);
+ *   - an item that fails the integrity verdict (hash / author / objectId /
+ *     proof — the ONE verdict in item-integrity.ts, shared with the archive
+ *     path) THROWS ContentIntegrityError (the caller must fail the job, never
+ *     render it);
+ *   - an item the verdict can only call 'unverifiable' (legacy item, encrypted
+ *     body, no typed-data signer in the runtime, contract-authored signer) is
+ *     SERVED, and the doubt is logged once per code;
  *   - the COLLECTION readers (fetchByPublication*, incl. the archive drift
  *     refetch) go through the same choke point: a forged body is never a body,
  *     only an ItemSkip whose `cause` distinguishes integrity from unavailable;
@@ -198,7 +202,7 @@ describe('fetchItemById', () => {
     expect(err).toBeInstanceOf(ContentIntegrityError);
     expect((err as ContentIntegrityError).genesis).toBe(GENESIS);
     expect((err as ContentIntegrityError).cid).toBe(CID);
-    expect((err as Error).message).toContain('plaintext hash mismatch');
+    expect((err as Error).message).toContain('hash-mismatch');
     expect((err as Error).message).toContain(CID);
   });
 
@@ -263,9 +267,9 @@ describe('verifyDecryptedBody — raw bytes only', () => {
   });
 
   it('accepts a flat toBody body (identity carried on the flat shape)', () => {
-    expect(verifyDecryptedBody(toBody(ENTRY, mkItem({ encryption: true, body: 'ct' })), PLAINTEXT)).toBe(
-      true,
-    );
+    expect(
+      verifyDecryptedBody(toBody(ENTRY, mkItem({ encryption: true, body: 'ct' })), PLAINTEXT),
+    ).toBe(true);
   });
 
   it('accepts JCS-ordered plaintext with integer-like keys that JSON.stringify would reorder', () => {
@@ -371,7 +375,7 @@ describe('collection readers — the same choke point (C1)', () => {
     const forged = skips.find((s) => s.cid === FORGED_CID);
     expect(forged?.genesis).toBe(FORGED_GENESIS);
     expect(forged?.cause).toBe('integrity');
-    expect(forged?.reason).toContain('plaintext hash mismatch');
+    expect(forged?.reason).toContain('hash-mismatch');
     expect(forged?.reason).toContain(FORGED_CID);
 
     const gone = skips.find((s) => s.cid === GONE_CID);
