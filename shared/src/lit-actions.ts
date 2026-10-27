@@ -32,6 +32,25 @@ export { toBytes32Id } from './identity/contract-id';
 // PURE
 // export { validateProtocol, validateConfig } from './publication';
 
+// Metadata (JSON-LD provenance) — canonicalisation + content URL rules, shared
+// by the renderer (sign) and the update gate (verify) so the signed bytes can
+// never drift.
+export {
+  canonicalizeProofPayload,
+  canonicalizeProofPayloadLegacy,
+  canonicalizeLegacy,
+  proofCanonicalizationOf,
+  PROOF_CANONICALIZATION_JCS,
+  type ProofCanonicalization,
+  isIpfsCid,
+  ipfsContentUrl,
+} from './metadata';
+
+// Identity — JCS canonical JSON + body-hash verification. Both are dependency
+// free enough for the Lit Action bundle (they only use ethers v5 utils).
+export { jcs } from './identity/jcs';
+export { verifyBodyHash } from './identity/verify-content';
+
 // Contenthash helpers (zod-free, safe for Lit Actions — INV-7)
 export {
   parseCID,

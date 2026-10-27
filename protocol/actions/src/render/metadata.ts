@@ -1,10 +1,21 @@
-import { S2SContentInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/lit-actions';
+import {
+  S2SContentInfo,
+  S2SProtocolInfo,
+  canonicalizeProofPayload,
+  ipfsContentUrl,
+  PROOF_CANONICALIZATION_JCS,
+} from '@s2s/soul2soul-shared/lit-actions';
 
-// Canonical JSON for consistent hashing
-const canonicalize = (obj: any): string => {
-  return JSON.stringify(obj, Object.keys(obj).sort());
-};
-
+/**
+ * Build the page's schema.org JSON-LD provenance block and sign it with the
+ * protocol PKP.
+ *
+ * Signed bytes: JCS-RFC8785(schema-without-proof) ++ JCS-RFC8785(proofOptions).
+ * The canonicalisation is shared with update/verify.ts (see
+ * shared/src/metadata/proof-canonicalization.ts) so signer and verifier cannot
+ * drift. `proof.canonicalization` records the scheme on the page so pre-JCS
+ * pages can still be verified with the legacy canonicaliser.
+ */
 export const addAndSignMetadata = async (
   id: string,
   html: string,
@@ -36,16 +47,18 @@ export const addAndSignMetadata = async (
     const timestamp = new Date().toISOString();
     const currentUrl = contentInfo?.publisher?.url || '';
 
-    // 4. Build schema WITHOUT proof first
-    const schema: any = {
+    // 3. Build schema WITHOUT proof first
+    const schema: Record<string, unknown> = {
       '@context': ['https://schema.org', 'https://w3id.org/security/data-integrity/v2'],
       '@type': 'Article',
+      // Stable document identity (bytes32 genesis / objectId). Unchanged.
       identifier: id,
     };
 
-    // Author (provenance)
+    // Author (provenance). The author's EIP-712 proof is nested HERE, not on
+    // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
     if (contentInfo?.author) {
-      schema.author = {
+      const author: Record<string, unknown> = {
         '@type': 'Person',
         identifier: {
           '@type': 'PropertyValue',
@@ -56,8 +69,20 @@ export const addAndSignMetadata = async (
 
       // Add profile creation timestamp if available
       if (contentInfo.author.createdAt) {
-        schema.author.dateCreated = contentInfo.author.createdAt;
+        author.dateCreated = contentInfo.author.createdAt;
       }
+
+      if (contentInfo.author.proof) {
+        const authorProof = contentInfo.author.proof;
+        author.proof = {
+          type: authorProof.type,
+          ...(authorProof.objectId ? { objectId: authorProof.objectId } : {}),
+          signer: authorProof.signer,
+          signature: authorProof.signature,
+        };
+      }
+
+      schema.author = author;
     }
 
     // Publisher
@@ -101,14 +126,39 @@ export const addAndSignMetadata = async (
       };
     }
 
-    // Content integrity (self-authentication)
-    schema.encoding = {
+    // Content integrity (self-authentication of the rendered page)
+    const contentUrl = ipfsContentUrl(contentInfo?.contentCid);
+    const encoding: Record<string, unknown> = {
       '@type': 'MediaObject',
       sha256: sha256Hash,
     };
+    if (contentInfo?.mediaType) {
+      encoding.encodingFormat = contentInfo.mediaType;
+    }
+    // Only a real IPFS CID becomes a contentUrl — never `ipfs://0x…`.
+    if (contentUrl) {
+      encoding.contentUrl = contentUrl;
+    }
+    schema.encoding = encoding;
 
-    if (contentInfo?.contentCid) {
-      schema.encoding.contentUrl = `ipfs://${contentInfo.contentCid}`;
+    // Canonical plaintext identity (specVersion "1"): what the author signed,
+    // independent of this render. Emitted only when the body hash is known.
+    if (contentInfo?.plaintextHash) {
+      const sdContent: Record<string, unknown> = {
+        '@type': 'CreativeWork',
+        identifier: contentInfo.plaintextHash,
+        sha256: contentInfo.plaintextHash.replace(/^0x/i, ''),
+      };
+      if (contentInfo.mediaType) {
+        sdContent.encodingFormat = contentInfo.mediaType;
+      }
+      if (contentInfo.specVersion) {
+        sdContent.version = contentInfo.specVersion;
+      }
+      if (contentUrl) {
+        sdContent.contentUrl = contentUrl;
+      }
+      schema.sdContent = sdContent;
     }
 
     // License contract reference
@@ -135,24 +185,23 @@ export const addAndSignMetadata = async (
       },
     };
 
-    // 5. Create proof metadata (without proofValue)
+    // 4. Create proof metadata (without proofValue)
     const proofOptions: Record<string, string> = {
       type: 'DataIntegrityProof',
       cryptosuite: 'ecdsa-secp256k1-2019',
       created: timestamp,
       verificationMethod: `did:pkh:eip155:8453:${pkpAddress}`,
       proofPurpose: 'assertionMethod',
+      canonicalization: PROOF_CANONICALIZATION_JCS,
     };
 
-    // 6. Hash schema + proof options for signing (W3C Data Integrity approach)
-    // Concatenate canonical schema + canonical proof options
-    const schemaCanonical = canonicalize(schema);
-    const proofOptionsCanonical = canonicalize(proofOptions);
-    const toSign = schemaCanonical + proofOptionsCanonical;
+    // 5. Hash schema + proof options for signing (W3C Data Integrity approach)
+    // Concatenate canonical schema + canonical proof options.
+    const toSign = canonicalizeProofPayload(schema, proofOptions);
 
     const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
 
-    // 7. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
+    // 6. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
     const sigName = `sign-${id.slice(0, 4)}`;
 
     try {
@@ -171,12 +220,12 @@ export const addAndSignMetadata = async (
       schema.proof = proofOptions;
     }
 
-    // 8. Create script tag (with proof if signed, without signature otherwise)
+    // 7. Create script tag (with proof if signed, without signature otherwise)
     const scriptTag = `<script type="application/ld+json">
 ${JSON.stringify(schema, null, 2)}
 </script>`;
 
-    // 10. Insert into HTML after DOCTYPE, before <html>
+    // 8. Insert into HTML after DOCTYPE, before <html>
     if (html.includes('<!DOCTYPE html>')) {
       const parts = html.split('<!DOCTYPE html>');
       let htmlContent = parts[1];

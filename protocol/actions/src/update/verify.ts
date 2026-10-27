@@ -1,21 +1,24 @@
 /// <reference path="../action_globals.ts" />
 
 import { fetchWithTimeout } from '../libs/helpers';
+import {
+  canonicalizeProofPayload,
+  canonicalizeProofPayloadLegacy,
+  proofCanonicalizationOf,
+} from '@s2s/soul2soul-shared/lit-actions';
 
 // Tree-mutation integrity gate — PKP provenance verification
-// Must match render/metadata.ts exactly for canonicalize and HTML extraction.
+// Canonicalisation + HTML extraction are shared with render/metadata.ts
+// (shared/src/metadata/proof-canonicalization.ts), so signer and verifier can
+// never drift.
 //
 // Verify three invariants before any tree mutation:
 //   1. Sig — recover address from `proof.proofValue` over
 //      canonicalize(schema)+canonicalize(proofOptions); assert == protocolInfo.pkp
+//      (canonicalisation chosen per-page via proof.canonicalization: JCS-RFC8785
+//      for specVersion "1" pages, LEGACY for everything already published)
 //   2. Bytes — recompute sha256(html body); assert == schema.encoding.sha256
 //   3. Genesis — read schema identifier; assert == expected job.id
-
-// Canonical JSON for consistent hashing (must mirror render/metadata.ts)
-const canonicalize = (obj: any): string => {
-  return JSON.stringify(obj, Object.keys(obj).sort());
-};
-
 /**
  * Extract and parse the first `<script type="application/ld+json">` from HTML.
  */
@@ -70,7 +73,7 @@ export async function verifyProvenance(
   const proof = schema.proof;
   if (!proof?.proofValue) throw 'Missing proof.proofValue in schema';
 
-  // Separate proof from data (must mirror render/metadata.ts proof construction)
+  // Separate proof from data (mirrors render/metadata.ts proof construction)
   const { proof: _removed, ...dataSchema } = schema;
 
   // Build proofOptions from all proof fields except proofValue
@@ -81,9 +84,13 @@ export async function verifyProvenance(
     }
   }
 
-  const schemaCanonical = canonicalize(dataSchema);
-  const proofOptionsCanonical = canonicalize(proofOptions);
-  const toSign = schemaCanonical + proofOptionsCanonical;
+  // Old pages carry no `canonicalization` marker and MUST verify under the
+  // legacy (recursive key-whitelist) canonicaliser, byte-identically.
+  const canonicalization = proofCanonicalizationOf(proofOptions);
+  const toSign =
+    canonicalization === 'JCS-RFC8785'
+      ? canonicalizeProofPayload(dataSchema, proofOptions)
+      : canonicalizeProofPayloadLegacy(dataSchema, proofOptions);
   const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
 
   const recoveredAddress = ethers.utils.recoverAddress(
