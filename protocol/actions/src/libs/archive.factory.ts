@@ -65,12 +65,13 @@ import { buildSigningView } from '../../../../shared/dist/identity/signing-view'
 // here.
 //
 // ENCRYPTED items: their `body` is ciphertext, so 2 cannot run here (they are
-// served at 'unverifiable' / 'encrypted' after 1, 3, 4). The PLAINTEXT of a
-// rendered encrypted item is verified after decryption in
-// `render/data.ctrlr.ts` (initTemplateData → verifyDecryptedPlaintext), against
-// the item's `public.plaintextHash`. Encrypted items inside a render
-// *collection* are decrypted in render/main.ts and are NOT verified there —
-// that call site is outside this module and is reported as a follow-up.
+// served at 'unverifiable' / 'encrypted' after 1, 3, 4). The PLAINTEXT is
+// verified after decryption, against the item's `public.plaintextHash`, at both
+// places it exists: the page body in `render/data.ctrlr.ts`
+// (initTemplateData → verifyDecrypted) and every encrypted item inside a render
+// COLLECTION in `render/main.ts` (verifyDecryptedBody(item, d.raw)). Both hash
+// the decryptor's raw string — the bytes the author signed — and both drop /
+// fail the item on mismatch; neither is left unverified.
 //
 // LEGACY items (no `specVersion` AND no `plaintextHash`) are UNVERIFIABLE, not
 // invalid: they are served (author binding still applies). A missing

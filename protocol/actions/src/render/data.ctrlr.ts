@@ -1,4 +1,4 @@
-import { decrypt } from '../libs/decrypt';
+import { decryptRaw, type DecryptedPlaintext } from '../libs/decrypt';
 import {
   fetchByPublication,
   fetchByPublicationWithSkips,
@@ -6,7 +6,9 @@ import {
   getDeals,
   getLatestEntry,
   toBody,
+  verifyDecryptedBody,
   type Entry,
+  type StoredContentItem,
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
 import {
@@ -107,38 +109,67 @@ export const mergeDecrypted = (
 };
 
 /**
- * Verify a DECRYPTED body against the author-signed `public.plaintextHash`.
+ * Outcome of checking a decrypted body against the author-signed
+ * `public.plaintextHash`.
  *
- * `decrypted` is hashed as the exact bytes the author signed:
- *  - a string (the raw plaintext JSON, the ideal input once decrypt() stops
- *    JSON.parse-ing internally) is hashed verbatim;
- *  - an already-parsed object is re-canonicalised with JCS first — never
- *    `JSON.stringify`, which is not canonical and would false-fail on any item
- *    an honest writer canonicalised (specVersion "1" pins JCS + keccak256).
- *
- * Encrypted items cannot be checked anywhere else: their archive body is
- * ciphertext, so `archive.factory` reports them 'unverifiable' and this is the
- * only place the plaintext is available.
+ *  - 'verified' — the decryptor handed back a STRING and it hashes to the
+ *                 author's digest: byte equivalence with what was signed.
+ *  - 'weak'     — the decryptor handed back a parsed object, so only its JCS
+ *                 re-canonicalisation could be hashed. That proves SEMANTIC
+ *                 equivalence of the parsed value (two identical parse trees
+ *                 render identically), not byte equivalence — weaker as
+ *                 evidence, still sufficient to render.
+ *  - 'legacy'   — nothing was signed to compare against (no plaintextHash).
+ *  - 'mismatch' — the bytes/values do NOT hash to the author's digest.
  */
-export const verifyDecryptedPlaintext = (decrypted: unknown, expectedHash: string): boolean => {
+export type DecryptedVerdict = 'verified' | 'weak' | 'legacy' | 'mismatch';
+
+/**
+ * Verify a DECRYPTED body against the author-signed plaintextHash.
+ *
+ * The raw branch delegates to `verifyDecryptedBody` (module.factory) — the SAME
+ * function the collection path in render/main.ts calls — so the page body and a
+ * collection item are always judged by identical byte semantics. Only the
+ * weaker object branch lives here, for the case where the decryptor returns a
+ * parsed value instead of the plaintext string (`rawFromDecryptor === false`).
+ */
+export const verifyDecrypted = (
+  decrypted: Pick<DecryptedPlaintext, 'raw' | 'parsed' | 'rawFromDecryptor'>,
+  expectedHash: string | null,
+): DecryptedVerdict => {
+  if (!expectedHash) return 'legacy';
+  if (decrypted.rawFromDecryptor) {
+    return verifyDecryptedBody({ plaintextHash: expectedHash }, decrypted.raw)
+      ? 'verified'
+      : 'mismatch';
+  }
   try {
-    const canonical = typeof decrypted === 'string' ? decrypted : jcs(decrypted);
-    return verifyBodyHash(canonical, expectedHash);
+    // NOT JSON.stringify: JCS orders integer-like keys lexically, so
+    // stringify(parsed) is neither what the author hashed nor canonical.
+    return verifyBodyHash(jcs(decrypted.parsed), expectedHash) ? 'weak' : 'mismatch';
   } catch {
-    return false;
+    return 'mismatch';
   }
 };
 
 /**
+ * One-shot warning latch for the weak branch (the Lit Action module is
+ * re-created per invocation, so this is per render, not per process).
+ */
+let warnedNonRawPlaintext = false;
+
+/**
  * Resolve the author-signed `public.plaintextHash` for a body being rendered.
  *
- * Preferred source is the flat body itself: once toBody() carries the identity
- * fields, the hash is already in hand and no I/O happens. Until then the item is
- * re-read from the on-chain (content-addressed) deal cid — getLatestEntry gives
- * both the cid and the deal author, so the item is integrity-bound the same way
- * the archive path binds it. Returns null when the hash cannot be resolved
- * (gateway/RPC failure or an item without the field): the caller must then say
- * so instead of pretending the body was verified.
+ * Preferred source — and the only one taken on any normal render — is the flat
+ * body itself: `toBody()` carries `plaintextHash`, so the hash is already in
+ * hand and NO I/O happens. The re-read below is a fallback for a caller that
+ * hands us a body without the identity fields (a hand-built or pre-identity
+ * body): it pays one getLatestEntry + one cat, and integrity-binds the item to
+ * its deal author before trusting the hash, exactly as the archive path does.
+ * Returns null when the hash cannot be resolved (RPC/gateway failure, or an item
+ * that genuinely has no hash): the caller must then say so instead of pretending
+ * the body was verified.
  */
 const resolvePlaintextHash = async (
   body: any,
@@ -221,7 +252,7 @@ export const initTemplateData = async (
   localePaths?: Record<string, string>,
 ) => {
   if (body.encryption) {
-    const decrypted = await decrypt(
+    const decrypted = await decryptRaw(
       protocolInfo.pkp,
       body,
       authorSafeAddress,
@@ -242,33 +273,46 @@ export const initTemplateData = async (
     // Decryption proves nothing about authorship: anyone may encrypt to the
     // publication PKP (only DECRYPTION is gated by canRead), so an attacker can
     // ship their own plaintext under a real deal's identity. The encrypted body
-    // could not be hash-checked in the archive, so this is the one place the
-    // plaintext exists: bind it to the author-signed public.plaintextHash before
-    // it reaches the template.
+    // could not be hash-checked at rest (it is ciphertext), so this is the one
+    // place the plaintext exists: bind it to the author-signed plaintextHash
+    // before it reaches the template.
     //
-    // Mismatch ⇒ the job FAILS (throw). Serving an empty/revoked page instead
-    // would hide the tampering and quietly drop real content.
+    // The page body is THE content, so a mismatch FAILS THE JOB (throw) — the
+    // collection path in render/main.ts handles the same verdict non-fatally
+    // (one item dropped, page still renders) because there the item is one of
+    // many. Both hash with the SAME helper (verifyDecrypted → the raw branch
+    // delegates to module.factory.verifyDecryptedBody), so the two paths cannot
+    // drift apart on what "verified" means.
     const expectedHash = await resolvePlaintextHash(
       body,
       publicationModule,
       rpcs,
       protocolInfo?.gateway,
     );
-    if (expectedHash) {
-      if (!verifyDecryptedPlaintext(decrypted, expectedHash)) {
-        throw new Error(
-          `body integrity: decrypted content does not match public.plaintextHash for ${String(body.id)} (expected ${expectedHash})`,
-        );
-      }
-    } else {
-      // No hash resolvable (item/render path without the field, gateway or RPC
-      // failure). Do not pretend: record it and continue unverified.
+    const verdict = verifyDecrypted(decrypted, expectedHash);
+    if (verdict === 'mismatch') {
+      throw new Error(
+        `body integrity: decrypted content does not match public.plaintextHash for ${String(body.id)} (expected ${String(expectedHash)})`,
+      );
+    }
+    if (verdict === 'legacy') {
+      // Nothing signed to compare against (legacy item) or the hash could not
+      // be resolved. Do not pretend: record it and continue unverified.
       console.warn(
         `body integrity: ${String(body.id)} could not be verified after decryption (no plaintextHash available)`,
       );
     }
+    if (verdict === 'weak' && !warnedNonRawPlaintext) {
+      // The decryptor returned a parsed object instead of the plaintext string.
+      // Weaker evidence, but a decryptor CHANGE must not take every encrypted
+      // page down — warn once and render, rather than throw.
+      warnedNonRawPlaintext = true;
+      console.warn(
+        `body integrity: decryptor returned a parsed plaintext (not a string) for ${String(body.id)}; verified by JCS re-canonicalisation only (semantic, not byte, equivalence)`,
+      );
+    }
 
-    body = mergeDecrypted(body, decrypted);
+    body = mergeDecrypted(body, decrypted.parsed);
   }
 
   return buildTemplateData(body, templateConfig, protocolInfo, localePaths);
@@ -445,10 +489,10 @@ const summariseIssues = (issues: IntegrityIssue[]): string => {
  * reported through `skips`, and is refetched from the on-chain deal cid (where
  * the same verdict gate applies again via judgeRefetchedItem — a cat is not
  * authorship). Encrypted items are only author-bound here (their body is
- * ciphertext): the PLAINTEXT of a rendered page body is verified after
- * decryption in initTemplateData, and encrypted items rendered inside a
- * COLLECTION are decrypted in render/main.ts, which does not verify them yet —
- * a reported follow-up, not a claim made by this comment.
+ * ciphertext). The plaintext is verified at the first point it exists: the page
+ * body in initTemplateData below, and every encrypted COLLECTION item in
+ * render/main.ts (both hash the decryptor's raw string through
+ * module.factory.verifyDecryptedBody).
  *
  * Alongside the bodies it surfaces the observed `drift` (deals + needsFetch +
  * the FULL fetched items) for the T4 write-back — see CollectionsDrift. On
@@ -540,7 +584,7 @@ const fetchCollectionsFromArchive = async (
         return null;
       }
       fetchedItems.set(entry.genesis, item as S2SContentItem);
-      return toBody(entry, item);
+      return toBody(entry, item as StoredContentItem);
     }),
   );
   return {
