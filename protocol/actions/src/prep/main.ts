@@ -7,7 +7,13 @@ import {
   S2STemplateConfig,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { getLatestEntry, fetchById, fetchByPublication, getVersion } from '../libs/module.factory';
+import {
+  ContentIntegrityError,
+  fetchById,
+  fetchByPublication,
+  getLatestEntry,
+  getVersion,
+} from '../libs/module.factory';
 import { getConfig, getTaskConfig } from '../render/config.ctrl';
 import { requireFields, setRpcAuth } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
@@ -62,9 +68,23 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     const config = await getConfig(configCid, configModule, rpcs?.L2, gateway);
     const jobs: S2SJob[] = [];
     const remove: { path: string; replacedBy?: string }[] = [];
+    // Items refused by the integrity check are CONTAINED here: skipping one
+    // publication must not cancel prep for every other contentId in the batch
+    // (which would also starve their ripple jobs and renders). The render
+    // action independently refuses to render such a body, so no job is lost —
+    // it is reported instead of aborting the invocation.
+    const skipped: { genesis: string; cid: string; reason: string }[] = [];
 
     for (const contentId of contentIds) {
-      const body = await fetchById(contentId, publicationModule, rpcs?.L2, gateway);
+      let body: any;
+      try {
+        body = await fetchById(contentId, publicationModule, rpcs?.L2, gateway);
+      } catch (e) {
+        if (!(e instanceof ContentIntegrityError)) throw e;
+        console.warn(`prep: skip ${contentId} (cid ${e.cid})`, e.message);
+        skipped.push({ genesis: contentId, cid: e.cid, reason: e.message });
+        continue;
+      }
       if (!body?.id) throw `content not found: '${contentId}'`;
 
       // Slug-change detection: compare current slug with the first-version slug
@@ -121,6 +141,8 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
         }
       }
     }
+
+    if (skipped.length > 0) trace.push({ skipped });
 
     // dedup by id, first occurrence wins
     const seen = new Set<string>();

@@ -27,7 +27,7 @@ vi.mock('../libs/ipfs.factory', () => ({
   uploadFile: vi.fn(),
   decodeArchiveCid: vi.fn(() => ''),
 }));
-vi.mock('../libs/decrypt', () => ({ decrypt: vi.fn() }));
+vi.mock('../libs/decrypt', () => ({ decryptRaw: vi.fn() }));
 vi.mock('../libs/protocol.factory', () => ({ getProtocolInfo: vi.fn() }));
 vi.mock('../libs/ens.factory', () => ({ getDomainOwnerAndModules: vi.fn() }));
 vi.mock('../libs/gates', () => ({ extractSignerAddress: vi.fn() }));
@@ -51,7 +51,7 @@ vi.mock('../renderer/html.ctrlr', () => ({ renderHTML: vi.fn() }));
 import { main } from './main';
 import { evmRead } from '../libs/evm';
 import { catFile, uploadFile } from '../libs/ipfs.factory';
-import { decrypt } from '../libs/decrypt';
+import { decryptRaw } from '../libs/decrypt';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
@@ -270,9 +270,12 @@ describe('render action — decrypted integrity (encrypted collection items)', (
   });
 
   it('skips a corrupted decrypted plaintext NON-fatally and never renders it', async () => {
-    vi.mocked(decrypt).mockResolvedValue(
-      JSON.parse(JSON.stringify({ ...JSON.parse(PLAINTEXT), content: 'EXPLOIT' })) as never,
-    );
+    const forged = JSON.stringify({ ...JSON.parse(PLAINTEXT), content: 'EXPLOIT' });
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: forged,
+      parsed: JSON.parse(forged) as never,
+      rawFromDecryptor: true,
+    });
 
     const result = await main(input(collections));
 
@@ -295,7 +298,11 @@ describe('render action — decrypted integrity (encrypted collection items)', (
   });
 
   it('keeps a decrypted plaintext that matches the signed hash', async () => {
-    vi.mocked(decrypt).mockResolvedValue(JSON.parse(PLAINTEXT) as never);
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: PLAINTEXT,
+      parsed: JSON.parse(PLAINTEXT) as never,
+      rawFromDecryptor: true,
+    });
 
     const result = await main(input(collections));
 
@@ -308,5 +315,79 @@ describe('render action — decrypted integrity (encrypted collection items)', (
     };
     expect(templateData.collections.posts).toHaveLength(1);
     expect(vi.mocked(mergeDecrypted)).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects differently formatted but equivalent plaintext (hashes bytes, not the object)', async () => {
+    // Same object, pretty-printed: NOT the bytes the author signed.
+    const pretty = JSON.stringify(JSON.parse(PLAINTEXT), null, 2);
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: pretty,
+      parsed: JSON.parse(pretty) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input(collections));
+
+    expect(result.ok).toBe(true);
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, unknown[]>;
+    };
+    expect(templateData.collections.posts).toEqual([]);
+    expect(vi.mocked(mergeDecrypted)).not.toHaveBeenCalled();
+  });
+
+  it('accepts JCS-ordered plaintext with integer-like keys (JSON.stringify would reorder them)', async () => {
+    const jcsBody = '{"content":"x","custom":{"10":"a","2":"b"}}';
+    // the trap this test guards against: re-serialising reorders the keys
+    expect(JSON.stringify(JSON.parse(jcsBody))).not.toBe(jcsBody);
+    const jcsHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(jcsBody));
+    vi.mocked(fetchCollections).mockResolvedValue({
+      collections: {
+        posts: [{ ...encryptedItem, plaintextHash: jcsHash }] as never,
+      },
+      drift: null,
+      skips: [],
+    });
+    vi.mocked(decryptRaw).mockResolvedValue({
+      raw: jcsBody,
+      parsed: JSON.parse(jcsBody) as never,
+      rawFromDecryptor: true,
+    });
+
+    const result = await main(input(collections));
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data?: { availability?: unknown[] } }).data;
+    expect(data?.availability).toBeUndefined();
+    const templateData = vi.mocked(renderHTML).mock.calls[0][2] as {
+      collections: Record<string, unknown[]>;
+    };
+    expect(templateData.collections.posts).toHaveLength(1);
+  });
+
+  it('surfaces a collection skip (forged body upstream) as a non-fatal data entry', async () => {
+    vi.mocked(fetchCollections).mockResolvedValue({
+      collections: { posts: [] },
+      drift: null,
+      skips: [
+        {
+          genesis: encryptedItem.id,
+          cid: ENCRYPTED_CID,
+          reason: `plaintext hash mismatch for ${encryptedItem.id} (cid ${ENCRYPTED_CID}): the stored body does not match public.plaintextHash`,
+          cause: 'integrity',
+        },
+      ] as never,
+    });
+
+    const result = await main(input(collections));
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data?: { availability?: Record<string, unknown>[] } }).data;
+    const entry = (data?.availability ?? []).find((a) => a.kind === 'data');
+    if (!entry) throw new Error('expected a data availability entry');
+    expect(entry.fatal).toBe(false);
+    expect(entry.cid).toBe(ENCRYPTED_CID);
+    expect(String(entry.reason)).toContain('plaintext hash mismatch');
+    expect(vi.mocked(uploadFile)).toHaveBeenCalledTimes(1);
   });
 });

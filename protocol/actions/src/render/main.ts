@@ -7,7 +7,7 @@ import {
   SingleData,
   DataAvailabilityEntry,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { decrypt } from '../libs/decrypt';
+import { decryptRaw } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
@@ -326,7 +326,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
           collections[key].map(async (item: any) => {
             if (item.encryption) {
               try {
-                const d = await decrypt(
+                const d = await decryptRaw(
                   protocolInfo.pkp,
                   item,
                   authorSafeAddress,
@@ -349,11 +349,13 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                 }
                 // Integrity: the decrypted plaintext must hash to the
                 // author-signed plaintextHash (the stored body is ciphertext, so
-                // the direct check in fetchItemById cannot apply). A mismatch is
+                // the check in readItemByEntry cannot apply). Hash the RAW bytes
+                // the decryptor returned (d.raw) — never JSON.stringify(d.parsed),
+                // which is not the string the author signed. A mismatch is
                 // handled exactly like a decrypt failure — non-fatal to the page
                 // (the item is dropped), because the remaining collections can
                 // still render honestly. The unverified plaintext is NEVER used.
-                if (!verifyDecryptedBody(item, d)) {
+                if (!verifyDecryptedBody(item, d.raw)) {
                   const errorMsg = `Plaintext hash mismatch for item ${item.id || 'unknown'}${item.cid ? ` (${item.cid})` : ''}: decrypted body does not match the author-signed plaintextHash`;
                   console.log(errorMsg);
                   errors.push(errorMsg);
@@ -366,7 +368,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   });
                   return null;
                 }
-                const obj = mergeDecrypted(item, d);
+                const obj = mergeDecrypted(item, d.parsed);
                 return obj;
               } catch (error) {
                 const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
