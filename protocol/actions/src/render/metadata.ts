@@ -2,8 +2,12 @@ import {
   S2SContentInfo,
   S2SProtocolInfo,
   canonicalizeProofPayload,
+  extractHashableHtml,
+  hasHtmlBlock,
+  insertJsonLdScript,
   ipfsContentUrl,
   PROOF_CANONICALIZATION_JCS,
+  stripUndefinedDeep,
 } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
@@ -25,18 +29,13 @@ export const addAndSignMetadata = async (
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
   try {
-    // 1. Extract HTML content between <html> and </html> tags
-    let contentToHash = html;
-    const htmlMatch = /<html[^>]*>([\s\S]*)<\/html>/i.exec(html);
-
-    if (htmlMatch && htmlMatch[0]) {
-      contentToHash = htmlMatch[0];
-    } else {
+    // 1. The hashed region — shared with update/verify.ts so that the bytes the
+    //    verifier re-derives after injection are exactly the bytes hashed here,
+    //    including for pages with no <html> tag.
+    const contentToHash = extractHashableHtml(html);
+    if (!hasHtmlBlock(html)) {
       console.log('Could not find HTML tags, hashing entire content');
     }
-
-    // Normalise line endings — IPFS gateways may insert \r\n
-    contentToHash = contentToHash.replace(/\r\n/g, '\n');
 
     // 2. Hash the HTML (SHA-256 for Schema.org)
     const htmlBytes = ethers.utils.toUtf8Bytes(contentToHash);
@@ -126,7 +125,12 @@ export const addAndSignMetadata = async (
       };
     }
 
-    // Content integrity (self-authentication of the rendered page)
+    // Content integrity (self-authentication of the rendered page).
+    //
+    // This MediaObject asserts a digest OF THIS HTML, so it must not carry a
+    // contentUrl: the only CID we have is the content item's, and nothing is
+    // retrievable at that URL with this sha256. The item CID belongs on the
+    // sdContent node below, where it is paired with the plaintext hash.
     const contentUrl = ipfsContentUrl(contentInfo?.contentCid);
     const encoding: Record<string, unknown> = {
       '@type': 'MediaObject',
@@ -135,10 +139,6 @@ export const addAndSignMetadata = async (
     if (contentInfo?.mediaType) {
       encoding.encodingFormat = contentInfo.mediaType;
     }
-    // Only a real IPFS CID becomes a contentUrl — never `ipfs://0x…`.
-    if (contentUrl) {
-      encoding.contentUrl = contentUrl;
-    }
     schema.encoding = encoding;
 
     // Canonical plaintext identity (specVersion "1"): what the author signed,
@@ -146,8 +146,11 @@ export const addAndSignMetadata = async (
     if (contentInfo?.plaintextHash) {
       const sdContent: Record<string, unknown> = {
         '@type': 'CreativeWork',
+        // keccak256 of the canonical body — NOT a schema.org sha256 (that term
+        // is taken by encoding.sha256, a real SHA-256 of the HTML). Naming the
+        // algorithm explicitly avoids two algorithms under one term.
         identifier: contentInfo.plaintextHash,
-        sha256: contentInfo.plaintextHash.replace(/^0x/i, ''),
+        digestMethod: 'keccak256',
       };
       if (contentInfo.mediaType) {
         sdContent.encodingFormat = contentInfo.mediaType;
@@ -197,13 +200,19 @@ export const addAndSignMetadata = async (
 
     // 5. Hash schema + proof options for signing (W3C Data Integrity approach)
     // Concatenate canonical schema + canonical proof options.
-    const toSign = canonicalizeProofPayload(schema, proofOptions);
+    //
+    // JCS has no undefined type and throws on one, while JSON.stringify (used
+    // for emission, below) silently drops such a key. A runtime caller leaving
+    // an optional field undefined would therefore abort signing here, and the
+    // catch-all below would return the page with NO JSON-LD at all — a page the
+    // update gate can only ever reject. Strip first, so the signed bytes are
+    // exactly the emitted bytes.
+    const signable = stripUndefinedDeep(schema);
+    const toSign = canonicalizeProofPayload(signable, proofOptions);
 
     const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
 
     // 6. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
-    const sigName = `sign-${id.slice(0, 4)}`;
-
     try {
       const signingKey = new ethers.utils.SigningKey(
         await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
@@ -211,37 +220,23 @@ export const addAndSignMetadata = async (
       const signature = ethers.utils.joinSignature(
         signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
       );
-      schema.proof = {
+      signable.proof = {
         ...proofOptions,
         proofValue: signature,
       };
     } catch (signError) {
       console.log('Signing skipped (preview or shim):', signError);
-      schema.proof = proofOptions;
+      signable.proof = proofOptions;
     }
 
     // 7. Create script tag (with proof if signed, without signature otherwise)
     const scriptTag = `<script type="application/ld+json">
-${JSON.stringify(schema, null, 2)}
+${JSON.stringify(signable, null, 2)}
 </script>`;
 
-    // 8. Insert into HTML after DOCTYPE, before <html>
-    if (html.includes('<!DOCTYPE html>')) {
-      const parts = html.split('<!DOCTYPE html>');
-      let htmlContent = parts[1];
-
-      if (htmlContent.includes('<html')) {
-        htmlContent = htmlContent.replace(/(\s*<html)/i, `\n${scriptTag}\n$1`);
-      }
-
-      html = '<!DOCTYPE html>' + htmlContent;
-    } else if (html.includes('<html')) {
-      html = html.replace(/(<html)/i, `${scriptTag}\n$1`);
-    } else {
-      html = scriptTag + '\n' + html;
-    }
-
-    return html;
+    // 8. Insert so the block lands outside the hashed region (see
+    //    shared/src/metadata/html-block.ts — insert and extract are a pair).
+    return insertJsonLdScript(html, scriptTag);
   } catch (error) {
     console.log('Error in addMetadata:', error);
     return html;

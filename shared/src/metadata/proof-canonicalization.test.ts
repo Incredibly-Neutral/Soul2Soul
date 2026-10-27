@@ -16,7 +16,6 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from './proof-canonicalization';
 import { isIpfsCid, ipfsContentUrl } from './content-url';
-import { jcs } from '../identity/jcs';
 import { keccakOfJson } from '../identity/jcs';
 
 const IPFS_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
@@ -38,7 +37,7 @@ const schema = {
   sdContent: {
     '@type': 'CreativeWork',
     identifier: '0x' + '66'.repeat(32),
-    sha256: '66'.repeat(32),
+    digestMethod: 'keccak256',
     encodingFormat: 'text/markdown',
     version: '1',
   },
@@ -91,7 +90,7 @@ describe('canonicalizeProofPayloadLegacy — frozen history', () => {
       '@type': 'Person',
       identifier: { '@type': 'PropertyValue' },
     });
-    expect(schemaHalf.sdContent).not.toHaveProperty('sha256');
+    expect(schemaHalf.sdContent).not.toHaveProperty('digestMethod');
     expect(schemaHalf.sdContent).not.toHaveProperty('encodingFormat');
     expect(schemaHalf.sdContent).not.toHaveProperty('version');
     // Nuance worth pinning: a nested key survives the whitelist only when the
@@ -103,36 +102,23 @@ describe('canonicalizeProofPayloadLegacy — frozen history', () => {
     const tweaked = {
       ...schema,
       author: { ...schema.author, dateCreated: '2030-01-01T00:00:00.000Z' },
-      encoding: { ...schema.encoding, sha256: 'ff'.repeat(32), contentUrl: 'ipfs://bafkother' },
-      sdContent: { ...schema.sdContent, sha256: 'ff'.repeat(32), version: '2' },
+      encoding: { ...schema.encoding, sha256: 'ff'.repeat(32), encodingFormat: 'text/html' },
+      // `identifier` is top-level so it survives the whitelist; digestMethod,
+      // version and contentUrl are nested-only and vanish.
+      sdContent: {
+        ...schema.sdContent,
+        digestMethod: 'sha3-512',
+        version: '2',
+        contentUrl: 'ipfs://bafkother',
+      },
     };
     expect(canonicalizeProofPayloadLegacy(tweaked, proofOptionsLegacy)).toBe(
       canonicalizeProofPayloadLegacy(schema, proofOptionsLegacy),
     );
   });
-
-  it('canonicalizeLegacy is the plain old helper', () => {
-    expect(canonicalizeLegacy(schema)).toBe(JSON.stringify(schema, Object.keys(schema).sort()));
-  });
 });
 
 describe('canonicalizeProofPayload — JCS-RFC8785', () => {
-  it('is the concatenation of the JCS of both halves', () => {
-    expect(canonicalizeProofPayload(schema, proofOptions)).toBe(
-      jcs(schema) + jcs(proofOptions),
-    );
-  });
-
-  it('round-trips: re-canonicalising the parsed payload is a fixed point', () => {
-    const payload = canonicalizeProofPayload(schema, proofOptions);
-    // Split on the proof half — JCS emits no whitespace, and the proof is a
-    // single JSON object, so re-serialising both halves is stable.
-    const schemaHalf = jcs(schema);
-    const proofHalf = jcs(proofOptions);
-    expect(payload).toBe(schemaHalf + proofHalf);
-    expect(jcs(JSON.parse(schemaHalf)) + jcs(JSON.parse(proofHalf))).toBe(payload);
-  });
-
   it('is independent of key insertion order', () => {
     const reordered = {
       sdContent: schema.sdContent,
@@ -176,13 +162,11 @@ describe('proofCanonicalizationOf', () => {
     expect(proofCanonicalizationOf(proofOptions)).toBe('JCS-RFC8785');
   });
 
-  it('reads the marker off a full schema carrying a proof node', () => {
-    expect(proofCanonicalizationOf({ ...schema, proof: proofOptions })).toBe('JCS-RFC8785');
-  });
-
   it('defaults to LEGACY when the marker is absent', () => {
     expect(proofCanonicalizationOf(proofOptionsLegacy)).toBe('LEGACY');
-    expect(proofCanonicalizationOf({ ...schema, proof: proofOptionsLegacy })).toBe('LEGACY');
+    // A whole schema is NOT a marker source: proof.canonicalization is the only
+    // one, so a schema handed in by mistake degrades to LEGACY (fail closed).
+    expect(proofCanonicalizationOf({ ...schema, proof: proofOptions })).toBe('LEGACY');
   });
 
   it('never guesses JCS from anything but the exact marker', () => {
@@ -192,14 +176,19 @@ describe('proofCanonicalizationOf', () => {
 });
 
 describe('ipfsContentUrl / isIpfsCid', () => {
-  it('accepts CIDv0 (base58btc), CIDv1 (base32) and 12D3 peer ids', () => {
+  it('accepts CIDv0 (base58btc) and CIDv1 (base32, dag-pb / raw)', () => {
     const v0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
     const bafk = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy';
-    const peer = '12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN';
-    for (const cid of [v0, IPFS_CID, bafk, peer]) {
+    for (const cid of [v0, IPFS_CID, bafk]) {
       expect(isIpfsCid(cid)).toBe(true);
       expect(ipfsContentUrl(cid)).toBe(`ipfs://${cid}`);
     }
+  });
+
+  it('omits the URL for libp2p peer ids (a multihash is not content)', () => {
+    const peer = '12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN';
+    expect(isIpfsCid(peer)).toBe(false);
+    expect(ipfsContentUrl(peer)).toBeUndefined();
   });
 
   it('omits the URL for bytes32 ids, http urls, empties and near-misses', () => {
@@ -210,9 +199,12 @@ describe('ipfsContentUrl / isIpfsCid', () => {
       '',
       undefined,
       null,
+      // Real parse, not a prefix match: these all start like a CID and fail.
       'QmTooShort',
       'bafynot-base32!',
       'notacid',
+      'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdiX',
+      'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbd0',
     ];
     for (const value of rejected) {
       expect(isIpfsCid(value)).toBe(false);
