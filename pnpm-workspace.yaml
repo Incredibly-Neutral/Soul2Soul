@@ -1,7 +1,6 @@
 packages:
   - 'author/*'
   - 'publication/*'
-  - 'verification/contracts'
   - 'press'
   - 'shared'
 

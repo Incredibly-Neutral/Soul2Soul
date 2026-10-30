@@ -12,8 +12,8 @@
     "filecoin:storage-info": "tsx ./scripts/filecoin/storage-info.ts",
     "test": "vitest run --reporter=verbose",
     "contracts:publication:compile": "pnpm -C ../publication/contracts run compile",
-    "contracts:verification:compile": "pnpm -C ../verification/contracts run compile",
-    "press:update": "tsx ./scripts/lit/update-protocol.ts"
+    "press:update": "tsx ./scripts/lit/update-protocol.ts",
+    "contracts:ens:compile": "pnpm -C ../publication/ens-contracts run compile"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
