@@ -1,7 +1,24 @@
+/// <reference path="../action_globals.ts" />
+
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
-import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
+// The integrity verdict (and its shape gate) lives in ONE module shared with the
+// direct read path — see item-integrity.ts. Re-exported below so callers that
+// imported these from the archive module keep working.
+import { inspectItemIntegrity, isValidContentItem, type ItemIssueCode } from './item-integrity';
+
+export {
+  addressOf,
+  checkItemBodyIntegrity,
+  inspectItemIntegrity,
+  isValidContentItem,
+  judgeRefetchedItem,
+  type ItemIntegrity,
+  type ItemIntegrityLevel,
+  type ItemIssueCode,
+  type RefetchedItemVerdict,
+} from './item-integrity';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-publication IPFS content archive.
@@ -13,15 +30,24 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // cid still matches the latest cid returned by getDeals(); otherwise it is
 // STALE/MISS and must be re-catted and rebuilt.
 //
-// Each stored item is validated against the existing shared content-item
-// schema (s2sContentItemSchema, @s2s/soul2soul-shared) — so the archive
-// carries the full public metadata (specVersion, mediaType, plaintextHash,
-// ...) that the flat toBody output drops, typed with the real type — never
-// `any`.
+// Items are stored as they were parsed (the raw object, NOT a re-normalised
+// copy), so `item.body` is preserved byte-for-byte and a legacy hash-less item
+// survives a round trip. What IS re-serialised is the archive container itself
+// (a JSON object of items), so the *item's* CID cannot be recomputed from the
+// archive bytes — content-addressing stops at the container boundary, which is
+// why `ArchiveItem.cid` is a claim (compared against getDeals) rather than
+// something this module can re-derive.
 //
-// reconcile()'s OUTPUT stays the flat toBody bodies (the in-flight T3 read
-// path consumes exactly that): the archive stores the full item, but fresh
-// entries are served as toBody(deal, item) flat bodies.
+// INTEGRITY — see libs/item-integrity.ts
+// ---------------------------------------
+// What makes a stored item trustworthy (author binding, plaintext hash,
+// objectId digest, proof signer) is defined ONCE in `item-integrity.ts`, which
+// documents what each check proves, what it does not, and the residuals. This
+// module only wires that verdict to the cache: a 'mismatch' entry is never
+// served, it is reported as a MISS and refetched from the on-chain cid. The
+// SAME verdict is used by the direct read path (libs/module.factory.ts), so both
+// paths agree about an identical item; they differ only in failure shape
+// (MISS + refetch here, ContentIntegrityError/skip there).
 //
 // The core functions are pure/deterministic — no chain or IPFS calls inside —
 // so the whole correctness story is unit-testable in isolation. The caller
@@ -48,17 +74,6 @@ export const emptyArchive = (publication = ''): Archive => ({
   built: new Date().toISOString(),
   items: {},
 });
-
-/**
- * True when `item` is a structurally valid S2SContentItem per the shared
- * content-item schema. Used as the reconcile() wellFormed guard (bias toward
- * inclusion: an unverifiable item is a MISS, refetch — never silently serve).
- */
-const isValidItem = (item: unknown): item is S2SContentItem =>
-  !!item &&
-  typeof item === 'object' &&
-  !Array.isArray(item) &&
-  s2sContentItemSchema.safeParse(item).success;
 
 /**
  * Parse + validate an archive payload.
@@ -101,12 +116,12 @@ export function parseArchive(json: string): Archive {
       typeof (entry as ArchiveItem).cid === 'string' &&
       (entry as ArchiveItem).cid !== ''
     ) {
-      const res = s2sContentItemSchema.safeParse((entry as ArchiveItem).item);
-      if (res.success) {
-        // Schema enforces the shape at runtime; the branded literals (DidEthr,
-        // `0x${string}`) are compile-time refinements the schema can't infer,
-        // so the validated data is re-cast to the canonical type.
-        items[genesis] = { cid: (entry as ArchiveItem).cid, item: res.data as S2SContentItem };
+      // Schema enforces the shape at runtime; the branded literals (DidEthr,
+      // `0x${string}`) are compile-time refinements the schema can't infer, so
+      // the validated item is kept as the canonical type. The raw item is kept
+      // (not a normalised copy) so a legacy hash-less item survives round-trip.
+      if (isValidContentItem((entry as ArchiveItem).item)) {
+        items[genesis] = { cid: (entry as ArchiveItem).cid, item: (entry as ArchiveItem).item };
       }
     }
     // else: malformed / schema-invalid item → omit; reconcile treats it as a MISS (refetch).
@@ -120,39 +135,77 @@ export function parseArchive(json: string): Archive {
   };
 }
 
+/** Tamper/doubt evidence for one archive entry (never served on 'mismatch'). */
+export interface IntegrityIssue {
+  genesis: string;
+  cid: string;
+  code: ItemIssueCode;
+  reason: string;
+}
+
 /**
  * Classify each deal against the archive.
  *
- *  - archive entry present AND item.cid === deal.cid  → FRESH → `fresh.get(g) = toBody(deal, item)`
- *  - no entry                                         → MISS
- *  - item.cid !== deal.cid                            → STALE
- *  - malformed / unverifiable entry (missing cid or invalid item) → MISS (bias
- *    toward inclusion: refetch rather than silently serve a broken/dropped entry)
+ *  - archive entry present AND entry.cid === deal.cid AND the item passes
+ *    inspectItemIntegrity() → FRESH → `fresh.get(g) = toBody(deal, item)`.
+ *    'verified' and 'unverifiable' are both served ('unverifiable' means a
+ *    specific check could not run — encrypted body, legacy item, malformed
+ *    hash, contract-authored signer; the code says which).
+ *  - no entry → MISS; item.cid !== deal.cid → STALE; malformed / invalid item
+ *    → MISS (bias toward inclusion: refetch rather than serve a broken entry).
+ *  - verdict 'mismatch' (author mismatch, missing hash on a specVersion item,
+ *    body-vs-plaintextHash mismatch, objectId mismatch, proof-signer mismatch)
+ *    → MISS, NEVER served, and recorded in `integrityIssues` so the caller can
+ *    surface it through the availability channel. Refetched from the
+ *    content-addressed on-chain deal cid, which the pointer writer cannot
+ *    forge.
  *  - schema-valid entry whose body cannot be flattened (e.g. non-JSON plain
  *    body) → MISS, never throw (fail-open preserved — a corrupt-but-schema-valid
- *    blob is refetched, not crashed on)
+ *    blob is refetched, not crashed on).
  *
  * Both MISS and STALE land in `needsFetch`, where the caller cats
  * `deal.cid` fresh and rebuilds the body.
  *
- * OUTPUT CONTRACT (unchanged): `fresh` carries the flat toBody bodies — the
- * in-flight T3 read path consumes exactly this shape.
+ * OUTPUT CONTRACT: `fresh` carries the flat toBody bodies — the in-flight T3
+ * read path consumes exactly this shape. `integrityIssues` is ADDITIVE
+ * (existing `{ fresh, needsFetch }` destructuring is unaffected).
  */
 export function reconcile(
   deals: Entry[],
   archive: Archive | null,
-): { fresh: Map<string, any>; needsFetch: Entry[] } {
+): { fresh: Map<string, any>; needsFetch: Entry[]; integrityIssues: IntegrityIssue[] } {
   const fresh = new Map<string, any>();
   const needsFetch: Entry[] = [];
+  const integrityIssues: IntegrityIssue[] = [];
 
   for (const deal of deals) {
     const entry = archive?.items?.[deal.genesis];
-    const wellFormed =
-      !!entry && typeof entry.cid === 'string' && entry.cid !== '' && isValidItem(entry.item);
 
-    if (wellFormed && entry!.cid === deal.cid) {
+    if (
+      entry &&
+      typeof entry.cid === 'string' &&
+      entry.cid !== '' &&
+      entry.cid === deal.cid &&
+      isValidContentItem(entry.item)
+    ) {
+      // Integrity gate — see inspectItemIntegrity/the header. cid equality only
+      // proves the archive was built from this deal cid (the container is
+      // re-serialised, so the item CID cannot be re-derived); `deal.author` is
+      // what binds the item to the publication's on-chain deal set. Mismatch ⇒
+      // not served, refetch from the content-addressed on-chain cid (MISS).
+      const verdict = inspectItemIntegrity(entry.item, deal.author);
+      if (verdict.level === 'mismatch') {
+        integrityIssues.push({
+          genesis: deal.genesis,
+          cid: deal.cid,
+          code: verdict.code,
+          reason: verdict.reason,
+        });
+        needsFetch.push(deal);
+        continue;
+      }
       try {
-        fresh.set(deal.genesis, toBody(deal, entry!.item));
+        fresh.set(deal.genesis, toBody(deal, entry.item));
       } catch {
         // Corrupt-but-schema-valid blob (e.g. plain body that isn't parseable
         // JSON): treat as MISS (refetch) — never throw (fail-open preserved,
@@ -164,7 +217,7 @@ export function reconcile(
     }
   }
 
-  return { fresh, needsFetch };
+  return { fresh, needsFetch, integrityIssues };
 }
 
 /**
@@ -174,24 +227,42 @@ export function reconcile(
  *  - start from prev (or an empty archive if null);
  *  - DROP any item whose genesis has no deal (deal-set floor — geneses that
  *    disappeared on-chain are pruned);
- *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, item }`;
+ *  - DROP any carried-forward item named in `drop` (see SELF-HEALING below) —
+ *    unless it is the publication's ONLY deal, in which case the snapshot keeps
+ *    it so the archive stays complete for a single-deal publication (the read
+ *    path refuses it either way, so nothing forged is served);
+ *  - REPLACE/APPEND each refreshed genesis with `{ cid: deal.cid, item }` (a
+ *    dropped genesis that refetches cleanly comes back through here);
  *  - deal'd-but-not-refreshed geneses stay as-is (absent if never present) —
  *    lazy, slow convergence is intended;
  *  - stamp `format`, `publication` (from prev) and `built` (now).
+ *
+ * SELF-HEALING: reconcile() re-derives the SAME integrity issue for a tampered
+ * snapshot entry on every invocation, so carrying that entry forward would make
+ * the pointer re-report it forever and never converge. `drop` is how the
+ * write-back evicts it: the entry is not copied, the snapshot gets a new cid,
+ * and the next reconcile has nothing to flag (the deal is then a plain MISS and
+ * is refetched from the on-chain cid, which is where the real item lives).
  */
 export function mergeArchive(
   prev: Archive | null,
   deals: Entry[],
   refreshed: Map<string, S2SContentItem>,
+  drop: Iterable<string> = [],
 ): Archive {
   const dealSet = new Set(deals.map((d) => d.genesis));
+  const dropped = new Set(drop);
+  // Never write an archive that forgets the publication's only deal: an empty
+  // snapshot for a live publication is a worse failure mode than a cached blob
+  // the reader knows how to reject.
+  const evict = deals.length > 1;
   const items: Record<string, ArchiveItem> = {};
 
   if (prev && prev.items) {
     for (const [genesis, item] of Object.entries(prev.items)) {
-      if (dealSet.has(genesis)) {
-        items[genesis] = item;
-      }
+      if (!dealSet.has(genesis)) continue;
+      if (evict && dropped.has(genesis)) continue;
+      items[genesis] = item;
     }
   }
 

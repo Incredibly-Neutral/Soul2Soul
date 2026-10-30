@@ -7,12 +7,12 @@ import {
   SingleData,
   DataAvailabilityEntry,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { decrypt } from '../libs/decrypt';
+import { decryptRaw } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { evmRead } from '../libs/evm';
-import { fetchById } from '../libs/module.factory';
+import { fetchById, verifyDecryptedBody } from '../libs/module.factory';
 
 import { getConfig } from './config.ctrl';
 import {
@@ -70,6 +70,69 @@ export async function isRevokedByDealState(
 // write (setText), so setText is intentionally not included here.
 const RECORDS_CONTRACT_ABI = ['function getText(bytes32 node, string key) view returns (string)'];
 
+type AuthorProof = NonNullable<NonNullable<S2SContentInfo['author']>['proof']>;
+
+/**
+ * Warn-once latch for decrypted plaintexts that can only be called a DOUBT.
+ *
+ * `verifyDecryptedBody` returns a verdict, not a boolean:
+ *   'verified'    — the raw bytes hash to the author-signed plaintextHash;
+ *   'mismatch'    — they do not (tampering: the item is dropped below);
+ *   'weak'        — the signed digest is not a keccak hex, so it cannot be
+ *                   checked with keccak (a third-party hash algorithm — the same
+ *                   carve-out as inspectItemIntegrity's 'hash-malformed');
+ *   'uncheckable' — there is nothing to check against (legacy item).
+ * The last two are served, and this latch keeps the log to one line per verdict
+ * per invocation, matching data.ctrlr's warnedNonRawPlaintext.
+ */
+const warnedUnverifiedDecrypted = new Set<string>();
+const warnUnverifiedDecrypted = (verdict: string, genesis: string): void => {
+  if (warnedUnverifiedDecrypted.has(verdict)) return;
+  warnedUnverifiedDecrypted.add(verdict);
+  console.log(
+    `item integrity: rendering decrypted item ${genesis} unverified (${verdict} plaintext, not a mismatch)`,
+  );
+};
+
+/**
+ * Project an item's `proof` onto the metadata author proof, but ONLY when it is
+ * a complete EIP-712 author proof (type + signer + signature). Legacy items
+ * without a proof contribute nothing — a half-formed proof is not emitted.
+ */
+/**
+ * Rebuild the author's EIP-712 attestation for the page.
+ *
+ * A REAL item's proof is `{type, signer, signature}` — `objectId` is a SIBLING
+ * field on the item (see toBody), not a member of proof. It is threaded in
+ * explicitly so the page carries the digest the author actually signed; reading
+ * it off `proof.objectId` alone (as this used to) produced nothing in
+ * production and only ever worked against a hand-shaped test fixture.
+ */
+const toAuthorProof = (proof: unknown, itemObjectId?: unknown): AuthorProof | undefined => {
+  if (proof == null || typeof proof !== 'object') return undefined;
+  const p = proof as {
+    type?: unknown;
+    objectId?: unknown;
+    signer?: unknown;
+    signature?: unknown;
+  };
+  if (p.type !== 'eip712' || typeof p.signer !== 'string' || typeof p.signature !== 'string') {
+    return undefined;
+  }
+  const objectId =
+    typeof p.objectId === 'string'
+      ? p.objectId
+      : typeof itemObjectId === 'string'
+        ? itemObjectId
+        : undefined;
+  return {
+    type: 'eip712',
+    ...(objectId ? { objectId } : {}),
+    signer: p.signer,
+    signature: p.signature,
+  };
+};
+
 async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
   let html: string | undefined = undefined;
   let t0 = Date.now();
@@ -108,7 +171,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
     const protocolInfo = await getProtocolInfo(false, rpcs);
     if (!protocolInfo) throw 'Failed to fetch protocol info';
-
 
     // Per-publication content archive pointer (ENS text record). Mirrors
     // update/main.ts's namehash + getText read for contenthash_wrapped. Only
@@ -152,8 +214,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       maintainCache,
     });
 
-
-
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,
       rpcs,
@@ -161,8 +221,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
 
     if (multisig == null || configModule == null || publicationModule == null)
       throw 'Failed to resolve publication modules';
-
-
 
     let body: any | undefined | null = await fetchById(
       job.id,
@@ -172,8 +230,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     );
     if (body == undefined || body == null || body.id == undefined) throw 'Post content not found';
     trace.push(body);
-
-
 
     let config: any;
     try {
@@ -193,8 +249,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     let t1 = Date.now();
     trace.push(`got body & config: ${((t1 - t0) / 1000).toFixed(3)} seconds`);
 
-
-
     let templateData: any = await initTemplateData(
       protocolInfo,
       authorSafeAddress,
@@ -206,8 +260,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       config.localePaths,
     );
     trace.push(templateData);
-
-
 
     // Revoke detection via on-chain deal state: the decrypt-path
     // `revoked` flag only covers decrypt failures, not on-chain retract.
@@ -261,8 +313,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         preview,
       });
 
-
-
       const { collections, drift, skips } = await fetchCollections(
         job.templateConfig,
         publicationModule,
@@ -281,8 +331,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         });
       }
 
-
-
       let t3 = Date.now();
       trace.push(`fetched collections: ${((t3 - t0) / 1000).toFixed(3)} seconds`);
       trace.push({
@@ -300,7 +348,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
           collections[key].map(async (item: any) => {
             if (item.encryption) {
               try {
-                const d = await decrypt(
+                const d = await decryptRaw(
                   protocolInfo.pkp,
                   item,
                   authorSafeAddress,
@@ -321,7 +369,39 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
                   });
                   return null;
                 }
-                const obj = mergeDecrypted(item, d);
+                // Integrity: the decrypted plaintext must hash to the
+                // author-signed plaintextHash (the stored body is ciphertext, so
+                // the check in readItemByEntry cannot apply). Hash the RAW bytes
+                // the decryptor returned (d.raw) — never JSON.stringify(d.parsed),
+                // which is not the string the author signed. A mismatch is
+                // handled exactly like a decrypt failure — non-fatal to the page
+                // (the item is dropped), because the remaining collections can
+                // still render honestly. The unverified plaintext is NEVER used.
+                const plaintextVerdict = verifyDecryptedBody(item, d.raw);
+                if (plaintextVerdict === 'mismatch') {
+                  const errorMsg = `Plaintext hash mismatch for item ${item.id || 'unknown'}${item.cid ? ` (${item.cid})` : ''}: decrypted body does not match the author-signed plaintextHash`;
+                  console.log(errorMsg);
+                  errors.push(errorMsg);
+                  availability.push({
+                    kind: 'data',
+                    genesis: item.id,
+                    cid: item.cid,
+                    reason: errorMsg,
+                    fatal: false,
+                  });
+                  return null;
+                }
+                if (plaintextVerdict !== 'verified') {
+                  // Doubt, not tampering: 'weak' (the signed digest is not a
+                  // keccak hex — a third-party hash algorithm, which
+                  // inspectItemIntegrity also serves as 'unverifiable') or
+                  // 'uncheckable' (nothing to check against). Dropping these
+                  // would make the collection reader disagree with itself: the
+                  // archive path keeps such an item. Log once per verdict and
+                  // render.
+                  warnUnverifiedDecrypted(plaintextVerdict, String(item.id ?? 'unknown'));
+                }
+                const obj = mergeDecrypted(item, d.parsed);
                 return obj;
               } catch (error) {
                 const errorMsg = `Decryption error for item ${item.id || 'unknown'}: ${error instanceof Error ? error.message : String(error)}`;
@@ -344,7 +424,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         );
         decryptedCollections[key] = decrypted.filter(Boolean);
       }
-
 
       let t4 = Date.now();
       trace.push(`decrypted collections: ${((t4 - t0) / 1000).toFixed(3)} seconds`);
@@ -372,24 +451,35 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         throw `template render failed: ${reason || 'unknown error'}`;
       }
 
-
       if (typeof html === 'string') {
         console.log('HTML', html.slice(0, 400));
 
         let t5 = Date.now();
         trace.push(`rendered: ${((t5 - t0) / 1000).toFixed(3)} seconds`);
 
-        // Build content info from actual data
+        // Build content info from actual data — identity comes from the ITEM
+        // that was fetched, never from guesswork. `body.cid` is the real deal
+        // CID carried by toBody (the old `body.cid || body.id` fallback emitted
+        // `ipfs://0x…` for the bytes32 genesis, which is not a CID).
+        const authorProof = toAuthorProof(body.proof, body.objectId);
         const metadata: S2SContentInfo = {
           author: {
             did: body.author || '',
             createdAt: body.creationDate || '',
+            ...(authorProof ? { proof: authorProof } : {}),
           },
           publisher: {
             did: signerAddress ? `did:ethr:0x${signerAddress.replace('0x', '')}` : '',
             url: body.publication || '',
+            ...(authorSafeAddress ? { safe: authorSafeAddress } : {}),
           },
-          contentCid: body.cid || body.id || '',
+          contentGenesis: job.id,
+          // The item's own EIP-712 digest (sibling of proof), NOT the genesis.
+          objectId: typeof body.objectId === 'string' ? body.objectId : undefined,
+          contentCid: body.cid,
+          plaintextHash: body.plaintextHash,
+          mediaType: body.mediaType,
+          specVersion: body.specVersion,
           licenseContract: publicationModule,
           isBasedOn: body.parent
             ? {
@@ -444,8 +534,6 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       html = '';
     }
 
-
-
     // Data-fetch failures are NON-FATAL per the availability contract: a page
     // that rendered with some unavailable collection items still produces a
     // valid result. Classify any remaining errors as data availability entries
@@ -484,7 +572,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       ok: false,
       action: 'single',
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      error: typeof e === 'string' ? (e || 'render action failed') : (((e as Error)?.message || String(e)) || 'render action failed'),
+      error:
+        typeof e === 'string'
+          ? e || 'render action failed'
+          : (e as Error)?.message || String(e) || 'render action failed',
       trace,
     };
   }
