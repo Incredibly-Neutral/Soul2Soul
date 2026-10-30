@@ -8,7 +8,7 @@
 // result (Neovim plugin contract). Human progress always goes to stderr.
 // ============================================================================
 
-import { parseArgs } from './lib/args';
+import { BOOLEAN_FLAGS, parseArgs } from './lib/args';
 import { CliError, UsageError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
 import { createOut } from './lib/out';
@@ -63,9 +63,7 @@ function actionHelp(command: CommandSpec): string {
 }
 
 async function main(argv: string[]): Promise<number> {
-  const { flags, positionals } = parseArgs(argv, {
-    booleanFlags: ['json', 'help', 'h', 'version', 'local'],
-  });
+  const { flags, positionals } = parseArgs(argv, { booleanFlags: BOOLEAN_FLAGS });
   const json = flags.json !== undefined;
   const out = createOut(json);
   const wantHelp = (['help', 'h', 'version'] as const).some((k) => flags[k] === true);

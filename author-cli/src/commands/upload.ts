@@ -8,11 +8,13 @@
 import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
+import { flagBool } from '../lib/args';
+import { ipfsGatewayUrl, ipfsUri } from '../lib/ipfs-link';
 
 export const upload: CommandSpec = {
   name: 'upload',
   summary: 'Upload a note to IPFS + pins (no on-chain offer — propose it separately).',
-  usage: 's2s author upload <note> [--publication <ens>] [--json]',
+  usage: 's2s author upload <note> [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);
@@ -22,6 +24,8 @@ export const upload: CommandSpec = {
       render: false,
       publish: true,
       offer: false,
+      // Explicit opt-in to republishing a previously-encrypted genesis in the clear.
+      allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
     });
 
     ctx.out.result(
@@ -32,6 +36,9 @@ export const upload: CommandSpec = {
         subdomain: result.subdomain,
         objectId: result.objectId,
         kuboCid: result.kuboCid,
+        // Public links for the uploaded CID — additive scalars, existing keys unchanged.
+        ipfsUrl: ipfsUri(result.kuboCid),
+        gatewayUrl: ipfsGatewayUrl(result.kuboCid),
         frontmatterWritten: result.frontmatterWritten,
       },
       [
@@ -39,6 +46,7 @@ export const upload: CommandSpec = {
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
         `  kubo cid    : ${result.kuboCid}`,
+        `  link        : ${ipfsGatewayUrl(result.kuboCid)}`,
         `  offer       : not proposed on-chain — run: s2s author propose ${notePath}${result.frontmatterWritten ? '' : ` --cid ${result.kuboCid}`}`,
       ].join('\n'),
     );

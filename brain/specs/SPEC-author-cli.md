@@ -33,19 +33,19 @@ Top-level bin `s2s`; three groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
-s2s author address   [--json]                                     # author id: the Safe (predicted, no deployment)
-s2s author init      [--json]                                     # deploy the author Safe (idempotent)
-s2s author upload    <note> [--publication <ens>] [--json]        # ipfs + pins only (off-chain)
-s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--json]  # on-chain offer only
-s2s author preview   <note> [--publication <ens>] [--json]        # ipfs + preview render (off-chain)
-s2s author publish   <note> [--publication <ens>] [--json]        # all-in-one: upload + offer + render + pins
-s2s author revoke    <note> [--publication <ens>] [--json]        # on-chain retract + remove re-render
+s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
+s2s author init      [--json]                                                                     # deploy the author Safe (idempotent)
+s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
+s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--allow-plaintext] [--json]  # on-chain offer only
+s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
+s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + offer + render + pins
+s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
-s2s config set       <key> <value> [--local] [--json]            # write a config value
-s2s config get       <key> [--json]                              # effective value for a key
-s2s config unset     <key> [--local] [--json]                    # remove a key from the file
-s2s config list      [--json]                                    # all effective values (secrets masked)
-s2s config path      [--local] [--json]                          # print the config file path
+s2s config set       <key> <value> [--local] [--json]                                             # write a config value
+s2s config get       <key> [--json]                                                               # effective value for a key
+s2s config unset     <key> [--local] [--json]                                                     # remove a key from the file
+s2s config list      [--json]                                                                     # all effective values (secrets masked)
+s2s config path      [--local] [--json]                                                           # print the config file path
 ```
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
@@ -75,6 +75,7 @@ Global flags parse anywhere in the argv:
 | `--version` | Print `s2s v<version>` and exit 0. |
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. |
 | `--cid <kuboCid>` | (propose) Explicit content CID. Defaults to the `kubo_cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
+| `--allow-plaintext` | (consumed by upload / preview / publish / propose; declared in `BOOLEAN_FLAGS` in `lib/args.ts`, so it is boolean — never consumes a value token — and every other command parses it and ignores it) Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `kubo_cid`. It skips only that guard — `propose`'s "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. |
 | `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
 | `--author <addr>,...` | (new) Initial author set; defaults to the EOA address. |
@@ -238,7 +239,10 @@ s2s <group> <action> [positionals…] [flags…]
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
 { action: 'upload'; note: string; publication: string; subdomain: string;
-  objectId: string; kuboCid: string; frontmatterWritten: boolean }          // no txHash
+  objectId: string; kuboCid: string;
+  ipfsUrl: string;        // 'ipfs://<kuboCid>'
+  gatewayUrl: string;     // 'https://ipfs.io/ipfs/<kuboCid>'
+  frontmatterWritten: boolean }          // no txHash
 
 // s2s author propose <note> [--cid <kuboCid>] [--publication <ens>] [--json] — on-chain offer only
 { action: 'propose'; note: string; publication: string; subdomain: string;
@@ -269,9 +273,18 @@ Shared field meanings:
 | `subdomain` | Publication subdomain (bytes32 → string via shared `subdomainOf`). |
 | `objectId` | Stable on-chain content identity (frontmatter `genesis`, else signed item id). |
 | `kuboCid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
+| `ipfsUrl` | (upload only) `ipfs://<kuboCid>` — gateway-agnostic URI, from `ipfsUri` in `lib/ipfs-link.ts`. |
+| `gatewayUrl` | (upload only) `https://ipfs.io/ipfs/<kuboCid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `kubo cid`. |
 | `txHash` | L2 transaction hash of the on-chain action. |
 | `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
 | `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author` on first publish, `kubo_cid` and `modified_date` always). |
+
+`ipfsUrl`/`gatewayUrl` are **additive scalars** on `upload` alone — existing keys are unchanged, so
+hosts that read the result as an open shape need no change: the Neovim plugin formats known fields,
+passes unknown scalars through and never rejects extras (SPEC-nvim-s2s decision 6, with a
+future-shaped fixture in its test seams). Both links come from `lib/ipfs-link.ts`, where the gateway
+is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `kuboGateway` instead of
+`ipfs.io` is a one-line change there, not a change at any call site.
 
 ### `publication` group — result types
 
@@ -323,7 +336,7 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 |---|---|---|---|
 | `S2S_PRIVATE_KEY` | authoring | — | EOA signer key for author flows (the genesisAuthor, INV-10). |
 | `LIT_ACCOUNT_KEY` | authoring | — | Lit master/network key (LitService account). |
-| `LIT_USAGE_KEY` | render paths | — | Lit usage key passed to the action runs. |
+| `LIT_USAGE_KEY` | render paths; `encryption: true` notes | — | Lit usage key passed to the action runs, and the key the encrypt seam (`core/encrypt.ts`) passes to `LitService.encrypt`. |
 | `GITHUB_TOKEN` / `S2S_GITHUB_TOKEN` | `new` | — | GitHub token for the assets/config build (`ConfigBuilder`). |
 | `S2S_KUBO_GATEWAY` | uploads | `ipfs.transport-union.dev` | Kubo RPC gateway. |
 | `S2S_KUBO_TOKEN` | token-gated | — | Kubo bearer token (renders use it as `_ipfsGatewayAuth`). |
@@ -348,7 +361,7 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 src/
   cli.ts            top-level dispatch (s2s <group> <action>), json/help/version, error envelope
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
-  core/             config + configfile (field registry, config-file IO), context (clients), service, author write/revoke
+  core/             config + configfile (field registry, config-file IO), context (clients), service, author write/revoke, encrypt seam
   adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), ipfs, lit, rpc, filecoin
   commands/         upload / propose / preview / publish / revoke (author), new (publication), config set/get/unset/list/path
 ```
@@ -389,9 +402,44 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 ## Flow notes
 
-- **Signed content**: `buildSignedContentItem` + `noOpEncrypt`; `objectId` = frontmatter `genesis`
-  when present, else the signed item's objectId. `genesis` is written back to the note's frontmatter
-  (`upsertFrontmatter`) when it was missing.
+- **Signed content**: `buildSignedContentItem`; `objectId` = frontmatter `genesis` when present, else
+  the signed item's objectId. `genesis` is written back to the note's frontmatter (`upsertFrontmatter`)
+  when it was missing. This write path is the missing half of the port: `author.ts:2` calls it the CLI
+  port of neutralpress' `publishToPublication`, the step `SPEC-neutralpress.md:73-75` records as never
+  wired there — that package publishes plaintext.
+- **Encrypted notes** (`encryption: true` in the frontmatter): `core/encrypt.ts buildEncryptFn`
+  returns a Lit encryptor bound to `ctx.protocolInfo.pkp` with `LIT_USAGE_KEY`; shared's
+  `buildSignedContentItem` calls it **after signing, before upload**. That order is safe because the
+  signature covers `plaintextHash`, not the body: `plaintextHash` is the keccak of the JCS-canonical
+  body — `jcs` over `{title, slug, content, custom}` (`shared/src/identity/sign-content.ts:54`) —
+  fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext `.body` still
+  satisfies the commitment. The signed item carries `encryption: true`; `encryption: false`/absent
+  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. Four checks at three call
+  sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn` resolves the
+  credentials (`author.ts:109` → `encrypt.ts:240`) and a missing or empty
+  `LIT_USAGE_KEY`/`protocolInfo.pkp` is a `UsageError`; the downgrade guard runs next
+  (`author.ts:112`), so on a plaintext note it has already decided before anything is signed; then
+  the write signs and encrypts (`author.ts:154` → `encrypt.ts:254`). `assertCiphertext` carries two of
+  the checks in its single call: the ciphertext must be JSON text that parses to a non-empty string
+  or object — the read path does `JSON.parse(body.content)`
+  (`protocol/actions/src/libs/decrypt.ts:36`) — so Lit's swallowed error strings are rejected instead
+  of published, and an encryptor that echoes the plaintext back (directly, as a JSON string, or
+  re-serialised) is refused rather than publishing the body in the clear under a lying
+  `encryption: true`. The downgrade guard keys on the identity, `genesis` else `content_id`
+  (`author.ts:386`; legacy `content_id`-only notes are covered), and refuses three states, each with
+  its own message: the previous item is encrypted (restore `encryption: true`, or
+  `--allow-plaintext`); the previous revision cannot be read, cause-classified — a recorded CID that
+  does not resolve gets "fix or remove the stale `kubo_cid`", while a timeout or a gateway fault gets
+  "re-run …, or pass `--allow-plaintext`", so that first remedy does not name the flag; and an
+  identity with no recorded `kubo_cid`, where nothing can be checked at all, also a `UsageError`
+  naming the flag. No silent plaintext fallback. The code records one open risk in its header: the
+  writer's ciphertext shape is inferred from the read path, not from a recorded live `/lit_action`
+  encrypt response, so if a live encrypt returns bare base64 the fix belongs on the read path
+  (`decrypt.ts:36` must stop assuming `JSON.parse`), not in loosening the writer.
+  Reading an encrypted note still has to pass the action's `canRead` gate
+  (`protocol/actions/src/libs/gates.ts`: `canPublish(authorSafe)` + `isOwner(signer)` +
+  `hasDeal(genesis)`) inside `decryptRaw`, so an author preview renders empty/revoked until a deal
+  exists for the note.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
   It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
   only the name label, taken from the ENS name itself.
@@ -399,8 +447,12 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   upload overwrites it, and it describes the note as of that upload, not current edits).
   `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
   the `makeOffer(objectId, kuboCid)` for `--cid` if given, else the stored `kubo_cid`; it
-  expects `upload` to have run first (no genesis, or no CID and no `--cid`, → usage error
-  pointing at `s2s author upload`).
+  expects `upload` to have run first (no identity — `genesis` or `content_id` — or no CID and no
+  `--cid`, → usage error pointing at `s2s author upload`). When the note says `encryption: true`,
+  `propose` also verifies the item it is about to anchor: it fetches that CID and refuses if the
+  stored item does not declare `encryption: true`, has no string body, or cannot be read or parsed —
+  and the check is on the anchored CID (including `--cid`), not on the frontmatter's `kubo_cid`. It
+  runs the same downgrade guard as the write path.
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
   signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
