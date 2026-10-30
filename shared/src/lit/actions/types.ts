@@ -1,4 +1,4 @@
-import { S2SJob } from '../../protocol/types';
+import { S2SJob } from '../../rendering/types';
 
 export type ActionResult<T> =
   | { ok: true; action: string; data: T; trace: any[] }

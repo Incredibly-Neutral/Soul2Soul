@@ -11,7 +11,7 @@ import {
   S2S_DOMAIN,
   S2S_TYPES,
   eoaOf,
-} from '../protocol/types';
+} from '../types';
 
 // ============================================================================
 // verifyAuthorship — called by decryptors before rendering

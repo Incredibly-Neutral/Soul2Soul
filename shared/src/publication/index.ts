@@ -1,4 +1,5 @@
 export * from './types'
+export * from './schemas'
 export * from './validation'
 export * from './config-builder'
 export * from './assets-builder'

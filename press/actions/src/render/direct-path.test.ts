@@ -70,8 +70,8 @@ import type { SingleInput, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-a
 // verdict CAN compute the EIP-712 digest and recover a signer here. The stored
 // item must therefore be MINTED (JCS body → keccak → digest → signature): a
 // hand-shaped objectId/proof is, correctly, a forgery the read path refuses.
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 

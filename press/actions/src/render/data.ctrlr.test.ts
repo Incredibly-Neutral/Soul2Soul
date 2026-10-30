@@ -21,8 +21,8 @@ import {
   toBody,
 } from '../libs/module.factory';
 import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
 
 // The ambient ethers v5 global a Lit Action provides; stub the two functions
 // the integrity verdict uses (identical EIP-712/ecrecover semantics in v6).

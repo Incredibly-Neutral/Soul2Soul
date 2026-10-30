@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { hasSpecV1Terms, stripUndefinedDeep } from './jsonld';
-import { jcs } from '../identity/jcs';
+import { jcs } from '../manuscript/identity/jcs';
 
 describe('stripUndefinedDeep', () => {
   it('drops undefined-valued keys and makes the JCS payload serialisable', () => {

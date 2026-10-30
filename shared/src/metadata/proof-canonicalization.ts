@@ -17,7 +17,7 @@
 // published under the old scheme still verify.
 // ============================================================================
 
-import { jcs } from '../identity/jcs';
+import { jcs } from '../manuscript/identity/jcs';
 
 /** Marker stored on the proof so verifiers know which canonicalisation was used. */
 export const PROOF_CANONICALIZATION_JCS = 'JCS-RFC8785';

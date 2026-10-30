@@ -7,10 +7,10 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // @s2s/soul2soul-shared/lit-actions (only `jcs` and `verifyBodyHash` are) and
 // shared/** is out of scope here, so the compiled identity helpers are imported
 // directly — the same pattern data.ctrlr.ts already uses for
-// shared/dist/protocol/types. Both files are dependency-free (no zod, no viem),
+// shared/dist/manuscript/types. Both files are dependency-free (no zod, no viem),
 // so they stay bundle-safe inside a Lit Action.
-import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/protocol/types';
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
 
 // ───────────────────────────────────────────────────────────────────────────
 // ONE definition of "this stored item may be served".

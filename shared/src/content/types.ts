@@ -1,10 +1,10 @@
 /**
- * @deprecated Use the new content-item types from shared/src/protocol/types.ts instead.
+ * @deprecated Use the new content-item types from shared/src/manuscript/types.ts instead.
  *
  * The new types replace these with:
- * - S2SPublicContent → shared/src/protocol/types.ts (signed, did:ethr author, specVersion, mediaType, plaintextHash)
- * - S2SToEncrypt → S2SContentBody (shared/src/protocol/types.ts)
- * - S2SContentItem → shared/src/protocol/types.ts (flat: public + objectId + proof + encryption + body)
+ * - S2SPublicContent → shared/src/manuscript/types.ts (signed, did:ethr author, specVersion, mediaType, plaintextHash)
+ * - S2SToEncrypt → S2SContentBody (shared/src/manuscript/types.ts)
+ * - S2SContentItem → shared/src/manuscript/types.ts (flat: public + objectId + proof + encryption + body)
  *
  * Old types kept for backward compatibility during migration. New code should
  * import from '@s2s/soul2soul-shared' (the protocol module).
@@ -35,6 +35,6 @@ export interface S2SToEncrypt {
     slug: string
 }
 
-/** @deprecated Extends the deprecated S2SPublicContent. Use the new S2SContentItem from protocol/types.ts. */
+/** @deprecated Extends the deprecated S2SPublicContent. Use the new S2SContentItem from manuscript/types.ts. */
 export interface S2SContentItem extends S2SPublicContent {
 }

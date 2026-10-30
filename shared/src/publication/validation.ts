@@ -1,11 +1,7 @@
 import { z } from 'zod';
-import {
-  templateConfigSchema,
-  rippleSchema,
-  protocolSchema,
-} from '../protocol/schemas';
-import { S2SPublicationConfig } from './types';
-import { S2STemplateConfig, S2SRipple } from '../protocol/types';
+import { templateConfigSchema, rippleSchema } from './schemas';
+import { protocolSchema } from '../protocol/schemas';
+import { S2SPublicationConfig, S2STemplateConfig, S2SRipple } from './types';
 
 
 
