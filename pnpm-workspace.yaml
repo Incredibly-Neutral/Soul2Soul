@@ -1,8 +1,8 @@
 packages:
-  - 'author/*'
-  - 'publication/*'
-  - 'press'
-  - 'shared'
+  - 'src/author/*'
+  - 'src/publication/*'
+  - 'src/press'
+  - 'src/shared'
 
 # Keep peer resolution stable (matches the committed lockfile's
 # `settings.autoInstallPeers: false`); pnpm 10 otherwise flips it to true

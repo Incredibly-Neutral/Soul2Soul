@@ -8,8 +8,8 @@ build/
 *.tsbuildinfo
 # Hardhat & TypeChain
 cache/
-publication/contracts/artifacts/
-publication/ens-contracts/artifacts/
+src/publication/contracts/artifacts/
+src/publication/ens-contracts/artifacts/
 typechain-types/
 *.dbg.json
 cache-solidity-files-cache.json
@@ -43,8 +43,8 @@ coverage/
 temp/
 repomix-output.xml
 # chain-secured deploy-group sidecar (cleartext usage key + derivation path)
-press/scripts/lit/chain-secured-pending.json
-press/scripts/lit/config.chain-secured-pending.json
+src/press/scripts/lit/chain-secured-pending.json
+src/press/scripts/lit/config.chain-secured-pending.json
 # multi-part-lite-adopted/
 .pi
 .hermes

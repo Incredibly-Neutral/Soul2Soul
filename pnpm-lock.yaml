@@ -52,7 +52,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  author/0xobsidian:
+  src/author/0xobsidian:
     dependencies:
       '@filoz/synapse-core':
         specifier: ^0.7.0
@@ -248,7 +248,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  author/author-cli:
+  src/author/author-cli:
     dependencies:
       '@s2s/publication-contracts':
         specifier: workspace:*
@@ -282,7 +282,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.39)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.25.12)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  author/neutralpress:
+  src/author/neutralpress:
     dependencies:
       '@fluencelabs/aqua-lib':
         specifier: ^0.6.0
@@ -424,7 +424,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  press:
+  src/press:
     dependencies:
       '@ensdomains/content-hash':
         specifier: ^3.0.0
@@ -641,7 +641,7 @@ importers:
         specifier: ^9.0.4
         version: 9.0.5
 
-  publication/contracts:
+  src/publication/contracts:
     dependencies:
       '@openzeppelin/contracts':
         specifier: ^4.9.6
@@ -687,7 +687,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  publication/safe-app:
+  src/publication/safe-app:
     dependencies:
       '@ipld/car':
         specifier: ^5.4.6
@@ -766,7 +766,7 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.39)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  shared:
+  src/shared:
     dependencies:
       '@filoz/synapse-core':
         specifier: ^0.7.0
@@ -836,7 +836,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@18.19.130)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  publication/ens-contracts:
+  src/publication/ens-contracts:
     dependencies:
       '@openzeppelin/contracts':
         specifier: ^4.9.6
