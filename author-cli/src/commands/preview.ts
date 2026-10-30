@@ -7,11 +7,12 @@
 import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
+import { flagBool } from '../lib/args';
 
 export const preview: CommandSpec = {
   name: 'preview',
   summary: 'Upload a note and render a preview (Bun runner, no on-chain offer, no prod mutation).',
-  usage: 's2s author preview <note> [--publication <ens>] [--json]',
+  usage: 's2s author preview <note> [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);
@@ -21,6 +22,8 @@ export const preview: CommandSpec = {
       render: true,
       publish: false,
       offer: false,
+      // Explicit opt-in to republishing a previously-encrypted genesis in the clear.
+      allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
     });
 
     ctx.out.result(
