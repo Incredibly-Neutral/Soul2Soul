@@ -15,7 +15,6 @@ import { basename } from 'node:path';
 
 import {
   buildSignedContentItem,
-  noOpEncrypt,
   parseMarkdownNote,
   renderwithLitActions,
   revokedPathFor,
@@ -24,6 +23,7 @@ import {
   toDidEthr,
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
+import type { ParsedNote } from '@s2s/soul2soul-shared';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
@@ -31,6 +31,8 @@ import { KUBO_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmat
 import { UsageError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
+import { assertCiphertext, buildEncryptFn, fetchStoredItem } from './encrypt';
+import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
 
@@ -74,6 +76,12 @@ export interface AuthorWriteOptions {
   offer: boolean;
   /** Revocation remove entries (render path only). */
   remove?: { path: string; replacedBy?: string }[];
+  /**
+   * Allow replacing a previously-encrypted genesis with a plaintext body
+   * (`--allow-plaintext`). Without it, a republish that drops `encryption: true`
+   * is refused — see `guardEncryptionDowngrade`.
+   */
+  allowPlaintext?: boolean;
 }
 
 // ===========================================================================
@@ -96,6 +104,16 @@ export async function authorWrite(
   // the fallback title, so an absolute path slugifies into `/home/…/note` —
   // `homejoerawhitepaperauthor` — and that becomes the render path.
   const parsed = await parseMarkdownNote(raw, basename(notePath));
+
+  // Resolve the encrypt function FIRST, before any chain/IPFS work: a note with
+  // `encryption: true` and no usable Lit key/PKP must fail closed with a usage
+  // error, not upload a plaintext (or error-string) body. `upload`, `preview`
+  // and `publish` all land here, so this one place covers them. (`propose` does
+  // not re-sign: it verifies the target item instead — see proposeContent.)
+  const encryptFn = buildEncryptFn(ctx, parsed, notePath);
+
+  // Refuse a silent downgrade (encrypted genesis → plaintext body).
+  await guardEncryptionDowngrade(ctx, parsed, notePath, opts);
 
   // The author id is the author Safe, not the EOA — that is what the plugin
   // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
@@ -153,7 +171,7 @@ export async function authorWrite(
     },
     { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
     ctx.signer,
-    noOpEncrypt,
+    encryptFn,
     toDidEthr(author.address),
   );
 
@@ -233,6 +251,7 @@ export async function proposeContent(
   notePath: string,
   publication: string,
   kuboCidFlag: string | undefined,
+  opts: { allowPlaintext?: boolean } = {},
 ): Promise<ProposeResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, basename(notePath));
@@ -249,6 +268,19 @@ export async function proposeContent(
     throw new UsageError(
       `cannot propose ${notePath}: no content CID (no \`--cid\` given and no \`${KUBO_CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
     );
+  }
+
+  // `propose` anchors an EXISTING CID, so the note's flag is not what gets
+  // published — the stored item is. Both directions are checked, before any
+  // chain call:
+  //   - note says encrypted: the anchored item (`--cid` included) must itself
+  //     declare `body.encryption: true` and carry a decryptable body;
+  //   - note says plaintext: the previous revision of the same genesis must
+  //     not have been encrypted (the same question `upload` asks, same guard —
+  //     otherwise `propose --cid <plaintext>` re-opens the downgrade).
+  await guardEncryptionDowngrade(ctx, parsed, notePath, opts);
+  if (parsed.encryption) {
+    await assertStoredItemEncrypted(ctx, kuboCid, notePath);
   }
 
   // The write is sent by the author Safe: the module keys genesisAuthor and the
@@ -282,6 +314,146 @@ export async function proposeContent(
     publication,
     subdomain: service.subdomain,
     txHash,
+  };
+}
+
+// ===========================================================================
+// Encryption guards on existing content
+// ===========================================================================
+
+/**
+ * Refuse to propose a CID whose stored item is plaintext when the note asks for
+ * encryption. Also refuses an item that cannot be read or whose encrypted body
+ * does not meet the read-path contract — proposing either would anchor
+ * something the render path cannot decrypt.
+ */
+async function assertStoredItemEncrypted(
+  ctx: CliContext,
+  kuboCid: string,
+  notePath: string,
+): Promise<void> {
+  const stored = await fetchStoredItem(ctx.ipfs, kuboCid, notePath);
+  if (!stored.encryption) {
+    throw new UsageError(
+      `refusing to propose ${notePath}: ${kuboCid} declares \`encryption: false\` but the note has \`encryption: true\`. Re-upload the note (\`s2s author upload\`) so the offered CID is encrypted.`,
+    );
+  }
+  if (stored.body === undefined) {
+    throw new UsageError(
+      `refusing to propose ${notePath}: ${kuboCid} says \`encryption: true\` but has no string body`,
+    );
+  }
+  assertCiphertext(stored.body);
+}
+
+/**
+ * Refuse to republish or re-offer a genesis as plaintext when its previous
+ * revision was encrypted.
+ *
+ * `parsed.encryption` only reflects the CURRENT frontmatter, so a dropped,
+ * renamed or mistyped key would put a plaintext body where a ciphertext one
+ * was. This guard is load-bearing precisely because the two revisions are NOT
+ * distinguishable from the outside: `plaintextHash` is computed over the
+ * canonical plaintext before `encryptFn` runs
+ * (`shared/src/identity/sign-content.ts:53-73`), so both revisions share
+ * `objectId`, `plaintextHash` and therefore the author's signature — only
+ * `body` and `body.encryption` differ. The previous item's flag is the only
+ * trustworthy record; it is read from the CID the last upload recorded.
+ *
+ * Everything that prevents the check from happening FAILS CLOSED, and the
+ * failure says which of the three situations it is: no recorded CID (least is
+ * known — a note with an identity but no `kubo_cid` can hide an encrypted
+ * revision), a CID that does not resolve (a stale/hand-edited `kubo_cid`), or a
+ * gateway that is unreachable/slow. `fetchFromKubo` is an ordinary HTTPS call to
+ * `ctx.config.kuboGateway` (repo default `ipfs.transport-union.dev`) bounded by
+ * the shared 60s `MFS_TIMEOUTS.cp` — that ceiling is on the now-blocking
+ * default path, and it cannot be shortened from here because `fetchFromKubo`
+ * takes no signal/options; a client-side race would only leak the pending
+ * fetch. No retry is attempted. `--allow-plaintext` is the escape hatch for all
+ * three (a confirmed downgrade, or a read the author cannot complete plus a
+ * deliberate decision to proceed).
+ *
+ * The one silent path is a note with no identity at all (`genesis` or
+ * `content_id`): there is no previous revision, so there is nothing to compare
+ * against.
+ */
+async function guardEncryptionDowngrade(
+  ctx: CliContext,
+  parsed: ParsedNote,
+  notePath: string,
+  opts: { allowPlaintext?: boolean },
+): Promise<void> {
+  if (parsed.encryption || opts.allowPlaintext) return;
+
+  // The identity is what makes "a previous revision" a meaningful idea. Legacy
+  // notes carry `content_id` instead of `genesis`; both are keyed here so a
+  // plaintext re-publish through either route is checked.
+  const identity = parsed.genesis ?? parsed.contentId;
+  if (typeof identity !== 'string' || identity.trim() === '') return;
+
+  const recordedCid = parsed.frontmatter[KUBO_CID_KEY];
+  const previousCid = typeof recordedCid === 'string' ? recordedCid.trim() : '';
+  if (previousCid === '') {
+    // Least is known in this state, so it is not a warning: a note with an
+    // identity but no recorded CID can hide an encrypted previous revision, and
+    // the warning channel is stderr, which the plugin never renders on a
+    // success envelope.
+    throw new UsageError(
+      `refusing to publish ${notePath}: identity ${identity} has no recorded \`${KUBO_CID_KEY}\`, so the previous revision cannot be checked for encryption and this note has \`encryption: false\`. Re-add the CID, restore \`encryption: true\`, or pass --allow-plaintext to publish a plaintext revision anyway.`,
+    );
+  }
+
+  let stored: Awaited<ReturnType<typeof fetchStoredItem>>;
+  try {
+    stored = await fetchStoredItem(ctx.ipfs, previousCid, notePath);
+  } catch (err) {
+    // `fetchFromKubo` throws "Failed to fetch from IPFS: <status>" for a non-2xx
+    // answer and the AbortSignal error for the (60s, shared MFS_TIMEOUTS.cp)
+    // ceiling — different problems, different remedies.
+    const detail = describePreviousReadFailure(err);
+    throw new UsageError(
+      `refusing to publish ${notePath}: could not read the previous revision ${previousCid} of identity ${identity} to check whether it is encrypted — ${detail.reason}. This note has \`encryption: false\`, so publishing could replace a ciphertext body with plaintext. ${detail.remedy}`,
+    );
+  }
+  if (stored.encryption) {
+    throw new UsageError(
+      `refusing to republish ${notePath}: the previous item ${previousCid} for identity ${identity} is encrypted, and this note has \`encryption: false\` — that would publish the body in the clear. Restore \`encryption: true\`, or pass --allow-plaintext if the downgrade is intentional.`,
+    );
+  }
+}
+
+/**
+ * Split a failed previous-revision read into a cause and the remedy for it.
+ *
+ * The read is the now-blocking default path, so a stale CID (author error, fix
+ * the note), a gateway fault and a timeout (environment, retry later or accept
+ * the risk) must not be reported as the same thing.
+ *
+ * Limit of the classification: it can only use the HTTP status and the abort
+ * signal, because `S2SIPFSMethods.fetchFromKubo` discards the response body
+ * (`shared/src/ipfs/index.ts:337-342`). A Kubo 500 whose body says "block was
+ * not found locally" is therefore reported as a gateway fault; surfacing it as
+ * a stale CID needs that body, which is a `shared/` change.
+ */
+function describePreviousReadFailure(err: unknown): { reason: string; remedy: string } {
+  const message = err instanceof Error ? err.message : String(err);
+
+  const status = /Failed to fetch from IPFS:\s*(\d{3})\b/.exec(message)?.[1] ?? '';
+  if (status.startsWith('4')) {
+    return {
+      reason: `the recorded \`${KUBO_CID_KEY}\` does not resolve (${message})`,
+      remedy: `Fix or remove the stale \`${KUBO_CID_KEY}\` in the frontmatter, then re-run.`,
+    };
+  }
+  if (/abort|timeout/i.test(message)) {
+    return {
+      reason: `the gateway read timed out (${message})`,
+      remedy: 'Re-run once the gateway is responsive, or pass --allow-plaintext if you accept a plaintext revision.',
+    };
+  }
+  return {
+    reason: `the gateway could not be reached (${message})`,
+    remedy: 'Re-run once the gateway is reachable, or pass --allow-plaintext if you accept a plaintext revision.',
   };
 }
 
@@ -331,7 +503,7 @@ async function renderContent(
   // prints with a doubled slash (`https://polyphony.soul2soul.eth//1-intro/`).
   const join = (root: string, path: string) => `${root.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
   const previewUrl = join(`https://${toPreviewLabel(cid)}.ipfs.transport-union.dev`, res.path);
-  const ipfsUrl = join(`ipfs://${cid}`, res.path);
+  const ipfsUrl = join(ipfsUri(cid), res.path);
   const prodUrl = opts.publish ? join(`https://${publication}`, res.path) : undefined;
 
   return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl };
