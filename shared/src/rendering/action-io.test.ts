@@ -12,7 +12,7 @@ import {
 
 // ============================================================================
 // requireFields — tested inline to avoid cross-package module resolution issues
-// with nodenext. Mirrors protocol/actions/src/libs/helpers.ts exactly.
+// with nodenext. Mirrors press/actions/src/libs/helpers.ts exactly.
 // ============================================================================
 function requireFields<T extends object>(obj: T, fields: (keyof T)[]): void {
   const missing = fields.filter((f) => obj[f] === undefined || obj[f] === null || obj[f] === '');

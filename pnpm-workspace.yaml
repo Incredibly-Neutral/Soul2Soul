@@ -1,10 +1,9 @@
 packages:
   - 'author/*'
   - 'publication/*'
-  - 'verification/*'
-  - 'protocol'
+  - 'verification/contracts'
+  - 'press'
   - 'shared'
-  - 'safe-app'
 
 # Keep peer resolution stable (matches the committed lockfile's
 # `settings.autoInstallPeers: false`); pnpm 10 otherwise flips it to true

@@ -31,7 +31,7 @@
  * ### Remove-path derivation (B1)
  *
  * The render pipeline computes an item's page path in `createPath`
- * (`protocol/actions/src/render/data.ctrlr.ts`):
+ * (`press/actions/src/render/data.ctrlr.ts`):
  *
  *     prefix  = localePaths[body.locale] ?? localePaths.default ?? ''   ('' if no localePaths)
  *     path    = prefix + templateConfig.path                            (with `{slug}` → body.slug)

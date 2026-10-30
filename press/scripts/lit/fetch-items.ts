@@ -1,4 +1,4 @@
-// protocol/scripts/lit/fetch-items.ts — Phase 1: pull all publication item
+// press/scripts/lit/fetch-items.ts — Phase 1: pull all publication item
 // CIDs from ipfs.transport-union.dev into a local staging dir for the
 // off-chain archive rebuild. Read-only against the gateway (no writes on-chain).
 //

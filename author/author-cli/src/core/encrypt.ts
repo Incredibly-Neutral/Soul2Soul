@@ -3,11 +3,11 @@
 //
 // WHAT THE READ PATH REQUIRES (this is the contract the write path must meet):
 //   - An encrypted item stores the ciphertext as TEXT in `item.body`
-//     (`protocol/actions/src/libs/module.factory.ts:359-361` — `toBody` passes
+//     (`press/actions/src/libs/module.factory.ts:359-361` — `toBody` passes
 //     it through as `content`).
 //   - `decryptRaw` does `JSON.parse(body.content)` and hands the parsed value
 //     to `Lit.Actions.Decrypt({ pkpId, ciphertext })`
-//     (`protocol/actions/src/libs/decrypt.ts:36`).
+//     (`press/actions/src/libs/decrypt.ts:36`).
 //   So the encryptor must return a string that `JSON.parse`s, and the parsed
 //   value must be usable as a ciphertext: a non-empty string, or a non-empty
 //   object. Anything else is a body the render path cannot decrypt, so it is
@@ -23,7 +23,7 @@
 //   `result.response.ciphertext` verbatim from the action's
 //   `Lit.Actions.Encrypt({ pkpId, message })`, so its type is genuinely unknown
 //   here. If a live run shows raw base64, the JSON requirement still stands:
-//   the fix belongs in the READ path (`protocol/actions/src/libs/decrypt.ts:36`
+//   the fix belongs in the READ path (`press/actions/src/libs/decrypt.ts:36`
 //   must stop assuming `JSON.parse`), not in loosening the writer — publishing a
 //   body nothing can render is worse than refusing to publish it.
 //
@@ -46,7 +46,7 @@
 //     `LIT_USAGE_KEY` or `protocolInfo.pkp` is a `UsageError` before any
 //     chain/IPFS work. There is no fallback to `noOpEncrypt`.
 //   - The body is encrypted to `protocolInfo.pkp`, the same flattened PKP the
-//     render action decrypts with (`protocol/actions/src/render/data.ctrlr.ts`
+//     render action decrypts with (`press/actions/src/render/data.ctrlr.ts`
 //     — `decryptRaw(protocolInfo.pkp, …)`).
 //
 // FRONTMATTER COERCION (owned by shared/src/authoring/note.ts:218,
@@ -177,7 +177,7 @@ export function assertCiphertext(value: unknown, plaintext?: string): string {
     // Lit outage.
     throw new CliError(
       `encryption failed: got ${describeUnparseable(value)}, which cannot be stored as an encrypted body — nothing was published. ` +
-        'The read path requires JSON text: protocol/actions/src/libs/decrypt.ts:36 does `JSON.parse(body.content)` and passes the parsed value to `Lit.Actions.Decrypt`. ' +
+        'The read path requires JSON text: press/actions/src/libs/decrypt.ts:36 does `JSON.parse(body.content)` and passes the parsed value to `Lit.Actions.Decrypt`. ' +
         'If this really is Lit\'s ciphertext, the read path has to accept that shape before any encrypted note can be published.',
     );
   }

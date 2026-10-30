@@ -7,7 +7,7 @@
  * 0x24936f87442673B7c057BF3f5dCCB726baF20c6B). There is no account API key.
  *
  * Flow:
- *   1. build protocol/actions/dist/<action>/main.js, compact, compute CID,
+ *   1. build press/actions/dist/<action>/main.js, compact, compute CID,
  *      upload to Pinata (unchanged — no auth)
  *   2. build + propose ONE Safe batch against the EXISTING group id from
  *      config.json: addAction(hash) + addActionToGroup(groupId, hash)
@@ -58,7 +58,7 @@ const actionName = process.argv[2] ?? 'updateEvm'; // backward-compatible defaul
 
 const isDryRun = () => process.env.LIT_DRY_RUN === '1' || process.argv.includes('--dry-run');
 
-const actionPath = `./protocol/actions/dist/${actionName}/main.js`;
+const actionPath = `./press/actions/dist/${actionName}/main.js`;
 const code = fs.readFileSync(actionPath, 'utf-8');
 
 const ipfs = new S2SIPFSMethods(

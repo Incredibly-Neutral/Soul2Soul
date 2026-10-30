@@ -126,7 +126,7 @@ export interface FilecoinCarBuilder {
  *  (browser-usable as an INDEPENDENT PRIMARY). Two-indep-primary strategy
  *  only needs primary usability — the SP-to-SP pull path is bypassed, so a
  *  provider's pull-endpoint health is irrelevant here.
- *  Re-run protocol/scripts/filecoin/probe-providers.ts to refresh. */
+ *  Re-run press/scripts/filecoin/probe-providers.ts to refresh. */
 const BROWSER_USABLE_PROVIDERS = [1n, 5n, 7n, 13n, 15n, 29n, 30n, 32n];
 
 /**

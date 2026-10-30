@@ -64,7 +64,7 @@ const proposeToSafe = async (account: any, transactions: any[]) => {
  * from what the tooling thinks the repoint action is.
  *
  * Usage:
- *   pnpm tsx protocol/scripts/lit/repoint-record.ts
+ *   pnpm tsx press/scripts/lit/repoint-record.ts
  *   (or: pnpm repoint-record  — not wired yet, run via tsx directly)
  *   LIT_DRY_RUN=1 ... to preview the batch without proposing.
  */

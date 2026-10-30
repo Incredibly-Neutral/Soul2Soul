@@ -1,4 +1,4 @@
-// protocol/scripts/filecoin/storage-info.ts
+// press/scripts/filecoin/storage-info.ts
 import { Synapse, mainnet } from "@filoz/synapse-sdk";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "dotenv";

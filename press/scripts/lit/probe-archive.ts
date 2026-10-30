@@ -1,4 +1,4 @@
-// protocol/scripts/lit/probe-archive.ts — PHASE 0 (read-only) verification.
+// press/scripts/lit/probe-archive.ts — PHASE 0 (read-only) verification.
 //
 // Goal: verify the recovery preconditions for the lost per-publication content
 // archive cache WITHOUT writing anything on-chain.

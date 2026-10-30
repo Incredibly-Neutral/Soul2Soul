@@ -4,7 +4,7 @@
 //
 // PR #83 added an optional `domain` to S2SPublicationConfig so the EVM update
 // action can write the publication's contenthash to `namehash(domain)` instead
-// of the default `namehash(name)` subdomain (protocol/actions/src/update/main.ts
+// of the default `namehash(name)` subdomain (press/actions/src/update/main.ts
 // picks `writeDomain = config.domain || publication` and writes contenthash at
 // `namehash(writeDomain)`). Without a guard that is an arbitrary-node write: any
 // domain could be targeted. This module closes that hole on the safe-app side —

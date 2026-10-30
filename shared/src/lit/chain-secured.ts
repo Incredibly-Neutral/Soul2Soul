@@ -17,7 +17,7 @@
  *  - WritesFacet.sol / ViewsFacet.sol / AppStorage.sol from
  *    LIT-Protocol/chipotle (lit-api-server/blockchain/lit_node_express/contracts/AccountConfigFacets/)
  *  - core_sdk.js / account_config_full_abi.js / tx_lifecycle.js from lit-static
- *  - protocol/scripts/lit/update-protocol.ts (the Safe propose mechanism reused here)
+ *  - press/scripts/lit/update-protocol.ts (the Safe propose mechanism reused here)
  *
  * Verified vectors (independent keccak256 check):
  *  - actionHash('QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh') ==
@@ -99,7 +99,7 @@ export interface UsageKey {
   usageHash: Hex;
 }
 
-/** Shape of protocol/scripts/lit/config.json group entries. */
+/** Shape of press/scripts/lit/config.json group entries. */
 export interface LitActionConfig {
   name: string;
   cid: string;
@@ -487,7 +487,7 @@ export function encodeSetUsageApiKey(p: SetUsageApiKeyParams): EncodedWrite {
 /**
  * Wrap encoded WritesFacet calls into Safe batch entries ({ to, value, data,
  * operation }) targeting the AccountConfig diamond. Mirrors the transaction
- * shape built by protocol/scripts/lit/update-protocol.ts.
+ * shape built by press/scripts/lit/update-protocol.ts.
  */
 export function buildSafeBatch(
   writes: EncodedWrite[],
@@ -718,7 +718,7 @@ export interface ProposeToSafeOptions {
 }
 
 /**
- * Propose a Safe batch exactly like protocol/scripts/lit/update-protocol.ts:
+ * Propose a Safe batch exactly like press/scripts/lit/update-protocol.ts:
  *  - @safe-global/protocol-kit Safe.init({ provider, signer, safeAddress })
  *  - createTransaction({ transactions }) + getTransactionHash + signHash
  *  - @safe-global/api-kit proposeTransaction on Base (chainId 8453n)
@@ -840,14 +840,14 @@ export function findS2SGroup(config: LitConfigFile, groupName = 's2s'): LitGroup
 // ── env loading ─────────────────────────────────────────────────────────────
 
 /**
- * Load .env from the monorepo root (three levels up from protocol/scripts/lit,
+ * Load .env from the monorepo root (three levels up from press/scripts/lit,
  * two levels up from this file), with protocol/.env as a fallback. Mirrors
  * add-dev-action.ts's root resolution; `tsx --require dotenv/config` also loads
  * root .env from the CWD, this makes it robust to any cwd.
  */
 export function loadMonorepoEnv(fromFile: string): void {
   const scriptDir = path.dirname(fromFile);
-  const root = path.resolve(scriptDir, '../../..'); // <root>/protocol/scripts/lit -> <root>
+  const root = path.resolve(scriptDir, '../../..'); // <root>/press/scripts/lit -> <root>
   dotenv.config({ path: path.join(root, '.env') });
   dotenv.config({ path: path.join(scriptDir, '../.env') });
 }

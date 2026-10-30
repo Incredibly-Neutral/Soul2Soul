@@ -1,5 +1,5 @@
 {
-  "name": "@s2s/protocol",
+  "name": "@s2s/press",
   "version": "1.0.0",
   "description": "Smart contract protocol",
   "type": "module",
@@ -10,10 +10,10 @@
     "filecoin:fund-account": "tsx ./scripts/filecoin/fund-account.ts",
     "filecoin:terminate-datasets": "tsx ./scripts/filecoin/terminate-datasets.ts",
     "filecoin:storage-info": "tsx ./scripts/filecoin/storage-info.ts",
-    "protocol:update": "tsx ./scripts/lit/update-protocol.ts",
     "test": "vitest run --reporter=verbose",
     "contracts:publication:compile": "pnpm -C ../publication/contracts run compile",
-    "contracts:verification:compile": "pnpm -C ../verification/contracts run compile"
+    "contracts:verification:compile": "pnpm -C ../verification/contracts run compile",
+    "press:update": "tsx ./scripts/lit/update-protocol.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
