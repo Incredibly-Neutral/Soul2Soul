@@ -3,7 +3,7 @@ import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
 import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
-import { S2SPublicationModuleV2 } from "../../../protocol/contracts/generated/abis"
+import { S2SPublicationModuleV2 } from "../../../../protocol/contracts/generated/abis"
 import { toBytes32Id } from '@s2s/soul2soul-shared'; 
 
 const L1 = "ETH_MAINNET";

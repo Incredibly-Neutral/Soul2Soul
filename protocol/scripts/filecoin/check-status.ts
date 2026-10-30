@@ -34,7 +34,7 @@ const RPC_URL =
 // Session key JSON paths
 const PLUGIN_DIR = resolve(
   process.cwd(),
-  "../0xobsidian/.obsidian/plugins/0xobsidian",
+  "../author/0xobsidian/.obsidian/plugins/0xobsidian",
 );
 const SK_PATHS = [
   resolve(process.cwd(), "scripts/filecoin/session-key.json"),

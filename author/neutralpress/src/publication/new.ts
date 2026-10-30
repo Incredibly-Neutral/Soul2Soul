@@ -23,7 +23,7 @@ import {
 	S2SRecordsModuleFactory,
 	S2SPublicationModuleV2Factory,
 	S2SRecordsModule,
-} from '../../../protocol/contracts/generated/abis';
+} from '../../../../protocol/contracts/generated/abis';
 
 export const newPublicationSafe = async (main: any, publication: S2SPublication) => {
 	const githubToken =

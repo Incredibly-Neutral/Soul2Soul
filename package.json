@@ -15,15 +15,15 @@
     "update-protocol": "tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts",
     "lit:probe-core-api": "node protocol/scripts/lit/lit-core-api-probe.mjs",
     "deploy-action": "bash -c 'pnpm actions:build && tsx --require dotenv/config protocol/scripts/lit/swap-action.ts $1 && tsx --require dotenv/config protocol/scripts/lit/update-protocol.ts' deploy-action",
-    "plugins": "pnpm -C shared run build && pnpm -C 0xobsidian run build && pnpm -C neutralpress run build",
+    "plugins": "pnpm -C shared run build && pnpm -C author/0xobsidian run build && pnpm -C author/neutralpress run build",
     "shared": "pnpm -C shared run build",
     "test": "pnpm -r test",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
-    "author-cli:build": "pnpm -C author-cli run build",
-    "author-cli:test": "pnpm -C author-cli run test"
+    "author-cli:build": "pnpm -C author/author-cli run build",
+    "author-cli:test": "pnpm -C author/author-cli run test"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "5.29.0",
