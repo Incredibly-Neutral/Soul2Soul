@@ -23,7 +23,7 @@ import {
   S2SRecordsModule,
   S2SRecordsModuleFactory,
   S2SPublicationModuleV2Factory,
-} from '../../../protocol/contracts/generated/abis';
+} from '../../../../protocol/contracts/generated/abis';
 
 import { createSafeRunner } from '../adapters/tx-runner';
 import { flagList, flagString, type ParsedArgs } from '../lib/args';

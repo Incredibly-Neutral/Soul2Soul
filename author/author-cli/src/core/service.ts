@@ -16,7 +16,7 @@ import {
   toBytes32Id,
   type S2SIPFSMethods,
 } from '@s2s/soul2soul-shared';
-import { S2SRecordsModule, S2SPublicationModuleV2 } from '../../../protocol/contracts/generated/abis';
+import { S2SRecordsModule, S2SPublicationModuleV2 } from '../../../../protocol/contracts/generated/abis';
 import { BaseError, type Address, type Hex } from 'viem';
 import type { TxRunner } from '@s2s/soul2soul-shared';
 import { CliError } from '../lib/errors';

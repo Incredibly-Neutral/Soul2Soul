@@ -1,6 +1,6 @@
 import { defineConfig, mergeConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
-import base from '../vitest.config.base';
+import base from '../../vitest.config.base';
 
 export default mergeConfig(
 	base,
@@ -15,7 +15,7 @@ export default mergeConfig(
 				// Resolve the shared package to its TS source (same as safe-app): the
 				// built CJS dist does `require('multiformats/cid')`, which Node's
 				// require-condition resolver rejects (export has no `require` entry).
-				'@s2s/soul2soul-shared': fileURLToPath(new URL('../shared/src', import.meta.url)),
+				'@s2s/soul2soul-shared': fileURLToPath(new URL('../../shared/src', import.meta.url)),
 			},
 		},
 		test: {
