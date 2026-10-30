@@ -67,13 +67,13 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // this entry (its cache-load validator); vitest requires the mocked module
   // to provide it. Import the REAL validation (zod only — no ethers/identity
   // graph, so the browser bundle stays light) to keep the fail-closed posture.
-  const validation = await import('../../../shared/src/cid-view/validation.ts');
+  const validation = await import('../../../../shared/src/cid-view/validation.ts');
   // T4b: the batch retrievability adapter (src/lib/cid-view.ts) also imports
   // these from the safe-app entry — provide the real (pure, browser-safe)
   // implementations so the named imports resolve.
-  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
-  const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
-  const client = await import('../../../shared/src/cid-view/ipfs-check-client.ts');
+  const retrievability = await import('../../../../shared/src/cid-view/retrievability.ts');
+  const parser = await import('../../../../shared/src/cid-view/retrieval-parser.ts');
+  const client = await import('../../../../shared/src/cid-view/ipfs-check-client.ts');
   return {
     S2SIPFSMethods: class {},
     buildPublicationCidView: async () => ({

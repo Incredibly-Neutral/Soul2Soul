@@ -55,9 +55,9 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // also real so the component's cache-load path validates exactly as in src.
   // The retrievability helpers are real too — the section's risk-sorted flat
   // table + stalest-first recheck loop depend on them.
-  const real = await import('../../../shared/src/cid-view/coordinator.ts');
-  const validation = await import('../../../shared/src/cid-view/validation.ts');
-  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
+  const real = await import('../../../../shared/src/cid-view/coordinator.ts');
+  const validation = await import('../../../../shared/src/cid-view/validation.ts');
+  const retrievability = await import('../../../../shared/src/cid-view/retrievability.ts');
   realBuild.fn = real.buildPublicationCidView;
   return {
     buildPublicationCidView: buildSpy,

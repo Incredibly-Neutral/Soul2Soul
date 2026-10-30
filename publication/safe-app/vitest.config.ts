@@ -3,7 +3,7 @@ import { playwright } from '@vitest/browser-playwright';
 import { resolve } from 'path';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import base from '../vitest.config.base';
+import base from '../../vitest.config.base';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(__dirname, '.');
@@ -26,9 +26,9 @@ const appRoot = resolve(__dirname, '.');
 export default mergeConfig(
   base,
   defineConfig({
-    // Load ../.env (monorepo root) so VITE_* vars are exposed via
+    // Load ../../.env (monorepo root) so VITE_* vars are exposed via
     // import.meta.env in both node and browser test runs.
-    envDir: resolve(appRoot, '..'),
+    envDir: resolve(appRoot, '../..'),
 
     resolve: {
       alias: [
@@ -36,14 +36,14 @@ export default mergeConfig(
         { find: '@/components', replacement: resolve(appRoot, 'src/components') },
         { find: '@/types', replacement: resolve(appRoot, 'src/types') },
         { find: '@/utils', replacement: resolve(appRoot, 'src/utils') },
-        { find: '@s2s/soul2soul-shared', replacement: resolve(appRoot, '../shared/src') },
-        { find: '@s2s/soul2soul-shared/protocol', replacement: resolve(appRoot, '../shared/src/protocol') },
-        { find: '@s2s/soul2soul-shared/publication', replacement: resolve(appRoot, '../shared/src/publication') },
-        { find: '@s2s/soul2soul-shared/lit', replacement: resolve(appRoot, '../shared/src/lit') },
-        { find: '@s2s/soul2soul-shared/lit-actions', replacement: resolve(appRoot, '../shared/src/lit-actions') },
+        { find: '@s2s/soul2soul-shared', replacement: resolve(appRoot, '../../shared/src') },
+        { find: '@s2s/soul2soul-shared/protocol', replacement: resolve(appRoot, '../../shared/src/protocol') },
+        { find: '@s2s/soul2soul-shared/publication', replacement: resolve(appRoot, '../../shared/src/publication') },
+        { find: '@s2s/soul2soul-shared/lit', replacement: resolve(appRoot, '../../shared/src/lit') },
+        { find: '@s2s/soul2soul-shared/lit-actions', replacement: resolve(appRoot, '../../shared/src/lit-actions') },
         {
           find: 'filecoin-pin/dist/core/unixfs/browser.js',
-          replacement: resolve(appRoot, '../node_modules/filecoin-pin/dist/core/unixfs/browser.js'),
+          replacement: resolve(appRoot, '../../node_modules/filecoin-pin/dist/core/unixfs/browser.js'),
         },
       ],
     },
