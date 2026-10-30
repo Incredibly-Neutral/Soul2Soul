@@ -8,7 +8,7 @@ import { ConfigBuilder, parseGitHubUrl } from './config-builder';
 
 // =============================================================================
 // Protocol-generated ABIs injected because they live outside shared's rootDir.
-// Neutralpress imports them from protocol/contracts/generated/abis;
+// Neutralpress imports them from @s2s/publication-contracts;
 // safe-app will provide them from its own build path.
 // =============================================================================
 export interface NewPublicationDeps {

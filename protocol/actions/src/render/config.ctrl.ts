@@ -7,7 +7,7 @@ import {
   S2SRipple,
   S2STemplateConfig,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts';
+import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
 
 export const getConfig = async (
   configCid: string | undefined,

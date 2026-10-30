@@ -2,7 +2,7 @@
 
 import { evmRead } from "./evm";
 import { getProtocolControllerAndModules } from "./ens.factory";
-import { Abi_S2SRecordsModule } from '../../../contracts/generated/abis/S2SRecordsModule.ts'
+import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule'
 
 
 export const getProtocolInfo = async (dev: boolean, rpcs?: { L1: string[]; L2: string[] }) => {

@@ -55,7 +55,7 @@ import type { IMainController } from '../main.ctrlr';
 import { subdomainOf } from '../content/ens-tags';
 import type { RemoveEntry } from '../render/render.helper';
 import { renderCalls } from '../render/render.helper';
-import { S2SRecordsModule } from '../../../../protocol/contracts/generated/abis';
+import { S2SRecordsModule } from '@s2s/publication-contracts';
 import type { IPublicationSrv } from './publication.service';
 
 /**

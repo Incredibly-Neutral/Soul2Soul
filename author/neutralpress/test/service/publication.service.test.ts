@@ -18,7 +18,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PublicationService } from '../../src/publication/publication.service';
 import { makeMain } from '../helpers/main';
 import { safeAbi, toBytes32Id } from '@s2s/soul2soul-shared';
-import { S2SPublicationModuleV2 } from '../../../../protocol/contracts/generated/abis';
+import { S2SPublicationModuleV2 } from '@s2s/publication-contracts';
 
 const MODULE_RECORDS = '0x' + 'a'.repeat(40); // NAME() === 'S2S Records Module'
 const MODULE_PUBLICATION = '0x' + 'b'.repeat(40); // NAME() === 'S2S Publication Module V2'

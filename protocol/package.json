@@ -4,12 +4,6 @@
   "description": "Smart contract protocol",
   "type": "module",
   "scripts": {
-    "compile": "hardhat --config contracts/hardhat.config.ts compile",
-    "deploy:pubfac": "npx tsx contracts/scripts/deploy-publication-factory.ts",
-    "deploy:pub": "npx tsx contracts/scripts/update-impl.ts",
-    "deploy:ens": "hardhat --config contracts/hardhat.config.ts deploy --tags ENS --network @@MODE @@",
-    "verify": "npx tsx contracts/scripts/verify-pub.ts",
-    "export": "ldenv rocketh-export -e @@MODE @@",
     "filecoin:setup-key": "tsx ./scripts/filecoin/setup-session-key.ts",
     "filecoin:setup-payment": "tsx ./scripts/filecoin/setup-payment.ts",
     "filecoin:check-status": "tsx ./scripts/filecoin/check-status.ts",
@@ -17,7 +11,9 @@
     "filecoin:terminate-datasets": "tsx ./scripts/filecoin/terminate-datasets.ts",
     "filecoin:storage-info": "tsx ./scripts/filecoin/storage-info.ts",
     "protocol:update": "tsx ./scripts/lit/update-protocol.ts",
-    "test": "vitest run --reporter=verbose"
+    "test": "vitest run --reporter=verbose",
+    "contracts:publication:compile": "pnpm -C ../publication/contracts run compile",
+    "contracts:verification:compile": "pnpm -C ../verification/contracts run compile"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
@@ -56,12 +52,11 @@
   },
   "dependencies": {
     "@ensdomains/content-hash": "^3.0.0",
-    "@hono/node-server": "*",
-    "hono": "*",
     "@ensdomains/ens-contracts": "^1.6.2",
     "@ensdomains/eth-ens-namehash": "^2.0.15",
     "@filoz/synapse-core": "^0.7.0",
     "@filoz/synapse-sdk": "^1.0.1",
+    "@hono/node-server": "*",
     "@ipld/dag-pb": "^4.1.5",
     "@lens-chain/sdk": "^1.0.3",
     "@lens-chain/storage-client": "^1.0.6",
@@ -73,6 +68,7 @@
     "@lit-protocol/constants": "^8.0.8",
     "@lit-protocol/lit-client": "^8.3.1",
     "@lit-protocol/networks": "8.4.1",
+    "@s2s/publication-contracts": "workspace:*",
     "@s2s/soul2soul-shared": "workspace:*",
     "@safe-global/api-kit": "^3.0.2",
     "@safe-global/protocol-kit": "^6.1.2",
@@ -85,6 +81,7 @@
     "ethers": "^6.16.0",
     "ethers5": "npm:ethers@^5.8.0",
     "form-data": "^4.0.5",
+    "hono": "*",
     "html-entities": "^2.6.0",
     "ipfs-unixfs": "^12.0.0",
     "multibase": "^4.0.6",

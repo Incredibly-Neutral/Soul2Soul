@@ -8,8 +8,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { Interface, getAddress } from 'ethers';
-import { Abi_S2SRecordsModuleFactory } from '../../../protocol/generated/abis/S2SRecordsModuleFactory';
-import { Abi_S2SPublicationModuleV2Factory } from '../../../protocol/generated/abis/S2SPublicationModuleV2Factory';
+import { Abi_S2SRecordsModuleFactory } from '@s2s/publication-contracts/abis/S2SRecordsModuleFactory';
+import { Abi_S2SPublicationModuleV2Factory } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2Factory';
 import {
   buildCreateModuleBatch,
   buildEnableModuleBatch,

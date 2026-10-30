@@ -3,10 +3,10 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-import {Artifact_S2SPublicationModuleFactory} from '../generated/artifacts/S2SPublicationModuleFactory.js';
-import {Artifact_S2SPublicationModule} from '../generated/artifacts/S2SPublicationModule.js';
-import {Artifact_S2SRecordsModuleFactory} from '../generated/artifacts/S2SRecordsModuleFactory.js';
-import {Artifact_S2SRecordsModule} from '../generated/artifacts/S2SRecordsModule.js';
+import {Artifact_S2SPublicationModuleFactory} from '@s2s/publication-contracts/artifacts/S2SPublicationModuleFactory';
+import {Artifact_S2SPublicationModule} from '@s2s/publication-contracts/artifacts/S2SPublicationModule';
+import {Artifact_S2SRecordsModuleFactory} from '@s2s/publication-contracts/artifacts/S2SRecordsModuleFactory';
+import {Artifact_S2SRecordsModule} from '@s2s/publication-contracts/artifacts/S2SRecordsModule';
 
 async function main() {
 	const network = process.env.HARDHAT_NETWORK || process.env.NETWORK || 'base';
