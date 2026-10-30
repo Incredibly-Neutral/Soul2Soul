@@ -1,5 +1,7 @@
 packages:
   - 'author/*'
+  - 'publication/*'
+  - 'verification/*'
   - 'protocol'
   - 'shared'
   - 'safe-app'

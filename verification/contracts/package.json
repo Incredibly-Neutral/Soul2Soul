@@ -1,0 +1,44 @@
+{
+  "name": "@s2s/verification-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "generated/abis/index.ts",
+  "types": "generated/abis/index.ts",
+  "exports": {
+    ".": {
+      "types": "./generated/abis/index.ts",
+      "default": "./generated/abis/index.ts"
+    },
+    "./abis/*": {
+      "types": "./generated/abis/*.ts",
+      "default": "./generated/abis/*.ts"
+    }
+  },
+  "files": [
+    "generated/abis",
+    "src"
+  ],
+  "scripts": {
+    "compile": "hardhat compile",
+    "export": "ldenv rocketh-export -e @@MODE @@",
+    "clean": "rm -rf artifacts cache generated"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.6"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-keystore": "^3.0.4",
+    "@nomicfoundation/hardhat-network-helpers": "^3.0.3",
+    "@nomicfoundation/hardhat-node-test-runner": "^3.0.8",
+    "@nomicfoundation/hardhat-viem": "^3.0.1",
+    "@types/node": "^20.19.31",
+    "dotenv": "^16.6.1",
+    "hardhat": "^3.1.8",
+    "hardhat-deploy": "^2.0.0",
+    "ldenv": "^0.3.16",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "viem": "^2.46.2"
+  }
+}

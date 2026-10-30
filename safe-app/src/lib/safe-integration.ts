@@ -1,6 +1,6 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SPublicationModuleV2 } from '../../../protocol/generated/abis/S2SPublicationModuleV2';
-import { Abi_S2SRecordsModule } from '../../../protocol/generated/abis/S2SRecordsModule';
+import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
+import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
 
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 

@@ -101,7 +101,7 @@ importers:
         version: 4.0.0
       '@s2s/soul2soul-shared':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../../shared
       '@safe-global/api-kit':
         specifier: ^2.5.11
         version: 2.5.11(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
@@ -250,9 +250,12 @@ importers:
 
   author/author-cli:
     dependencies:
+      '@s2s/publication-contracts':
+        specifier: workspace:*
+        version: link:../../publication/contracts
       '@s2s/soul2soul-shared':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../../shared
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
@@ -302,9 +305,12 @@ importers:
       '@lens-protocol/react':
         specifier: ^2.3.2
         version: 2.3.2(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@s2s/publication-contracts':
+        specifier: workspace:*
+        version: link:../../publication/contracts
       '@s2s/soul2soul-shared':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../../shared
       '@safe-global/api-kit':
         specifier: ^1.3.1
         version: 1.3.1
@@ -471,6 +477,9 @@ importers:
       '@lit-protocol/networks':
         specifier: 8.4.1
         version: 8.4.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(valibot@1.4.1(typescript@5.9.3))(viem@2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76))
+      '@s2s/publication-contracts':
+        specifier: workspace:*
+        version: link:../publication/contracts
       '@s2s/soul2soul-shared':
         specifier: workspace:*
         version: link:../shared
@@ -632,6 +641,52 @@ importers:
         specifier: ^9.0.4
         version: 9.0.5
 
+  publication/contracts:
+    dependencies:
+      '@openzeppelin/contracts':
+        specifier: ^4.9.6
+        version: 4.9.6
+      '@openzeppelin/contracts-upgradeable':
+        specifier: ^4.9.6
+        version: 4.9.6
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
+      viem:
+        specifier: ^2.46.2
+        version: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+    devDependencies:
+      '@nomicfoundation/hardhat-keystore':
+        specifier: ^3.0.4
+        version: 3.0.8(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-network-helpers':
+        specifier: ^3.0.3
+        version: 3.0.7(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-node-test-runner':
+        specifier: ^3.0.8
+        version: 3.0.14(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-viem':
+        specifier: ^3.0.1
+        version: 3.0.6(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(viem@2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@types/node':
+        specifier: ^20.19.31
+        version: 20.19.39
+      hardhat:
+        specifier: ^3.1.8
+        version: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      hardhat-deploy:
+        specifier: ^2.0.0
+        version: 2.0.5(@rocketh/node@0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      ldenv:
+        specifier: ^0.3.16
+        version: 0.3.16
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   safe-app:
     dependencies:
       '@ipld/car':
@@ -640,6 +695,9 @@ importers:
       '@phosphor-icons/webcomponents':
         specifier: 2.1.5
         version: 2.1.5
+      '@s2s/publication-contracts':
+        specifier: workspace:*
+        version: link:../publication/contracts
       '@s2s/soul2soul-shared':
         specifier: workspace:*
         version: link:../shared
@@ -777,6 +835,49 @@ importers:
       vitest:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@18.19.130)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  verification/contracts:
+    dependencies:
+      '@openzeppelin/contracts':
+        specifier: ^4.9.6
+        version: 4.9.6
+    devDependencies:
+      '@nomicfoundation/hardhat-keystore':
+        specifier: ^3.0.4
+        version: 3.0.8(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-network-helpers':
+        specifier: ^3.0.3
+        version: 3.0.7(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-node-test-runner':
+        specifier: ^3.0.8
+        version: 3.0.14(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-viem':
+        specifier: ^3.0.1
+        version: 3.0.6(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(viem@2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@types/node':
+        specifier: ^20.19.31
+        version: 20.19.39
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
+      hardhat:
+        specifier: ^3.1.8
+        version: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      hardhat-deploy:
+        specifier: ^2.0.0
+        version: 2.0.5(@rocketh/node@0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      ldenv:
+        specifier: ^0.3.16
+        version: 0.3.16
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      viem:
+        specifier: ^2.46.2
+        version: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
 
 packages:
 
@@ -14975,6 +15076,13 @@ snapshots:
       hardhat: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
 
+  '@nomicfoundation/hardhat-viem@3.0.6(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(viem@2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
+    dependencies:
+      '@nomicfoundation/hardhat-errors': 3.0.12
+      '@nomicfoundation/hardhat-utils': 4.1.0
+      hardhat: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+
   '@nomicfoundation/hardhat-zod-utils@3.0.4(zod@3.25.76)':
     dependencies:
       '@nomicfoundation/hardhat-errors': 3.0.12
@@ -15552,6 +15660,18 @@ snapshots:
       - utf-8-validate
       - zod
 
+  '@rocketh/core@0.19.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)':
+    dependencies:
+      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.3)
+      eip-1193: 0.6.5
+      named-logs: 0.4.1
+      viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
   '@rocketh/deploy@0.19.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)':
     dependencies:
       '@rocketh/core': 0.19.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
@@ -15613,6 +15733,26 @@ snapshots:
       rocketh: 0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       tsx: 4.21.0
       viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
+  '@rocketh/node@0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)':
+    dependencies:
+      '@rocketh/core': 0.19.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      '@types/prompts': 2.4.9
+      change-case: 5.4.4
+      commander: 14.0.3
+      eip-1193: 0.6.5
+      ldenv: 0.5.0
+      named-logs: 0.4.1
+      named-logs-console: 0.5.1
+      prompts: 2.4.2
+      rocketh: 0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      tsx: 4.21.0
+      viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     transitivePeerDependencies:
       - bufferutil
       - typescript
@@ -20983,6 +21123,17 @@ snapshots:
       rocketh: 0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       zod: 3.25.76
 
+  hardhat-deploy@2.0.5(@rocketh/node@0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)):
+    dependencies:
+      '@nomicfoundation/hardhat-zod-utils': 3.0.4(zod@3.25.76)
+      '@rocketh/node': 0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      commander: 14.0.3
+      hardhat: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      named-logs: 0.4.1
+      named-logs-console: 0.5.1
+      rocketh: 0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      zod: 3.25.76
+
   hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10):
     dependencies:
       '@nomicfoundation/edr': 0.12.0-next.31
@@ -23667,6 +23818,21 @@ snapshots:
     dependencies:
       '@rocketh/core': 0.19.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       abitype: 1.2.4(typescript@5.9.3)(zod@3.25.76)
+      change-case: 5.4.4
+      eip-1193: 0.6.5
+      eip-1193-jsonrpc-provider: 0.4.3
+      ldenv: 0.5.0
+      named-logs: 0.4.1
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
+  rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3):
+    dependencies:
+      '@rocketh/core': 0.19.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.3)
       change-case: 5.4.4
       eip-1193: 0.6.5
       eip-1193-jsonrpc-provider: 0.4.3

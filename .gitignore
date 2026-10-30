@@ -8,6 +8,8 @@ build/
 *.tsbuildinfo
 # Hardhat & TypeChain
 cache/
+publication/contracts/artifacts/
+verification/contracts/artifacts/
 typechain-types/
 *.dbg.json
 cache-solidity-files-cache.json
