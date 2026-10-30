@@ -29,7 +29,8 @@ duplicated across packages must live here** — including resolving the incongru
 **Shared is part of each consumer's code, not a service.** Its functions are *bundled* into each
 consumer's build via that consumer's entry point. So the authoritative "what of shared matters here"
 list lives in **each consumer spec's _Shared surface consumed_ section** (SPEC-protocol-actions,
-SPEC-safe-app, SPEC-0xobsidian, SPEC-neutralpress) — this spec is the catalog/source of truth; the
+publication/SPEC-publication-admin-app, author/SPEC-author-identity, author/SPEC-author-publishing,
+author/SPEC-author-shared) — this spec is the catalog/source of truth; the
 consumer specs say which slice each one compiles in.
 
 ## Dependency placement (pnpm workspace rule, extends the entry-point contract)
@@ -191,7 +192,7 @@ decision).
 `lit/actions/types.ts`) gained an optional `remove: { path: string; replacedBy?: string }[]` field —
 the update action's stale-path-removal input (slug renames / revocations). The compile-time sentinel
 `_AssertEvmUpdateInputMatches` (interface ↔ zod-inferred) still resolves to `true`. Semantics live
-in SPEC-protocol-actions A3; client-side population is a neutralpress TODO (SPEC-neutralpress).
+in SPEC-protocol-actions A3; client-side population is a neutralpress TODO (SPEC-author-publishing).
 
 `bodySchema` in `publication/validation.ts` is now **only for backward-compatibility with the
 S2SBody-driven actions** — new content-type validation should use `s2sContentItemSchema`.

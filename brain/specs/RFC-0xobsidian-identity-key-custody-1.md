@@ -1,11 +1,11 @@
 # RFC — 0xobsidian Identity & Key Custody
 
 > **Type:** design proposal / forward work (an RFC, not a spec). Captures *intended* changes not yet
-> built, so a future agent or human can pick them up cold. Companion to `SPEC-0xobsidian` — that spec
+> built, so a future agent or human can pick them up cold. Companion to `SPEC-author-identity` — that spec
 > describes what *is*; this describes what we *propose*. When an item here is built, fold the settled
-> parts into `SPEC-0xobsidian` and strike it here.
+> parts into `SPEC-author-identity` and strike it here.
 >
-> **Status: Track A — DONE (see `src/keystore/` and `SPEC-0xobsidian`). Only Track B (DID identity)
+> **Status: Track A — DONE (see `src/keystore/` and `SPEC-author-identity`). Only Track B (DID identity)
 > remains open.**
 > **Context:** today identity *is* the keypair. `OXOUser` runs `ethers.Wallet.createRandom()` →
 > EOA → `private_key` stored **in plaintext in `data.json`**, with the Lens account and Safe derived
@@ -52,7 +52,7 @@ API or a reachable bridge). One check in a live plugin settles it:
   half, and it kills the actual embarrassment (plaintext in a text file).
 
 **Done when:** the private key is never written plaintext on any of the three OSes (with the Linux
-availability check handled), and `SPEC-0xobsidian`'s "private key at rest" note is updated from
+availability check handled), and `SPEC-author-identity`'s "private key at rest" note is updated from
 "plaintext, accepted for now" to the `safeStorage` reality.
 
 ---

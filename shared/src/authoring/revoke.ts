@@ -4,7 +4,7 @@
 //
 // Ported from neutralpress' publication/revoke.ts so the headless author-cli
 // derives the exact same remove path the Obsidian plugin does. See the B1/B1b
-// comments there (and in SPEC-hosts) for the full reasoning: the path must
+// comments there (and in SPEC-author-hosts) for the full reasoning: the path must
 // reproduce the render pipeline's `createPath` prefix logic.
 // ============================================================================
 

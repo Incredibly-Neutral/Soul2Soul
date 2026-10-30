@@ -1,15 +1,19 @@
 # SPEC-author-cli — the headless authoring binary (`s2s author`)
 
+> **Parent:** [SPEC-author](../SPEC-author.md) — the authoring front door. Host sibling:
+> [SPEC-author-nvim](./SPEC-author-nvim.md) (the editor wrapper built against this spec's Binary API
+> reference).
+>
 > **Type:** host specification — describes the `@s2s/author-cli` workspace package, the *headless
-> binary* host from [SPEC-hosts](./SPEC-hosts.md) AD-1/AD-4. Implemented 2026-10-18.
+> binary* host from [SPEC-author-hosts](./SPEC-author-hosts.md) AD-1/AD-4. Implemented 2026-10-18.
 >
 > **Status:** IMPLEMENTED (scaffold + compile-clean + pure-part tests). Live-chain paths are
 > exercised by hand only — see [Live execution notes](#live-execution-notes).
 >
-> **Origin:** joera direction on the SPEC-hosts binary ticket; command structure mandated as
+> **Origin:** joera direction on the SPEC-author-hosts binary ticket; command structure mandated as
 > `s2s author <action>` with `--json` machine output for the Neovim plugin.
 >
-> **Blank-slate rule (SPEC-hosts):** this package reuses **only** what already lives in
+> **Blank-slate rule (SPEC-author-hosts):** this package reuses **only** what already lives in
 > `@s2s/soul2soul-shared`. It never imports `neutralpress`/`0xobsidian` internals; every runtime
 > adapter is written fresh for node.
 
@@ -19,7 +23,7 @@
 
 `s2s author <action>` is a node CLI that drives the same author flows neutralpress drives in the
 Obsidian plugin — **upload, preview, publish, revoke** — plus **new** (fresh full publication
-creation, which the other two hosts cannot express, SPEC-hosts AD-4). All pure orchestration lives
+creation, which the other two hosts cannot express, SPEC-author-hosts AD-4). All pure orchestration lives
 in `@s2s/soul2soul-shared` (the `authoring` module: note parsing, signed-content building, tag →
 publication resolution, revoke path derivation, publication-safe deployment sequencing); the CLI
 writes only the thin node adapters: a viem EOA signer, a permissionless Safe runner (Pimlico,
@@ -77,7 +81,7 @@ Global flags parse anywhere in the argv:
 | `--cid <kuboCid>` | (propose) Explicit content CID. Defaults to the `kubo_cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
 | `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
-| `--author <addr>,...` | (new) Initial author set; defaults to the EOA address. |
+| `--author <addr>,...` | (new) Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. |
 | `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
 | `--local` | (config) Target the project config file (`.s2sconfig.json` in cwd) instead of the user config. |
 
@@ -321,7 +325,7 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 
 | Env var | Required | Default | Purpose |
 |---|---|---|---|
-| `S2S_PRIVATE_KEY` | authoring | — | EOA signer key for author flows (the genesisAuthor, INV-10). |
+| `S2S_PRIVATE_KEY` | authoring | — | EOA signer key. Signs (EIP-712 content items, `lit actions auth`) and **owns the author Safe** — it is never the on-chain author identity (that is the Safe, INV-10). |
 | `LIT_ACCOUNT_KEY` | authoring | — | Lit master/network key (LitService account). |
 | `LIT_USAGE_KEY` | render paths | — | Lit usage key passed to the action runs. |
 | `GITHUB_TOKEN` / `S2S_GITHUB_TOKEN` | `new` | — | GitHub token for the assets/config build (`ConfigBuilder`). |
@@ -362,11 +366,12 @@ the protocol generated ABIs, and `toBytes32Id`.
 Written fresh (nothing imported from neutralpress/0xobsidian):
 
 - **EOA signer** (`adapters/signer.ts`) — viem `privateKeyToAccount`, EIP-712 typed signing for
-  `buildSignedContentItem`; DID = `toDidEthr(eoaAddress)`.
-- **TxRunner ×2** (`adapters/tx-runner.ts`) — a plain EOA runner for propose/publish/revoke
-  (genericTx encodes calldata from the protocol ABIs and sends a normal L2 tx; `upload`/`preview`
-  never touch the chain), and
-  `createSafeRunner` (permissionless `toSafeSmartAccount` + Pimlico) for `new`. `saltNonceFor`
+  `buildSignedContentItem` (`proof.signer` = the EOA); DID = `toDidEthr(authorSafe)`.
+- **TxRunner ×3** (`adapters/tx-runner.ts`, `core/author-safe.ts`) — a plain EOA runner used for
+  **reads** only (genericTx encodes calldata from the protocol ABIs; the EOA runner never sends an
+  author write), `createAuthorWriteRunner` (permissionless `toSafeSmartAccount` + Pimlico, pinned
+  SafeL2 v1.4.1) for `makeOffer`/`retract` so the author Safe is `msg.sender`, and
+  `createSafeRunner` for `new`. `saltNonceFor`
   derives a deterministic, top-bit-cleared Safe salt-nonce from a human salt — identical on L1 and
   L2 so the twin Safes land on the same address.
 - **Kubo client** (`adapters/ipfs.ts`) — `addToKubo` with **2-space JSON.stringify** (load-bearing
@@ -379,9 +384,17 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 ### The ETH actor split (AD-1 / INV-10)
 
-- **propose / publish / revoke** — the **EOA** is the actor (genesisAuthor). The Safe is
-  *not* the actor for author flows; `makeOffer`/`retract` are sent as plain L2 txs from the EOA.
+- **propose / publish / revoke** — the **author Safe** (`0x7907…`, derived from `s2s_${eoa}`,
+  owned by the EOA) is the actor. `makeOffer`/`retract` are ERC-4337 userOps through the bundler,
+  so `msg.sender` — and therefore `genesisAuthor` — is the Safe. The EOA is the **signer only**:
+  it signs the EIP-712 content item (`proof.signer`), signs `lit actions auth` for the render
+  gates (which then check `isOwner(authorSafe, recovered)`), and owns the Safe. Sending an author
+  write from the EOA reverts `OnlySafe()` on a genesis's first version and would permanently
+  write `genesisAuthor = EOA`, locking the Safe and 0xobsidian out of that document.
   (`upload`/`preview` are **off-chain** — they never touch the chain at all.)
+- **Identity everywhere else** — `did:ethr:` author, frontmatter `author`, the render action's
+  `authorSafeAddress`, and the Filecoin piece attribution (`[publicationSafe, authorSafe]`) all
+  carry the author Safe. `s2s author address`/`config` print the EOA only as the Safe's owner.
 - **new** — the Safe is the actor for the deployment sequence: both L1 and L2 Safes are deployed
   with the same salt via `toSafeSmartAccount`; the SafeRunner sends the registerSubdomain (L1),
   module installs (L2), publication module, enableModule×2, config records, and owner-setup userOps

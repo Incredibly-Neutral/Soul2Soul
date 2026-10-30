@@ -181,7 +181,7 @@ export class SafeIntegration {
     }
   }
 
-  // ===== GENERIC SAFE PRIMITIVES (module-install / init flow, SPEC-hosts AD-3) =====
+  // ===== GENERIC SAFE PRIMITIVES (module-install / init flow, SPEC-author-hosts AD-3) =====
   // These are runtime-agnostic Safe-side building blocks. The orchestration
   // layer (publication-init) injects them as deps and never imports this file's
   // host internals.
@@ -189,7 +189,7 @@ export class SafeIntegration {
   /**
    * Propose an arbitrary batch of txs to the Safe for owner confirmation.
    * Used to install the records + publication modules in a single proposal
-   * (SPEC-hosts AD-3 step 3). Returns the Safe UI queue URL.
+   * (SPEC-author-hosts AD-3 step 3). Returns the Safe UI queue URL.
    */
   async proposeBatch(txs: Array<{ to: string; value: string; data: string }>): Promise<string> {
     if (!this.safeSdk) {

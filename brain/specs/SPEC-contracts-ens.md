@@ -3,7 +3,8 @@
 > **Audited against live code:** 2026-08-03.
 >
 > Protocol-wide naming + resolution + site-root layer. Read **SPEC-00** first. Sibling:
-> **SPEC-contracts-publication** (per-publication Safe modules). Owns the read/write path for the
+> **[SPEC-publication](SPEC-publication.md)** (the publication, incl. its site tree —
+> [storage](publication/SPEC-publication-storage.md) is the caller that writes the root). Owns the read/write path for the
 > published site pointer. Follows SPEC-00 §7.
 >
 > Invariants carried: INV-6 (contenthash codec + read path), INV-12 (PKP authorizedCaller),

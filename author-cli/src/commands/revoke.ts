@@ -2,7 +2,7 @@
 // s2s author revoke <note> — full withdrawal + site removal.
 // On-chain retract FIRST (author-caller path fully withdraws from deals and/or
 // offers), then a remove-plumbing re-render so the production site stops
-// resolving the content path (SPEC-hosts AD-4).
+// resolving the content path (SPEC-author-hosts AD-4).
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';

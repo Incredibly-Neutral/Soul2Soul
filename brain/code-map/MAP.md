@@ -10,12 +10,14 @@
 
 | Component | Package | Spec(s) | Code LOC | Entry | What it is |
 |---|---|---|---|---|---|
-| `0xobsidian` | `@s2s/0xobsidian` | SPEC-0xobsidian, RFC-identity-key-custody | 6,657 | `src/main.ts` | Obsidian plugin — author identity, key custody, eth/filecoin/ipfs services |
-| `neutralpress` | `@s2s/neutralpress` | SPEC-neutralpress, RFC-media-items | 4,987 | `src/main.ts` | Obsidian plugin — publishing: content → publication service → on-chain tx |
-| `protocol` | `@s2s/protocol` | SPEC-protocol-actions, SPEC-contracts* | 9,569 | (contracts `hardhat.config.ts`) | On-chain: Solidity contracts + Lit actions + CCIP gateway + serverless + deploy scripts |
-| `safe-app` | `s2s-records-safe-app` | SPEC-safe-app | 5,641 | `src/main.ts` | Safe management UI (Vite) — records/deals/storage/whitelist tabs, state stores |
-| `shared` | `@s2s/soul2soul-shared` | SPEC-shared | 7,374 | `src/index.ts` | Cross-cutting lib — identity/signing, lit actions+gates, publication, rendering, protocol, ipfs |
-| `website-starter` | `website` | SPEC-website-starter | 2,851 | `templates/` | Neutral renderer/site template — handlebars templates, scss, upload scripts |
+| `0xobsidian` | `@s2s/0xobsidian` | author/SPEC-author-identity, RFC-identity-key-custody | 6,657 | `src/main.ts` | Obsidian plugin — author identity, key custody, eth/filecoin/ipfs services |
+| `neutralpress` | `@s2s/neutralpress` | author/SPEC-author-publishing, RFC-media-items | 4,987 | `src/main.ts` | Obsidian plugin — publishing: content → publication service → on-chain tx |
+| `author-cli` | `@s2s/author-cli` | author/SPEC-author-cli | 3,255 | `src/cli.ts` | `s2s` headless binary — `author`/`publication`/`config` groups, `--json` machine contract, node adapters (viem, Pimlico Safe, kubo, Lit, Filecoin) |
+| `nvim-s2s` | — (pure Lua, not in pnpm workspace) | author/SPEC-author-nvim | ~3.2k (branch `agent/nvim-core`, unmerged; absent from `main`) | `lua/s2s/init.lua` | Neovim wrapper over the `s2s` binary — spawns it, formats the one JSON result, no domain logic |
+| `protocol` | `@s2s/protocol` | SPEC-protocol-actions, SPEC-contracts-ens, publication/SPEC-publication-account | 9,569 | (contracts `hardhat.config.ts`) | On-chain: Solidity contracts + Lit actions + CCIP gateway + serverless + deploy scripts |
+| `safe-app` | `s2s-records-safe-app` | publication/SPEC-publication-admin-app | 5,641 | `src/main.ts` | Safe management UI (Vite) — records/deals/storage/whitelist tabs, state stores |
+| `shared` | `@s2s/soul2soul-shared` | SPEC-shared, author/SPEC-author-shared | 7,374 | `src/index.ts` | Cross-cutting lib — identity/signing, lit actions+gates, publication, rendering, protocol, ipfs, the host-agnostic `authoring/` module |
+| `website-starter` | `website` | publication/SPEC-publication-look | 2,851 | `templates/` | Neutral renderer/site template — handlebars templates, scss, upload scripts |
 | `cid-mirror` | — (standalone, not in pnpm workspace) | RFC-cid-mirror | ~1.2k | `src/index.ts` | Dockerized ENS/IPFS → location-addressed static mirror — resolves `PUBLICATION_URL` to root CID via s2s L2 records-contract `contenthash_wrapped` (Base 8453 `getText`, `RECORDS_CONTRACT` override), traverses the kubo tree, downloads every leaf to `webcontent/` (host-shared for nginx), `POST /api/refresh` |
 
 Total ~38k LOC. Specs are authoritative for *what/why*; this map is the *where*.

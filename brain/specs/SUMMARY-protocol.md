@@ -3,7 +3,7 @@
 > Enough to get a decent, self-sufficient understanding of how the protocol works, why it is
 > built this way, and how actions drive it — so that a proposal (e.g. locale-in-config) can be
 > written without re-reading the specs. Distilled from SPEC-00-system-contract, SPEC-protocol-actions,
-> SPEC-shared, SPEC-website-starter, RFC-website-starter-agent-kit, and the whitepaper. Where a
+> SPEC-shared, publication/SPEC-publication-look, RFC-website-starter-agent-kit, and the whitepaper. Where a
 > detail is unsettled it is marked `[GAP]` / `[unresolved]` — treat those as real state, not docs holes.
 
 ## 1. What s2s is, and why it is built this way
@@ -205,6 +205,6 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 - System contract + invariants + gaps: `specs/SPEC-00-system-contract.md`.
 - Actions (I/O contracts, decision tree): `specs/SPEC-protocol-actions.md`.
 - Shared types + validation + entry points: `specs/SPEC-shared.md`.
-- Website-starter kit: `specs/SPEC-website-starter.md` + `specs/RFC-website-starter-agent-kit.md`.
+- Publication (the whole group): `specs/SPEC-publication.md`; template kit: `specs/publication/SPEC-publication-look.md` + `specs/RFC-website-starter-agent-kit.md`.
 - Clone-local skills: `skills/template-design/SKILL.md` + `skills/s2s-protocol/SKILL.md` (in
   `~/code/website-starter/skills/`, mirrored into each clone).

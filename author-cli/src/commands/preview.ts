@@ -1,7 +1,7 @@
 // ============================================================================
 // s2s author preview <note> — upload + preview render (Bun runner).
 // Off-chain: ipfs upload + a preview render via the Bun runner; no on-chain
-// offer and no prod mutation (SPEC-hosts AD-4).
+// offer and no prod mutation (SPEC-author-hosts AD-4).
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';

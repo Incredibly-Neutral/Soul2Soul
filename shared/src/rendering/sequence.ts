@@ -202,10 +202,6 @@ export const renderwithLitActions = async (
 
   if (!resetOnly) {
     if (notice) notice.setMessage('prepping render ...');
-    else console.log('preview:', preview);
-
-    console.log('pub1', publication);
-    console.log('pub1', publication);
     const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
     const prepAction = await runAction(
       true,

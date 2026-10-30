@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { parseArgs } from './lib/args';
-import { CliError, UsageError } from './lib/errors';
+import { CliError, UsageError, describeError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
 import { createOut } from './lib/out';
 import { loadConfig } from './core/config';
@@ -146,7 +146,7 @@ void main(process.argv.slice(2))
       }
       process.exitCode = err.exitCode;
     } else {
-      const text = err instanceof Error ? err.message : String(err);
+      const text = describeError(err);
       if (isJson) {
         process.stdout.write(`${JSON.stringify({ ok: false, error: text })}\n`);
       } else {

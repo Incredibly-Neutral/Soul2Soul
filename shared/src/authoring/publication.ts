@@ -5,7 +5,7 @@
 //
 // Ported from neutralpress' publication/ens.ts + publication.service.ts so the
 // headless author-cli resolves addresses exactly the way the Obsidian plugin
-// does (SPEC-hosts). Host-agnostic: callers pass viem public clients.
+// does (SPEC-author-hosts). Host-agnostic: callers pass viem public clients.
 // ============================================================================
 
 import { keccak256, toBytes, type Address, type PublicClient } from 'viem';

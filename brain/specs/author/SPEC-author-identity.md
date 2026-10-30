@@ -1,10 +1,13 @@
-# SPEC-0xobsidian
+# SPEC-author-identity — 0xobsidian (author identity, Safe, key custody)
 
+> **Parent:** [SPEC-author](../SPEC-author.md) — the authoring front door. Sibling:
+> [SPEC-author-publishing](./SPEC-author-publishing.md), which runtime-depends on this package.
+>
 > **Audited against live code:** 2026-08-03.
 >
 > Component spec for `0xobsidian/` — Obsidian plugin id **`oxo-core`**, the **author identity &
 > account** layer. Read **SPEC-00** first; types from **SPEC-shared**. It is the runtime dependency
-> of **SPEC-neutralpress** (which reads the active user/accounts from it). Follows SPEC-00 §7.
+> of **SPEC-author-publishing** (which reads the active user/accounts from it). Follows SPEC-00 §7.
 >
 > Invariants touched: INV-1 (the author key produces the `"lit actions auth"` signature the gates
 > check) and the cross-chain **same-address** Safe requirement (SPEC-contracts-ens).
@@ -127,4 +130,4 @@ the plugin bundle — part of this package's code.
 - `PermissionlessSafeService`: existing `test/integration/safe.service.test.ts` is the seed; assert
   the Safe address is stable across chains for the same owner.
 - Auth: assert the EOA signs `"lit actions auth"` and recovers to an owner the publication module's
-  `canPublish` accepts (cross-check with SPEC-contracts-publication gate fixtures).
+  `canPublish` accepts (cross-check with publication/SPEC-publication-account gate fixtures).

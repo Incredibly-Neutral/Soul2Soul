@@ -11,6 +11,7 @@
 // ============================================================================
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import {
   buildSignedContentItem,
@@ -91,7 +92,10 @@ export async function authorWrite(
   opts: AuthorWriteOptions,
 ): Promise<AuthorWriteResult> {
   const raw = readFileSync(notePath, 'utf8');
-  const parsed = await parseMarkdownNote(raw, notePath);
+  // Basename, not the full path: `parseMarkdownNote` slugifies the filename as
+  // the fallback title, so an absolute path slugifies into `/home/…/note` —
+  // `homejoerawhitepaperauthor` — and that becomes the render path.
+  const parsed = await parseMarkdownNote(raw, basename(notePath));
 
   // The author id is the author Safe, not the EOA — that is what the plugin
   // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
@@ -231,7 +235,7 @@ export async function proposeContent(
   kuboCidFlag: string | undefined,
 ): Promise<ProposeResult> {
   const raw = readFileSync(notePath, 'utf8');
-  const parsed = await parseMarkdownNote(raw, notePath);
+  const parsed = await parseMarkdownNote(raw, basename(notePath));
 
   const objectId = parsed.genesis ?? parsed.contentId;
   if (!objectId) {
@@ -322,9 +326,13 @@ async function renderContent(
     throw new Error('render reported success but produced no root CID');
   }
 
-  const previewUrl = `https://${toPreviewLabel(cid)}.ipfs.transport-union.dev/${res.path}`;
-  const ipfsUrl = `ipfs://${cid}/${res.path}`;
-  const prodUrl = opts.publish ? `https://${publication}/${res.path}` : undefined;
+  // `res.path` is already root-absolute (`/1-introduction/`, from the
+  // template's `path: /{slug}/`) — join instead of concatenating, or every URL
+  // prints with a doubled slash (`https://polyphony.soul2soul.eth//1-intro/`).
+  const join = (root: string, path: string) => `${root.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  const previewUrl = join(`https://${toPreviewLabel(cid)}.ipfs.transport-union.dev`, res.path);
+  const ipfsUrl = join(`ipfs://${cid}`, res.path);
+  const prodUrl = opts.publish ? join(`https://${publication}`, res.path) : undefined;
 
   return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl };
 }
@@ -430,7 +438,7 @@ export async function revokeContent(
   publication: string,
 ): Promise<RevokeResult> {
   const raw = readFileSync(notePath, 'utf8');
-  const parsed = await parseMarkdownNote(raw, notePath);
+  const parsed = await parseMarkdownNote(raw, basename(notePath));
   const genesis = parsed.genesis;
   if (!genesis) {
     throw new Error(`note ${notePath} has no genesis — nothing to revoke on-chain`);

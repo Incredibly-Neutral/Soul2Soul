@@ -6,7 +6,7 @@
 // note's `--s2s` frontmatter tags and the publication ENS name they target
 // (e.g. `acme--s2s` ⇄ `acme.soul2soul.eth`). They were extracted from the
 // neutralpress Obsidian plugin so the headless author-cli (and any other host)
-// shares the exact same mapping (SPEC-00 §0 single-source rule; SPEC-hosts).
+// shares the exact same mapping (SPEC-00 §0 single-source rule; SPEC-author-hosts).
 // ============================================================================
 
 /** Frontmatter tag suffix that marks a note as claimed by a publication. */

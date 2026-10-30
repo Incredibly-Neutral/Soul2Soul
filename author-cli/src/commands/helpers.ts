@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { existsSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import { parseMarkdownNote } from '@s2s/soul2soul-shared';
 
@@ -34,7 +35,7 @@ export async function resolvePublication(
   const fromFlag = flagString(args.flags, 'publication');
   if (fromFlag) return fromFlag;
 
-  const parsed = await parseMarkdownNote(readFileSync(notePath, 'utf8'), notePath);
+  const parsed = await parseMarkdownNote(readFileSync(notePath, 'utf8'), basename(notePath));
   const fromTags = parsed.publications[0];
   if (!fromTags) {
     throw new UsageError(

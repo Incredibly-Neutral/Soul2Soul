@@ -1,6 +1,6 @@
 // safe-app/src/lib/publication-init.ts
 //
-// "New publication init" flow for safe-app (SPEC-hosts.md AD-3): make THIS
+// "New publication init" flow for safe-app (SPEC-author-hosts.md AD-3): make THIS
 // existing Safe a publication by installing the two modules (records +
 // publication) and recording the publication name.
 //

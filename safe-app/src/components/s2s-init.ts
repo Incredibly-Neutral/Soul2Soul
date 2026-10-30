@@ -1,4 +1,4 @@
-// s2s-init.ts — "New publication" component (SPEC-hosts.md AD-3).
+// s2s-init.ts — "New publication" component (SPEC-author-hosts.md AD-3).
 //
 // Shown by <s2s-app> when the loaded Safe has neither the records nor the
 // publication module. It drives the DIRECT-SEQUENCE init flow end-to-end

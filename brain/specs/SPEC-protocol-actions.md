@@ -520,7 +520,7 @@ section is relied upon.
   `{ slug, source:"lens", key, value, query:{method,args}, filters:[{...}] }`.
   ⚠ `mapping.json` embeds **publication-specific identifiers** (collection `feedAddress`, ripple
   destination `postId`). **Currently** the safe-app `ConfigBuilder` uses `mapping.json` verbatim, so
-  they are author-owned in the publication's repo. **Planned (SPEC-safe-app TODO):** `ConfigBuilder`
+  they are author-owned in the publication's repo. **Planned (admin-app TODO):** `ConfigBuilder`
   should inject the `feedAddress` at build time. Until then, a copied `website-starter` carries
   someone else's values.
 - **`S2SProtocolInfo`**: `{ addr, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords,
