@@ -687,7 +687,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  safe-app:
+  publication/safe-app:
     dependencies:
       '@ipld/car':
         specifier: ^5.4.6

@@ -61,10 +61,10 @@ vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // The lib now ALSO imports the shared retrievability core (real symbols) —
   // provide them from the shared source tree (relative path, mirroring the
   // component test's coordinator load) rather than the heavy root barrel.
-  const retrievability = await import('../../../shared/src/cid-view/retrievability.ts');
-  const validation = await import('../../../shared/src/cid-view/validation.ts');
-  const parser = await import('../../../shared/src/cid-view/retrieval-parser.ts');
-  const client = await import('../../../shared/src/cid-view/ipfs-check-client.ts');
+  const retrievability = await import('../../../../shared/src/cid-view/retrievability.ts');
+  const validation = await import('../../../../shared/src/cid-view/validation.ts');
+  const parser = await import('../../../../shared/src/cid-view/retrieval-parser.ts');
+  const client = await import('../../../../shared/src/cid-view/ipfs-check-client.ts');
   return {
     S2SIPFSMethods: ipfsMocks.ipfsClass,
     buildPublicationCidView: ipfsMocks.buildPublicationCidView,
