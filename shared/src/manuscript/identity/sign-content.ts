@@ -14,7 +14,7 @@ import {
   S2S_DOMAIN,
   S2S_TYPES,
   toDidEthr,
-} from '../protocol/types';
+} from '../types';
 
 /**
  * Signer abstraction — any object that can produce an EIP-712 typed data signature.

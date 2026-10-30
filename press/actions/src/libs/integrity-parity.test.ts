@@ -23,8 +23,8 @@ import {
 import { SKIP_REASON_RE, inspectItemIntegrity } from './item-integrity';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { jcs } from '@s2s/soul2soul-shared/lit-actions';
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
 
 // ============================================================================
 // PARITY — one item, two readers.

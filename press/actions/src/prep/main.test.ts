@@ -35,8 +35,8 @@ import type { PrepInput } from '@s2s/soul2soul-shared/lit-actions';
 // compute the EIP-712 digest and recover a signer. The stored item is therefore
 // MINTED (public → digest = objectId → author signature): a hand-shaped
 // objectId/proof is a forgery the read path refuses.
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
 
 const FORGED_GENESIS = '0x' + '11'.repeat(32);
 const GOOD_GENESIS = '0x' + '22'.repeat(32);

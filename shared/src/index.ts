@@ -36,5 +36,5 @@ export type {
 } from './content';
 
 
-// identity — new EIP-712 signing and verification
-export * from './identity';
+// manuscript — the authored thing: content-item types, canonical form, proof
+export * from './manuscript';

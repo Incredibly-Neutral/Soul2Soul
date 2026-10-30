@@ -1,4 +1,5 @@
-import type { S2STemplateConfig, S2SJob } from '../../protocol/types';
+import type { S2STemplateConfig } from '../../publication/types';
+import type { S2SJob } from '../types';
 import type { PrepActionInput, SingleActionInput, EvmUpdateActionInput } from '../action-io';
 
 // ============================================================================

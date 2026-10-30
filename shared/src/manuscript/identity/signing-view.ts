@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { keccakOfJson } from './jcs';
-import type { S2SPublicContent } from '../protocol/types';
+import type { S2SPublicContent } from '../types';
 
 export function buildSigningView(pub: S2SPublicContent): Record<string, unknown> {
   const tagsHash = keccakOfJson(pub.tags);

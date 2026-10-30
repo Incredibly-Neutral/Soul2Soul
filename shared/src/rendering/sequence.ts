@@ -12,7 +12,7 @@ import {
   validateSingleInput,
   validateSingleOutput,
 } from './action-io';
-import { S2SJob } from '../protocol/types';
+import { S2SJob } from './types';
 import { runAction } from './helpers';
 
 // ===========================================================================

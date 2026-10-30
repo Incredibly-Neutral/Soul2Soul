@@ -1,8 +1,41 @@
-import { S2SRipple, type S2STemplateConfig } from '../protocol/types';
+// ============================================================================
+// Publication's own design vocabulary — how it looks, not what was authored.
+//
+// A publication is a name, a look, and a line. The name is the ENS stack in
+// publication/ens-contracts; this file is the look: the template config, the
+// collections it groups pages into, and the ripples that carry a page from one
+// collection to another. Press consumes these shapes; it does not define them.
+// ============================================================================
 
-// Import the canonical types from protocol/types.ts.
-// Adding the S2SQuery shape here as a convenience re-export.
-export type { S2STemplateConfig };
+export type CollectionSortBy = 'position' | 'creationDate' | 'modifiedDate' | 'title';
+
+export interface S2SCollection {
+  filters?: any[];
+  sortBy?: CollectionSortBy;
+  slug: string;
+}
+
+export interface S2SRipple {
+  origins: string[];
+  destination: string;
+  reference: string;
+  query?: any;
+  filters?: any[];
+  trigger_filters?: Record<string, string>[];
+}
+
+export interface S2STemplateConfig {
+  reference: string;
+  file: string | null;
+  path: string | null;
+  collections?: S2SCollection[];
+  filters?: any[];
+}
+
+export interface IMapping {
+  templateConfig: S2STemplateConfig[];
+  ripples: S2SRipple[];
+}
 
 export type S2SQuery = {
     method: string,

@@ -16,7 +16,7 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from './proof-canonicalization';
 import { isIpfsCid, ipfsContentUrl } from './content-url';
-import { keccakOfJson } from '../identity/jcs';
+import { keccakOfJson } from '../manuscript/identity/jcs';
 
 const IPFS_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 

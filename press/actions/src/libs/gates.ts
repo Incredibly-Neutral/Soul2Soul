@@ -1,79 +1,53 @@
+// Gates — the RULES live in @s2s/soul2soul-shared/gates; this file is the
+// adapter that binds them to this action runtime's EVM interface.
+//
+// Two things are Lit-specific and therefore stay here:
+//   - `evmRead` (./evm) — the action-scoped chain interface, including the RPC
+//     list handling and the L1/L2 split
+//   - `extractSignerAddress` — uses the `ethers` v5 global that the Lit Action
+//     runtime injects; it is a signature utility, not a gate
+//
+// Call signatures are unchanged so existing callers and their mocks keep
+// working; what moved is the decision logic.
+//
 // Note userAddress is added as a parameter since :userAddress was a Lit placeholder for the connected wallet — you'll need to pass that explicitly now.
 
-import { evmRead } from "./evm";
-import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
+import { evmRead } from './evm';
+import {
+    canPublish as gateCanPublish,
+    canRead as gateCanRead,
+    canReset as gateCanReset,
+    type GateRead,
+} from '@s2s/soul2soul-shared/gates';
 
 export const extractSignerAddress = (messageHash: string, signature: string): string => {
     return ethers.utils.recoverAddress(messageHash, signature);
 };
 
-export const canRead = async (
+/** Bind the injected GateRead to this runtime's evmRead (L2 + optional RPC list). */
+const bindRead = (rpcs?: string[]): GateRead => (target, abi, fn, args) =>
+    evmRead('L2', target, abi, fn, args, rpcs);
+
+export const canRead = (
     contentId: string,
     safeAddress: string,
     publicationModule: string,
     signerAddress: string,
     rpcs: string[],
-): Promise<boolean> => {
+): Promise<boolean> =>
+    gateCanRead(bindRead(rpcs), contentId, safeAddress, publicationModule, signerAddress);
 
-
-    // Convert body.id → bytes32 genesis before the on-chain read.
-    // toBytes32Id passes an already-hashed 0x+64hex id through unchanged;
-    // it keccak256-hashes anything else (e.g. a raw CID string).
-    const genesis = toBytes32Id(contentId);
-
-    const [cp, isOwner, isDeal] = await Promise.all([
-        evmRead("L2", publicationModule, [
-            "function canPublish(address _author) view returns (bool)"
-        ], "canPublish", [safeAddress], rpcs),
-        evmRead("L2", safeAddress, [
-            "function isOwner(address owner) view returns (bool)"
-        ], "isOwner", [signerAddress], rpcs),
-        evmRead("L2", publicationModule, [
-            "function hasDeal(bytes32 genesis) view returns (bool)"
-        ], "hasDeal", [genesis], rpcs)
-    ]);
-
-    return cp && isOwner && isDeal;
-};
-
-export const canPublish = async (
+export const canPublish = (
     authorSafeAddress: string,
     publicationModule: string,
     signerAddress: string,
     rpcs?: string[],
-): Promise<boolean> => {
+): Promise<boolean> =>
+    gateCanPublish(bindRead(rpcs), authorSafeAddress, publicationModule, signerAddress);
 
-    const [canPublishResult, isOwner] = await Promise.all([
-        evmRead("L2", publicationModule, [
-            "function canPublish(address _author) view returns (bool)"
-        ], "canPublish", [authorSafeAddress], rpcs),
-
-        evmRead("L2", authorSafeAddress, [
-            "function isOwner(address owner) view returns (bool)"
-        ], "isOwner", [signerAddress], rpcs),
-    ]);
-
-    return canPublishResult && isOwner;
-};
-
-// A reset is a STRICTER gate than a normal publish: only an owner of the
-// PUBLICATION Safe (`multisig`, resolved by getDomainOwnerAndModules) may nuke
-// the tree — NOT merely an owner of a whitelisted author Safe. This mirrors the
-// `isOwner` read in `canPublish` but evaluates it against the publication Safe
-// (the value returned as `multisig` by getDomainOwnerAndModules) instead of the
-// author Safe. See RFC-reset-tree-button.md.
-export const canReset = async (
+export const canReset = (
     multisig: string,
     signerAddress: string,
     rpcs?: string[],
-): Promise<boolean> => {
-
-    return await evmRead(
-        "L2",
-        multisig,
-        ["function isOwner(address owner) view returns (bool)"],
-        "isOwner",
-        [signerAddress],
-        rpcs,
-    );
-};
+): Promise<boolean> =>
+    gateCanReset(bindRead(rpcs), multisig, signerAddress);

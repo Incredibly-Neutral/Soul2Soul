@@ -20,8 +20,8 @@ import { jcs } from '@s2s/soul2soul-shared/lit-actions';
 import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
 // The mint and the signing view come from shared (out of scope for edits, so
 // deep-imported exactly like the module under test deep-imports them).
-import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).

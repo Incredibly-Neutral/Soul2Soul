@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { jobSchema } from '../protocol/schemas';
+import { jobSchema } from './schemas';
 import type { EvmUpdateInput, MaintainCacheInput, SingleInput } from '../lit/actions/types';
 
 // ============================================================================

@@ -12,6 +12,10 @@
       "types": "./dist/lit-actions.d.ts",
       "default": "./dist/lit-actions.js"
     },
+    "./gates": {
+      "types": "./dist/gates/index.d.ts",
+      "default": "./dist/gates/index.js"
+    },
     "./rendering/action-io": {
       "types": "./dist/rendering/action-io.d.ts",
       "default": "./dist/rendering/action-io.js"
