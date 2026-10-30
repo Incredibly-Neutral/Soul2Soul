@@ -66,10 +66,6 @@ export default defineConfig({
       { find: '@/types', replacement: resolve(__dirname, 'src/types') },
       { find: '@/utils', replacement: resolve(__dirname, 'src/utils') },
       { find: '@s2s/soul2soul-shared', replacement: resolve(__dirname, '../../shared/src') },
-      { find: '@s2s/soul2soul-shared/protocol', replacement: resolve(__dirname, '../../shared/src/protocol') },
-      { find: '@s2s/soul2soul-shared/publication', replacement: resolve(__dirname, '../../shared/src/publication') },
-      { find: '@s2s/soul2soul-shared/lit', replacement: resolve(__dirname, '../../shared/src/lit') },
-      { find: '@s2s/soul2soul-shared/lit-actions', replacement: resolve(__dirname, '../../shared/src/lit-actions') },
       { find: 'filecoin-pin/dist/core/unixfs/browser.js', replacement: resolve(__dirname, '../../node_modules/filecoin-pin/dist/core/unixfs/browser.js') },
     ]
   },
