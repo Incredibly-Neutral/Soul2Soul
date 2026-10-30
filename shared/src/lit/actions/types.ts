@@ -104,7 +104,7 @@ export interface EvmUpdateData {
 // pending cache drift. Runs in its OWN fresh Lit session (own 50-request budget,
 // young provider) mirroring the conditions under which the update action's
 // setText is provably reliable — versus the render inline write-back firing at
-// the tail of a heavy session. See protocol/actions/src/maintain-cache/main.ts.
+// the tail of a heavy session. See press/actions/src/maintain-cache/main.ts.
 export interface MaintainCacheInput {
   publication: string;
   signature: string;
@@ -127,13 +127,13 @@ export interface MaintainCacheData {
 // reconcile must cover every on-chain deal) then writes
 // `content_cache_<publication>` via the PKP. Gated by canReset (publication
 // Safe owner — stricter than canPublish). See
-// protocol/actions/src/repoint-archive/main.ts.
+// press/actions/src/repoint-archive/main.ts.
 export interface RepointArchiveInput {
   publication: string;
   signature: string;
   authorSafeAddress: string;
   // Prebuilt archive CID to point the cache at (e.g. from the off-chain
-  // rebuild — protocol/scripts/lit/rebuild-archive.ts).
+  // rebuild — press/scripts/lit/rebuild-archive.ts).
   archiveCid: string;
   preview?: boolean;
   endpoints: {

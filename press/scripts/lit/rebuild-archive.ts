@@ -1,4 +1,4 @@
-// protocol/scripts/lit/rebuild-archive.ts — Phase 1: rebuild the lost
+// press/scripts/lit/rebuild-archive.ts — Phase 1: rebuild the lost
 // per-publication content archive cache off-chain (no on-chain writes).
 //
 // Source of truth: getDeals() (on-chain, in the staged manifest) + the item

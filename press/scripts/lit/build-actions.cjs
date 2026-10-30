@@ -3,20 +3,20 @@ const { transform } = require('esbuild');
 const fs = require('fs');
 
 const entries = [
-  { in: './protocol/actions/src/prep/main.ts', out: './protocol/actions/dist/prep/main.js' },
-  { in: './protocol/actions/src/render/main.ts', out: './protocol/actions/dist/render/main.js' },
-  { in: './protocol/actions/src/update/main.ts', out: './protocol/actions/dist/update/main.js' },
+  { in: './press/actions/src/prep/main.ts', out: './press/actions/dist/prep/main.js' },
+  { in: './press/actions/src/render/main.ts', out: './press/actions/dist/render/main.js' },
+  { in: './press/actions/src/update/main.ts', out: './press/actions/dist/update/main.js' },
   {
-    in: './protocol/actions/src/maintain-cache/main.ts',
-    out: './protocol/actions/dist/maintain-cache/main.js',
+    in: './press/actions/src/maintain-cache/main.ts',
+    out: './press/actions/dist/maintain-cache/main.js',
   },
   {
-    in: './protocol/actions/src/repoint-archive/main.ts',
-    out: './protocol/actions/dist/repoint-archive/main.js',
+    in: './press/actions/src/repoint-archive/main.ts',
+    out: './press/actions/dist/repoint-archive/main.js',
   },
   {
-    in: './protocol/actions/src/render-dev/main.ts',
-    out: './protocol/actions/dist/render-dev/main.js',
+    in: './press/actions/src/render-dev/main.ts',
+    out: './press/actions/dist/render-dev/main.js',
   },
 ];
 

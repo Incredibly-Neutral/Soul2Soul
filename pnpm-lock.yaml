@@ -424,7 +424,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@16.18.126)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.17.3)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  protocol:
+  press:
     dependencies:
       '@ensdomains/content-hash':
         specifier: ^3.0.0
@@ -697,10 +697,10 @@ importers:
         version: 2.1.5
       '@s2s/publication-contracts':
         specifier: workspace:*
-        version: link:../publication/contracts
+        version: link:../../publication/contracts
       '@s2s/soul2soul-shared':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../../shared
       '@safe-global/safe-apps-provider':
         specifier: 0.18.6
         version: 0.18.6(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.4.3)

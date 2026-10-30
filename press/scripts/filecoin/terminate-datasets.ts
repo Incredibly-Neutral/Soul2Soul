@@ -1,4 +1,4 @@
-// protocol/scripts/filecoin/terminate-datasets.ts
+// press/scripts/filecoin/terminate-datasets.ts
 import { Synapse } from "@filoz/synapse-sdk";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainnet } from "@filoz/synapse-sdk";

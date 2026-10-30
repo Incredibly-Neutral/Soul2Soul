@@ -209,7 +209,7 @@ export const cleanupStaleKeys = async (account: any) => {
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 const main = async () => {
-  const config = fs.readFileSync('./protocol/scripts/lit/config.json', 'utf-8');
+  const config = fs.readFileSync('./press/scripts/lit/config.json', 'utf-8');
   const group = JSON.parse(config).groups.find((g: any) => g.name === 's2s');
 
   if (!group) throw new Error("Group 's2s' not found in config.json");

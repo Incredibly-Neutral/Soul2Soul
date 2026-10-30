@@ -23,7 +23,7 @@
  *   6. the operator approves the Safe tx, then runs:
  *        pnpm deploy-group --finalize <safeTxHash>
  *      which reads the ACTUAL group id from the addGroup receipt (GroupAdded
- *      log, never hardcoded), writes protocol/scripts/lit/config.json, and
+ *      log, never hardcoded), writes press/scripts/lit/config.json, and
  *      prints .env / update-protocol instructions.
  *
  * Dry-run: LIT_DRY_RUN=1 or --dry-run builds the full batch, pretty-prints each

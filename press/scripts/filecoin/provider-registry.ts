@@ -1,4 +1,4 @@
-// protocol/scripts/filecoin/provider-registry.ts
+// press/scripts/filecoin/provider-registry.ts
 import { Synapse } from "@filoz/synapse-sdk";
 import * as SPRegistry from "@filoz/synapse-core/sp-registry";
 import { asClient, mainnet } from "@filoz/synapse-core/chains";

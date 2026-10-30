@@ -1,4 +1,4 @@
-// protocol/scripts/lit/repoint-cache.ts — Phase 3: execute the repoint-archive
+// press/scripts/lit/repoint-cache.ts — Phase 3: execute the repoint-archive
 // Lit action to repoint the s3nl cache pointer at the rebuilt archive.
 //
 // Uses the SAME live transport as the orchestrator (runAction non-preview):

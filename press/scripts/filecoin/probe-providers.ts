@@ -1,4 +1,4 @@
-// protocol/scripts/filecoin/probe-providers.ts
+// press/scripts/filecoin/probe-providers.ts
 //
 // Probes every active mainnet PDP provider for browser usability.
 //

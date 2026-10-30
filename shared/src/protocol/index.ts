@@ -15,7 +15,7 @@ export type ViemProvider = PublicClient;
 /**
  * NOTE (INV-2): This reader expects the following on-chain record keys to exist
  * on the controller's records module. Before this can produce correct results,
- * the on-chain records must be written (see protocol/scripts/lit/update-protocol.ts):
+ * the on-chain records must be written (see press/scripts/lit/update-protocol.ts):
  *
  *   data_gateway, ens_records, ens_registry, publication_factory, records_factory,
  *   pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update
