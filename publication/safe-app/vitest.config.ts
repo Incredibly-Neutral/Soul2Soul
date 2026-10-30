@@ -37,10 +37,6 @@ export default mergeConfig(
         { find: '@/types', replacement: resolve(appRoot, 'src/types') },
         { find: '@/utils', replacement: resolve(appRoot, 'src/utils') },
         { find: '@s2s/soul2soul-shared', replacement: resolve(appRoot, '../../shared/src') },
-        { find: '@s2s/soul2soul-shared/protocol', replacement: resolve(appRoot, '../../shared/src/protocol') },
-        { find: '@s2s/soul2soul-shared/publication', replacement: resolve(appRoot, '../../shared/src/publication') },
-        { find: '@s2s/soul2soul-shared/lit', replacement: resolve(appRoot, '../../shared/src/lit') },
-        { find: '@s2s/soul2soul-shared/lit-actions', replacement: resolve(appRoot, '../../shared/src/lit-actions') },
         {
           find: 'filecoin-pin/dist/core/unixfs/browser.js',
           replacement: resolve(appRoot, '../../node_modules/filecoin-pin/dist/core/unixfs/browser.js'),
