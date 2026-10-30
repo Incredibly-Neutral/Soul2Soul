@@ -1,5 +1,10 @@
-# SPEC — Host architecture: shared core + three hosts (obsidian plugin, safe-app, headless binary)
+# SPEC-author-hosts — shared core + the authoring hosts (obsidian, safe-app, binary, neovim)
 
+> **Parent:** [SPEC-author](../SPEC-author.md) — the authoring front door. Children that realize
+> this split: [SPEC-author-identity](./SPEC-author-identity.md),
+> [SPEC-author-publishing](./SPEC-author-publishing.md), [SPEC-author-cli](./SPEC-author-cli.md),
+> [SPEC-author-nvim](./SPEC-author-nvim.md).
+>
 > **Type:** settled architectural decision (a SPEC — describes the target host architecture, not a
 > change proposal). Records the decision made **2026-10-17**.
 >

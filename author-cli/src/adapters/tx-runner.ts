@@ -1,5 +1,5 @@
 // ============================================================================
-// TxRunner adapters — the two execution modes the CLI needs (SPEC-hosts AD-1):
+// TxRunner adapters — the two execution modes the CLI needs (SPEC-author-hosts AD-1):
 //
 //   EoaRunner     — direct EOA transactions (viem wallet). Signs and pays, and
 //                   is used for READS. It is deliberately NOT used for author

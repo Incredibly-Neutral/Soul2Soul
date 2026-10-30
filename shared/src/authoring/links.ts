@@ -3,7 +3,7 @@
 // preview/prod URLs a host surfaces after a render.
 //
 // Extracted from neutralpress' render.helper so the headless author-cli emits
-// the same links the Obsidian plugin shows (SPEC-hosts).
+// the same links the Obsidian plugin shows (SPEC-author-hosts).
 // ============================================================================
 
 import { parseCID, toPreviewLabel } from '../ipfs';

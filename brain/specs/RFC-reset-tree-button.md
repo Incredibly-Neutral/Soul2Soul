@@ -1,7 +1,7 @@
 # RFC — "Reset tree" button (clear pages, keep assets, optional bulk render)
 
 > An RFC, not a spec: this is a feasibility proposal for behavior that is **not yet built**.
-> When built + reviewed, fold the settled parts into `SPEC-safe-app.md` and
+> When built + reviewed, fold the settled parts into `publication/SPEC-publication-admin-app.md` and
 > `SPEC-protocol-actions.md`, then strike here.
 >
 > Status: PROPOSED 2026-08-20. Follows the Website Tree tab (PR #48/#51/#52, `feat/website-tree-tab`).
@@ -161,4 +161,4 @@ build`, `pnpm lint`; plus the shared/protocol vitest suites for the schema/seque
 2. Implement in two PRs: (a) `reset` in action-io + update action + sequence (shared/protocol,
    with vitest coverage for the zero-jobs-reset path), (b) the tree-tab button + optional
    bulk-render wiring (safe-app). Each in its own worktree, gates green, independent review.
-3. Fold settled behavior into `SPEC-safe-app.md` / `SPEC-protocol-actions.md`; strike this RFC.
+3. Fold settled behavior into `publication/SPEC-publication-admin-app.md` / `SPEC-protocol-actions.md`; strike this RFC.

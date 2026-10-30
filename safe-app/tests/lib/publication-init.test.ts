@@ -1,7 +1,7 @@
 // safe-app/tests/lib/publication-init.test.ts
 //
 // Unit tests for the pure "new publication init" orchestration
-// (SPEC-hosts.md AD-3): encoding, batch building, ModuleCreated-log detection,
+// (SPEC-author-hosts.md AD-3): encoding, batch building, ModuleCreated-log detection,
 // and the full initializePublication flow. Node env, no browser, no SDK — all
 // runtime deps are injected mocks.
 

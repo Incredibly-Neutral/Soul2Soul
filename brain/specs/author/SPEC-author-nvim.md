@@ -1,5 +1,8 @@
-# SPEC-nvim-s2s — the Neovim plugin wrapper over the `s2s` binary
+# SPEC-author-nvim — the Neovim plugin wrapper over the `s2s` binary
 
+> **Parent:** [SPEC-author](../SPEC-author.md) — the authoring front door. Host sibling:
+> [SPEC-author-cli](./SPEC-author-cli.md) (the binary this plugin spawns).
+>
 > **Type:** host specification — describes the `nvim-s2s/` package, the *editor* host that drives
 > the headless binary from [SPEC-author-cli](./SPEC-author-cli.md). Nothing is built yet.
 >

@@ -1,14 +1,17 @@
-# SPEC-neutralpress
+# SPEC-author-publishing — neutralpress (publication lifecycle, content authoring, render triggering)
 
+> **Parent:** [SPEC-author](../SPEC-author.md) — the authoring front door. Basis sibling:
+> [SPEC-author-identity](./SPEC-author-identity.md) (`oxo-core`), which this package runtime-depends on.
+>
 > **Audited against live code:** 2026-08-03; **partial re-audit 2026-08-06** for the frontmatter
 > `slug` override and the (still-unwired) `remove[]` population for the update action (see
 > handoff `handoff-actions-fixes-and-remove.md`).
 >
 > Component spec for `neutralpress/` — the Obsidian plugin for **publication lifecycle, content
 > authoring/encryption, and render triggering**. Read **SPEC-00** first; types from **SPEC-shared**.
-> Runtime-depends on **SPEC-0xobsidian** (`oxo-core`). The richest front-end — it wires authoring to
+> Runtime-depends on **SPEC-author-identity** (`oxo-core`). The richest front-end — it wires authoring to
 > the publish pipeline (SPEC-protocol-actions) and deploys the per-publication contracts
-> (SPEC-contracts-publication/-ens). Follows SPEC-00 §7.
+> (../SPEC-publication.md, ../SPEC-contracts-ens.md). Follows SPEC-00 §7.
 >
 > Invariants touched: INV-1 (passes the author signature), INV-2/INV-4 (`getProtocolInfo`, module
 > discovery), INV-8 (holds/passes the `litUsageKey`), the **cross-chain same-address** Safe
@@ -95,11 +98,11 @@ pipeline, so most of shared's *orchestration* surface lands here.
   safe-app's `ConfigBuilder` (no diverging neutralpress copy remains).
 - **Duplicate ABIs (RESOLVED 2026-10-17):** the neutralpress `protocol.abi.ts`/`publication/abi.ts`
   copies were deleted — ABIs now come only from `shared/contracts` + `protocol/contracts`. Lens is
-  called via `oxo.ctrlr.lens` (0xobsidian-side, commented-out — see SPEC-0xobsidian); reconcile
+  called via `oxo.ctrlr.lens` (0xobsidian-side, commented-out — see SPEC-author-identity); reconcile
   whether lens is fully dead across the authoring path.
 - **`litUsageKey` in plugin settings** with a `// hardcoded?` note — it's the INV-8 group credential
   that authorizes execution; treat its provisioning deliberately (and it's a secret at rest like the
-  author key — low stakes per SPEC-0xobsidian, but it gates publishing).
+  author key — low stakes per SPEC-author-identity, but it gates publishing).
 - **Publication creation is a long multi-step background job** (Safe×2, ENS, modules, enable, verify,
   config, feed, records, owners, remove-temp-signer). Partial failure leaves a half-built publication;
   the **remove-temp-signer** step is especially delicate (lose it wrong → lockout). Needs idempotent
@@ -143,7 +146,7 @@ pipeline, so most of shared's *orchestration* surface lands here.
 - `parseNote`: note (`.md`/`.base`) → `{contentId, publicContent, toEncrypt}` is the cleanest unit
   test (pure-ish) — fixture notes, assert the split.
 - **Encrypt↔decrypt round-trip:** `encryptContent` here vs the action's gated `decrypt` — assert a
-  blob encrypted to the PKP decrypts only when `canRead` passes (cross-check SPEC-contracts-publication
+  blob encrypted to the PKP decrypts only when `canRead` passes (cross-check publication/SPEC-publication-agreements
   + SPEC-protocol-actions).
 - **Publication creation:** integration (chain fork + Lens testnet) — assert L1==L2 Safe address,
   both modules enabled + discoverable by NAME, feed created, records set, temp signer removed.

@@ -6,7 +6,7 @@
 > publication-POV and author-POV administration and a new `getBylines(author)` primitive. A future
 > agent or human can pick it up cold. **Not implemented.** Parked for now; execution deferred to a
 > separate handoff session. When built and reviewed, fold the settled outcome into the relevant SPECs
-> (`SPEC-contracts-publication.md`, `SPEC-00-system-contract.md`, `SPEC-contracts.md`) and strike here.
+> (`SPEC-publication.md`, `SPEC-00-system-contract.md`) and strike here.
 >
 > **Pick-up contract:** a `handoffs/handoff-*.md` to be written when this is unparked — the executing
 > session starts there; this RFC is the durable proposal + acceptance contract.

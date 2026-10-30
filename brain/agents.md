@@ -26,9 +26,14 @@ touching code** — they carry the invariants, sub-component maps, gotchas, and 
 
 | package | spec |
 |---|---|
-| `safe-app/` | `brain/specs/SPEC-safe-app.md` — plus the QA harness (`safe-app/qa/`, `pnpm qa`) and the deploy method (`./deploy.sh`) it documents |
+| `safe-app/` | `brain/specs/publication/SPEC-publication-admin-app.md` — plus the QA harness (`safe-app/qa/`, `pnpm qa`) and the deploy method (`./deploy.sh`) it documents |
 | `shared/` | `brain/specs/SPEC-shared.md` |
-| contracts / protocol | `brain/specs/SPEC-00-system-contract.md` + `SPEC-contracts-publication.md` / `SPEC-contracts-ens.md` |
+| `author-cli/` | `brain/specs/author/SPEC-author-cli.md` — start at `brain/specs/SPEC-author.md` (the authoring front door) |
+| `nvim-s2s/` | `brain/specs/author/SPEC-author-nvim.md` (built against the binary's Binary API reference) |
+| `0xobsidian/` | `brain/specs/author/SPEC-author-identity.md` |
+| `neutralpress/` | `brain/specs/author/SPEC-author-publishing.md` |
+| any authoring host | `brain/specs/SPEC-author.md` + `brain/specs/author/SPEC-author-shared.md` (the seam) + `brain/specs/author/SPEC-author-hosts.md` (the split) |
+| contracts / protocol | `brain/specs/SPEC-00-system-contract.md` + `brain/specs/SPEC-publication.md` (tree) / `SPEC-contracts-ens.md` |
 
 - **s2s-prof** — the dispatcher. Reads/author handoffs, decomposes goals, spawns
   builders in worktrees, reviews branch diffs, merges via PR (human approves). Future
@@ -124,7 +129,8 @@ into main.
 - Trivial/mechanical one-liners (AGENTS.md) may be merged directly by the lead
   without a PR, but the record goes in the commit message.
 - **Update specs after every PR.** Once a PR merges, update the affected package
-  spec(s) in `brain/specs/` (`SPEC-safe-app.md`, `SPEC-shared.md`, `SPEC-contracts-*.md`)
+  spec(s) in `brain/specs/` (`publication/SPEC-publication-admin-app.md`, `SPEC-shared.md`, `SPEC-contracts-ens.md`,
+  and the authoring tree under `brain/specs/author/` — front door `SPEC-author.md`)
   to match what shipped — changed API surface, invariants, sub-component maps, test
   seams, gotchas. Specs are the read-before-code contract; a PR that drifts from its
   spec is how specs rot.

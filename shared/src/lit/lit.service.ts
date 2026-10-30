@@ -1,5 +1,5 @@
 import { keccak256, toBytes } from "viem";
-import { callWithTimeout, withRetry } from "../helpers/index.js";
+import { callWithTimeout, isAbortError, withRetry } from "../helpers/index.js";
 import { encryptAction } from "./actions/encrypt.js";
 import { compactAction } from "./actions/index.js";
 
@@ -67,8 +67,11 @@ export class LitService {
           signal: effectiveSignal,
         });
       } catch (err: unknown) {
-        const aborted = err instanceof Error && err.name === 'AbortError';
-        if (aborted) throw new Error(`Lit API call to ${endpoint} timed out`);
+        // undici hides an abort behind `TypeError: fetch failed` — see
+        // isAbortError. Without this, a 120s timeout reads as "fetch failed".
+        if (isAbortError(err)) {
+          throw new Error(`Lit API call to ${endpoint} timed out`, { cause: err });
+        }
         throw err;
       }
 
@@ -279,7 +282,7 @@ export class LitService {
   ) {
     const endpoint = '/lit_action';
 
-    const result = await this.call<{ response: unknown; logs: string[]; has_error: boolean }>(
+    const result = await this.call<{ response: unknown; logs?: string[]; has_error?: boolean }>(
       endpoint,
       {
         method: 'POST',
@@ -289,6 +292,19 @@ export class LitService {
       },
       signal,
     );
+
+    // `has_error` means the action itself failed. Its `response` is usually the
+    // action's own error envelope, but the *logs* — the action's console output,
+    // the only place the real reason tends to appear — were being dropped, which
+    // is why a failing render said nothing. Print them; the caller still decides
+    // whether the envelope counts as a failure (throwing here would collapse the
+    // retry/classification logic that distinguishes transport failures).
+    if (result?.has_error) {
+      const logs = result.logs ?? [];
+      console.error(
+        `[lit_action] action reported an error; logs (${logs.length}):\n${logs.join('\n')}`,
+      );
+    }
 
     return result;
   }
