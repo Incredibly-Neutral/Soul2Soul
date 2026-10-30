@@ -22,9 +22,22 @@
 // Note: `hasDeal` is read by canRead, but nothing reads `hasOffer`. Whether
 // holding an offer (rather than a deal) is enough to read is GATES-5's open
 // mechanism question, not decided here.
+//
+// Runtime note: the Lit Action runtime supplies ethers (an action's `require`
+// resolves it, and a bare global is also present), which is what the default
+// genesis normaliser uses. A host without ethers — a browser plugin, the
+// safe-app, a CLI — must pass its own normaliser to canRead, or hand it an
+// already-bytes32 id.
 // ============================================================================
 
 import { toBytes32Id } from '../manuscript/identity/contract-id';
+
+/**
+ * Normalises a content reference into the bytes32 genesis the contract keys
+ * deals by. The default hashes through ethers, which the Lit Action runtime
+ * provides; other hosts pass their own.
+ */
+export type IdNormaliser = (ref: string) => string;
 
 /**
  * A read against the EVM, as the caller implements it.
@@ -69,7 +82,7 @@ export const canPublish = async (
  * the signer owns the author Safe, and a deal exists for the item's genesis.
  * `contentId` is normalised to bytes32 the same way the writes normalise it —
  * an already-hashed 0x+64hex id passes through, anything else (a raw CID,
- * an objectId) is keccak256-hashed.
+ * an objectId) is keccak256-hashed. Pass `toId` when your host has no ethers.
  */
 export const canRead = async (
   read: GateRead,
@@ -77,8 +90,9 @@ export const canRead = async (
   safeAddress: string,
   publicationModule: string,
   signerAddress: string,
+  toId: IdNormaliser = toBytes32Id,
 ): Promise<boolean> => {
-  const genesis = toBytes32Id(contentId);
+  const genesis = toId(contentId);
 
   const [cp, isOwner, isDeal] = await Promise.all([
     read(publicationModule, CAN_PUBLISH_ABI, 'canPublish', [safeAddress]),

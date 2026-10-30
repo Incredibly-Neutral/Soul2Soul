@@ -101,6 +101,23 @@ describe('canRead', () => {
   });
 });
 
+describe('canRead without an ethers runtime', () => {
+  it('uses the normaliser the host supplies, never the global', async () => {
+    vi.unstubAllGlobals();
+    expect(typeof (globalThis as any).ethers).toBe('undefined');
+
+    let seen: unknown[] | undefined;
+    const read: GateRead = async (_target, _abi, fn, args) => {
+      if (fn === 'hasDeal') seen = args;
+      return true;
+    };
+    const toId = (ref: string) => `hashed:${ref}`;
+
+    expect(await canRead(read, 'bafyrawwcid', AUTHOR_SAFE, PUBLICATION, SIGNER, toId)).toBe(true);
+    expect(seen).toEqual(['hashed:bafyrawwcid']);
+  });
+});
+
 describe('canReset', () => {
   it('asks one question, of the publication Safe, not of the author Safe', async () => {
     const { read, asked } = makeRead({ [`isOwner:${PUBLICATION}`]: true });
