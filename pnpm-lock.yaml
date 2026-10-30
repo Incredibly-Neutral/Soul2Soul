@@ -836,7 +836,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@18.19.130)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  verification/contracts:
+  publication/ens-contracts:
     dependencies:
       '@openzeppelin/contracts':
         specifier: ^4.9.6

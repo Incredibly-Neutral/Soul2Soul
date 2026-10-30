@@ -1,5 +1,5 @@
 {
-  "name": "@s2s/verification-contracts",
+  "name": "@s2s/ens-contracts",
   "version": "1.0.0",
   "private": true,
   "type": "module",
