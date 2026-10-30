@@ -3,6 +3,64 @@ import { callWithTimeout, withRetry } from "../helpers/index.js";
 import { encryptAction } from "./actions/encrypt.js";
 import { compactAction } from "./actions/index.js";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Log hygiene — nothing in this module may put a Lit usage key, a plaintext
+// body or a ciphertext on stdout/stderr. Two proven routes:
+//
+//   1. Lit error payloads. A live 403 body from /lit_action echoed a numeric
+//      rendering of the X-Api-Key that was sent (`…861850`), and on
+//      /lit_action a body can echo `js_params` — i.e. `message` (plaintext) on
+//      the encrypt path or `ciphertext` on the decrypt path.
+//   2. Action `logs`. `/lit_action` returns the action's own stdout. Actions on
+//      the decrypt/render path log rendered output
+//      (`console.log('HTML', html.slice(0, 400))`, handlebars helper dumps),
+//      and prep logs `endpoints` (which can carry a gateway auth token). Any of
+//      those can be derived from decrypted plaintext.
+//
+// So: log response *shape*, not bodies; summarise action logs by size, not
+// content; scrub anything that still reaches a log line or an Error message.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Key/blob-shaped runs: a 44-char base64 usage key (`9i8zKrv71/…=`), a
+ * ciphertext or signature hex blob, any CID. Deliberately excludes `-`/`_` so
+ * ordinary hyphenated prose in an error reason survives.
+ */
+const SECRET_RUN = /[A-Za-z0-9+/=]{16,}/g;
+/** Lit has echoed numeric renderings of a key, e.g. a 403 body ending `…861850`. */
+const LONG_DIGITS = /\d{8,}/g;
+
+/**
+ * Mask credential-shaped runs and bound the length, so a Lit error reason stays
+ * readable without carrying the key (or payload) that produced it.
+ */
+const redact = (value: unknown, limit = 200): string =>
+  String(value ?? '')
+    .replace(SECRET_RUN, '<redacted>')
+    .replace(LONG_DIGITS, '<n>')
+    .slice(0, limit);
+
+/** Describe a JSON body by shape only — keys, never values. */
+const bodyShape = (data: unknown): string => {
+  if (Array.isArray(data)) return `array[${data.length}]`;
+  if (data && typeof data === 'object') {
+    const keys = Object.keys(data as Record<string, unknown>);
+    return keys.length ? `{${keys.slice(0, 8).join(',')}}` : '{}';
+  }
+  return typeof data;
+};
+
+/**
+ * Action logs are the action's own stdout and can contain decrypted plaintext
+ * or js_params. Report how much was emitted, never what: enough to tell a
+ * silent failure from a chatty one without echoing the payload.
+ */
+const describeActionLogs = (logs: unknown): string => {
+  if (!Array.isArray(logs) || logs.length === 0) return 'no action logs';
+  const bytes = logs.reduce((n, line) => n + String(line ?? '').length, 0);
+  return `${logs.length} action log line(s), ${bytes} byte(s) withheld`;
+};
+
 type LitEnvironment = 'dev' | 'prod';
 
 interface LitServiceConfig {
@@ -21,7 +79,7 @@ export class LitService {
       : 'https://api.chipotle.litprotocol.com/core/v1';
     this.accountKey = config.accountKey;
 
-    // console.log("CONFIGURATION", this.baseUrl, this.accountKey)
+    // (no config dump here on purpose — it printed `accountKey`)
   }
 
   // ============================================================
@@ -78,12 +136,20 @@ export class LitService {
       try {
           data = JSON.parse(text);
       } catch {
-          throw new Error(`Lit API returned non-JSON: ${response.status} ${text.slice(0, 200)}`);
+          // Body withheld on purpose: on /lit_action it can be the plaintext.
+          throw new Error(`Lit API returned non-JSON: HTTP ${response.status} (${text.length} bytes)`);
       }
 
       if (!response.ok) {
-          console.log('[Lit API] Error response:', response.status, text);
-          throw new Error(data.error ?? data.message ?? data.detail ?? `HTTP ${response.status}: ${text.slice(0, 500)}`);
+          // Shape only — never the body (see the log-hygiene note above).
+          console.error(
+            `[Lit API] ${method} ${endpoint} -> ${response.status}` +
+            ` (body ${text.length} bytes, json ${bodyShape(data)})`,
+          );
+          const reason = data?.error ?? data?.message ?? data?.detail;
+          throw new Error(
+            `HTTP ${response.status} from ${endpoint}` + (reason ? `: ${redact(reason)}` : ''),
+          );
       }
 
       return data;
@@ -123,11 +189,14 @@ export class LitService {
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error(`Lit API returned non-JSON: ${response.status} ${text.slice(0, 200)}`);
+      throw new Error(`Lit API returned non-JSON: HTTP ${response.status} (${text.length} bytes)`);
     }
 
     if (!response.ok) {
-      throw new Error(data.error ?? data.message ?? `HTTP ${response.status}`);
+      const reason = data?.error ?? data?.message;
+      throw new Error(
+        `HTTP ${response.status} from /get_lit_action_ipfs_id` + (reason ? `: ${redact(reason)}` : ''),
+      );
     } 
 
     return data;
@@ -298,9 +367,9 @@ export class LitService {
   // ============================================================
 
   async encrypt(key: string, pkpId: string, message: string): Promise<string> {
-
-    console.log({ key, pkpId, message })
-
+    // Deliberately unlogged: `key` is the Lit usage key (a credential) and
+    // `message` is the plaintext being gated. Never print either — not before
+    // the call, not in the catch below.
     if (!message || typeof message !== 'string') {
       throw new Error(`encrypt: message must be a non-empty string, got: ${typeof message}`);
     }
@@ -318,13 +387,18 @@ export class LitService {
       );
 
       if (result.has_error) {
-        throw new Error(`Encrypt failed: ${result.logs?.join('\n')}`);
+        // The action's log lines can carry js_params / rendered plaintext, so
+        // the message reports their size rather than their content.
+        throw new Error(`Encrypt failed: ${describeActionLogs(result.logs)}`);
       }
 
       return result.response.ciphertext;
 
     } catch(error: any) {
-      console.log(error)
+      // Log the reason, never the error object: call() errors embed the Lit
+      // response body, and this same string is returned as the "ciphertext",
+      // so an unredacted print would put the payload back on stdout.
+      console.error(`[Lit] encrypt failed: ${redact(error?.message ?? error)}`);
 
       return error.toString()
     }
@@ -340,11 +414,12 @@ export class LitService {
       );
 
       if (result.response.error) {
-          throw new Error(`Lit decrypt error: ${result.response.error}`);
+          throw new Error(`Lit decrypt error: ${redact(result.response.error)}`);
       }
 
       if (!result.response.plaintext) {
-          throw new Error(`Lit decrypt returned no plaintext. Response: ${JSON.stringify(result.response)}`);
+          // Shape only: JSON.stringify(result.response) is a response body print.
+          throw new Error(`Lit decrypt returned no plaintext (response ${bodyShape(result.response)})`);
       }
 
       return result.response.plaintext!;

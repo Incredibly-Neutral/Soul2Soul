@@ -1,20 +1,39 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { Wallet, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers';
 import {
   createPath,
   sortCollection,
   bodiesFromReconcile,
   fetchCollections,
+  initTemplateData,
+  verifyDecrypted,
   shouldWriteBackCache,
   type CollectionsDrift,
 } from './data.ctrlr';
+import { decryptRaw } from '../libs/decrypt';
 import { catFile } from '../libs/ipfs.factory';
 import {
   fetchByPublication,
   fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
   getDeals,
+  getLatestEntry,
+  toBody,
 } from '../libs/module.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import { buildSigningView } from '../../../../shared/dist/identity/signing-view';
+import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/protocol/types';
+
+// The ambient ethers v5 global a Lit Action provides; stub the two functions
+// the integrity verdict uses (identical EIP-712/ecrecover semantics in v6).
+beforeAll(() => {
+  vi.stubGlobal('ethers', {
+    utils: { _TypedDataEncoder: { hash: TypedDataEncoder.hash }, recoverAddress },
+  });
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 // Mock the I/O boundaries so fetchCollections' archive path can be exercised
 // without a chain/IPFS. The pure helpers above (createPath, sortCollection,
@@ -23,11 +42,19 @@ vi.mock('../libs/ipfs.factory', () => ({
   catFile: vi.fn(),
 }));
 
+// The Lit decrypt call is an I/O boundary; the post-decryption gate itself is
+// pure and is what these tests pin.
+vi.mock('../libs/decrypt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/decrypt')>();
+  return { ...actual, decryptRaw: vi.fn(), decrypt: vi.fn() };
+});
+
 vi.mock('../libs/module.factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/module.factory')>();
   return {
     ...actual,
     getDeals: vi.fn(),
+    getLatestEntry: vi.fn(),
     fetchByPublication: vi.fn(),
     fetchByPublicationWithSkips: vi.fn(),
     fetchByPublicationDetailed: vi.fn(),
@@ -301,9 +328,12 @@ describe('sortCollection: defensive missing/null fields', () => {
 // byte-identical input to the no-archive `fetchByPublication` path.
 // ============================================================================
 
-const mkEntry = (genesis: string, cid: string) => ({
+const AUTHOR = new Wallet('0x' + '11'.repeat(32));
+const ATTACKER = new Wallet('0x' + '22'.repeat(32));
+
+const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address) => ({
   genesis,
-  author: '0xauthor',
+  author, // getDeals() returns a plain address, NOT a did:ethr
   cid,
   timestamp: 1,
 });
@@ -314,11 +344,45 @@ const mkBody = (genesis: string) => ({
   encryption: false,
 });
 
-/** A schema-valid canonical content item (plain by default; encrypted on demand). */
-const mkItem = (genesis: string, opts?: { encryption?: boolean }) => ({
-  public: {
+const bodyObject = (genesis: string) => ({
+  title: `title-${genesis}`,
+  slug: `slug-${genesis}`,
+  content: `content-${genesis}`,
+});
+
+/** Honest plaintext body bytes for a genesis (what plaintextHash is taken over). */
+const plainBody = (genesis: string): string => jcs(bodyObject(genesis));
+
+const hashOf = (body: string): string => keccak256(toUtf8Bytes(body));
+
+interface ItemOpts {
+  encryption?: boolean;
+  /** Mint with a different signing key (records ITS address as author). */
+  signer?: Wallet;
+  /** Override the author identity in `public` (defaults to the signer's). */
+  author?: string;
+  /** Replace the body AFTER minting (the forged-body lever). */
+  body?: string;
+  /** Override public.plaintextHash; `null` removes it (specVersion item ⇒ refused). */
+  plaintextHash?: string | null;
+  /** Also drop specVersion (true legacy item: author-bound only). */
+  legacy?: boolean;
+}
+
+/**
+ * Mint a genuine item the way buildSignedContentItem does (JCS body →
+ * plaintextHash → EIP-712 digest/objectId → real signature), then apply the
+ * tampering lever. A hand-shaped item would not exercise the real checks.
+ */
+const mkItem = (genesis: string, opts?: ItemOpts) => {
+  const signer = opts?.signer ?? AUTHOR;
+  const encryption = opts?.encryption ?? false;
+  const body = encryption ? `ciphertext-${genesis}` : plainBody(genesis);
+  const plaintextHash = hashOf(jcs(bodyObject(genesis)));
+
+  const pub: Record<string, unknown> = {
     specVersion: '1',
-    author: ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`,
+    author: opts?.author ?? toDidEthr(signer.address),
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -329,22 +393,188 @@ const mkItem = (genesis: string, opts?: { encryption?: boolean }) => ({
     base: '',
     tags: [],
     attributes: {},
-    plaintextHash: '0x' + '0'.repeat(64),
-  },
-  objectId: '0x' + '1'.repeat(64),
-  proof: {
-    type: 'eip712',
-    signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
-    signature: ('0x' + '2'.repeat(130)) as `0x${string}`,
-  },
-  encryption: opts?.encryption ?? false,
-  body: opts?.encryption
-    ? `ciphertext-${genesis}`
-    : JSON.stringify({
-        title: `title-${genesis}`,
-        slug: `slug-${genesis}`,
-        content: `content-${genesis}`,
-      }),
+    plaintextHash,
+  };
+  const digest = TypedDataEncoder.hash(
+    S2S_DOMAIN as any,
+    S2S_TYPES as any,
+    buildSigningView(pub as any),
+  );
+
+  const item: Record<string, any> = {
+    public: pub,
+    objectId: digest,
+    proof: {
+      type: 'eip712',
+      signer: signer.address,
+      signature: signer.signingKey.sign(digest).serialized,
+    },
+    encryption,
+    body,
+  };
+
+  if (opts?.plaintextHash === null) delete item.public.plaintextHash;
+  else if (opts?.plaintextHash !== undefined) item.public.plaintextHash = opts.plaintextHash;
+  if (opts?.legacy) {
+    delete item.public.specVersion;
+    delete item.public.plaintextHash;
+  }
+  if (opts?.body !== undefined) item.body = opts.body;
+
+  return item as unknown as S2SContentItem;
+};
+
+// ============================================================================
+// initTemplateData: post-decryption integrity gate.
+//
+// The stored encrypted body is ciphertext, so nothing can be checked at rest.
+// The decryptor's RAW STRING is hashed against the author-signed plaintextHash
+// (verifyDecrypted → module.factory.verifyDecryptedBody, the same function the
+// collection path in render/main.ts uses). Mismatch fails the job; a decryptor
+// that returns a parsed object falls back to JCS re-canonicalisation (weaker:
+// semantic, not byte, equivalence) and must WARN, never throw.
+// ============================================================================
+
+const PLAIN = plainBody('g1');
+const PARSED = JSON.parse(PLAIN) as Record<string, unknown>;
+
+const decryptedRaw = (raw: string) => ({
+  raw,
+  parsed: JSON.parse(raw),
+  rawFromDecryptor: true,
+});
+const decryptedParsed = (parsed: unknown) => ({
+  raw: JSON.stringify(parsed), // best effort only, and deliberately not signed
+  parsed: parsed as Record<string, unknown>,
+  rawFromDecryptor: false,
+});
+
+const encBody = (overrides: Record<string, unknown> = {}) =>
+  ({
+    id: 'g1',
+    author: toDidEthr(AUTHOR.address),
+    locale: 'en',
+    parent: '',
+    position: '',
+    postType: 'post',
+    creationDate: '2026-08-13',
+    modifiedDate: '2026-08-13',
+    tags: [],
+    publication: 'pub',
+    encryption: true,
+    content: 'ciphertext-g1',
+    plaintextHash: hashOf(PLAIN),
+    ...overrides,
+  }) as any;
+
+const renderTpl = { reference: 'post', file: 'post', path: '/{slug}/' } as any;
+
+const runInit = (body: any) =>
+  initTemplateData(
+    { pkp: 'pkp', gateway: 'gateway' } as any,
+    AUTHOR.address,
+    AUTHOR.address,
+    renderTpl,
+    body,
+    'module',
+    ['rpc'],
+  );
+
+describe('initTemplateData: post-decryption integrity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('verifies the decryptor’s RAW string and does ZERO extra reads (hash rides on toBody)', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+
+    const data = await runInit(encBody());
+
+    expect(data.content).toBe('content-g1');
+    expect(data.revoked).toBe(false);
+    // the hash was already on the flat body — no getLatestEntry, no extra cat
+    expect(getLatestEntry).not.toHaveBeenCalled();
+    expect(catFile).not.toHaveBeenCalled();
+  });
+
+  it('FAILS THE JOB when the decrypted raw string does not hash to plaintextHash', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PWNED_BODY));
+
+    await expect(runInit(encBody())).rejects.toThrow(/body integrity: decrypted content/);
+  });
+
+  it('PARSED-object decryptor: falls back to JCS, renders, and warns instead of throwing', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedParsed(PARSED));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ id: 'g-parsed' }));
+
+    expect(data.content).toBe('content-g1');
+    expect(data.revoked).toBe(false);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('verified by JCS'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('PARSED-object decryptor whose value does not match still fails the job', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedParsed(JSON.parse(PWNED_BODY)));
+
+    await expect(runInit(encBody())).rejects.toThrow(/body integrity: decrypted content/);
+  });
+
+  it('resolves the hash from the on-chain cid when the flat body lacks it (the only extra-read path)', async () => {
+    const item = mkItem('g1', { encryption: true });
+    // The fallback is pinned to the body's OWN deal cid: if the deal advanced
+    // mid-render, the chain's hash belongs to the NEXT version and must not be
+    // compared against this body.
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockResolvedValue(mkEntry('g1', 'cid1'));
+    (catFile as any).mockResolvedValue(JSON.stringify(item));
+
+    const data = await runInit(encBody({ plaintextHash: undefined, cid: 'cid1' }));
+
+    expect(data.content).toBe('content-g1');
+    // this IS the documented fallback: one RPC + one cat
+    expect(getLatestEntry).toHaveBeenCalledWith('g1', 'module', ['rpc']);
+    expect(catFile).toHaveBeenCalledWith('gateway', 'cid1');
+  });
+
+  it('refuses the chain fallback when the deal advanced past the rendered cid', async () => {
+    // The chain's hash belongs to the NEXT version of the content. Comparing it
+    // against THIS body would fail a good body (or validate it against a hash it
+    // was never signed under), so the fallback refuses and the page renders
+    // unverified instead.
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockResolvedValue(mkEntry('g1', 'cid2'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ plaintextHash: undefined, cid: 'cid1' }));
+
+    expect(data.content).toBe('content-g1');
+    expect(catFile).not.toHaveBeenCalled();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('deal advanced'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('an UNRESOLVABLE hash warns and renders unverified (never silently pretends, never throws)', async () => {
+    (decryptRaw as any).mockResolvedValue(decryptedRaw(PLAIN));
+    (getLatestEntry as any).mockRejectedValue(new Error('rpc down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const data = await runInit(encBody({ plaintextHash: undefined }));
+
+    expect(data.content).toBe('content-g1');
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('could not be verified'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('verifyDecrypted buckets: verified / weak / legacy / mismatch', () => {
+    const hash = hashOf(PLAIN);
+    expect(verifyDecrypted(decryptedRaw(PLAIN), hash)).toBe('verified');
+    expect(verifyDecrypted(decryptedRaw(PWNED_BODY), hash)).toBe('mismatch');
+    expect(verifyDecrypted(decryptedParsed(PARSED), hash)).toBe('weak');
+    expect(verifyDecrypted(decryptedParsed(JSON.parse(PWNED_BODY)), hash)).toBe('mismatch');
+    expect(verifyDecrypted(decryptedRaw(PLAIN), null)).toBe('legacy');
+  });
 });
 
 describe('bodiesFromReconcile', () => {
@@ -553,5 +783,208 @@ describe('fetchCollections: archive drift tracking', () => {
     expect(result.drift).toBeNull();
     expect(result.skips).toEqual([]);
     expect(result.collections.posts).toEqual([fallbackBody]);
+  });
+});
+
+// ============================================================================
+// fetchCollections: archive read-path integrity (plaintextHash).
+//
+// The archive stores re-serialised items, so a stored item's cid can never be
+// re-verified by hashing it — the author-signed `public.plaintextHash` is the
+// substitute. Whoever can write the ENS cache pointer could otherwise serve a
+// schema-valid item claiming a REAL deal cid while carrying a fake body, and it
+// would render. Every served plaintext item is hash-checked; a mismatch is
+// refetched from the content-addressed on-chain cid and, if that also
+// mismatches, surfaced as a non-fatal skip (never a dropped page).
+// ============================================================================
+
+const mkArchiveJson = (items: Record<string, { cid: string; item: unknown }>) =>
+  JSON.stringify({
+    format: 's2s-publication-archive/2',
+    publication: 'pub',
+    built: '2026-01-01T00:00:00.000Z',
+    items,
+  });
+
+const PWNED_BODY = jcs({ title: 'pwned', slug: 'pwned', content: 'pwned' });
+
+/** Real deal cid, FAKE body, honest `public` block (so only the hash check catches it). */
+const forgedItem = (genesis: string) => mkItem(genesis, { body: PWNED_BODY });
+
+/** Whole-item forgery: the attacker's OWN public block (author, hash, proof, objectId). */
+const forgedWholeItem = (genesis: string) =>
+  mkItem(genesis, { signer: ATTACKER, body: PWNED_BODY });
+
+describe('fetchCollections: archive read-path integrity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does NOT serve a forged archive item and refetches it from the on-chain cid', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const honest = mkItem('g1');
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedItem('g1') } }))
+      .mockResolvedValueOnce(JSON.stringify(honest)); // drift refetch of the REAL cid
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // the forged body never reaches the template data …
+    expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
+    expect(JSON.stringify(result.collections.posts)).not.toContain('pwned');
+    // … the forged entry is treated as MISS and the real cid was catted …
+    expect(catFile).toHaveBeenCalledWith('gateway', 'cid1');
+    expect(result.drift!.needsFetch.map((e) => e.genesis)).toEqual(['g1']);
+    // … the write-back stores the HONEST refetched item, not the forged one.
+    expect(result.drift!.fetchedItems.get('g1')).toEqual(honest);
+    // tamper evidence reaches the caller: the refused archive entry is reported
+    // (non-fatal — the page is served from the refetch)
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-mismatch\): /);
+    // same failure taxonomy as the direct read path
+    expect(result.skips[0].cause).toBe('integrity');
+    expect(result.collections.posts).toHaveLength(1);
+  });
+
+  it('does NOT serve a WHOLE-ITEM forgery (attacker’s own public block) — refetched too', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const honest = mkItem('g1');
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedWholeItem('g1') } }))
+      .mockResolvedValueOnce(JSON.stringify(honest));
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // internally self-consistent (own hash + own valid signature) and still refused,
+    // because the on-chain deal author is somebody else
+    expect(JSON.stringify(result.collections.posts)).not.toContain('pwned');
+    expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
+    expect(result.skips[0].reason).toMatch(/^integrity\(author-mismatch\): /);
+  });
+
+  it('refetched item that ALSO mismatches produces a non-fatal skip with a reason (never renders it)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedItem('g1') } }))
+      .mockResolvedValueOnce(JSON.stringify(forgedItem('g1'))); // refetch is forged too
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    // two entries: the archive item was refused, and the refetched bytes were refused
+    expect(result.skips).toHaveLength(2);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-mismatch\): /);
+    expect(result.skips[1]).toMatchObject({ genesis: 'g1', cid: 'cid1' });
+    expect(result.skips[1].reason).toMatch(/^integrity\(hash-mismatch\): refetched item rejected/);
+    expect(result.skips[1].cause).toBe('integrity');
+    // a mismatching refetch is NEVER cached into the next archive snapshot
+    expect(result.drift!.fetchedItems.has('g1')).toBe(false);
+  });
+
+  it('a refetched item that is not a content item at all is reported distinctly (not "retrieval failed")', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({})) // archive has nothing for g1
+      .mockResolvedValueOnce('{"not":"an item"}');
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0].reason).toMatch(
+      /^unavailable: refetched item rejected: refetched content is not a valid content item/,
+    );
+    expect(result.skips[0].reason).not.toMatch(/retrieval failed/);
+    // a malformed item is "could not be read", NOT "signed and then altered"
+    expect(result.skips[0].cause).toBe('unavailable');
+    expect(result.drift!.fetchedItems.has('g1')).toBe(false);
+  });
+
+  it('serves an honest archive item through toBody (identity fields follow the deal)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const honest = mkItem('g1');
+    (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: honest } }));
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    // archive-served bodies go through toBody(deal, item) — same shape as the
+    // cold path (whatever identity fields toBody emits ride along automatically).
+    expect(result.collections.posts).toEqual([toBody(deals[0] as any, honest)]);
+    expect(result.drift!.needsFetch).toEqual([]);
+    expect(result.skips).toEqual([]);
+  });
+
+  it('does NOT reject an encrypted archive item (ciphertext body — checked after decryption)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const enc = mkItem('g1', { encryption: true });
+    (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: enc } }));
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([toBody(deals[0] as any, enc)]);
+    expect(result.collections.posts[0].encryption).toBe(true);
+    expect(result.drift!.needsFetch).toEqual([]);
+    expect(result.skips).toEqual([]);
+    // no drift refetch: only the archive cat happened
+    expect(catFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves a LEGACY archive item without plaintextHash (unverifiable, not invalid)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const legacy = mkItem('g1', { legacy: true });
+    (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: legacy } }));
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts.map((b: any) => b.title)).toEqual(['title-g1']);
+    expect(result.drift!.needsFetch).toEqual([]);
+    expect(result.skips).toEqual([]);
+    // only the archive was catted — a legacy item is served, not refetched
+    expect(catFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT serve a specVersion item whose plaintextHash was stripped (refuses the opt-out)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    const stripped = mkItem('g1', { plaintextHash: null });
+    (catFile as any)
+      .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: stripped } }))
+      .mockResolvedValueOnce(''); // refetch fails → nothing served
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips[0].reason).toMatch(/^integrity\(hash-missing\): /);
+  });
+
+  it('binds an ENCRYPTED archive item to the author (the ciphertext itself is not checked)', async () => {
+    const deals = [mkEntry('g1', 'cid1')];
+    (catFile as any).mockResolvedValueOnce(
+      mkArchiveJson({
+        g1: { cid: 'cid1', item: mkItem('g1', { encryption: true, signer: ATTACKER }) },
+      }),
+    );
+    (getDeals as any).mockResolvedValue(deals);
+
+    const tpl = { collections: [{ slug: 'posts' }] } as any;
+    const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
+
+    expect(result.collections.posts).toEqual([]);
+    expect(result.skips[0].reason).toMatch(/^integrity\(author-mismatch\): /);
   });
 });

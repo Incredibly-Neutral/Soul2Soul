@@ -1,10 +1,25 @@
-import { S2SContentInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/lit-actions';
+import {
+  S2SContentInfo,
+  S2SProtocolInfo,
+  canonicalizeProofPayload,
+  extractHashableHtml,
+  hasHtmlBlock,
+  insertJsonLdScript,
+  ipfsContentUrl,
+  PROOF_CANONICALIZATION_JCS,
+  stripUndefinedDeep,
+} from '@s2s/soul2soul-shared/lit-actions';
 
-// Canonical JSON for consistent hashing
-const canonicalize = (obj: any): string => {
-  return JSON.stringify(obj, Object.keys(obj).sort());
-};
-
+/**
+ * Build the page's schema.org JSON-LD provenance block and sign it with the
+ * protocol PKP.
+ *
+ * Signed bytes: JCS-RFC8785(schema-without-proof) ++ JCS-RFC8785(proofOptions).
+ * The canonicalisation is shared with update/verify.ts (see
+ * shared/src/metadata/proof-canonicalization.ts) so signer and verifier cannot
+ * drift. `proof.canonicalization` records the scheme on the page so pre-JCS
+ * pages can still be verified with the legacy canonicaliser.
+ */
 export const addAndSignMetadata = async (
   id: string,
   html: string,
@@ -14,18 +29,13 @@ export const addAndSignMetadata = async (
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
   try {
-    // 1. Extract HTML content between <html> and </html> tags
-    let contentToHash = html;
-    const htmlMatch = /<html[^>]*>([\s\S]*)<\/html>/i.exec(html);
-
-    if (htmlMatch && htmlMatch[0]) {
-      contentToHash = htmlMatch[0];
-    } else {
+    // 1. The hashed region — shared with update/verify.ts so that the bytes the
+    //    verifier re-derives after injection are exactly the bytes hashed here,
+    //    including for pages with no <html> tag.
+    const contentToHash = extractHashableHtml(html);
+    if (!hasHtmlBlock(html)) {
       console.log('Could not find HTML tags, hashing entire content');
     }
-
-    // Normalise line endings — IPFS gateways may insert \r\n
-    contentToHash = contentToHash.replace(/\r\n/g, '\n');
 
     // 2. Hash the HTML (SHA-256 for Schema.org)
     const htmlBytes = ethers.utils.toUtf8Bytes(contentToHash);
@@ -36,16 +46,18 @@ export const addAndSignMetadata = async (
     const timestamp = new Date().toISOString();
     const currentUrl = contentInfo?.publisher?.url || '';
 
-    // 4. Build schema WITHOUT proof first
-    const schema: any = {
+    // 3. Build schema WITHOUT proof first
+    const schema: Record<string, unknown> = {
       '@context': ['https://schema.org', 'https://w3id.org/security/data-integrity/v2'],
       '@type': 'Article',
+      // Stable document identity (bytes32 genesis / objectId). Unchanged.
       identifier: id,
     };
 
-    // Author (provenance)
+    // Author (provenance). The author's EIP-712 proof is nested HERE, not on
+    // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
     if (contentInfo?.author) {
-      schema.author = {
+      const author: Record<string, unknown> = {
         '@type': 'Person',
         identifier: {
           '@type': 'PropertyValue',
@@ -56,8 +68,26 @@ export const addAndSignMetadata = async (
 
       // Add profile creation timestamp if available
       if (contentInfo.author.createdAt) {
-        schema.author.dateCreated = contentInfo.author.createdAt;
+        author.dateCreated = contentInfo.author.createdAt;
       }
+
+      if (contentInfo.author.proof) {
+        const authorProof = contentInfo.author.proof;
+        // The item's `objectId` is a SIBLING of `proof`, not part of it (a real
+        // mint emits proof = {type, signer, signature}). Render copies it onto
+        // the nested proof — falling back to the contentInfo sibling here — so
+        // the page carries the exact digest the author signed and a reader can
+        // verify the attestation without re-fetching the item.
+        const objectId = authorProof.objectId ?? contentInfo.objectId;
+        author.proof = {
+          type: authorProof.type,
+          ...(objectId ? { objectId } : {}),
+          signer: authorProof.signer,
+          signature: authorProof.signature,
+        };
+      }
+
+      schema.author = author;
     }
 
     // Publisher
@@ -101,14 +131,43 @@ export const addAndSignMetadata = async (
       };
     }
 
-    // Content integrity (self-authentication)
-    schema.encoding = {
+    // Content integrity (self-authentication of the rendered page).
+    //
+    // This MediaObject asserts a digest OF THIS HTML, so it must not carry a
+    // contentUrl: the only CID we have is the content item's, and nothing is
+    // retrievable at that URL with this sha256. The item CID belongs on the
+    // sdContent node below, where it is paired with the plaintext hash.
+    const contentUrl = ipfsContentUrl(contentInfo?.contentCid);
+    const encoding: Record<string, unknown> = {
       '@type': 'MediaObject',
       sha256: sha256Hash,
     };
+    if (contentInfo?.mediaType) {
+      encoding.encodingFormat = contentInfo.mediaType;
+    }
+    schema.encoding = encoding;
 
-    if (contentInfo?.contentCid) {
-      schema.encoding.contentUrl = `ipfs://${contentInfo.contentCid}`;
+    // Canonical plaintext identity (specVersion "1"): what the author signed,
+    // independent of this render. Emitted only when the body hash is known.
+    if (contentInfo?.plaintextHash) {
+      const sdContent: Record<string, unknown> = {
+        '@type': 'CreativeWork',
+        // keccak256 of the canonical body — NOT a schema.org sha256 (that term
+        // is taken by encoding.sha256, a real SHA-256 of the HTML). Naming the
+        // algorithm explicitly avoids two algorithms under one term.
+        identifier: contentInfo.plaintextHash,
+        digestMethod: 'keccak256',
+      };
+      if (contentInfo.mediaType) {
+        sdContent.encodingFormat = contentInfo.mediaType;
+      }
+      if (contentInfo.specVersion) {
+        sdContent.version = contentInfo.specVersion;
+      }
+      if (contentUrl) {
+        sdContent.contentUrl = contentUrl;
+      }
+      schema.sdContent = sdContent;
     }
 
     // License contract reference
@@ -135,26 +194,31 @@ export const addAndSignMetadata = async (
       },
     };
 
-    // 5. Create proof metadata (without proofValue)
+    // 4. Create proof metadata (without proofValue)
     const proofOptions: Record<string, string> = {
       type: 'DataIntegrityProof',
       cryptosuite: 'ecdsa-secp256k1-2019',
       created: timestamp,
       verificationMethod: `did:pkh:eip155:8453:${pkpAddress}`,
       proofPurpose: 'assertionMethod',
+      canonicalization: PROOF_CANONICALIZATION_JCS,
     };
 
-    // 6. Hash schema + proof options for signing (W3C Data Integrity approach)
-    // Concatenate canonical schema + canonical proof options
-    const schemaCanonical = canonicalize(schema);
-    const proofOptionsCanonical = canonicalize(proofOptions);
-    const toSign = schemaCanonical + proofOptionsCanonical;
+    // 5. Hash schema + proof options for signing (W3C Data Integrity approach)
+    // Concatenate canonical schema + canonical proof options.
+    //
+    // JCS has no undefined type and throws on one, while JSON.stringify (used
+    // for emission, below) silently drops such a key. A runtime caller leaving
+    // an optional field undefined would therefore abort signing here, and the
+    // catch-all below would return the page with NO JSON-LD at all — a page the
+    // update gate can only ever reject. Strip first, so the signed bytes are
+    // exactly the emitted bytes.
+    const signable = stripUndefinedDeep(schema);
+    const toSign = canonicalizeProofPayload(signable, proofOptions);
 
     const toSignHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toSign));
 
-    // 7. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
-    const sigName = `sign-${id.slice(0, 4)}`;
-
+    // 6. Sign with Lit PKP (may fail in preview — that's fine, metadata still gets embedded)
     try {
       const signingKey = new ethers.utils.SigningKey(
         await Lit.Actions.getPrivateKey({ pkpId: protocolInfo.pkp }),
@@ -162,37 +226,23 @@ export const addAndSignMetadata = async (
       const signature = ethers.utils.joinSignature(
         signingKey.signDigest(ethers.utils.arrayify(toSignHash)),
       );
-      schema.proof = {
+      signable.proof = {
         ...proofOptions,
         proofValue: signature,
       };
     } catch (signError) {
       console.log('Signing skipped (preview or shim):', signError);
-      schema.proof = proofOptions;
+      signable.proof = proofOptions;
     }
 
-    // 8. Create script tag (with proof if signed, without signature otherwise)
+    // 7. Create script tag (with proof if signed, without signature otherwise)
     const scriptTag = `<script type="application/ld+json">
-${JSON.stringify(schema, null, 2)}
+${JSON.stringify(signable, null, 2)}
 </script>`;
 
-    // 10. Insert into HTML after DOCTYPE, before <html>
-    if (html.includes('<!DOCTYPE html>')) {
-      const parts = html.split('<!DOCTYPE html>');
-      let htmlContent = parts[1];
-
-      if (htmlContent.includes('<html')) {
-        htmlContent = htmlContent.replace(/(\s*<html)/i, `\n${scriptTag}\n$1`);
-      }
-
-      html = '<!DOCTYPE html>' + htmlContent;
-    } else if (html.includes('<html')) {
-      html = html.replace(/(<html)/i, `${scriptTag}\n$1`);
-    } else {
-      html = scriptTag + '\n' + html;
-    }
-
-    return html;
+    // 8. Insert so the block lands outside the hashed region (see
+    //    shared/src/metadata/html-block.ts — insert and extract are a pair).
+    return insertJsonLdScript(html, scriptTag);
   } catch (error) {
     console.log('Error in addMetadata:', error);
     return html;

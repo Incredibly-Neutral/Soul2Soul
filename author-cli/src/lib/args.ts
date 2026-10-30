@@ -9,6 +9,20 @@
 // Unknown flags are kept verbatim in `flags` so commands can error clearly.
 // ============================================================================
 
+/**
+ * Flags that never consume the following token. A flag missing here silently
+ * swallows the note path as its value (`s2s author publish --allow-plaintext
+ * note.md`), so keep this list in step with the `[--flag]` usage strings.
+ */
+export const BOOLEAN_FLAGS = [
+  'json',
+  'help',
+  'h',
+  'version',
+  'local',
+  'allow-plaintext',
+] as const;
+
 export interface ParsedArgs {
   flags: Record<string, string | boolean>;
   positionals: string[];
@@ -70,6 +84,16 @@ export function flagString(
 ): string | undefined {
   const value = flags[name];
   return typeof value === 'string' ? value : undefined;
+}
+
+/** Read a boolean flag (`--flag` → true; absent or `--flag=false` → false). */
+export function flagBool(
+  flags: Record<string, string | boolean>,
+  name: string,
+): boolean {
+  const value = flags[name];
+  if (typeof value === 'boolean') return value;
+  return value === 'true';
 }
 
 /** Split a comma-separated flag value into trimmed entries. */
