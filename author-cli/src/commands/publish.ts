@@ -8,11 +8,12 @@
 import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
+import { flagBool } from '../lib/args';
 
 export const publish: CommandSpec = {
   name: 'publish',
   summary: 'Upload, propose on-chain, render on the production site, and back it up (one-shot).',
-  usage: 's2s author publish <note> [--publication <ens>] [--json]',
+  usage: 's2s author publish <note> [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);
@@ -22,6 +23,8 @@ export const publish: CommandSpec = {
       render: true,
       publish: true,
       offer: true,
+      // Explicit opt-in to republishing a previously-encrypted genesis in the clear.
+      allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
     });
 
     ctx.out.result(

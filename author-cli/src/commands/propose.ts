@@ -10,19 +10,24 @@
 import type { CommandSpec } from '../lib/command';
 import { proposeContent } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
-import { flagString } from '../lib/args';
+import { flagBool, flagString } from '../lib/args';
 
 export const propose: CommandSpec = {
   name: 'propose',
   summary: 'Offer already-uploaded content on-chain (makeOffer; run upload first).',
-  usage: 's2s author propose <note> [--cid <kuboCid>] [--publication <ens>] [--json]',
+  usage:
+    's2s author propose <note> [--cid <kuboCid>] [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const kuboCid = flagString(args.flags, 'cid');
     const publication = await resolvePublication(ctx, args, notePath);
 
     ctx.out.log(`proposing ${notePath} (${kuboCid ?? 'cid from frontmatter'}) → ${publication}`);
-    const result = await proposeContent(ctx, notePath, publication, kuboCid);
+    const result = await proposeContent(ctx, notePath, publication, kuboCid, {
+      // Same escape hatch as upload/preview/publish: accept a plaintext
+      // revision of a previously-encrypted genesis.
+      allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
+    });
 
     ctx.out.result(
       {
