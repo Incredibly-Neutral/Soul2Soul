@@ -108,8 +108,8 @@ export async function authorWrite(
   // Resolve the encrypt function FIRST, before any chain/IPFS work: a note with
   // `encryption: true` and no usable Lit key/PKP must fail closed with a usage
   // error, not upload a plaintext (or error-string) body. `upload`, `preview`
-  // and `publish` all land here, so this one place covers them. (`propose` does
-  // not re-sign: it verifies the target item instead — see proposeContent.)
+  // and `publish` all land here, so this one place covers them. (`offer` does
+  // not re-sign: it verifies the target item instead — see offerContent.)
   const encryptFn = buildEncryptFn(ctx, parsed, notePath);
 
   // Refuse a silent downgrade (encrypted genesis → plaintext body).
@@ -181,17 +181,17 @@ export async function authorWrite(
   const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
   ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${subdomain})`);
 
-  // On-chain append only when asked (`propose`/`publish`). A bare `upload`
+  // On-chain append only when asked (`offer`/`publish`). A bare `upload`
   // stays off-chain — ipfs + pins only; the offer is a separate step.
   let txHash: string | undefined;
   if (opts.offer) {
     if (!service) throw new Error('internal: on-chain offer requested without a resolved publication');
     txHash = await service.makeOffer(objectId, kuboCid);
-    ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash.slice(0, 12)}…)`);
+    ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash.slice(0, 12)}…)`);
   }
 
   // Frontmatter write-back: genesis+author on first publish; modified_date and
-  // the last upload's CID always (the CID is what `propose` offers on-chain).
+  // the last upload's CID always (the CID is what `offer` offers on-chain).
   const updates: Record<string, string> = {
     modified_date: new Date().toISOString().slice(0, 19),
     [KUBO_CID_KEY]: kuboCid,
@@ -227,7 +227,7 @@ export async function authorWrite(
   };
 }
 
-export interface ProposeResult {
+export interface OfferResult {
   /** Stable on-chain identity (frontmatter `genesis`, else `content_id`). */
   objectId: string;
   /** The CID anchored on-chain. */
@@ -240,44 +240,44 @@ export interface ProposeResult {
 }
 
 /**
- * On-chain offer only — the `propose` step split out of `upload`. The content
+ * On-chain offer only — the `offer` step split out of `upload`. The content
  * must already be on IPFS (run `upload` first: it writes `genesis` and
  * `kubo_cid` back to the note). `kuboCid` is the explicit `--cid` when given,
  * else the CID `upload` stored in the note's frontmatter. No re-upload, no
  * render, no durability, no frontmatter write.
  */
-export async function proposeContent(
+export async function offerContent(
   ctx: CliContext,
   notePath: string,
   publication: string,
   kuboCidFlag: string | undefined,
   opts: { allowPlaintext?: boolean } = {},
-): Promise<ProposeResult> {
+): Promise<OfferResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, basename(notePath));
 
   const objectId = parsed.genesis ?? parsed.contentId;
   if (!objectId) {
     throw new UsageError(
-      `cannot propose ${notePath}: no on-chain identity (frontmatter \`genesis\` or \`content_id\`). Run \`s2s author upload\` first.`,
+      `cannot offer ${notePath}: no on-chain identity (frontmatter \`genesis\` or \`content_id\`). Run \`s2s author upload\` first.`,
     );
   }
 
   const kuboCid = resolveKuboCid(kuboCidFlag, parsed.frontmatter);
   if (!kuboCid) {
     throw new UsageError(
-      `cannot propose ${notePath}: no content CID (no \`--cid\` given and no \`${KUBO_CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
+      `cannot offer ${notePath}: no content CID (no \`--cid\` given and no \`${KUBO_CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
     );
   }
 
-  // `propose` anchors an EXISTING CID, so the note's flag is not what gets
+  // `offer` anchors an EXISTING CID, so the note's flag is not what gets
   // published — the stored item is. Both directions are checked, before any
   // chain call:
   //   - note says encrypted: the anchored item (`--cid` included) must itself
   //     declare `body.encryption: true` and carry a decryptable body;
   //   - note says plaintext: the previous revision of the same genesis must
   //     not have been encrypted (the same question `upload` asks, same guard —
-  //     otherwise `propose --cid <plaintext>` re-opens the downgrade).
+  //     otherwise `offer --cid <plaintext>` re-opens the downgrade).
   await guardEncryptionDowngrade(ctx, parsed, notePath, opts);
   if (parsed.encryption) {
     await assertStoredItemEncrypted(ctx, kuboCid, notePath);
@@ -288,7 +288,7 @@ export async function proposeContent(
   const author = await authorSafeState(ctx);
   if (!author.deployed) {
     throw new UsageError(
-      `cannot propose ${notePath}: the author Safe ${author.address} is not deployed — run \`s2s author init\` first`,
+      `cannot offer ${notePath}: the author Safe ${author.address} is not deployed — run \`s2s author init\` first`,
     );
   }
   warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
@@ -306,7 +306,7 @@ export async function proposeContent(
   );
 
   const txHash = await service.makeOffer(objectId, kuboCid);
-  ctx.out.log(`✓ proposed ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+  ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
 
   return {
     objectId,
@@ -322,9 +322,9 @@ export async function proposeContent(
 // ===========================================================================
 
 /**
- * Refuse to propose a CID whose stored item is plaintext when the note asks for
+ * Refuse to offer a CID whose stored item is plaintext when the note asks for
  * encryption. Also refuses an item that cannot be read or whose encrypted body
- * does not meet the read-path contract — proposing either would anchor
+ * does not meet the read-path contract — offering either would anchor
  * something the render path cannot decrypt.
  */
 async function assertStoredItemEncrypted(
@@ -335,12 +335,12 @@ async function assertStoredItemEncrypted(
   const stored = await fetchStoredItem(ctx.ipfs, kuboCid, notePath);
   if (!stored.encryption) {
     throw new UsageError(
-      `refusing to propose ${notePath}: ${kuboCid} declares \`encryption: false\` but the note has \`encryption: true\`. Re-upload the note (\`s2s author upload\`) so the offered CID is encrypted.`,
+      `refusing to offer ${notePath}: ${kuboCid} declares \`encryption: false\` but the note has \`encryption: true\`. Re-upload the note (\`s2s author upload\`) so the offered CID is encrypted.`,
     );
   }
   if (stored.body === undefined) {
     throw new UsageError(
-      `refusing to propose ${notePath}: ${kuboCid} says \`encryption: true\` but has no string body`,
+      `refusing to offer ${notePath}: ${kuboCid} says \`encryption: true\` but has no string body`,
     );
   }
   assertCiphertext(stored.body);

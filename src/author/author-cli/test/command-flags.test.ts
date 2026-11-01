@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // These tests are about the command → core wiring, not the write path.
-vi.mock('../src/core/author', () => ({ authorWrite: vi.fn(), proposeContent: vi.fn() }));
+vi.mock('../src/core/author', () => ({ authorWrite: vi.fn(), offerContent: vi.fn() }));
 
-import { authorWrite, proposeContent } from '../src/core/author';
+import { authorWrite, offerContent } from '../src/core/author';
 import { preview } from '../src/commands/preview';
-import { propose } from '../src/commands/propose';
+import { offer } from '../src/commands/offer';
 import { publish } from '../src/commands/publish';
 import { upload } from '../src/commands/upload';
 import { BOOLEAN_FLAGS, parseArgs } from '../src/lib/args';
@@ -38,8 +38,8 @@ describe('--allow-plaintext command wiring', () => {
 
   beforeEach(() => {
     vi.mocked(authorWrite).mockResolvedValue(RESULT);
-    // proposeContent only reports the on-chain fields
-    vi.mocked(proposeContent).mockResolvedValue({
+    // offerContent only reports the on-chain fields
+    vi.mocked(offerContent).mockResolvedValue({
       objectId: RESULT.objectId,
       kuboCid: RESULT.kuboCid,
       publication: RESULT.publication,
@@ -79,9 +79,9 @@ describe('--allow-plaintext command wiring', () => {
     return call[3];
   }
 
-  function proposeOpts(): { allowPlaintext?: boolean } {
-    const call = vi.mocked(proposeContent).mock.calls[0];
-    if (!call) throw new Error('proposeContent was not called');
+  function offerOpts(): { allowPlaintext?: boolean } {
+    const call = vi.mocked(offerContent).mock.calls[0];
+    if (!call) throw new Error('offerContent was not called');
     return call[4] ?? {};
   }
 
@@ -98,16 +98,16 @@ describe('--allow-plaintext command wiring', () => {
     expect(uploadOpts().allowPlaintext).toBe(false);
   });
 
-  it('propose passes allowPlaintext: true only with the flag (and keeps the note path)', async () => {
+  it('offer passes allowPlaintext: true only with the flag (and keeps the note path)', async () => {
     const withFlag = note();
-    await propose.run(ctx, argsFor(withFlag, ['--allow-plaintext']));
-    expect(proposeOpts().allowPlaintext).toBe(true);
-    expect(vi.mocked(proposeContent).mock.calls[0]?.[1]).toBe(withFlag);
+    await offer.run(ctx, argsFor(withFlag, ['--allow-plaintext']));
+    expect(offerOpts().allowPlaintext).toBe(true);
+    expect(vi.mocked(offerContent).mock.calls[0]?.[1]).toBe(withFlag);
 
     vi.clearAllMocks();
     const without = note();
-    await propose.run(ctx, argsFor(without));
-    expect(proposeOpts().allowPlaintext).toBe(false);
+    await offer.run(ctx, argsFor(without));
+    expect(offerOpts().allowPlaintext).toBe(false);
   });
 
   it('preview and publish use the same flag-derived value', async () => {
