@@ -1,0 +1,10 @@
+{
+  "config": {
+    "environment": "prod",
+    "eoa": "0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387",
+    "kuboGateway": "ipfs.transport-union.dev",
+    "kuboToken": "dd…fc51",
+    "pinataGateway": "neutralpress.mypinata.cloud",
+    "rpcL1": "https://lb.drpc.live/eth/REDACTED"
+  }
+}

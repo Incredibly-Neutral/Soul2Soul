@@ -1,0 +1,15 @@
+{
+  "action": "publish",
+  "note": "/home/joera/notes/hello-s2s.md",
+  "publication": "joera.soul2soul.eth",
+  "subdomain": "joera",
+  "objectId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "kuboCid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+  "txHash": "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "render": {
+    "cid": "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+    "path": "/hello-s2s/",
+    "previewUrl": "https://bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku.ipfs.transport-union.dev/hello-s2s/",
+    "prodUrl": "https://joera.soul2soul.eth/hello-s2s/"
+  }
+}

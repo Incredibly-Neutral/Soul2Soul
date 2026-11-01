@@ -1,0 +1,9 @@
+{
+  "action": "upload",
+  "note": "/home/joera/notes/hello-s2s.md",
+  "publication": "joera.soul2soul.eth",
+  "subdomain": "joera",
+  "objectId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "kuboCid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+  "frontmatterWritten": true
+}

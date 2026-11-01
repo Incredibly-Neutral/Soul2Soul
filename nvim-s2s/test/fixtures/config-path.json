@@ -1,0 +1,8 @@
+{
+  "path": "/home/joera/.config/s2s/config.json",
+  "env": {
+    "user": "/home/joera/.config/s2s/.env",
+    "userExists": false,
+    "project": null
+  }
+}

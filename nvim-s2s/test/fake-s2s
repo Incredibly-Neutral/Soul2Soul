@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# ============================================================================
+# fake-s2s — a stand-in for the `s2s` binary, for spawn integration tests.
+#
+#   S2S_FIXTURE=<name>   fixture to print (test/fixtures/<name>.json)
+#                        special names: raw (non-JSON), empty (nothing),
+#                        pwd (a result carrying the child's $PWD)
+#   S2S_EXIT=<code>      exit code to use (default 0)
+#   S2S_PROGRESS=<text>  optional progress line on stderr
+#
+# The fixture may also be given as argv[1]; $S2S_FIXTURE wins.
+# No network, no state.
+# ============================================================================
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fixture="${S2S_FIXTURE:-${1:-upload}}"
+code="${S2S_EXIT:-0}"
+
+if [ -n "${S2S_PROGRESS:-}" ]; then
+  printf 's2s: %s\n' "$S2S_PROGRESS" >&2
+fi
+
+case "$fixture" in
+  raw)
+    printf 'this is not a json document\n'
+    ;;
+  prefixed)
+    # Progress leaked onto stdout, then the result document.
+    printf 'uploading note.md → polyphony.eth\n'
+    cat "$here/fixtures/upload.json"
+    ;;
+  suffixed)
+    # Result document first, then a stray log line (fire-and-forget legs).
+    cat "$here/fixtures/upload.json"
+    printf '{"leg":"filebase","ok":true}\n'
+    ;;
+  rewrite)
+    # Emulates the binary's frontmatter write-back: insert a key after the
+    # opening --- of the note given as the first positional argument.
+    note_path="${3:-}"
+    if [ -n "$note_path" ] && [ -f "$note_path" ]; then
+      awk 'NR==1 && $0=="---"{print; print "kubo_cid: FAKECIDFROMBINARY"; next} {print}' \
+        "$note_path" > "$note_path.fake.tmp"
+      mv "$note_path.fake.tmp" "$note_path"
+    fi
+    cat "$here/fixtures/upload.json"
+    ;;
+  braces)
+    # Junk that itself contains braces, on both sides of the result.
+    printf 'start {not json} here\n'
+    cat "$here/fixtures/upload.json"
+    printf 'end {still not json}\n'
+    ;;
+  empty)
+    :
+    ;;
+  pwd)
+    printf '{"action":"upload","note":"fake","cwd":"%s"}\n' "$PWD"
+    ;;
+  *)
+    cat "$here/fixtures/$fixture.json"
+    ;;
+esac
+
+exit "$code"

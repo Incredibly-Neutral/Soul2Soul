@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "error": "missing required setting S2S_PRIVATE_KEY"
+}
