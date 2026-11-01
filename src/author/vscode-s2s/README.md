@@ -93,11 +93,13 @@ None of these change s2s behaviour. Publication, keys and RPC are `s2s config`'s
 - The binary reads the **saved file**, so unsaved changes are invisible to it. Upload/offer/
   preview/publish/revoke ask before running on a dirty buffer; the extension never saves for you.
   If "Save and run" cannot save (a read-only mount, a failed write) you get an error, not silence.
-- `upload` rewrites the note's frontmatter on disk (`genesis`, `author`, `kubo_cid`,
-  `modified_date`) and reports `frontmatterWritten`. If the buffer is clean it is reloaded from disk
-  silently; if it is dirty you get **one** warning and nothing is clobbered — saving then would
-  discard the update, and the next `s2s: Offer` reads identity from the file. `preview`/`publish`
-  also write the frontmatter but do not report it, so the reload is only automatic for `upload`.
+- `upload`, `preview` and `publish` rewrite the note's frontmatter on disk (`genesis`, `author`,
+  `kubo_cid`, `modified_date`) — they all go through the binary's `authorWrite`. Only `upload`
+  reports `frontmatterWritten`, so the extension keys the reload on the action instead of the flag.
+  If the buffer is clean **and** still the active editor, it is reloaded from disk (and verified
+  against disk); if it is dirty, or you switched to another file during the run, you get **one**
+  warning and nothing is reverted — saving then would discard the update, and the next
+  `s2s: Offer` reads identity from the file.
 - Progress goes to stderr and streams into the `s2s` output channel (the notification shows the
   last line, throttled) — that is how a long publish is diagnosable if your connection drops.
 

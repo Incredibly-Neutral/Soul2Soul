@@ -78,22 +78,49 @@ export async function reportSuccess(summary: Summary, options: ReportOptions): P
 /**
  * Reload a clean buffer from disk. Needed after the binary rewrote the note's frontmatter on disk
  * (SPEC §Document ↔ disk sync) — there is no public API for it, so this is the built-in
- * "File: Revert File" command, which takes the resource to revert and falls back to the active
- * editor (the note) when it ignores the argument.
+ * "File: Revert File" command.
+ *
+ * Two guards, because that command acts on the **active** editor when it ignores the resource
+ * argument: if the user switched to another file during a long run, reverting would silently
+ * discard *their* edits. And its return value is `undefined` on success as well as on failure, so
+ * the only honest confirmation is comparing the buffer with what is now on disk.
+ *
+ * Returns true only when the buffer is verified to match disk. Silent on failure: the caller
+ * decides how to warn (one warning per document, not one per attempt).
  */
-export async function revertFile(uri: vscode.Uri): Promise<void> {
-  try {
-    await vscode.commands.executeCommand('workbench.action.files.revert', uri);
-    log(`reloaded ${uri.fsPath} from disk (s2s wrote its frontmatter)`);
-  } catch (error) {
-    log(`reload failed for ${uri.fsPath}: ${String(error)}`);
-    await vscode.window.showWarningMessage(
-      `s2s: the note changed on disk — reload ${basename(uri.fsPath)} to pick up the frontmatter update.`,
-    );
+export async function revertFile(document: vscode.TextDocument): Promise<boolean> {
+  const name = basename(document.uri.fsPath);
+
+  if (vscode.window.activeTextEditor?.document !== document) {
+    log(`not reloading ${name}: it is not the active editor (revert would hit another buffer)`);
+    return false;
   }
+
+  try {
+    await vscode.commands.executeCommand('workbench.action.files.revert', document.uri);
+  } catch (error) {
+    log(`reload command failed for ${name}: ${String(error)}`);
+    return false;
+  }
+
+  try {
+    const onDisk = new TextDecoder().decode(await vscode.workspace.fs.readFile(document.uri));
+    if (onDisk !== document.getText()) {
+      log(`${name} still differs from disk after the revert command`);
+      return false;
+    }
+  } catch (error) {
+    // Cannot verify (virtual file, permissions). The command did not throw; do not cry wolf.
+    log(`could not verify ${name} against disk: ${String(error)}`);
+    return true;
+  }
+
+  log(`reloaded ${name} from disk (s2s wrote its frontmatter)`);
+  return true;
 }
 
-/** The dirty-buffer half of the same rule: never revert, warn once that saving will clobber. */
+/** The dirty-buffer half of the same rule, and the fallback when the reload could not happen:
+ * never revert, warn once that saving will clobber. */
 export async function warnChangedOnDisk(name: string): Promise<void> {
   await vscode.window.showWarningMessage(
     `s2s updated ${name}'s frontmatter on disk — revert to take it, or saving will clobber it.`,

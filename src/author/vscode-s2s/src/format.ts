@@ -188,6 +188,7 @@ function identityLines(action: string | undefined, result: ResultObject): string
       for (const key of ['key', 'value', 'path', 'file'] as const) {
         const value = result[key];
         if (isScalar(value)) lines.push(`${key}  ${scalarText(value)}`);
+        else if (key === 'value' && value === null) lines.push('value  (unset)');
       }
       break;
     }
@@ -278,6 +279,13 @@ export function detailRows(result: ResultObject): string[] {
 
     if (FLATTENED.has(key)) {
       flattenInto(rows, key, value);
+      continue;
+    }
+
+    // `config get` on a key that is not set returns {key, value: null}
+    // (src/author/author-cli/src/commands/config.ts:129). An empty document says nothing; say so.
+    if (key === 'value' && value === null) {
+      rows.push('value: (unset)');
       continue;
     }
 

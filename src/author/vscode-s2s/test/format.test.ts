@@ -189,6 +189,21 @@ describe('detailRows — config and env', () => {
     expect(rows).toContain(`env.project: ${configPathResult.env.project}`);
   });
 
+  it('config get on an unset key says so instead of rendering an empty document', () => {
+    const result = { key: 'rpcL2', value: null };
+    expect(detailRows(result)).toEqual(['key: rpcL2', 'value: (unset)']);
+    expect(formatResult(result, { label: 'config get' }).lines.join('\n')).toContain(
+      'value  (unset)',
+    );
+  });
+
+  it('a set value is still rendered verbatim', () => {
+    expect(detailRows({ key: 'rpcL2', value: 'https://rpc.example' })).toEqual([
+      'key: rpcL2',
+      'value: https://rpc.example',
+    ]);
+  });
+
   it('skips a null inside a flattened object (the binary sends project: null)', () => {
     const rows = detailRows({ path: '/c.json', env: { project: null, userExists: false } });
     expect(rows).toContain('env.userExists: false');
