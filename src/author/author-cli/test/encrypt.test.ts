@@ -33,7 +33,7 @@ vi.mock('../src/core/author-safe', () => ({
 }));
 
 import { authorSafeState } from '../src/core/author-safe';
-import { authorWrite, proposeContent } from '../src/core/author';
+import { authorWrite, offerContent } from '../src/core/author';
 import type { CliContext } from '../src/core/context';
 import { assertCiphertext, buildEncryptFn, fetchStoredItem } from '../src/core/encrypt';
 import { CliError, UsageError } from '../src/lib/errors';
@@ -632,16 +632,16 @@ describe('authorWrite honors frontmatter encryption', () => {
 });
 
 // ===========================================================================
-// propose — the CID is what gets anchored, so the ITEM is what is checked
+// offer — the CID is what gets anchored, so the ITEM is what is checked
 // ===========================================================================
-describe('proposeContent verifies the stored item', () => {
+describe('offerContent verifies the stored item', () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
   function noteWith(frontmatter: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), 's2s-propose-'));
+    const dir = mkdtempSync(join(tmpdir(), 's2s-offer-'));
     dirs.push(dir);
     const path = join(dir, 'note.md');
     writeFileSync(path, ['---', ...frontmatter, '---', '', '# Hello', '', 'body'].join('\n'));
@@ -668,7 +668,7 @@ describe('proposeContent verifies the stored item', () => {
       'kubo_cid: bafyplaintext',
     ]);
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }));
-    await expect(proposeContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /declares `encryption: false`/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
@@ -682,7 +682,7 @@ describe('proposeContent verifies the stored item', () => {
       'kubo_cid: bafyencrypted',
     ]);
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: true, body: 'raw-not-json' }));
-    await expect(proposeContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /got non-JSON text/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
@@ -696,7 +696,7 @@ describe('proposeContent verifies the stored item', () => {
       'kubo_cid: bafymissing',
     ]);
     const { ctx } = fakeCtx(() => Promise.reject(new Error('Failed to fetch from IPFS')));
-    await expect(proposeContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       UsageError,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
@@ -711,7 +711,7 @@ describe('proposeContent verifies the stored item', () => {
     ]);
     const cipher = JSON.stringify('gAAAAABok');
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: true, body: cipher }));
-    await expect(proposeContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /SAFE_REACHED/,
     );
   });
@@ -731,8 +731,8 @@ describe('proposeContent verifies the stored item', () => {
         : Promise.resolve({ encryption: true, body: cipher }),
     );
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
-    ).rejects.toThrow(/refusing to propose .*bafy--cid-plain/);
+      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
+    ).rejects.toThrow(/refusing to offer .*bafy--cid-plain/);
     expect(fetchFromKubo).toHaveBeenCalledWith('bafy--cid-plain');
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -746,7 +746,7 @@ describe('proposeContent verifies the stored item', () => {
     ]);
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }));
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
+      offerContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
     ).rejects.toThrow(/declares `encryption: false`/);
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -762,7 +762,7 @@ describe('proposeContent verifies the stored item', () => {
       Promise.resolve({ encryption: true, body: 'TimeoutError: The operation was aborted' }),
     );
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
+      offerContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
     ).rejects.toThrow(/encryption failed/);
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -778,12 +778,12 @@ describe('proposeContent verifies the stored item', () => {
       Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
     );
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
+      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
     ).rejects.toThrow(/would publish the body in the clear/);
     expect(authorSafeState).not.toHaveBeenCalled();
   });
 
-  it('allows the propose downgrade with --allow-plaintext', async () => {
+  it('allows the offer downgrade with --allow-plaintext', async () => {
     const path = noteWith([
       'title: Hello',
       'encryption: false',
@@ -794,11 +794,11 @@ describe('proposeContent verifies the stored item', () => {
       Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
     );
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain', { allowPlaintext: true }),
+      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain', { allowPlaintext: true }),
     ).rejects.toThrow(/SAFE_REACHED/);
   });
 
-  it('refuses a propose when the previous revision cannot be read', async () => {
+  it('refuses a offer when the previous revision cannot be read', async () => {
     const path = noteWith([
       'title: Hello',
       'encryption: false',
@@ -807,7 +807,7 @@ describe('proposeContent verifies the stored item', () => {
     ]);
     const { ctx } = fakeCtx(() => Promise.reject(new Error('gateway timeout')));
     await expect(
-      proposeContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
+      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
     ).rejects.toThrow(/could not read the previous revision bafyencrypted/);
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -815,7 +815,7 @@ describe('proposeContent verifies the stored item', () => {
   it('lets a plaintext note through when the previous revision was plaintext too', async () => {
     const path = noteWith(['title: Hello', 'genesis: "' + genesis + '"', 'kubo_cid: bafyplain']);
     const { ctx, fetchFromKubo } = fakeCtx(() => Promise.resolve({ encryption: false }));
-    await expect(proposeContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /SAFE_REACHED/,
     );
     // the downgrade guard read the previous revision, and did not refuse

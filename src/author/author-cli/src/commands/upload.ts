@@ -2,7 +2,7 @@
 // s2s author upload <note> — ipfs + pins only (off-chain).
 // Signs the content, uploads it to Kubo, fires the durability legs
 // (filebase + pinata + filecoin), and writes genesis/author back to the note.
-// No on-chain offer — that is the separate `propose` step.
+// No on-chain offer — that is the separate `offer` step.
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';
@@ -13,7 +13,7 @@ import { ipfsGatewayUrl, ipfsUri } from '../lib/ipfs-link';
 
 export const upload: CommandSpec = {
   name: 'upload',
-  summary: 'Upload a note to IPFS + pins (no on-chain offer — propose it separately).',
+  summary: 'Upload a note to IPFS + pins (no on-chain offer — offer it separately).',
   usage: 's2s author upload <note> [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
@@ -47,7 +47,7 @@ export const upload: CommandSpec = {
         `  objectId    : ${result.objectId}`,
         `  kubo cid    : ${result.kuboCid}`,
         `  link        : ${ipfsGatewayUrl(result.kuboCid)}`,
-        `  offer       : not proposed on-chain — run: s2s author propose ${notePath}${result.frontmatterWritten ? '' : ` --cid ${result.kuboCid}`}`,
+        `  offer       : not offered on-chain — run: s2s author offer ${notePath}${result.frontmatterWritten ? '' : ` --cid ${result.kuboCid}`}`,
       ].join('\n'),
     );
   },

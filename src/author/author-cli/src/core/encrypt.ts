@@ -256,7 +256,7 @@ export function buildEncryptFn(
 }
 
 // ===========================================================================
-// Stored item reads (propose verification + republish downgrade guard)
+// Stored item reads (offer verification + republish downgrade guard)
 // ===========================================================================
 
 /**

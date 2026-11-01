@@ -4,7 +4,7 @@
 
 import type { CommandSpec } from '../lib/command';
 import { upload } from './upload';
-import { propose } from './propose';
+import { offer } from './offer';
 import { preview } from './preview';
 import { publish } from './publish';
 import { revoke } from './revoke';
@@ -15,7 +15,7 @@ import { authorInit } from './init';
 /** `s2s author` — content actions on an existing publication. */
 export const authorCommands: CommandSpec[] = [
   upload,
-  propose,
+  offer,
   preview,
   publish,
   revoke,
