@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 
-import { detailRows, type Summary } from './format';
+import { basename, detailRows, type Summary } from './format';
 import type { LastResult } from './state';
 
 export const DETAIL_SCHEME = 's2s-result';
@@ -75,6 +75,31 @@ export async function reportSuccess(summary: Summary, options: ReportOptions): P
   if (picked === 'Copy CID' && summary.copy !== undefined) await copy(summary.copy);
 }
 
+/**
+ * Reload a clean buffer from disk. Needed after the binary rewrote the note's frontmatter on disk
+ * (SPEC §Document ↔ disk sync) — there is no public API for it, so this is the built-in
+ * "File: Revert File" command, which takes the resource to revert and falls back to the active
+ * editor (the note) when it ignores the argument.
+ */
+export async function revertFile(uri: vscode.Uri): Promise<void> {
+  try {
+    await vscode.commands.executeCommand('workbench.action.files.revert', uri);
+    log(`reloaded ${uri.fsPath} from disk (s2s wrote its frontmatter)`);
+  } catch (error) {
+    log(`reload failed for ${uri.fsPath}: ${String(error)}`);
+    await vscode.window.showWarningMessage(
+      `s2s: the note changed on disk — reload ${basename(uri.fsPath)} to pick up the frontmatter update.`,
+    );
+  }
+}
+
+/** The dirty-buffer half of the same rule: never revert, warn once that saving will clobber. */
+export async function warnChangedOnDisk(name: string): Promise<void> {
+  await vscode.window.showWarningMessage(
+    `s2s updated ${name}'s frontmatter on disk — revert to take it, or saving will clobber it.`,
+  );
+}
+
 /** Runtime failure: the binary's own message, verbatim. It already points at the fix. */
 export async function reportFailure(message: string): Promise<void> {
   log(`error: ${message}`);
@@ -106,11 +131,22 @@ export function withProgress<T>(
  * Detail view: a read-only virtual document beside the note. No webview — the content is plain
  * `key: value` rows, and a text document gives the user search, selection and copy for free.
  */
-export class DetailProvider implements vscode.TextDocumentContentProvider {
+export class DetailProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
   private readonly contents = new Map<string, string>();
+  private readonly changed = new vscode.EventEmitter<vscode.Uri>();
+
+  /**
+   * The URI is deterministic per action and `openTextDocument` hands back the cached virtual
+   * document, so without this the second `s2s.last` re-showed the first result.
+   */
+  readonly onDidChange = this.changed.event;
 
   provideTextDocumentContent(uri: vscode.Uri): string {
     return this.contents.get(uri.toString()) ?? '';
+  }
+
+  dispose(): void {
+    this.changed.dispose();
   }
 
   async show(last: LastResult, title: string): Promise<void> {
@@ -119,6 +155,8 @@ export class DetailProvider implements vscode.TextDocumentContentProvider {
     const header = [`s2s ${title}`, '='.repeat(`s2s ${title}`.length), ''];
 
     this.contents.set(uri.toString(), [...header, ...detailRows(last.result), ''].join('\n'));
+    // Fire before opening: the document is cached by URI, so the change event is what re-renders.
+    this.changed.fire(uri);
 
     const document = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(document, {

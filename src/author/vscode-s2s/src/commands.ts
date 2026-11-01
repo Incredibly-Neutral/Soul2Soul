@@ -4,31 +4,31 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
 import {
-  UsageError,
   authorArgs,
   authorIdentityArgs,
   configArgs,
   publicationNewArgs,
   type AuthorAction,
-  type AuthorFlags,
   type ConfigVerb,
 } from './argv';
-import { formatResult } from './format';
+import { basename, formatResult } from './format';
 import { parseResult } from './parse';
+import { createLineThrottle } from './progress';
+import { config } from './settings';
 import { resolveBinary, run, type ResolvedBinary, type RunResult } from './spawn';
 import type { State } from './state';
 import * as ui from './ui';
 
 const MARKERS = ['.s2sconfig.json', '.git', 'package.json'];
 
-function config(): vscode.WorkspaceConfiguration {
-  return vscode.workspace.getConfiguration('s2s');
-}
+/** How many stderr lines a verbose failure report carries. */
+const STDERR_TAIL_LINES = 20;
 
 let state: State;
 let detailProvider: ui.DetailProvider;
@@ -65,7 +65,7 @@ function hasMarker(dir: string): boolean {
  * workspace folder.
  */
 export function projectRoot(notePath: string): string {
-  const configured = config().get<string>('cwd') ?? 'auto';
+  const configured = config(vscode.Uri.file(notePath)).get<string>('cwd') ?? 'auto';
   if (configured !== 'auto' && configured.length > 0) return configured;
 
   const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(notePath))?.uri.fsPath;
@@ -100,7 +100,18 @@ async function confirmDirty(document: vscode.TextDocument): Promise<boolean> {
     anyway,
   );
 
-  if (picked === save) return document.save();
+  if (picked === save) {
+    // `save()` resolves false on a read-only mount or a failed write. Say so: silently doing
+    // nothing is the worst possible answer to "Save and run".
+    const saved = await document.save();
+    if (!saved) {
+      await vscode.window.showErrorMessage(
+        `s2s: could not save ${basename(document.uri.fsPath)} — is it read-only? Nothing was run.`,
+      );
+      return false;
+    }
+    return true;
+  }
   return picked === anyway;
 }
 
@@ -113,13 +124,19 @@ interface Invocation {
   cwd: string;
   label: string;
   key: string;
+  /** The note this run acts on, when there is one — frontmatter reconciliation needs it. */
+  document?: vscode.TextDocument;
 }
 
 /**
  * One action = one process. Exit codes map as SPEC-author-vscode §Invocation contract; stderr is
  * never parsed, only surfaced.
+ *
+ * The mutex is released in `finally` **as soon as the child is gone**, before any UI: both
+ * `showInformationMessage` and `withProgress` resolve on dismiss, not on display, so awaiting them
+ * inside the guarded region refused a re-run for seconds after the process had already exited.
  */
-async function invoke({ args, cwd, label, key }: Invocation): Promise<void> {
+async function invoke({ args, cwd, label, key, document }: Invocation): Promise<void> {
   if (!state.begin(key)) {
     void vscode.window.showInformationMessage(`s2s: ${label} is already running for this file.`);
     return;
@@ -129,12 +146,20 @@ async function invoke({ args, cwd, label, key }: Invocation): Promise<void> {
   const verbose = config().get<boolean>('verboseStderr') ?? false;
   const timeoutMs = config().get<number>('timeout') ?? 0;
 
+  let result: RunResult | undefined;
+  let failure: Error | undefined;
+
   try {
     const resolved = await binary();
     ui.log(`$ ${resolved.bin} ${args.join(' ')}  (cwd ${cwd})`);
 
-    const result = await ui.withProgress(`s2s: ${label}`, async (progress, token) => {
+    result = await ui.withProgress(`s2s: ${label}`, async (progress, token) => {
       const subscription = token.onCancellationRequested(() => abort.abort());
+      // stderr can be a firehose; the notification wants the last line, ~10 times a second.
+      const reportProgress = createLineThrottle((line) =>
+        progress.report({ message: line.slice(0, 80) }),
+      );
+
       try {
         return await run({
           bin: resolved.bin,
@@ -143,47 +168,129 @@ async function invoke({ args, cwd, label, key }: Invocation): Promise<void> {
           signal: abort.signal,
           timeoutMs,
           onStderr: (line) => {
-            if (verbose) ui.log(`  ${line}`);
-            progress.report({ message: line.slice(0, 80) });
+            // Always mirrored, no setting (SPEC decision 9): after a dropped connection this
+            // channel is the only evidence of what the run was doing.
+            ui.log(`  ${line}`);
+            reportProgress(line);
           },
         });
       } finally {
         subscription.dispose();
       }
     });
-
-    await handleOutcome({ label, key, result });
   } catch (error) {
-    const message =
-      error instanceof UsageError || error instanceof Error ? error.message : String(error);
-    await ui.reportFailure(message);
+    failure = error instanceof Error ? error : new Error(String(error));
   } finally {
     state.end(key);
   }
+
+  if (failure !== undefined) {
+    await ui.reportFailure(failure.message);
+    return;
+  }
+  if (result === undefined) return;
+
+  await handleOutcome({ label, key, result, document, verbose, timeoutMs });
+}
+
+function stderrLines(result: RunResult): string[] {
+  return result.stderr
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+}
+
+/** One line by default (`s2s.verboseStderr` = false); the last ~20 when it is on. */
+function stderrSnippet(result: RunResult, verbose: boolean): string | undefined {
+  const lines = stderrLines(result);
+  if (lines.length === 0) return undefined;
+  return (verbose ? lines.slice(-STDERR_TAIL_LINES) : lines.slice(0, 1)).join('\n');
+}
+
+/** One warning per document per session — SPEC §Document ↔ disk sync says "one warning". */
+const warnedStale = new Set<string>();
+
+/**
+ * SPEC §Document ↔ disk sync. `upload` rewrites the note's frontmatter on disk, and the binary is
+ * the only writer (the extension never touches the note's bytes) — so a clean buffer is reloaded
+ * from disk, and a **dirty** buffer is never reverted: the user's edits win, with one warning that
+ * saving will clobber the update.
+ *
+ * Keyed on the reported `frontmatterWritten`, which only `upload` emits
+ * (src/author/author-cli/src/commands/upload.ts). `preview`/`publish` also write the frontmatter on
+ * disk but do not say so, so there is nothing to key on for them — no guessing here.
+ */
+async function reconcileFrontmatter(
+  result: Record<string, unknown>,
+  document: vscode.TextDocument | undefined,
+  key: string,
+): Promise<void> {
+  if (document === undefined || result['frontmatterWritten'] !== true) return;
+  if (!vscode.workspace.textDocuments.includes(document)) return;
+
+  if (document.isDirty) {
+    if (warnedStale.has(key)) return;
+    warnedStale.add(key);
+    await ui.warnChangedOnDisk(basename(document.uri.fsPath));
+    return;
+  }
+
+  await ui.revertFile(document.uri);
+  // A clean buffer is current again, so a future dirty run deserves a fresh warning.
+  warnedStale.delete(key);
 }
 
 async function handleOutcome({
   label,
   key,
   result,
+  document,
+  verbose,
+  timeoutMs,
 }: {
   label: string;
   key: string;
   result: RunResult;
+  document: vscode.TextDocument | undefined;
+  verbose: boolean;
+  timeoutMs: number;
 }): Promise<void> {
+  const snippet = stderrSnippet(result, verbose);
+  const withSnippet = (message: string): string =>
+    snippet === undefined ? message : `${message}\n${snippet}`;
+
   if (result.aborted) {
-    ui.log(`${label}: cancelled after ${result.durationMs}ms`);
+    ui.log(`${label}: cancelled by the user after ${result.durationMs}ms`);
     return;
   }
 
-  const firstStderrLine = result.stderr.split('\n').find((line) => line.trim().length > 0);
+  // A timeout is not a cancel and not a crash: name it, instead of "printed nothing on stdout".
+  if (result.timedOut) {
+    state.stats.failures += 1;
+    await ui.reportFailure(
+      withSnippet(
+        `timed out after ${timeoutMs}ms — killed with SIGTERM (raise s2s.timeout, or 0 for no timeout)`,
+      ),
+    );
+    return;
+  }
+
+  // Signal without an exit code and without our cancel: a real crash (OOM, external SIGKILL).
+  if (result.code === null) {
+    state.stats.failures += 1;
+    await ui.reportFailure(
+      withSnippet(
+        `killed by ${result.signal ?? 'a signal'} after ${result.durationMs}ms — it never produced a result`,
+      ),
+    );
+    return;
+  }
+
   const outcome = parseResult(result.stdout);
 
   if (outcome.kind === 'failure') {
     state.stats.failures += 1;
-    await ui.reportFailure(
-      firstStderrLine === undefined ? outcome.message : `${outcome.message}\n${firstStderrLine}`,
-    );
+    await ui.reportFailure(withSnippet(outcome.message));
     return;
   }
 
@@ -203,7 +310,7 @@ async function handleOutcome({
     );
   }
 
-  const summary = formatResult(outcome.result, { durationMs: result.durationMs });
+  const summary = formatResult(outcome.result, { durationMs: result.durationMs, label });
   const failed = result.code !== 0 || outcome.result['ok'] === false;
 
   if (failed) {
@@ -212,6 +319,9 @@ async function handleOutcome({
     else await ui.reportFailure(summary.title);
     return;
   }
+
+  // Before the toast: the buffer must be current before the user reacts to a success message.
+  await reconcileFrontmatter(outcome.result, document, key);
 
   await ui.reportSuccess(summary, {
     notify: config().get<boolean>('notify') ?? true,
@@ -242,6 +352,7 @@ async function authorAction(action: AuthorAction): Promise<void> {
     cwd: projectRoot(notePath),
     label: action,
     key: document.uri.toString(),
+    document,
   });
 }
 
@@ -249,9 +360,18 @@ async function runRaw(label: string, args: string[], cwd: string): Promise<void>
   await invoke({ args, cwd, label, key: `s2s:${label}` });
 }
 
+/**
+ * cwd for the commands that are not tied to a single note (`publication new`, `config`, `address`,
+ * `init`). SPEC §Invocation contract: the note's project root when a note is open → the first
+ * workspace folder → `os.homedir()`. Never `process.cwd()`, and never `'.'` (which *is* the
+ * extension host's cwd, so doctor and the binary would describe the wrong project).
+ */
 function workspaceCwd(): string {
+  const active = vscode.window.activeTextEditor?.document;
+  if (active !== undefined && active.uri.scheme === 'file') return projectRoot(active.uri.fsPath);
+
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  return folder ?? path.dirname(vscode.window.activeTextEditor?.document.uri.fsPath ?? '.');
+  return folder ?? os.homedir();
 }
 
 async function newPublication(): Promise<void> {
@@ -362,9 +482,24 @@ async function selectBinary(): Promise<void> {
     value = typed;
   }
 
-  await vscode.workspace
-    .getConfiguration('s2s')
-    .update('bin', value, vscode.ConfigurationTarget.Workspace);
+  // Where to write: workspace settings when a folder is open, else the (remote) user settings.
+  // `ConfigurationTarget.Workspace` throws when no folder is open — exactly the remote window
+  // with no folder where doctor recommends this command — and the old code swallowed it.
+  const target =
+    (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+
+  try {
+    await config().update('bin', value, target);
+  } catch (error) {
+    const where = target === vscode.ConfigurationTarget.Global ? 'user' : 'workspace';
+    await ui.reportFailure(
+      `could not write s2s.bin to ${where} settings: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+
   void vscode.window.showInformationMessage(
     value.length === 0 ? 's2s: binary setting cleared' : `s2s: binary set to ${value}`,
   );

@@ -138,10 +138,36 @@ describe('run — missing binary and cancellation', () => {
     expect(result.aborted).toBe(true);
   });
 
-  it('treats timeoutMs as a kill, not a rejection', async () => {
+  it('treats timeoutMs as a kill, not a rejection — and names it as a timeout', async () => {
     const bin = fakeBinary('s2s-timeout', 'sleep 5');
     const result = await run({ bin, args: [], cwd: dir, timeoutMs: 60 });
+    expect(result.timedOut).toBe(true);
+    // Not a user cancel: nothing aborted the signal.
+    expect(result.aborted).toBe(false);
     expect(result.code === null || result.code > 0).toBe(true);
+  });
+
+  it('SIGKILLs a child that ignores SIGTERM and still settles', async () => {
+    const bin = fakeBinary('s2s-stubborn', "trap '' TERM\nwhile :; do :; done");
+    const started = Date.now();
+    const result = await run({ bin, args: [], cwd: dir, timeoutMs: 100, killGraceMs: 100 });
+
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('never reports a timeout as a user cancel', async () => {
+    const bin = fakeBinary('s2s-timeout-abort', 'sleep 5');
+    const controller = new AbortController();
+    const result = await run({
+      bin,
+      args: [],
+      cwd: dir,
+      signal: controller.signal,
+      timeoutMs: 60,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.aborted).toBe(false);
   });
 });
 
@@ -161,9 +187,60 @@ describe('resolveBinary', () => {
     expect(resolved).toEqual({ bin: 's2s-absent-xyz', source: 'bare' });
   });
 
-  it('caches the resolution per name and shell set', async () => {
-    const first = await resolveBinary({ name: 's2s-absent-xyz' });
-    const second = await resolveBinary({ name: 's2s-absent-xyz' });
+  it('caches a hit', async () => {
+    const real = fakeBinary('s2s-hit', 'exit 0');
+    const shell = fakeBinary('shell-hit', `echo '${real}'`);
+
+    const first = await resolveBinary({ name: 's2s-hit', shells: [shell], timeoutMs: 2000 });
+    const second = await resolveBinary({ name: 's2s-hit', shells: [shell], timeoutMs: 2000 });
+
+    expect(first.source).toBe('login-shell');
     expect(second).toBe(first);
+  });
+
+  it('does not cache a miss — a freshly installed binary is found without a reload', async () => {
+    const late = join(dir, 's2s-late');
+    const shell = fakeBinary('shell-late', `if [ -x '${late}' ]; then echo '${late}'; fi`);
+
+    const first = await resolveBinary({ name: 's2s-late', shells: [shell], timeoutMs: 2000 });
+    expect(first).toEqual({ bin: 's2s-late', source: 'bare' });
+
+    writeFileSync(late, '#!/bin/sh\nexit 0\n', 'utf8');
+    chmodSync(late, 0o755);
+
+    const second = await resolveBinary({ name: 's2s-late', shells: [shell], timeoutMs: 2000 });
+    expect(second.bin).toBe(late);
+    expect(second.source).toBe('login-shell');
+  });
+});
+
+describe('resolveBinary — probe output', () => {
+  it('takes the last non-empty line, so a profile banner is not the answer', async () => {
+    const real = fakeBinary('s2s-real', 'exit 0');
+    const shell = fakeBinary(
+      'shell-banner',
+      `echo 'welcome to my dotfiles'\necho 'last login: yesterday on pts/0'\necho '${real}'`,
+    );
+
+    const resolved = await resolveBinary({ name: 's2s-any', shells: [shell], timeoutMs: 2000 });
+    expect(resolved).toEqual({ bin: real, source: 'login-shell', probe: `${shell} -lc` });
+  });
+
+  it('rejects an answer that is not an absolute path', async () => {
+    const shell = fakeBinary('shell-relative', `echo 's2s-not-a-path'`);
+    const resolved = await resolveBinary({ name: 's2s-any', shells: [shell], timeoutMs: 2000 });
+    expect(resolved.source).toBe('bare');
+  });
+
+  it('rejects an absolute answer that does not exist', async () => {
+    const shell = fakeBinary('shell-ghost', `echo '${join(dir, 'not-installed')}'`);
+    const resolved = await resolveBinary({ name: 's2s-any', shells: [shell], timeoutMs: 2000 });
+    expect(resolved.source).toBe('bare');
+  });
+
+  it('rejects empty probe output', async () => {
+    const shell = fakeBinary('shell-silent', 'exit 0');
+    const resolved = await resolveBinary({ name: 's2s-any', shells: [shell], timeoutMs: 2000 });
+    expect(resolved.source).toBe('bare');
   });
 });

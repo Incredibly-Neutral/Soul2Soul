@@ -88,10 +88,25 @@ describe('formatResult — one per action', () => {
     expect(summary.lines[0]).toContain(authorAddressResult.address);
   });
 
-  it('config path: no note, shows the path', () => {
-    const summary = formatResult({ action: 'config.path', path: configPathResult.path });
+  it('config path: the binary names no action — the label names the run', () => {
+    const summary = formatResult(configPathResult, { label: 'config path' });
+    expect(summary.action).toBeUndefined();
     expect(summary.title).toBe('config path');
     expect(summary.lines.join('\n')).toContain(configPathResult.path);
+  });
+
+  it('config get: key/value shape, no action, subject from the key', () => {
+    const summary = formatResult({ key: 'rpcL2', value: 'https://rpc.example' }, { label: 'config get' });
+    expect(summary.title).toBe('config get rpcL2');
+    expect(summary.lines.join('\n')).toContain('https://rpc.example');
+  });
+
+  it('config set keeps its own verb — the binary does emit that action', () => {
+    expect(formatResult({ action: 'config.set', key: 'rpcL2' }).title).toBe('config set rpcL2');
+  });
+
+  it('falls back to a generic title when there is no action and no label', () => {
+    expect(formatResult(configPathResult).title).toBe('s2s result');
   });
 
   it('falls back to the raw action for an unknown verb', () => {
@@ -157,5 +172,32 @@ describe('detailRows', () => {
   it('renders array fields readably and skips empty ones', () => {
     expect(detailRows({ action: 'new', owners: ['0xa', '0xb'] })).toContain('owners: 0xa, 0xb');
     expect(detailRows({ action: 'new', owners: [] })).toEqual(['action: new']);
+  });
+});
+
+describe('detailRows — config and env', () => {
+  it('flattens a config list result instead of dropping it', () => {
+    const rows = detailRows({ config: { rpcL2: 'https://rpc.example', eoa: '0xabc' } });
+    expect(rows).toEqual(['config.rpcL2: https://rpc.example', 'config.eoa: 0xabc']);
+  });
+
+  it('flattens the env block from config path', () => {
+    const rows = detailRows(configPathResult);
+    expect(rows).toContain(`path: ${configPathResult.path}`);
+    expect(rows).toContain(`env.user: ${configPathResult.env.user}`);
+    expect(rows).toContain('env.userExists: true');
+    expect(rows).toContain(`env.project: ${configPathResult.env.project}`);
+  });
+
+  it('skips a null inside a flattened object (the binary sends project: null)', () => {
+    const rows = detailRows({ path: '/c.json', env: { project: null, userExists: false } });
+    expect(rows).toContain('env.userExists: false');
+    expect(rows.join('\n')).not.toContain('env.project');
+  });
+
+  it('still drops unknown nesting, including inside a flattened object', () => {
+    const rows = detailRows({ action: 'upload', config: { a: 'b', nested: { deep: 1 } } });
+    expect(rows).toContain('config.a: b');
+    expect(rows.join('\n')).not.toContain('nested');
   });
 });

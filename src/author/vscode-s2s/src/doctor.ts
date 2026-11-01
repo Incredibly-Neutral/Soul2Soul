@@ -7,13 +7,20 @@
  * and it never prints a config *value* (the keys include secrets).
  */
 
+import * as os from 'node:os';
+
 import * as vscode from 'vscode';
 
 import { configArgs, versionArgs } from './argv';
+import { projectRoot } from './commands';
 import { parseResult } from './parse';
+import { config as settingsConfig, describeScope, settingsScope } from './settings';
 import { resolveBinary, run, BinaryNotFoundError } from './spawn';
 import type { State } from './state';
 import * as ui from './ui';
+
+/** Version probe timeout — the binary answers `--version` locally, no network. */
+const VERSION_TIMEOUT_MS = 5000;
 
 function describeRemote(remote: string | undefined): string[] {
   if (remote === undefined)
@@ -32,24 +39,35 @@ function describeRemote(remote: string | undefined): string[] {
   ];
 }
 
-function settingScope(): string {
-  const inspected = vscode.workspace.getConfiguration('s2s').inspect<string>('bin');
+function settingScope(scope: vscode.Uri | undefined): string {
+  const inspected = settingsConfig(scope).inspect<string>('bin');
   if (inspected === undefined) return 'unknown';
-  if (inspected.workspaceValue !== undefined) return 'workspace settings';
+  // Real precedence: folder > workspace > user. The old code reported a workspace value first
+  // even when a folder value was the one in force.
   if (inspected.workspaceFolderValue !== undefined) return 'workspace folder settings';
+  if (inspected.workspaceValue !== undefined) return 'workspace settings';
   if (inspected.globalValue !== undefined) return 'user settings (this machine/remote only)';
   return 'unset — using the login-shell probe';
 }
 
-function firstLine(text: string): string | undefined {
-  const line = text.split('\n')[0]?.trim();
-  return line === undefined || line.length === 0 ? undefined : line;
+/**
+ * The directory the config-file / env / key report describes. SPEC §s2s.doctor forbids describing
+ * the wrong project: the open note's project root → the first workspace folder → `os.homedir()`.
+ * Never `vscode.env.appRoot` (a `~/.vscode-server/bin/<commit>` path) and never `process.cwd()`
+ * (the extension host's cwd, which is the same wrong answer for every project).
+ */
+function doctorCwd(): string {
+  const active = vscode.window.activeTextEditor?.document;
+  if (active !== undefined && active.uri.scheme === 'file') return projectRoot(active.uri.fsPath);
+
+  const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return folder ?? os.homedir();
 }
 
 export async function runDoctor(state: State): Promise<void> {
-  const config = vscode.workspace.getConfiguration('s2s');
-  const cwd =
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? vscode.env.appRoot ?? process.cwd();
+  const scope = settingsScope();
+  const config = settingsConfig(scope);
+  const cwd = doctorCwd();
 
   const lines: string[] = [...describeRemote(vscode.env.remoteName), ''];
 
@@ -59,19 +77,31 @@ export async function runDoctor(state: State): Promise<void> {
   lines.push(
     `binary: ${resolved.bin}`,
     `  resolved via: ${resolved.source}${resolved.probe === undefined ? '' : ` (${resolved.probe})`}`,
-    `  s2s.bin is set in: ${settingScope()}`,
+    `  s2s.bin is set in: ${settingScope(scope)}`,
+    `  settings scope: ${describeScope(scope)}`,
+    `  cwd (describes this project): ${cwd}`,
   );
 
   try {
-    const version = await run({ bin: resolved.bin, args: versionArgs(), cwd, timeoutMs: 5000 });
-    const parsed = parseResult(version.stdout);
+    const version = await run({
+      bin: resolved.bin,
+      args: versionArgs(),
+      cwd,
+      timeoutMs: VERSION_TIMEOUT_MS,
+    });
 
-    if (parsed.kind === 'result') {
-      const name = parsed.result['name'];
-      const value = parsed.result['version'];
-      lines.push(`version: ${String(name ?? 's2s')} ${String(value ?? '(unnamed)')}`);
+    if (version.timedOut) {
+      lines.push(`version: FAILED — --version timed out after ${VERSION_TIMEOUT_MS}ms`);
     } else {
-      lines.push(`version: unreadable — ${parsed.message}`);
+      const parsed = parseResult(version.stdout);
+
+      if (parsed.kind === 'result') {
+        const name = parsed.result['name'];
+        const value = parsed.result['version'];
+        lines.push(`version: ${String(name ?? 's2s')} ${String(value ?? '(unnamed)')}`);
+      } else {
+        lines.push(`version: unreadable — ${parsed.message}`);
+      }
     }
   } catch (error) {
     if (error instanceof BinaryNotFoundError) {
@@ -94,7 +124,9 @@ export async function runDoctor(state: State): Promise<void> {
       timeoutMs: 5000,
     });
     const parsed = parseResult(pathResult.stdout);
-    if (parsed.kind === 'result' && typeof parsed.result['path'] === 'string') {
+    if (pathResult.timedOut) {
+      lines.push('', `config file: FAILED — config path timed out after 5000ms`);
+    } else if (parsed.kind === 'result' && typeof parsed.result['path'] === 'string') {
       lines.push('', `config file: ${parsed.result['path']}`);
       const env = parsed.result['env'];
       if (typeof env === 'object' && env !== null && !Array.isArray(env)) {
@@ -112,7 +144,9 @@ export async function runDoctor(state: State): Promise<void> {
   try {
     const list = await run({ bin: resolved.bin, args: configArgs('list'), cwd, timeoutMs: 10000 });
     const parsed = parseResult(list.stdout);
-    if (parsed.kind === 'result' && typeof parsed.result['config'] === 'object') {
+    if (list.timedOut) {
+      lines.push('', 'config keys: FAILED — config list timed out after 10000ms');
+    } else if (parsed.kind === 'result' && typeof parsed.result['config'] === 'object') {
       const values = parsed.result['config'] as Record<string, unknown>;
       const names = Object.keys(values).sort();
       lines.push(
