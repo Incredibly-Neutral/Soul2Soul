@@ -1,0 +1,200 @@
+{
+  "name": "vscode-s2s",
+  "displayName": "s2s",
+  "description": "Upload, offer, preview and publish soul2soul manuscripts from a (remote) VS Code window — a thin wrapper over the s2s binary.",
+  "version": "0.1.0",
+  "publisher": "soul2soul",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "soul2soul",
+    "s2s",
+    "authoring",
+    "ipfs",
+    "publication"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "s2s.upload",
+        "title": "Upload",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.offer",
+        "title": "Offer",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.preview",
+        "title": "Preview",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.publish",
+        "title": "Publish",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.revoke",
+        "title": "Revoke",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.newPublication",
+        "title": "New Publication…",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.config",
+        "title": "Config…",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.address",
+        "title": "Show Author Safe",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.init",
+        "title": "Deploy Author Safe",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.run",
+        "title": "Run Action…",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.last",
+        "title": "Show Last Result",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.doctor",
+        "title": "Doctor",
+        "category": "s2s"
+      },
+      {
+        "command": "s2s.selectBinary",
+        "title": "Select Binary…",
+        "category": "s2s"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "s2s.context",
+          "group": "s2s@1",
+          "when": "resourceScheme == file && resourceExtname == .md"
+        }
+      ],
+      "s2s.context": [
+        {
+          "command": "s2s.upload",
+          "group": "1_author@1"
+        },
+        {
+          "command": "s2s.offer",
+          "group": "1_author@2"
+        },
+        {
+          "command": "s2s.preview",
+          "group": "1_author@3"
+        },
+        {
+          "command": "s2s.publish",
+          "group": "1_author@4"
+        },
+        {
+          "command": "s2s.revoke",
+          "group": "2_danger@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "s2s.revoke",
+          "when": "resourceScheme == file && resourceExtname == .md"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "s2s.context",
+        "label": "s2s"
+      }
+    ],
+    "configuration": {
+      "title": "s2s",
+      "properties": {
+        "s2s.bin": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `s2s` binary. Empty runs a login-shell probe (`bash -lc 'command -v s2s'`) — necessary because a remote extension host does not inherit your login `PATH`. In a remote window set this in **workspace** settings or the **remote** user settings."
+        },
+        "s2s.cwd": {
+          "type": "string",
+          "default": "auto",
+          "description": "Directory the binary runs in. \"auto\" = the workspace folder containing the note."
+        },
+        "s2s.notify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a message on success. Errors are always shown."
+        },
+        "s2s.open": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open the preview/prod URL the binary returned after preview/publish."
+        },
+        "s2s.copyCid": {
+          "type": "boolean",
+          "default": false,
+          "description": "Put the upload's working CID on the clipboard."
+        },
+        "s2s.confirmRevoke": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before revoking — it retracts the item on-chain."
+        },
+        "s2s.timeout": {
+          "type": "number",
+          "default": 0,
+          "description": "Kill the binary after this many milliseconds. 0 = no timeout (upload and publish legitimately take minutes)."
+        },
+        "s2s.verboseStderr": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mirror every stderr line into the s2s output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "watch": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=verbose",
+    "package": "node esbuild.config.mjs production && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}
