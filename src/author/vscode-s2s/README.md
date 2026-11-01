@@ -79,11 +79,11 @@ ids are stable.
 | `s2s.copyCid`       | `false`  | put the upload's CID on the clipboard                                    |
 | `s2s.confirmRevoke` | `true`   | confirm before revoking                                                  |
 | `s2s.timeout`       | `0`      | kill after N ms; `0` = no timeout                                        |
-| `s2s.verboseStderr` | `false`  | failure message stderr: `false` = one line, `true` = last 20 lines      |
+| `s2s.verboseStderr` | `false`  | failure message stderr: `false` = one line, `true` = last 20 lines       |
 
 stderr always streams into the `s2s` output channel, whatever `s2s.verboseStderr` says — that
 channel is how a run stays diagnosable after a dropped connection. The setting only decides how
-much of it a *failure message* repeats.
+much of it a _failure message_ repeats.
 
 None of these change s2s behaviour. Publication, keys and RPC are `s2s config`'s job — use
 `s2s: Config…` and the binary's own `-h`.

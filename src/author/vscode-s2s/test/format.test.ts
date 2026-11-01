@@ -96,7 +96,10 @@ describe('formatResult — one per action', () => {
   });
 
   it('config get: key/value shape, no action, subject from the key', () => {
-    const summary = formatResult({ key: 'rpcL2', value: 'https://rpc.example' }, { label: 'config get' });
+    const summary = formatResult(
+      { key: 'rpcL2', value: 'https://rpc.example' },
+      { label: 'config get' },
+    );
     expect(summary.title).toBe('config get rpcL2');
     expect(summary.lines.join('\n')).toContain('https://rpc.example');
   });
