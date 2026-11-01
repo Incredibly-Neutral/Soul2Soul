@@ -219,16 +219,6 @@ function stderrSnippet(result: RunResult, verbose: boolean): string | undefined 
 const warnedStale = new Set<string>();
 
 /**
- * SPEC §Document ↔ disk sync. `upload` rewrites the note's frontmatter on disk, and the binary is
- * the only writer (the extension never touches the note's bytes) — so a clean buffer is reloaded
- * from disk, and a **dirty** buffer is never reverted: the user's edits win, with one warning that
- * saving will clobber the update.
- *
- * Keyed on the reported `frontmatterWritten`, which only `upload` emits
- * (src/author/author-cli/src/commands/upload.ts). `preview`/`publish` also write the frontmatter on
- * disk but do not say so, so there is nothing to key on for them — no guessing here.
- */
-/**
  * SPEC §Document ↔ disk sync. The binary is the only writer of the note's frontmatter — on disk,
  * not in the buffer — so a clean buffer is reloaded and a **dirty** buffer is never reverted: the
  * user's edits win, with one warning that saving will clobber the update.
