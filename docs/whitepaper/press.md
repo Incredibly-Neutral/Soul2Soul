@@ -1,6 +1,6 @@
 ---
 post_type: chapter
-position: 6
+position: 7
 slug: press
 tags:
   - polyphony--s2s
@@ -9,7 +9,7 @@ kubo_cid: QmdRaE3M8fbTfXuZYujHdnqG5cyxT2N72CauCUVVpSyvSa
 genesis: "0x41d747c81665cd9c85c6424f544035beeb49799721fec4c9bc8f16478d082505"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## 6. The press
+# The press
 
 The press turns an author's signed manuscript into a page a reader can read, and every decryption happens inside it: for the author, for a publication's reviewers, for building pages and for readers who pass the reader gate. It is the only technical part of the protocol that must hold a manuscript decrypted, so two things about it have to be trusted: the hardware and the people who own it. Everything else it does can be checked. It has three layers: the hardware, the nodes that run on it, and the code the nodes run.
 

@@ -1,7 +1,7 @@
 ---
 post_type: chapter
 slug: reader
-position: 8
+position: 9
 tags:
   - polyphony--s2s
 modified_date: 2026-10-29T11:54:39
@@ -9,7 +9,7 @@ kubo_cid: QmRFTwpas9yNZSktcjbvmg3FjSFSwFMLnJSKAmdw3pNa4o
 genesis: "0xfa0c4831eaf0d21722c1ce2572432239f55c9aa26c5b6cbb999829f29d598d3a"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## 8. The reader 
+# The reader 
 
 A reader can check a page without trusting whoever serves it, by following a chain of authorization from the publication's name to the page. Each link vouches for the next.
 

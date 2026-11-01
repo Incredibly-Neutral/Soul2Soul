@@ -9,7 +9,7 @@ kubo_cid: QmfJzZ64TKuxm2q5uZCmcgTHLkMFxrvffcihyzJPnCtc9s
 genesis: "0x4a0ef0df8d9aba4e036e9d7eec105ed0e6e40511f32d94da56341812442cceb5"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## The author
+# The author
 Writing is local, and publishing is a separate, deliberate act. An author writes and revises on their own machine, and nothing in the protocol has to be reachable for that. The protocol defines an interface, not an application, so no single program stands between an author and their manuscripts: any number of writing tools can publish through it, and ideally the same tool works with more than one implementation.
 
 To publish, the author signs the manuscript and encrypts it, not to any person or company, but to the press's key. After that, only the author can decrypt it at any time; the reviewers of a publication it has been offered to can decrypt it while they consider it; and the renderer can decrypt it while an agreement with that publication exists. A few details stay public, such as its tags, so that a publication can sort what it has been offered, and organise its pages by topic, before anything is decrypted. Anyone can read them, and so anyone can see that an author offered a manuscript to a publication.

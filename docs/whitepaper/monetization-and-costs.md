@@ -1,7 +1,7 @@
 ---
 post_type: chapter
 slug: monetization-and-costs
-position: 7
+position: 8
 tags:
   - polyphony--s2s
 modified_date: 2026-10-29T11:55:44
@@ -9,7 +9,7 @@ kubo_cid: QmaofjSipD37JRdWWygaommpHwBT4mA15kbJrRwWobz7Ar
 genesis: "0x1681d22f7a18dbeefcba4fd30214a7d8c8ecef45d73b3a14504bacab78333006"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## 7. Monetization and costs
+# Monetization and costs
 
 The protocol lays three rails for direct payment, and nothing more. First, a destination: every author account can name a wallet, and so can every publication, so whatever a reader pays goes straight there, with no party in between to hold it. Second, a division: the agreement records how any revenue divides, and the ledger carries out the division, so neither party is paid from the other's hand. Neither party can change it alone: changing it means ending the agreement, which takes the manuscript off the site, and making a new one. Finally, a condition: the reader gate (section 5) can ask for anything the ledger can confirm, such as a payment, a membership or a subscription. It answers only yes or no, and never holds the money.
 

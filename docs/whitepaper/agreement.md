@@ -1,6 +1,6 @@
 ---
 post_type: chapter
-position: 4
+position: 5
 slug: agreement
 tags:
   - polyphony--s2s
@@ -9,7 +9,7 @@ kubo_cid: QmZtpdfBW7i8JcGXqZ5uydTkiXxaituxSJqsoqoFRBdWHs
 genesis: "0x39160f9682c10ffe3fdc0d9638bdf0c07c5a237562aa04b238794452225718b4"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## 4. The agreement
+# The agreement
 
 An agreement is between an author and a publication, over a single manuscript. It records who wrote the manuscript, that the publication may publish it, and how any revenue divides between them. The split is public, because a reader who pays needs to know where the money goes; section 7, on monetization, describes how it is paid. Both parties enter it: the author by offering the manuscript, the publication by admitting it, or in advance, by trusting the author. Withdrawing that trust later affects only future offers; agreements already made stand.
 

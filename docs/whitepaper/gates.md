@@ -1,16 +1,15 @@
 ---
 post_type: chapter
 slug: gates
-position: 5
+position: 6
 tags:
   - polyphony--s2s
-modified_date: 2026-10-29T11:56:51
-kubo_cid: QmUcg5jaohj78V4WL85yaYgvN1uG4vW4mmG56S8iFTuG1x
+modified_date: 2026-11-01T14:02:50
+kubo_cid: QmZWzUwGPE5NyTEYYhzbw1MLnXA1n1yUmyRYXJ67WcB4EQ
 genesis: "0x32131c8187132fde3e11f1f0977ec783a9bdf085feb9f05d52bac1e32b5cc479"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-## 5. Gates
-## 5. Gates
+# The gates
 
 A manuscript is encrypted to the press's key. Who can decrypt it, and when, is settled by gates: conditions fixed in advance, which no one can change afterwards. What a gate reads from the ledger, such as whether an agreement is in force, can change; the gate itself cannot. Each gate is checked at the moment someone asks, and must pass before anything is decrypted. A gate decides only whether a manuscript can be decrypted, not what is done with it afterwards. Where the gates run, and what has to be trusted about them, is the subject of section 6.
 

@@ -1,10 +1,15 @@
 ---
-    post_type : chapter
-    position: 2  
-    tags: [polyphony--s2s]
-    slug: manuscript
---- 
-# 3. The manuscript
+post_type: chapter
+position: 3
+tags:
+  - polyphony--s2s
+slug: manuscript
+modified_date: 2026-11-01T14:02:06
+kubo_cid: QmShHybWHoNYuhCis4G7B72Afu1oq6fsx5cRoJEdCVNfGi
+genesis: "0xf956c3bddebbfc5e7ab8f02d7f3a358de034151973e5ec0771e44c4c3515deee"
+author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+---
+# The manuscript
 
 A manuscript's identity is derived from the first version the author signs, and every revision keeps it. Agreements are made over that identity, so an agreement outlives a revision.
 

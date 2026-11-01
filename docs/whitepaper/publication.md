@@ -1,6 +1,6 @@
 ---
 post_type: chapter
-position: 3
+position: 4
 tags:
   - polyphony--s2s
 slug: publication
@@ -9,7 +9,7 @@ kubo_cid: QmaixDb6hJH71ZCPagroaWBwam9g5orG9JRXMJuw8aMwuv
 genesis: "0x9d83adbfd9aad1933c3e0d6026924dc499c02f97f60a712129021acc0a547f38"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-# 3. The publication
+# The publication
 A publication is a name, a look and an editorial line: which authors it works with, and which manuscripts it publishes. The name is the address its pages are served from, and it is the publication's own, not space rented on someone else's platform. Keeping its pages available is the publication's own responsibility, as keeping manuscripts available is the author's. There are no constraints on how it looks: the publication writes its own templates and styles. It is its own thing and looks like it.
 
 How it decides is up to the publication. It may have one holder or several, and set whatever threshold it likes for acting. Holders make the publication's decisions; editors and reviewers are the people they authorise to read and judge manuscripts. The protocol does not fix that shape; it makes it public. Every decision is an act on the ledger: trusting an author, admitting a manuscript, changing the site's design, changing the governance itself. All of them go through the same procedure, and none is silent. The holders and editors may be pseudonymous, as authors may, but the trail of their decisions is public. No decision by the publication reaches the next build of the site any other way.
