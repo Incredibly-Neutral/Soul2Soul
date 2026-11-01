@@ -45,6 +45,36 @@ describe('createLineThrottle', () => {
     expect(seen).toEqual(['one', 'three']);
   });
 
+  it('flush reports the last line the throttle dropped', () => {
+    const seen: string[] = [];
+    const report = createLineThrottle((line) => seen.push(line), 100, clock().now);
+
+    report('uploading');
+    report('pinning');
+    report('done');
+    expect(seen).toEqual(['uploading']);
+
+    report.flush();
+    expect(seen).toEqual(['uploading', 'done']);
+  });
+
+  it('flush is a no-op when the last line was already reported', () => {
+    const seen: string[] = [];
+    const report = createLineThrottle((line) => seen.push(line), 100, clock().now);
+
+    report('only');
+    report.flush();
+    expect(seen).toEqual(['only']);
+  });
+
+  it('flush is a no-op before any line arrives', () => {
+    const seen: string[] = [];
+    const report = createLineThrottle((line) => seen.push(line), 100, clock().now);
+
+    report.flush();
+    expect(seen).toEqual([]);
+  });
+
   it('caps a fast stream at ~10 updates a second', () => {
     const seen: string[] = [];
     const { now, advance } = clock();

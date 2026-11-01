@@ -20,7 +20,7 @@ import {
 import { basename, formatResult } from './format';
 import { parseResult } from './parse';
 import { createLineThrottle } from './progress';
-import { config } from './settings';
+import { config, settingsScope } from './settings';
 import { resolveBinary, run, type ResolvedBinary, type RunResult } from './spawn';
 import type { State } from './state';
 import * as ui from './ui';
@@ -115,8 +115,8 @@ async function confirmDirty(document: vscode.TextDocument): Promise<boolean> {
   return picked === anyway;
 }
 
-async function binary(): Promise<ResolvedBinary> {
-  return resolveBinary({ setting: config().get<string>('bin') ?? '' });
+async function binary(scope: vscode.Uri | undefined): Promise<ResolvedBinary> {
+  return resolveBinary({ setting: config(scope).get<string>('bin') ?? '' });
 }
 
 interface Invocation {
@@ -124,6 +124,12 @@ interface Invocation {
   cwd: string;
   label: string;
   key: string;
+  /**
+   * The settings scope, resolved **once** by the caller. `config(scope)` is folder-aware, so
+   * re-resolving mid-run would read another folder's settings as soon as the user clicks another
+   * file while a publish is in flight.
+   */
+  scope: vscode.Uri | undefined;
   /** The note this run acts on, when there is one — frontmatter reconciliation needs it. */
   document?: vscode.TextDocument;
 }
@@ -136,21 +142,21 @@ interface Invocation {
  * `showInformationMessage` and `withProgress` resolve on dismiss, not on display, so awaiting them
  * inside the guarded region refused a re-run for seconds after the process had already exited.
  */
-async function invoke({ args, cwd, label, key, document }: Invocation): Promise<void> {
+async function invoke({ args, cwd, label, key, scope, document }: Invocation): Promise<void> {
   if (!state.begin(key)) {
     void vscode.window.showInformationMessage(`s2s: ${label} is already running for this file.`);
     return;
   }
 
   const abort = new AbortController();
-  const verbose = config().get<boolean>('verboseStderr') ?? false;
-  const timeoutMs = config().get<number>('timeout') ?? 0;
+  const verbose = config(scope).get<boolean>('verboseStderr') ?? false;
+  const timeoutMs = config(scope).get<number>('timeout') ?? 0;
 
   let result: RunResult | undefined;
   let failure: Error | undefined;
 
   try {
-    const resolved = await binary();
+    const resolved = await binary(scope);
     ui.log(`$ ${resolved.bin} ${args.join(' ')}  (cwd ${cwd})`);
 
     result = await ui.withProgress(`s2s: ${label}`, async (progress, token) => {
@@ -175,6 +181,8 @@ async function invoke({ args, cwd, label, key, document }: Invocation): Promise<
           },
         });
       } finally {
+        // The spec asks for the LAST stderr line; a leading-edge throttle drops it.
+        reportProgress.flush();
         subscription.dispose();
       }
     });
@@ -190,7 +198,7 @@ async function invoke({ args, cwd, label, key, document }: Invocation): Promise<
   }
   if (result === undefined) return;
 
-  await handleOutcome({ label, key, result, document, verbose, timeoutMs });
+  await handleOutcome({ label, key, result, document, scope, verbose, timeoutMs });
 }
 
 function stderrLines(result: RunResult): string[] {
@@ -220,24 +228,54 @@ const warnedStale = new Set<string>();
  * (src/author/author-cli/src/commands/upload.ts). `preview`/`publish` also write the frontmatter on
  * disk but do not say so, so there is nothing to key on for them — no guessing here.
  */
+/**
+ * SPEC §Document ↔ disk sync. The binary is the only writer of the note's frontmatter — on disk,
+ * not in the buffer — so a clean buffer is reloaded and a **dirty** buffer is never reverted: the
+ * user's edits win, with one warning that saving will clobber the update.
+ *
+ * The ground truth is src/author/author-cli/src/core/author.ts:203 — `authorWrite` writes the
+ * frontmatter for `upload`, `preview` **and** `publish` (only upload reports
+ * `frontmatterWritten`; preview.ts:21 and publish.ts:22 report nothing). Keying on the flag alone
+ * left the clobber path open for publish, so the action is the signal and `note` is the guard.
+ */
+const WRITES_FRONTMATTER = new Set(['upload', 'preview', 'publish']);
+
 async function reconcileFrontmatter(
   result: Record<string, unknown>,
   document: vscode.TextDocument | undefined,
   key: string,
 ): Promise<void> {
-  if (document === undefined || result['frontmatterWritten'] !== true) return;
+  if (document === undefined) return;
   if (!vscode.workspace.textDocuments.includes(document)) return;
 
-  if (document.isDirty) {
+  const action = result['action'];
+  const reported = result['frontmatterWritten'] === true;
+  const writes = typeof action === 'string' && WRITES_FRONTMATTER.has(action);
+  if (!reported && !writes) return;
+
+  // Never reconcile a document the result is not about.
+  const note = result['note'];
+  if (typeof note === 'string' && path.resolve(note) !== path.resolve(document.uri.fsPath)) return;
+
+  /** One warning per document per session — SPEC says "one warning", not one per run. */
+  const warnOnce = async (): Promise<void> => {
     if (warnedStale.has(key)) return;
     warnedStale.add(key);
     await ui.warnChangedOnDisk(basename(document.uri.fsPath));
+  };
+
+  if (document.isDirty) {
+    await warnOnce();
     return;
   }
 
-  await ui.revertFile(document.uri);
-  // A clean buffer is current again, so a future dirty run deserves a fresh warning.
-  warnedStale.delete(key);
+  if (await ui.revertFile(document)) {
+    // A clean buffer is current again, so a future dirty run deserves a fresh warning.
+    warnedStale.delete(key);
+    return;
+  }
+
+  await warnOnce();
 }
 
 async function handleOutcome({
@@ -245,6 +283,7 @@ async function handleOutcome({
   key,
   result,
   document,
+  scope,
   verbose,
   timeoutMs,
 }: {
@@ -252,6 +291,7 @@ async function handleOutcome({
   key: string;
   result: RunResult;
   document: vscode.TextDocument | undefined;
+  scope: vscode.Uri | undefined;
   verbose: boolean;
   timeoutMs: number;
 }): Promise<void> {
@@ -264,8 +304,14 @@ async function handleOutcome({
     return;
   }
 
-  // A timeout is not a cancel and not a crash: name it, instead of "printed nothing on stdout".
-  if (result.timedOut) {
+  const outcome = parseResult(result.stdout);
+
+  /**
+   * A timeout is only a timeout when it cost us the result. A run that finishes *at* the deadline
+   * exits 0 with a complete document — reporting "timed out" there threw away a valid CID, and for
+   * publish the offer tx may already be mined.
+   */
+  if (result.timedOut && (result.code !== 0 || outcome.kind !== 'result')) {
     state.stats.failures += 1;
     await ui.reportFailure(
       withSnippet(
@@ -273,6 +319,10 @@ async function handleOutcome({
       ),
     );
     return;
+  }
+
+  if (result.timedOut) {
+    ui.log(`${label}: finished at the ${timeoutMs}ms deadline — keeping its result`);
   }
 
   // Signal without an exit code and without our cancel: a real crash (OOM, external SIGKILL).
@@ -285,8 +335,6 @@ async function handleOutcome({
     );
     return;
   }
-
-  const outcome = parseResult(result.stdout);
 
   if (outcome.kind === 'failure') {
     state.stats.failures += 1;
@@ -324,9 +372,9 @@ async function handleOutcome({
   await reconcileFrontmatter(outcome.result, document, key);
 
   await ui.reportSuccess(summary, {
-    notify: config().get<boolean>('notify') ?? true,
-    copyCid: config().get<boolean>('copyCid') ?? false,
-    open: config().get<boolean>('open') ?? true,
+    notify: config(scope).get<boolean>('notify') ?? true,
+    copyCid: config(scope).get<boolean>('copyCid') ?? false,
+    open: config(scope).get<boolean>('open') ?? true,
   });
 }
 
@@ -334,9 +382,12 @@ async function handleOutcome({
 async function authorAction(action: AuthorAction): Promise<void> {
   const document = requireNoteDocument();
   if (document === undefined) return;
+  // Snapshot the scope before the first await: prompts can sit on screen for minutes, and
+  // `config()` without a scope would then read whatever file the user clicked in the meantime.
+  const scope = settingsScope();
   if (!(await confirmDirty(document))) return;
 
-  if (action === 'revoke' && (config().get<boolean>('confirmRevoke') ?? true)) {
+  if (action === 'revoke' && (config(scope).get<boolean>('confirmRevoke') ?? true)) {
     const picked = await vscode.window.showWarningMessage(
       `Revoke ${path.basename(document.uri.fsPath)}? This retracts it on-chain.`,
       { modal: true },
@@ -352,12 +403,13 @@ async function authorAction(action: AuthorAction): Promise<void> {
     cwd: projectRoot(notePath),
     label: action,
     key: document.uri.toString(),
+    scope,
     document,
   });
 }
 
 async function runRaw(label: string, args: string[], cwd: string): Promise<void> {
-  await invoke({ args, cwd, label, key: `s2s:${label}` });
+  await invoke({ args, cwd, label, key: `s2s:${label}`, scope: settingsScope() });
 }
 
 /**
@@ -433,20 +485,25 @@ async function runConfig(): Promise<void> {
     }
   }
 
-  const local = await vscode.window.showQuickPick(['User config', 'Project config (--local)'], {
-    title: `s2s config ${typed}`,
-  });
-  if (local === undefined) return;
+  // `--local` is a set/unset/path flag (src/author/author-cli/src/commands/config.ts:192,204,216):
+  // get and list resolve the merged config and have no scope to pick, so do not offer one.
+  const takesScope = typed === 'set' || typed === 'unset' || typed === 'path';
+  let local = false;
 
-  await runRaw(
-    `config ${typed}`,
-    configArgs(typed, rest, { local: local.startsWith('Project') }),
-    workspaceCwd(),
-  );
+  if (takesScope) {
+    const picked = await vscode.window.showQuickPick(['User config', 'Project config (--local)'], {
+      title: `s2s config ${typed}`,
+    });
+    if (picked === undefined) return;
+    local = picked.startsWith('Project');
+  }
+
+  await runRaw(`config ${typed}`, configArgs(typed, rest, { local }), workspaceCwd());
 }
 
 async function selectBinary(): Promise<void> {
-  const resolved = await binary();
+  const scope = settingsScope();
+  const resolved = await binary(scope);
   const detected = await resolveBinary({});
   const items: vscode.QuickPickItem[] = [
     {
@@ -482,26 +539,39 @@ async function selectBinary(): Promise<void> {
     value = typed;
   }
 
-  // Where to write: workspace settings when a folder is open, else the (remote) user settings.
-  // `ConfigurationTarget.Workspace` throws when no folder is open — exactly the remote window
-  // with no folder where doctor recommends this command — and the old code swallowed it.
+  // Where to write, in the same precedence the reader uses (settings.ts): the scope's own
+  // workspace FOLDER first — a workspace value would be outranked by a folder value in
+  // `.vscode/settings.json`, so writing it there would be a no-op announced as success — then the
+  // workspace, then the (remote) user settings. `Workspace`/`WorkspaceFolder` throw with nothing
+  // open, which is exactly the remote window where doctor recommends this command.
+  const folder = scope === undefined ? undefined : vscode.workspace.getWorkspaceFolder(scope);
   const target =
-    (vscode.workspace.workspaceFolders?.length ?? 0) > 0
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
+    folder !== undefined
+      ? vscode.ConfigurationTarget.WorkspaceFolder
+      : (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+
+  const where =
+    folder !== undefined
+      ? `${folder.name}'s folder settings`
+      : target === vscode.ConfigurationTarget.Workspace
+        ? 'workspace settings'
+        : 'user settings';
 
   try {
-    await config().update('bin', value, target);
+    await config(scope).update('bin', value, target);
   } catch (error) {
-    const where = target === vscode.ConfigurationTarget.Global ? 'user' : 'workspace';
     await ui.reportFailure(
-      `could not write s2s.bin to ${where} settings: ${error instanceof Error ? error.message : String(error)}`,
+      `could not write s2s.bin to ${where}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return;
   }
 
   void vscode.window.showInformationMessage(
-    value.length === 0 ? 's2s: binary setting cleared' : `s2s: binary set to ${value}`,
+    value.length === 0
+      ? `s2s: binary setting cleared (${where})`
+      : `s2s: binary set to ${value} (${where})`,
   );
 }
 

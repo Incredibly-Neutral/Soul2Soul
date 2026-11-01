@@ -136,6 +136,9 @@ export async function runDoctor(state: State): Promise<void> {
         );
         lines.push(`  project env: ${String(record['project'] ?? '(none)')}`);
       }
+    } else {
+      // Same rule as the version block: never print nothing and leave the reason unstated.
+      lines.push('', `config file: unreadable — ${parsed.message}`);
     }
   } catch {
     lines.push('', 'config file: unreadable (binary not runnable yet)');
@@ -154,6 +157,8 @@ export async function runDoctor(state: State): Promise<void> {
         `config keys set (${names.length}, names only):`,
         ...names.map((name) => `  ${name}`),
       );
+    } else {
+      lines.push('', `config keys: unreadable — ${parsed.message}`);
     }
   } catch {
     lines.push('', 'config keys: unreadable');
