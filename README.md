@@ -42,7 +42,7 @@ Read more:
 - `0xobsidian` — Obsidian plugin for identity and key custody: the wallet, keystore, eth / Filecoin / IPFS clients, paymaster. It does not publish.
 - `neutralpress` — Obsidian plugin for publishing, on top of 0xobsidian: content, publication state, render and preview UI.
 - `vscode-s2s` — VS Code extension for a remote window: spawns the binary and parses its output.
-- `nvim-s2s` — Neovim plugin, pure Lua at the repo root (`nvim-s2s/`, outside the pnpm workspace): `:S2S upload|offer|preview|publish|revoke` on the current buffer, plus `new`, `config`, `health`.
+- `nvim-s2s` — Neovim plugin, pure Lua, no build step (`src/author/nvim-s2s/`; no `package.json`, so pnpm leaves it alone): `:S2S upload|offer|preview|publish|revoke` on the current buffer, plus `new`, `config`, `health`.
 
 **`reader`** — the read path.
 

@@ -8,8 +8,8 @@ It is deliberately dumb about s2s: **it never reads the note**, never parses fro
 never resolves a publication, never computes or caches a CID, and never re-reads `s2s`
 config. Every domain question is answered by the binary.
 
-- Spec: [`brain/specs/SPEC-nvim-s2s.md`](../brain/specs/SPEC-nvim-s2s.md)
-- Contract it is built against: [`brain/specs/SPEC-author-cli.md`](../brain/specs/SPEC-author-cli.md)
+- Spec: [`brain/specs/SPEC-nvim-s2s.md`](../../../brain/specs/SPEC-nvim-s2s.md)
+- Contract it is built against: [`brain/specs/SPEC-author-cli.md`](../../../brain/specs/SPEC-author-cli.md)
   ("Binary API reference")
 
 ## Requirements
@@ -25,7 +25,7 @@ Pure Lua, no build step. With lazy.nvim, point it at the directory:
 
 ```lua
 {
-  dir = vim.fn.expand('~/code/s2s/nvim-s2s'),
+  dir = vim.fn.expand('~/code/s2s/src/author/nvim-s2s'),
   name = 'nvim-s2s',
   lazy = false, -- see the note below
   config = function()
@@ -42,7 +42,7 @@ does). Otherwise the spec has no trigger, lazy defers it, `config` never runs, a
 Or without a plugin manager:
 
 ```lua
-vim.opt.runtimepath:prepend(vim.fn.expand('~/code/s2s/nvim-s2s'))
+vim.opt.runtimepath:prepend(vim.fn.expand('~/code/s2s/src/author/nvim-s2s'))
 require('s2s').setup()
 ```
 
@@ -51,7 +51,7 @@ require('s2s').setup()
 ### Trying it without touching your config
 
 ```sh
-nvim -u /home/joera/code/wt-nvim-core/nvim-s2s/dev/init.lua some-note.md
+nvim -u ~/code/s2s/src/author/nvim-s2s/dev/init.lua some-note.md
 ```
 
 `dev/init.lua` prepends this checkout to the runtimepath and calls `setup()`, nothing else.
@@ -174,7 +174,7 @@ The plugin's own suite needs no chain, no network and no real binary (a fake `s2
 script drives the spawn tests):
 
 ```sh
-cd nvim-s2s
+cd src/author/nvim-s2s
 nvim --headless -l test/run.lua      # prints "ok <n> assertions, <f> failures"
 ```
 

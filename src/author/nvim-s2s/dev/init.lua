@@ -1,6 +1,6 @@
 -- Minimal test config for nvim-s2s: load this checkout, nothing else.
 --
---   nvim -u /home/joera/code/wt-nvim-core/nvim-s2s/dev/init.lua some-note.md
+--   nvim -u ~/code/s2s/src/author/nvim-s2s/dev/init.lua some-note.md
 --
 -- This exists because a plugin manager (lazy.nvim) rebuilds the runtimepath
 -- during startup, so `--cmd "set rtp+=..."` does not survive. A `-u` config is
