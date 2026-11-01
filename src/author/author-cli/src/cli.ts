@@ -31,7 +31,7 @@ Usage:
   s2s <group> <action> [flags]
 
 Groups:
-  author        Upload, preview, propose, publish, or revoke content
+  author        Upload, preview, offer, publish, or revoke content
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 

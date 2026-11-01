@@ -16,7 +16,7 @@ import { Document } from 'yaml';
  * preserved verbatim.
  */
 /**
- * Frontmatter key holding the CID of the last upload — the value `propose`
+ * Frontmatter key holding the CID of the last upload — the value `offer`
  * offers on-chain. Written back by `upload`; overridable with `--cid`.
  *
  * Ephemeral by nature: it names one upload of one revision of the note, so it
@@ -27,7 +27,7 @@ import { Document } from 'yaml';
 export const KUBO_CID_KEY = 'kubo_cid';
 
 /**
- * Resolve the content CID for `propose`: an explicit `--cid` wins, else the
+ * Resolve the content CID for `offer`: an explicit `--cid` wins, else the
  * `kubo_cid` written back by the last `upload`. Returns `undefined` when
  * neither is available (the caller turns that into a usage error).
  */

@@ -2,7 +2,7 @@
 // s2s author publish <note> — the all-in-one flow.
 // sign → Kubo upload → on-chain offer → prod render (Lit nodes)
 // → fire-and-forget 4-way backup (Kubo + Pinata + Filebase + Filecoin).
-// Equals upload + propose + render + pins in a single invocation.
+// Equals upload + offer + render + pins in a single invocation.
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';
@@ -12,7 +12,7 @@ import { flagBool } from '../lib/args';
 
 export const publish: CommandSpec = {
   name: 'publish',
-  summary: 'Upload, propose on-chain, render on the production site, and back it up (one-shot).',
+  summary: 'Upload, offer on-chain, render on the production site, and back it up (one-shot).',
   usage: 's2s author publish <note> [--publication <ens>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
@@ -50,7 +50,7 @@ export const publish: CommandSpec = {
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
         `  kubo cid    : ${result.kuboCid}`,
-        `  tx          : ${result.txHash ?? '(propose step not run)'}`,
+        `  tx          : ${result.txHash ?? '(offer step not run)'}`,
         result.render
           ? [
               `  render      : ${result.render.cid}`,
