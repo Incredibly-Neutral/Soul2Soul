@@ -118,7 +118,7 @@ export function authorIdentityArgs(which: 'address' | 'init'): string[] {
   return ['author', which, '--json'];
 }
 
-/** `s2s <group> --help --json` — used by doctor for the version/help document. */
+/** `s2s --version --json` — the version document doctor reads. No group, no `--help`. */
 export function versionArgs(): string[] {
   return ['--version', '--json'];
 }

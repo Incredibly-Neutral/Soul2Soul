@@ -19,6 +19,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     ui.output(),
+    detail,
     vscode.workspace.registerTextDocumentContentProvider(ui.DETAIL_SCHEME, detail),
     vscode.commands.registerCommand('s2s.doctor', () => runDoctor(state)),
     vscode.workspace.onDidCloseTextDocument((document) => {

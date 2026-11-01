@@ -10,6 +10,8 @@
  */
 
 import { spawn as spawnProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 
 export interface RunOptions {
   bin: string;
@@ -21,14 +23,22 @@ export interface RunOptions {
   onStderr?: (line: string) => void;
   /** 0 / undefined = no timeout. The progress notification is the timeout. */
   timeoutMs?: number;
+  /** Override the SIGTERM→SIGKILL grace period (test seam). Defaults to `KILL_GRACE_MS`. */
+  killGraceMs?: number;
 }
+
+/** How long a child gets to honour SIGTERM before SIGKILL, and before we settle regardless. */
+export const KILL_GRACE_MS = 2000;
 
 export interface RunResult {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  /** The user cancelled (progress token / AbortSignal). */
   aborted: boolean;
+  /** We killed it on `timeoutMs` — distinct from a cancel and from a crash (spec exit table). */
+  timedOut: boolean;
   durationMs: number;
 }
 
@@ -46,18 +56,19 @@ function isErrnoException(value: unknown): value is NodeJS.ErrnoException {
 
 export function run(options: RunOptions): Promise<RunResult> {
   const startedAt = Date.now();
-  const { bin, args, cwd, signal, onStderr, timeoutMs } = options;
+  const { bin, args, cwd, signal, onStderr, timeoutMs, killGraceMs } = options;
 
   return new Promise<RunResult>((resolve, reject) => {
     let stdout = '';
     let stderr = '';
     let pendingStderr = '';
     let settled = false;
+    let timedOut = false;
     let timer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
 
     // Own process group (POSIX): killing the group takes down anything the binary spawned, and
-    // guanantees the stdio pipes close so `close` fires. Windows is a non-goal.
+    // guarantees the stdio pipes close so `close` fires. Windows is a non-goal.
     const grouped = process.platform !== 'win32';
 
     const child = spawnProcess(bin, [...args], {
@@ -77,13 +88,6 @@ export function run(options: RunOptions): Promise<RunResult> {
       }
     };
 
-    /** SIGTERM, then SIGKILL if the child lingers — a stuck run must not hold the mutex. */
-    const terminate = (): void => {
-      signalGroup('SIGTERM');
-      if (killTimer !== undefined) return;
-      killTimer = setTimeout(() => signalGroup('SIGKILL'), 2000);
-    };
-
     const cleanup = (): void => {
       if (timer !== undefined) clearTimeout(timer);
       if (killTimer !== undefined) clearTimeout(killTimer);
@@ -95,6 +99,28 @@ export function run(options: RunOptions): Promise<RunResult> {
       settled = true;
       cleanup();
       resolve(result);
+    };
+
+    /**
+     * SIGTERM, then SIGKILL if the child lingers — a stuck run must not hold the mutex. If even
+     * SIGKILL never produces `close` (a wedged child or a grandchild holding the pipes), settle
+     * here anyway: the caller's `finally` runs and the mutex is released no matter what.
+     */
+    const terminate = (): void => {
+      signalGroup('SIGTERM');
+      if (killTimer !== undefined) return;
+      killTimer = setTimeout(() => {
+        signalGroup('SIGKILL');
+        settle({
+          code: null,
+          signal: 'SIGKILL',
+          stdout,
+          stderr,
+          aborted: signal?.aborted === true,
+          timedOut,
+          durationMs: Date.now() - startedAt,
+        });
+      }, killGraceMs ?? KILL_GRACE_MS);
     };
 
     function onAbort(): void {
@@ -136,6 +162,7 @@ export function run(options: RunOptions): Promise<RunResult> {
         stdout,
         stderr,
         aborted: signal?.aborted === true,
+        timedOut,
         durationMs: Date.now() - startedAt,
       });
     });
@@ -146,7 +173,10 @@ export function run(options: RunOptions): Promise<RunResult> {
     }
 
     if (timeoutMs !== undefined && timeoutMs > 0) {
-      timer = setTimeout(terminate, timeoutMs);
+      timer = setTimeout(() => {
+        timedOut = true;
+        terminate();
+      }, timeoutMs);
     }
   });
 }
@@ -188,9 +218,26 @@ function defaultShells(): readonly string[] {
   );
 }
 
-function firstLine(text: string): string | undefined {
-  const line = text.split('\n')[0]?.trim();
-  return line !== undefined && line.length > 0 ? line : undefined;
+/**
+ * The probe runs an *interactive/login* shell (`bash -ilc`), whose profile may print banners or
+ * "last login" mush on stdout. The answer is the **last** non-empty line, and only if it is an
+ * absolute path that actually exists — otherwise a banner becomes the resolved binary and every
+ * spawn fails ENOENT with a nonsense name.
+ */
+function probeAnswer(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const candidate = lines[lines.length - 1];
+  if (candidate === undefined) return undefined;
+  if (!isAbsolute(candidate)) return undefined;
+  try {
+    if (!existsSync(candidate)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return candidate;
 }
 
 async function probe(
@@ -207,7 +254,7 @@ async function probe(
       timeoutMs,
     });
     if (result.code !== 0) return undefined;
-    return firstLine(result.stdout);
+    return probeAnswer(result.stdout);
   } catch {
     return undefined;
   }
@@ -215,7 +262,9 @@ async function probe(
 
 /**
  * Resolution order (SPEC-author-vscode §Binary discovery):
- * `s2s.bin` → login-shell probe → bare name. Cached per setting for the session.
+ * `s2s.bin` → login-shell probe → bare name. Only a **hit** is cached: caching the miss would keep
+ * doctor and Select Binary reporting "not found" after the user installs the binary, until the
+ * window reloads. A miss is re-probed on the next call (`clearResolverCache()` also exists).
  */
 export async function resolveBinary(options: ResolveOptions = {}): Promise<ResolvedBinary> {
   const name = options.name ?? 's2s';
@@ -247,6 +296,5 @@ export async function resolveBinary(options: ResolveOptions = {}): Promise<Resol
   }
 
   const bare: ResolvedBinary = { bin: name, source: 'bare' };
-  cache.set(key, bare);
   return bare;
 }

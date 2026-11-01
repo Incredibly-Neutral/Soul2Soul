@@ -79,7 +79,11 @@ ids are stable.
 | `s2s.copyCid`       | `false`  | put the upload's CID on the clipboard                                    |
 | `s2s.confirmRevoke` | `true`   | confirm before revoking                                                  |
 | `s2s.timeout`       | `0`      | kill after N ms; `0` = no timeout                                        |
-| `s2s.verboseStderr` | `false`  | mirror every stderr line into the output channel                         |
+| `s2s.verboseStderr` | `false`  | failure message stderr: `false` = one line, `true` = last 20 lines      |
+
+stderr always streams into the `s2s` output channel, whatever `s2s.verboseStderr` says — that
+channel is how a run stays diagnosable after a dropped connection. The setting only decides how
+much of it a *failure message* repeats.
 
 None of these change s2s behaviour. Publication, keys and RPC are `s2s config`'s job — use
 `s2s: Config…` and the binary's own `-h`.
@@ -88,10 +92,14 @@ None of these change s2s behaviour. Publication, keys and RPC are `s2s config`'s
 
 - The binary reads the **saved file**, so unsaved changes are invisible to it. Upload/offer/
   preview/publish/revoke ask before running on a dirty buffer; the extension never saves for you.
-- `upload`/`preview`/`publish` may rewrite the note's frontmatter on disk. If the buffer is clean
-  it is reloaded silently; if it is dirty you get one warning and nothing is clobbered.
-- Progress goes to stderr and streams into the `s2s` output channel — that is how a long publish
-  is diagnosable if your connection drops.
+  If "Save and run" cannot save (a read-only mount, a failed write) you get an error, not silence.
+- `upload` rewrites the note's frontmatter on disk (`genesis`, `author`, `kubo_cid`,
+  `modified_date`) and reports `frontmatterWritten`. If the buffer is clean it is reloaded from disk
+  silently; if it is dirty you get **one** warning and nothing is clobbered — saving then would
+  discard the update, and the next `s2s: Offer` reads identity from the file. `preview`/`publish`
+  also write the frontmatter but do not report it, so the reload is only automatic for `upload`.
+- Progress goes to stderr and streams into the `s2s` output channel (the notification shows the
+  last line, throttled) — that is how a long publish is diagnosable if your connection drops.
 
 ## Development
 

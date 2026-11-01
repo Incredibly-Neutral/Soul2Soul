@@ -23,6 +23,11 @@ export interface Summary {
   copy: string | undefined;
 }
 
+/**
+ * Only actions the binary actually puts in a result's `action` field. `config list`, `config get`
+ * and `config path` emit **no** `action` at all (src/author/author-cli/src/commands/config.ts), so
+ * the caller's display label covers them instead of a table entry that can never match.
+ */
 const VERBS: Record<string, string> = {
   upload: 'uploaded',
   offer: 'offered',
@@ -33,10 +38,7 @@ const VERBS: Record<string, string> = {
   'author.address': 'author address',
   'author.init': 'author safe',
   'config.set': 'config set',
-  'config.get': 'config get',
   'config.unset': 'config unset',
-  'config.list': 'config list',
-  'config.path': 'config path',
 };
 
 /** Display order for the detail view; anything not listed is appended alphabetically. */
@@ -71,6 +73,7 @@ const KNOWN_ORDER = [
   'local',
   'path',
   'env',
+  'config',
   'error',
 ] as const;
 
@@ -110,14 +113,15 @@ function renderField(result: ResultObject, key: string): string | undefined {
   return isPlainObject(render) ? str(render[key]) : undefined;
 }
 
-/** The result's own verb, for the summary line. */
-function verbFor(action: string | undefined, result: ResultObject): string {
+/** The result's own verb, for the summary line. `label` is the invocation's display name and is
+ * used only when the binary named no action (config get/list/path). */
+function verbFor(action: string | undefined, result: ResultObject, label?: string): string {
   if (action !== undefined) {
     const known = VERBS[action];
     if (known !== undefined) return known;
   }
   if (result['ok'] === false) return 's2s failed';
-  return action ?? 's2s result';
+  return action ?? label ?? 's2s result';
 }
 
 /** Subject of the sentence: the note basename when the binary named one. */
@@ -203,7 +207,10 @@ function openableUrl(action: string | undefined, result: ResultObject): string |
   return undefined;
 }
 
-export function formatResult(result: ResultObject, options: { durationMs?: number } = {}): Summary {
+export function formatResult(
+  result: ResultObject,
+  options: { durationMs?: number; label?: string } = {},
+): Summary {
   const action = str(result['action']);
 
   if (result['ok'] === false) {
@@ -217,7 +224,7 @@ export function formatResult(result: ResultObject, options: { durationMs?: numbe
   }
 
   const subject = subjectFor(result);
-  const head = `${verbFor(action, result)}${subject.length > 0 ? ` ${subject}` : ''}`;
+  const head = `${verbFor(action, result, options.label)}${subject.length > 0 ? ` ${subject}` : ''}`;
 
   return {
     action,
@@ -233,9 +240,25 @@ export function formatFailure(result: ResultObject): string {
   return str(result['error']) ?? 's2s reported a failure without an error message';
 }
 
+/** Keys whose object value is flattened to `key.sub: value` rows (`config.list` and
+ * `config.path` both return one level of nesting; the binary's own order is preserved). */
+const FLATTENED = new Set(['config', 'env']);
+
+function flattenInto(rows: string[], prefix: string, value: unknown): void {
+  if (!isPlainObject(value)) return;
+
+  for (const [subKey, subValue] of Object.entries(value)) {
+    if (isScalar(subValue)) rows.push(`${prefix}.${subKey}: ${scalarText(subValue)}`);
+    else if (Array.isArray(subValue) && subValue.length > 0) {
+      rows.push(`${prefix}.${subKey}: ${subValue.map((item) => String(item)).join(', ')}`);
+    }
+    // Deeper nesting is dropped rather than dumped raw (open-shape rule).
+  }
+}
+
 /**
- * Detail view rows: known fields in a fixed order, `render.*` flattened, then extra scalars
- * alphabetically. Unknown nested objects are skipped (open-shape rule).
+ * Detail view rows: known fields in a fixed order, `render.*` / `config.*` / `env.*` flattened,
+ * then extra scalars alphabetically. Unknown nested objects are skipped (open-shape rule).
  */
 export function detailRows(result: ResultObject): string[] {
   const rows: string[] = [];
@@ -250,6 +273,11 @@ export function detailRows(result: ResultObject): string[] {
         const renderValue = value[renderKey];
         if (isScalar(renderValue)) rows.push(`render.${renderKey}: ${scalarText(renderValue)}`);
       }
+      continue;
+    }
+
+    if (FLATTENED.has(key)) {
+      flattenInto(rows, key, value);
       continue;
     }
 

@@ -6,7 +6,6 @@
   "publisher": "soul2soul",
   "license": "UNLICENSED",
   "private": true,
-  "type": "module",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -177,7 +176,7 @@
         "s2s.verboseStderr": {
           "type": "boolean",
           "default": false,
-          "description": "Mirror every stderr line into the s2s output channel."
+          "description": "How much stderr a FAILURE message carries: false = one line, true = the last 20 lines. stderr always streams into the s2s output channel either way, and it is never parsed."
         }
       }
     }
