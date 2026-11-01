@@ -11,7 +11,7 @@ Its press is open code running on sealed hardware that not even its owners can s
 - Every page carries proof of who wrote it, that both sides consented, and that it hasn't changed.
 - Authors keep their work when they leave. A publication keeps its authors only while they choose to stay.
 
-What remains is trust in that hardware, and in its owners not to collude. The design defends against whoever runs a publication or hosts its pages, not against a state-level adversary.
+What remains is trust in that hardware, and in its owners not to collude. Beyond that, the design assumes the worst of whoever runs a publication and whoever hosts its pages, and is built to hold against both. It is not built to hold against a state-level adversary.
 
 Read more:
 
@@ -36,12 +36,13 @@ Read more:
 - `ens-contracts` — the names: an open subdomain registry, a resolver with CCIP-Read, and L2 records.
 - `safe-app` — the admin UI a publication uses to run itself: records, agreements, storage, lists.
 
-**`author`** — where manuscripts come from. Four hosts over one binary contract: the CLI holds the logic, the editors shell out to it and format its JSON.
+**`author`** — where manuscripts come from. Five hosts over one binary contract: the CLI holds the logic, the editors shell out to it and format its JSON.
 
 - `author-cli` — the `s2s` binary, headless and machine-friendly: `init`, `address`, `config`, `new`, `upload`, `offer`, `preview`, `publish`, `revoke`.
 - `0xobsidian` — Obsidian plugin for identity and key custody: the wallet, keystore, eth / Filecoin / IPFS clients, paymaster. It does not publish.
 - `neutralpress` — Obsidian plugin for publishing, on top of 0xobsidian: content, publication state, render and preview UI.
 - `vscode-s2s` — VS Code extension for a remote window: spawns the binary and parses its output.
+- `nvim-s2s` — Neovim plugin, pure Lua at the repo root (`nvim-s2s/`, outside the pnpm workspace): `:S2S upload|offer|preview|publish|revoke` on the current buffer, plus `new`, `config`, `health`.
 
 **`reader`** — the read path.
 
