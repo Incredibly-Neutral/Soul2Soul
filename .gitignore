@@ -53,3 +53,5 @@ src/press/scripts/lit/config.chain-secured-pending.json
 .pi
 .hermes
 .s2s-orchestrator
+# Scratch: per-task working notes. Never cited, never durable (docs/conventions.md)
+.work/
