@@ -1,6 +1,8 @@
 # GATES — who may decrypt, and who may ask for a build
 
-Read against: `whitepaper/gates.md` (2026-10-29).
+Read against: `../../whitepaper/gates.md` (2026-10-29).
+
+No branch: the gates are small enough to read at `src/shared/src/gates`.
 
 A gate is a condition fixed in advance. What it reads from the ledger may change — whether an
 agreement is in force, who is a holder — but the gate itself may not. It is checked at the moment

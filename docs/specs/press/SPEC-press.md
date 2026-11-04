@@ -1,6 +1,8 @@
 # PRESS — the only place plaintext is held
 
-Read against: `whitepaper/press.md` (2026-10-29).
+Read against: `../../whitepaper/press.md` (2026-10-29).
+
+Branch: [SPEC-protocol-actions](SPEC-protocol-actions.md) — PREP → RENDER → UPDATE, the I/O contract, the decision tree.
 
 The press is the only party that must hold a manuscript decrypted, and it holds it in order to do
 two things: open it to the people a gate names, and turn it into pages. Everything else the press

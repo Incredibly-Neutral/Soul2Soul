@@ -1,6 +1,8 @@
 # READER — checking a page without trusting who serves it
 
-Read against: `whitepaper/verification.md` (2026-10-29).
+Read against: `../../whitepaper/reader.md` (2026-10-29).
+
+Branch: [publication/SPEC-contracts-ens](../publication/SPEC-contracts-ens.md) — the name layer, the CCIP-Read resolver, the L2 records contract.
 
 A reader follows a chain of authorisation from a publication's name to the page in front of them.
 The name's record holds the content address of the site's root; the root addresses every page; the

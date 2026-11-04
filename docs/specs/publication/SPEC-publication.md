@@ -1,6 +1,8 @@
 # PUBLICATION — the name, the look, and the line
 
-Read against: `whitepaper/publication.md` (2026-10-29).
+Read against: `../../whitepaper/publication.md` (2026-10-29).
+
+Branches: [overview](SPEC-publication-overview.md) · [account](SPEC-publication-account.md) · [agreements](SPEC-publication-agreements.md) · [admin-app](SPEC-publication-admin-app.md) · [look](SPEC-publication-look.md) · [review](SPEC-publication-review.md) · [storage](SPEC-publication-storage.md) · [contracts-ens](SPEC-contracts-ens.md).
 
 A publication is three things at once: a name its pages are served from, a look it designs
 itself, and an editorial line — whom it trusts and what it carries. The protocol fixes none of
@@ -127,7 +129,7 @@ Read against `src/publication/` (contracts), `src/press/actions` (the press),
   cannot list ended agreements, and no byline record is kept beyond the log's author field.
 - **PUBLICATION-13 — no payee exists.** There is no payment address, split, or royalty field
   anywhere in the contracts, the actions, or the CMS. This is the mirror of the author's gap, and
-  the author at least has a proposal (`rfc/RFC-002-payee-wallet.md`); the publication side has
+  the author at least has a proposal (`../../rfc/RFC-002-payee-wallet.md`); the publication side has
   nothing.
 
 ## Decisions not yet written up

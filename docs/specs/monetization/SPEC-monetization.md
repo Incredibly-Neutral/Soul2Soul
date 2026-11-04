@@ -1,6 +1,8 @@
 # MONETIZATION — three rails, and nothing in the middle
 
-Read against: `whitepaper/monetization-and-costs.md` (2026-10-29).
+Read against: `../../whitepaper/monetization-and-costs.md` (2026-10-29).
+
+No branch: no rail is built. The one proposal is [RFC-002](../../rfc/RFC-002-payee-wallet.md).
 
 The protocol lays three rails and no business model. A destination: every author account and every
 publication can name a wallet. A division: the agreement records how revenue splits, and the ledger
@@ -76,7 +78,7 @@ seen from each party's side, and GATES-7 is the condition rail seen from the gat
 ## Gaps without a proposal
 
 - **MONETIZATION-1 — no destination.** Neither an account nor a publication can name a wallet. The
-  author's half has a proposal (`rfc/RFC-002-payee-wallet.md`); the publication's half has none, and
+  author's half has a proposal (`../../rfc/RFC-002-payee-wallet.md`); the publication's half has none, and
   until both exist the rail has two missing ends.
 - **MONETIZATION-1, division — nothing records a split.** See AGREEMENT-2. This is the one gap here
   that no proposal addresses at all, and it is the one that decides whether "revenue divides" in the

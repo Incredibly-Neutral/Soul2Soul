@@ -53,5 +53,5 @@ re-render the work it is meant to remove.
   `removeWhitelistedAuthor` is unconditional and publication-only, an author who
   has been de-whitelisted can still retract on the ledger but cannot get the page
   rebuilt away. This decision is therefore satisfied in practice and not in
-  principle; the gap is recorded in `docs/protocol/author.md`, and the missing gate
+  principle; the gap is recorded in `docs/specs/author/SPEC-author.md`, and the missing gate
   belongs in `gates.md`.

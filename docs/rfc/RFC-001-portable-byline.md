@@ -10,7 +10,7 @@ Sources (dated records, `docs/research/`):
 [off-chain findings](../research/indexer-offchain-resolution-findings.md)
 
 The first two carry the design; the rest are working material whose conclusions are above.
-The deals-ledger reports stayed in `brain/` — that line of work is dropped, see *Rejected*.
+The deals-ledger reports were later moved to `docs/research/`; that line of work is dropped, see *Rejected*.
 
 ## Problem
 
@@ -108,7 +108,7 @@ author ownership. Same author-facing outcome, strictly more machinery. Deferred.
 ## Rejected
 
 - **A protocol-wide deals ledger with `getBylines(author)` / `authorDeals[author]` maintained
-  on-chain.** This was proposed (`brain/specs/RFC-protocol-wide-deals-ledger.md`); the research
+  on-chain.** This was proposed (`docs/rfc/RFC-005-protocol-wide-deals-ledger.md`); the research
   dropped it. It recreates the central store the protocol exists to avoid, and it makes the
   protocol's governance the curator of everyone's byline. The per-author module gives the same
   query with no shared state.

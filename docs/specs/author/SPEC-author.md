@@ -1,6 +1,8 @@
 # AUTHOR — the author's guarantees
 
-Read against: `whitepaper/author.md` (2026-10-29).
+Read against: `../../whitepaper/author.md` (2026-10-29).
+
+Branches: [overview](SPEC-author-overview.md) (the model, host matrix, reading order) · [identity](SPEC-author-identity.md) · [publishing](SPEC-author-publishing.md) · [shared](SPEC-author-shared.md) · [hosts](SPEC-author-hosts.md) · [cli](SPEC-author-cli.md) · [nvim](SPEC-author-nvim.md) · [vscode](SPEC-author-vscode.md) · [nvim-s2s](SPEC-nvim-s2s.md).
 
 An author is an account that signs manuscripts. Everything below is owed to that
 account, not to a person: the protocol never learns a legal name.
@@ -109,26 +111,26 @@ the ledger.
 # This implementation
 
 The prototype is a layer between these invariants and the code: it may do less
-(gaps) or more (additions). Recorded against `prototype/author.md`.
+(gaps) or more (additions). Recorded against `../../prototype/author.md`.
 
 ## Decisions
 
 - **ADR-001** — the author's account is a Safe on Base
-  → [adr/ADR-001-author-account-is-a-safe.md](../adr/ADR-001-author-account-is-a-safe.md)
+  → [adr/ADR-001-author-account-is-a-safe.md](../../adr/ADR-001-author-account-is-a-safe.md)
   Carries AUTHOR-5 and AUTHOR-6; the protocol's obligation reduces to never
   binding identity to a signing key.
 - **ADR-002** — revoking retracts on-chain first, then re-renders with a remove
-  directive → [adr/ADR-002-revoke-retracts-then-re-renders.md](../adr/ADR-002-revoke-retracts-then-re-renders.md)
+  directive → [adr/ADR-002-revoke-retracts-then-re-renders.md](../../adr/ADR-002-revoke-retracts-then-re-renders.md)
   Satisfies AUTHOR-3 in one command, both halves, author alone.
 
 ## Proposals
 
 - **RFC-001** — the portable byline (AUTHOR-9)
-  → [rfc/RFC-001-portable-byline.md](../rfc/RFC-001-portable-byline.md)
+  → [rfc/RFC-001-portable-byline.md](../../rfc/RFC-001-portable-byline.md)
   An author-owned records module on the account, holding per-work claim records, plus a
   derived anyone-can-index view. Ships the list and the reader path together.
 - **RFC-002** — a payee wallet on the account (AUTHOR-7)
-  → [rfc/RFC-002-payee-wallet.md](../rfc/RFC-002-payee-wallet.md)
+  → [rfc/RFC-002-payee-wallet.md](../../rfc/RFC-002-payee-wallet.md)
 
 ## Gaps without a proposal
 

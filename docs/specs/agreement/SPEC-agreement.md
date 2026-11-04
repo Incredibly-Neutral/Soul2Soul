@@ -1,6 +1,8 @@
 # AGREEMENT — a manuscript, two parties, and terms neither can rewrite
 
-Read against: `whitepaper/agreement.md` (2026-10-29).
+Read against: `../../whitepaper/agreement.md` (2026-10-29).
+
+Branch: [publication/SPEC-publication-agreements](../publication/SPEC-publication-agreements.md) — the contract as built (`S2SPublicationModuleV2`), offer/deal/retract, the version log.
 
 An agreement is the whole of what makes a manuscript published. It names one manuscript, it records
 an author and a publication, it carries the publication's permission and the division of any revenue,
@@ -98,7 +100,7 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV2.sol`,
   (PUBLICATION-10); this is the other case, and it is not.
 - **AGREEMENT-2 — no division exists.** There is no revenue field anywhere in the module, so an
   agreement records two of its three required facts. The proposal on the author side
-  (`rfc/RFC-002-payee-wallet.md`) covers only where an author is paid; nothing addresses the split.
+  (`../../rfc/RFC-002-payee-wallet.md`) covers only where an author is paid; nothing addresses the split.
 - **AGREEMENT-6 — ended is an event, not a state.** `Retracted` is emitted and the entry is removed
   from the deal and offer sets; nothing writes "ended" anywhere readable. The append-only version
   log survives, so the manuscript's history is queryable, but the agreement's ending is not — and a
