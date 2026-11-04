@@ -8,10 +8,11 @@ services:
     ports:
       - "2002:2002"
     environment:
-      - NODE_ENV=production
-      - PORT=2002
-      # Add your Alchemy API key here
-      - BASE_RPC_URL=https://lb.drpc.live/base/REDACTED
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-2002}
+      # DRPC (Base L2). The key comes from `.env` next to this file — never
+      # inline it here. Copy .env.example → .env first.
+      - BASE_RPC_URL=https://lb.drpc.live/base/${DRPC_API_KEY:?DRPC_API_KEY is not set — cp .env.example .env}
     restart: unless-stopped
     healthcheck:
       test:

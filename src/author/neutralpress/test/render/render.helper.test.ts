@@ -2,9 +2,10 @@
  * Unit tests for the pure render-pipeline helpers in src/render/render.helper.ts.
  *
  * Covered:
- *   - buildRpcEndpoints: deterministic DRPC/Alchemy RPC URL construction for
+ *   - buildRpcEndpoints: deterministic DRPC RPC URL construction for
  *     ETH_MAINNET (L1) and BASE (L2), driven by the plugin's `rpc_key` setting
- *     and the hardcoded Alchemy key — including the empty `rpc_key` path.
+ *     (the DRPC API key) — including the empty `rpc_key` path. No fallback
+ *     providers are wired in yet, so each chain carries exactly one endpoint.
  *   - pagePathFor: CID-aware render-path normalisation — digest compare against
  *     the publish root CID (v0/v1 share the multihash digest), spurious-prefix
  *     dropping for unparseable segments, bare `/ipfs/<cid>` fold, and
@@ -20,8 +21,7 @@ import { describe, it, expect } from 'vitest';
 import { buildRpcEndpoints, pagePathFor } from '../../src/render/render.helper';
 import { makeMain } from '../helpers/main';
 
-// Hardcoded in buildRpcEndpoints (not read from settings).
-const ALCHEMY_KEY = 'REDACTED';
+// buildRpcEndpoints reads the DRPC API key from settings; no literals.
 
 // Real CIDv0 strings whose multihash digests are distinct (verified via the
 // shared `parseCID`). Each v1 form shares its v0 digest — used to exercise the
@@ -32,19 +32,13 @@ const OTHER_CID_V0 = 'QmbWqxBEKC3P8tqsKc98xmWNzrzDtRLMiMPL8wBuTGsMnR';
 const OTHER_CID_V1 = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 
 describe('buildRpcEndpoints', () => {
-	it('builds deterministic L1/L2 endpoint pairs from the rpc_key setting', () => {
+	it('builds one DRPC endpoint per chain from the rpc_key setting', () => {
 		const main = makeMain();
 		main.oxo.ctrlr.plugin.settings.rpc_key = 'drpc_test';
 
 		expect(buildRpcEndpoints(main as any)).toEqual({
-			L1: [
-				'https://lb.drpc.live/ethereum/drpc_test',
-				`https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-			],
-			L2: [
-				'https://lb.drpc.live/base/drpc_test',
-				`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-			],
+			L1: ['https://lb.drpc.live/ethereum/drpc_test'],
+			L2: ['https://lb.drpc.live/base/drpc_test'],
 		});
 	});
 
@@ -57,28 +51,24 @@ describe('buildRpcEndpoints', () => {
 		expect(rpcs.L2[0]).toBe('https://lb.drpc.live/base/my-secret-key');
 	});
 
-	it('L1 vs L2 differ only in the DRPC network slug; Alchemy host mirrors the chain', () => {
+	it('L1 vs L2 differ only in the DRPC network slug, same key on both', () => {
 		const main = makeMain();
 		main.oxo.ctrlr.plugin.settings.rpc_key = 'k';
 		const { L1, L2 } = buildRpcEndpoints(main as any);
 
 		expect(L1[0]).toContain('/ethereum/');
 		expect(L2[0]).toContain('/base/');
-		expect(L1[1]).toContain('eth-mainnet.g.alchemy.com');
-		expect(L2[1]).toContain('base-mainnet.g.alchemy.com');
-		// Same key is reused across both chains.
-		expect(L1[1]).toBe(`https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`);
-		expect(L2[1]).toBe(`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`);
+		expect(L1).toHaveLength(1);
+		expect(L2).toHaveLength(1);
 	});
 
-	it('handles the empty rpc_key path without throwing (Alchemy still keyed)', () => {
+	it('handles the empty rpc_key path without throwing', () => {
 		const main = makeMain();
 		main.oxo.ctrlr.plugin.settings.rpc_key = '';
 
 		const rpcs = buildRpcEndpoints(main as any);
 		expect(rpcs.L1[0]).toBe('https://lb.drpc.live/ethereum/');
 		expect(rpcs.L2[0]).toBe('https://lb.drpc.live/base/');
-		expect(rpcs.L1[1]).toContain(`/v2/${ALCHEMY_KEY}`);
 	});
 });
 

@@ -15,11 +15,12 @@
  */
 import { Notice } from 'obsidian';
 import {
-	parseCID,
+	pagePathFor,
 	renderwithLitActions,
 	toPreviewLabel,
 	runFilecoinLeg,
 } from '@s2s/soul2soul-shared';
+import type { RenderRpcs } from '@s2s/soul2soul-shared';
 import type { IMainController } from '../main.ctrlr';
 import { ipfsFromSettings, kuboBaseUrl } from '../publication/filecoin';
 import { subdomainOf } from '../content/ens-tags';
@@ -30,44 +31,28 @@ export interface RemoveEntry {
 	replacedBy?: string;
 }
 
-/** Build the DRPC/Alchemy RPC endpoints for the render pipeline. */
-export function buildRpcEndpoints(main: IMainController): { L1: string[]; L2: string[] } {
+/**
+ * Build the DRPC RPC endpoints for the render pipeline.
+ *
+ * One endpoint per chain: the plugin's `rpc_key` is the DRPC API key, and the
+ * render pipeline's failover loop iterates whatever is in these arrays, so a
+ * single entry means "DRPC or nothing". Fallback providers (public RPCs,
+ * Alchemy) are deliberately not wired in yet — see shared's
+ * `buildFallbackRpcs`, which is the eventual home for this. Keeping the
+ * endpoint construction local for now avoids a shared-land change.
+ */
+export function buildRpcEndpoints(main: IMainController): RenderRpcs {
 	const rpcKey = main.oxo.ctrlr.plugin.settings.rpc_key;
-	const alchemyKey = 'REDACTED';
 	return {
-		L1: [
-			`https://lb.drpc.live/ethereum/${rpcKey}`,
-			`https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`,
-		],
-		L2: [
-			`https://lb.drpc.live/base/${rpcKey}`,
-			`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`,
-		],
+		L1: [`https://lb.drpc.live/ethereum/${rpcKey}`],
+		L2: [`https://lb.drpc.live/base/${rpcKey}`],
 	};
 }
 
-/**
- * Strip a leading `/ipfs/<cid>` segment from a render path when it matches the
- * publish's own root CID. The `.preview` subdomain gateway — and the `.link`
- * DNSLink gateway — serve the site root at the domain itself, so that prefix
- * 404s. CIDv0 and CIDv1 share the multihash digest, so a digest-wise compare
- * only removes a matching root; a bare `/ipfs/<cid>` folds to `/`.
- */
-export function pagePathFor(resPath: string, cid: string): string {
-	const rest = resPath.replace(/^\/ipfs\/[^/]+/, '');
-	if (rest === resPath) return resPath; // no leading /ipfs/<cid> — leave unchanged
-	let matchesOwnCid = true;
-	try {
-		const seg = resPath.match(/^\/ipfs\/([^/]+)/)?.[1] ?? '';
-		const a = parseCID(seg).digest;
-		const b = parseCID(cid).digest;
-		matchesOwnCid = a.length === b.length && a.every((byte, i) => byte === b[i]);
-	} catch {
-		/* unparseable segment — treat it as the spurious prefix */
-	}
-	return matchesOwnCid ? (rest.length ? rest : '/') : resPath;
-}
-
+// `pagePathFor` (CID-aware render-path normalisation) lives in shared now —
+// `shared/src/authoring/links.ts`. Re-exported so existing importers of this
+// module keep working.
+export { pagePathFor };
 /**
  * Run the full render pipeline (prep → render → EVM update) for a publication.
  *

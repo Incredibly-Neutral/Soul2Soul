@@ -25,6 +25,10 @@ cache-solidity-files-cache.json
 deployed-*.json
 deployed-resolver-*.json
 sessions/
+# Filecoin session keys — cleartext private key, local only, never committed.
+# Created by src/press/scripts/filecoin/setup-session-key.ts and copied into
+# the plugins/safe-app by hand.
+session-key.json
 # Local IDE/editor
 .idea/
 .vscode/
