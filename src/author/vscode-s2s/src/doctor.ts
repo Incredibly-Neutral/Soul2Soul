@@ -132,10 +132,13 @@ export async function runDoctor(state: State): Promise<void> {
       if (typeof env === 'object' && env !== null && !Array.isArray(env)) {
         const record = env as Record<string, unknown>;
         lines.push(
-          `  user env:    ${String(record['user'])} (${record['userExists'] === true ? 'present' : 'missing'})`,
+          `  user env:    ${typeof record['user'] === 'string' ? record['user'] : '(unknown)'} (${record['userExists'] === true ? 'present' : 'missing'})`,
         );
         lines.push(`  project env: ${String(record['project'] ?? '(none)')}`);
       }
+    } else if (parsed.kind === 'result') {
+      // A result we could not use is not the same thing as a parse failure; say which.
+      lines.push('', 'config file: unreadable — the result carried no `path`');
     } else {
       // Same rule as the version block: never print nothing and leave the reason unstated.
       lines.push('', `config file: unreadable — ${parsed.message}`);
@@ -157,6 +160,8 @@ export async function runDoctor(state: State): Promise<void> {
         `config keys set (${names.length}, names only):`,
         ...names.map((name) => `  ${name}`),
       );
+    } else if (parsed.kind === 'result') {
+      lines.push('', 'config keys: unreadable — the result carried no `config` map');
     } else {
       lines.push('', `config keys: unreadable — ${parsed.message}`);
     }

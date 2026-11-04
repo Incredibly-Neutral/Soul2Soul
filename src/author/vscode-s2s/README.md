@@ -8,7 +8,8 @@ reads the one JSON document on stdout, and formats it. It never parses your mark
 frontmatter, never derives a CID, never resolves a publication, never reads `s2s` config. Every
 domain question goes to the binary, and `--json` is on every invocation.
 
-Spec: [`brain/specs/author/SPEC-author-vscode.md`](../../../brain/specs/author/SPEC-author-vscode.md).
+Spec: `brain/specs/author/SPEC-author-vscode.md` in the monorepo (machine-local, not shipped in the
+`.vsix`).
 Binary contract: `SPEC-author-cli` §Binary API reference.
 
 ## Remote workspaces
