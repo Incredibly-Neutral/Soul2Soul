@@ -416,8 +416,39 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect(item.encryption).toBe(true);
     expect(item.body).toBe(CIPHER);
     expect(result.kuboCid).toBe('bafyfake');
-    // Frontmatter write-back happened on the temp note.
-    expect(readFileSync(path, 'utf8')).toContain('kubo_cid: bafyfake');
+    // Frontmatter write-back happened on the temp note: `cid` (renamed from
+    // `kubo_cid`), a creation_date, and a bare author address (no `did:ethr:`).
+    const written = readFileSync(path, 'utf8');
+    expect(written).toContain('cid: bafyfake');
+    expect(written).toMatch(/creation_date: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(written).toContain('author: "0x');
+    expect(written).not.toContain('did:ethr:');
+    expect(written).not.toContain('kubo_cid');
+  });
+
+  it('renames a legacy kubo_cid, backfills creation_date and strips the did from the author', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'genesis: "0x' + 'cd'.repeat(32) + '"',
+      'kubo_cid: bafyplain',
+      'modified_date: 2026-01-02T03:04:05',
+      'author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55',
+    ]);
+    const { ctx } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    const written = readFileSync(path, 'utf8');
+    // one CID key, the new name
+    expect(written).toContain('cid: bafy');
+    expect(written).not.toContain('kubo_cid');
+    // creation_date falls back to the modified date the note already had, not to now
+    expect(written).toContain('creation_date: 2026-01-02T03:04:05');
+    expect(written).not.toContain(
+      'creation_date: 2026-01-02T03:04:05\nmodified_date: 2026-01-02T03:04:05',
+    );
+    // the author keeps its address, loses only the prefix
+    expect(written).toContain('author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"');
+    expect(written).not.toContain('did:ethr:');
   });
 
   it('uploads the body unchanged for a note without the flag', async () => {
@@ -460,7 +491,8 @@ describe('authorWrite honors frontmatter encryption', () => {
       'kubo_cid: bafyprevious',
     ]);
     const { ctx, addToKubo } = fakeCtx({
-      fetchFromKubo: () => Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
+      fetchFromKubo: () =>
+        Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
     });
     await expect(authorWrite(ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(
       /would publish the body in the clear/,
@@ -477,7 +509,8 @@ describe('authorWrite honors frontmatter encryption', () => {
       'kubo_cid: bafyprevious',
     ]);
     const { ctx, addToKubo } = fakeCtx({
-      fetchFromKubo: () => Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
+      fetchFromKubo: () =>
+        Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
     });
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await authorWrite(ctx, path, 'test.soul2soul.eth', { ...opts, allowPlaintext: true });
@@ -532,7 +565,7 @@ describe('authorWrite honors frontmatter encryption', () => {
     const { ctx, addToKubo } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await expect(authorWrite(ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(
-      /no recorded `kubo_cid`/,
+      /no recorded `cid`/,
     );
     expect(addToKubo).not.toHaveBeenCalled();
   });
@@ -588,7 +621,7 @@ describe('authorWrite honors frontmatter encryption', () => {
       fetchFromKubo: () => Promise.reject(new Error('Failed to fetch from IPFS: 404 Not Found')),
     });
     await expect(authorWrite(stale.ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(
-      /does not resolve .*404.*Fix or remove the stale `kubo_cid`/,
+      /does not resolve .*404.*Fix or remove the stale `cid`/,
     );
 
     const down = fakeCtx({ fetchFromKubo: () => Promise.reject(new Error('fetch failed')) });
@@ -620,7 +653,6 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect(addToKubo).not.toHaveBeenCalled();
     expect(uploaded).toEqual([]);
   });
-
 
   it('does no downgrade read for a first publish (no genesis / no recorded CID)', async () => {
     const path = noteWith(['title: Hello', 'encryption: false']);
@@ -667,7 +699,9 @@ describe('offerContent verifies the stored item', () => {
       'genesis: "' + genesis + '"',
       'kubo_cid: bafyplaintext',
     ]);
-    const { ctx } = fakeCtx(() => Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }));
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }),
+    );
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /declares `encryption: false`/,
     );
@@ -730,9 +764,9 @@ describe('offerContent verifies the stored item', () => {
         ? Promise.resolve({ encryption: false, body: '{"title":"Hello"}' })
         : Promise.resolve({ encryption: true, body: cipher }),
     );
-    await expect(
-      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
-    ).rejects.toThrow(/refusing to offer .*bafy--cid-plain/);
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain')).rejects.toThrow(
+      /refusing to offer .*bafy--cid-plain/,
+    );
     expect(fetchFromKubo).toHaveBeenCalledWith('bafy--cid-plain');
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -744,7 +778,9 @@ describe('offerContent verifies the stored item', () => {
       'genesis: "' + genesis + '"',
       'kubo_cid: bafyplaintext',
     ]);
-    const { ctx } = fakeCtx(() => Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }));
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: false, body: '{"title":"Hello"}' }),
+    );
     await expect(
       offerContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
     ).rejects.toThrow(/declares `encryption: false`/);
@@ -777,9 +813,9 @@ describe('offerContent verifies the stored item', () => {
     const { ctx } = fakeCtx(() =>
       Promise.resolve({ encryption: true, body: JSON.stringify('gAAAAABold') }),
     );
-    await expect(
-      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
-    ).rejects.toThrow(/would publish the body in the clear/);
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain')).rejects.toThrow(
+      /would publish the body in the clear/,
+    );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
 
@@ -806,9 +842,9 @@ describe('offerContent verifies the stored item', () => {
       'kubo_cid: bafyencrypted',
     ]);
     const { ctx } = fakeCtx(() => Promise.reject(new Error('gateway timeout')));
-    await expect(
-      offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain'),
-    ).rejects.toThrow(/could not read the previous revision bafyencrypted/);
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain')).rejects.toThrow(
+      /could not read the previous revision bafyencrypted/,
+    );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
 
@@ -856,7 +892,17 @@ describe('frontmatter `encryption` coercion (Boolean())', () => {
   }
 
   it('encrypts for anything truthy, including quoted "false", no and off', async () => {
-    for (const value of ['true', '"true"', '"false"', 'no', 'off', 'yes', '1', 'encrypted', 'TRUE']) {
+    for (const value of [
+      'true',
+      '"true"',
+      '"false"',
+      'no',
+      'off',
+      'yes',
+      '1',
+      'encrypted',
+      'TRUE',
+    ]) {
       expect(await flagFor(value), `encryption: ${value}`).toBe(true);
     }
   });

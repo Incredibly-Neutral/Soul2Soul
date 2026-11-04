@@ -4,7 +4,7 @@
 // Default: sign + upload the note (Kubo + pins, frontmatter write-back) and then
 // append it on-chain with `makeOffer` — i.e. `upload` and `offer` in one pass.
 // This is what "offer this note" means: the bytes the chain anchors are the
-// bytes in the note right now, never a stale `kubo_cid` left by an earlier
+// bytes in the note right now, never a stale `cid` left by an earlier
 // upload.
 //
 // `--cid <kuboCid>` keeps the split-out half: anchor an ALREADY-uploaded CID

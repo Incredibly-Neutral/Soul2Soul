@@ -24,29 +24,49 @@ import { Document } from 'yaml';
  * That staleness is only *detectable* by the binary (it owns the file), which
  * is why the value lives here rather than in an editor's session state.
  */
-export const KUBO_CID_KEY = 'kubo_cid';
+export const CID_KEY = 'cid';
 
 /**
- * Resolve the content CID for `offer`: an explicit `--cid` wins, else the
- * `kubo_cid` written back by the last `upload`. Returns `undefined` when
- * neither is available (the caller turns that into a usage error).
+ * Pre-rename key, still read so notes written before the rename keep resolving
+ * (and so an old note's recorded CID can still be checked for encryption).
+ * Never written: the write-back renames it to `CID_KEY` on the next upload.
+ */
+export const LEGACY_CID_KEY = 'kubo_cid';
+
+/**
+ * Resolve the content CID for `offer`: an explicit `--cid` wins, else the `cid`
+ * written back by the last `upload` (or its pre-rename `kubo_cid`). Returns
+ * `undefined` when neither is available (the caller turns that into a usage
+ * error).
  */
 export function resolveKuboCid(
   explicit: string | undefined,
   frontmatter: Record<string, unknown>,
 ): string | undefined {
   if (explicit) return explicit;
-  const stored = frontmatter[KUBO_CID_KEY];
-  if (typeof stored !== 'string') return undefined;
-  const trimmed = stored.trim();
-  return trimmed === '' ? undefined : trimmed;
+  for (const key of [CID_KEY, LEGACY_CID_KEY]) {
+    const stored = frontmatter[key];
+    if (typeof stored !== 'string') continue;
+    const trimmed = stored.trim();
+    if (trimmed !== '') return trimmed;
+  }
+  return undefined;
 }
 
-export function upsertFrontmatter(raw: string, updates: Record<string, string>): string {
+export function upsertFrontmatter(
+  raw: string,
+  updates: Record<string, string>,
+  remove: readonly string[] = [],
+): string {
   const { frontmatter, body } = extractFrontmatter(raw);
   const doc = new Document(frontmatter);
   for (const [key, value] of Object.entries(updates)) {
     doc.set(key, value);
+  }
+  // Removing a renamed key is what keeps one CID per note: two keys holding
+  // different revisions is the state in which `offer` anchors the wrong bytes.
+  for (const key of remove) {
+    doc.delete(key);
   }
   const yamlText = doc.toString().trimEnd();
   return `---\n${yamlText}\n---\n${body}`;

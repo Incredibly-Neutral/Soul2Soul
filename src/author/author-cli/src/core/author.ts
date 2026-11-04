@@ -27,7 +27,7 @@ import type { ParsedNote } from '@s2s/soul2soul-shared';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
-import { KUBO_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
+import { CID_KEY, LEGACY_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
 import { UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
@@ -246,17 +246,36 @@ export async function authorWrite(
     ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash})`);
   }
 
-  // Frontmatter write-back: genesis+author on first publish; modified_date and
-  // the last upload's CID always (the CID is what `offer` offers on-chain).
+  // Frontmatter write-back: genesis+author+creation_date on first publish;
+  // modified_date and the last upload's CID always (the CID is what `offer`
+  // offers on-chain). The author is written as a bare address — the DID form
+  // (`did:ethr:0x…`) is the manuscript's, not the note's.
+  const modified = new Date().toISOString().slice(0, 19);
   const updates: Record<string, string> = {
-    modified_date: new Date().toISOString().slice(0, 19),
-    [KUBO_CID_KEY]: kuboCid,
+    modified_date: modified,
+    [CID_KEY]: kuboCid,
   };
   if (!parsed.genesis) {
     updates.genesis = objectId;
-    updates.author = signedItem.public.author;
+    updates.author = author.address;
   }
-  const frontmatterWritten = writeNoteFrontmatter(notePath, updates);
+  // The note may predate `creation_date`: neutralpress fills it on save, the CLI
+  // never did. There is no way to recover the real first-write time from the
+  // file, so an existing note is stamped with the modified time it already had
+  // (a lower bound on how long it has existed) rather than with `now`.
+  if (!nonEmptyString(parsed.frontmatter['creation_date'])) {
+    const declaredModified = nonEmptyString(parsed.frontmatter['modified_date']);
+    updates.creation_date = declaredModified ?? modified;
+  }
+  // Format migration: a `did:ethr:` author is rewritten to its bare address,
+  // whatever address it is (this is a spelling change, not a re-attribution).
+  // Never on the first publish, where the genesis author above is authoritative
+  // and a stale declared one would otherwise win.
+  const declaredAuthor = nonEmptyString(parsed.frontmatter['author']);
+  if (parsed.genesis && declaredAuthor !== undefined && /^did:ethr:/i.test(declaredAuthor)) {
+    updates.author = declaredAuthor.replace(/^did:ethr:/i, '');
+  }
+  const frontmatterWritten = writeNoteFrontmatter(notePath, updates, [LEGACY_CID_KEY]);
 
   // Durability — real upload/publish only (never preview-only renders).
   if (opts.publish) {
@@ -323,7 +342,7 @@ export async function offerContent(
   const kuboCid = resolveKuboCid(kuboCidFlag, parsed.frontmatter);
   if (!kuboCid) {
     throw new UsageError(
-      `cannot offer ${notePath}: no content CID (no \`--cid\` given and no \`${KUBO_CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
+      `cannot offer ${notePath}: no content CID (no \`--cid\` given and no \`${CID_KEY}\` in the frontmatter). Run \`s2s author upload\` first, or pass --cid.`,
     );
   }
 
@@ -419,8 +438,8 @@ async function assertStoredItemEncrypted(
  *
  * Everything that prevents the check from happening FAILS CLOSED, and the
  * failure says which of the three situations it is: no recorded CID (least is
- * known — a note with an identity but no `kubo_cid` can hide an encrypted
- * revision), a CID that does not resolve (a stale/hand-edited `kubo_cid`), or a
+ * known — a note with an identity but no `cid` can hide an encrypted
+ * revision), a CID that does not resolve (a stale/hand-edited `cid`), or a
  * gateway that is unreachable/slow. `fetchFromKubo` is an ordinary HTTPS call to
  * `ctx.config.kuboGateway` (repo default `ipfs.transport-union.dev`) bounded by
  * the shared 60s `MFS_TIMEOUTS.cp` — that ceiling is on the now-blocking
@@ -448,15 +467,14 @@ async function guardEncryptionDowngrade(
   const identity = parsed.genesis ?? parsed.contentId;
   if (typeof identity !== 'string' || identity.trim() === '') return;
 
-  const recordedCid = parsed.frontmatter[KUBO_CID_KEY];
-  const previousCid = typeof recordedCid === 'string' ? recordedCid.trim() : '';
+  const previousCid = resolveKuboCid(undefined, parsed.frontmatter) ?? '';
   if (previousCid === '') {
     // Least is known in this state, so it is not a warning: a note with an
     // identity but no recorded CID can hide an encrypted previous revision, and
     // the warning channel is stderr, which the plugin never renders on a
     // success envelope.
     throw new UsageError(
-      `refusing to publish ${notePath}: identity ${identity} has no recorded \`${KUBO_CID_KEY}\`, so the previous revision cannot be checked for encryption and this note has \`encryption: false\`. Re-add the CID, restore \`encryption: true\`, or pass --allow-plaintext to publish a plaintext revision anyway.`,
+      `refusing to publish ${notePath}: identity ${identity} has no recorded \`${CID_KEY}\`, so the previous revision cannot be checked for encryption and this note has \`encryption: false\`. Re-add the CID, restore \`encryption: true\`, or pass --allow-plaintext to publish a plaintext revision anyway.`,
     );
   }
 
@@ -498,8 +516,8 @@ function describePreviousReadFailure(err: unknown): { reason: string; remedy: st
   const status = /Failed to fetch from IPFS:\s*(\d{3})\b/.exec(message)?.[1] ?? '';
   if (status.startsWith('4')) {
     return {
-      reason: `the recorded \`${KUBO_CID_KEY}\` does not resolve (${message})`,
-      remedy: `Fix or remove the stale \`${KUBO_CID_KEY}\` in the frontmatter, then re-run.`,
+      reason: `the recorded \`${CID_KEY}\` does not resolve (${message})`,
+      remedy: `Fix or remove the stale \`${CID_KEY}\` in the frontmatter, then re-run.`,
     };
   }
   if (/abort|timeout/i.test(message)) {
@@ -767,10 +785,21 @@ function warnOnAuthorMismatch(
   );
 }
 
-function writeNoteFrontmatter(notePath: string, updates: Record<string, string>): boolean {
+function writeNoteFrontmatter(
+  notePath: string,
+  updates: Record<string, string>,
+  remove: readonly string[] = [],
+): boolean {
   const raw = readFileSync(notePath, 'utf8');
-  const next = upsertFrontmatter(raw, updates);
+  const next = upsertFrontmatter(raw, updates, remove);
   if (next === raw) return false;
   writeFileSync(notePath, next, 'utf8');
   return true;
+}
+
+/** A trimmed, non-empty string from raw frontmatter; anything else is absent. */
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
