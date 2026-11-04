@@ -23,6 +23,24 @@ export class UsageError extends CliError {
 }
 
 /**
+ * A Lit action that ran and failed (exit code 1), carrying the action's trace.
+ *
+ * The trace is the only record of how far the action got — which MFS step, which
+ * RPC, which request — and the update action's root-CID write is the LAST step,
+ * so "the site did not change" and "the run died before the write" look
+ * identical from the outside without it. Printed in `--json` as `trace`.
+ */
+export class ActionError extends CliError {
+  readonly trace: unknown[];
+
+  constructor(message: string, trace: unknown[]) {
+    super(message, 1);
+    this.name = 'ActionError';
+    this.trace = trace;
+  }
+}
+
+/**
  * Flatten an error and its `cause` chain into one line.
  *
  * Node's `fetch` reports every transport failure — DNS, TLS, socket reset, and

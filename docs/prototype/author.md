@@ -11,7 +11,7 @@ author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # The author
 
-In the white paper, the author is one of three parties to publishing, beside the publication and the press. The protocol exists so that disagreeing with a publication doesn't cost an author their work. The author signs every manuscript and encrypts it to the press's key, offers it rather than handing it over, and can end any agreement alone and at once. Behind every byline is a public account whose keys can be replaced, with a list of published work that only the author curates, so the byline outlives any publication. [White paper, section 2: The author](#)
+In the white paper, the author is one of three parties to publishing, beside the publication and the press. The protocol exists so that disagreeing with a publication doesn't cost an author their work. The author signs every manuscript and encrypts it to the press's key, offers it rather than handing it over, and can end any agreement alone and at once. Behind every byline is a public account whose keys can be replaced, with a list of published work that only the author curates, so the byline outlives any publication. [White paper, section 2: The author](https://polyphony.eth.link/author)
 
 ## Account: a Safe on Base
 

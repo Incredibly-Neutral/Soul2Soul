@@ -19,7 +19,7 @@
 // Read-only: no transactions, no Lit session, no writes to any contract or
 // gateway beyond GET-style content probes.
 //
-// Run:  cd protocol && npx tsx scripts/lit/probe-archive.ts
+// Run:  (repo root) npx tsx src/press/scripts/lit/probe-archive.ts
 
 import { config as loadEnv } from 'dotenv';
 import { createPublicClient, http, namehash } from 'viem';

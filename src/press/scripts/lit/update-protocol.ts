@@ -13,7 +13,10 @@ import { privateKeyToAccount } from "viem/accounts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: '../.env' });
+// Repo root is four levels up from <root>/src/press/scripts/lit; resolve the
+// env from __dirname so the CWD cannot decide whether it loads.
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') }); // <root>/src/press/.env
 
 // ── ABIs ────────────────────────────────────────────────────────────────────
 
@@ -209,7 +212,7 @@ export const cleanupStaleKeys = async (account: any) => {
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 const main = async () => {
-  const config = fs.readFileSync('./press/scripts/lit/config.json', 'utf-8');
+  const config = fs.readFileSync(path.join(__dirname, 'config.json'), 'utf-8');
   const group = JSON.parse(config).groups.find((g: any) => g.name === 's2s');
 
   if (!group) throw new Error("Group 's2s' not found in config.json");

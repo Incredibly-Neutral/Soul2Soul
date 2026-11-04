@@ -2,7 +2,7 @@
 // CIDs from ipfs.transport-union.dev into a local staging dir for the
 // off-chain archive rebuild. Read-only against the gateway (no writes on-chain).
 //
-// Run:  cd protocol && npx tsx scripts/lit/fetch-items.ts [outDir]
+// Run:  (repo root) npx tsx src/press/scripts/lit/fetch-items.ts [outDir]
 
 import { config as loadEnv } from 'dotenv';
 import { createPublicClient, http, namehash } from 'viem';

@@ -8,7 +8,7 @@ import path from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: '../.env' });
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env') }); // repo root
 
 interface GroupConfig {
   groups: {

@@ -7,7 +7,7 @@
 
 import type { CommandSpec } from '../lib/command';
 import { revokeContent } from '../core/author';
-import { requireNotePath, resolvePublication } from './helpers';
+import { requireNotePath, resolvePublication, rootTxLine } from './helpers';
 
 export const revoke: CommandSpec = {
   name: 'revoke',
@@ -33,6 +33,8 @@ export const revoke: CommandSpec = {
               cid: result.render.cid,
               path: result.render.path,
               previewUrl: result.render.previewUrl,
+              rootTx: result.render.rootTx,
+              trace: result.render.trace,
             }
           : undefined,
       },
@@ -45,6 +47,7 @@ export const revoke: CommandSpec = {
           ? [
               `  re-render   : ${result.render.cid}`,
               `  removed     : ${result.render.path}`,
+              rootTxLine(result.render),
             ].join('\n')
           : '  render      : (none)',
       ].join('\n'),

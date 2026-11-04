@@ -10,11 +10,11 @@
  * is unchanged — it never talks to the Lit API (no LIT_ACCOUNT_KEY, no usage
  * key). We only:
  *
- *   1. build press/actions/dist/render-dev/main.js via build-actions.cjs
+ *   1. build src/press/actions/dist/render-dev/main.js via build-actions.cjs
  *   2. compactAction(code)
  *   3. ipfs.uploadToPinata(_action, 'render-dev')   (IPFS_URL / PINATA_JWT /
  *      PINATA_GATEWAY env)
- *   4. print + record the CID in press/scripts/lit/dev-actions.json
+ *   4. print + record the CID in src/press/scripts/lit/dev-actions.json
  *
  * Dry-run: LIT_DRY_RUN=1 or --dry-run compacts the built action and prints
  * `dry-run: would upload` instead of uploading, then stops.
@@ -30,12 +30,12 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename); // <root>/press/scripts/lit
+const __dirname = path.dirname(__filename); // <root>/src/press/scripts/lit
 
-// Repo root (three levels up from press/scripts/lit)
+// Repo root (four levels up from src/press/scripts/lit).
 const root = path.resolve(__dirname, '../../../..');
 
-// Load env from repo root .env (also fall back to protocol/.env).
+// Load env from repo root .env (also fall back to press/.env).
 dotenv.config({ path: path.join(root, '.env') });
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
@@ -48,12 +48,12 @@ async function main(): Promise<void> {
 
   // 1. Build all actions (the render-dev entry is wired into build-actions.cjs).
   console.log('→ building actions (render-dev entry) ...');
-  execSync('node press/scripts/lit/build-actions.cjs', {
+  execSync(`node "${path.join(__dirname, 'build-actions.cjs')}"`, {
     cwd: root,
     stdio: 'inherit',
   });
 
-  const actionPath = path.join(root, 'press/actions/dist/render-dev/main.js');
+  const actionPath = path.resolve(__dirname, '../../actions/dist', ACTION_NAME, 'main.js');
   if (!fs.existsSync(actionPath)) {
     throw new Error(`Built action not found: ${actionPath}`);
   }
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
 
   if (dryRun) {
     console.log(`dry-run: would upload ${ACTION_NAME} (${_action.length} chars compact) to Pinata`);
-    console.log('dry-run: would record CID in press/scripts/lit/dev-actions.json');
+    console.log('dry-run: would record CID in src/press/scripts/lit/dev-actions.json');
     console.log('dry-run: STOPPING before upload.');
     return;
   }

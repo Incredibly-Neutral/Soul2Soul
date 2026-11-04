@@ -7,7 +7,7 @@
  * 0x24936f87442673B7c057BF3f5dCCB726baF20c6B). There is no account API key.
  *
  * Flow:
- *   1. build press/actions/dist/<action>/main.js, compact, compute CID,
+ *   1. build src/press/actions/dist/<action>/main.js, compact, compute CID,
  *      upload to Pinata (unchanged — no auth)
  *   2. build + propose ONE Safe batch against the EXISTING group id from
  *      config.json:
@@ -73,7 +73,9 @@ if (!actionName || !validActions.includes(actionName)) {
 
 const isDryRun = () => process.env.LIT_DRY_RUN === '1' || process.argv.includes('--dry-run');
 
-const actionPath = `./press/actions/dist/${actionName}/main.js`;
+// Anchored to this file, not the CWD: the tree sits under src/ and run order
+// must not decide where the build output is found.
+const actionPath = path.resolve(__dirname, '../../actions/dist', actionName, 'main.js');
 const code = fs.readFileSync(actionPath, 'utf-8');
 
 const ipfs = new S2SIPFSMethods(

@@ -4,8 +4,8 @@ post_type: chapter
 position: 1
 tags:
   - polyphony--s2s
-modified_date: 2026-10-29T11:59:19
-kubo_cid: QmNcTXG2R1RoYY4YtsR67xoMZx3xtohnZfHqDJ8VrVyekK
+modified_date: 2026-11-03T14:20:50
+kubo_cid: QmVPJouX4yAuBWvMbba25uujQLqiHpFKdt1qyL11JRdjGN
 genesis: "0xc55d87a7b2d4c3725108e6107ba767cc19ed70db30ee53138600e485f289d3c3"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---

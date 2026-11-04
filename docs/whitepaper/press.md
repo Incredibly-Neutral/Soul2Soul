@@ -4,8 +4,8 @@ position: 7
 slug: press
 tags:
   - polyphony--s2s
-modified_date: 2026-10-29T11:56:20
-kubo_cid: QmdRaE3M8fbTfXuZYujHdnqG5cyxT2N72CauCUVVpSyvSa
+modified_date: 2026-11-02T22:01:27
+kubo_cid: QmUsBiu4BECKUbPBFknSqt3cNTaDukzQWYegVp26Q8ZDQA
 genesis: "0x41d747c81665cd9c85c6424f544035beeb49799721fec4c9bc8f16478d082505"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---

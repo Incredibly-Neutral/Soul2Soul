@@ -11,7 +11,7 @@ author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # The publication
 
-In the white paper, a publication is a name, a look and an editorial line: which authors it works with, and which manuscripts it publishes. It is the party that gives writing a home and an audience, and the protocol makes its decisions public. It sets its own governance, and every decision, from trusting an author to changing the design, is an act on the ledger. Its name points only at sites the press has built from the agreements in force, so an author's ending of an agreement is visible to readers. [White paper, section 3: The publication](#)
+In the white paper, a publication is a name, a look and an editorial line: which authors it works with, and which manuscripts it publishes. It is the party that gives writing a home and an audience, and the protocol makes its decisions public. It sets its own governance, and every decision, from trusting an author to changing the design, is an act on the ledger. Its name points only at sites the press has built from the agreements in force, so an author's ending of an agreement is visible to readers. [White paper, section 3: The publication](https://polyphony.eth.link/publication)
 
 A publication in Soul2Soul is a Safe. Safe's contracts are in wide use: together they held some $27 billion in assets in mid-2026. A publication can arrange itself the way its people work, with one owner or several, and a threshold that says how many must agree. Every decision is a transaction the owners sign, so how a publication governs itself is public.
 

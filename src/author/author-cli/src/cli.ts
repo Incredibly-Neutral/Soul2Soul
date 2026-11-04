@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { BOOLEAN_FLAGS, parseArgs } from './lib/args';
-import { CliError, UsageError, describeError } from './lib/errors';
+import { CliError, UsageError, ActionError, describeError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
 import { createOut } from './lib/out';
 import { loadConfig } from './core/config';
@@ -136,7 +136,22 @@ void main(process.argv.slice(2))
   })
   .catch((err: unknown) => {
     const isJson = process.argv.slice(2).includes('--json');
-    if (err instanceof CliError) {
+    if (err instanceof ActionError) {
+      // The action's own trace, not a re-worded summary: the failure point is
+      // (almost always) the LAST line before the error, and the root-CID write
+      // is the last step of the update action.
+      if (isJson) {
+        process.stdout.write(
+          `${JSON.stringify({ ok: false, error: err.message, trace: err.trace })}\n`,
+        );
+      } else {
+        process.stderr.write(`error: ${err.message}\n`);
+        for (const line of err.trace) {
+          process.stderr.write(`  ${typeof line === 'string' ? line : JSON.stringify(line)}\n`);
+        }
+      }
+      process.exitCode = err.exitCode;
+    } else if (err instanceof CliError) {
       if (isJson) {
         process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
       } else {

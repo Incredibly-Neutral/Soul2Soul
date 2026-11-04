@@ -58,7 +58,8 @@ const actionName = process.argv[2] ?? 'updateEvm'; // backward-compatible defaul
 
 const isDryRun = () => process.env.LIT_DRY_RUN === '1' || process.argv.includes('--dry-run');
 
-const actionPath = `./press/actions/dist/${actionName}/main.js`;
+// Anchored to this file, not the CWD (the tree sits under src/).
+const actionPath = path.resolve(__dirname, '../../actions/dist', actionName, 'main.js');
 const code = fs.readFileSync(actionPath, 'utf-8');
 
 const ipfs = new S2SIPFSMethods(

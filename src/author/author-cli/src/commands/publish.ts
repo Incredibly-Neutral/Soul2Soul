@@ -7,7 +7,7 @@
 
 import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
-import { requireNotePath, resolvePublication } from './helpers';
+import { requireNotePath, resolvePublication, rootTxLine } from './helpers';
 import { flagBool } from '../lib/args';
 
 export const publish: CommandSpec = {
@@ -42,6 +42,8 @@ export const publish: CommandSpec = {
               path: result.render.path,
               previewUrl: result.render.previewUrl,
               prodUrl: result.render.prodUrl,
+              rootTx: result.render.rootTx,
+              trace: result.render.trace,
             }
           : undefined,
       },
@@ -56,6 +58,7 @@ export const publish: CommandSpec = {
               `  render      : ${result.render.cid}`,
               `  path        : ${result.render.path}`,
               `  live        : ${result.render.prodUrl ?? result.render.previewUrl}`,
+              rootTxLine(result.render),
             ].join('\n')
           : '  render      : (none)',
       ].join('\n'),

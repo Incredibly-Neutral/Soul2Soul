@@ -12,7 +12,7 @@
 //   --push  uploads the archive to transport-union (Kubo add) and triple-pins
 //           it to Pinata + Filebase, then prints the final CID + pointer value.
 //
-// Run:  cd protocol && npx tsx scripts/lit/rebuild-archive.ts [--push]
+// Run:  (repo root) npx tsx src/press/scripts/lit/rebuild-archive.ts [--push]
 
 import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'url';

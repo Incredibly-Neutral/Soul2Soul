@@ -11,7 +11,7 @@ author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # The manuscript
 
-In the white paper, the manuscript is what an author offers a publication and what the press turns into pages. The author signs it and encrypts it to the press's key, leaving a few details, such as its tags, public so a publication can sort what it is offered. A revision is a new signed version, and every version is recorded. Since no one but the author can change it, a page that points back to its manuscript shows exactly what the author wrote. [White paper, section 2: The author](#)
+In the white paper, the manuscript is what an author offers a publication and what the press turns into pages. The author signs it and encrypts it to the press's key, leaving a few details, such as its tags, public so a publication can sort what it is offered. A revision is a new signed version, and every version is recorded. Since no one but the author can change it, a page that points back to its manuscript shows exactly what the author wrote. [White paper, section 2: The manuscript](https://polyphony.eth.link/manuscript)
 
 In Soul2Soul, a manuscript is a JSON object with a public part, which anyone can read, and a body, which the author can encrypt. The author signs the public part, and the object is stored at its content address. The format is shared: every writing tool produces it, every publication reads it, and the renderer builds pages from it, so nothing about a manuscript depends on the tool that made it.
 

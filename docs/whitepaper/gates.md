@@ -4,8 +4,8 @@ slug: gates
 position: 6
 tags:
   - polyphony--s2s
-modified_date: 2026-11-01T14:02:50
-kubo_cid: QmZWzUwGPE5NyTEYYhzbw1MLnXA1n1yUmyRYXJ67WcB4EQ
+modified_date: 2026-11-03T12:10:46
+kubo_cid: QmeBrCks7txppxUZTWZ3ftFcQHSoBmxCf1jVGmtKHJbyx5
 genesis: "0x32131c8187132fde3e11f1f0977ec783a9bdf085feb9f05d52bac1e32b5cc479"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
@@ -17,7 +17,7 @@ Two gates open a manuscript to people. The author can decrypt their own manuscri
 
 Two gates open it to the renderer, the part of the press that builds a publication's pages. The renderer decrypts a manuscript only while an agreement covering it is in force, and only the version the publication has approved. And it builds and publishes a site only when asked by someone with the right to ask: the author of a manuscript the site carries or has carried, a holder of the publication, or someone the holders have authorised. A request cannot put anything on the site, because the renderer builds only from the agreements in force.
 
-The last gate is for readers, and only when an agreement includes monetization (section 7). Whether a manuscript sits behind it, and for how long, is agreed by both parties along with the split, and holds for as long as the agreement does; what the gate asks of a reader, such as a payment or a membership, is the publication's choice (section 7). Neither party can change what they agreed alone: changing it means ending the agreement, which takes the manuscript off the site, and making a new one. While they hold, a reader gets the manuscript's text only when the check passes on the ledger. The check answers yes or no; it never holds the money.
+The last gate is for readers, and only when an agreement includes monetization [section 7](/monetization-and-costs). Whether a manuscript sits behind it, and for how long, is agreed by both parties along with the split, and holds for as long as the agreement does; what the gate asks of a reader, such as a payment or a membership, is the publication's choice [section 7](/monetization-and-costs). Neither party can change what they agreed alone: changing it means ending the agreement, which takes the manuscript off the site, and making a new one. While they hold, a reader gets the manuscript's text only when the check passes on the ledger. The check answers yes or no; it never holds the money.
 
 ### What the protocol guarantees about its gates
 

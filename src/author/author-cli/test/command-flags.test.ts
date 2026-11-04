@@ -98,16 +98,32 @@ describe('--allow-plaintext command wiring', () => {
     expect(uploadOpts().allowPlaintext).toBe(false);
   });
 
-  it('offer passes allowPlaintext: true only with the flag (and keeps the note path)', async () => {
+  it('offer uploads first and passes allowPlaintext through (no --cid)', async () => {
+    // `offer` uploads AND offers, so the core returns a tx hash here.
+    vi.mocked(authorWrite).mockResolvedValue({ ...RESULT, txHash: '0x' + '44'.repeat(32) });
     const withFlag = note();
     await offer.run(ctx, argsFor(withFlag, ['--allow-plaintext']));
-    expect(offerOpts().allowPlaintext).toBe(true);
-    expect(vi.mocked(offerContent).mock.calls[0]?.[1]).toBe(withFlag);
+    const call = vi.mocked(authorWrite).mock.calls[0];
+    expect(call?.[1]).toBe(withFlag);
+    // render stays off; the upload (and its pins) stays on
+    expect(call?.[3]).toMatchObject({ render: false, publish: true, offer: true });
+    expect(call?.[3].allowPlaintext).toBe(true);
+    expect(vi.mocked(offerContent)).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
-    const without = note();
-    await offer.run(ctx, argsFor(without));
-    expect(offerOpts().allowPlaintext).toBe(false);
+    vi.mocked(authorWrite).mockResolvedValue({ ...RESULT, txHash: '0x' + '44'.repeat(32) });
+    await offer.run(ctx, argsFor(note()));
+    expect(vi.mocked(authorWrite).mock.calls[0]?.[3].allowPlaintext).toBe(false);
+  });
+
+  it('offer --cid anchors the given CID without re-uploading', async () => {
+    const path = note();
+    await offer.run(ctx, argsFor(path, ['--cid', 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi']));
+    expect(vi.mocked(authorWrite)).not.toHaveBeenCalled();
+    expect(vi.mocked(offerContent).mock.calls[0]?.[1]).toBe(path);
+    expect(vi.mocked(offerContent).mock.calls[0]?.[3]).toBe(
+      'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+    );
   });
 
   it('preview and publish use the same flag-derived value', async () => {

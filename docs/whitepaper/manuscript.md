@@ -4,8 +4,8 @@ position: 3
 tags:
   - polyphony--s2s
 slug: manuscript
-modified_date: 2026-11-01T14:02:06
-kubo_cid: QmShHybWHoNYuhCis4G7B72Afu1oq6fsx5cRoJEdCVNfGi
+modified_date: 2026-11-03T12:55:20
+kubo_cid: QmRp7fqkdHYGmw7prKD2qonCBEj2CMjvsYWHa8LZn2d4ef
 genesis: "0xf956c3bddebbfc5e7ab8f02d7f3a358de034151973e5ec0771e44c4c3515deee"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---

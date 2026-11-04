@@ -4,14 +4,14 @@ position: 1
 slug: introduction
 tags:
   - about--s2s
-modified_date: 2026-10-30T13:55:13
-kubo_cid: QmX8dF4nW9eyrkN8ShMDSqQMAikiWvmQnEHwK3syhRx28H
+modified_date: 2026-11-02T18:59:55
+kubo_cid: QmRHcA1isW6ox4UjDrvqTxpSdxoBmU6deBYJUA3eMkN4La
 genesis: "0xe0f3f9face812e3da45375ee85d4876936bfa3b8c25032847b6e5b0e79de79f9"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
-# Soul2Soul
+# Introduction
 
-Soul2Soul is a prototype of Polyphony, a protocol for independent authors and collective publications. It is early alpha, built by Incredibly Neutral; work on it began early 2025. The white paper says what an implementation must guarantee, never how. What follows are the choices we made, the trade-offs we accepted, and where this implementation falls short.
+Soul2Soul is a prototype of Polyphony, a protocol for independent authors and collective publications. It is early alpha, built by Incredibly Neutral; work on it began early 2025. The [white paper](https://polyphony.eth.link) says what an implementation must guarantee, never how. What follows are the choices we made, the trade-offs we accepted, and where this implementation falls short.
 
 ## Ledger: Base, an Ethereum Layer 2
 
@@ -37,5 +37,5 @@ With ENS, the right to change a publication's record can belong to the press's k
 
 ## Code and licence
 
-The code is a monorepo on GitHub ([link]) under Apache-2.0. The white paper and these texts are under CC BY 4.0. Use them, fork them, build your own take on them.
+The code is a monorepo on [GitHub](https://github.com/Incredibly-Neutral/Soul2Soul) under Apache-2.0. The white paper and these texts are under CC BY 4.0. Use them, fork them, build your own take on them.
 

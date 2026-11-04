@@ -28,7 +28,7 @@ import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
 import { KUBO_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
-import { UsageError } from '../lib/errors';
+import { UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { assertCiphertext, buildEncryptFn, fetchStoredItem } from './encrypt';
@@ -40,6 +40,24 @@ import { PublicationService } from './service';
 // Shared result types
 // ===========================================================================
 
+/**
+ * The root-CID write (`batchSetRecords` on the ENS records module), extracted
+ * from the update action's trace. Whoever publishes needs to be able to tell
+ * "the site did not change because the write failed" from "the write landed on
+ * a node nobody resolves" — the action's trace is the only place that says.
+ */
+export interface RootTxOutcome {
+  /** Tx hash of the root-CID write, when the node returned one. */
+  hash?: string;
+  /** `evmWrite`'s verdict — a mined-but-reverted tx is `false`. */
+  success: boolean;
+  /** Receipt status (1 = landed, 0 = reverted), when a receipt was waited for. */
+  status?: number;
+  blockNumber?: number;
+  /** Send/revert error, when there is one. */
+  error?: string;
+}
+
 export interface RenderOutcome {
   cid: string;
   path: string;
@@ -49,6 +67,43 @@ export interface RenderOutcome {
   prodUrl: string | undefined;
   /** ipfs://<rootCid> gateway-agnostic link. */
   ipfsUrl: string;
+  /** Root-CID write outcome (absent on preview, which never writes on-chain). */
+  rootTx: RootTxOutcome | undefined;
+  /** Raw update-action trace: node list, previous root, new root, write result. */
+  trace: unknown[];
+}
+
+/**
+ * Pull the root-CID write outcome out of the update action's trace.
+ *
+ * The action pushes `JSON.stringify(evmWrite(...))` as one trace entry and
+ * prose for everything else (update/main.ts). Scanning from the end means a
+ * future action that logs more than one write still yields the LAST one, which
+ * is the one that set the root.
+ */
+export function rootTxFromTrace(trace: unknown[] | undefined): RootTxOutcome | undefined {
+  if (!trace) return undefined;
+  for (let i = trace.length - 1; i >= 0; i--) {
+    let entry: any = trace[i];
+    if (typeof entry === 'string') {
+      try {
+        entry = JSON.parse(entry);
+      } catch {
+        continue;
+      }
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.success !== 'boolean') continue;
+    const receipt = entry.receipt;
+    return {
+      hash: typeof entry.hash === 'string' ? entry.hash : undefined,
+      success: entry.success,
+      status: receipt?.status != null ? Number(receipt.status) : undefined,
+      blockNumber: receipt?.blockNumber != null ? Number(receipt.blockNumber) : undefined,
+      error: typeof entry.error === 'string' ? entry.error : undefined,
+    };
+  }
+  return undefined;
 }
 
 export interface AuthorWriteResult {
@@ -108,8 +163,9 @@ export async function authorWrite(
   // Resolve the encrypt function FIRST, before any chain/IPFS work: a note with
   // `encryption: true` and no usable Lit key/PKP must fail closed with a usage
   // error, not upload a plaintext (or error-string) body. `upload`, `preview`
-  // and `publish` all land here, so this one place covers them. (`offer` does
-  // not re-sign: it verifies the target item instead — see offerContent.)
+  // and `publish` all land here, so this one place covers them. (`offer` lands
+  // here too — it uploads unless `--cid` says the bytes are already on IPFS; on
+  // that path it verifies the target item instead — see offerContent.)
   const encryptFn = buildEncryptFn(ctx, parsed, notePath);
 
   // Refuse a silent downgrade (encrypted genesis → plaintext body).
@@ -187,7 +243,7 @@ export async function authorWrite(
   if (opts.offer) {
     if (!service) throw new Error('internal: on-chain offer requested without a resolved publication');
     txHash = await service.makeOffer(objectId, kuboCid);
-    ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash.slice(0, 12)}…)`);
+    ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash})`);
   }
 
   // Frontmatter write-back: genesis+author on first publish; modified_date and
@@ -241,10 +297,11 @@ export interface OfferResult {
 
 /**
  * On-chain offer only — the `offer` step split out of `upload`. The content
- * must already be on IPFS (run `upload` first: it writes `genesis` and
- * `kubo_cid` back to the note). `kuboCid` is the explicit `--cid` when given,
- * else the CID `upload` stored in the note's frontmatter. No re-upload, no
- * render, no durability, no frontmatter write.
+ * On-chain offer for a CID that is already uploaded — the `offer --cid` path
+ * (re-offer after a failed chain write, backfill an older revision). `offer`
+ * without `--cid` goes through `authorWrite` instead: it uploads the note and
+ * offers exactly those bytes. No re-upload, no render, no durability pins, no
+ * frontmatter write here.
  */
 export async function offerContent(
   ctx: CliContext,
@@ -306,7 +363,7 @@ export async function offerContent(
   );
 
   const txHash = await service.makeOffer(objectId, kuboCid);
-  ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash.slice(0, 12)}…)`);
+  ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${service.subdomain} (tx ${txHash})`);
 
   return {
     objectId,
@@ -491,11 +548,17 @@ async function renderContent(
   );
 
   if (!res.success) {
-    throw new Error(`render failed: ${String(res.error ?? 'unknown render error')}`);
+    // Carry the update trace out: when the root-CID write is the step that died
+    // (Lit's 50-requests-per-session cap, a dead RPC, a reverted batch), the
+    // trace is the only evidence of where it stopped.
+    throw new ActionError(
+      `render failed: ${String(res.error ?? 'unknown render error')}`,
+      (res.trace ?? []) as unknown[],
+    );
   }
   const cid = res.cid;
   if (!cid) {
-    throw new Error('render reported success but produced no root CID');
+    throw new ActionError('render reported success but produced no root CID', (res.trace ?? []) as unknown[]);
   }
 
   // `res.path` is already root-absolute (`/1-introduction/`, from the
@@ -506,7 +569,26 @@ async function renderContent(
   const ipfsUrl = join(ipfsUri(cid), res.path);
   const prodUrl = opts.publish ? join(`https://${publication}`, res.path) : undefined;
 
-  return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl };
+  const trace = (res.trace ?? []) as unknown[];
+  const rootTx = rootTxFromTrace(trace);
+  if (opts.publish) {
+    if (!rootTx) {
+      ctx.out.warn(
+        'update action reported success but its trace carries no root-CID write result — the on-chain contenthash may be stale',
+      );
+    } else if (!rootTx.success) {
+      ctx.out.warn(
+        `root-CID write failed (${rootTx.hash ? `tx ${rootTx.hash}` : 'no tx hash'}): ${rootTx.error ?? 'unknown error'}`,
+      );
+    } else {
+      ctx.out.log(
+        `✓ root cid written on-chain${rootTx.hash ? ` (tx ${rootTx.hash})` : ''}` +
+          (rootTx.blockNumber != null ? ` block ${rootTx.blockNumber}` : ''),
+      );
+    }
+  }
+
+  return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl, rootTx, trace };
 }
 
 // ===========================================================================
@@ -635,7 +717,7 @@ export async function revokeContent(
 
   // 1. Retract first — removes the version from deals/offers.
   const txHash = await service.retract(genesis);
-  ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash.slice(0, 12)}…)`);
+  ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
 
   // 2. Remove-plumbing re-render so the published site stops resolving it.
   const localePaths = await service.localePathsOf();

@@ -1,12 +1,17 @@
 ---
-    post_type: chapter
-    position: 5 
-    slug: agreement 
-    tags: [about--s2s]
+post_type: chapter
+position: 5
+slug: agreement
+tags:
+  - about--s2s
+modified_date: 2026-11-02T10:07:41
+kubo_cid: QmaiZUFGiWcHNUhfxYCsm2rcLa6J55GTtUB2XEtZRjhgeN
+genesis: "0x9286c900d744ffafdfdf89a1dd92d8c10fd3a9bce74a78b95e8ab3682ec2b4c2"
+author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # The agreement
 
-In the white paper, an agreement is between an author and a publication, over a single manuscript. It records who wrote the manuscript, that the publication may publish it, how any revenue divides, and whether a reader must pass the reader gate. Both parties enter it: the publication either for each manuscript, or in advance by trusting the author. Either can end it alone. What a publication publishes is exactly the set of agreements in force. [White paper, section 5: The agreement](#)
+In the white paper, an agreement is between an author and a publication, over a single manuscript. It records who wrote the manuscript, that the publication may publish it, how any revenue divides, and whether a reader must pass the reader gate. Both parties enter it: the publication either for each manuscript, or in advance by trusting the author. Either can end it alone. What a publication publishes is exactly the set of agreements in force. [White paper, section 5: The agreement] (https://polyphony.eth.link/agreement)
 
 An agreement lives in the publication module, the contract the publication's Safe enables on Base. Each publication has its own. Only the publication can change the code that decides what it publishes, and no one holds a lever over every publication's agreements at once. The owners enable a new version of the rules when they choose, and a publication that disagrees keeps the one it has. Unlike a platform, the implementation can't force a change on a publication.
 

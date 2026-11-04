@@ -15,7 +15,7 @@
 // script signs for you.) Either way it pre-flights isOwner and refuses to
 // proceed unless the recovered signer is an owner of the publication Safe.
 //
-// Run:  cd protocol && npx tsx scripts/lit/repoint-cache.ts [owner_signature]
+// Run:  (repo root) npx tsx src/press/scripts/lit/repoint-cache.ts [owner_signature]
 
 import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'url';
