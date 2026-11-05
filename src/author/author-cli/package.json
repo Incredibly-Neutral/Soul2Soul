@@ -12,7 +12,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -noEmit && node esbuild.config.mjs production",
+    "build": "npm --prefix ../../shared run build --loglevel=error && tsc -noEmit && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
     "test": "vitest run --reporter=verbose",
     "typecheck": "tsc -noEmit",
