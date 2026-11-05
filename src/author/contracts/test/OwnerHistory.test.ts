@@ -173,9 +173,6 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(await d.history.read.isOwnerAt([addr(d.second), head]), true);
     assert.equal(await d.history.read.isOwnerAt([addr(d.third), head]), false);
 
-    assert.equal(await d.history.read.isOwnerOrWasOwnerAt([addr(d.first), head]), true);
-    assert.equal(await d.history.read.isOwnerOrWasOwnerAt([addr(d.third), head]), false);
-
     // Nobody was an owner in the block before era 0.
     assert.equal(await d.history.read.isOwnerAt([addr(d.first), d.proxyBlock - 1n]), false);
   });
@@ -280,6 +277,32 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(await d.history.read.isOwnerAt([addr(d.second), boundary]), false);
     assert.equal(await d.history.read.isOwnerAt([addr(d.third), boundary]), true);
     assert.equal(await d.history.read.isOwnerAt([addr(d.third), boundary - 1n]), false);
+  });
+
+  it('an owner who joined in a later era is not an owner at an earlier block, though they are one today', async () => {
+    // The substitution `isOwnerAt` must never make: `isOwner(who) || <history>`
+    // would let a signer prove a past block with a key that did not hold one
+    // then. era 1 is {first}; era 2 swaps first out and third in.
+    const era1 = await rotate(d, 1, addr(d.second)); // {first}
+    const era2 = await rotate(d, 2, addr(d.first), addr(d.third)); // {third}
+
+    // Today.
+    assert.equal(await d.history.read.isOwner([addr(d.third)]), true);
+    assert.equal(await d.history.read.isOwner([addr(d.first)]), false);
+
+    // third joined in era 2: not an owner in era 1, an owner from era 2 on.
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), era1]), false);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), era2 - 1n]), false);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), era2]), true);
+
+    // first, the mirror case: an owner in era 1 and earlier, gone in era 2.
+    assert.equal(await d.history.read.isOwnerAt([addr(d.first), era1]), true);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.first), era2]), false);
+
+    // And the present tense still answers live, through the same function.
+    const head = await publicClient.getBlockNumber();
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), head]), true);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.first), head]), false);
   });
 
   it('wasOwnerAt answers on both sides of the rotation timestamp', async () => {
@@ -436,7 +459,6 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(await d.history.read.isOwner([nobody]), false);
     assert.equal(await d.history.read.isOwnerAt([nobody, 0n]), false);
     assert.equal(await d.history.read.wasOwnerAt([nobody, 0n]), false);
-    assert.equal(await d.history.read.isOwnerOrWasOwnerAt([nobody, 0n]), false);
 
     const [blocks, times] = await d.history.read.tenuresOf([nobody]);
     assert.deepEqual([...blocks], []);

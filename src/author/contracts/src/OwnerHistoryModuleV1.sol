@@ -19,7 +19,7 @@ interface ISafeOwners {
  *   The gate on the publication module asks `Safe.isOwner(signer)` — present
  *   tense. Rotate one owner and every earlier signature over the author's work
  *   stops verifying, even though the work did not change. This module keeps the
- *   missing tense: `isOwnerAt`, `wasOwnerAt`, `isOwnerOrWasOwnerAt`.
+ *   missing tense: `isOwnerAt` and its timestamp twin `wasOwnerAt`.
  *
  * How it stays current:
  *   Safe 1.4.1 has no owner-rotation callback. The only on-chain tap is the
@@ -199,14 +199,27 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
     // ── Reads: history ─────────────────────────────────────────────
 
     /**
-     * @dev Was `who` an owner at `blockNumber`? Half-open tenures, so the block
-     *      a rotation landed in belongs to the new set.
+     * @dev The universal check: was `who` an owner at `blockNumber`? There is
+     *      no second, "either tense" variant on purpose. A function answering
+     *      `isOwner(who) || isOwnerAt(who, n)` would accept an owner who joined
+     *      *after* `n` for a query *about* `n` — precisely the substitution a
+     *      gate exists to reject ("was this signer an owner when they signed?")
+     *      — and it would be redundant, because this function already covers
+     *      the present tense:
      *
-     *      A query at or after the current block answers from the live set, not
-     *      from the index: within a block the index can lag by one `sync()`
-     *      (the guard runs after the mutation), and a mirror that answers "no"
-     *      about a sitting owner in the current block would be wrong in the one
-     *      case callers care about most. For past blocks the index is exact.
+     *        - `blockNumber` < the current block: answered from the tenure
+     *          index, half-open, so the block a rotation landed in belongs to
+     *          the new set.
+     *        - `blockNumber` >= the current block: answered by the Safe's own
+     *          `isOwner`. The index can lag by one `sync()` inside a block (the
+     *          guard runs after the mutation), and a mirror that said "no"
+     *          about a sitting owner in the current block would be wrong in the
+     *          case callers care about most.
+     *
+     *      So a gate that wants "owner now" calls `isOwnerAt(who, block.number)`
+     *      and gets the live set; a gate proving a past signature calls it with
+     *      the block that signature was valid at and gets the historical set,
+     *      including "nobody" for an address that joined later.
      */
     function isOwnerAt(address who, uint256 blockNumber) public view returns (bool) {
         if (blockNumber >= block.number) return isOwner(who);
@@ -229,16 +242,6 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
             if (timestamp >= t.start && (t.end == 0 || timestamp < t.end)) return true;
         }
         return false;
-    }
-
-    /**
-     * @dev The gate's one call. A current owner answers live (so a `sync()` the
-     *      guard has not reached yet cannot deny a sitting owner); a past owner
-     *      answers from the index.
-     */
-    function isOwnerOrWasOwnerAt(address who, uint256 blockNumber) external view returns (bool) {
-        if (isOwner(who)) return true;
-        return isOwnerAt(who, blockNumber);
     }
 
     function tenuresOf(address who) external view returns (Tenure[] memory blocks, Tenure[] memory times) {

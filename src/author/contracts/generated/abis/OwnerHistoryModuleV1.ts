@@ -366,30 +366,6 @@ export type Abi_OwnerHistoryModuleV1 = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "who",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "blockNumber",
-        "type": "uint256"
-      }
-    ],
-    "name": "isOwnerOrWasOwnerAt",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "lastSyncedBlock",
     "outputs": [
@@ -915,30 +891,6 @@ export const Abi_OwnerHistoryModuleV1: Abi_OwnerHistoryModuleV1 = [
       }
     ],
     "name": "isOwnerAt",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "who",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "blockNumber",
-        "type": "uint256"
-      }
-    ],
-    "name": "isOwnerOrWasOwnerAt",
     "outputs": [
       {
         "internalType": "bool",
