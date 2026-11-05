@@ -95,7 +95,8 @@ own area.
   re-reading everything
 - `author/` — nine invariants, ADR-001..002, RFC-001..002, RFC-003, RFC-004; branches:
   `identity`, `publishing`, `shared`, `hosts`, `cli`, `nvim`, `vscode`, `nvim-s2s`, `drafts`,
-  `owner-history` (who was an owner of the author Safe, and when — spec-first, no code)
+  `owner-history` (who was an owner of the author Safe, and when — the module, the guard and
+  the era model)
 - `publication/` — thirteen invariants, two additions, five gaps; branches: `account`,
   `agreements`, `admin-app`, `look`, `review`, `storage`, `contracts-ens` (the name layer, which
   implements PUBLICATION-1, -8 and -9)
