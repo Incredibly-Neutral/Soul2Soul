@@ -5,6 +5,7 @@ import {
   encodeErrorResult,
   encodeFunctionData,
   parseAbi,
+  toEventSelector,
   toFunctionSelector,
   zeroAddress,
   zeroHash,
@@ -102,11 +103,25 @@ async function execAsSafe(d: Deployment, target: Hex, data: Hex) {
   return blockOf(d.mockSafe.write.execCall([target, data]));
 }
 
+/**
+ * The guard's only notice that it did not record anything: the block it names,
+ * or `undefined` when the hook fired.
+ */
+async function syncFailure(hash: Hex): Promise<bigint | undefined> {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const topic = toEventSelector('SyncFailed(uint256)');
+  const log = receipt.logs.find((l) => l.topics[0] === topic);
+  if (!log) return undefined;
+  assert.equal(receipt.blockNumber, BigInt(log.data), 'SyncFailed names its own block');
+  return receipt.blockNumber;
+}
+
 const ERROR_ABI = parseAbi([
   'error OnlySafe()',
   'error ZeroAddress()',
   'error SafeCallFailed()',
   'error OnlyDeployer()',
+  'error ZeroOwners()',
 ]);
 
 const selectorOf = (name: 'OnlySafe' | 'ZeroAddress' | 'SafeCallFailed' | 'OnlyDeployer') =>
@@ -418,23 +433,81 @@ describe('OwnerHistoryModuleV1', () => {
     await assert.doesNotReject(d.mockSafe.write.pokeGuard([zeroHash, false]));
   });
 
-  it('a gas-tight Safe transaction still succeeds: the hook is skipped, never fatal', async () => {
+  it('a module address with no code does not revert the Safe, and admits it', async () => {
+    // The one permanent wound this contract could inflict: `module` is
+    // immutable, and `try ... returns (bool)` on a codeless callee decodes empty
+    // returndata *in the guard's frame*, outside any catch — reverting
+    // `execTransaction`, and with it the `setGuard(address(0))` that would remove
+    // the guard. The guard now calls low-level and decodes nothing.
+    const guard = await viem.deployContract('OwnerHistoryGuard', [
+      d.safeAddr,
+      d.stranger.account.address,
+    ]);
+    await d.mockSafe.write.setGuard([guard.address]);
+
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]);
+    assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true); // the Safe lived
+    assert.equal(await d.history.read.eraCount(), 1n); // and nothing was recorded
+
+    // Silence would be the other failure: the guard has to say it skipped.
+    assert.notEqual(await syncFailure(hash), undefined);
+
+    // The escape hatch still works, which is the whole point: on a real Safe
+    // `setGuard` is `onlySelf`, i.e. an `execTransaction` that must not revert.
+    await d.mockSafe.write.setGuard([zeroAddress]);
+    assert.equal(await d.mockSafe.read.guard(), zeroAddress);
+  });
+
+  it('a module with code but no sync() does not revert the Safe', async () => {
+    const noSync = await viem.deployContract('NoSync');
+    const guard = await viem.deployContract('OwnerHistoryGuard', [d.safeAddr, noSync.address]);
+    await d.mockSafe.write.setGuard([guard.address]);
+
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]);
+    assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true);
+    assert.equal(await d.history.read.eraCount(), 1n);
+    assert.notEqual(await syncFailure(hash), undefined);
+  });
+
+  it('a proxy whose implementation slot is empty does not revert the Safe', async () => {
+    // `code.length > 0`, so the codeless belt cannot help here, and the
+    // delegatecall to address(0) *succeeds* with empty returndata — exactly the
+    // shape a `returns (bool)` decode cannot survive.
+    const emptyProxy = await viem.deployContract('EmptyImplementationProxy');
+    assert.equal(await emptyProxy.read.implementation(), zeroAddress);
+
+    const guard = await viem.deployContract('OwnerHistoryGuard', [d.safeAddr, emptyProxy.address]);
+    await d.mockSafe.write.setGuard([guard.address]);
+
+    await assert.doesNotReject(d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]));
+    assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true);
+    assert.equal(await d.history.read.eraCount(), 1n);
+  });
+
+  it('a gas-tight Safe transaction still succeeds, and the skip is visible', async () => {
     // 250k is enough for the owner mutation and not for the sync (306k on a
     // 2-owner era), so the guard's reserved tail keeps the Safe's own call
-    // alive and the catch absorbs the module's out-of-gas.
-    await assert.doesNotReject(
-      d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress], { gas: 250_000n }),
-    );
+    // alive and the failed module call is nothing but a skipped sync.
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress], {
+      gas: 250_000n,
+    });
 
     // The thing this protects: the Safe can always still execute, so the guard
     // can always still be removed — a guard cannot brick the Safe.
     assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true);
     assert.equal(await d.history.read.eraCount(), 1n); // sync missed
 
-    // And the miss is not a loss: anybody repairs it.
-    await d.history.write.sync([], { account: d.stranger.account });
+    // A miss is not silent any more, and it is legible from the module too.
+    const failedAt = await syncFailure(hash);
+    assert.notEqual(failedAt, undefined);
+    assert.equal(await d.history.read.lastSyncedBlock(), d.proxyBlock); // lagging
+
+    // And it is not a loss: anybody repairs it, and the era is stamped then.
+    const repairBlock = await blockOf(d.history.write.sync([], { account: d.stranger.account }));
     assert.equal(await d.history.read.eraCount(), 2n);
     assert.equal(await d.history.read.count(), 3n);
+    assert.equal(await d.history.read.lastSyncedBlock(), repairBlock);
+    assert.ok(repairBlock > failedAt!);
   });
 
   it('the guard ignores calls from non-Safe senders', async () => {
@@ -497,6 +570,43 @@ describe('OwnerHistoryModuleV1', () => {
 
     assert.equal(chk(await d.guard.read.safe()), d.safeAddr);
     assert.equal(chk(await d.guard.read.module()), chk(d.history.address));
+  });
+
+  it('sync() on a proxy that was never initialized fails cleanly, not with a panic', async () => {
+    // The factory always initializes, so this needs a hand-made proxy: the
+    // implementation behind an ERC-1967 proxy with no `initialize` call.
+    const bareProxy = await viem.deployContract('BareProxy', [d.implementation.address]);
+    const uninitialised = await viem.getContractAt('OwnerHistoryModuleV1', bareProxy.address);
+
+    assert.equal(await uninitialised.read.eraCount(), 0n);
+    assert.equal(await uninitialised.read.isOwner([addr(d.first)]), false); // safe is zero
+    await assertReverts(uninitialised.write.sync([]), selectorOf('SafeCallFailed'));
+    assert.equal(await uninitialised.read.lastSyncedBlock(), 0n);
+  });
+
+  it('initialize refuses a Safe that has no owners yet', async () => {
+    // Deployed but not `setup()`ed: `getOwners()` returns nothing, so era 0
+    // would be silently empty and nobody would ever have a tenure.
+    const ownerless = await viem.deployContract('MockSafe', [[]]);
+    await assertReverts(d.factory.write.createModule([ownerless.address]), selectorOf('ZeroOwners'));
+    assert.equal((await d.factory.read.getModulesForSafe([chk(ownerless.address)])).length, 0);
+  });
+
+  it('isOwner answers false when the Safe returns a word that is not 0 or 1', async () => {
+    // `abi.decode(..., (bool))` reverts on such a word, so a lying Safe could
+    // have made the module's "never reverts" read revert. It compares the raw
+    // word instead.
+    const lying = await viem.deployContract('LyingSafe', [addr(d.first)]);
+    await d.factory.write.createModule([lying.address]);
+    const proxies = await d.factory.read.getModulesForSafe([chk(lying.address)]);
+    const module = await viem.getContractAt('OwnerHistoryModuleV1', proxies[0]!);
+
+    assert.equal(await module.read.eraCount(), 1n);
+    assert.equal(await module.read.isOwner([addr(d.first)]), false);
+    assert.equal(
+      await module.read.isOwnerAt([addr(d.first), await publicClient.getBlockNumber()]),
+      false,
+    );
   });
 
   it('factory createModule yields a working proxy for the Safe', async () => {

@@ -27,6 +27,7 @@
     "compile": "hardhat compile",
     "test": "hardhat test",
     "deploy:draftsfac": "tsx scripts/deploy-drafts-factory.ts",
+    "deploy:ownerhistory": "tsx scripts/deploy-owner-history.ts",
     "clean": "rm -rf artifacts cache generated"
   },
   "dependencies": {

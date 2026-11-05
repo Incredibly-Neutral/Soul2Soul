@@ -2,6 +2,17 @@
 pragma solidity ^0.8.19;
 
 /**
+ * NOTE ON THE FILE NAME: `.t.sol`, not `.sol`. `hardhat-deploy`'s
+ * `generateTypedArtifacts` hook walks `artifacts/` and skips every path ending
+ * in `.t.sol`, and that hook has no include/exclude option. This file is the
+ * only place these fixtures are declared, so the suffix keeps `MockSafe`,
+ * `RevertingSync`, `IGuard` and the proxy below out of `generated/abis/index.ts`
+ * — which is the package's `main` and would otherwise publish test fixtures as
+ * if they were part of the ABI surface. Hardhat still compiles it and resolves
+ * the contracts by name, which is all the suite asks for.
+ */
+
+/**
  * @title MockSafe
  * @notice Just enough of Safe 1.4.1's owner surface to exercise
  *         OwnerHistoryModuleV1 and OwnerHistoryGuard: `getOwners`, `isOwner`,
@@ -186,4 +197,114 @@ contract RevertingSync {
     function sync() external pure returns (bool) {
         revert Broken();
     }
+}
+
+/**
+ * @title EmptyImplementationProxy
+ * @notice A proxy-shaped contract whose ERC-1967 implementation slot was never
+ *         written, i.e. a proxy deployed before (or without) its implementation.
+ *
+ *         The point is what it returns to a caller expecting a bool: the
+ *         `delegatecall` goes to address(0), which *succeeds* with empty
+ *         returndata. A caller decoding that returndata as `bool` reverts in its
+ *         own frame — the shape of the bug that would brick a Safe whose guard
+ *         was wired to a module that was not there yet.
+ *
+ *         It reads the real slot rather than assuming zero, so the fixture stays
+ *         honest if someone later sets an implementation.
+ */
+contract EmptyImplementationProxy {
+
+    /// @dev `keccak256("eip1967.proxy.implementation") - 1`.
+    bytes32 private constant IMPLEMENTATION_SLOT =
+        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+    function implementation() external view returns (address impl) {
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            impl := sload(slot)
+        }
+    }
+
+    fallback() external {
+        address impl;
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            impl := sload(slot)
+            calldatacopy(0, 0, calldatasize())
+            let ok := delegatecall(gas(), impl, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch ok
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+}
+
+/**
+ * @title BareProxy
+ * @notice The smallest ERC-1967-shaped proxy that delegates everything, with no
+ *         initializer call. Deploy a module implementation behind it and you
+ *         have the one unreachable-by-factory state the module has to survive:
+ *         a proxy whose storage was never initialised, so there is no era 0.
+ */
+contract BareProxy {
+
+    bytes32 private constant IMPLEMENTATION_SLOT =
+        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+    constructor(address implementation) {
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            sstore(slot, implementation)
+        }
+    }
+
+    fallback() external {
+        address impl;
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            impl := sload(slot)
+            calldatacopy(0, 0, calldatasize())
+            let ok := delegatecall(gas(), impl, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch ok
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+}
+
+/**
+ * @title LyingSafe
+ * @notice A Safe-shaped contract that answers `isOwner` with a word that is not
+ *         0 or 1. `abi.decode(bytes, (bool))` reverts on such a word, so this is
+ *         the fixture that proves the module's live read cannot be made to
+ *         revert by the contract it reads.
+ */
+contract LyingSafe {
+    address private immutable _owner;
+
+    constructor(address owner_) {
+        _owner = owner_;
+    }
+
+    function getOwners() external view returns (address[] memory owners) {
+        owners = new address[](1);
+        owners[0] = _owner;
+    }
+
+    function isOwner(address) external pure returns (uint256) {
+        return 2;
+    }
+}
+
+/**
+ * @title NoSync
+ * @notice A contract with code, a right-looking deployment, and no `sync()`:
+ *         the call to it reverts in the dispatcher (no fallback either). The
+ *         guard must swallow that the same way it swallows a revert.
+ */
+contract NoSync {
+    uint256 public answer;
 }

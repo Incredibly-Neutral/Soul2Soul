@@ -4,11 +4,6 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-interface ISafeOwners {
-    function getOwners() external view returns (address[] memory);
-    function isOwner(address owner) external view returns (bool);
-}
-
 /**
  * @title OwnerHistoryModuleV1
  * @notice The author Safe's ownership history: who was an owner, and from which
@@ -35,15 +30,31 @@ interface ISafeOwners {
  *   is also the repair path when the hook is missed (a module enable/disable
  *   window, a guard removed for a Safe upgrade, an out-of-gas hook).
  *
+ *   The tap is not a guarantee, and the guard is not the primary path:
+ *     - The guard is **best-effort**. A Safe transaction whose gas limit is the
+ *       estimated cost starves the hook, and the era is then stamped at the next
+ *       `sync()`. Rotations proposed by this project's tooling should carry an
+ *       explicit `sync()` call; the guard catches the ones that do not.
+ *     - `execTransactionFromModule` is a self-call and skips guards, so an
+ *       enabled Safe module can rotate owners and can `setGuard(address(0))`
+ *       with no hook at all. Guard coverage is over *transactions*, not over a
+ *       malicious module. Again: `sync()` repairs it.
+ *
  * The half-open era model:
  *   Era k covers blocks `[startBlock, endBlock)`; `endBlock == 0` means "still
- *   current". At the boundary block — the block the Safe rotated in — the new
- *   set is already authoritative and the previous era is already closed. That
- *   matches the chain: the `AddedOwner`/`RemovedOwner` event and the guard's
- *   `checkAfterExecution` are in that block, so a signature verified *in* that
- *   block sees the new set. Half-open makes `isOwnerAt(x, boundary)` and
+ *   current". For a block strictly in the past the eras and the tenure index
+ *   are the whole answer, and at the boundary block — the block the Safe rotated
+ *   in — the new set is authoritative: the tenure of whoever left ends there and
+ *   the tenure of whoever joined starts there, so `isOwnerAt(x, boundary)` and
  *   `isOwnerAt(y, boundary)` give exactly one true answer for the pair that
  *   swapped, and no block belongs to two eras.
+ *
+ *   At the *head* the index is deliberately not consulted (see `isOwnerAt`):
+ *   inside the current block the answer comes from the Safe's live `isOwner`, so
+ *   it reflects whatever the pre-state or post-state of that block is at the
+ *   moment of the call. A gate judging the current block must therefore read
+ *   `isOwnerAt(who, block.number)` and accept that a rotation landing in the same
+ *   block may or may not be visible — wait a block before trusting it.
  *
  * Storage declaration order is the upgrade contract, same rule as the drafts
  * module (INV-3 in the publication spec): `safe`, `eras`, `tenureBlocks`,
@@ -54,6 +65,13 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
     /// @notice The Safe whose ownership this module mirrors. The only address
     ///         allowed to upgrade the module; everything else is permissionless.
     address public safe;
+
+    /// @dev The two Safe calls this module makes, as selector constants rather
+    ///      than through a local `interface`: an interface here would exist only
+    ///      to be called, and would add a second, unused ABI entry to the
+    ///      package's public surface. The strings are the Safe's own signatures.
+    bytes4 private constant SAFE_GET_OWNERS = bytes4(keccak256("getOwners()"));
+    bytes4 private constant SAFE_IS_OWNER = bytes4(keccak256("isOwner(address)"));
 
     struct Era {
         uint64 startBlock;      // first block of the era (inclusive)
@@ -90,6 +108,10 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
     error OnlySafe();
     error ZeroAddress();
     error SafeCallFailed();
+    /// @dev The `safe` answered `getOwners()` with nothing: deployed but not
+    ///      `setup()`, or a contract that merely looks like a Safe. Era 0 would
+    ///      be silently empty and nobody would ever have a tenure.
+    error ZeroOwners();
 
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
@@ -114,6 +136,7 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
         safe = _safe;
 
         address[] memory owners = _readSafeOwners();
+        if (owners.length == 0) revert ZeroOwners();
         uint256 index = _openEra(owners);
         for (uint256 i = 0; i < owners.length; i++) {
             // Era 0's owners get a tenure too, opened at this block. Without it
@@ -152,6 +175,11 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
      *      why the guard exists to keep the gap empty in normal operation.
      */
     function sync() external returns (bool) {
+        // A proxy deployed without `initialize` has no era 0, and `length - 1`
+        // would panic. Only reachable by skipping the factory, but the guard
+        // calls this function with a swallowed revert, so it must fail cleanly.
+        if (eras.length == 0) revert SafeCallFailed();
+
         address[] memory live = _readSafeOwners();
 
         uint256 lastIndex = eras.length - 1;
@@ -189,11 +217,11 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
      *      lookup is a gate that can be DOSed by pointing at a dead address.
      */
     function isOwner(address who) public view returns (bool) {
-        (bool ok, bytes memory data) = safe.staticcall(
-            abi.encodeWithSelector(ISafeOwners.isOwner.selector, who)
-        );
+        (bool ok, bytes memory data) = safe.staticcall(abi.encodeWithSelector(SAFE_IS_OWNER, who));
         if (!ok || data.length < 32) return false;
-        return abi.decode(data, (bool));
+        // `abi.decode(data, (bool))` reverts on a word other than 0 or 1, which
+        // would make this "never reverts" read revert. Compare the raw word.
+        return abi.decode(data, (uint256)) == 1;
     }
 
     // ── Reads: history ─────────────────────────────────────────────
@@ -287,9 +315,7 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
     // ── Internal ───────────────────────────────────────────────────
 
     function _readSafeOwners() private view returns (address[] memory owners) {
-        (bool ok, bytes memory data) = safe.staticcall(
-            abi.encodeWithSelector(ISafeOwners.getOwners.selector)
-        );
+        (bool ok, bytes memory data) = safe.staticcall(abi.encodeWithSelector(SAFE_GET_OWNERS));
         if (!ok || data.length == 0) revert SafeCallFailed();
         owners = abi.decode(data, (address[]));
     }
@@ -330,9 +356,11 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
         Tenure[] storage blocks_ = tenureBlocks[who];
         Tenure[] storage times_ = tenureTimes[who];
         // Both arrays are written in lockstep, so the last entry of each belongs
-        // to the tenure being closed. `end == 0` (ongoing) is asserted rather
-        // than assigned blindly: closing twice would be a bug in `sync`, and a
-        // silent overwrite would hide it.
+        // to the tenure being closed. An already-closed tenure is **skipped**,
+        // not asserted: closing twice would be a bug in `sync`, but a revert
+        // here would be unrecoverable through a guard whose `catch` swallows it
+        // and would leave the era half-written. Skipping keeps the write
+        // idempotent, which is the property `sync` is allowed to rely on.
         if (blocks_.length > 0) {
             Tenure storage t = blocks_[blocks_.length - 1];
             if (t.end == 0) t.end = uint64(block.number);

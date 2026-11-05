@@ -21,6 +21,19 @@ export type Abi_OwnerHistoryGuard = [
     "type": "error"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "blockNumber",
+        "type": "uint256"
+      }
+    ],
+    "name": "SyncFailed",
+    "type": "event"
+  },
+  {
     "inputs": [
       {
         "internalType": "bytes32",
@@ -149,6 +162,19 @@ export const Abi_OwnerHistoryGuard: Abi_OwnerHistoryGuard = [
     "inputs": [],
     "name": "ZeroAddress",
     "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "blockNumber",
+        "type": "uint256"
+      }
+    ],
+    "name": "SyncFailed",
+    "type": "event"
   },
   {
     "inputs": [

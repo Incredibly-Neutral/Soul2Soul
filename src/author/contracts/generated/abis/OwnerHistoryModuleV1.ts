@@ -20,6 +20,11 @@ export type Abi_OwnerHistoryModuleV1 = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "ZeroOwners",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -553,6 +558,11 @@ export const Abi_OwnerHistoryModuleV1: Abi_OwnerHistoryModuleV1 = [
   {
     "inputs": [],
     "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroOwners",
     "type": "error"
   },
   {
