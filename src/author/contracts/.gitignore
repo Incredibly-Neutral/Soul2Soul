@@ -1,0 +1,5 @@
+# Hardhat build outputs (the root .gitignore lists the publication package only).
+# Anchor these to this directory: `artifacts/` unanchored would also swallow
+# generated/artifacts, which IS committed (ABI + bytecode for consumers).
+/artifacts/
+/cache/
