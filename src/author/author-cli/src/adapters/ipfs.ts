@@ -7,7 +7,7 @@
 //   ipfs.entries[0]              → the primary gateway + its write token
 //   pinning[provider=pinata]     → the Pinata JWT and, if given, its gateway
 //   pinning[provider=filebase]   → the Filebase token
-// A pinning entry with an empty key is a gateway-only label: it is skipped here
+// A pinning entry with no key is a gateway-only label: it is skipped here
 // rather than passed on as a credential-shaped empty string.
 // ============================================================================
 
@@ -18,7 +18,7 @@ import type { CliConfig } from '../core/config';
 /** The first pinning entry for a provider — whole-label merge means one per label. */
 function pinningFor(config: CliConfig, provider: string): { key: string; url?: string } | undefined {
   const entry = config.pinning.find((candidate) => candidate.provider === provider);
-  if (!entry || entry.key.trim() === '') return undefined;
+  if (!entry || entry.key === undefined || entry.key.trim() === '') return undefined;
   return { key: entry.key, url: entry.url };
 }
 

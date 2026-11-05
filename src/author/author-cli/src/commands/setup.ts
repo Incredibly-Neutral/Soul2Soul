@@ -24,7 +24,7 @@ import type { StoreCommandSpec } from '../lib/command';
 import { isInteractive, prompt } from '../lib/prompt';
 import type { CliOut } from '../lib/out';
 import { configKeyValue, configValueSource } from '../core/config';
-import { configFilePaths, maskSecret, writeConfigValue } from '../core/configfile';
+import { configFilePaths, maskSecret, maskUrlCredential, writeConfigValue } from '../core/configfile';
 import { matchField, type ConfigFieldSpec } from '../core/configschema';
 
 type Section = 'pinning' | 'ipfs' | 'rpc' | 'paymaster' | 'filecoin';
@@ -99,14 +99,29 @@ const ACCEPT_DEFAULTS_FLAG = {
   summary: 'ask nothing and write nothing — keep every provided default (the non-TTY path)',
 } as const;
 
-/** `pinning.pinata.key [custom: pi…abcd]` — source plus a safe rendering. */
+/**
+ * `pinning.pinata.key [custom: pi…abcd]` — source plus a safe rendering.
+ *
+ * Both kinds of credential are masked here, exactly as `config get`/`list` do
+ * it: a secret between its hint, and a URL's query-string credential replaced
+ * per value with the endpoint left readable (`filecoin.rpcUrl` carries a GLIF
+ * key that way). A value the registry does not mark is shown as it is.
+ */
 function describe(
   spec: ConfigFieldSpec | undefined,
   source: ValueSource,
   value: string | undefined,
 ): string {
   if (source === 'unset' || value === undefined) return 'unset';
-  return `${source}: ${spec?.secret ? maskSecret(value) : value}`;
+  const shown =
+    value.length === 0
+      ? ''
+      : spec?.secret === true
+        ? maskSecret(value)
+        : spec?.url === true
+          ? maskUrlCredential(value)
+          : value;
+  return `${source}: ${shown}`;
 }
 
 function summary(written: string[], kept: string[], file: string): string {

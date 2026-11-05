@@ -191,7 +191,10 @@ describe('layer precedence', () => {
     expect(loadConfig({ LIT_USAGE_KEY: 'from-env' }, paths).lit.usageKey).toBe('from-env');
   });
 
-  it('never lets a lower layer credential into an entry that names none', () => {
+  it('keeps the lower layer credential when the higher entry names only a gateway', () => {
+    // Provider identity is the ONLY isolation rule: the custom entry names the
+    // same provider, so its gateway merges onto the default JWT. Blanking the
+    // key here would silently stop the backup pins for a working install.
     const config = loadConfig(
       {},
       {
@@ -204,8 +207,9 @@ describe('layer precedence', () => {
         }),
       },
     );
-    // The custom entry names only a gateway, so the default JWT must NOT leak in.
-    expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'mine.example' }]);
+    expect(config.pinning).toEqual([
+      { provider: 'pinata', key: 'default-jwt', url: 'mine.example' },
+    ]);
   });
 
   it('merges a label entry field by field when the provider is unchanged', () => {
@@ -316,9 +320,10 @@ describe('unset markers', () => {
       userConfigPath: file('custom.json', { pinning: { pinata: { key: null } } }),
     };
     const config = loadConfig({}, paths);
-    // The tombstone clears the legacy token; the sibling still resolves.
+    // The tombstone clears the legacy token; the sibling still resolves, and an
+    // unset key is ABSENT (not `''`, which would read as a credential in list).
     expect(configKeyValue('pinning.pinata.key', {}, paths)).toBeUndefined();
-    expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'pinata.example' }]);
+    expect(config.pinning).toEqual([{ provider: 'pinata', url: 'pinata.example' }]);
   });
 
   it('clears a whole label when the marker sits on the label', () => {
@@ -494,6 +499,31 @@ describe('the signing key', () => {
     }
   });
 
+  it('says how to retire the key, in one grammatical sentence', () => {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+      return true;
+    });
+
+    try {
+      const paths = {
+        ...nowhere,
+        legacyConfigPath: keyFile('legacy.json', `0x${'6'.repeat(64)}`),
+      };
+      loadConfig({}, paths);
+      const warning = writes[0] ?? '';
+      // The legacy branch cannot name a command, so it names the edit — and the
+      // sentence has to survive that substitution (it used to splice into
+      // "then remove it with delete the … line by hand").
+      expect(warning).toContain('then remove it by hand');
+      expect(warning).toMatch(/delete the `privateKey` line/);
+      expect(warning).not.toMatch(/with (delete|by hand)/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('prefers the env and normalizes a bare 64-char key', () => {
     const config = loadConfig(
       { S2S_PRIVATE_KEY: 'a'.repeat(64) },
@@ -538,14 +568,67 @@ describe('bundlerEndpoints', () => {
     );
   });
 
-  it('lets an explicit endpoint win over the derived one', () => {
+  it('treats an explicit bundler URL with no Pimlico key as no sponsorship', () => {
+    // The regression this guards: folding the two URLs into one leaf made the
+    // bundler double as the paymaster, so a userOp went to a bundler endpoint
+    // as if it were a paymaster and failed where `main` ran it unsponsored.
+    const config = loadConfig({ S2S_BUNDLER_URL: 'https://bundler.example' }, nowhere);
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://bundler.example',
+      paymasterUrl: undefined,
+    });
+  });
+
+  it('keeps the derived Pimlico paymaster behind an explicit bundler', () => {
     const config = loadConfig(
-      { S2S_PIMLICO_KEY: 'pk_123', S2S_PAYMASTER_URL: 'https://bundler.example' },
+      { S2S_PIMLICO_KEY: 'pk_123', S2S_BUNDLER_URL: 'https://bundler.example' },
+      nowhere,
+    );
+    // A different bundler says nothing about who pays: the key still does.
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://bundler.example',
+      paymasterUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+    });
+  });
+
+  it('lets an explicit paymaster URL override only the paymaster role', () => {
+    const config = loadConfig(
+      { S2S_PIMLICO_KEY: 'pk_123', S2S_PAYMASTER_URL: 'https://paymaster.example' },
+      nowhere,
+    );
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_123',
+      paymasterUrl: 'https://paymaster.example',
+    });
+  });
+
+  it('keeps the two env vars independent when both are set', () => {
+    const config = loadConfig(
+      { S2S_BUNDLER_URL: 'https://bundler.example', S2S_PAYMASTER_URL: 'https://paymaster.example' },
       nowhere,
     );
     expect(bundlerEndpoints(config, 8453)).toEqual({
       bundlerUrl: 'https://bundler.example',
-      paymasterUrl: 'https://bundler.example',
+      paymasterUrl: 'https://paymaster.example',
+    });
+  });
+
+  it('maps the two legacy flat keys onto their own leaves', () => {
+    // `bundlerUrl` + `paymasterUrl` used to share a destination, so the later
+    // key won and the user's real bundler was silently dropped.
+    const config = loadConfig(
+      {},
+      {
+        ...nowhere,
+        legacyConfigPath: file('legacy.json', {
+          bundlerUrl: 'https://bundler.example',
+          paymasterUrl: 'https://paymaster.example',
+        }),
+      },
+    );
+    expect(bundlerEndpoints(config, 8453)).toEqual({
+      bundlerUrl: 'https://bundler.example',
+      paymasterUrl: 'https://paymaster.example',
     });
   });
 
@@ -607,9 +690,11 @@ describe('the defaults layer', () => {
 
     const config = loadConfig({}, { ...layers(), defaultsPath });
 
-    // A label is replaced WHOLE: the default JWT must not leak into the custom
-    // pinata entry, which named only a gateway.
-    expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'mine.example' }]);
+    // The custom entry names only a gateway: the default JWT survives (same
+    // provider merges field by field) and the gateway is the custom one.
+    expect(config.pinning).toEqual([
+      { provider: 'pinata', key: 'default-jwt', url: 'mine.example' },
+    ]);
     // A singleton merges: the custom key wins, the default URL survives.
     expect(config.paymaster).toEqual({ key: 'my-key', url: 'default-bundler' });
   });

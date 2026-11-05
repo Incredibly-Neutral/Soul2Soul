@@ -3,7 +3,7 @@
 // the legacy flat file translated on read.
 // ============================================================================
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -106,6 +106,25 @@ describe('tolerant reads', () => {
     expect(config.rpc).toEqual({ drpc: { key: 'dk' }, custom: { l1: ['a', 'b'] } });
     expect(config.github).toBeUndefined();
   });
+
+  it('omits an absent field in a pinning entry instead of blanking it', () => {
+    // `key: ''` used to be written for every entry, and `mergeLabels` copies
+    // every defined field — so a gateway-only label wiped the credential the
+    // layer below supplied. Same rule as the `ipfs` map: omit, and inherit.
+    writeJson(join(dir, 'a.json'), {
+      pinning: {
+        pinata: { url: 'gateway.example' },
+        filebase: { key: 'fb-token' },
+      },
+    });
+    const config = readFileConfig(join(dir, 'a.json'));
+    expect(config.pinning).toEqual({
+      pinata: { provider: 'pinata', url: 'gateway.example' },
+      filebase: { provider: 'filebase', key: 'fb-token' },
+    });
+    // …specifically: no `key` property at all, not an empty string.
+    expect('key' in (config.pinning?.pinata ?? {})).toBe(false);
+  });
 });
 
 describe('the legacy flat file', () => {
@@ -138,8 +157,10 @@ describe('the legacy flat file', () => {
       filebase: { provider: 'filebase', key: 'ft' },
     });
     expect(legacy.rpc).toEqual({ custom: { l1: ['http://a'], l2: ['http://b', 'http://c'] } });
-    // paymasterUrl is the more specific of the two that share a destination
+    // Two independent escape hatches: folding both onto `paymaster.url` used to
+    // drop the real bundler (the later key won).
     expect(legacy.paymaster).toEqual({ key: 'pk', url: 'https://paymaster.example' });
+    expect(legacy.bundler).toEqual({ url: 'https://bundler.example' });
     expect(legacy.filecoin).toEqual({
       chain: 'calibration',
       rpcUrl: 'https://fc.example',
@@ -213,6 +234,20 @@ describe('writeConfigValue', () => {
     }).toThrow(/placeholder/);
   });
 
+  it('refuses a prototype segment and leaves Object.prototype alone', () => {
+    // `config set ipfs.__proto__.url …` is argv, not a typo in a hand-edited
+    // file: the walker would descend into the prototype and assign a GLOBAL.
+    const file = paths().userConfigPath;
+    expect(() => {
+      writeConfigValue(file, 'ipfs.__proto__.url', 'evil.example');
+    }).toThrow(/__proto__/);
+    expect(() => {
+      writeConfigValue(file, 'ipfs.constructor.url', 'evil.example');
+    }).toThrow(/constructor/);
+    expect(({} as Record<string, unknown>).url).toBeUndefined();
+    expect(existsSync(file)).toBe(false);
+  });
+
   it('round-trips through loadConfig', () => {
     writeConfigValue(paths().userConfigPath, 'ipfs.kubo.url', 'mine.example');
     writeConfigValue(paths().userConfigPath, 'pinning.pinata.key', 'jwt');
@@ -233,6 +268,15 @@ describe('matchField', () => {
     expect(matchField('privateKey')).toBeUndefined();
     expect(matchField('pinning.pinata')).toBeUndefined();
     expect(matchField('bundler.entryPoint')).toBeUndefined();
+  });
+
+  it('never matches a prototype segment as a label', () => {
+    // A label map would otherwise accept `__proto__` as its label and reach the
+    // prototype in the path walkers.
+    expect(matchField('ipfs.__proto__.url')).toBeUndefined();
+    expect(matchField('pinning.prototype.key')).toBeUndefined();
+    expect(matchField('ipfs.constructor.url')).toBeUndefined();
+    expect(matchField('ipfs.kubo.url')?.spec.path).toBe('ipfs.*.url');
   });
 
   it('does not offer entryPoint as a settable key', () => {
@@ -274,6 +318,12 @@ describe('maskSecret', () => {
   it('hides the body but keeps a hint', () => {
     expect(maskSecret('0123456789abcdef')).toBe('01…cdef');
     expect(maskSecret('short')).toBe('********');
+  });
+
+  it('masks nothing when there is nothing to mask', () => {
+    // `********` for an empty string made `config list` show a credential for a
+    // leaf that has none.
+    expect(maskSecret('')).toBe('');
   });
 });
 

@@ -216,6 +216,31 @@ describe('the value shown next to each question', () => {
     // Nothing provides a Filebase token, so that one is still unset.
     expect(question('Filebase token')).toContain('unset');
   });
+
+  it('masks a URL credential exactly as `config get` does', async () => {
+    // The wizard used to print `filecoin.rpcUrl` in clear while `config get`
+    // hid the GLIF key — the same leaf, two answers, one of them a leak on
+    // screen (and in a shared terminal, in the log).
+    promptState.interactive = true;
+    mkdirSync(join(dir, 's2s'), { recursive: true });
+    writeFileSync(
+      customFile(),
+      JSON.stringify({
+        filecoin: { rpcUrl: 'https://glif.example/rpc/v1?token=GLIFKEY' },
+        pinning: { pinata: { provider: 'pinata', url: 'https://pinata.example/api?key=PINKEY' } },
+      }),
+      'utf8',
+    );
+
+    await run([]);
+
+    const asked = promptState.asked.join('\n');
+    expect(asked).not.toContain('GLIFKEY');
+    expect(asked).not.toContain('PINKEY');
+    // …and the endpoint (and the layer it comes from) is still legible.
+    expect(asked).toContain('https://glif.example/rpc/v1?token=********');
+    expect(asked).toContain('https://pinata.example/api?key=********');
+  });
 });
 
 describe('the flag surface', () => {

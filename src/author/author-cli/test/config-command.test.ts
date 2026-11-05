@@ -47,20 +47,27 @@ function configFile(layer = 'custom.json', data: Record<string, unknown> = {}): 
   return path;
 }
 
-function capture(): { out: CliOut; results: Record<string, unknown>[]; warnings: string[] } {
+function capture(): {
+  out: CliOut;
+  results: Record<string, unknown>[];
+  warnings: string[];
+  humans: string[];
+} {
   const results: Record<string, unknown>[] = [];
   const warnings: string[] = [];
+  const humans: string[] = [];
   const out: CliOut = {
     json: true,
     log: () => undefined,
     warn: (message: string) => {
       warnings.push(message);
     },
-    result: (data: unknown) => {
+    result: (data: unknown, human?: string) => {
       results.push(data as Record<string, unknown>);
+      if (human !== undefined) humans.push(human);
     },
   };
-  return { out, results, warnings };
+  return { out, results, warnings, humans };
 }
 
 function run(action: 'get' | 'list' | 'set' | 'unset', argv: string[]) {
@@ -229,6 +236,81 @@ describe('config unset for a real key', () => {
     expect(readConfigFile(file)).toEqual({});
     expect(sink.results[0]).not.toHaveProperty('tombstone');
   });
+
+  it('creates no custom.json on a machine that never had one', () => {
+    // Nothing supplies this leaf anywhere: a delete is a no-op, and a no-op
+    // must not leave an empty custom file behind (same rule as a privateKey
+    // unset).
+    const file = join(dir, 's2s', 'custom.json');
+
+    const sink = run('unset', ['pinning.filebase.key']);
+
+    expect(existsSync(file)).toBe(false);
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('does not write a marker when a higher layer supplies the value', () => {
+    // A tombstone can only suppress layers BELOW the file it is written into.
+    // With the project file holding the value, a null in custom.json would do
+    // nothing while the result said the key was gone — and for a secret that
+    // is a false "I removed it".
+    process.chdir(dir);
+    writeFileSync(
+      join(dir, '.s2sconfig.json'),
+      JSON.stringify({ paymaster: { key: 'PR0JECTKEY' } }),
+      'utf8',
+    );
+    const file = configFile('custom.json', {});
+
+    const sink = run('unset', ['paymaster.key']);
+
+    expect(readConfigFile(file)).toEqual({});
+    expect(sink.results[0]).toMatchObject({ suppliedBy: 'project' });
+    expect(sink.results[0]).not.toHaveProperty('tombstone');
+    expect(sink.warnings[0]).toContain('.s2sconfig.json');
+    expect(sink.warnings[0]).toMatch(/--local/);
+    // …and the value really is still in effect, which is what it said.
+    expect(configKeyValue('paymaster.key')).toBe('PR0JECTKEY');
+  });
+
+  it('does not write a marker when the env supplies the value, and names the var', () => {
+    vi.stubEnv('S2S_GITHUB_TOKEN', 'gh-token');
+    const file = configFile('custom.json', {});
+
+    const sink = run('unset', ['github.token']);
+
+    expect(readConfigFile(file)).toEqual({});
+    expect(sink.results[0]).toMatchObject({ suppliedBy: 'env' });
+    expect(sink.warnings[0]).toContain('S2S_GITHUB_TOKEN');
+    expect(configKeyValue('github.token')).toBe('gh-token');
+  });
+
+  it('still removes a duplicate in the target while the project layer wins', () => {
+    // The copy in custom.json is real litter; deleting it cannot touch the
+    // project file, so the delete is honest on its own (no marker).
+    process.chdir(dir);
+    writeFileSync(
+      join(dir, '.s2sconfig.json'),
+      JSON.stringify({ lit: { usageKey: 'project-usage' } }),
+      'utf8',
+    );
+    const file = configFile('custom.json', { lit: { usageKey: 'custom-usage' } });
+
+    const sink = run('unset', ['lit.usageKey']);
+
+    expect(readConfigFile(file)).toEqual({});
+    expect(sink.results[0]).toMatchObject({ suppliedBy: 'project' });
+    expect(configKeyValue('lit.usageKey')).toBe('project-usage');
+  });
+
+  it('rejects a prototype segment instead of walking onto Object.prototype', () => {
+    configFile('custom.json', {});
+
+    expect(() => run('set', ['ipfs.__proto__.url', 'evil.example'])).toThrow(/unknown config key/);
+    expect(() => run('unset', ['ipfs.__proto__.url'])).toThrow(/unknown config key/);
+    expect(({} as Record<string, unknown>).url).toBeUndefined();
+  });
+
   it('refuses entryPoint, which is env-only', () => {
     const file = configFile('custom.json', {});
 
@@ -272,5 +354,51 @@ describe('config unset for a real key', () => {
     const listed = run('list', []);
     expect(JSON.stringify(listed.results[0])).not.toContain('pk_live_secret');
     expect(JSON.stringify(listed.results[0])).toContain('api.pimlico.io');
+  });
+
+  it('masks a credential in a label-map URL, in get and list', () => {
+    // `pinning.*.url` / `ipfs.*.url` carry tokens too (a Pinata gateway with
+    // `?key=`, a Kubo endpoint with `?token=`): they are `url: true` leaves.
+    configFile('custom.json', {
+      ipfs: { kubo: { url: 'https://gw.example/api?token=S3CRETTOKEN' } },
+      pinning: { pinata: { url: 'https://pinata.example/api?key=S3CRETKEY' } },
+    });
+
+    for (const [key, endpoint] of [
+      ['ipfs.kubo.url', 'https://gw.example/api?token=********'],
+      ['pinning.pinata.url', 'https://pinata.example/api?key=********'],
+    ] as const) {
+      const gotten = run('get', [key]);
+      expect(gotten.results[0]).toMatchObject({ key, value: endpoint });
+    }
+
+    const listed = run('list', []);
+    const payload = JSON.stringify(listed.results[0]);
+    expect(payload).not.toContain('S3CRETTOKEN');
+    expect(payload).not.toContain('S3CRETKEY');
+    // …the endpoint stays readable, so the table still says which gateway it is.
+    expect(payload).toContain('gw.example');
+    expect(payload).toContain('pinata.example');
+  });
+
+  it('warns about a credential in a label-map URL written to the project file', () => {
+    process.chdir(dir);
+    configFile('custom.json', {});
+
+    const sink = run('set', ['ipfs.kubo.url', 'https://gw.example/?token=S3', '--local']);
+
+    expect(sink.warnings[0]).toMatch(/credential/);
+    expect(sink.warnings[0]).toMatch(/\.s2sconfig\.json/);
+  });
+
+  it('does not invent a masked secret for a label that has no credential', () => {
+    // `maskSecret('')` used to return `********`, so `list` claimed a credential
+    // for a gateway-only label while `get` said (unset).
+    configFile('custom.json', { pinning: { pinata: { provider: 'pinata', url: 'mine.example' } } });
+
+    expect(run('get', ['pinning.pinata.key']).results[0]).toMatchObject({ value: null });
+    const listed = run('list', []);
+    expect(JSON.stringify(listed.results[0])).not.toContain('pinning.pinata.key');
+    expect(listed.humans[0] ?? '').not.toContain('pinning.pinata.key');
   });
 });

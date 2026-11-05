@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path';
 
 import {
   deletePath,
+  isUnsafeSegment,
   matchField,
   normalizeFileConfig,
   parseList,
@@ -84,6 +85,9 @@ function pruneTombstones(value: unknown): unknown {
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      // `JSON.parse` keeps `"__proto__"` as an own key; assigning it here would
+      // set the prototype instead. It is never a config label, so drop it.
+      if (isUnsafeSegment(key)) continue;
       const kept = pruneTombstones(child);
       if (kept !== undefined) out[key] = kept;
     }
@@ -116,9 +120,10 @@ export function readFileConfig(path: string): FileConfig {
 /**
  * The pre-reorganisation flat keys, translated onto their nested paths.
  *
- * Order matters where two legacy keys share a destination (`bundlerUrl` and
- * `paymasterUrl` both land on `paymaster.url`): the later, more specific one
- * wins, exactly as it did when they were separate settings.
+ * The two escape hatches land on two leaves: `bundlerUrl` is the bundler and
+ * `paymasterUrl` the paymaster, independently, exactly as they were separate
+ * settings before the reorganisation (folding them together silently dropped
+ * one of the two, and made an explicit bundler imply sponsorship).
  *
  * Deliberately absent: `privateKey`, `filecoinPrivateKey`, `entryPoint`,
  * `runnerUrl`. The first two are secrets with another home (the env and
@@ -135,7 +140,7 @@ const LEGACY_KEY_PATHS: readonly (readonly [string, string])[] = [
   ['rpcL1', 'rpc.custom.l1'],
   ['rpcL2', 'rpc.custom.l2'],
   ['pimlicoKey', 'paymaster.key'],
-  ['bundlerUrl', 'paymaster.url'],
+  ['bundlerUrl', 'bundler.url'],
   ['paymasterUrl', 'paymaster.url'],
   ['filecoinChain', 'filecoin.chain'],
   ['filecoinRpc', 'filecoin.rpcUrl'],
@@ -215,8 +220,14 @@ function storedScalar(value: unknown): unknown {
   return typeof value === 'string' ? textValue(value) : value;
 }
 
-/** Mask a secret for display — keeps the shape, hides the body. */
+/**
+ * Mask a secret for display — keeps the shape, hides the body.
+ *
+ * An empty value is not a secret: returning `********` for it would show a
+ * credential in `config list` for a leaf that has none.
+ */
 export function maskSecret(value: string): string {
+  if (value.length === 0) return '';
   if (value.length <= 8) return '********';
   return `${value.slice(0, 2)}…${value.slice(-4)}`;
 }

@@ -12,10 +12,11 @@
 //
 // Merge rules (they differ per section on purpose):
 //   - `pinning` / `ipfs` are label maps merged per label: the same provider is
-//     filled field by field, so `ipfs.kubo.key` keeps the gateway it belongs to;
-//     a different provider replaces the entry whole (a JWT has no meaning for
-//     Kubo). A credential is never inherited across providers — pinning's key
-//     normalizes to `''`, which counts as "named" and does not fall through.
+//     filled field by field, so `ipfs.kubo.key` keeps the gateway it belongs to
+//     and `pinning.pinata.url` keeps the JWT below it; a different provider
+//     replaces the entry whole (a JWT has no meaning for Kubo). An absent field
+//     is omitted rather than blanked, so it inherits — a credential is never
+//     inherited ACROSS providers, only within one.
 //   - `rpc` is per provider key; `rpc.custom.l1`/`l2` replace the derived chain
 //     only when BOTH are set. One alone heads its own chain and the fallbacks
 //     stay behind it; `MAINNET_RPC_URL`/`BASE_RPC_URL` take the same head slot.
@@ -106,7 +107,9 @@ export interface CliConfig {
   ipfs: { entries: IpfsEntry[]; primary: IpfsEntry | undefined };
   /** Fully resolved L1/L2 chains, in failover order. */
   rpc: { l1: string[]; l2: string[] };
-  /** ERC-4337 bundler/paymaster credentials; one Pimlico key serves both. */
+  /** ERC-4337 endpoints. A Pimlico key serves both roles; each URL is its own
+   * escape hatch, and an explicit bundler URL with no key means NO sponsorship. */
+  bundler: { url: string | undefined };
   paymaster: { key: string | undefined; url: string | undefined };
   filecoin: {
     chain: FilecoinChain;
@@ -267,6 +270,9 @@ function mergeLayers(layers: readonly FileConfig[]): FileConfig {
 
   const paymaster = mergeFields(layers.map((layer) => layer.paymaster));
   if (paymaster) out.paymaster = paymaster;
+
+  const bundler = mergeFields(layers.map((layer) => layer.bundler));
+  if (bundler) out.bundler = bundler;
 
   const filecoin = mergeFields(layers.map((layer) => layer.filecoin));
   if (filecoin) out.filecoin = filecoin;
@@ -496,12 +502,12 @@ function warnDeprecatedFileKey(layer: 'project' | 'custom' | 'legacy', path: str
   warnedKeyFiles.add(path);
   const removal =
     layer === 'project'
-      ? '`s2s config unset privateKey --local`'
+      ? 'with `s2s config unset privateKey --local`'
       : layer === 'custom'
-        ? '`s2s config unset privateKey`'
-        : 'delete the `privateKey` line from that file by hand — the CLI never writes it';
+        ? 'with `s2s config unset privateKey`'
+        : 'by hand — delete the `privateKey` line from that file';
   process.stderr.write(
-    `warning: the signing key was read from the ${layer} config file (${path}). A \`privateKey\` in a config file is deprecated: file it once with \`s2s author new\`, then remove it with ${removal}.\n`,
+    `warning: the signing key was read from the ${layer} config file (${path}). A \`privateKey\` in a config file is deprecated: file it once with \`s2s author new\`, then remove it ${removal}.\n`,
   );
 }
 
@@ -606,6 +612,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
     ipfs: { entries, primary: entries[0] },
     rpc: resolveRpcs(env, file),
     paymaster: { key: file.paymaster?.key, url: file.paymaster?.url },
+    bundler: { url: file.bundler?.url },
     filecoin: {
       chain: file.filecoin?.chain ?? 'mainnet',
       // `unset` wins over the registry default, or `config unset filecoin.rpcUrl`
@@ -681,6 +688,16 @@ const SHORTHAND_ENV = new Map<string, readonly string[]>(
   LABEL_ENV_SHORTHANDS.map((shorthand) => [shorthand.path, shorthand.env]),
 );
 
+/**
+ * Env names that can supply one dotted path, in precedence order: the field's
+ * own names plus (for a concrete label path) its shorthand. Used by
+ * `configValueSource` and by `config unset` when it names the layer to edit.
+ */
+export function envNamesFor(key: string): string[] {
+  const spec = fieldByPath(key) ?? matchField(key)?.spec;
+  return [...(spec?.env ?? []), ...(SHORTHAND_ENV.get(key) ?? [])];
+}
+
 /** Is this leaf — or any object above it — an explicit `null` tombstone? */
 function isTombstoned(raw: Record<string, unknown>, dotted: string): boolean {
   let node: unknown = raw;
@@ -706,8 +723,7 @@ export function configValueSource(
   env: NodeJS.ProcessEnv = process.env,
   opts: LoadConfigOptions = {},
 ): ConfigValueSource | undefined {
-  const spec = fieldByPath(key) ?? matchField(key)?.spec;
-  const names = [...(spec?.env ?? []), ...(SHORTHAND_ENV.get(key) ?? [])];
+  const names = envNamesFor(key);
   if (names.some((name) => textValue(env[name]) !== undefined)) return 'env';
 
   const paths = pathsFor(env, opts);
@@ -772,21 +788,24 @@ export interface BundlerEndpoints {
  * Resolve the ERC-4337 endpoints for one chain. Endpoints are per-chain, so a
  * bare Pimlico key yields a different URL for mainnet and Base.
  *
- * `paymaster.url` is the explicit endpoint (a non-Pimlico bundler, or a
- * paymaster-only service) and wins over the derived Pimlico URL; the same URL
- * serves both roles, which is how Pimlico exposes them and how the one
- * remaining knob is documented. No endpoint configured → undefined, and the
- * caller says which env var to set.
+ * Two independent escape hatches, never one:
+ *   bundlerUrl   = `bundler.url` ?? the derived Pimlico URL
+ *   paymasterUrl = `paymaster.url` ?? the derived Pimlico URL
+ *
+ * So an explicit bundler on its own means **no sponsorship** (`paymasterUrl`
+ * undefined) — it is not a Pimlico paymaster and must not be called as one —
+ * while an explicit paymaster URL never moves the bundler. No bundler endpoint
+ * at all → undefined, and the caller says which env var to set.
  */
 export function bundlerEndpoints(
   config: CliConfig,
   chainId: number,
 ): BundlerEndpoints | undefined {
   const key = config.paymaster.key;
-  const derived = key ? pimlicoRpcUrl(key, chainId) : undefined;
-  const endpoint = config.paymaster.url ?? derived;
-  if (!endpoint) return undefined;
-  return { bundlerUrl: endpoint, paymasterUrl: endpoint };
+  const pimlico = key ? pimlicoRpcUrl(key, chainId) : undefined;
+  const bundlerUrl = config.bundler.url ?? pimlico;
+  if (!bundlerUrl) return undefined;
+  return { bundlerUrl, paymasterUrl: config.paymaster.url ?? pimlico };
 }
 
 // The schema is shared with the config commands and the tests; re-exported so
