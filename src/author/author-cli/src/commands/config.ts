@@ -20,10 +20,14 @@
 // or the project file with `--local`. Secrets are masked in get/list output and
 // warned about when they land in a project file (risk of committing them).
 //
-// `privateKey` is deliberately NOT a key of this surface any more: the signing
-// identity lives in the author store (authors.json), reached through
-// `s2s author new` / `s2s author switch`. Setting it here would silently lose
-// to the active stored author, so it is refused with a pointer instead.
+// `privateKey` is deliberately NOT a settable key of this surface any more:
+// the signing identity lives in the author store (authors.json), reached
+// through `s2s author new` / `s2s author switch`. Setting it here would
+// silently lose to the active stored author, so it is refused with a pointer
+// instead. `unset privateKey` is the exception, and has to be: core/config.ts
+// still honours a `privateKey` left in a config file (the deprecated fallback
+// for installs that predate the store), so the same tool has to be able to take
+// that stranded secret back out of the file.
 //
 // This group never touches buildContext — configuring the CLI must work
 // without a private key or any RPC endpoint.
@@ -38,7 +42,7 @@ import { commandHelp, flagRows, GLOBAL_FLAGS, type FlagSpec, type ParsedArgs } f
 import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
-import { configFilePaths, maskSecret, writeConfigValue } from '../core/configfile';
+import { configFilePaths, maskSecret, readConfigFile, writeConfigValue } from '../core/configfile';
 import { configKeyValue, configSections, loadConfig, type LoadConfigOptions } from '../core/config';
 import { CONFIG_FIELDS, matchField, type ConfigFieldSpec } from '../core/configschema';
 
@@ -122,6 +126,11 @@ const PRIVATE_KEY_REDIRECT =
 
 function rejectPrivateKey(key: string): void {
   if (key === 'privateKey') throw new UsageError(PRIVATE_KEY_REDIRECT);
+}
+
+/** Where the signing key may still be sitting, for `unset privateKey`. */
+function fileKeyPresent(path: string): boolean {
+  return path !== '' && readConfigFile(path).privateKey !== undefined;
 }
 
 function requireField(args: ParsedArgs): ResolvedField {
@@ -229,12 +238,60 @@ function getCommand(out: CliOut, args: ParsedArgs): void {
 }
 
 function unsetCommand(out: CliOut, args: ParsedArgs): void {
+  const key = args.positionals[0];
+  if (!key) {
+    throw new UsageError('missing required argument: <key>');
+  }
+  // The retired key is the one exception on this action: it can no longer be
+  // set, but a copy left behind by an older install still resolves, so it must
+  // be removable from here or the secret is stranded in the file.
+  if (key === 'privateKey') {
+    unsetPrivateKey(out, args);
+    return;
+  }
   const { path } = requireField(args);
   const target = writeTarget(args);
   writeConfigValue(target.file, path, undefined);
   out.result(
     { action: 'config.unset', key: path, file: target.file, local: target.local },
     `unset ${path} in ${target.label} config (${target.file})`,
+  );
+}
+
+/**
+ * Remove a stranded `privateKey` from the target config file.
+ *
+ * `--local` targets the project file, the default the custom file. The legacy
+ * file (~/.config/s2s/config.json) is read-only here by design, so a copy
+ * there is reported with its path and left for a human to delete — silently
+ * skipping it would leave the user "unset" and still signing with it.
+ */
+function unsetPrivateKey(out: CliOut, args: ParsedArgs): void {
+  const target = writeTarget(args);
+  const existed = fileKeyPresent(target.file);
+  // Only touch the file when there is something in it: an unset must not
+  // create an empty custom.json for someone who never had one.
+  if (existed) writeConfigValue(target.file, 'privateKey', undefined);
+
+  const legacy = configFilePaths().legacy;
+  const stranded = legacy !== target.file && fileKeyPresent(legacy);
+  if (!existed) {
+    out.warn(
+      stranded
+        ? `no privateKey in ${target.file} — but the legacy config file ${legacy} has one. The CLI never writes that file; delete the privateKey line from it by hand.`
+        : `no privateKey in ${target.file} — nothing to remove`,
+    );
+  } else if (stranded && target.file !== legacy) {
+    out.warn(
+      `the legacy config file ${legacy} also holds a privateKey — delete that line by hand too (the CLI never writes it)`,
+    );
+  }
+
+  out.result(
+    { action: 'config.unset', key: 'privateKey', file: target.file, local: target.local },
+    existed
+      ? `removed privateKey from ${target.label} config (${target.file})\nThe signing key is the author store's job now: \`s2s author new\` files one, \`s2s author switch\` picks between them.`
+      : `privateKey is not in the ${target.label} config (${target.file})`,
   );
 }
 
@@ -383,6 +440,8 @@ Known keys: ${knownKeys()}
 
 The signing key is not managed here: 's2s author new/switch/list/rm' own the
 identities, and 's2s config get eoa' shows the address they sign with.
+An older install's 'privateKey' in a config file still resolves (below the
+store); take it out with 's2s config unset privateKey [--local]'.
 
 Run "s2s config <action> --help" for details on an action.`;
 }
