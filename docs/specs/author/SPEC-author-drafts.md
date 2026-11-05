@@ -10,9 +10,9 @@
 > **Type:** component spec. It owns one package — `src/author/contracts`, `DraftsModuleV1` and
 > `DraftsModuleV1Factory` — and the meaning of the log it keeps.
 >
-> **Status:** SPEC-FIRST. No code, no package, no deployment at the time of writing. The interface below
-> is frozen; anything under [open questions](#open-questions) is not decided and must not be treated as
-> a guarantee.
+> **Status:** the package is written and tested (`src/author/contracts`, 7 node-test cases); nothing is
+> deployed. The interface below is frozen; anything under [open questions](#open-questions) is not
+> decided and must not be treated as a guarantee.
 
 ---
 
@@ -22,7 +22,8 @@ A UUPS module installed on an author Safe, keeping **drafts**: manuscripts uploa
 a publication. It holds, per Safe:
 
 - **the draft list** — `bytes32[]` in insertion order, plus `mapping(bytes32 => bool) isDraft`;
-- **the version log** — `Version[] versions[genesis]`, `versionCount[genesis]`;
+- **the version log** — `Version[] versions[genesis]` (the count is its length; there is no separate
+  counter);
 - **the binding** — `authorOf[genesis]`.
 
 It does not hold content, encryption, deals, offers, whitelists, config, or the site root. It never
@@ -88,9 +89,10 @@ struct Entry   { bytes32 genesis; address author; string cid; uint256 timestamp;
 `Entry` is assembled on read and never stored — as on the publication side. Its `cid` and `timestamp` are
 the **latest** version's; `versionCount` is how many there are.
 
-**The tuple order is not the publication `Entry`'s order.** Publication is
-`(genesis, cid, author, timestamp)`; this is `(genesis, author, cid, timestamp, versionCount)`. A decoder
-written against one must never be pointed at the other, and the generated ABIs will not catch it.
+The first four fields match the publication `Entry` (`genesis, author, cid, timestamp`) field for field;
+this `Entry` appends `versionCount`. The two structs are still distinct types with distinct ABIs — a
+decoder written against one must never be pointed at the other, and nothing catches it for you, but at
+least the shared prefix reads identically.
 
 ## Events and upgrade
 
@@ -184,9 +186,14 @@ other. What follows:
    a chain read per document and nothing in `author-cli` imports the module today.
 5. **Is this the works list (AUTHOR-9)?** No — [RFC-001](../../rfc/RFC-001-portable-byline.md) is the
    byline and covers works that carry agreements. Whether the byline should also read drafts is open.
-6. **`versionIndex` base** — 0 or 1 — is not fixed. Pin it at build time and assert it in tests.
-7. **Paging edges** — out-of-range `offset`, `limit == 0`, and whether a paged read clamps or returns
-   empty are unspecified.
+6. **Is a draft entry ever pruned?** Not in V1 (INV: append-only). If storage cost on Base becomes the
+   complaint, an `onlySafe` prune that keeps the CID but drops the record is the first thing to weigh
+   against the invariant that `history` is a complete trail.
+
+Settled by the implementation, recorded here so it stops being a question: `versionIndex` is **0-based**
+(the index the new version just took, i.e. the old length); a paged read returns an **empty array** when
+`offset >= count` or `limit == 0`, and otherwise **clamps** the end at `count`; `fetch` on an unknown
+genesis returns the zeroed `Entry` rather than reverting.
 
 ## Safe-to-change vs do-not-touch
 
@@ -209,4 +216,5 @@ other. What follows:
   `setImplementation` then `createModule` → new proxy on the new implementation, old one untouched;
   `getImplementationByVersion(0)` and `(count + 1)` revert.
 - Upgrade: `_authorizeUpgrade` from a non-Safe reverts, from the Safe succeeds and emits
-  `ContractUpgraded`.
+  `ContractUpgraded`. **Untested** — there is no V2 implementation to upgrade to yet, so the only
+  exercised parts of the UUPS path are `initialize` and the `onlySafe` modifier it shares.

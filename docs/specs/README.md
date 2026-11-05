@@ -95,7 +95,7 @@ own area.
   re-reading everything
 - `author/` — nine invariants, ADR-001..002, RFC-001..002, RFC-003, RFC-004; branches:
   `identity`, `publishing`, `shared`, `hosts`, `cli`, `nvim`, `vscode`, `nvim-s2s`, `drafts`
-  (the append log of manuscripts uploaded and never offered, on the author Safe; spec-first, no code)
+  (the append log of manuscripts uploaded and never offered, on the author Safe)
 - `publication/` — thirteen invariants, two additions, five gaps; branches: `account`,
   `agreements`, `admin-app`, `look`, `review`, `storage`, `contracts-ens` (the name layer, which
   implements PUBLICATION-1, -8 and -9)

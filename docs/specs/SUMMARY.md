@@ -62,7 +62,7 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   CIDs, PKP fields, `ens_records` address); read/write via `getRecords`/`setRecord`.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**
-- **`DraftsModuleV1`** (author side, spec-first — not built) — per author Safe, the append-only log of
+- **`DraftsModuleV1`** (author side, built in `src/author/contracts`, not deployed) — per author Safe, the append-only log of
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
