@@ -1,11 +1,6 @@
 # AGENTS.md — s2s / Polyphony
 
-> **Write short.** The reader is slower than you and skims what is long. A reply is the point,
-> not a log of how you got there: no recap of what you just did, no restating the diff, no
-> narration between tool calls. Test output is a count and the failing lines — never a pasted
-> run. Bold and headers inside a wall of text make it *less* readable, not more; use them to
-> mark the two or three things that matter, and leave the rest plain. If a sentence does not
-> change what the reader does next, cut it.
+Reply like a colleague giving a quick spoken update. Plain words, short. Start with anything that needs my decision or action. If nothing does, say so in one line. Skip what went fine: routine steps, files read, passing checks. Only flag problems that actually affect me, and no more than three. Bold at most one thing per reply. No headers or lists unless there are truly separate items. No recap, no offers to do more.
 
 This file is the entry point for any agent working in this repo. It replaces `brain/agents.md`,
 which is retired: `brain/` no longer exists and nothing belongs there. **Do not create a second
