@@ -66,6 +66,14 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
+- **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, built in `src/author/contracts`, not deployed) — one module per
+author Safe, mirroring the Safe's owner set and keeping every past set with the block and timestamp it
+held, plus a storage-free, non-upgradeable guard whose `checkAfterExecution` calls the module's
+permissionless `sync()`. It exists because Safe 1.4.1 has no hook on owner rotation: every rotation is
+`onlySelf`, so it arrives through `execTransaction`, and the guard is the only on-chain tap there is.
+The guard is best-effort, not the mechanism: history starts when the module does, a missed hook is
+repaired by anyone's `sync()` at the repair block (leaving `SyncFailed` and `lastSyncedBlock()` behind),
+and reading the history never depends on the guard having fired.
 
 ## 3. The publish pipeline — how actions work (PREP → RENDER → UPDATE)
 
@@ -212,5 +220,8 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 - Publication (the whole group): `specs/publication/SPEC-publication.md`; template kit: `specs/publication/SPEC-publication-look.md` + `rfc/RFC-010-website-starter-agent-kit.md`.
 - Drafts (uploaded, never offered): `specs/author/SPEC-author-drafts.md` — `DraftsModuleV1`, its append
   log, and why an offer is a copy of a CID rather than a reference into it.
+- Owner history (who was an owner, and when): `specs/author/SPEC-author-owner-history.md` —
+  `OwnerHistoryModuleV1` and `OwnerHistoryGuard`, the era model and its boundary rule, and why the Safe
+  offers no hook on owner rotation.
 - Clone-local skills: `skills/template-design/SKILL.md` + `skills/s2s-protocol/SKILL.md` (in
   `~/code/website-starter/skills/`, mirrored into each clone).
