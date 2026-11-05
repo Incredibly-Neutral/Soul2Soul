@@ -66,13 +66,14 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
-- **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, spec-first, no code) — one module per
+- **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, built in `src/author/contracts`, not deployed) — one module per
 author Safe, mirroring the Safe's owner set and keeping every past set with the block and timestamp it
 held, plus a storage-free, non-upgradeable guard whose `checkAfterExecution` calls the module's
 permissionless `sync()`. It exists because Safe 1.4.1 has no hook on owner rotation: every rotation is
 `onlySelf`, so it arrives through `execTransaction`, and the guard is the only on-chain tap there is.
-The guarantee is only as good as the guard's uptime — history starts when the guard is installed, and a
-later `sync()` stamps the boundary at sync time.
+The guard is best-effort, not the mechanism: history starts when the module does, a missed hook is
+repaired by anyone's `sync()` at the repair block (leaving `SyncFailed` and `lastSyncedBlock()` behind),
+and reading the history never depends on the guard having fired.
 
 ## 3. The publish pipeline — how actions work (PREP → RENDER → UPDATE)
 
