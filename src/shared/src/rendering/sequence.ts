@@ -404,9 +404,6 @@ export const renderwithLitActions = async (
         preview,
         endpoints,
       });
-      console.log(
-        `[maintain-cache] firing dedicated action (${protocolInfo.litActions.maintainCache}) after render flagged drift`,
-      );
       maintainCacheResult = await runAction(
         preview,
         lit,
@@ -417,21 +414,18 @@ export const renderwithLitActions = async (
       );
     } catch (err: any) {
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      console.error(`[maintain-cache] dedicated action threw: ${err?.message || String(err)}`);
-      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
       maintainCacheResult = { ok: false, error: err?.message || String(err) || 'maintain-cache action failed' };
     }
-    // Log loudly, never swallow — the pointer write must be observable, not
-    // silently dropped the way the old fire-and-forget write-back was.
-    console.log(
-      `[maintain-cache] result: ${JSON.stringify({
-        ok: maintainCacheResult?.ok,
-        action: maintainCacheResult?.action,
-        error: maintainCacheResult?.error,
-        wrote: maintainCacheResult?.data?.wrote,
-        cid: maintainCacheResult?.data?.cid,
-      })}`,
-    );
+    // One line, never swallowed — the pointer write must be observable, not
+    // silently dropped the way the old fire-and-forget write-back was. A
+    // success without a CID is the steady state (no drift to merge): say
+    // nothing rather than print an empty write.
+    if (maintainCacheResult?.ok) {
+      const cacheCid = maintainCacheResult?.data?.cid;
+      if (cacheCid) console.log(`✓ cache updated ${cacheCid}`);
+    } else {
+      console.error(`✗ cache update failed: ${maintainCacheResult?.error ?? 'unknown error'}`);
+    }
   }
 
   return {
