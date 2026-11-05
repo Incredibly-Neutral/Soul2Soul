@@ -92,10 +92,16 @@ async function deployHistory() {
  * that is itself allowed to skip the hook, so the estimate is self-consistent
  * with "no sync".
  */
-async function rotate(d: Deployment, kind: number, a: Hex, b: Hex = zeroAddress) {
-  const block = await blockOf(d.mockSafe.write.execOwnerChange([kind, a, b], { gas: 1_200_000n }));
+async function rotateTx(d: Deployment, kind: number, a: Hex, b: Hex = zeroAddress) {
+  const hash = await d.mockSafe.write.execOwnerChange([kind, a, b], { gas: 1_200_000n });
+  const block = await blockOf(Promise.resolve(hash));
   await networkHelpers.mine(); // so block/timestamp reads take the index path
-  return block;
+  return { hash, block };
+}
+
+/** The block a rotation landed in; most tests only care about that. */
+async function rotate(d: Deployment, kind: number, a: Hex, b: Hex = zeroAddress) {
+  return (await rotateTx(d, kind, a, b)).block;
 }
 
 /** An `onlySelf` call, made the way a real Safe makes it: by executing it. */
@@ -114,6 +120,39 @@ async function syncFailure(hash: Hex): Promise<bigint | undefined> {
   if (!log) return undefined;
   assert.equal(receipt.blockNumber, BigInt(log.data), 'SyncFailed names its own block');
   return receipt.blockNumber;
+}
+
+/**
+ * How many CALLs the guard made to the module in this transaction, read off a
+ * `callTracer` trace rather than inferred.
+ *
+ * This helper exists because of a measurement, not out of tidiness: viem's gas
+ * estimation simulates the call, and the simulation is *allowed* to skip the
+ * hook (the guard is best-effort by construction), so the estimate comes back at
+ * the cost of the Safe's mutation alone — ~83k — and the hook then returns at
+ * its reserve check having called nothing at all. A test written that way passes
+ * against a guard that never calls the module, which is exactly what the first
+ * version of the three tests below did: all three were green, and a trace showed
+ * zero CALLs from the guard frame in each.
+ *
+ * So every test that claims something about the module's behaviour under the
+ * hook must (a) send an explicit gas limit — the `1_200_000n` on those calls is
+ * load-bearing, not decoration — and (b) assert the call happened.
+ */
+async function guardCallsModule(hash: Hex, guard: Hex, module: Hex): Promise<number> {
+  const trace: any = await publicClient.request({
+    method: 'debug_traceTransaction' as any,
+    params: [hash, { tracer: 'callTracer' }] as any,
+  });
+  let count = 0;
+  const walk = (frame: any) => {
+    if (frame.type === 'CALL' && chk(frame.from) === chk(guard) && chk(frame.to) === chk(module)) {
+      count++;
+    }
+    for (const child of frame.calls ?? []) walk(child);
+  };
+  walk(trace);
+  return count;
 }
 
 const ERROR_ABI = parseAbi([
@@ -193,8 +232,10 @@ describe('OwnerHistoryModuleV1', () => {
   });
 
   it('a rotation through the guard hook opens era 1 and closes era 0', async () => {
-    const boundary = await rotate(d, 0, addr(d.third));
+    const { hash, block: boundary } = await rotateTx(d, 0, addr(d.third));
 
+    // A sync that landed under the hook says nothing: no notice, era opened.
+    assert.equal(await syncFailure(hash), undefined);
     assert.equal(await d.history.read.eraCount(), 2n);
 
     const era0 = await d.history.read.eraAt([0n]);
@@ -279,6 +320,68 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(readdBlocks.length, 2);
     assert.equal(readdBlocks[1]!.start, readd);
     assert.equal(readdBlocks[1]!.end, 0n);
+  });
+
+  it('in the rotation block the live set answers, and the index agrees only because the sync landed', async () => {
+    // head == N: `isOwnerAt(who, N)` takes the live branch, because the query is
+    // not below the current block. It answers from the Safe's `isOwner`, which
+    // is already post-rotation in this block.
+    const boundary = await blockOf(
+      d.mockSafe.write.execOwnerChange([2, addr(d.second), addr(d.third)], { gas: 1_200_000n }),
+    );
+    assert.equal(await publicClient.getBlockNumber(), boundary, 'no block mined since the rotation');
+
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), boundary]), true); // the joiner
+    assert.equal(await d.history.read.isOwnerAt([addr(d.second), boundary]), false); // the leaver
+
+    // N+1: the same two queries now come from the tenure index, and they agree
+    // with the live answers only because the sync landed in the rotation block.
+    // Had the hook been skipped, the index would still describe era 0 here and
+    // the two paths would disagree — see the second half.
+    await networkHelpers.mine();
+    assert.equal(await d.history.read.eraCount(), 2n);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.third), boundary]), true);
+    assert.equal(await d.history.read.isOwnerAt([addr(d.second), boundary]), false);
+
+    // The counter-example that makes the point: a rotation whose sync was
+    // skipped, because 250k cannot pay for an add on a two-owner era (~306k).
+    // At the head the live branch still follows the Safe; one block past it the
+    // index answers from the stale era and says the opposite.
+    const skipped = await blockOf(
+      d.mockSafe.write.execOwnerChange([0, addr(d.second), zeroAddress], { gas: 250_000n }),
+    );
+    await networkHelpers.mine();
+    await networkHelpers.mine();
+
+    assert.equal(await d.mockSafe.read.isOwner([addr(d.second)]), true); // the Safe moved
+    assert.equal(await d.history.read.eraCount(), 2n); // the index did not
+
+    // At a block below the head the index is consulted, and it is stale: it
+    // still describes the era that ended before this owner came back.
+    assert.equal(await d.history.read.isOwnerAt([addr(d.second), skipped + 1n]), false);
+    // At the head the live branch is consulted, and it is right.
+    assert.equal(
+      await d.history.read.isOwnerAt([addr(d.second), await publicClient.getBlockNumber()]),
+      true,
+    );
+    // Only the live answer is reproducible from the chain's own state; the index
+    // one is a record of a gap, and it stays wrong until somebody calls `sync()`.
+  });
+
+  it('sync() refuses to record an empty owner set, rather than emptying the history', async () => {
+    // A real Safe cannot lose its last owner (`removeOwner` refuses to go below
+    // the threshold), so this is the module's reaction to a broken or mid-upgrade
+    // Safe. Recording it would close every tenure and open an era with no owners
+    // — a history that says the Safe was ownerless from here on, forever.
+    const before = await d.history.read.lastSyncedBlock();
+    await d.mockSafe.write.dropAllOwners();
+
+    await assertReverts(d.history.write.sync([]), selectorOf('ZeroOwners'));
+
+    assert.equal(await d.history.read.eraCount(), 1n);
+    assert.equal(await d.history.read.lastSyncedBlock(), before);
+    assert.equal(await d.history.read.isOwner([addr(d.first)]), false); // the Safe is empty
+    assert.equal(await d.history.read.isOwnerAt([addr(d.first), before]), true); // the history is not
   });
 
   it('swapOwner keeps the count and records one era, not two', async () => {
@@ -445,12 +548,23 @@ describe('OwnerHistoryModuleV1', () => {
     ]);
     await d.mockSafe.write.setGuard([guard.address]);
 
-    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]);
+    // The gas limit is explicit because estimation is blind to the hook: see
+    // `guardCallsModule`. Without it this test never reaches the decoder that
+    // round 1 bricked on, which is the only thing it is here to prove.
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress], {
+      gas: 1_200_000n,
+    });
     assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true); // the Safe lived
     assert.equal(await d.history.read.eraCount(), 1n); // and nothing was recorded
 
     // Silence would be the other failure: the guard has to say it skipped.
+    // There is no CALL to trace here — the `code.length` belt returns first —
+    // so the notice is the evidence that the hook ran at all, and the gas says
+    // which branch produced it: the transaction spent ~83k of its 1.2M, so the
+    // hook was entered with the rest and cannot have hit the reserve check.
     assert.notEqual(await syncFailure(hash), undefined);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    assert.ok(receipt.gasUsed < 200_000n);
 
     // The escape hatch still works, which is the whole point: on a real Safe
     // `setGuard` is `onlySelf`, i.e. an `execTransaction` that must not revert.
@@ -463,9 +577,18 @@ describe('OwnerHistoryModuleV1', () => {
     const guard = await viem.deployContract('OwnerHistoryGuard', [d.safeAddr, noSync.address]);
     await d.mockSafe.write.setGuard([guard.address]);
 
-    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]);
+    // Explicit limit, same reason: the call has to be made for the test to mean
+    // anything (see `guardCallsModule`).
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress], {
+      gas: 1_200_000n,
+    });
     assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true);
     assert.equal(await d.history.read.eraCount(), 1n);
+
+    // The call happened and reverted in the dispatcher — this one landed in the
+    // `catch` even before the fix, so it guards against a regression, not the
+    // brick.
+    assert.equal(await guardCallsModule(hash, chk(guard.address), chk(noSync.address)), 1);
     assert.notEqual(await syncFailure(hash), undefined);
   });
 
@@ -479,9 +602,21 @@ describe('OwnerHistoryModuleV1', () => {
     const guard = await viem.deployContract('OwnerHistoryGuard', [d.safeAddr, emptyProxy.address]);
     await d.mockSafe.write.setGuard([guard.address]);
 
-    await assert.doesNotReject(d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress]));
+    // Explicit limit again, and here it decides the outcome: with a short one
+    // the hook returns at the reserve check, never calls, and `SyncFailed` would
+    // fire for the wrong reason — the test would pass while proving nothing.
+    const hash = await d.mockSafe.write.execOwnerChange([0, addr(d.third), zeroAddress], {
+      gas: 1_200_000n,
+    });
     assert.equal(await d.mockSafe.read.isOwner([addr(d.third)]), true);
     assert.equal(await d.history.read.eraCount(), 1n);
+
+    // The guard really called it, the delegatecall to address(0) really
+    // succeeded, and the empty returndata is what the length check catches:
+    // `ok == true` and nothing recorded, which is why `SyncFailed` has to come
+    // from the returndata length and not from `!ok`.
+    assert.equal(await guardCallsModule(hash, chk(guard.address), chk(emptyProxy.address)), 1);
+    assert.notEqual(await syncFailure(hash), undefined);
   });
 
   it('a gas-tight Safe transaction still succeeds, and the skip is visible', async () => {

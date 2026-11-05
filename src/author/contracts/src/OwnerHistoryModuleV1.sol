@@ -181,6 +181,13 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
         if (eras.length == 0) revert SafeCallFailed();
 
         address[] memory live = _readSafeOwners();
+        // `_readSafeOwners` only rejects a *missing* answer, so an empty array
+        // would otherwise sail through: every tenure closed, an era opened with
+        // no owners, and the history claiming the Safe was ownerless from here
+        // on. A Safe that answers "no owners" is broken or mid-upgrade; refuse,
+        // and let the caller retry once it can answer. A real Safe cannot reach
+        // this — `removeOwner` keeps a threshold of at least one.
+        if (live.length == 0) revert ZeroOwners();
 
         uint256 lastIndex = eras.length - 1;
         address[] memory previous = eras[lastIndex].owners;

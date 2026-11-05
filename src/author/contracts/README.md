@@ -52,7 +52,7 @@ Two holes worth knowing, both properties of Safe 1.4.1:
 ## The publish surface
 
 `main` is `generated/abis/index.ts`, which is generated on `pnpm compile` by
-`hardhat-deploy`'s `generateTypedArtifacts` hook and exports exactly the four
+`hardhat-deploy`'s `generateTypedArtifacts` hook and exports exactly the five
 contracts above. That hook has no include/exclude option; it skips files whose
 path ends in `.t.sol`, which is why the test fixtures live in
 `test/MockSafe.t.sol`. Keep fixtures in a `.t.sol` file or they will be published

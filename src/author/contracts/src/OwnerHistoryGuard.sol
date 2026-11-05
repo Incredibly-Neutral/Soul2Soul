@@ -53,18 +53,20 @@ pragma solidity ^0.8.19;
  *   guard's own frame, outside the `catch`** — `execTransaction` reverts, and so
  *   does the `setGuard(address(0))` that would remove the guard. Permanent and
  *   unrecoverable. The call below is therefore low-level, and the return data is
- *   not decoded at all (the guard does not care whether the set changed).
+ *   never decoded — only measured (a word is the least a `bool` could be).
  *   Reachable exactly the ways a hand-made deploy gets wrong: the
  *   implementation address instead of the proxy, a typo, a proxy deployed later.
- *   `module.code.length == 0` is a cheap belt for the codeless case; the empty
- *   returndata of a *proxy* pointing at nothing is covered by the low-level call
- *   (a `delegatecall` to address(0) succeeds), which is the actual fix.
+ *   `module.code.length == 0` is a cheap belt for the codeless case. It is not
+ *   enough on its own: a *proxy* whose implementation slot is still empty has
+ *   code, and its `delegatecall` to address(0) succeeds with no returndata — the
+ *   low-level call survives that (no decode, no revert) and the length check is
+ *   what makes it visible instead of a silent success.
  *
  * Best-effort, measured — why the hook is not the primary path:
  *   The gas limit of the Safe transaction is chosen *before* the transaction
  *   runs, and the guard forwards a bounded amount (`SYNC_GAS`) out of what is
- *   left at the tail, keeping `SYNC_RESERVE` back for the `catch`, for the
- *   ABI encoding and cold-account charge of the call, and for the Safe's own
+ *   left at the tail, keeping `SYNC_RESERVE` back for the event, for the ABI
+ *   encoding and cold-account charge of the call, and for the Safe's own
  *   epilogue (`ExecutionSuccess`, `handlePayment` when `gasPrice > 0`, return).
  *   A gas limit equal to the transaction's true cost is exactly what
  *   `eth_estimateGas` produces, and at that limit the sync is starved by the
@@ -91,35 +93,43 @@ pragma solidity ^0.8.19;
  *   execution gas of a direct `sync()` transaction (gas used minus the 21k
  *   transaction base), at era size N:
  *
- *     N = 2,  one owner added ........... 306k
- *     N = 3,  one owner added ........... 338k
- *     N = 4,  one owner added ........... 370k
- *     N = 10, one owner added ........... 569k   fits
- *     N = 11, one owner added ........... 604k   MISSES SYNC_GAS
- *     N = 12, one owner added ........... 639k
- *     N = 13, one owner swapped ......... 715k
- *     N = 13, one owner removed ......... 528k
- *     N = 2,  no change .................  29k
- *     N = 13, no change ................. 104k
+ *     N = 2,  one owner added ........... 305,895
+ *     N = 3,  one owner added ........... 337,617
+ *     N = 4,  one owner added ........... 369,688
+ *     N = 10, one owner added ........... 569,421   fits
+ *     N = 11, one owner added ........... 603,928   MISSES SYNC_GAS
+ *     N = 12, one owner added ........... 638,784
+ *     N = 2,  no change .................  28,784
+ *     N = 13, no change .................  96,991
  *
- *   A clean linear fit: `242k + 32.4k * N` for a rotation, `20k + 6.9k * N` for
- *   the no-op (two cold arrays are walked: the Safe's list and the era's copy).
- *   So the operational ceiling is `242k + 32.4k * eraSize <= SYNC_GAS`, which on
- *   this build means **an era of ten gaining one owner fits (569k) and an era of
- *   eleven does not (604k)**; a swap costs roughly forty owners' worth more than
- *   an add, because it closes one tenure and opens another. Past the ceiling the
- *   sync is skipped and repaired by the next permissionless `sync()` — and the
- *   era is then stamped at the repair block, not the rotation block, so the gap
- *   shows up as `SyncFailed` here plus `lastSyncedBlock()` lagging on the module.
+ *   An add at N = 13 measures 673,987. A swap or a removal is *not* dearer in a
+ *   way worth a row: at N = 13 a removal is 490,859 and a swap 679,053, and the
+ *   spread between two measurements of the same row (some thousands) comes from
+ *   whether the changed address is new to `ownersEver` — a fresh entry pays a
+ *   zero-to-nonzero slot and an array push, a returning one does not. Neither is
+ *   near the ceiling at that size, so the add is the binding cost and the table
+ *   keeps to it. (The `sync()` in question here is the module's; measure it
+ *   yourself with a direct `sync()` transaction and subtract the 21k base.)
+ *
+ *   Fit: `~239k + 33.5k * N` for an add, `~16.4k + 6.2k * N` for the no-op (two
+ *   cold arrays are walked: the Safe's list and the era's copy). The per-owner
+ *   cost creeps up with N because the era's owner array is copied on open, which
+ *   is why the fit is approximate and why the ceiling is stated for an add:
+ *   **an era of ten gaining one owner fits (569,421) and an era of eleven does
+ *   not (603,928)**. Past the ceiling the sync is skipped and repaired by the
+ *   next permissionless `sync()` — and the era is then stamped at the repair
+ *   block, not the rotation block, so the gap shows up as `SyncFailed` here plus
+ *   `lastSyncedBlock()` lagging on the module.
  *
  *   `SYNC_GAS = 600_000` is a ceiling, not a cost (a sync that needs 306k spends
  *   306k), so a larger bound would only widen the window in which a compromised
  *   module can burn the Safe's gas. `SYNC_RESERVE = 20_000` is sized against
- *   measurement, not taste: the call's own cold-account access (2 600) and its
- *   ABI encoding are charged on top of the reserved amount, leaving ~12.4k
- *   actually retained on the first call of a transaction, and the Safe's
- *   `handlePayment` needs ~12k more when `gasPrice > 0`. Reserving 15k left too
- *   little for a paid transaction.
+ *   measurement, not taste: measured across three different transaction gas
+ *   limits, 17,050 of it is actually retained at the module call — the rest goes
+ *   to the `code.length` read (2,600, cold, and it is that read that warms the
+ *   account so the call itself is free of the charge) and to the call and its
+ *   encoding (~350). The Safe's `handlePayment` needs ~12k of that back when
+ *   `gasPrice > 0`, which is why the reserve is 20k and not 15k.
  *
  *   The guard runs on *every* transaction, not only on owner changes, and the
  *   no-op sync is not free: 29k on a two-owner era, 104k on a thirteen-owner
@@ -157,10 +167,13 @@ contract OwnerHistoryGuard {
     bytes4 private constant SYNC_SELECTOR = bytes4(keccak256("sync()"));
 
     /// @notice Emitted whenever the hook did **not** record this transaction's
-    ///         outcome: no code at `module`, less gas left than `SYNC_RESERVE`,
-    ///         or the module call failed. It is the only on-chain notice a gap
-    ///         ever gets — the next successful `sync()` repairs it, and the
-    ///         scar shows up as `lastSyncedBlock()` lagging the rotation.
+    ///         outcome. Four cases: no code at `module`; less gas left than
+    ///         `SYNC_RESERVE`; the call failed; or it answered with less than a
+    ///         word of returndata. The last one is not a curiosity — it is what
+    ///         a proxy with an empty implementation slot does, successfully. It
+    ///         is the only on-chain notice a gap ever gets; the next successful
+    ///         `sync()` repairs it, and the scar shows up as `lastSyncedBlock()`
+    ///         lagging the rotation.
     event SyncFailed(uint256 blockNumber);
 
     error ZeroAddress();
@@ -219,11 +232,17 @@ contract OwnerHistoryGuard {
         uint256 budget = available - SYNC_RESERVE;
         if (budget > SYNC_GAS) budget = SYNC_GAS;
 
-        // Low-level, and the returndata is not decoded: `returns (bool)` on a
-        // call to a codeless address reverts *here*, outside any catch, which
-        // would brick the Safe. See the docblock. `ok == false` covers a revert
-        // and an out-of-gas module alike.
-        (bool ok, ) = module.call{gas: budget}(abi.encodeWithSelector(SYNC_SELECTOR));
-        if (!ok) emit SyncFailed(block.number);
+        // Low-level, and the returndata is measured but never decoded:
+        // `returns (bool)` reverts *here*, outside any catch, on empty
+        // returndata, which would brick the Safe. See the docblock.
+        //
+        // `!ok` covers a revert and an out-of-gas module. `ret.length < 32`
+        // covers the case the low-level call exists for: a proxy with an empty
+        // implementation slot delegatecalls to address(0), which *succeeds* with
+        // no returndata at all, so `ok` is true and nothing was recorded. A
+        // length test is the whole point — a decode is the brick.
+        (bool ok, bytes memory ret) =
+            module.call{gas: budget}(abi.encodeWithSelector(SYNC_SELECTOR));
+        if (!ok || ret.length < 32) emit SyncFailed(block.number);
     }
 }

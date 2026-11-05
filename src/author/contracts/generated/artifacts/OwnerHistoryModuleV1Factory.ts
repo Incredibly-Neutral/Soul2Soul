@@ -220,7 +220,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "3961": [
+    "3976": [
       {
         "length": 32,
         "start": 166
@@ -252,7 +252,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "3961": [
+        "3976": [
           {
             "length": 32,
             "start": 166
@@ -302,7 +302,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 3963,
+        "astId": 3978,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "latestImplementation",
         "offset": 0,
@@ -310,7 +310,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
         "type": "t_address"
       },
       {
-        "astId": 3966,
+        "astId": 3981,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "implementationHistory",
         "offset": 0,
@@ -318,7 +318,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 3972,
+        "astId": 3987,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "safeModules",
         "offset": 0,
@@ -579,7 +579,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "3961": [
+    "3976": [
       {
         "length": 32,
         "start": 166
@@ -611,7 +611,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "3961": [
+        "3976": [
           {
             "length": 32,
             "start": 166
@@ -661,7 +661,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 3963,
+        "astId": 3978,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "latestImplementation",
         "offset": 0,
@@ -669,7 +669,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
         "type": "t_address"
       },
       {
-        "astId": 3966,
+        "astId": 3981,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "implementationHistory",
         "offset": 0,
@@ -677,7 +677,7 @@ export const Artifact_OwnerHistoryModuleV1Factory: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 3972,
+        "astId": 3987,
         "contract": "project/src/OwnerHistoryModuleV1Factory.sol:OwnerHistoryModuleV1Factory",
         "label": "safeModules",
         "offset": 0,

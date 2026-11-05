@@ -64,6 +64,21 @@ contract MockSafe {
         return _owners.length;
     }
 
+    /**
+     * @dev A Safe that loses every owner at once — which a real Safe cannot do
+     *      (`removeOwner` refuses to go below the threshold, and the threshold
+     *      is at least one). Exists so the module's refusal to record an empty
+     *      set is testable: `sync()` must revert `ZeroOwners`, not open an empty
+     *      era and close every tenure.
+     */
+    function dropAllOwners() external {
+        for (uint256 i = 0; i < _owners.length; i++) {
+            delete _isOwner[_owners[i]];
+            emit RemovedOwner(_owners[i]);
+        }
+        delete _owners;
+    }
+
     // ── Guard plumbing (on a real Safe this is `onlySelf`) ─────────
 
     function setGuard(address newGuard) external {
