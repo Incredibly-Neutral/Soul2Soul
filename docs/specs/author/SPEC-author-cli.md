@@ -117,7 +117,10 @@ stored author's pet name, `null` when the key came from env/project/user) and `s
 recorded Safe, `null` when it has not been predicted yet). Note that the
 **author id is not the EOA**: it is the author Safe (`s2s author address`), which is
 counterfactual and therefore needs an L2 read. List keys (`rpcL1`,
-`rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
+`rpcL2`) accept comma-separated values and are stored as JSON arrays. Because the store outranks
+the user file for `privateKey`, `config set privateKey …` and `config unset privateKey` warn when a
+stored author is active — naming it and saying `s2s author switch` / `s2s author rm` is the way to
+change who signs. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
 
 ### The author store (several identities)
@@ -152,10 +155,14 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   holds a different key, `buildContext` warns on stderr — `S2S_PRIVATE_KEY overrides active author
   'zomi'` — because a shell export silently overriding `author switch` is invisible in every
   result otherwise. stderr only: stdout still carries exactly one document.
-- **Safe derivation and write-back.** `author new` predicts the author Safe for the key it was given
-  (same `s2s_${eoa}` salt as `author address`) when an L2 RPC is configured, and stores it. No RPC,
-  or a failed read, stores `safe: null` and warns instead of failing: the key is the irreplaceable
-  part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
+- **Safe derivation and write-back.** `author new` writes the record first, with `safe: null`, then
+  predicts the author Safe for the key it was given (same `s2s_${eoa}` salt as `author address`) and
+  writes that back. The order is deliberate: prediction is a network read, and an interrupted or
+  slow one must not cost the key the user just pasted. The endpoint comes from
+  `buildRpcEndpoints(config).L2[0]` — the same DRPC → public → Alchemy → Infura chain every other
+  author path uses, *not* the explicit `rpcL2` list, which is usually empty. A failed read (or the
+  genuinely empty list) leaves `safe: null` and warns instead of failing: the key is the
+  irreplaceable part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
   signing key came from the store and the stored value is missing or different, so `author list`
   and `author switch` can report the identity offline (no RPC, no bundler).
 - **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
@@ -384,7 +391,8 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `kubo
 { action: 'config.unset'; key: string; file: string; local: boolean }
 
 // s2s config list [--json]             — all effective values; secrets masked
-{ config: Record<string, string> }       // plus the derived `eoa` when privateKey is set
+{ config: Record<string, string> }       // plus the derived `eoa`/`author`/`safe` when they resolve
+                                        // (unresolved derived keys are omitted, not null)
 
 // s2s config path [--local] [--json]
 { path: string; env: { user: string; userExists: boolean; project: string | null } }
@@ -574,14 +582,24 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 `pnpm test` (vitest, node env) covers the pure parts: arg parsing (`booleanFlags` never consuming
 the next token, value flags, `--`, `-h`), env config defaults/overrides/aliases, `requireSetting`,
 `saltNonceFor` (determinism, top-bit-cleared range), `upsertFrontmatter` (upsert, body
-preservation, hex quoting), and the config-file layer (field-registry coverage, env > project >
-user > default precedence, list/enum normalization, file round-trip, secret masking), and the author
-store (`test/authors.test.ts`: file round-trip at mode 0600, XDG path resolution, tolerant reads of
+preservation, hex quoting), the config-file layer (field-registry coverage, env > project > user >
+default precedence, list/enum normalization, file round-trip, secret masking), and the author store
+(`test/authors.test.ts`: file round-trip at mode 0600, XDG path resolution, tolerant reads of
 missing/corrupt/malformed files, pet-name validation and case-insensitive uniqueness, one key one
 name, switch, active-slot reassignment on `rm`, Safe write-back, the `env > project > store > user`
-precedence matrix against temp dirs, and the four store commands end-to-end offline). Every test
-that loads a config passes `authorsPath`, so no test reads the developer's real
-`~/.config/s2s/authors.json`; command tests point `XDG_CONFIG_HOME` at a temp dir. Gate:
+precedence matrix against temp dirs).
+
+The store commands are tested at two levels: their `run(out, args)` functions directly (with
+`XDG_CONFIG_HOME` pointed at a temp dir and `fetch` stubbed, so no real store and no network), and
+the `authorStoreCommands` / `findAuthorStoreCommand` table that `cli.ts` dispatches from — it is
+imported from `commands/author-store.ts` precisely so a test can reach it without the content
+command graph (which drags in the ESM-only Filecoin adapter and will not load under vitest). What
+is *not* unit-tested is the dispatch itself: `cli.ts` running a store action before `buildContext`,
+per-action `--help`, and the one-document `--json` envelope at that level are covered by the hand
+smoke-tests below, because importing `cli.ts` pulls the same graph.
+
+Every test that loads a config passes `authorsPath`, so no test reads the developer's real
+`~/.config/s2s/authors.json`. Gate:
 `pnpm build` = `tsc -noEmit` + esbuild; eslint strict (`--max-warnings 0`) over `src/` and `test/`.
 
 ## Live execution notes

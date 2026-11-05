@@ -25,6 +25,7 @@ import { authorNew } from '../src/commands/author-new';
 import { authorSwitch } from '../src/commands/author-switch';
 import { authorList } from '../src/commands/author-list';
 import { authorRm } from '../src/commands/author-rm';
+import { authorStoreCommands, findAuthorStoreCommand } from '../src/commands/author-store';
 import { parseArgs } from '../src/lib/args';
 import type { CliOut } from '../src/lib/out';
 
@@ -48,6 +49,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 function storePath(): string {
@@ -269,6 +271,24 @@ describe('signing-key precedence', () => {
   });
 });
 
+describe('store command registry', () => {
+  it('is the table cli.ts dispatches before the context is built', () => {
+    // cli.ts looks these up by name and runs them without buildContext; the
+    // routing itself is hand-smoke-tested (see the spec's live notes).
+    expect(authorStoreCommands.map((command) => command.name)).toEqual([
+      'new',
+      'switch',
+      'list',
+      'rm',
+    ]);
+    for (const command of authorStoreCommands) {
+      expect(findAuthorStoreCommand(command.name)).toBe(command);
+      expect(command.usage.startsWith('s2s author ')).toBe(true);
+    }
+    expect(findAuthorStoreCommand('upload')).toBeUndefined();
+  });
+});
+
 describe('author commands', () => {
   function seed(): string {
     const path = storePath();
@@ -282,7 +302,12 @@ describe('author commands', () => {
     return path;
   }
 
-  it('new files a key under a pet name and activates it (no RPC → safe: null)', async () => {
+  it('new files a key under a pet name and activates it (unreachable RPC → safe: null)', async () => {
+    // Prediction reads the L2 Safe factory, so keep it offline: a failing fetch
+    // must leave the key stored with safe: null, not lose it.
+    vi.stubGlobal('fetch', () => {
+      throw new Error('offline');
+    });
     const sink = capture();
     await authorNew.run(sink.out, parseArgs(['zomi', '--key', KEY_A]));
 
@@ -290,7 +315,7 @@ describe('author commands', () => {
     expect(stored.active).toBe('zomi');
     expect(stored.authors.zomi?.privateKey).toBe(KEY_A);
     expect(stored.authors.zomi?.safe).toBeNull();
-    expect(sink.warnings[0]).toMatch(/no L2 RPC configured/);
+    expect(sink.warnings[0]).toMatch(/could not predict the author Safe/);
     expect(sink.results[0]).toMatchObject({
       action: 'author.new',
       name: 'zomi',
@@ -330,12 +355,13 @@ describe('author commands', () => {
     });
   });
 
-  it('rejects an unknown author and names the known ones', async () => {
+  it('rejects an unknown author and names the known ones', () => {
     seed();
     // `switch` is synchronous (no RPC, no await) — the usage error throws here.
     expect(() => authorSwitch.run(capture().out, parseArgs(['ghost']))).toThrow(
       /unknown author 'ghost' — known authors: zomi, bob/,
-    );  });
+    );
+  });
 
   it('lists every author and marks the active one', async () => {
     seed();
