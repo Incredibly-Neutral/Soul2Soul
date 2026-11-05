@@ -104,7 +104,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const l2 = createPublicClient({ chain: base, transport: http(l2Rpc) }) as SharedPublicClient;
 
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
-  const ensRegistry = (config.ensRegistry ?? protocolInfo.ensRegistry) as Address;
+  const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);

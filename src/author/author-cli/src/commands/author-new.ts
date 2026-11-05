@@ -134,8 +134,8 @@ async function predictSafe(
   privateKey: string,
   eoa: Address,
 ): Promise<string | null> {
-  // `config.rpc.L2` holds only the explicit overrides; every other author path
-  // reads `ctx.rpcs.L2`, i.e. the DRPC → public → Alchemy → Infura chain.
+  // `config.rpc.l2` is already the fully resolved chain (custom endpoints, else
+  // DRPC → public → Alchemy → Infura), the same one `ctx.rpcs.L2` carries.
   const rpcUrl = buildRpcEndpoints(config).L2[0];
   if (!rpcUrl) {
     out.warn(

@@ -1,0 +1,19 @@
+{
+  "environment": "prod",
+  "pinning": {},
+  "ipfs": {
+    "kubo": {
+      "provider": "kubo",
+      "url": "ipfs.transport-union.dev"
+    }
+  },
+  "rpc": {},
+  "paymaster": {},
+  "filecoin": {
+    "chain": "mainnet",
+    "rpcUrl": "https://api.node.glif.io/rpc/v1"
+  },
+  "lit": {},
+  "ens": {},
+  "github": {}
+}
