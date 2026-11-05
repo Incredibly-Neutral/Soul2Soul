@@ -1,13 +1,19 @@
 // ============================================================================
 // s2s author new <pet-name> — file a new author identity in the store.
 //
-//   s2s author new zomi                       # generate a fresh key
+//   s2s author new zomi                       # generate a fresh key (BIP39 phrase)
 //   echo 0x… | s2s author new zomi            # key piped on stdin
 //   s2s author new zomi --key 0x…             # key given on the command line
+//   s2s author new zomi --mnemonic "word …"   # restore from a BIP39 phrase
 //
-// With no key anywhere, one is generated from 32 bytes of CSPRNG output: the
-// common case is "give me an identity", not "I have a key to file". A generated
-// key is printed once, in both modes — the store is its only other copy.
+// With no key anywhere, a 12-word BIP39 phrase is generated and the key is
+// derived from it at the standard `m/44'/60'/0'/0/0` path: the common case is
+// "give me an identity", not "I have a key to file", and a phrase is what a
+// person can write down and any wallet can import. The store keeps the derived
+// key only — every other layer (env, project config, signing) speaks keys, so a
+// phrase in the file would be a second secret protecting the same thing. A
+// generated phrase is printed once, in both modes; the store is its only other
+// copy.
 //
 // The key is the Safe's owner, not the author id: the author id is the
 // counterfactual Safe (`s2s_${eoa}` salt). Its address is predicted here when
@@ -20,10 +26,11 @@
 // Runs without `buildContext`: no Lit keys, no publication, no bundler.
 // ============================================================================
 
-import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import type { Address } from 'viem';
+import { bytesToHex } from 'viem';
+import { english, generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
@@ -55,26 +62,65 @@ function stdinKey(): string | undefined {
   }
 }
 
-/** A fresh secp256k1 key: 32 bytes of CSPRNG output, hex-encoded. */
-function generateKey(): string {
-  return `0x${randomBytes(32).toString('hex')}`;
+/** A BIP39 phrase and the account it derives, at the standard HD path. */
+function fromMnemonic(mnemonic: string): { privateKey: string; mnemonic: string } {
+  const phrase = mnemonic.trim().split(/\s+/).join(' ');
+  let key: Uint8Array | null;
+  try {
+    key = mnemonicToAccount(phrase).getHdKey().privateKey;
+  } catch (err) {
+    throw new UsageError(
+      `invalid mnemonic — expected a BIP39 phrase (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (!key) {
+    throw new UsageError('invalid mnemonic — the phrase derives no key at m/44\'/60\'/0\'/0/0');
+  }
+  return { privateKey: bytesToHex(key), mnemonic: phrase };
+}
+
+/** Anything that is not a single hex word is treated as a phrase candidate. */
+function looksLikePhrase(input: string): boolean {
+  return !/^0x[0-9a-fA-F]*$/.test(input.trim());
+}
+
+export interface KeySource {
+  privateKey: string;
+  /** The phrase the key came from: generated, or restored from an existing one. */
+  mnemonic?: string;
+  /** True only when this run made the phrase — the caller should show it once. */
+  generated: boolean;
 }
 
 /**
- * The key to file: `--key`, else stdin, else a generated one. Split out (with
- * both sources injectable) so the no-key path is testable without touching fd 0
- * or the CSPRNG.
+ * Where the key comes from: `--key`, else `--mnemonic`, else stdin (a hex key
+ * or a phrase, told apart by shape), else a freshly generated phrase. Split out
+ * — with every source injectable — so the paths that would otherwise read fd 0
+ * or the CSPRNG are testable.
  */
-export function resolvePrivateKey(
+export function resolveKeySource(
   flags: Record<string, string | boolean>,
   sources: {
     stdin?: () => string | undefined;
-    random?: () => string;
+    phrase?: () => string;
   } = {},
-): { key: string; generated: boolean } {
-  const explicit = flagString(flags, 'key') ?? (sources.stdin ?? stdinKey)();
-  if (explicit) return { key: explicit, generated: false };
-  return { key: (sources.random ?? generateKey)(), generated: true };
+): KeySource {
+  const explicitKey = flagString(flags, 'key');
+  if (explicitKey) return { privateKey: explicitKey, generated: false };
+
+  const explicitMnemonic = flagString(flags, 'mnemonic');
+  if (explicitMnemonic) return { ...fromMnemonic(explicitMnemonic), generated: false };
+
+  const piped = (sources.stdin ?? stdinKey)();
+  if (piped) {
+    const text = piped.trim();
+    return looksLikePhrase(text)
+      ? { ...fromMnemonic(text), generated: false }
+      : { privateKey: text, generated: false };
+  }
+
+  const phrase = (sources.phrase ?? (() => generateMnemonic(english)))();
+  return { ...fromMnemonic(phrase), generated: true };
 }
 
 /**
@@ -117,8 +163,13 @@ export const authorNew: StoreCommandSpec = {
   flags: {
     key: {
       type: 'string',
-      summary: 'private key to file (0x…); default: stdin if piped, else a generated key',
+      summary: 'private key to file (0x…); default: stdin if piped, else a generated phrase',
       value: '<0x…>',
+    },
+    mnemonic: {
+      type: 'string',
+      summary: 'BIP39 phrase to restore from (or pipe it on stdin)',
+      value: '<words…>',
     },
   },
   async run(out: CliOut, args: ParsedArgs) {
@@ -132,8 +183,8 @@ export const authorNew: StoreCommandSpec = {
       );
     }
 
-    const { key: rawKey, generated } = resolvePrivateKey(args.flags);
-    const privateKey = hexKey(rawKey);
+    const source = resolveKeySource(args.flags);
+    const privateKey = hexKey(source.privateKey);
     if (privateKey === undefined) {
       throw new UsageError(
         'invalid private key — expected 32 bytes of hex (0x followed by 64 hex chars)',
@@ -166,16 +217,21 @@ export const authorNew: StoreCommandSpec = {
         safe,
         active: true,
         file,
-        // Only echoed when we made it: a key the user supplied is already theirs.
-        ...(generated ? { privateKey } : {}),
+        // The phrase is echoed when it is the thing to write down; a key the
+        // user supplied is already theirs and never comes back at them.
+        ...(source.mnemonic ? { mnemonic: source.mnemonic } : {}),
+        ...(source.generated ? { privateKey } : {}),
       },
       [
         `author '${name}' created and activated`,
         `eoa         : ${eoa}`,
         `safe        : ${safe ?? '(not predicted — no L2 RPC)'}`,
         `store       : ${file}`,
-        ...(generated
-          ? [`private key : ${privateKey}`, '              (generated — write it down: the store file is the only other copy)']
+        ...(source.mnemonic
+          ? [
+              `mnemonic    : ${source.mnemonic}`,
+              `              (${source.generated ? 'generated' : 'restored'} — write it down: it restores this author anywhere)`,
+            ]
           : []),
       ].join('\n'),
     );

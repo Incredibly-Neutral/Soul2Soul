@@ -21,7 +21,7 @@ import {
 } from '../src/core/authors';
 import { loadConfig, type LoadConfigOptions } from '../src/core/config';
 import { writeConfigValue } from '../src/core/configfile';
-import { authorNew, resolvePrivateKey } from '../src/commands/author-new';
+import { authorNew, resolveKeySource } from '../src/commands/author-new';
 import { authorSwitch } from '../src/commands/author-switch';
 import { authorList } from '../src/commands/author-list';
 import { authorRm } from '../src/commands/author-rm';
@@ -292,26 +292,53 @@ describe('store command registry', () => {
 });
 
 describe('which key `author new` files', () => {
-  it('prefers --key, then stdin, then generates', () => {
+  // A phrase nobody should ever use on a real chain.
+  const PHRASE = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+  it('prefers --key, then --mnemonic, then stdin, then a generated phrase', () => {
     const stdin = (): string => KEY_B;
-    const random = (): string => KEY_A;
-    expect(resolvePrivateKey({ key: KEY_A }, { stdin, random })).toEqual({
-      key: KEY_A,
+    const phrase = (): string => PHRASE;
+    expect(resolveKeySource({ key: KEY_A }, { stdin, phrase })).toEqual({
+      privateKey: KEY_A,
       generated: false,
     });
-    expect(resolvePrivateKey({}, { stdin, random })).toEqual({ key: KEY_B, generated: false });
-    expect(resolvePrivateKey({}, { stdin: () => undefined, random })).toEqual({
-      key: KEY_A,
+    expect(resolveKeySource({ mnemonic: PHRASE }, { stdin, phrase })).toEqual({
+      privateKey: resolveKeySource({ mnemonic: PHRASE }).privateKey,
+      mnemonic: PHRASE,
+      generated: false,
+    });
+    expect(resolveKeySource({}, { stdin, phrase })).toEqual({ privateKey: KEY_B, generated: false });
+    expect(resolveKeySource({}, { stdin: () => undefined, phrase })).toEqual({
+      privateKey: resolveKeySource({ mnemonic: PHRASE }).privateKey,
+      mnemonic: PHRASE,
       generated: true,
     });
   });
 
-  it('generates a usable 32-byte key when neither is given', async () => {
-    // Real CSPRNG, not a stub: the point is that the generated key is a key.
-    const { key, generated } = resolvePrivateKey({}, { stdin: () => undefined });
+  it('reads a piped phrase as a phrase, not as a key', () => {
+    const stdin = (): string => `  ${PHRASE}\n`;
+    const fromKey = resolveKeySource({ mnemonic: PHRASE });
+    expect(resolveKeySource({}, { stdin })).toEqual({ ...fromKey, generated: false });
+  });
+
+  it('derives the published "abandon … about" key at m/44\'/60\'/0\'/0/0', () => {
+    // The well-known vector for this phrase, so this pins the BIP39 seed + BIP44
+    // path rather than "some key came out".
+    expect(resolveKeySource({ mnemonic: PHRASE }).privateKey).toBe(
+      '0x1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727',
+    );
+  });
+
+  it('rejects a phrase that is not a phrase', () => {
+    expect(() => resolveKeySource({ mnemonic: 'not a phrase at all' })).toThrow(/invalid mnemonic/);
+  });
+
+  it('generates a 12-word phrase whose key is usable', () => {
+    const { privateKey, mnemonic, generated } = resolveKeySource({}, { stdin: () => undefined });
     expect(generated).toBe(true);
-    expect(key).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(authorEoa(key)).toMatch(/^0x[0-9A-Fa-f]{40}$/);
+    expect(mnemonic?.split(' ')).toHaveLength(12);
+    expect(privateKey).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(authorEoa(privateKey)).toMatch(/^0x[0-9A-Fa-f]{40}$/);
   });
 });
 

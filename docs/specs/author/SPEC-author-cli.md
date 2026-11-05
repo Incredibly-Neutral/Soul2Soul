@@ -42,7 +42,7 @@ Top-level bin `s2s`; three groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
-s2s author new       <pet-name> [--key <0x…>] [--json]                                          # add an author identity (activates it; key generated when omitted)
+s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; phrase generated when omitted)
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
 s2s author list      [--json]                                                                     # stored authors, active one marked
 s2s author rm        <pet-name> [--json]                                                          # forget a stored author
@@ -104,7 +104,8 @@ silent no-op:
 | `--local` | Target the project config file (`.s2sconfig.json`) instead of the user config. | config set, unset, path |
 | `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
 | `--local` | (config) Target the project config file (`.s2sconfig.json` in cwd) instead of the user config. |
-| `--key <0x…>` | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); with neither, a fresh key is generated (see below). |
+| `--key <0x…>` | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); with neither, a fresh phrase is generated (see below). |
+| `--mnemonic <words>` | (author new) BIP39 phrase to restore from — the key is derived at `m/44'/60'/0'/0/0`. A piped line that is not a single `0x…` word is read as a phrase too. |
 
 ### Config file (bring-your-own infra)
 
@@ -153,12 +154,17 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   in the file — means no stored author is active.
 - **`author new` activates** the author it creates: adding an identity is a switch. A duplicate
   name or a key already filed under another name is a usage error.
-- **No key given → generate one.** `s2s author new zomi` with no `--key` and nothing piped on
-  stdin files a key made from 32 bytes of CSPRNG output: the common intent is "give me an
-  identity", not "I have a key to file". The generated key is echoed once — as a `private key :`
-  line in the human result and as `privateKey` in the JSON result (`--json`), for machine use —
-  and is otherwise only in the store, which is 0600. A key from `--key` or stdin is never echoed
-  back: it is already the caller's.
+- **No key given → generate a phrase.** `s2s author new zomi` with no `--key`, no `--mnemonic` and
+  nothing piped on stdin generates a 12-word BIP39 phrase (128 bits) and derives the key at
+  `m/44'/60'/0'/0/0`: the common intent is "give me an identity", not "I have a key to file", and a
+  phrase is what a person writes down and any wallet imports. **The store keeps the derived key,
+  not the phrase** — the env layer, the project config and every signing path speak keys, so a
+  phrase there would be a second secret protecting the same thing. The phrase is echoed once (a
+  `mnemonic :` line in the human result; `mnemonic` plus the derived `privateKey` in `--json`,
+  because a script may want either to back up) and is otherwise only in the store, which is 0600.
+  Restoring from an existing phrase is the mirror case: `--mnemonic "word …"`, or pipe the words
+  and they are told from a hex key by shape. A key or phrase the caller supplied is never echoed
+  back — it is already theirs.
 - **`author rm`** of the active author moves `active` to the first remaining author (file order), or
   to `null` when the store empties. Removing a non-active author leaves `active` alone. An unknown
   name is a usage error listing the known ones.
