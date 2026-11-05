@@ -69,9 +69,9 @@ export const newPublication: CommandSpec = {
     // initializer — i.e. it is part of the Safe's address. 0.6 is only sane
     // for a bundler that cannot speak 0.7, and the plugin would then get a
     // different publication Safe, so say so out loud.
-    if (ctx.config.bundler.entryPoint !== '0.7') {
+    if (ctx.config.entryPoint !== '0.7') {
       ctx.out.warn(
-        `entryPoint ${ctx.config.bundler.entryPoint} — the publication Safes will not match the plugin (which pins 0.7)`,
+        `entryPoint ${ctx.config.entryPoint} — the publication Safes will not match the plugin (which pins 0.7)`,
       );
     }
 
@@ -100,7 +100,7 @@ export const newPublication: CommandSpec = {
       privateKey: requirePrivateKey(ctx),
       bundlerUrl: l1Endpoints.bundlerUrl,
       paymasterUrl: l1Endpoints.paymasterUrl,
-      entryPointVersion: ctx.config.bundler.entryPoint,
+      entryPointVersion: ctx.config.entryPoint,
       safeVersion,
     });
     const l2Runner = await createSafeRunner({
@@ -109,7 +109,7 @@ export const newPublication: CommandSpec = {
       privateKey: requirePrivateKey(ctx),
       bundlerUrl: l2Endpoints.bundlerUrl,
       paymasterUrl: l2Endpoints.paymasterUrl,
-      entryPointVersion: ctx.config.bundler.entryPoint,
+      entryPointVersion: ctx.config.entryPoint,
       safeVersion,
     });
 
@@ -129,7 +129,7 @@ export const newPublication: CommandSpec = {
       publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
       recordsModuleAbi: S2SRecordsModule,
       ipfs: ctx.ipfs,
-      githubToken: ctx.config.githubToken ?? '',
+      githubToken: ctx.config.github.token ?? '',
       createFeed: createFeedStub,
     });
 

@@ -1,77 +1,45 @@
 // ============================================================================
-// Config file layer — the field registry (single source of truth for BOTH the
-// env surface and the `s2s config` file), config-file read/write, and secret
-// masking.
+// Config file layer — IO only, no precedence policy.
 //
-// Model (git-style): env vars > project config (.s2sconfig.json in cwd) >
-// user config (~/.config/s2s/config.json) > defaults. `s2s config set` writes
-// the user file by default, or the project file with --local.
+//   custom   ~/.config/s2s/custom.json   (XDG_CONFIG_HOME honored), 0600
+//   project  ./.s2sconfig.json           (cwd)
+//   legacy   ~/.config/s2s/config.json   READ-ONLY fallback: the old flat file
+//   defaults <dist>/defaults.json        ships with the CLI (core/defaults.ts)
+//
+// `s2s setup` and `s2s config set` write the custom file by default, or the
+// project file with --local. The legacy file is never written by this CLI: it
+// is translated on read, so an install that predates the nested schema keeps
+// working and a fresh install has exactly one file it owns.
+//
+// Writer contract: mkdir -p, atomic (tmp + rename), 0600. The files hold
+// tokens, so the permission is not advisory.
 // ============================================================================
 
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-/** One settable setting: env-var names, default, and write/display behavior. */
-export interface ConfigField {
-  /** Friendly key used by `s2s config` and the config file (e.g. `rpcL1`). */
-  key: string;
-  /** Env-var names in precedence order (first non-empty wins). */
-  env: readonly string[];
-  /** Fallback when neither env nor any config file sets it. */
-  default?: string;
-  /** Secret — masked in `get`/`list`, warned about in project files. */
-  secret?: boolean;
-  /** Comma-separated list (stored as a JSON array in the file). */
-  list?: boolean;
-  /** Allowed values (enum validation on `set` + normalization on read). */
-  enumValues?: readonly string[];
-}
-
-export const CONFIG_FIELDS: readonly ConfigField[] = [
-  { key: 'environment', env: ['S2S_ENV'], default: 'prod', enumValues: ['dev', 'prod'] },
-  { key: 'privateKey', env: ['S2S_PRIVATE_KEY'], secret: true },
-  { key: 'litAccountKey', env: ['LIT_ACCOUNT_KEY'], secret: true },
-  { key: 'litUsageKey', env: ['LIT_USAGE_KEY'], secret: true },
-  { key: 'githubToken', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
-  { key: 'kuboGateway', env: ['S2S_KUBO_GATEWAY'], default: 'ipfs.transport-union.dev' },
-  { key: 'kuboToken', env: ['S2S_KUBO_TOKEN'], secret: true },
-  { key: 'pinataJwt', env: ['S2S_PINATA_JWT'], secret: true },
-  { key: 'pinataGateway', env: ['S2S_PINATA_GATEWAY'] },
-  { key: 'filebaseToken', env: ['S2S_FILEBASE_TOKEN'], secret: true },
-  { key: 'runnerUrl', env: ['S2S_RUNNER_URL'], default: 'https://run.transport-union.dev/run' },
-  { key: 'rpcL1', env: ['S2S_RPC_L1', 'MAINNET_RPC_URL'], list: true },
-  { key: 'rpcL2', env: ['S2S_RPC_L2', 'BASE_RPC_URL'], list: true },
-  { key: 'ensRegistry', env: ['S2S_ENS_REGISTRY'] },
-  {
-    key: 'filecoinChain',
-    env: ['S2S_FILECOIN_CHAIN'],
-    default: 'mainnet',
-    enumValues: ['mainnet', 'calibration'],
-  },
-  { key: 'filecoinRpc', env: ['S2S_FILECOIN_RPC'], default: 'https://api.node.glif.io/rpc/v1' },
-  { key: 'filecoinSessionKey', env: ['S2S_FILECOIN_SESSION_KEY'] },
-  { key: 'filecoinPrivateKey', env: ['S2S_FILECOIN_PRIVATE_KEY'], secret: true },
-  { key: 'pimlicoKey', env: ['S2S_PIMLICO_KEY', 'PIMLICO_KEY', 'PIMLICO_API_KEY'], secret: true },
-  { key: 'bundlerUrl', env: ['S2S_BUNDLER_URL'] },
-  { key: 'paymasterUrl', env: ['S2S_PAYMASTER_URL'] },
-  // Not a free choice: the EntryPoint version selects the Safe4337Module
-  // installed by the Safe's initializer, so it is part of the counterfactual
-  // address. 0.7 matches the plugin (0xobsidian hardcodes ENTRYPOINT v0.7).
-  { key: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.7', enumValues: ['0.6', '0.7'] },
-];
-
-/** Typed key→field lookup (property access is non-optional — built from the array). */
-export type ConfigKey = (typeof CONFIG_FIELDS)[number]['key'];
-export const CONFIG_FIELD: Record<ConfigKey, ConfigField> = Object.fromEntries(
-  CONFIG_FIELDS.map((f) => [f.key, f]),
-);
+import {
+  deletePath,
+  isUnsafeSegment,
+  matchField,
+  normalizeFileConfig,
+  parseList,
+  textValue,
+  writePath,
+  type FileConfig,
+} from './configschema';
+import { defaultsFilePath } from './defaults';
 
 export interface ConfigFilePaths {
-  /** ~/.config/s2s/config.json (XDG_CONFIG_HOME honored). */
+  /** ~/.config/s2s/custom.json — what `s2s setup` / `config set` writes. */
   user: string;
-  /** .s2sconfig.json in the current working directory. */
+  /** .s2sconfig.json in the current working directory (`config set --local`). */
   project: string;
+  /** ~/.config/s2s/config.json — the old flat file, read-only here. */
+  legacy: string;
+  /** The `defaults.json` that ships with the CLI (see core/defaults.ts). */
+  defaults: string;
 }
 
 export interface ConfigPathsInput {
@@ -85,13 +53,19 @@ export function configFilePaths(input: ConfigPathsInput = {}): ConfigFilePaths {
   const xdg = env.XDG_CONFIG_HOME;
   const base = xdg && xdg.trim().length > 0 ? xdg.trim() : join(homedir(), '.config');
   return {
-    user: join(base, 's2s', 'config.json'),
+    user: join(base, 's2s', 'custom.json'),
     project: join(cwd, '.s2sconfig.json'),
+    legacy: join(base, 's2s', 'config.json'),
+    defaults: defaultsFilePath(env),
   };
 }
 
-/** Read a config file tolerantly — missing/unparsable → empty object. */
-export function readConfigFile(path: string): Record<string, unknown> {
+/**
+ * Read a config file tolerantly as written — missing/unparsable → empty object.
+ * Tombstones (`null` leaves) are preserved: only the writer and the tombstone
+ * walk want them, and they need the file exactly as it is on disk.
+ */
+export function readConfigRaw(path: string): Record<string, unknown> {
   if (!path) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -104,19 +78,132 @@ export function readConfigFile(path: string): Record<string, unknown> {
   }
 }
 
+/** Drop the tombstones and the objects they leave empty, at any depth. */
+function pruneTombstones(value: unknown): unknown {
+  if (value === null) return undefined;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      // `JSON.parse` keeps `"__proto__"` as an own key; assigning it here would
+      // set the prototype instead. It is never a config label, so drop it.
+      if (isUnsafeSegment(key)) continue;
+      const kept = pruneTombstones(child);
+      if (kept !== undefined) out[key] = kept;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+  return value;
+}
+
+/** A config file's values with the tombstones removed (see `readConfigFile`). */
+export function stripTombstones(
+  value: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return pruneTombstones(value) as Record<string, unknown> | undefined;
+}
+
 /**
- * Merge one value into a config file (mkdir -p, atomic write, 0600 perms).
- * Passing `undefined` as value removes the key. Also returns the file path.
+ * Read a config file as the values it carries — a tombstone is not a value, so
+ * it is dropped here (with any object it empties). The merge never sees one;
+ * the write path and the tombstone walk use `readConfigRaw` instead.
  */
-export function writeConfigValue(path: string, key: string, value: unknown): void {
-  const data = readConfigFile(path);
-  const next =
-    value === undefined
-      ? Object.fromEntries(Object.entries(data).filter(([k]) => k !== key))
-      : { ...data, [key]: value };
+export function readConfigFile(path: string): Record<string, unknown> {
+  return stripTombstones(readConfigRaw(path)) ?? {};
+}
+
+/** Read a config file as a typed, normalized FileConfig (tolerant, never throws). */
+export function readFileConfig(path: string): FileConfig {
+  return normalizeFileConfig(readConfigFile(path));
+}
+
+/**
+ * The pre-reorganisation flat keys, translated onto their nested paths.
+ *
+ * The two escape hatches land on two leaves: `bundlerUrl` is the bundler and
+ * `paymasterUrl` the paymaster, independently, exactly as they were separate
+ * settings before the reorganisation (folding them together silently dropped
+ * one of the two, and made an explicit bundler imply sponsorship).
+ *
+ * Deliberately absent: `privateKey`, `filecoinPrivateKey`, `entryPoint`,
+ * `runnerUrl`. The first two are secrets with another home (the env and
+ * `authors.json`); the last two are not preferences (`entryPoint` is part of the
+ * counterfactual Safe address, `runnerUrl` is a builtin).
+ */
+const LEGACY_KEY_PATHS: readonly (readonly [string, string])[] = [
+  ['environment', 'environment'],
+  ['kuboGateway', 'ipfs.kubo.url'],
+  ['kuboToken', 'ipfs.kubo.key'],
+  ['pinataJwt', 'pinning.pinata.key'],
+  ['pinataGateway', 'pinning.pinata.url'],
+  ['filebaseToken', 'pinning.filebase.key'],
+  ['rpcL1', 'rpc.custom.l1'],
+  ['rpcL2', 'rpc.custom.l2'],
+  ['pimlicoKey', 'paymaster.key'],
+  ['bundlerUrl', 'bundler.url'],
+  ['paymasterUrl', 'paymaster.url'],
+  ['filecoinChain', 'filecoin.chain'],
+  ['filecoinRpc', 'filecoin.rpcUrl'],
+  ['filecoinSessionKey', 'filecoin.sessionKeyFile'],
+  ['litAccountKey', 'lit.accountKey'],
+  ['litUsageKey', 'lit.usageKey'],
+  ['ensRegistry', 'ens.registry'],
+  ['githubToken', 'github.token'],
+];
+
+/**
+ * Read the legacy flat file as a FileConfig. The file is only ever read: an
+ * install that has one keeps working, and nothing here writes it back.
+ */
+export function readLegacyFileConfig(path: string): FileConfig {
+  const raw = readConfigFile(path);
+  const translated: Record<string, unknown> = {};
+  for (const [flatKey, nestedPath] of LEGACY_KEY_PATHS) {
+    const value = raw[flatKey];
+    if (value === undefined || value === null) continue;
+    const resolved = matchField(nestedPath)?.spec.list ? parseList(value) : value;
+    if (resolved === undefined) continue;
+    writePath(translated, nestedPath, resolved);
+  }
+  return normalizeFileConfig(translated);
+}
+
+/** A path may be written only when it is concrete: `*` is a schema placeholder. */
+function assertWritablePath(dotted: string): void {
+  if (dotted.split('.').includes('*')) {
+    throw new Error(`cannot write '${dotted}': '*' is a schema placeholder, not a label`);
+  }
+}
+
+/**
+ * Write one leaf into a config file (mkdir -p, atomic, 0600).
+ *
+ * `dotted` is a schema path with the label filled in (`pinning.pinata.key`);
+ * intermediate objects are created. `list` fields accept a comma-separated
+ * string (the command-line spelling) and are stored as a JSON array. Passing
+ * `undefined` removes the leaf and prunes whatever objects fall empty behind it;
+ * passing `null` writes an explicit tombstone that the merge honours as
+ * "unset" (how `config unset` reaches a value living in a lower layer).
+ */
+export function writeConfigValue(path: string, dotted: string, value: unknown): void {
+  assertWritablePath(dotted);
+  const data = readConfigRaw(path);
+
+  if (value === undefined) {
+    deletePath(data, dotted);
+  } else if (value === null) {
+    // A tombstone is a leaf value, not a scalar to normalize: keep the `null`.
+    writePath(data, dotted, null);
+  } else {
+    const listy = matchField(dotted)?.spec.list === true;
+    const stored = listy ? parseList(value) : storedScalar(value);
+    if (stored === undefined) deletePath(data, dotted);
+    else writePath(data, dotted, stored);
+  }
+
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, path);
   try {
     chmodSync(path, 0o600);
@@ -126,32 +213,43 @@ export function writeConfigValue(path: string, key: string, value: unknown): voi
 }
 
 /**
- * Normalize a stored config-file value (string | string[] | number…) to the
- * comma-joined string form used internally. Returns undefined for empty/absent.
+ * What a non-list value is stored as: a trimmed string when one was given (an
+ * empty string is an unset, not a value), otherwise the value untouched.
  */
-export function configFileValue(value: unknown, field: ConfigField): string | undefined {
-  if (value === undefined || value === null) return undefined;
-
-  // List/array-aware part extraction; non-string scalars stringify for numbers
-  // and booleans, anything else (objects) is treated as empty.
-  const asParts = (v: unknown): string[] => {
-    if (Array.isArray(v)) return v.map((item: unknown) => (typeof item === 'string' ? item.trim() : ''));
-    if (typeof v === 'string') return v.split(',').map((s) => s.trim());
-    if (typeof v === 'number' || typeof v === 'boolean') return [String(v)];
-    return [];
-  };
-
-  if (field.list) {
-    const cleaned = asParts(value).filter((s) => s.length > 0);
-    return cleaned.length > 0 ? cleaned.join(',') : undefined;
-  }
-
-  const first = asParts(value)[0] ?? '';
-  return first.length > 0 ? first : undefined;
+function storedScalar(value: unknown): unknown {
+  return typeof value === 'string' ? textValue(value) : value;
 }
 
-/** Mask a secret for display — keeps the shape, hides the body. */
+/**
+ * Mask a secret for display — keeps the shape, hides the body.
+ *
+ * An empty value is not a secret: returning `********` for it would show a
+ * credential in `config list` for a leaf that has none.
+ */
 export function maskSecret(value: string): string {
+  if (value.length === 0) return '';
   if (value.length <= 8) return '********';
   return `${value.slice(0, 2)}…${value.slice(-4)}`;
 }
+
+/** Query parameters whose value is a credential when it appears in a URL. */
+const CREDENTIAL_PARAM = /[?&](?:api[-_]?key|key|token|secret|auth|jwt|password|passwd|signature|sig)=/i;
+
+/** Does this URL carry a credential in its query string? */
+export function urlHasCredential(value: string): boolean {
+  return CREDENTIAL_PARAM.test(value);
+}
+
+/**
+ * Hide query-string credentials while keeping the endpoint readable, so
+ * `config get paymaster.url` can show which service is configured without
+ * printing the key: `…?apikey=********`.
+ */
+export function maskUrlCredential(value: string): string {
+  if (!urlHasCredential(value)) return value;
+  return value.replace(/([?&][^=&#]+=)[^&#]*/g, '$1********');
+}
+
+// The defaults layer is a config file too; re-exported here so a caller that
+// only wants IO has one import.
+export { loadDefaults, defaultsFilePath, resetDefaultsCache } from './defaults';

@@ -1,13 +1,16 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as esbuild from 'esbuild';
 
+import { buildPaths } from './esbuild.paths.mjs';
+
 const production = process.argv[2] === 'production';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sharedRoot = resolve(here, '../../shared');
+const paths = buildPaths(here);
 
 /**
  * Bundle `@s2s/soul2soul-shared` from SOURCE, not from its built `dist/`.
@@ -62,14 +65,33 @@ const sharedFromSource = {
   },
 };
 
+/**
+ * Copy `defaults.json` next to the bundle.
+ *
+ * The defaults are a config LAYER, not code: shipping them as a file keeps them
+ * editable by the operator and swappable for a fetched copy later. The bundle
+ * looks them up beside itself (`core/defaults.ts`), so the build has to put them
+ * there — a missing file is tolerated at runtime (builtin constants take over),
+ * which is exactly why the copy must not be silently forgotten.
+ */
+function copyDefaults() {
+  // From the script directory, never cwd: the build must produce the same
+  // output whether it is run from the package root or anywhere else.
+  mkdirSync(paths.dist, { recursive: true });
+  if (!existsSync(paths.defaults)) {
+    throw new Error(`esbuild: ${paths.defaults} is missing — the defaults layer would not ship`);
+  }
+  copyFileSync(paths.defaults, paths.defaultsCopy);
+}
+
 /** @type {esbuild.BuildOptions} */
 const options = {
-  entryPoints: ['src/cli.ts'],
+  entryPoints: [paths.entry],
   bundle: true,
   platform: 'node',
   format: 'cjs',
   target: 'node20',
-  outfile: 'dist/cli.cjs',
+  outfile: paths.outfile,
   banner: { js: '#!/usr/bin/env node' },
   sourcemap: production ? false : 'inline',
   logLevel: 'info',
@@ -80,7 +102,11 @@ const options = {
 
 if (production) {
   await esbuild.build(options);
+  copyDefaults();
 } else {
   const ctx = await esbuild.context(options);
   await ctx.watch();
+  // The dev bundle reads the same `dist/defaults.json`; re-copying on every run
+  // is what keeps `node dist/cli.cjs` honest after an edit to the file.
+  copyDefaults();
 }

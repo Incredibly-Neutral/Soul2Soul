@@ -9,7 +9,8 @@
     "s2s": "dist/cli.cjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "defaults.json"
   ],
   "scripts": {
     "build": "npm --prefix ../../shared run build --loglevel=error && tsc -noEmit && node esbuild.config.mjs production",

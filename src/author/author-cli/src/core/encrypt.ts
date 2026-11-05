@@ -69,7 +69,7 @@ export type EncryptFn = (plaintext: string) => Promise<string> | string;
 
 /** The subset of `CliContext` encryption needs. Structural, so tests can fake it. */
 export interface EncryptionContext {
-  config: { litUsageKey?: string };
+  config: { lit: { usageKey?: string } };
   protocolInfo: { pkp?: string };
   lit: { encrypt(key: string, pkpId: string, message: string): Promise<string> | string };
 }
@@ -237,7 +237,7 @@ export function buildEncryptFn(
   if (!parsed.encryption) return noOpEncrypt;
 
   const why = `cannot encrypt ${notePath ?? 'note'}: frontmatter \`encryption: true\``;
-  const litUsageKey = requireEncryptionSetting(ctx.config.litUsageKey, 'LIT_USAGE_KEY', why);
+  const litUsageKey = requireEncryptionSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY', why);
   const pkp = requireEncryptionSetting(ctx.protocolInfo.pkp, 'protocolInfo.pkp', why);
 
   // `LitService.encrypt` does not throw (it stringifies its own errors), but a

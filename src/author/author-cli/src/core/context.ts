@@ -96,7 +96,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const l2Rpc = rpcs.L2[0];
   if (!l1Rpc || !l2Rpc) {
     throw new Error(
-      'No RPC endpoints configured. Set S2S_RPC_L1 / S2S_RPC_L2 (or the DRPC/Alchemy keys) in the environment.',
+      'No RPC endpoints configured. Set them in the environment (S2S_RPC_L1 / S2S_RPC_L2, or MAINNET_RPC_URL / BASE_RPC_URL), or store them with `s2s config set rpc.custom.l1 <url>` / `s2s config set rpc.custom.l2 <url>` — `s2s setup` asks for them too.',
     );
   }
 
@@ -104,7 +104,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const l2 = createPublicClient({ chain: base, transport: http(l2Rpc) }) as SharedPublicClient;
 
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
-  const ensRegistry = (config.ensRegistry ?? protocolInfo.ensRegistry) as Address;
+  const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);
