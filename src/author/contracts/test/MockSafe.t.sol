@@ -79,9 +79,27 @@ contract MockSafe {
         delete _owners;
     }
 
-    // ── Guard plumbing (on a real Safe this is `onlySelf`) ─────────
+    // ── Guard plumbing (on a real Safe this is `authorized`) ───────
 
+    /**
+     * @dev The real installation gate, copied from Safe 1.4.1's
+     *      `GuardManager.setGuard`: an ERC-165 check before the address is
+     *      stored. Reproducing it is the point of this fixture — a permissive
+     *      `setGuard` is what let `OwnerHistoryGuard` ship without
+     *      `supportsInterface` and still pass a green suite, while the same
+     *      bytes reverted `GS300` on a real Safe.
+     *
+     *      Two ways a non-guard fails here, and they are not the same revert: a
+     *      contract that answers `supportsInterface` with `false` is rejected by
+     *      the `require` with `GS300`, while one with no such function at all
+     *      reverts inside the call itself (no reason string) — as on the real
+     *      Safe.
+     */
     function setGuard(address newGuard) external {
+        require(
+            newGuard == address(0) || IERC165(newGuard).supportsInterface(0xe6d7a83a),
+            "GS300"
+        );
         guard = newGuard;
         emit GuardChanged(newGuard);
     }
@@ -184,6 +202,10 @@ contract MockSafe {
     }
 }
 
+interface IERC165 {
+    function supportsInterface(bytes4 interfaceId) external view returns (bool);
+}
+
 interface IGuard {
     function checkTransaction(
         address to,
@@ -200,6 +222,19 @@ interface IGuard {
     ) external;
 
     function checkAfterExecution(bytes32 txHash, bool success) external;
+}
+
+/**
+ * @title NotAGuard
+ * @notice A contract with code that answers ERC-165 — with `false` for every
+ *         interface, which is a conforming answer. Pointed at `setGuard` it is
+ *         rejected by the `require` with `GS300`, the case that matters: it is
+ *         what `OwnerHistoryGuard` was before `supportsInterface` existed.
+ */
+contract NotAGuard {
+    function supportsInterface(bytes4) external pure returns (bool) {
+        return false;
+    }
 }
 
 /**

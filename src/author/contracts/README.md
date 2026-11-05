@@ -6,7 +6,7 @@ The author-side Safe contracts for Polyphony, on Base.
 |---|---|
 | `DraftsModuleV1` + `DraftsModuleV1Factory` | the author's draft log, one UUPS proxy per author Safe |
 | `OwnerHistoryModuleV1` + `OwnerHistoryModuleV1Factory` | who was an owner of the author Safe, and from which block, one proxy per Safe |
-| `OwnerHistoryGuard` | a Safe transaction guard that keeps the owner history current |
+| `OwnerHistoryGuard` | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
 
 Source in `src/`, tests in `test/`, deploy scripts in `scripts/`.
 `pnpm compile && pnpm test`; `pnpm deploy:draftsfac`, `pnpm deploy:ownerhistory`.

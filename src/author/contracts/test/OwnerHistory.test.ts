@@ -707,6 +707,45 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(chk(await d.guard.read.module()), chk(d.history.address));
   });
 
+  it('setGuard enforces the ERC-165 gate: our guard installs, a plain contract reverts GS300', async () => {
+    // Safe 1.4.1's `GuardManager.setGuard` validates before it stores:
+    //   require(Guard(guard).supportsInterface(type(Guard).interfaceId), "GS300");
+    // so a guard without ERC-165 is not uninstallable-later, it is uninstallable
+    // at all. `d.guard` answering `true` is what this asserts; `NotAGuard`, which
+    // answers `false` for every interface, is what the require rejects.
+    await d.mockSafe.write.setGuard([zeroAddress]);
+    assert.equal(await d.mockSafe.read.guard(), zeroAddress);
+
+    await assert.doesNotReject(d.mockSafe.write.setGuard([d.guard.address]));
+    assert.equal(chk(await d.mockSafe.read.guard()), chk(d.guard.address));
+
+    const notAGuard = await viem.deployContract('NotAGuard');
+    await assertReverts(d.mockSafe.write.setGuard([notAGuard.address]), 'GS300');
+    // Rejected means unchanged: the Safe keeps the guard it had.
+    assert.equal(chk(await d.mockSafe.read.guard()), chk(d.guard.address));
+  });
+
+  it('supportsInterface answers the guard id derived from our own selectors, and nothing else', async () => {
+    // The id the real `setGuard` compares against, computed from the two
+    // selectors this contract actually compiles to — not a literal typed twice.
+    // EIP-165 excludes inherited functions, so `supportsInterface(bytes4)` is not
+    // part of it, which is why this XOR is the whole interface id.
+    const checkTransaction = toFunctionSelector(
+      'function checkTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes,address)',
+    );
+    const checkAfterExecution = toFunctionSelector('function checkAfterExecution(bytes32,bool)');
+    const guardInterfaceId = `0x${(BigInt(checkTransaction) ^ BigInt(checkAfterExecution))
+      .toString(16)
+      .padStart(8, '0')}` as Hex;
+
+    assert.equal(guardInterfaceId, '0xe6d7a83a');
+    assert.equal(await d.guard.read.supportsInterface([guardInterfaceId]), true);
+    assert.equal(await d.guard.read.supportsInterface(['0x01ffc9a7']), true); // IERC165
+
+    // ERC-165 is not "returns true always": an id nobody claims is false.
+    assert.equal(await d.guard.read.supportsInterface(['0xffffffff']), false);
+  });
+
   it('sync() on a proxy that was never initialized fails cleanly, not with a panic', async () => {
     // The factory always initializes, so this needs a hand-made proxy: the
     // implementation behind an ERC-1967 proxy with no `initialize` call.

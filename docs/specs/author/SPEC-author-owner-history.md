@@ -6,7 +6,7 @@
 > **Type:** branch — a part of the author side, not a domain in its own right.
 > **Status:** built. `OwnerHistoryModuleV1`, `OwnerHistoryModuleV1Factory` and
 > `OwnerHistoryGuard` are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
-> `test/MockSafe.t.sol` and 36 passing tests in the package;
+> `test/MockSafe.t.sol` and 40 passing tests in the package;
 > `scripts/deploy-owner-history.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Nothing
@@ -22,10 +22,11 @@ it.
 - `OwnerHistoryModuleV1` (UUPS; one proxy per author Safe, made by
   `OwnerHistoryModuleV1Factory`). It mirrors the Safe's owner set and records a new *era*
   every time that set changes. It is the store and the read surface.
-- `OwnerHistoryGuard` (non-upgradeable, storage-free, installed with `setGuard`). It is a
-  **best-effort** tap that calls the module's `sync()` inside the Safe's own transaction,
-  so the era boundary is the rotation's block and not a later one. It is the only thing in
-  this design that can be skipped, and the spec says exactly how often and how visibly.
+- `OwnerHistoryGuard` (non-upgradeable, storage-free, ERC-165-answering, installed with
+  `setGuard`). It is a **best-effort** tap that calls the module's `sync()` inside the Safe's
+  own transaction, so the era boundary is the rotation's block and not a later one. It is the
+  only thing in this design that can be skipped, and the spec says exactly how often and how
+  visibly.
 
 Neither contract gates anything on its own. `canPublish` stays in
 [`SPEC-gates.md`](../gates/SPEC-gates.md); this package supplies one more read a gate may
@@ -45,9 +46,14 @@ This is the question the design turns on, and the answer is **no**, for Safe v1.
   mutation, and a module gets no notification in 1.4.1 either.
 - `execTransaction` reads `guard` **once** into a local at the top
   (`address guard = getGuard();`), calls `guard.checkTransaction(...)` before executing, and
-  calls `guard.checkAfterExecution(txHash, success)` after. So a transaction that replaces
-  the guard is still checked by the *old* guard, and a guard installed by transaction *N* is
-  not consulted for transaction *N*.
+  calls `guard.checkAfterExecution(txHash, success)` after. That read is the Safe's own:
+  `getGuard()` is **`internal` in 1.4.1**, with no public getter (bytecode size), so a reader
+  cannot ask a Safe for its guard — the address is only recoverable with
+  `getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 1)` (the
+  guard-manager slot, one word, low 20 bytes) or `eth_getStorageAt`, and nothing in this
+  package pretends to query it. Because the read is once, a transaction that replaces the
+  guard is still checked by the *old* guard, and a guard installed by transaction *N* is not
+  consulted for transaction *N*.
 - The only on-chain place a rotation can be observed inside the same transaction is
   therefore a guard, and specifically `checkAfterExecution` — the one call that runs after
   the mutation has landed.
@@ -65,6 +71,14 @@ Two Safe transactions, because the guard is deployed against the module proxy's 
 
 `enableModule` is not needed for the module to work — the guard calls it and `sync()` is
 permissionless — but it is the only on-chain proof that *this Safe* adopted *this* module.
+
+The batch has one precondition that is easy to miss and fatal to skip: `setGuard` is
+`authorized` — a self-call, the Safe's own `execTransaction` or an enabled module's
+`execTransactionFromModule` — and validates ERC-165 before it stores the address:
+`require(Guard(guard).supportsInterface(type(Guard).interfaceId), "GS300")`. A contract that
+does not answer the guard interface id (`0xe6d7a83a`) cannot be installed at all: the
+transaction reverts `GS300` and the previous guard stays. `OwnerHistoryGuard.supportsInterface`
+answers `0xe6d7a83a` and `0x01ffc9a7`, so the batch lands.
 
 Nothing else in the install is required: there is no registry to join and no name to claim,
 the proxy answers only to the Safe, and the factory is a deployer with an index.
@@ -321,11 +335,15 @@ mutation has landed, and only as a **safety net**: a rotation our tooling propos
 own `sync()`, and the guard is what covers the ones it does not build.
 
 **Why it is separate from the module.** A guard is called from inside `execTransaction`;
-anything it reverts takes the Safe's transaction with it. And `setGuard` is itself
-`onlySelf` — an `execTransaction`. A guard that reverts on its own bug therefore blocks the
-only transaction that could remove it: **a permanent brick of the author Safe**, with no
-recovery but the module hole above. That single fact dictates the shape:
+anything it reverts takes the Safe's transaction with it. And `setGuard` is itself a
+self-call (`authorized` — normally an `execTransaction`). A guard that reverts on its own bug
+therefore blocks the only transaction that could remove it: **a permanent brick of the author
+Safe**, with no recovery but the module hole above. That single fact dictates the shape:
 
+- it answers ERC-165 (`supportsInterface` for `0xe6d7a83a` and `0x01ffc9a7`) because
+  `setGuard` refuses anything else with `GS300` — a guard that does not answer the interface id
+  cannot be installed at all; the function is `pure` and reads nothing, so it adds no way to
+  revert.
 - the call to the module is a **low-level `call` with a gas cap**, never
   `try IOwnerHistory(module).sync{gas: …}() returns (bool)`. A `returns (bool)` decode of a
   callee that succeeds with empty returndata — a proxy whose implementation slot was never
@@ -550,6 +568,8 @@ whoever made the proxy named that Safe. The rules:
 | `the guard ignores calls from non-Safe senders` | the sender gate |
 | `unknown address: every read answers false or empty instead of reverting` | INV-6, empty era for out-of-range |
 | `the guard ABI is Safe 1.4.1 IGuard: the enum encodes as uint8` | the guard's selectors against a hardcoded 1.4.1 string |
+| `setGuard enforces the ERC-165 gate: our guard installs, a plain contract reverts GS300` | the real installation gate: the guard answers ERC-165, `NotAGuard` does not, and the Safe keeps what it had |
+| `supportsInterface answers the guard id derived from our own selectors, and nothing else` | `0xe6d7a83a` = `checkTransaction ^ checkAfterExecution` computed from the compiled selectors, plus `0x01ffc9a7`; `0xffffffff` is false |
 | `sync() on a proxy that was never initialized fails cleanly, not with a panic` | `SafeCallFailed` on no era 0 |
 | `initialize refuses a Safe that has no owners yet` | `ZeroOwners`, and no proxy left in the index |
 | `isOwner answers false when the Safe returns a word that is not 0 or 1` | the raw-word compare, not `abi.decode` |
@@ -560,7 +580,10 @@ whoever made the proxy named that Safe. The rules:
 **What the fixtures are not.** `test/MockSafe.t.sol` is not the Safe package: it implements
 `getOwners`, `isOwner`, `guard`/`setGuard`, and an `execOwnerChange` that calls the guard the
 way 1.4.1 does (read the guard once, `checkTransaction` before, `checkAfterExecution` after,
-`onlySelf` simulated by being the caller). The claim “this is Safe 1.4.1's order and shape”
+`onlySelf` simulated by being the caller). `setGuard` there carries the real gate — the
+ERC-165 `require` with its `GS300`, so a guard that does not answer
+`type(Guard).interfaceId` cannot be installed in the fixture either, which is exactly the bug
+a permissive mock hid. The claim “this is Safe 1.4.1's order and shape”
 is **asserted by construction, not by a test against the real contract** — the ABI test pins
 our side of that contract, not Safe's.
 

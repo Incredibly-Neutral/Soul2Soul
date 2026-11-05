@@ -5,7 +5,9 @@ pragma solidity ^0.8.19;
  * @title OwnerHistoryGuard
  * @notice Safe 1.4.1 transaction guard that keeps `OwnerHistoryModuleV1`
  *         current. Installed with the Safe's own `setGuard` (which is
- *         `onlySelf`, so a Safe transaction installs it).
+ *         `authorized`: the Safe itself, or an enabled module through
+ *         `execTransactionFromModule`), and only if this contract answers ERC-165
+ *         for the guard interface — see "Installing it" below.
  *
  * What this is, in one line: **a best-effort hook, not the primary path.**
  *
@@ -15,6 +17,29 @@ pragma solidity ^0.8.19;
  * is `onlySelf`, i.e. it must go through `execTransaction`, so a guard *sees*
  * every rotation. Seeing is not the same as recording, and the difference
  * matters enough to state up front (see "Best-effort, measured" below).
+ *
+ * Installing it: `authorized`, ERC-165, and nothing to read back.
+ *   Two facts from `GuardManager` in 1.4.1, both load-bearing for a reader:
+ *     - `setGuard` is `authorized`, i.e. a self-call: the Safe's own
+ *       `execTransaction`, **or an enabled module through
+ *       `execTransactionFromModule`** (also a self-call). It is a self-call gate,
+ *       not an owner signature, which is why a module can also remove the guard.
+ *       And it validates before it stores:
+ *         require(Guard(guard).supportsInterface(type(Guard).interfaceId), "GS300");
+ *       A guard that does not answer ERC-165 for `type(Guard).interfaceId`
+ *       cannot be installed at all: the Safe transaction reverts `GS300` and the
+ *       old guard stays. `type(Guard).interfaceId` is the XOR of the two
+ *       selectors implemented here, `checkTransaction(...) ^
+ *       checkAfterExecution(bytes32,bool)` = `0xe6d7a83a`; `supportsInterface`
+ *       below answers that id and `0x01ffc9a7` (`type(IERC165).interfaceId`) and
+ *       nothing else. It is `pure` and reads no storage, so it cannot fail.
+ *     - `getGuard()` is `internal` in 1.4.1 — there is no public getter, the
+ *       Safe is short on bytecode — so **no caller can ask a Safe which guard it
+ *       has**. The address is in the guard-manager slot
+ *       `0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8`
+ *       and is recovered only by `getStorageAt(uint256(slot), 1)` (or
+ *       `eth_getStorageAt`) and taking the low 20 bytes of the word. Nothing
+ *       here pretends to query it.
  *
  * What it does NOT cover — two holes, both real:
  *   1. **A module can act as the Safe.** `execTransactionFromModule` is a
@@ -166,6 +191,17 @@ contract OwnerHistoryGuard {
     ///      for no caller's benefit.
     bytes4 private constant SYNC_SELECTOR = bytes4(keccak256("sync()"));
 
+    /// @dev `type(Guard).interfaceId` from Safe 1.4.1's `GuardManager`: the XOR
+    ///      of the selectors of the two functions declared in `Guard` itself,
+    ///      `checkTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes,address)`
+    ///      and `checkAfterExecution(bytes32,bool)`. EIP-165 excludes inherited
+    ///      functions, so the inherited `supportsInterface(bytes4)` is not part
+    ///      of it. `setGuard` checks this exact id and reverts `GS300` otherwise.
+    bytes4 internal constant GUARD_INTERFACE_ID = 0xe6d7a83a;
+
+    /// @dev `type(IERC165).interfaceId`.
+    bytes4 internal constant ERC165_INTERFACE_ID = 0x01ffc9a7;
+
     /// @notice Emitted whenever the hook did **not** record this transaction's
     ///         outcome. Four cases: no code at `module`; less gas left than
     ///         `SYNC_RESERVE`; the call failed; or it answered with less than a
@@ -182,6 +218,14 @@ contract OwnerHistoryGuard {
         if (_safe == address(0) || _module == address(0)) revert ZeroAddress();
         safe = _safe;
         module = _module;
+    }
+
+    /// @notice ERC-165, answered exactly as Safe 1.4.1's `BaseGuard` answers it.
+    ///         `setGuard` calls this before it will store the address; answering
+    ///         `false` for `GUARD_INTERFACE_ID` makes installation revert
+    ///         `GS300`. No storage read, no assembly, nothing that can revert.
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == GUARD_INTERFACE_ID || interfaceId == ERC165_INTERFACE_ID;
     }
 
     /// @dev Deliberately empty: unnamed parameters so that nothing here can even
