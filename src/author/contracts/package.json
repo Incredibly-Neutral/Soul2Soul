@@ -1,0 +1,50 @@
+{
+  "name": "@s2s/author-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "generated/abis/index.ts",
+  "types": "generated/abis/index.ts",
+  "exports": {
+    ".": {
+      "types": "./generated/abis/index.ts",
+      "default": "./generated/abis/index.ts"
+    },
+    "./abis/*": {
+      "types": "./generated/abis/*.ts",
+      "default": "./generated/abis/*.ts"
+    },
+    "./artifacts/*": {
+      "types": "./generated/artifacts/*.ts",
+      "default": "./generated/artifacts/*.ts"
+    }
+  },
+  "files": [
+    "generated/abis",
+    "src"
+  ],
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:draftsfac": "tsx scripts/deploy-drafts-factory.ts",
+    "clean": "rm -rf artifacts cache generated"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.6",
+    "@openzeppelin/contracts-upgradeable": "^4.9.6",
+    "dotenv": "^16.6.1",
+    "viem": "^2.46.2"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-keystore": "^3.0.4",
+    "@nomicfoundation/hardhat-network-helpers": "^3.0.3",
+    "@nomicfoundation/hardhat-node-test-runner": "^3.0.8",
+    "@nomicfoundation/hardhat-viem": "^3.0.1",
+    "@types/node": "^20.19.31",
+    "hardhat": "^3.1.8",
+    "hardhat-deploy": "^2.0.0",
+    "ldenv": "^0.3.16",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
