@@ -18,7 +18,13 @@ import {
   readLegacyFileConfig,
   writeConfigValue,
 } from '../src/core/configfile';
-import { CONFIG_FIELDS, LABEL_ENV_SHORTHANDS, matchField } from '../src/core/configschema';
+import {
+  CONFIG_FIELDS,
+  LABEL_ENV_SHORTHANDS,
+  defaultForPath,
+  fieldByPath,
+  matchField,
+} from '../src/core/configschema';
 
 let dir: string;
 
@@ -76,7 +82,7 @@ describe('tolerant reads', () => {
     expect(readConfigFile('')).toEqual({});
   });
 
-  it('normalizes a hand-edited file: types, providers, dead ipfs entries', () => {
+  it('normalizes a hand-edited file: types, providers, credential-only ipfs entries', () => {
     writeJson(join(dir, 'a.json'), {
       environment: 'nonsense',
       ipfs: {
@@ -89,8 +95,13 @@ describe('tolerant reads', () => {
     });
     const config = readFileConfig(join(dir, 'a.json'));
     expect(config.environment).toBeUndefined();
-    // provider defaults to the label; an entry with no url is dropped
-    expect(config.ipfs).toEqual({ kubo: { provider: 'kubo', url: 'gateway.example' } });
+    // provider defaults to the label. An entry with no url survives here — its
+    // credential is what merges onto a same-provider gateway from a lower layer
+    // — but it is not an endpoint, so `ipfs.entries` drops it.
+    expect(config.ipfs).toEqual({
+      kubo: { provider: 'kubo', url: 'gateway.example' },
+      dead: { provider: 'dead', key: 'no-url' },
+    });
     expect(config.pinning).toEqual({ mypin: { provider: 'mypin', key: 'k' } });
     expect(config.rpc).toEqual({ drpc: { key: 'dk' }, custom: { l1: ['a', 'b'] } });
     expect(config.github).toBeUndefined();
@@ -165,6 +176,17 @@ describe('the legacy flat file', () => {
 });
 
 describe('writeConfigValue', () => {
+  it('writes an explicit null for an unset marker', () => {
+    // The marker is how `config unset` reaches a value that lives in a layer the
+    // user cannot edit; the reader drops it, the merge honours it.
+    const file = paths().userConfigPath;
+    writeConfigValue(file, 'pinning.pinata.key', null);
+    expect(JSON.parse(readFileSync(file, 'utf8')) as unknown).toEqual({
+      pinning: { pinata: { key: null } },
+    });
+    expect(readConfigFile(file)).toEqual({});
+  });
+
   it('creates intermediate objects and writes the file at 0600', () => {
     const file = paths().userConfigPath;
     writeConfigValue(file, 'pinning.pinata.key', 'jwt');
@@ -178,8 +200,7 @@ describe('writeConfigValue', () => {
     expect(readConfigFile(file)).toEqual({ rpc: { custom: { l1: ['http://a', 'http://b'] } } });
   });
 
-  it('prunes objects that fall empty when a leaf is unset', () => {
-    const file = paths().userConfigPath;
+  it('prunes objects that fall empty when a leaf is unset', () => {    const file = paths().userConfigPath;
     writeConfigValue(file, 'pinning.pinata.key', 'jwt');
     writeConfigValue(file, 'environment', 'dev');
     writeConfigValue(file, 'pinning.pinata.key', undefined);
@@ -212,6 +233,15 @@ describe('matchField', () => {
     expect(matchField('privateKey')).toBeUndefined();
     expect(matchField('pinning.pinata')).toBeUndefined();
     expect(matchField('bundler.entryPoint')).toBeUndefined();
+  });
+
+  it('does not offer entryPoint as a settable key', () => {
+    // Advertised settable for a while, but only the env is ever read: a value in
+    // a file would sit there doing nothing. Env-only, kept in the registry so
+    // `config get` and the enum check have one source of truth.
+    expect(matchField('entryPoint')).toBeUndefined();
+    expect(fieldByPath('entryPoint')?.env).toEqual(['S2S_ENTRY_POINT']);
+    expect(defaultForPath('entryPoint')).toBe('0.7');
   });
 });
 

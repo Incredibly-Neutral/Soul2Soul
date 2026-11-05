@@ -59,8 +59,12 @@ export function configFilePaths(input: ConfigPathsInput = {}): ConfigFilePaths {
   };
 }
 
-/** Read a config file tolerantly as raw JSON — missing/unparsable → empty object. */
-export function readConfigFile(path: string): Record<string, unknown> {
+/**
+ * Read a config file tolerantly as written — missing/unparsable → empty object.
+ * Tombstones (`null` leaves) are preserved: only the writer and the tombstone
+ * walk want them, and they need the file exactly as it is on disk.
+ */
+export function readConfigRaw(path: string): Record<string, unknown> {
   if (!path) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -71,6 +75,37 @@ export function readConfigFile(path: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Drop the tombstones and the objects they leave empty, at any depth. */
+function pruneTombstones(value: unknown): unknown {
+  if (value === null) return undefined;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const kept = pruneTombstones(child);
+      if (kept !== undefined) out[key] = kept;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+  return value;
+}
+
+/** A config file's values with the tombstones removed (see `readConfigFile`). */
+export function stripTombstones(
+  value: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return pruneTombstones(value) as Record<string, unknown> | undefined;
+}
+
+/**
+ * Read a config file as the values it carries — a tombstone is not a value, so
+ * it is dropped here (with any object it empties). The merge never sees one;
+ * the write path and the tombstone walk use `readConfigRaw` instead.
+ */
+export function readConfigFile(path: string): Record<string, unknown> {
+  return stripTombstones(readConfigRaw(path)) ?? {};
 }
 
 /** Read a config file as a typed, normalized FileConfig (tolerant, never throws). */
@@ -141,14 +176,19 @@ function assertWritablePath(dotted: string): void {
  * `dotted` is a schema path with the label filled in (`pinning.pinata.key`);
  * intermediate objects are created. `list` fields accept a comma-separated
  * string (the command-line spelling) and are stored as a JSON array. Passing
- * `undefined` removes the leaf and prunes whatever objects fall empty behind it.
+ * `undefined` removes the leaf and prunes whatever objects fall empty behind it;
+ * passing `null` writes an explicit tombstone that the merge honours as
+ * "unset" (how `config unset` reaches a value living in a lower layer).
  */
 export function writeConfigValue(path: string, dotted: string, value: unknown): void {
   assertWritablePath(dotted);
-  const data = readConfigFile(path);
+  const data = readConfigRaw(path);
 
   if (value === undefined) {
     deletePath(data, dotted);
+  } else if (value === null) {
+    // A tombstone is a leaf value, not a scalar to normalize: keep the `null`.
+    writePath(data, dotted, null);
   } else {
     const listy = matchField(dotted)?.spec.list === true;
     const stored = listy ? parseList(value) : storedScalar(value);
@@ -179,6 +219,24 @@ function storedScalar(value: unknown): unknown {
 export function maskSecret(value: string): string {
   if (value.length <= 8) return '********';
   return `${value.slice(0, 2)}…${value.slice(-4)}`;
+}
+
+/** Query parameters whose value is a credential when it appears in a URL. */
+const CREDENTIAL_PARAM = /[?&](?:api[-_]?key|key|token|secret|auth|jwt|password|passwd|signature|sig)=/i;
+
+/** Does this URL carry a credential in its query string? */
+export function urlHasCredential(value: string): boolean {
+  return CREDENTIAL_PARAM.test(value);
+}
+
+/**
+ * Hide query-string credentials while keeping the endpoint readable, so
+ * `config get paymaster.url` can show which service is configured without
+ * printing the key: `…?apikey=********`.
+ */
+export function maskUrlCredential(value: string): string {
+  if (!urlHasCredential(value)) return value;
+  return value.replace(/([?&][^=&#]+=)[^&#]*/g, '$1********');
 }
 
 // The defaults layer is a config file too; re-exported here so a caller that

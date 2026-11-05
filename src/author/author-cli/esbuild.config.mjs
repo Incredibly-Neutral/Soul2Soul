@@ -4,10 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 import * as esbuild from 'esbuild';
 
+import { buildPaths } from './esbuild.paths.mjs';
+
 const production = process.argv[2] === 'production';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sharedRoot = resolve(here, '../../shared');
+const paths = buildPaths(here);
 
 /**
  * Bundle `@s2s/soul2soul-shared` from SOURCE, not from its built `dist/`.
@@ -72,22 +75,23 @@ const sharedFromSource = {
  * which is exactly why the copy must not be silently forgotten.
  */
 function copyDefaults() {
-  mkdirSync('dist', { recursive: true });
-  const source = join(here, 'defaults.json');
-  if (!existsSync(source)) {
-    throw new Error(`esbuild: ${source} is missing — the defaults layer would not ship`);
+  // From the script directory, never cwd: the build must produce the same
+  // output whether it is run from the package root or anywhere else.
+  mkdirSync(paths.dist, { recursive: true });
+  if (!existsSync(paths.defaults)) {
+    throw new Error(`esbuild: ${paths.defaults} is missing — the defaults layer would not ship`);
   }
-  copyFileSync(source, join(here, 'dist', 'defaults.json'));
+  copyFileSync(paths.defaults, paths.defaultsCopy);
 }
 
 /** @type {esbuild.BuildOptions} */
 const options = {
-  entryPoints: ['src/cli.ts'],
+  entryPoints: [paths.entry],
   bundle: true,
   platform: 'node',
   format: 'cjs',
   target: 'node20',
-  outfile: 'dist/cli.cjs',
+  outfile: paths.outfile,
   banner: { js: '#!/usr/bin/env node' },
   sourcemap: production ? false : 'inline',
   logLevel: 'info',

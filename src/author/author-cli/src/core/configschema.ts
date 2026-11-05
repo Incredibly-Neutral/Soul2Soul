@@ -19,9 +19,11 @@
 // (the env). A key in a committed `.s2sconfig.json`, or a second copy in the
 // custom file, is a leak waiting for a `git add`.
 //
-// `entryPoint` is registered but has no file home: it selects the Safe4337Module
-// inside the Safe initializer, so it is part of the counterfactual author
-// address and is not a preference. Env + builtin only.
+// `entryPoint` has no file home: it selects the Safe4337Module inside the Safe
+// initializer, so it is part of the counterfactual author address and is not a
+// preference. Env + builtin only, and therefore NOT in the settable registry —
+// a value in a file would be written and never read. `ENV_ONLY_FIELDS` keeps its
+// spec so `config get entryPoint` and the enum check have one source of truth.
 //
 // This module is types + schema knowledge (validation, path plumbing). It never
 // touches the filesystem and never decides precedence — see core/configfile.ts
@@ -45,10 +47,17 @@ export interface PinningEntry {
   url?: string;
 }
 
-/** One IPFS read/write endpoint. `url` is the gateway host (no scheme needed). */
+/**
+ * One IPFS read/write endpoint. `url` is the gateway host (no scheme needed).
+ *
+ * `url` is optional because a layer may carry the credential alone
+ * (`s2s config set ipfs.kubo.key …`): the gateway then comes from a lower layer
+ * with the same provider. Only entries with a url are endpoints — see
+ * `CliConfig.ipfs`.
+ */
 export interface IpfsEntry {
   provider: string;
-  url: string;
+  url?: string;
   key?: string;
 }
 
@@ -64,7 +73,10 @@ export interface FileConfig {
     drpc?: { key?: string };
     alchemy?: { key?: string };
     infura?: { key?: string };
-    /** Explicit endpoints; they replace the derived chain when non-empty. */
+    /**
+     * Explicit endpoints. Both lists set ⇒ they replace the derived chains;
+     * one alone ⇒ it heads its own chain and the fallbacks stay behind it.
+     */
     custom?: { l1?: string[]; l2?: string[] };
   };
   paymaster?: { key?: string; url?: string };
@@ -81,6 +93,12 @@ export interface ConfigFieldSpec {
   env: readonly string[];
   /** Masked in `config get`/`list`, and warned about in a project file. */
   secret?: boolean;
+  /**
+   * A URL that may carry a credential in its query string. Masking is per
+   * value (the whole URL stays useful), and a project-file write that carries
+   * one is warned about even though the leaf itself is not a secret.
+   */
+  url?: boolean;
   /** Comma-separated on the command line / in env, a JSON array in the file. */
   list?: boolean;
   /** Builtin fallback (never a secret). */
@@ -95,9 +113,6 @@ export interface ConfigFieldSpec {
  */
 export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'environment', env: ['S2S_ENV'], default: 'prod', enumValues: ['prod', 'dev'] },
-  // Env-only: see the header. Kept in the registry so `config get entryPoint`
-  // and the enum check still have one source of truth.
-  { path: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.7', enumValues: ['0.6', '0.7'] },
   { path: 'pinning.*.provider', env: [] },
   { path: 'pinning.*.key', env: [], secret: true },
   { path: 'pinning.*.url', env: [] },
@@ -107,14 +122,17 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'rpc.drpc.key', env: ['S2S_DRPC_KEY', 'VITE_DRPC_API_KEY'], secret: true },
   { path: 'rpc.alchemy.key', env: ['S2S_ALCHEMY_KEY', 'VITE_ALCHEMY_KEY'], secret: true },
   { path: 'rpc.infura.key', env: ['S2S_INFURA_KEY', 'VITE_INFURA_KEY', 'INFURA_KEY'], secret: true },
-  { path: 'rpc.custom.l1', env: ['S2S_RPC_L1', 'MAINNET_RPC_URL'], list: true },
-  { path: 'rpc.custom.l2', env: ['S2S_RPC_L2', 'BASE_RPC_URL'], list: true },
+  // MAINNET_RPC_URL / BASE_RPC_URL are deliberately NOT aliases here: they head
+  // the derived chain (shared `buildFallbackRpcs`) instead of replacing it, so a
+  // single explicit endpoint never costs the failover. See `resolveRpcs`.
+  { path: 'rpc.custom.l1', env: ['S2S_RPC_L1'], list: true, url: true },
+  { path: 'rpc.custom.l2', env: ['S2S_RPC_L2'], list: true, url: true },
   {
     path: 'paymaster.key',
     env: ['S2S_PIMLICO_KEY', 'PIMLICO_KEY', 'PIMLICO_API_KEY'],
     secret: true,
   },
-  { path: 'paymaster.url', env: ['S2S_PAYMASTER_URL', 'S2S_BUNDLER_URL'] },
+  { path: 'paymaster.url', env: ['S2S_PAYMASTER_URL', 'S2S_BUNDLER_URL'], url: true },
   { path: 'filecoin.sessionKeyFile', env: ['S2S_FILECOIN_SESSION_KEY'] },
   {
     path: 'filecoin.chain',
@@ -126,11 +144,23 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
     path: 'filecoin.rpcUrl',
     env: ['S2S_FILECOIN_RPC'],
     default: 'https://api.node.glif.io/rpc/v1',
+    url: true,
   },
   { path: 'lit.accountKey', env: ['LIT_ACCOUNT_KEY'], secret: true },
   { path: 'lit.usageKey', env: ['LIT_USAGE_KEY'], secret: true },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
+];
+
+/**
+ * Fields with no file home: env + builtin only.
+ *
+ * They are not settable (`matchField` does not see them) and are not written by
+ * `config set` / `setup`. They stay in one table so the dot-path readers
+ * (`config get`, the enum check, `defaultForPath`) still resolve them.
+ */
+export const ENV_ONLY_FIELDS: readonly ConfigFieldSpec[] = [
+  { path: 'entryPoint', env: ['S2S_ENTRY_POINT'], default: '0.7', enumValues: ['0.6', '0.7'] },
 ];
 
 /**
@@ -196,9 +226,12 @@ export function matchField(key: string): { spec: ConfigFieldSpec; path: string }
   return undefined;
 }
 
-/** The spec registered for exactly this path (wildcards included). */
+/** The spec registered for exactly this path (wildcards included, env-only too). */
 export function fieldByPath(path: string): ConfigFieldSpec | undefined {
-  return CONFIG_FIELDS.find((spec) => spec.path === path);
+  return (
+    CONFIG_FIELDS.find((spec) => spec.path === path) ??
+    ENV_ONLY_FIELDS.find((spec) => spec.path === path)
+  );
 }
 
 /** The registry default for a path, or undefined when it has none. */
@@ -295,10 +328,11 @@ function compact<T extends object>(value: T): T | undefined {
 
 /**
  * Turn raw JSON into a FileConfig, tolerantly: unknown keys, wrong types and
- * empty strings are dropped, a missing `provider` falls back to the label, and
- * an unusable `ipfs` entry (no url) is discarded rather than kept as a dead
- * primary gateway. Nothing throws — every caller runs on a file a human can
- * edit by hand.
+ * empty strings are dropped, and a missing `provider` falls back to the label.
+ * An `ipfs` entry survives with no url when it carries a key — that is a
+ * credential waiting for its gateway in a lower layer, not a dead endpoint (the
+ * resolved config drops url-less entries from `ipfs.entries`). Nothing throws —
+ * every caller runs on a file a human can edit by hand.
  */
 export function normalizeFileConfig(raw: Record<string, unknown> | undefined): FileConfig {
   const out: FileConfig = {};
@@ -325,9 +359,13 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
     const entry = objectValue(value);
     if (!entry) continue;
     const url = textValue(entry.url);
-    if (url === undefined) continue;
     const key = textValue(entry.key);
-    ipfs[label] = { provider: textValue(entry.provider) ?? label, url, ...(key === undefined ? {} : { key }) };
+    if (url === undefined && key === undefined) continue;
+    ipfs[label] = {
+      provider: textValue(entry.provider) ?? label,
+      ...(url === undefined ? {} : { url }),
+      ...(key === undefined ? {} : { key }),
+    };
   }
   if (Object.keys(ipfs).length > 0) out.ipfs = ipfs;
 

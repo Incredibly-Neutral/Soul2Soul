@@ -23,8 +23,8 @@ import { flagBool, flagRows, GLOBAL_FLAGS, type ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { isInteractive, prompt } from '../lib/prompt';
 import type { CliOut } from '../lib/out';
-import { configKeyValue } from '../core/config';
-import { configFilePaths, maskSecret, readConfigFile, writeConfigValue } from '../core/configfile';
+import { configKeyValue, configValueSource } from '../core/config';
+import { configFilePaths, maskSecret, writeConfigValue } from '../core/configfile';
 import { matchField, type ConfigFieldSpec } from '../core/configschema';
 
 type Section = 'pinning' | 'ipfs' | 'rpc' | 'paymaster' | 'filecoin';
@@ -39,10 +39,10 @@ interface SetupPrompt {
   /** What the person is being asked for, in plain words. */
   question: string;
   /**
-   * Written alongside the value when the path lives under a map label.
-   * A higher layer replaces a label WHOLE (merge rule), so a custom
-   * `pinning.pinata.key` without `pinning.pinata.provider` would leave the
-   * default entry's provider unresolvable.
+   * Written alongside the value when the path lives under a map label, so the
+   * entry the wizard creates names its provider explicitly instead of relying
+   * on the label default. (The merge still fills siblings field by field, but a
+   * written custom.json should read on its own.)
    */
   label?: { path: string; value: string };
 }
@@ -92,37 +92,12 @@ const SETUP_PROMPTS: readonly SetupPrompt[] = [
 ];
 
 /** Which layer a value would resolve from today — what `[custom: …]` reports. */
-type ValueSource = 'env' | 'custom' | 'default' | 'unset';
+type ValueSource = NonNullable<ReturnType<typeof configValueSource>> | 'unset';
 
 const ACCEPT_DEFAULTS_FLAG = {
   type: 'boolean',
   summary: 'ask nothing and write nothing — keep every provided default (the non-TTY path)',
 } as const;
-
-/** Walk a tolerant config file for one dotted leaf. */
-function hasDotted(file: Record<string, unknown>, dotted: string): boolean {
-  let cursor: unknown = file;
-  for (const part of dotted.split('.')) {
-    if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return false;
-    const next = (cursor as Record<string, unknown>)[part];
-    if (next === undefined) return false;
-    cursor = next;
-  }
-  return true;
-}
-
-function sourceOf(
-  spec: ConfigFieldSpec,
-  path: string,
-  env: NodeJS.ProcessEnv,
-  custom: Record<string, unknown>,
-  defaults: Record<string, unknown>,
-): ValueSource {
-  if (spec.env.some((name) => (env[name] ?? '').trim().length > 0)) return 'env';
-  if (hasDotted(custom, path)) return 'custom';
-  if (hasDotted(defaults, path) || spec.default !== undefined) return 'default';
-  return 'unset';
-}
 
 /** `pinning.pinata.key [custom: pi…abcd]` — source plus a safe rendering. */
 function describe(
@@ -150,10 +125,6 @@ async function runSetup(out: CliOut, args: ParsedArgs): Promise<void> {
   const acceptDefaults = flagBool(args.flags, 'accept-defaults');
   const paths = configFilePaths();
   const env = process.env;
-  // Read once: the same two files answer "where does this value come from"
-  // for every question.
-  const customFile = readConfigFile(paths.user);
-  const defaultsFile = readConfigFile(paths.defaults);
   const written: string[] = [];
   const kept: string[] = [];
 
@@ -169,8 +140,10 @@ async function runSetup(out: CliOut, args: ParsedArgs): Promise<void> {
     out.log(`\n${section}`);
     for (const step of SETUP_PROMPTS.filter((candidate) => candidate.section === section)) {
       const spec = matchField(step.path)?.spec;
-      const current = configKeyValue(step.path) ?? spec?.default;
-      const source = spec ? sourceOf(spec, step.path, env, customFile, defaultsFile) : 'unset';
+      // Ask the merger, not a second opinion: legacy and label shorthands are
+      // only labelled correctly when the answer comes from real resolution.
+      const current = configKeyValue(step.path, env) ?? spec?.default;
+      const source = configValueSource(step.path, env) ?? 'unset';
       const shown = describe(spec, source, current);
 
       if (acceptDefaults) {
@@ -203,7 +176,7 @@ async function runSetup(out: CliOut, args: ParsedArgs): Promise<void> {
         : value;
       writeConfigValue(paths.user, step.path, stored);
       // The label's provider is implied by the map key, not a separate answer
-      // — it is written so the replaced entry stays resolvable.
+      // — it is written so the custom entry is self-describing.
       if (step.label) writeConfigValue(paths.user, step.label.path, step.label.value);
       written.push(step.path);
       out.log(`  wrote ${step.path}`);
