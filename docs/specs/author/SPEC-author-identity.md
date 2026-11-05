@@ -87,7 +87,10 @@ the plugin bundle — part of this package's code.
 
 - **INV-1 origin:** the author's `private_key`/EOA signs `hashMessage("lit actions auth")`; that
   signature is what the gates recover and check (`canRead`/`canPublish`). The signer must be an
-  **owner of the author Safe** the publication whitelists/licenses.
+  **owner of the author Safe** the publication whitelists/licenses — read *now*, which is all a
+  signature made today needs. For an artifact signed before a signer rotation, "is an owner" is the
+  wrong question and [SPEC-author-owner-history](SPEC-author-owner-history.md) is the record that
+  answers the right one ("was an owner at that block").
 - **Cross-chain same-address (SPEC-contracts-ens):** the author Safe address must be consistent so
   it can be the ENS subnode owner (L1) and the gated identity (L2). Safe-address determinism is owned
   here (4337 Safe deployment) — do not change derivation casually.
