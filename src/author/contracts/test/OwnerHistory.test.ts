@@ -43,8 +43,12 @@ async function blockOf(call: Promise<Hex>): Promise<bigint> {
 }
 
 /**
- * MockSafe(owners) → module implementation → factory → proxy → guard, then
- * install the guard, which is what a real Safe does with its own `setGuard`.
+ * MockSafe(owners) → both implementations → the one factory → proxy + guard
+ * from `createOwnerHistoryModule`, then install the guard, which is the one
+ * Safe transaction a real install needs (`setGuard` is `onlySelf`).
+ *
+ * Note what the factory did *not* do: it deployed the guard, and the Safe's
+ * guard slot was still zero until `setGuard` below. Deployment is not adoption.
  */
 async function deployHistory() {
   const [deployer, first, second, third, stranger] = await viem.getWalletClients();
@@ -54,14 +58,21 @@ async function deployHistory() {
   ]);
 
   const implementation = await viem.deployContract('OwnerHistoryModuleV1');
-  const factory = await viem.deployContract('OwnerHistoryModuleV1Factory', [implementation.address]);
+  // The factory deploys both module kinds; the drafts implementation is a
+  // constructor argument here and nothing in this suite proxies onto it.
+  const draftsImplementation = await viem.deployContract('DraftsModuleV1');
+  const factory = await viem.deployContract('AuthorContractsFactory', [
+    draftsImplementation.address,
+    implementation.address,
+  ]);
 
   // Era 0 opens in this transaction, so its start block is this one.
-  const proxyBlock = await blockOf(factory.write.createModule([mockSafe.address]));
-  const proxies = await factory.read.getModulesForSafe([mockSafe.address]);
+  const proxyBlock = await blockOf(factory.write.createOwnerHistoryModule([mockSafe.address]));
+  const proxies = await factory.read.getOwnerHistoryModulesForSafe([mockSafe.address]);
   const history = await viem.getContractAt('OwnerHistoryModuleV1', proxies[0]!);
+  const guardAddress = await factory.read.guardFor([proxies[0]!]);
+  const guard = await viem.getContractAt('OwnerHistoryGuard', guardAddress);
 
-  const guard = await viem.deployContract('OwnerHistoryGuard', [mockSafe.address, history.address]);
   await mockSafe.write.setGuard([guard.address]);
 
   return {
@@ -72,6 +83,7 @@ async function deployHistory() {
     stranger,
     mockSafe,
     implementation,
+    draftsImplementation,
     factory,
     history,
     guard,
@@ -762,8 +774,8 @@ describe('OwnerHistoryModuleV1', () => {
     // Deployed but not `setup()`ed: `getOwners()` returns nothing, so era 0
     // would be silently empty and nobody would ever have a tenure.
     const ownerless = await viem.deployContract('MockSafe', [[]]);
-    await assertReverts(d.factory.write.createModule([ownerless.address]), selectorOf('ZeroOwners'));
-    assert.equal((await d.factory.read.getModulesForSafe([chk(ownerless.address)])).length, 0);
+    await assertReverts(d.factory.write.createOwnerHistoryModule([ownerless.address]), selectorOf('ZeroOwners'));
+    assert.equal((await d.factory.read.getOwnerHistoryModulesForSafe([chk(ownerless.address)])).length, 0);
   });
 
   it('isOwner answers false when the Safe returns a word that is not 0 or 1', async () => {
@@ -771,8 +783,8 @@ describe('OwnerHistoryModuleV1', () => {
     // have made the module's "never reverts" read revert. It compares the raw
     // word instead.
     const lying = await viem.deployContract('LyingSafe', [addr(d.first)]);
-    await d.factory.write.createModule([lying.address]);
-    const proxies = await d.factory.read.getModulesForSafe([chk(lying.address)]);
+    await d.factory.write.createOwnerHistoryModule([lying.address]);
+    const proxies = await d.factory.read.getOwnerHistoryModulesForSafe([chk(lying.address)]);
     const module = await viem.getContractAt('OwnerHistoryModuleV1', proxies[0]!);
 
     assert.equal(await module.read.eraCount(), 1n);
@@ -783,15 +795,15 @@ describe('OwnerHistoryModuleV1', () => {
     );
   });
 
-  it('factory createModule yields a working proxy for the Safe', async () => {
-    assert.equal(chk(await d.factory.read.latestImplementation()), chk(d.implementation.address));
-    assert.equal(await d.factory.read.implementationCount(), 1n);
+  it('factory createOwnerHistoryModule yields a working proxy for the Safe', async () => {
+    assert.equal(chk(await d.factory.read.ownerHistoryImplementation()), chk(d.implementation.address));
+    assert.equal(await d.factory.read.ownerHistoryImplementationCount(), 1n);
     assert.equal(
-      chk(await d.factory.read.getImplementationByVersion([1n])),
+      chk(await d.factory.read.getOwnerHistoryImplementationByVersion([1n])),
       chk(d.implementation.address),
     );
 
-    const proxies = await d.factory.read.getModulesForSafe([d.safeAddr]);
+    const proxies = await d.factory.read.getOwnerHistoryModulesForSafe([d.safeAddr]);
     assert.equal(proxies.length, 1);
 
     const module = await viem.getContractAt('OwnerHistoryModuleV1', proxies[0]!);
@@ -801,8 +813,8 @@ describe('OwnerHistoryModuleV1', () => {
 
     // A second Safe gets its own proxy, and the first one is untouched.
     const other = await viem.deployContract('MockSafe', [[addr(d.third)]]);
-    await d.factory.write.createModule([other.address]);
-    const others = await d.factory.read.getModulesForSafe([chk(other.address)]);
+    await d.factory.write.createOwnerHistoryModule([other.address]);
+    const others = await d.factory.read.getOwnerHistoryModulesForSafe([chk(other.address)]);
     assert.equal(others.length, 1);
     const otherModule = await viem.getContractAt('OwnerHistoryModuleV1', others[0]!);
     assert.equal(chk(await otherModule.read.safe()), chk(other.address));
@@ -810,30 +822,102 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(await otherModule.read.isOwner([addr(d.first)]), false);
   });
 
+  it('createOwnerHistoryModule binds proxy, guard and Safe, and installs nothing', async () => {
+    // A Safe that has not been touched: the factory deploys the proxy and the
+    // guard wired to it, and stops there.
+    const fresh = await viem.deployContract('MockSafe', [[addr(d.first), addr(d.second)]]);
+    await blockOf(d.factory.write.createOwnerHistoryModule([fresh.address]));
+
+    const proxies = await d.factory.read.getOwnerHistoryModulesForSafe([chk(fresh.address)]);
+    const proxy = proxies.at(-1)!;
+    const guardAddress = await d.factory.read.guardFor([proxy]);
+    assert.notEqual(guardAddress, zeroAddress);
+
+    const history = await viem.getContractAt('OwnerHistoryModuleV1', proxy);
+    const guard = await viem.getContractAt('OwnerHistoryGuard', guardAddress);
+
+    // The two are bound to each other, and both name the Safe.
+    assert.equal(chk(await guard.read.module()), chk(proxy));
+    assert.equal(chk(await guard.read.safe()), chk(fresh.address));
+    assert.equal(chk(await history.read.safe()), chk(fresh.address));
+    // The factory's index points from the module to the guard it made.
+    assert.equal(chk(await d.factory.read.guardFor([proxy])), chk(guardAddress));
+
+    // Deployment is not adoption: nothing the factory does reaches the Safe's
+    // storage, so the guard slot is still zero and no hook can fire yet.
+    assert.equal(await fresh.read.guard(), zeroAddress);
+
+    // And the guard is installable in the Safe's own transaction — the one
+    // `setGuard`, which is `onlySelf` and enforces the ERC-165 gate.
+    await fresh.write.setGuard([guardAddress]);
+    assert.equal(chk(await fresh.read.guard()), chk(guardAddress));
+  });
+
+  it('both indexes append, and neither create is gated to the deployer', async () => {
+    const draftsBefore = (await d.factory.read.getDraftsModulesForSafe([d.safeAddr])).length;
+    const historyBefore = (await d.factory.read.getOwnerHistoryModulesForSafe([d.safeAddr])).length;
+
+    // A stranger may create for a Safe it has nothing to do with: a proxy and a
+    // guard install nothing on their own, so creation buys no trust.
+    await d.factory.write.createDraftsModule([d.safeAddr], { account: d.stranger.account });
+    await d.factory.write.createOwnerHistoryModule([d.safeAddr], { account: d.stranger.account });
+
+    const drafts = await d.factory.read.getDraftsModulesForSafe([d.safeAddr]);
+    const histories = await d.factory.read.getOwnerHistoryModulesForSafe([d.safeAddr]);
+    assert.equal(drafts.length, draftsBefore + 1);
+    assert.equal(histories.length, historyBefore + 1);
+    // Every history proxy the factory made has a guard in its index.
+    assert.notEqual(await d.factory.read.guardFor([histories.at(-1)!]), zeroAddress);
+
+    // Moving either implementation stays the deployer's alone.
+    assert.equal(chk(await d.factory.read.deployer()), addr(d.deployer));
+    for (const write of [
+      d.factory.write.setDraftsImplementation([chk(d.stranger.account.address)], {
+        account: d.stranger.account,
+      }),
+      d.factory.write.setOwnerHistoryImplementation([chk(d.stranger.account.address)], {
+        account: d.stranger.account,
+      }),
+    ]) {
+      await assertReverts(write, selectorOf('OnlyDeployer'));
+    }
+    assert.equal(chk(await d.factory.read.draftsImplementation()), chk(d.draftsImplementation.address));
+    assert.equal(chk(await d.factory.read.ownerHistoryImplementation()), chk(d.implementation.address));
+  });
+
+  it('guardFor answers zero for an unknown module instead of reverting', async () => {
+    // An address this factory never deployed is a reader's mistake, and a read
+    // that reverts on one is a read a gate cannot use.
+    assert.equal(
+      await d.factory.read.guardFor(['0x000000000000000000000000000000000000dead']),
+      zeroAddress,
+    );
+  });
+
   it('initialize rejects address(0) and a safe-less contract, at deploy time', async () => {
-    await assertReverts(d.factory.write.createModule([zeroAddress]), selectorOf('ZeroAddress'));
+    await assertReverts(d.factory.write.createOwnerHistoryModule([zeroAddress]), selectorOf('ZeroAddress'));
 
     // A contract without getOwners() cannot produce era 0: the proxy reverts
     // here rather than being born silently empty.
     await assertReverts(
-      d.factory.write.createModule([chk(d.guard.address)]),
+      d.factory.write.createOwnerHistoryModule([chk(d.guard.address)]),
       selectorOf('SafeCallFailed'),
     );
-    assert.equal((await d.factory.read.getModulesForSafe([chk(d.guard.address)])).length, 0);
+    assert.equal((await d.factory.read.getOwnerHistoryModulesForSafe([chk(d.guard.address)])).length, 0);
   });
 
-  it('setImplementation is deployer-only; the UUPS gate is the Safe', async () => {
+  it('setOwnerHistoryImplementation is deployer-only; the UUPS gate is the Safe', async () => {
     assert.equal(chk(await d.factory.read.deployer()), addr(d.deployer));
 
     const other = await viem.deployContract('OwnerHistoryModuleV1');
     await assertReverts(
-      d.factory.write.setImplementation([other.address], { account: d.stranger.account }),
+      d.factory.write.setOwnerHistoryImplementation([other.address], { account: d.stranger.account }),
       selectorOf('OnlyDeployer'),
     );
-    await d.factory.write.setImplementation([other.address]);
-    assert.equal(await d.factory.read.implementationCount(), 2n);
+    await d.factory.write.setOwnerHistoryImplementation([other.address]);
+    assert.equal(await d.factory.read.ownerHistoryImplementationCount(), 2n);
     assert.equal(
-      chk(await d.factory.read.getImplementationByVersion([2n])),
+      chk(await d.factory.read.getOwnerHistoryImplementationByVersion([2n])),
       chk(other.address),
     );
 

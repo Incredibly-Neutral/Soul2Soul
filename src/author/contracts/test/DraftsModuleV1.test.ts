@@ -27,22 +27,28 @@ const UNKNOWN = genesis('never-appended');
 type Deployment = Awaited<ReturnType<typeof deployDrafts>>;
 
 /**
- * Deploy the implementation, the factory, and one proxy for `safe` — the
- * module's only writer. Going through the factory is also what production does,
- * and Hardhat only emits artifacts for `src`, so the OZ proxy is not deployable
- * by name here.
+ * Deploy both implementations, the one factory, and one drafts index for
+ * `safe` — the module's only writer. Going through the factory is also what
+ * production does, and Hardhat only emits artifacts for `src`, so the OZ proxy
+ * is not deployable by name here.
  */
 async function deployDrafts() {
   const [deployer, safe, stranger] = await viem.getWalletClients();
 
   const implementation = await viem.deployContract('DraftsModuleV1');
-  const factory = await viem.deployContract('DraftsModuleV1Factory', [implementation.address]);
+  // The factory deploys both module kinds; the history implementation is a
+  // constructor argument here and nothing in this suite proxies onto it.
+  const historyImplementation = await viem.deployContract('OwnerHistoryModuleV1');
+  const factory = await viem.deployContract('AuthorContractsFactory', [
+    implementation.address,
+    historyImplementation.address,
+  ]);
 
-  await factory.write.createModule([safe.account.address]);
-  const modules = await factory.read.getModulesForSafe([safe.account.address]);
+  await factory.write.createDraftsModule([safe.account.address]);
+  const modules = await factory.read.getDraftsModulesForSafe([safe.account.address]);
   const drafts = await viem.getContractAt('DraftsModuleV1', modules[0]!);
 
-  return { drafts, implementation, factory, deployer, safe, stranger };
+  return { drafts, implementation, historyImplementation, factory, deployer, safe, stranger };
 }
 
 /** Append from the Safe — the only caller `append` accepts. */
@@ -229,12 +235,12 @@ describe('DraftsModuleV1', () => {
     assert.deepEqual(await d.drafts.read.fetchAllPaged([0n, 0n]), []);
   });
 
-  it('factory createModule yields a working proxy for the Safe', async () => {
-    assert.equal(getAddress(await d.factory.read.latestImplementation()), getAddress(d.implementation.address));
-    assert.equal(await d.factory.read.implementationCount(), 1n);
-    assert.equal(getAddress(await d.factory.read.getImplementationByVersion([1n])), getAddress(d.implementation.address));
+  it('factory createDraftsModule yields a working proxy for the Safe', async () => {
+    assert.equal(getAddress(await d.factory.read.draftsImplementation()), getAddress(d.implementation.address));
+    assert.equal(await d.factory.read.draftsImplementationCount(), 1n);
+    assert.equal(getAddress(await d.factory.read.getDraftsImplementationByVersion([1n])), getAddress(d.implementation.address));
 
-    const modules = await d.factory.read.getModulesForSafe([d.safe.account.address]);
+    const modules = await d.factory.read.getDraftsModulesForSafe([d.safe.account.address]);
     assert.equal(modules.length, 1);
 
     const module = await viem.getContractAt('DraftsModuleV1', modules[0]!);
@@ -317,13 +323,13 @@ describe('DraftsModuleV1', () => {
 
   it('initialize rejects address(0) instead of birthing a dead module', async () => {
     await assertReverts(
-      d.factory.write.createModule([zeroAddress]),
+      d.factory.write.createDraftsModule([zeroAddress]),
       selectorOf('ZeroAddress'),
     );
-    assert.equal((await d.factory.read.getModulesForSafe([zeroAddress])).length, 0);
+    assert.equal((await d.factory.read.getDraftsModulesForSafe([zeroAddress])).length, 0);
   });
 
-  it('setImplementation is deployer-only; createModule stays open by design', async () => {
+  it('setDraftsImplementation is deployer-only; createDraftsModule stays open by design', async () => {
     assert.equal(
       getAddress(await d.factory.read.deployer()),
       getAddress(d.deployer.account.address!),
@@ -332,39 +338,60 @@ describe('DraftsModuleV1', () => {
     const other = await viem.deployContract('DraftsModuleV1');
 
     await assertReverts(
-      d.factory.write.setImplementation([other.address], { account: d.stranger.account }),
+      d.factory.write.setDraftsImplementation([other.address], { account: d.stranger.account }),
       selectorOf('OnlyDeployer'),
     );
     assert.equal(
-      getAddress(await d.factory.read.latestImplementation()),
+      getAddress(await d.factory.read.draftsImplementation()),
       getAddress(d.implementation.address),
     );
-    assert.equal(await d.factory.read.implementationCount(), 1n);
+    assert.equal(await d.factory.read.draftsImplementationCount(), 1n);
 
     // The deployer moves it; the history records the swap and new modules follow it.
-    await d.factory.write.setImplementation([other.address]);
-    assert.equal(getAddress(await d.factory.read.latestImplementation()), getAddress(other.address));
-    assert.equal(await d.factory.read.implementationCount(), 2n);
+    await d.factory.write.setDraftsImplementation([other.address]);
+    assert.equal(getAddress(await d.factory.read.draftsImplementation()), getAddress(other.address));
+    assert.equal(await d.factory.read.draftsImplementationCount(), 2n);
     assert.equal(
-      getAddress(await d.factory.read.getImplementationByVersion([2n])),
+      getAddress(await d.factory.read.getDraftsImplementationByVersion([2n])),
       getAddress(other.address),
     );
 
-    await d.factory.write.createModule([d.safe.account.address]);
-    const modules = await d.factory.read.getModulesForSafe([d.safe.account.address]);
+    await d.factory.write.createDraftsModule([d.safe.account.address]);
+    const modules = await d.factory.read.getDraftsModulesForSafe([d.safe.account.address]);
     assert.equal(modules.length, 2);
     assert.equal(getAddress(await viem.getContractAt('DraftsModuleV1', modules[1]!).then((c) => c.read.safe())), getAddress(d.safe.account.address!));
   });
 
-  it('getModulesForSafe is an index, not a permission: anyone can append an entry', async () => {
-    // createModule is permissionless on purpose (a proxy installs nothing until
-    // the Safe enables it), so a stranger can push an entry for a Safe it has
-    // nothing to do with. Intersecting with the Safe's enabled modules is the
-    // reader's job.
-    await d.factory.write.createModule([d.safe.account.address], { account: d.stranger.account });
+  it('getDraftsModulesForSafe is an index, not a permission: anyone can append an entry', async () => {
+    // createDraftsModule is permissionless on purpose (deploying a proxy
+    // installs nothing; the Safe must still call the module itself), so a
+    // stranger can push an entry for a Safe it has nothing to do with.
+    // Intersecting the index with what the Safe actually uses is the reader's
+    // job.
+    await d.factory.write.createDraftsModule([d.safe.account.address], { account: d.stranger.account });
 
-    const modules = await d.factory.read.getModulesForSafe([d.safe.account.address]);
+    const modules = await d.factory.read.getDraftsModulesForSafe([d.safe.account.address]);
     assert.equal(modules.length, 2); // the helper's proxy plus the stranger's
+  });
+
+  it('getDraftsImplementationByVersion is 1-based and reverts InvalidVersion outside the history', async () => {
+    const VERSION_ABI = parseAbi(['error InvalidVersion()']);
+    const invalidVersion = encodeErrorResult({ abi: VERSION_ABI, errorName: 'InvalidVersion' });
+
+    assert.equal(
+      getAddress(await d.factory.read.getDraftsImplementationByVersion([1n])),
+      getAddress(d.implementation.address),
+    );
+    await assertReverts(d.factory.read.getDraftsImplementationByVersion([0n]), invalidVersion);
+    await assertReverts(d.factory.read.getDraftsImplementationByVersion([2n]), invalidVersion);
+
+    // The two histories are independent: the drafts history grew above, the
+    // owner-history one is still the constructor seed.
+    assert.equal(await d.factory.read.ownerHistoryImplementationCount(), 1n);
+    assert.equal(
+      getAddress(await d.factory.read.ownerHistoryImplementation()),
+      getAddress(d.historyImplementation.address),
+    );
   });
 
   it('the UUPS gate is exercisable today: stranger upgrade, bare init, double init all revert', async () => {

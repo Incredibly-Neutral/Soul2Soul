@@ -752,7 +752,7 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_array(t_uint256)50_storage"
       },
       {
-        "astId": 2890,
+        "astId": 3132,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "safe",
         "offset": 0,
@@ -760,31 +760,31 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_address"
       },
       {
-        "astId": 2929,
+        "astId": 3171,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "eras",
         "offset": 0,
         "slot": "102",
-        "type": "t_array(t_struct(Era)2919_storage)dyn_storage"
+        "type": "t_array(t_struct(Era)3161_storage)dyn_storage"
       },
       {
-        "astId": 2935,
+        "astId": 3177,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "tenureBlocks",
         "offset": 0,
         "slot": "103",
-        "type": "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)"
+        "type": "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)"
       },
       {
-        "astId": 2941,
+        "astId": 3183,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "tenureTimes",
         "offset": 0,
         "slot": "104",
-        "type": "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)"
+        "type": "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)"
       },
       {
-        "astId": 2944,
+        "astId": 3186,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "ownersEverSet",
         "offset": 0,
@@ -792,7 +792,7 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 2948,
+        "astId": 3190,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "seen",
         "offset": 0,
@@ -812,14 +812,14 @@ export const Artifact_OwnerHistoryModuleV1: {
         "label": "address[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Era)2919_storage)dyn_storage": {
-        "base": "t_struct(Era)2919_storage",
+      "t_array(t_struct(Era)3161_storage)dyn_storage": {
+        "base": "t_struct(Era)3161_storage",
         "encoding": "dynamic_array",
         "label": "struct OwnerHistoryModuleV1.Era[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Tenure)2925_storage)dyn_storage": {
-        "base": "t_struct(Tenure)2925_storage",
+      "t_array(t_struct(Tenure)3167_storage)dyn_storage": {
+        "base": "t_struct(Tenure)3167_storage",
         "encoding": "dynamic_array",
         "label": "struct OwnerHistoryModuleV1.Tenure[]",
         "numberOfBytes": "32"
@@ -835,12 +835,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         "label": "bool",
         "numberOfBytes": "1"
       },
-      "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)": {
+      "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)": {
         "encoding": "mapping",
         "key": "t_address",
         "label": "mapping(address => struct OwnerHistoryModuleV1.Tenure[])",
         "numberOfBytes": "32",
-        "value": "t_array(t_struct(Tenure)2925_storage)dyn_storage"
+        "value": "t_array(t_struct(Tenure)3167_storage)dyn_storage"
       },
       "t_mapping(t_address,t_bool)": {
         "encoding": "mapping",
@@ -849,12 +849,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         "numberOfBytes": "32",
         "value": "t_bool"
       },
-      "t_struct(Era)2919_storage": {
+      "t_struct(Era)3161_storage": {
         "encoding": "inplace",
         "label": "struct OwnerHistoryModuleV1.Era",
         "members": [
           {
-            "astId": 2909,
+            "astId": 3151,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "startBlock",
             "offset": 0,
@@ -862,7 +862,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2911,
+            "astId": 3153,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "endBlock",
             "offset": 8,
@@ -870,7 +870,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2913,
+            "astId": 3155,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "startTime",
             "offset": 16,
@@ -878,7 +878,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2915,
+            "astId": 3157,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "endTime",
             "offset": 24,
@@ -886,7 +886,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2918,
+            "astId": 3160,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "owners",
             "offset": 0,
@@ -896,12 +896,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         ],
         "numberOfBytes": "64"
       },
-      "t_struct(Tenure)2925_storage": {
+      "t_struct(Tenure)3167_storage": {
         "encoding": "inplace",
         "label": "struct OwnerHistoryModuleV1.Tenure",
         "members": [
           {
-            "astId": 2922,
+            "astId": 3164,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "start",
             "offset": 0,
@@ -909,7 +909,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2924,
+            "astId": 3166,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "end",
             "offset": 8,
@@ -1700,7 +1700,7 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_array(t_uint256)50_storage"
       },
       {
-        "astId": 2890,
+        "astId": 3132,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "safe",
         "offset": 0,
@@ -1708,31 +1708,31 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_address"
       },
       {
-        "astId": 2929,
+        "astId": 3171,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "eras",
         "offset": 0,
         "slot": "102",
-        "type": "t_array(t_struct(Era)2919_storage)dyn_storage"
+        "type": "t_array(t_struct(Era)3161_storage)dyn_storage"
       },
       {
-        "astId": 2935,
+        "astId": 3177,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "tenureBlocks",
         "offset": 0,
         "slot": "103",
-        "type": "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)"
+        "type": "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)"
       },
       {
-        "astId": 2941,
+        "astId": 3183,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "tenureTimes",
         "offset": 0,
         "slot": "104",
-        "type": "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)"
+        "type": "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)"
       },
       {
-        "astId": 2944,
+        "astId": 3186,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "ownersEverSet",
         "offset": 0,
@@ -1740,7 +1740,7 @@ export const Artifact_OwnerHistoryModuleV1: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 2948,
+        "astId": 3190,
         "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
         "label": "seen",
         "offset": 0,
@@ -1760,14 +1760,14 @@ export const Artifact_OwnerHistoryModuleV1: {
         "label": "address[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Era)2919_storage)dyn_storage": {
-        "base": "t_struct(Era)2919_storage",
+      "t_array(t_struct(Era)3161_storage)dyn_storage": {
+        "base": "t_struct(Era)3161_storage",
         "encoding": "dynamic_array",
         "label": "struct OwnerHistoryModuleV1.Era[]",
         "numberOfBytes": "32"
       },
-      "t_array(t_struct(Tenure)2925_storage)dyn_storage": {
-        "base": "t_struct(Tenure)2925_storage",
+      "t_array(t_struct(Tenure)3167_storage)dyn_storage": {
+        "base": "t_struct(Tenure)3167_storage",
         "encoding": "dynamic_array",
         "label": "struct OwnerHistoryModuleV1.Tenure[]",
         "numberOfBytes": "32"
@@ -1783,12 +1783,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         "label": "bool",
         "numberOfBytes": "1"
       },
-      "t_mapping(t_address,t_array(t_struct(Tenure)2925_storage)dyn_storage)": {
+      "t_mapping(t_address,t_array(t_struct(Tenure)3167_storage)dyn_storage)": {
         "encoding": "mapping",
         "key": "t_address",
         "label": "mapping(address => struct OwnerHistoryModuleV1.Tenure[])",
         "numberOfBytes": "32",
-        "value": "t_array(t_struct(Tenure)2925_storage)dyn_storage"
+        "value": "t_array(t_struct(Tenure)3167_storage)dyn_storage"
       },
       "t_mapping(t_address,t_bool)": {
         "encoding": "mapping",
@@ -1797,12 +1797,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         "numberOfBytes": "32",
         "value": "t_bool"
       },
-      "t_struct(Era)2919_storage": {
+      "t_struct(Era)3161_storage": {
         "encoding": "inplace",
         "label": "struct OwnerHistoryModuleV1.Era",
         "members": [
           {
-            "astId": 2909,
+            "astId": 3151,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "startBlock",
             "offset": 0,
@@ -1810,7 +1810,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2911,
+            "astId": 3153,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "endBlock",
             "offset": 8,
@@ -1818,7 +1818,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2913,
+            "astId": 3155,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "startTime",
             "offset": 16,
@@ -1826,7 +1826,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2915,
+            "astId": 3157,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "endTime",
             "offset": 24,
@@ -1834,7 +1834,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2918,
+            "astId": 3160,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "owners",
             "offset": 0,
@@ -1844,12 +1844,12 @@ export const Artifact_OwnerHistoryModuleV1: {
         ],
         "numberOfBytes": "64"
       },
-      "t_struct(Tenure)2925_storage": {
+      "t_struct(Tenure)3167_storage": {
         "encoding": "inplace",
         "label": "struct OwnerHistoryModuleV1.Tenure",
         "members": [
           {
-            "astId": 2922,
+            "astId": 3164,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "start",
             "offset": 0,
@@ -1857,7 +1857,7 @@ export const Artifact_OwnerHistoryModuleV1: {
             "type": "t_uint64"
           },
           {
-            "astId": 2924,
+            "astId": 3166,
             "contract": "project/src/OwnerHistoryModuleV1.sol:OwnerHistoryModuleV1",
             "label": "end",
             "offset": 8,
