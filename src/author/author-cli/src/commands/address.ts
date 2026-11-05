@@ -8,6 +8,7 @@
 
 import type { CommandSpec } from '../lib/command';
 import { authorSafeSalt, authorSafeState } from '../core/author-safe';
+import { rememberAuthorSafe } from '../core/authors';
 
 export const authorAddress: CommandSpec = {
   name: 'address',
@@ -15,8 +16,12 @@ export const authorAddress: CommandSpec = {
   usage: 's2s author address [--json]',
   async run(ctx) {
     const state = await authorSafeState(ctx);
+    // Keep the store current: `author list` / `switch` report the Safe offline.
+    rememberAuthorSafe(ctx.config.author, state.address, (message) => {
+      ctx.out.warn(message);
+    });
     ctx.out.result(
-      { action: 'author.address', ...state },
+      { action: 'author.address', ...state, author: ctx.config.author?.name },
       [
         `author safe : ${state.address}`,
         `eoa (owner) : ${state.eoa}`,

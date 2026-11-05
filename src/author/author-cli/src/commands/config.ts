@@ -30,29 +30,48 @@ import {
   writeConfigValue,
   type ConfigField,
 } from '../core/configfile';
-import { configKeyValue, hexKey } from '../core/config';
+import { configKeyValue, loadConfig, type LoadConfigOptions } from '../core/config';
 
 /**
  * Read-only pseudo-keys derived from the config — never stored, never written.
- * `eoa` is the signing account derived from `privateKey` locally (no RPC).
- * It is NOT the author id: the author id is the Safe (see `s2s author address`,
+ *
+ * `eoa` is the signing account derived from `privateKey` locally (no RPC). It is
+ * NOT the author id: the author id is the Safe (see `s2s author address`,
  * which is counterfactual and needs an L2 read).
+ *
+ * `author` is the active stored author's pet name and `safe` its recorded Safe;
+ * both are null when the signing key came from the env/project/user layers (or
+ * when no Safe has been predicted for that author yet).
  */
-export const DERIVED_KEYS = ['eoa'] as const;
+export const DERIVED_KEYS = ['eoa', 'author', 'safe'] as const;
 
 export function isDerivedKey(key: string): boolean {
   return (DERIVED_KEYS as readonly string[]).includes(key);
 }
 
-export function derivedConfigValue(key: string): string | null {
-  if (key !== 'eoa') return null;
-  const privateKey = hexKey(configKeyValue('privateKey'));
+export function derivedConfigValue(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: LoadConfigOptions = {},
+): string | null {
+  if (!isDerivedKey(key)) return null;
+  const config = loadConfig(env, opts);
+  if (key === 'author') return config.author?.name ?? null;
+  if (key === 'safe') return config.author?.safe ?? null;
+
+  const privateKey = config.privateKey;
   if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) return null;
   try {
     return privateKeyToAccount(privateKey as Hex).address;
   } catch {
     return null;
   }
+}
+
+/** Human fallback for a derived key that has no value. */
+function derivedFallback(key: string): string {
+  if (key === 'eoa') return '(unset — needs privateKey)';
+  return '(none)';
 }
 
 export interface ConfigCommandSpec {
@@ -121,7 +140,7 @@ function getCommand(out: CliOut, args: ParsedArgs): void {
   const requested = args.positionals[0];
   if (requested !== undefined && isDerivedKey(requested)) {
     const value = derivedConfigValue(requested);
-    out.result({ key: requested, value }, `${requested}: ${value ?? '(unset)'}`);
+    out.result({ key: requested, value }, `${requested}: ${value ?? derivedFallback(requested)}`);
     return;
   }
   const field = requireField(args);
@@ -150,8 +169,10 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
-  const eoa = derivedConfigValue('eoa');
-  const derived = [`eoa: ${eoa ?? '(unset — needs privateKey)'}`].join('\n');
+  const derivedValues = DERIVED_KEYS.map((key) => [key, derivedConfigValue(key)] as const);
+  const derived = derivedValues
+    .map(([key, value]) => `${key}: ${value ?? derivedFallback(key)}`)
+    .join('\n');
   const userEnv = userEnvPath();
   const projectEnv = projectEnvPath();
   const envNotes = [
@@ -159,8 +180,12 @@ function listCommand(out: CliOut): void {
     `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
   ].join('\n');
   out.result(
-    { config: Object.fromEntries([...entries, ['eoa', eoa] as const].filter(([, v]) => v !== null)) },
-    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
+    {
+      config: Object.fromEntries(
+        [...entries, ...derivedValues].filter(([, value]) => value !== null),
+      ),
+    },
+    `Effective configuration (env > project > author store > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }
 
@@ -233,9 +258,12 @@ Flags:
             instead of the user config (~/.config/s2s/config.json)
   --json    emit the result as JSON on stdout (machine-readable)
 
-Precedence: environment vars > project config > user config > defaults.
+Precedence: environment vars > project config > author store > user config > defaults.
 Env file:   $XDG_CONFIG_HOME/s2s/.env (default ~/.config/s2s/.env), then ./.env.
 Known keys: ${knownKeys()}
+
+Authors: 's2s author new/switch/list/rm' manage the stored identities the
+'privateKey' fallback comes from.
 
 Run "s2s config <action> --help" for details on an action.`;
 }

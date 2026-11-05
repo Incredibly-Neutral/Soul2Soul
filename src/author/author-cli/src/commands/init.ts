@@ -8,6 +8,7 @@
 
 import type { CommandSpec } from '../lib/command';
 import { initAuthorSafe } from '../core/author-safe';
+import { rememberAuthorSafe } from '../core/authors';
 
 export const authorInit: CommandSpec = {
   name: 'init',
@@ -15,13 +16,17 @@ export const authorInit: CommandSpec = {
   usage: 's2s author init [--json]',
   async run(ctx) {
     const result = await initAuthorSafe(ctx);
+    // Keep the store current: `author list` / `switch` report the Safe offline.
+    rememberAuthorSafe(ctx.config.author, result.address, (message) => {
+      ctx.out.warn(message);
+    });
     const headline = result.txHash
       ? result.deployed
         ? `author Safe deployed at ${result.address}`
         : `deployment submitted for ${result.address} — not confirmed yet`
       : `author Safe already deployed at ${result.address}`;
     ctx.out.result(
-      { action: 'author.init', ...result },
+      { action: 'author.init', ...result, author: ctx.config.author?.name },
       [
         headline,
         `author safe : ${result.address}`,
