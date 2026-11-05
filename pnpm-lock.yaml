@@ -282,6 +282,52 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.39)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.25.12)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  src/author/contracts:
+    dependencies:
+      '@openzeppelin/contracts':
+        specifier: ^4.9.6
+        version: 4.9.6
+      '@openzeppelin/contracts-upgradeable':
+        specifier: ^4.9.6
+        version: 4.9.6
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
+      viem:
+        specifier: ^2.46.2
+        version: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+    devDependencies:
+      '@nomicfoundation/hardhat-keystore':
+        specifier: ^3.0.4
+        version: 3.0.8(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-network-helpers':
+        specifier: ^3.0.3
+        version: 3.0.7(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-node-test-runner':
+        specifier: ^3.0.8
+        version: 3.0.14(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@nomicfoundation/hardhat-viem':
+        specifier: ^3.0.1
+        version: 3.0.6(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(viem@2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@types/node':
+        specifier: ^20.19.31
+        version: 20.19.39
+      hardhat:
+        specifier: ^3.1.8
+        version: 3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      hardhat-deploy:
+        specifier: ^2.0.0
+        version: 2.0.5(@rocketh/node@0.19.4(bufferutil@4.1.0)(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(hardhat@3.4.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))(rocketh@0.19.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      ldenv:
+        specifier: ^0.3.16
+        version: 0.3.16
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   src/author/neutralpress:
     dependencies:
       '@fluencelabs/aqua-lib':
