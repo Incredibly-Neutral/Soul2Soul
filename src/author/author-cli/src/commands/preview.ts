@@ -8,11 +8,13 @@ import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication, rootTxLine } from './helpers';
 import { flagBool } from '../lib/args';
+import { NOTE_FLAGS } from './flags';
 
 export const preview: CommandSpec = {
   name: 'preview',
   summary: 'Upload a note and render a preview (Bun runner, no on-chain offer, no prod mutation).',
-  usage: 's2s author preview <note> [--publication <ens>] [--allow-plaintext] [--json]',
+  params: '<note>',
+  flags: NOTE_FLAGS,
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);

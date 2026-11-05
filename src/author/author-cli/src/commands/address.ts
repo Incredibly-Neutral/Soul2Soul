@@ -12,7 +12,7 @@ import { authorSafeSalt, authorSafeState } from '../core/author-safe';
 export const authorAddress: CommandSpec = {
   name: 'address',
   summary: 'Print the author Safe address (author id, predicted — not deployed).',
-  usage: 's2s author address [--json]',
+  flags: {},
   async run(ctx) {
     const state = await authorSafeState(ctx);
     ctx.out.result(

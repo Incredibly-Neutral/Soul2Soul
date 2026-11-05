@@ -3,21 +3,24 @@
 //   0 = ok, 1 = runtime failure, 2 = usage error.
 // ============================================================================
 
-/** Base CLI error carrying a process exit code. */
+/** Base CLI error carrying a process exit code and a stable machine code. */
 export class CliError extends Error {
   readonly exitCode: number;
+  /** Stable `code` for the `--json` failure envelope (consumers switch on it). */
+  readonly code: string;
 
-  constructor(message: string, exitCode = 1) {
+  constructor(message: string, exitCode = 1, code = 'error') {
     super(message);
     this.name = 'CliError';
     this.exitCode = exitCode;
+    this.code = code;
   }
 }
 
 /** Invalid usage — unknown command, missing argument, bad flag (exit code 2). */
 export class UsageError extends CliError {
   constructor(message: string) {
-    super(message, 2);
+    super(message, 2, 'usage');
     this.name = 'UsageError';
   }
 }
@@ -34,7 +37,7 @@ export class ActionError extends CliError {
   readonly trace: unknown[];
 
   constructor(message: string, trace: unknown[]) {
-    super(message, 1);
+    super(message, 1, 'action_failed');
     this.name = 'ActionError';
     this.trace = trace;
   }

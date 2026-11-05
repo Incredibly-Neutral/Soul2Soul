@@ -12,7 +12,7 @@ import { preview } from '../src/commands/preview';
 import { offer } from '../src/commands/offer';
 import { publish } from '../src/commands/publish';
 import { upload } from '../src/commands/upload';
-import { BOOLEAN_FLAGS, parseArgs } from '../src/lib/args';
+import { parseCommandArgs, type FlagSpecs } from '../src/lib/args';
 import type { ParsedArgs } from '../src/lib/args';
 import type { CliContext } from '../src/core/context';
 
@@ -66,23 +66,19 @@ describe('--allow-plaintext command wiring', () => {
 
   const ctx = { out: { log: vi.fn(), warn: vi.fn(), result: vi.fn() } } as unknown as CliContext;
 
-  /** Parse argv exactly as cli.ts does, so a missing boolean flag shows up here. */
-  function argsFor(path: string, extra: string[] = []): ParsedArgs {
-    return parseArgs(['--publication', 'test.soul2soul.eth', ...extra, path], {
-      booleanFlags: BOOLEAN_FLAGS,
-    });
+  /** Parse argv against the command's own flag spec, exactly as cli.ts does. */
+  function argsFor(
+    path: string,
+    extra: string[] = [],
+    command: { flags: FlagSpecs } = publish,
+  ): ParsedArgs {
+    return parseCommandArgs(['--publication', 'test.soul2soul.eth', ...extra, path], command.flags);
   }
 
   function uploadOpts(): { allowPlaintext?: boolean } {
     const call = vi.mocked(authorWrite).mock.calls[0];
     if (!call) throw new Error('authorWrite was not called');
     return call[3];
-  }
-
-  function offerOpts(): { allowPlaintext?: boolean } {
-    const call = vi.mocked(offerContent).mock.calls[0];
-    if (!call) throw new Error('offerContent was not called');
-    return call[4] ?? {};
   }
 
   it('upload passes allowPlaintext: true only with the flag (and keeps the note path)', async () => {
@@ -118,7 +114,10 @@ describe('--allow-plaintext command wiring', () => {
 
   it('offer --cid anchors the given CID without re-uploading', async () => {
     const path = note();
-    await offer.run(ctx, argsFor(path, ['--cid', 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi']));
+    await offer.run(
+      ctx,
+      argsFor(path, ['--cid', 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi'], offer),
+    );
     expect(vi.mocked(authorWrite)).not.toHaveBeenCalled();
     expect(vi.mocked(offerContent).mock.calls[0]?.[1]).toBe(path);
     expect(vi.mocked(offerContent).mock.calls[0]?.[3]).toBe(
@@ -140,10 +139,12 @@ describe('--allow-plaintext command wiring', () => {
   });
 
   it('treats --allow-plaintext as boolean in the CLI parser', () => {
-    const { flags, positionals } = parseArgs(['author', 'publish', '--allow-plaintext', 'n.md'], {
-      booleanFlags: BOOLEAN_FLAGS,
-    });
+    const { flags, positionals } = parseCommandArgs(['--allow-plaintext', 'n.md'], publish.flags);
     expect(flags['allow-plaintext']).toBe(true);
-    expect(positionals).toEqual(['author', 'publish', 'n.md']);
+    expect(positionals).toEqual(['n.md']);
+  });
+
+  it('rejects a flag the command does not declare', () => {
+    expect(() => argsFor(note(), ['--allow-plaintex'])).toThrow(/unknown flag/);
   });
 });

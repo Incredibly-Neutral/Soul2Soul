@@ -5,13 +5,17 @@
 // Groups: `author` (content actions), `publication` (publication lifecycle),
 // and `config` (CLI settings — dispatched without a context build).
 // Flags parse anywhere; `--json` switches stdout to a machine-readable JSON
-// result (Neovim plugin contract). Human progress always goes to stderr.
+// envelope (Neovim plugin contract). Human progress always goes to stderr.
+//
+// Parsing happens twice on purpose: a lenient pass finds the group and action
+// (nothing else is known yet), then the resolved command's own flag spec drives
+// a strict pass that rejects unknown flags. `--help` renders from that same spec.
 // ============================================================================
 
-import { BOOLEAN_FLAGS, parseArgs } from './lib/args';
+import { commandHelp, flagBool, parseArgs, parseCommandArgs } from './lib/args';
 import { CliError, UsageError, ActionError, describeError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
-import { createOut } from './lib/out';
+import { createOut, SCHEMA_VERSION } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
 import {
@@ -20,7 +24,7 @@ import {
   findPublicationCommand,
   publicationCommands,
 } from './commands';
-import { runConfigGroup } from './commands/config';
+import { findConfigCommand, runConfigGroup } from './commands/config';
 import type { CommandSpec } from './lib/command';
 
 const VERSION = '0.1.0';
@@ -38,11 +42,19 @@ Groups:
 Global flags:
   --json        emit the result as JSON on stdout (machine-readable)
   -h, --help    show help for the current level
+  --version     print the CLI version
 
 Run "s2s author --help" or "s2s publication --help" for the actions.`;
 
+/** Set in `main`; the failure handler prints in the same mode the run chose. */
+let jsonMode = false;
+
 function groupHelp(commands: CommandSpec[], group: string, tagline: string): string {
-  const rows = commands.map((c) => `  ${c.name.padEnd(8)} ${c.summary}`).join('\n');
+  const labels = commands.map((c) => [c.name, c.params].filter(Boolean).join(' '));
+  const width = Math.max(...labels.map((label) => label.length));
+  const rows = commands
+    .map((c, i) => `  ${(labels[i] ?? c.name).padEnd(width)}  ${c.summary}`)
+    .join('\n');
   return `s2s ${group} — ${tagline}
 
 Usage:
@@ -58,21 +70,19 @@ const authorHelp = (): string => groupHelp(authorCommands, 'author', 'content ac
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
-function actionHelp(command: CommandSpec): string {
-  return `${command.usage}\n\n${command.summary}`;
-}
-
 async function main(argv: string[]): Promise<number> {
-  const { flags, positionals } = parseArgs(argv, { booleanFlags: BOOLEAN_FLAGS });
-  const json = flags.json !== undefined;
-  const out = createOut(json);
-  const wantHelp = (['help', 'h', 'version'] as const).some((k) => flags[k] === true);
+  // Discovery pass — lenient, because the command that owns the flag spec has
+  // not been identified yet. Anything it mis-reads is re-read strictly below.
+  const discovery = parseArgs(argv);
+  jsonMode = flagBool(discovery.flags, 'json');
+  const out = createOut(jsonMode);
+  const wantHelp = (['help', 'h', 'version'] as const).some((k) => flagBool(discovery.flags, k));
 
-  const group = positionals[0];
-  const action = positionals[1];
+  const group = discovery.positionals[0];
+  const action = discovery.positionals[1];
 
   // Top level: version or help or bare invocation.
-  if (flags.version === true || (argv.length === 0 && !group)) {
+  if (flagBool(discovery.flags, 'version') || (argv.length === 0 && !group)) {
     out.result(
       { name: 's2s', version: VERSION },
       `s2s v${VERSION} — Soul2Soul headless authoring CLI`,
@@ -88,7 +98,16 @@ async function main(argv: string[]): Promise<number> {
   // `config` is dispatched without building a context (no private key / RPC
   // needed) so the CLI can be configured before anything else is set up.
   if (group === 'config') {
-    runConfigGroup(out, wantHelp, flags, action, positionals.slice(2));
+    const configCommand = action ? findConfigCommand(action) : undefined;
+    // An unknown action is reported by runConfigGroup with the list of actions,
+    // so skip the strict pass rather than blaming the flags first.
+    const parsed = configCommand
+      ? parseCommandArgs(argv, configCommand.flags)
+      : { flags: {}, positionals: [] };
+    runConfigGroup(out, wantHelp, action, configCommand, {
+      flags: parsed.flags,
+      positionals: parsed.positionals.slice(2),
+    });
     return 0;
   }
 
@@ -106,23 +125,48 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (wantHelp) {
-    const command = findCommand(action);
-    if (!command) {
-      throw new UsageError(`unknown ${group} action '${action}'`);
-    }
-    out.result({ help: actionHelp(command) }, actionHelp(command));
-    return 0;
-  }
-
   const command = findCommand(action);
   if (!command) {
     throw new UsageError(`unknown ${group} action '${action}'`);
   }
 
+  if (wantHelp) {
+    const text = commandHelp(group, command.name, command.summary, command.flags, command.params);
+    out.result({ help: text }, text);
+    return 0;
+  }
+
+  const parsed = parseCommandArgs(argv, command.flags);
   const context = await buildContext(out, loadConfig());
-  await command.run(context, { flags, positionals: positionals.slice(2) });
+  await command.run(context, { flags: parsed.flags, positionals: parsed.positionals.slice(2) });
   return 0;
+}
+
+/** One shape for every `--json` failure, so consumers read `code`, not prose. */
+function failureEnvelope(err: unknown): string {
+  if (err instanceof ActionError) {
+    return JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      ok: false,
+      code: err.code,
+      error: err.message,
+      trace: err.trace,
+    });
+  }
+  if (err instanceof CliError) {
+    return JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      ok: false,
+      code: err.code,
+      error: err.message,
+    });
+  }
+  return JSON.stringify({
+    schemaVersion: SCHEMA_VERSION,
+    ok: false,
+    code: 'internal',
+    error: describeError(err),
+  });
 }
 
 // Layer the env files before anything reads the environment: the user's own
@@ -135,37 +179,20 @@ void main(process.argv.slice(2))
     process.exitCode = code;
   })
   .catch((err: unknown) => {
-    const isJson = process.argv.slice(2).includes('--json');
-    if (err instanceof ActionError) {
+    if (jsonMode) {
+      process.stdout.write(`${failureEnvelope(err)}\n`);
+    } else if (err instanceof ActionError) {
       // The action's own trace, not a re-worded summary: the failure point is
       // (almost always) the LAST line before the error, and the root-CID write
       // is the last step of the update action.
-      if (isJson) {
-        process.stdout.write(
-          `${JSON.stringify({ ok: false, error: err.message, trace: err.trace })}\n`,
-        );
-      } else {
-        process.stderr.write(`error: ${err.message}\n`);
-        for (const line of err.trace) {
-          process.stderr.write(`  ${typeof line === 'string' ? line : JSON.stringify(line)}\n`);
-        }
+      process.stderr.write(`error: ${err.message}\n`);
+      for (const line of err.trace) {
+        process.stderr.write(`  ${typeof line === 'string' ? line : JSON.stringify(line)}\n`);
       }
-      process.exitCode = err.exitCode;
     } else if (err instanceof CliError) {
-      if (isJson) {
-        process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
-      } else {
-        process.stderr.write(`error: ${err.message}\n`);
-      }
-      process.exitCode = err.exitCode;
+      process.stderr.write(`error: ${err.message}\n`);
     } else {
-      const text = describeError(err);
-      if (isJson) {
-        process.stdout.write(`${JSON.stringify({ ok: false, error: text })}\n`);
-      } else {
-        const message = err instanceof Error ? err.stack ?? err.message : String(err);
-        process.stderr.write(`${message}\n`);
-      }
-      process.exitCode = 1;
+      process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     }
+    process.exitCode = err instanceof CliError ? err.exitCode : 1;
   });

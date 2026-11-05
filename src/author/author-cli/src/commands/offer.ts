@@ -16,13 +16,21 @@ import type { CommandSpec } from '../lib/command';
 import { authorWrite, offerContent } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
 import { flagBool, flagString } from '../lib/args';
+import { NOTE_FLAGS } from './flags';
 import { ipfsGatewayUrl, ipfsUri } from '../lib/ipfs-link';
 
 export const offer: CommandSpec = {
   name: 'offer',
   summary: 'Upload a note (IPFS + pins) and append it on-chain (makeOffer).',
-  usage:
-    's2s author offer <note> [--publication <ens>] [--cid <cid>] [--allow-plaintext] [--json]',
+  params: '<note>',
+  flags: {
+    ...NOTE_FLAGS,
+    cid: {
+      type: 'string',
+      value: '<cid>',
+      summary: 'anchor an already-uploaded CID (no re-upload, no pins, no render)',
+    },
+  },
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const kuboCidFlag = flagString(args.flags, 'cid');

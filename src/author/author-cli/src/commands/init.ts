@@ -12,7 +12,7 @@ import { initAuthorSafe } from '../core/author-safe';
 export const authorInit: CommandSpec = {
   name: 'init',
   summary: 'Deploy the author Safe (idempotent).',
-  usage: 's2s author init [--json]',
+  flags: {},
   async run(ctx) {
     const result = await initAuthorSafe(ctx);
     const headline = result.txHash

@@ -71,19 +71,28 @@ publication that has not been created yet or whose ENS name has no address recor
 modules. The Filecoin leg is the one deferred lookup: it runs after the pins, and a
 publication it cannot resolve degrades to a warning rather than failing the upload.
 
-Global flags parse anywhere in the argv:
+Flags parse anywhere in the argv, and each action declares its own (see
+`src/commands/*.ts`; shared ones in `src/commands/flags.ts`). Only these three are global:
 
 | Flag | Meaning |
 |---|---|
-| `--json` | Emit the final result as JSON on stdout (Neovim contract). Always boolean — never consumes a value token. |
-| `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). |
+| `--json` | Emit the final result as JSON on stdout (Neovim contract). Always boolean — never consumes a value token. `--json=false` / `--no-json` mean human output. |
+| `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). The action level is rendered from that action's flag declaration. |
 | `--version` | Print `s2s v<version>` and exit 0. |
-| `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. |
-| `--cid <cid>` | (propose) Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
-| `--allow-plaintext` | (consumed by upload / preview / publish / propose; declared in `BOOLEAN_FLAGS` in `lib/args.ts`, so it is boolean — never consumes a value token — and every other command parses it and ignores it) Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — `propose`'s "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. |
-| `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
-| `--branch <b>` | (new) Default render branch; empty string when omitted. |
-| `--author <addr>,...` | (new) Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. |
+
+Everything else is per-action, and an undeclared flag is a **usage error (exit 2)**, not a
+silent no-op:
+
+| Flag | Meaning | Declared by |
+|---|---|---|
+| `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
+| `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
+| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. | upload, offer, preview, publish |
+| `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
+| `--branch <b>` | Default render branch; empty string when omitted. | publication new |
+| `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
+| `--owner <addr>,...` | Publication Safe owner; repeatable (or comma-separated). | publication new |
+| `--local` | Target the project config file (`.s2sconfig.json`) instead of the user config. | config set, unset, path |
 | `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
 | `--local` | (config) Target the project config file (`.s2sconfig.json` in cwd) instead of the user config. |
 
@@ -175,7 +184,7 @@ secrets in the user config or gitignore `.s2sconfig.json`).
 |---|---|
 | `0` | Success. |
 | `1` | Runtime failure (missing env, RPC/render failure, …). |
-| `2` | Usage error (unknown group/action, missing argument, missing required flag). |
+| `2` | Usage error (unknown group/action, unknown flag, missing argument, missing required flag, missing flag value). |
 
 ## Neovim JSON contract (the stdout/stderr split)
 
@@ -185,13 +194,29 @@ secrets in the user config or gitignore `.s2sconfig.json`).
 - On failure, stdout in `--json` mode carries a single error envelope, and nothing else:
 
 ```json
-{ "ok": false, "error": "unknown author action 'bogus'" }
+{ "schemaVersion": 1, "ok": false, "code": "usage", "error": "unknown author action 'bogus'" }
 ```
 
 Success results are flat, typed objects per action — enumerated exactly in
-[Binary API reference](#binary-api-reference-machine-contract) below.
+[Binary API reference](#binary-api-reference-machine-contract) below — wrapped in the same
+envelope (`schemaVersion`, `ok: true`, then the action's own fields).
 
-Help/version in `--json` mode are also JSON (`{ "help": "…" }` / `{ "name": "s2s", "version": "…" }`).
+Help/version in `--json` mode are also JSON documents in that envelope
+(`{ "schemaVersion": 1, "ok": true, "help": "…" }` / `{ … "name": "s2s", "version": "…" }`).
+
+### Result envelope
+
+Every `--json` document is an envelope, added in one place (`lib/out.ts` for successes,
+`cli.ts` for failures) — no command sets these keys itself:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | `1` | Bumped when the shape of a document changes. Hosts refuse a version they do not know. |
+| `ok` | `boolean` | `true` for a result, `false` for a failure. The one field a host can branch on without guessing from `action`. |
+| `code` | `string` | Failures only: `usage` (exit 2), `action_failed` (a Lit action ran and failed), `error` (other CLI failure), `internal` (uncaught throw). |
+
+A host must not depend on `error` prose — it is human-readable and changes freely. Branch on
+`ok`, `code`, and the action's typed fields.
 
 ## Binary API reference (machine contract)
 
@@ -208,14 +233,22 @@ s2s <group> <action> [positionals…] [flags…]
 ```
 
 - Flags parse **anywhere** in the argv; `--flag value` and `--flag=value` both work;
-  `-h` is a single-letter boolean; `--` stops flag parsing (the rest are positionals).
-- `--json` is **always boolean** — it never consumes the next token.
+  `-h` is an alias of `--help`; `--` stops flag parsing (the rest are positionals).
+- Each action declares its own flags (`src/commands/*.ts`), and parsing is **strict**: an
+  unknown flag is a usage error (exit 2) naming the nearest declared one, and a string flag
+  with no value is a usage error too. Flags are **not** interchangeable between actions.
+- `--json` is **always boolean** — it never consumes the next token; `--json=false` and
+  `--no-json` mean human output. Booleans in general accept `--no-<flag>`.
+- A `repeatable` flag (`--author`, `--owner` on `publication new`) accumulates; repeating it is
+  the same as passing a comma-separated list.
+- `--help` for an action is **derived from that flag declaration**, so it cannot disagree with
+  what the parser accepts; there is no hand-written usage string to fall out of date.
 - **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
   carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
 - Failure in `--json` mode puts a single envelope on stdout and nothing else:
 
   ```json
-  { "ok": false, "error": "unknown author action 'bogus'" }
+  { "schemaVersion": 1, "ok": false, "code": "usage", "error": "unknown author action 'bogus'" }
   ```
 
 - **Exit codes:** `0` success · `1` runtime failure (missing env, RPC/render failure) ·
@@ -225,11 +258,11 @@ s2s <group> <action> [positionals…] [flags…]
 
 | Invocation | stdout (`--json`) | exit |
 |---|---|---|
-| `s2s --version` | `{ "name": "s2s", "version": "0.1.0" }` | 0 |
-| `s2s` / `s2s --help` | `{ "help": "<top help>" }` | 0 |
-| `s2s <group> --help` | `{ "help": "<group help>" }` | 0 |
-| `s2s <group> <action> --help` | `{ "help": "<usage + summary>" }` | 0 |
-| any failure (`--json`) | `{ "ok": false, "error": "<msg>" }` | 1 or 2 |
+| `s2s --version` | `{ "schemaVersion": 1, "ok": true, "name": "s2s", "version": "0.1.0" }` | 0 |
+| `s2s` / `s2s --help` | `{ "schemaVersion": 1, "ok": true, "help": "<top help>" }` | 0 |
+| `s2s <group> --help` | `{ "schemaVersion": 1, "ok": true, "help": "<group help>" }` | 0 |
+| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + flags>" }` | 0 |
+| any failure (`--json`) | `{ "schemaVersion": 1, "ok": false, "code": "<code>", "error": "<msg>" }` | 1 or 2 |
 
 ### `author` group — result types
 

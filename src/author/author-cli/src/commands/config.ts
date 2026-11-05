@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Hex } from 'viem';
 
-import type { ParsedArgs } from '../lib/args';
+import { commandHelp, flagRows, GLOBAL_FLAGS, type FlagSpec, type ParsedArgs } from '../lib/args';
 import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
@@ -58,9 +58,17 @@ export function derivedConfigValue(key: string): string | null {
 export interface ConfigCommandSpec {
   name: string;
   summary: string;
-  usage: string;
+  /** Positional signature for usage/help, e.g. `<key> <value>`. */
+  params?: string;
+  flags: Record<string, FlagSpec>;
   run(out: CliOut, args: ParsedArgs): void;
 }
+
+/** `--local` — the one flag of the config group (declared once). */
+const LOCAL_FLAG: FlagSpec = {
+  type: 'boolean',
+  summary: 'target the project config file (.s2sconfig.json in cwd) instead of the user config',
+};
 
 function knownKeys(): string {
   return [...CONFIG_FIELDS.map((f) => f.key), `${DERIVED_KEYS.join(' ')} (derived)`].join(' ');
@@ -189,37 +197,48 @@ export const configCommands: readonly ConfigCommandSpec[] = [
   {
     name: 'set',
     summary: 'set a config value (writes the config file)',
-    usage: 's2s config set <key> <value> [--local] [--json]',
+    params: '<key> <value>',
+    flags: { local: LOCAL_FLAG },
     run: setCommand,
   },
   {
     name: 'get',
     summary: 'print the effective value for a key',
-    usage: 's2s config get <key> [--json]',
+    params: '<key>',
+    flags: {},
     run: getCommand,
   },
   {
     name: 'unset',
     summary: 'remove a key from the config file',
-    usage: 's2s config unset <key> [--local] [--json]',
+    params: '<key>',
+    flags: { local: LOCAL_FLAG },
     run: unsetCommand,
   },
   {
     name: 'list',
     summary: 'print all effective config values',
-    usage: 's2s config list [--json]',
+    flags: {},
     run: listCommand,
   },
   {
     name: 'path',
     summary: 'print the config file path',
-    usage: 's2s config path [--local] [--json]',
+    flags: { local: LOCAL_FLAG },
     run: pathCommand,
   },
 ];
 
+export function findConfigCommand(name: string): ConfigCommandSpec | undefined {
+  return configCommands.find((c) => c.name === name);
+}
+
 function configHelp(): string {
-  const rows = configCommands.map((c) => `  ${c.name.padEnd(6)} ${c.summary}`).join('\n');
+  const labels = configCommands.map((c) => [c.name, c.params].filter(Boolean).join(' '));
+  const width = Math.max(...labels.map((label) => label.length));
+  const rows = configCommands
+    .map((c, i) => `  ${(labels[i] ?? c.name).padEnd(width)}  ${c.summary}`)
+    .join('\n');
   return `s2s config — manage the CLI's own settings (bring-your-own RPC, Kubo, keys)
 
 Usage:
@@ -229,9 +248,10 @@ Actions:
 ${rows}
 
 Flags:
-  --local   target the project config file (.s2sconfig.json in cwd)
-            instead of the user config (~/.config/s2s/config.json)
-  --json    emit the result as JSON on stdout (machine-readable)
+${flagRows({ local: LOCAL_FLAG })}
+
+Global flags:
+${flagRows({}, GLOBAL_FLAGS)}
 
 Precedence: environment vars > project config > user config > defaults.
 Env file:   $XDG_CONFIG_HOME/s2s/.env (default ~/.config/s2s/.env), then ./.env.
@@ -247,24 +267,23 @@ Run "s2s config <action> --help" for details on an action.`;
 export function runConfigGroup(
   out: CliOut,
   wantHelp: boolean,
-  flags: Record<string, string | boolean>,
   action: string | undefined,
-  positionals: string[],
+  command: ConfigCommandSpec | undefined,
+  args: ParsedArgs,
 ): void {
   if (!action) {
     out.result({ help: configHelp() }, configHelp());
     return;
   }
-  const command = configCommands.find((c) => c.name === action);
   if (!command) {
     throw new UsageError(
       `unknown config action '${action}' — expected one of: ${configCommands.map((c) => c.name).join(', ')}`,
     );
   }
-  const usage = `${command.usage}\n\n${command.summary}`;
   if (wantHelp) {
-    out.result({ help: usage }, usage);
+    const text = commandHelp('config', command.name, command.summary, command.flags, command.params);
+    out.result({ help: text }, text);
     return;
   }
-  command.run(out, { flags, positionals });
+  command.run(out, args);
 }
