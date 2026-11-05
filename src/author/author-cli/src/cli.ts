@@ -15,13 +15,13 @@ import { createOut } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
 import {
-  authorCommands,
+  authorHelpEntries,
   findAuthorCommand,
+  findAuthorStoreCommand,
   findPublicationCommand,
   publicationCommands,
 } from './commands';
 import { runConfigGroup } from './commands/config';
-import type { CommandSpec } from './lib/command';
 
 const VERSION = '0.1.0';
 
@@ -31,7 +31,7 @@ Usage:
   s2s <group> <action> [flags]
 
 Groups:
-  author        Upload, preview, offer, publish, or revoke content
+  author        Author identities + content actions (new/switch/list/rm, upload, publish)
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
@@ -41,7 +41,11 @@ Global flags:
 
 Run "s2s author --help" or "s2s publication --help" for the actions.`;
 
-function groupHelp(commands: CommandSpec[], group: string, tagline: string): string {
+function groupHelp(
+  commands: readonly { name: string; summary: string }[],
+  group: string,
+  tagline: string,
+): string {
   const rows = commands.map((c) => `  ${c.name.padEnd(8)} ${c.summary}`).join('\n');
   return `s2s ${group} — ${tagline}
 
@@ -54,11 +58,12 @@ ${rows}
 Run "s2s ${group} <action> --help" for details on an action.`;
 }
 
-const authorHelp = (): string => groupHelp(authorCommands, 'author', 'content actions');
+const authorHelp = (): string =>
+  groupHelp(authorHelpEntries, 'author', 'author identities and content actions');
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
-function actionHelp(command: CommandSpec): string {
+function actionHelp(command: { usage: string; summary: string }): string {
   return `${command.usage}\n\n${command.summary}`;
 }
 
@@ -104,6 +109,22 @@ async function main(argv: string[]): Promise<number> {
   if (!action) {
     out.result({ help }, help);
     return 0;
+  }
+
+  // The author-store actions (new / switch / list / rm) are dispatched before
+  // buildContext, like `config`: they manage identities, so requiring one to
+  // already be configured would be circular.
+  if (group === 'author') {
+    const storeCommand = findAuthorStoreCommand(action);
+    if (storeCommand) {
+      const usage = actionHelp(storeCommand);
+      if (wantHelp) {
+        out.result({ help: usage }, usage);
+        return 0;
+      }
+      await storeCommand.run(out, { flags, positionals: positionals.slice(2) });
+      return 0;
+    }
   }
 
   if (wantHelp) {

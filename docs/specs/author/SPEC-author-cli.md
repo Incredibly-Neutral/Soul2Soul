@@ -13,6 +13,11 @@
 > **Origin:** joera direction on the SPEC-author-hosts binary ticket; command structure mandated as
 > `s2s author <action>` with `--json` machine output for the Neovim plugin.
 >
+> **Multiple authors (2026-11-05, joera direction):** "cli should hold multiple authors — `author
+> new` / `author switch`, store pk + safe + pet name, switch by pet name". One install used to mean
+> one identity (`S2S_PRIVATE_KEY` / config `privateKey`); the store below makes identities
+> addressable and switches them with one command.
+>
 > **Blank-slate rule (SPEC-author-hosts):** this package reuses **only** what already lives in
 > `@s2s/soul2soul-shared`. It never imports `neutralpress`/`0xobsidian` internals; every runtime
 > adapter is written fresh for node.
@@ -37,6 +42,10 @@ Top-level bin `s2s`; three groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), and `config` (CLI settings).
 
 ```
+s2s author new       <pet-name> [--key <0x…>] [--json]                                          # add an author identity (activates it)
+s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
+s2s author list      [--json]                                                                     # stored authors, active one marked
+s2s author rm        <pet-name> [--json]                                                          # forget a stored author
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
 s2s author init      [--json]                                                                     # deploy the author Safe (idempotent)
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
@@ -85,6 +94,7 @@ Global flags parse anywhere in the argv:
 | `--author <addr>,...` | (new) Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. |
 | `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
 | `--local` | (config) Target the project config file (`.s2sconfig.json` in cwd) instead of the user config. |
+| `--key <0x…>` | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); neither → usage error. |
 
 ### Config file (bring-your-own infra)
 
@@ -102,11 +112,62 @@ from a completely unprovisioned machine.
 
 Keys are the flat camelCase forms of the env vars (`kuboGateway`, `rpcL1`,
 `privateKey`, … — `s2s config list` shows the full set). Read-only derived keys are also accepted by `config get`:
-`eoa` (the signing account, computed from `privateKey` locally — no RPC). Note that the
+`eoa` (the signing account, computed from `privateKey` locally — no RPC), `author` (the active
+stored author's pet name, `null` when the key came from env/project/user) and `safe` (that author's
+recorded Safe, `null` when it has not been predicted yet). Note that the
 **author id is not the EOA**: it is the author Safe (`s2s author address`), which is
 counterfactual and therefore needs an L2 read. List keys (`rpcL1`,
-`rpcL2`) accept comma-separated values and are stored as JSON arrays. Enum keys
+`rpcL2`) accept comma-separated values and are stored as JSON arrays. Because the store outranks
+the user file for `privateKey`, `config set privateKey …` and `config unset privateKey` warn when a
+stored author is active — naming it and saying `s2s author switch` / `s2s author rm` is the way to
+change who signs. Enum keys
 (`environment`, `filecoinChain`, `entryPoint`) are validated on write.
+
+### The author store (several identities)
+
+One install holds many authors. `~/.config/s2s/authors.json` (`XDG_CONFIG_HOME` honored; a blank
+value falls back to `~/.config`) is written mode `0600`, atomically (tmp + rename, the same write
+`core/configfile.ts` uses):
+
+```json
+{ "active": "zomi",
+  "authors": { "zomi": { "privateKey": "0x…", "safe": "0x…" },
+               "work": { "privateKey": "0x…", "safe": null } } }
+```
+
+- **Pet name** is the key of an insertion-ordered map. Shape
+  `/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/`, max 64 chars. Names are unique **case-insensitively** (`Zomi`
+  is refused when `zomi` exists), and one private key belongs to exactly one pet name — the same
+  identity under two names would be two rows that can never diverge.
+- **`active`** names the author whose key the CLI signs with. `null` — or a name that is no longer
+  in the file — means no stored author is active.
+- **`author new` activates** the author it creates: adding an identity is a switch. A duplicate
+  name or a key already filed under another name is a usage error.
+- **`author rm`** of the active author moves `active` to the first remaining author (file order), or
+  to `null` when the store empties. Removing a non-active author leaves `active` alone. An unknown
+  name is a usage error listing the known ones.
+- **Precedence for the signing key:** `S2S_PRIVATE_KEY` env > project config `privateKey` > active
+  author's key > user config `privateKey` > undefined. The store therefore sits *above* the user
+  config file (a deliberate `author switch` must beat a leftover default) and *below* the env and
+  project layers. `CliConfig.author` reports which layer won, with the pet name and the stored Safe
+  only for the store layer.
+- **The env shadows the store, loudly.** When `S2S_PRIVATE_KEY` is set and the active stored author
+  holds a different key, `buildContext` warns on stderr — `S2S_PRIVATE_KEY overrides active author
+  'zomi'` — because a shell export silently overriding `author switch` is invisible in every
+  result otherwise. stderr only: stdout still carries exactly one document.
+- **Safe derivation and write-back.** `author new` writes the record first, with `safe: null`, then
+  predicts the author Safe for the key it was given (same `s2s_${eoa}` salt as `author address`) and
+  writes that back. The order is deliberate: prediction is a network read, and an interrupted or
+  slow one must not cost the key the user just pasted. The endpoint comes from
+  `buildRpcEndpoints(config).L2[0]` — the same DRPC → public → Alchemy → Infura chain every other
+  author path uses, *not* the explicit `rpcL2` list, which is usually empty. A failed read (or the
+  genuinely empty list) leaves `safe: null` and warns instead of failing: the key is the
+  irreplaceable part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
+  signing key came from the store and the stored value is missing or different, so `author list`
+  and `author switch` can report the identity offline (no RPC, no bundler).
+- **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
+  (the `config` group's contract): no private key, no RPC, no bundler, no Lit keys. Every other
+  `author` action still builds a context.
 
 ### The author identity: a counterfactual Safe
 
@@ -233,13 +294,29 @@ s2s <group> <action> [positionals…] [flags…]
 ### `author` group — result types
 
 ```ts
+// s2s author new <pet-name> [--key <0x…>] [--json] — file an identity and activate it
+{ action: 'author.new'; name: string; eoa: string; safe: string | null;
+  active: true; file: string }      // no salt: it is `s2s_` + eoa, nothing to record
+
+// s2s author switch <pet-name> [--json] — make a stored author active
+{ action: 'author.switch'; name: string; eoa: string; safe: string | null; file: string }
+
+// s2s author list [--json] — stored authors, active one marked
+{ action: 'author.list'; active: string | null;
+  authors: { name: string; eoa: string | null; safe: string | null; active: boolean }[] }
+
+// s2s author rm <pet-name> [--json] — forget an author
+{ action: 'author.rm'; name: string; file: string; active: string | null }
+
 // s2s author address [--json]      — the author id (Safe), predicted; no tx
 { action: 'author.address'; address: string; eoa: string; salt: string;
-  chain: 'base'; deployed: boolean }
+  chain: 'base'; deployed: boolean;
+  author: string | null }         // pet name when the key came from the store
 
 // s2s author init [--json]         — deploy the author Safe if not deployed
 { action: 'author.init'; address: string; eoa: string; salt: string;
-  chain: 'base'; deployed: boolean; txHash: string | null }
+  chain: 'base'; deployed: boolean; txHash: string | null;
+  author: string | null }
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
 { action: 'upload'; note: string; publication: string; subdomain: string;
@@ -314,7 +391,8 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `kubo
 { action: 'config.unset'; key: string; file: string; local: boolean }
 
 // s2s config list [--json]             — all effective values; secrets masked
-{ config: Record<string, string> }       // plus the derived `eoa` when privateKey is set
+{ config: Record<string, string> }       // plus the derived `eoa`/`author`/`safe` when they resolve
+                                        // (unresolved derived keys are omitted, not null)
 
 // s2s config path [--local] [--json]
 { path: string; env: { user: string; userExists: boolean; project: string | null } }
@@ -365,9 +443,9 @@ lists the env names; every one is also settable via `s2s config set <key>` with 
 src/
   cli.ts            top-level dispatch (s2s <group> <action>), json/help/version, error envelope
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
-  core/             config + configfile (field registry, config-file IO), context (clients), service, author write/revoke, encrypt seam
+  core/             config + configfile (field registry, config-file IO), authors (the multi-identity store), context (clients), service, author write/revoke, encrypt seam
   adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), ipfs, lit, rpc, filecoin
-  commands/         upload / propose / preview / publish / revoke (author), new (publication), config set/get/unset/list/path
+  commands/         upload / propose / preview / publish / revoke (author), new / switch / list / rm (author store), new (publication), config set/get/unset/list/path
 ```
 
 Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`,
@@ -504,8 +582,24 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 `pnpm test` (vitest, node env) covers the pure parts: arg parsing (`booleanFlags` never consuming
 the next token, value flags, `--`, `-h`), env config defaults/overrides/aliases, `requireSetting`,
 `saltNonceFor` (determinism, top-bit-cleared range), `upsertFrontmatter` (upsert, body
-preservation, hex quoting), and the config-file layer (field-registry coverage, env > project >
-user > default precedence, list/enum normalization, file round-trip, secret masking). Gate:
+preservation, hex quoting), the config-file layer (field-registry coverage, env > project > user >
+default precedence, list/enum normalization, file round-trip, secret masking), and the author store
+(`test/authors.test.ts`: file round-trip at mode 0600, XDG path resolution, tolerant reads of
+missing/corrupt/malformed files, pet-name validation and case-insensitive uniqueness, one key one
+name, switch, active-slot reassignment on `rm`, Safe write-back, the `env > project > store > user`
+precedence matrix against temp dirs).
+
+The store commands are tested at two levels: their `run(out, args)` functions directly (with
+`XDG_CONFIG_HOME` pointed at a temp dir and `fetch` stubbed, so no real store and no network), and
+the `authorStoreCommands` / `findAuthorStoreCommand` table that `cli.ts` dispatches from — it is
+imported from `commands/author-store.ts` precisely so a test can reach it without the content
+command graph (which drags in the ESM-only Filecoin adapter and will not load under vitest). What
+is *not* unit-tested is the dispatch itself: `cli.ts` running a store action before `buildContext`,
+per-action `--help`, and the one-document `--json` envelope at that level are covered by the hand
+smoke-tests below, because importing `cli.ts` pulls the same graph.
+
+Every test that loads a config passes `authorsPath`, so no test reads the developer's real
+`~/.config/s2s/authors.json`. Gate:
 `pnpm build` = `tsc -noEmit` + esbuild; eslint strict (`--max-warnings 0`) over `src/` and `test/`.
 
 ## Live execution notes

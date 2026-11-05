@@ -8,6 +8,7 @@ describe('loadConfig', () => {
   const noFiles = {
     userConfigPath: '/nonexistent/s2s/config.json',
     projectConfigPath: '/nonexistent/.s2sconfig.json',
+    authorsPath: '/nonexistent/s2s/authors.json',
   };
 
   it('applies defaults for an empty environment', () => {
@@ -33,7 +34,7 @@ describe('loadConfig', () => {
       S2S_KUBO_GATEWAY: 'http://127.0.0.1:5001',
       S2S_BUNDLER_URL: 'https://bundler.example',
       S2S_PAYMASTER_URL: 'https://paymaster.example',
-    });
+    }, noFiles);
     expect(config.environment).toBe('dev');
     expect(config.bundler.entryPoint).toBe('0.7');
     expect(config.filecoin.chain).toBe('calibration');
@@ -46,7 +47,7 @@ describe('loadConfig', () => {
   });
 
   it('parses comma-separated RPC lists with a fallback chain', () => {
-    const config = loadConfig({ S2S_RPC_L1: 'a, b , c', BASE_RPC_URL: 'z' });
+    const config = loadConfig({ S2S_RPC_L1: 'a, b , c', BASE_RPC_URL: 'z' }, noFiles);
     expect(config.rpc.L1).toEqual(['a', 'b', 'c']);
     expect(config.rpc.L2).toEqual(['z']);
   });
@@ -75,7 +76,10 @@ describe('loadConfig', () => {
   });
 
   it('reads LIT_* and S2S_GITHUB_TOKEN aliases', () => {
-    const config = loadConfig({ LIT_ACCOUNT_KEY: 'la', LIT_USAGE_KEY: 'lu', S2S_GITHUB_TOKEN: 'gt' });
+    const config = loadConfig(
+      { LIT_ACCOUNT_KEY: 'la', LIT_USAGE_KEY: 'lu', S2S_GITHUB_TOKEN: 'gt' },
+      noFiles,
+    );
     expect(config.litAccountKey).toBe('la');
     expect(config.litUsageKey).toBe('lu');
     expect(config.githubToken).toBe('gt');

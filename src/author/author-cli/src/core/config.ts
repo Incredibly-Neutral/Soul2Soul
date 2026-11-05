@@ -8,10 +8,22 @@
 // managed by `s2s config set/get/unset` — see src/core/configfile.ts for the
 // field registry shared by both.
 //
+// The signing key has one extra layer, the author store (`core/authors.ts`): a
+// user keeps several identities there and `s2s author switch` picks one, so the
+// active author's key sits between the project file and the user file. The
+// order is env > project > store > user, and `CliConfig.author` reports which
+// layer won.
+//
 // A `.env` in the current working directory is loaded by the CLI entrypoint
 // before `loadConfig()` runs, so it participates at the env layer.
 // ============================================================================
 
+import {
+  activeAuthorRecord,
+  readAuthors,
+  type AuthorKeySource,
+  type AuthorsStore,
+} from './authors';
 import {
   CONFIG_FIELD,
   configFilePaths,
@@ -75,11 +87,25 @@ export function bundlerEndpoints(
   return { bundlerUrl, paymasterUrl: config.bundler.paymasterUrl ?? pimlico };
 }
 
+/** Where the signing key came from, and — for the store layer — whose it is. */
+export interface CliAuthor {
+  /** Pet name of the active stored author; only set when `source` is `store`. */
+  name: string | undefined;
+  /** That author's recorded Safe; only set when `source` is `store`. */
+  safe: string | undefined;
+  source: AuthorKeySource;
+}
+
 export interface CliConfig {
   /** 'dev' → dev protocol gateways/factories + dev Lit; 'prod' → live (default). */
   environment: 'dev' | 'prod';
   /** EOA private key that signs author flows (Safe owner). Required for authoring. */
   privateKey: string | undefined;
+  /**
+   * Provenance of `privateKey`. Undefined only when no key resolved at all
+   * (`privateKey` is then undefined too).
+   */
+  author: CliAuthor | undefined;
   /** Lit master/network key (LitService account). Required for authoring. */
   litAccountKey: string | undefined;
   /** Lit usage key for action runs. Required for render paths. */
@@ -110,6 +136,8 @@ export interface CliConfig {
 export interface LoadConfigOptions {
   userConfigPath?: string;
   projectConfigPath?: string;
+  /** The author store (`core/authors.ts`) — test seam, like the config files. */
+  authorsPath?: string;
 }
 
 /** Explicit paths when provided, else the standard user/project locations. */
@@ -159,6 +187,66 @@ function resolveFieldValue(
   return field.default;
 }
 
+/** The signing key plus where it came from, honouring the store layer. */
+interface PrivateKeyResolution {
+  value: string | undefined;
+  source: AuthorKeySource | undefined;
+  /** Set only for `source: 'store'`. */
+  name: string | undefined;
+  /** Set only for `source: 'store'`. */
+  safe: string | undefined;
+}
+
+const UNRESOLVED_KEY: PrivateKeyResolution = {
+  value: undefined,
+  source: undefined,
+  name: undefined,
+  safe: undefined,
+};
+
+/**
+ * Precedence for the signing key: env > project file > active stored author >
+ * user file. The store sits above the user file because that is what makes
+ * `author switch` effective (the store is a deliberate selection, the user
+ * file is a leftover default).
+ */
+function resolvePrivateKey(
+  field: ConfigField,
+  env: NodeJS.ProcessEnv,
+  projectFile: Record<string, unknown>,
+  userFile: Record<string, unknown>,
+  authors: AuthorsStore,
+): PrivateKeyResolution {
+  for (const name of field.env) {
+    const value = env[name];
+    if (value !== undefined && value.trim().length > 0) {
+      return { value: hexKey(value), source: 'env', name: undefined, safe: undefined };
+    }
+  }
+
+  const fromProject = configFileValue(projectFile[field.key], field);
+  if (fromProject !== undefined) {
+    return { value: hexKey(fromProject), source: 'project', name: undefined, safe: undefined };
+  }
+
+  const active = activeAuthorRecord(authors);
+  if (active) {
+    return {
+      value: hexKey(active.privateKey),
+      source: 'store',
+      name: active.name,
+      safe: active.safe ?? undefined,
+    };
+  }
+
+  const fromUser = configFileValue(userFile[field.key], field);
+  if (fromUser !== undefined) {
+    return { value: hexKey(fromUser), source: 'user', name: undefined, safe: undefined };
+  }
+
+  return UNRESOLVED_KEY;
+}
+
 function listValue(value: string | undefined): string[] {
   return value
     ? value
@@ -194,10 +282,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
   const userFile = readConfigFile(paths.user);
 
   const resolve = (f: ConfigField): string | undefined => resolveFieldValue(f, env, projectFile, userFile);
+  const privateKey = resolvePrivateKey(
+    field('privateKey'),
+    env,
+    projectFile,
+    userFile,
+    readAuthors(opts.authorsPath),
+  );
 
   return {
     environment: enumValue(field('environment'), 'prod', resolve(field('environment'))),
-    privateKey: hexKey(resolve(field('privateKey'))),
+    privateKey: privateKey.value,
+    author:
+      privateKey.source === undefined
+        ? undefined
+        : { name: privateKey.name, safe: privateKey.safe, source: privateKey.source },
     litAccountKey: hexKey(resolve(field('litAccountKey'))),
     litUsageKey: resolve(field('litUsageKey')),
     githubToken: resolve(field('githubToken')),
@@ -236,7 +335,16 @@ export function configKeyValue(
   const field = CONFIG_FIELD[key];
   if (!field) return undefined;
   const paths = pathsFor(opts);
-  return resolveFieldValue(field, env, readConfigFile(paths.project), readConfigFile(paths.user));
+  const projectFile = readConfigFile(paths.project);
+  const userFile = readConfigFile(paths.user);
+  // The signing key carries the author-store layer, so it must resolve through
+  // the same chain `loadConfig` uses — otherwise `config list` would report
+  // "unset" while `author list` shows the author being signed as.
+  if (key === 'privateKey') {
+    return resolvePrivateKey(field, env, projectFile, userFile, readAuthors(opts.authorsPath))
+      .value;
+  }
+  return resolveFieldValue(field, env, projectFile, userFile);
 }
 
 /** Required-setting helper — throws a clear, actionable error for a missing key. */
