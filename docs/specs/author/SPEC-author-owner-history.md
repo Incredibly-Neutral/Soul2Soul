@@ -116,9 +116,8 @@ the signature came before or after the owner change within that block, and does 
 | call | answers |
 |---|---|
 | `isOwner(address who) -> bool` | live `staticcall` to the Safe's own `isOwner(who)`; **`false` if the call fails**, so a dead or wrong `safe` never reads as an owner |
-| `isOwnerAt(address who, uint256 blockNumber) -> bool` | was `who` in the set holding at that block |
+| `isOwnerAt(address who, uint256 blockNumber) -> bool` | **the gate's call.** `false` before `eras[0]`; answered from the tenures for any block earlier than `block.number`; for a `blockNumber` at or after `block.number` — which is how a caller asks "owner now" — the live `isOwner` answer, falling back to era membership if the staticcall fails |
 | `wasOwnerAt(address who, uint256 timestamp) -> bool` | the same on the timestamp axis |
-| `isOwnerOrWasOwnerAt(address who, uint256 blockNumber) -> bool` | **the gate's single call.** `false` before `eras[0]`; for a block in a closed era, tenure membership; for a block at or after the current era's start, the live `isOwner` answer, falling back to era membership if the staticcall fails |
 | `tenuresOf(address who) -> Tenure[]` | assembled on read from the two arrays; `{startBlock, startTime, endBlock, endTime}` per tenure, `0` for open |
 | `eraCount() -> uint256` | number of eras |
 | `eraAt(uint256 index) -> Era` | one era; **reverts outside `0..eraCount-1`** |
@@ -127,10 +126,24 @@ the signature came before or after the owner change within that block, and does 
 | `lastSyncedBlock() -> uint256` | `currentEra().startBlock` — the block of the last *observed rotation*, not of the last call |
 | `count() -> uint256` | `ownersEver.length` |
 
-`isOwnerOrWasOwnerAt` consults the live Safe for the present on purpose. A stale module — guard removed,
-`sync` never run — must not claim an address is an owner now, and a rotation the module missed must not
-make its own era answer for the present either. The module can be wrong about the past; it should not
-compound that by being wrong about the present, where a better source exists.
+### Why there is no "current or past" convenience
+
+A function answering `isOwner(who) || isOwnerAt(who, blockNumber)` was written and removed. It is recorded
+here as a **rejected API**, so nobody adds it back.
+
+It is wrong in the direction that matters. A present owner who joined in era 2 satisfies a query about a
+block in era 1, so a check built on it cannot establish point-in-time membership at all — the exact hole
+this module exists to close. "Was this signer an owner when they signed" is a question about a block, and
+a disjunction with the present answers a different and weaker question while looking like an answer.
+
+It is also unnecessary. `isOwnerAt(signer, block.number)` is how a caller asks "owner now", and it routes
+to the Safe's live `isOwner` instead of to stored history. One entry point, two questions, distinguished
+by the argument.
+
+The live branch exists for staleness: a module whose guard was removed, or whose `sync` never ran, must
+not claim an address is an owner now, and the present is the one place a better source than its own
+storage exists. The module can be wrong about the past; it should not compound that by being wrong about
+the present.
 
 Reads never revert on an address it has not seen, a block it never covered, or a timestamp before the
 history. Indexed reads (`eraAt`) revert out of range — they are enumeration, not query.
@@ -238,12 +251,16 @@ this package — it is installed by the Safe, so there is nothing here to author
 ## What the gate does with it
 
 `canRead` / `canPublish` today ask `isOwner(signer)` — the present only. The owner-history read replaces
-the signer term with a two-argument question:
+the signer term with a question about a block:
 
 ```ts
-const wasOwner = await read(ownerHistoryModule, ABI, 'isOwnerOrWasOwnerAt', [signer, blockOfTheArtifact])
+const wasOwner = await read(ownerHistoryModule, ABI, 'isOwnerAt', [signer, blockOfTheArtifact])
 return canPublish(publication, authorSafe) && wasOwner && hasDeal(genesis)
 ```
+
+That is the single call, and there is no `isOwnerOrWasOwnerAt` to reach for: the present tense is
+`isOwnerAt(signer, block.number)`, and the disjunction of the two is the bug
+([above](#why-there-is-no-current-or-past-convenience)).
 
 Two independent reads on two contracts, and **nothing on-chain links them**: `hasDeal` says a deal covers
 this genesis, the owner-history read says this signer held the author Safe's keys at a block, and no
@@ -281,8 +298,8 @@ module does not know a manuscript exists. A gate that needs both facts reads bot
 
 ## What V1 does not do
 
-- **No threshold history.** Only membership. A threshold change writes no era, and
-  `isOwnerOrWasOwnerAt` says nothing about how many signatures were required. Recording it would mean a
+- **No threshold history.** Only membership. A threshold change writes no era, and `isOwnerAt` says
+  nothing about how many signatures were required. Recording it would mean a
   third axis — the value read in the same `sync`, per era, in its own append-only array — and it would be
   incomplete for the same reason membership is: no guard, no observation.
 - **No per-owner metadata.** No labels, no ENS name, no `AddedOwner`-height, no removal reason. An
@@ -340,8 +357,11 @@ module does not know a manuscript exists. A gate that needs both facts reads bot
   `checkAfterExecution` records it, `eraCount() == 2`, old era's `endBlock == block.number`, the removed
   owner's open pair closed with the same block, the added owner pushed with a new pair.
 - Boundary, both directions: at block N, the outgoing owner reads `false` and the incoming owner `true`
-  from `isOwnerAt`, `wasOwnerAt` (same-second) and `isOwnerOrWasOwnerAt`. This is the test that encodes
-  the semantic choice, so it must assert the block, not a range around it.
+  from `isOwnerAt`, and the same on the timestamp axis (`wasOwnerAt`, same-second). This is the test that
+  encodes the semantic choice, so it must assert the block, not a range around it.
+- Rejected disjunction, the regression test: an owner added in era 2 reads `false` from
+  `isOwnerAt(who, b)` for a block `b` in era 1, while `isOwnerAt(who, block.number)` reads `true`. A
+  later joiner must never satisfy a query about an earlier block.
 - Removal then re-addition: two tenures, one `ownersEver` entry, `tenuresOf` ordered, and the second pair
   is the open one.
 - Pre-history: a block before `eras[0].startBlock` reads `false` from every membership call, without
@@ -349,9 +369,9 @@ module does not know a manuscript exists. A gate that needs both facts reads bot
 - Unobserved rotation: remove the guard, rotate, `sync()` — the boundary is the sync block, and the
   previous owner reads as an owner for the stretched interval. Assert the wrongness explicitly; it is the
   documented guarantee, not a bug to be fixed later.
-- Stale era, live read: `isOwnerOrWasOwnerAt` for a block inside the current era returns the live
-  `isOwner` answer even when the era's array disagrees; with `safe` set to something that fails the
-  staticcall, it falls back to era membership and does not revert.
+- Stale era, live read: `isOwnerAt(who, block.number)` returns the live `isOwner` answer even when the
+  era's array disagrees; with `safe` set to something that fails the staticcall, it falls back to era
+  membership and does not revert. A block earlier than `block.number` still answers from the tenures.
 - Guard resilience: a `safe` whose `getOwners()` reverts, or a module that consumes all forwarded gas,
   still lets the Safe transaction succeed — `SyncFailed` emitted, `sync()` afterwards is the repair.
 - Guard install hazards, asserted as documentation-in-code: `execTransaction` with a codeless guard
