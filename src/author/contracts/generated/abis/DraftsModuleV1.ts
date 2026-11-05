@@ -16,6 +16,11 @@ export type Abi_DraftsModuleV1 = [
   },
   {
     "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "ZeroHash",
     "type": "error"
   },
@@ -468,6 +473,11 @@ export const Abi_DraftsModuleV1: Abi_DraftsModuleV1 = [
   {
     "inputs": [],
     "name": "OnlySafe",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
     "type": "error"
   },
   {

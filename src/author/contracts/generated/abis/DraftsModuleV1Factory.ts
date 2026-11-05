@@ -11,6 +11,11 @@ export type Abi_DraftsModuleV1Factory = [
     "type": "constructor"
   },
   {
+    "inputs": [],
+    "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -71,6 +76,19 @@ export type Abi_DraftsModuleV1Factory = [
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "deployer",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -207,6 +225,11 @@ export const Abi_DraftsModuleV1Factory: Abi_DraftsModuleV1Factory = [
     "type": "constructor"
   },
   {
+    "inputs": [],
+    "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -267,6 +290,19 @@ export const Abi_DraftsModuleV1Factory: Abi_DraftsModuleV1Factory = [
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "deployer",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

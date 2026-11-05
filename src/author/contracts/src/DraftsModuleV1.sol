@@ -63,6 +63,7 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
     error OnlySafe();
     error ZeroHash();
     error EmptyCid();
+    error ZeroAddress();
 
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
@@ -75,6 +76,9 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
     }
 
     function initialize(address _safe) public initializer {
+        // A zero `safe` passes no caller check ever, so the module would be born
+        // dead: writes and upgrades both unreachable, with no way to repair it.
+        if (_safe == address(0)) revert ZeroAddress();
         __UUPSUpgradeable_init();
         safe = _safe;
     }
@@ -168,8 +172,11 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
         uint256 n = genesisList.length;
         if (offset >= n || limit == 0) return new Entry[](0);
 
+        // Clamp before adding: `offset + limit` overflows for a huge limit, and a
+        // read that reverts on a caller's arithmetic is a read that lies about
+        // the log. A reader may pass `type(uint256).max` to mean "to the end".
+        if (limit > n - offset) limit = n - offset;
         uint256 end = offset + limit;
-        if (end > n) end = n;
 
         Entry[] memory out = new Entry[](end - offset);
         for (uint256 i = offset; i < end; i++) {
