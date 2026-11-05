@@ -4,10 +4,10 @@
 > **Siblings:** [`SPEC-author-identity.md`](SPEC-author-identity.md),
 > [`SPEC-author-drafts.md`](SPEC-author-drafts.md)
 > **Type:** branch — a part of the author side, not a domain in its own right.
-> **Status:** built. `OwnerHistoryModuleV1`, `OwnerHistoryModuleV1Factory` and
-> `OwnerHistoryGuard` are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
-> `test/MockSafe.t.sol` and 40 passing tests in the package;
-> `scripts/deploy-owner-history.ts` is the deploy path and `src/author/contracts/README.md`
+> **Status:** built. `OwnerHistoryModuleV1`, `OwnerHistoryGuard` and the package's one factory,
+> `AuthorContractsFactory`, are in `src/author/contracts/src`, with `test/OwnerHistory.test.ts`,
+> `test/MockSafe.t.sol` and 44 passing tests in the package;
+> `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Nothing
 > is deployed.
@@ -20,7 +20,7 @@ the raw history that answer is computed from, so a reader can check it rather th
 it.
 
 - `OwnerHistoryModuleV1` (UUPS; one proxy per author Safe, made by
-  `OwnerHistoryModuleV1Factory`). It mirrors the Safe's owner set and records a new *era*
+  `AuthorContractsFactory.createOwnerHistoryModule`). It mirrors the Safe's owner set and records a new *era*
   every time that set changes. It is the store and the read surface.
 - `OwnerHistoryGuard` (non-upgradeable, storage-free, ERC-165-answering, installed with
   `setGuard`). It is a **best-effort** tap that calls the module's `sync()` inside the Safe's
@@ -64,21 +64,32 @@ a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that cost
 
 ## The install
 
-Two Safe transactions, because the guard is deployed against the module proxy's address:
+Two steps, and only the second one is a Safe transaction:
 
-1. `createModule(safe)` → the proxy address, then deploy `OwnerHistoryGuard(safe, proxy)`.
-2. `enableModule(proxy)` and `setGuard(guard)` in one batch.
+1. `createOwnerHistoryModule(safe)` on the factory — **permissionless**, deploys the proxy *and*
+   the guard bound to it, returns `(moduleProxy, guard)`, and installs nothing. The factory
+   cannot install: `setGuard` is `onlySelf`, and nothing in this package writes the Safe's
+   storage.
+2. One Safe transaction: `setGuard(guard)`.
 
-`enableModule` is not needed for the module to work — the guard calls it and `sync()` is
-permissionless — but it is the only on-chain proof that *this Safe* adopted *this* module.
-
-The batch has one precondition that is easy to miss and fatal to skip: `setGuard` is
+That transaction has one precondition that is easy to miss and fatal to skip: `setGuard` is
 `authorized` — a self-call, the Safe's own `execTransaction` or an enabled module's
 `execTransactionFromModule` — and validates ERC-165 before it stores the address:
 `require(Guard(guard).supportsInterface(type(Guard).interfaceId), "GS300")`. A contract that
 does not answer the guard interface id (`0xe6d7a83a`) cannot be installed at all: the
 transaction reverts `GS300` and the previous guard stays. `OwnerHistoryGuard.supportsInterface`
-answers `0xe6d7a83a` and `0x01ffc9a7`, so the batch lands.
+answers `0xe6d7a83a` and `0x01ffc9a7`, so the transaction lands.
+
+**`enableModule` is not part of the install, and is not recommended.** An enabled module can
+call `execTransactionFromModule`, i.e. execute anything as the author Safe — including
+`setGuard(address(0))` — and this module needs no module powers: the guard calls `sync()`,
+`sync()` is permissionless, and every read is a plain `view` call. Adoption is instead proven
+by the guard slot, which only the Safe can write:
+
+```
+Safe.getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)
+  → guard → guard.module() → module
+```
 
 Nothing else in the install is required: there is no registry to join and no name to claim,
 the proxy answers only to the Safe, and the factory is a deployer with an index.
@@ -446,9 +457,14 @@ whoever made the proxy named that Safe. The rules:
    already trusts) and check `history.safe() == theSafeYouAlreadyTrust`. Never resolve a
    history module from a name, an event, or a factory index (`getModulesForSafe` is an index,
    not proof).
-2. Where the install was made with `enableModule` (as above), `authorSafe.isModuleEnabled(history)`
-   is the stronger check: only the Safe can set it, and the gate already reads the Safe in
-   the same call. Prefer it when it is available.
+2. The stronger check is the **guard slot**, because only the Safe can write it and it names the
+   module: read the guard-manager word
+   (`getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)`, low
+   20 bytes) → `guard` → `guard.module()` → `history`, and require that last address to be the
+   one checked in step 1. Do **not** prefer `isModuleEnabled(history)`: `enableModule` is not
+   part of the install — an enabled module can `execTransactionFromModule`, i.e. execute
+   anything as the Safe, and this module needs no module powers — so its absence proves
+   nothing and its presence is a hazard, not evidence.
 3. Whichever is checked, a failed comparison is `false` for the gate, never a fallback to a
    live `isOwner`.
 
@@ -528,8 +544,8 @@ whoever made the proxy named that Safe. The rules:
 - `NAME()`'s string, and anything else cosmetic in the metadata surface.
 - `SYNC_GAS` / `SYNC_RESERVE`, upwards. Lowering them trades a gas bill for a higher miss
   rate and needs the measured numbers re-taken.
-- The factory's `getModulesForSafe` index shape; the deploy script; the TS read helper's
-  location.
+- The factory's `getOwnerHistoryModulesForSafe` / `guardFor` index shapes; the deploy script;
+  the TS read helper's location.
 
 🔴 **Do not touch**
 
@@ -547,7 +563,7 @@ whoever made the proxy named that Safe. The rules:
 
 ## Test seams
 
-36 tests pass in `src/author/contracts` — 22 in `test/OwnerHistory.test.ts` (below) and 14 in
+44 tests pass in `src/author/contracts` — 29 in `test/OwnerHistory.test.ts` (below) and 15 in
 `test/DraftsModuleV1.test.ts`, which belong to [`SPEC-author-drafts.md`](SPEC-author-drafts.md).
 
 | Test | Pins |
@@ -573,9 +589,12 @@ whoever made the proxy named that Safe. The rules:
 | `sync() on a proxy that was never initialized fails cleanly, not with a panic` | `SafeCallFailed` on no era 0 |
 | `initialize refuses a Safe that has no owners yet` | `ZeroOwners`, and no proxy left in the index |
 | `isOwner answers false when the Safe returns a word that is not 0 or 1` | the raw-word compare, not `abi.decode` |
-| `factory createModule yields a working proxy for the Safe` | factory surface, two Safes get separate proxies |
+| `factory createOwnerHistoryModule yields a working proxy for the Safe` | factory surface, two Safes get separate proxies |
+| `createOwnerHistoryModule binds proxy, guard and Safe, and installs nothing` | the factory deploys both and returns them bound (`guard.module()`, `guard.safe()`, `history.safe()`); the Safe's guard slot is still zero until its own `setGuard` |
+| `both indexes append, and neither create is gated to the deployer` | a stranger's create lands in both indexes, and still no `set*Implementation` for it |
+| `guardFor answers zero for an unknown module instead of reverting` | the read a gate can use: zero, not a revert |
 | `initialize rejects address(0) and a safe-less contract, at deploy time` | `ZeroAddress`, `SafeCallFailed` |
-| `setImplementation is deployer-only; the UUPS gate is the Safe` | `OnlyDeployer`, `OnlySafe`, `ContractUpgraded`, storage survives an upgrade |
+| `setOwnerHistoryImplementation is deployer-only; the UUPS gate is the Safe` | `OnlyDeployer`, `OnlySafe`, `ContractUpgraded`, storage survives an upgrade |
 
 **What the fixtures are not.** `test/MockSafe.t.sol` is not the Safe package: it implements
 `getOwners`, `isOwner`, `guard`/`setGuard`, and an `execOwnerChange` that calls the guard the
