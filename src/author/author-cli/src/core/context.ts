@@ -18,6 +18,7 @@ import type { TxRunner } from '@s2s/soul2soul-shared';
 
 import { createEoaRunner } from '../adapters/tx-runner';
 import { createAuthorWriteRunner } from './author-safe';
+import { activeAuthorRecord, readAuthors } from './authors';
 import { createLitService } from '../adapters/lit';
 import { createIpfs } from '../adapters/ipfs';
 import { buildRpcEndpoints, type RpcEndpoints } from '../adapters/rpc';
@@ -65,11 +66,30 @@ export interface CliContext {
 type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
 
 /**
+ * Warn on stderr when the env key shadows the active stored author.
+ *
+ * `S2S_PRIVATE_KEY` outranks the store, so a shell export (or a `.env` line)
+ * silently overrides `s2s author switch` — the CLI then signs as a key the user
+ * did not select, and nothing in the result says so. stderr only: the stdout
+ * contract (one document, `--json` parsed by hosts) is untouched.
+ */
+function warnEnvShadowsActiveAuthor(out: CliOut, config: CliConfig): void {
+  if (config.author?.source !== 'env' || config.privateKey === undefined) return;
+  const active = activeAuthorRecord(readAuthors());
+  if (!active) return;
+  if (active.privateKey.toLowerCase() === config.privateKey.toLowerCase()) return;
+  out.warn(
+    `S2S_PRIVATE_KEY overrides active author '${active.name}' — unset it to sign as that author`,
+  );
+}
+
+/**
  * Build the full context. Requires S2S_PRIVATE_KEY for any authoring command;
  * callers that only need `new` still pass the key (it funds the Safe).
  */
 export async function buildContext(out: CliOut, config: CliConfig): Promise<CliContext> {
   const privateKey = requireSetting(config.privateKey, 'S2S_PRIVATE_KEY');
+  warnEnvShadowsActiveAuthor(out, config);
 
   const rpcs = buildRpcEndpoints(config);
   const l1Rpc = rpcs.L1[0];

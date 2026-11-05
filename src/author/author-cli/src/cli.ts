@@ -2,8 +2,9 @@
 // s2s — Soul2Soul headless authoring CLI.
 //
 // Top-level dispatch: `s2s <group> <action> [flags]`.
-// Groups: `author` (content actions), `publication` (publication lifecycle),
-// and `config` (CLI settings — dispatched without a context build).
+// Groups: `author` (author identities + content actions), `publication`
+// (publication lifecycle), and `config` (CLI settings — dispatched without a
+// context build).
 // Flags parse anywhere; `--json` switches stdout to a machine-readable JSON
 // envelope (Neovim plugin contract). Human progress always goes to stderr.
 //
@@ -19,13 +20,14 @@ import { createOut, SCHEMA_VERSION } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
 import {
-  authorCommands,
+  authorHelpEntries,
   findAuthorCommand,
+  findAuthorStoreCommand,
   findPublicationCommand,
   publicationCommands,
 } from './commands';
 import { findConfigCommand, runConfigGroup } from './commands/config';
-import type { CommandSpec } from './lib/command';
+import type { FlagSpecs } from './lib/args';
 
 const VERSION = '0.1.0';
 
@@ -35,7 +37,7 @@ Usage:
   s2s <group> <action> [flags]
 
 Groups:
-  author        Upload, preview, offer, publish, or revoke content
+  author        Author identities + content actions (new/switch/list/rm, upload, publish)
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
@@ -49,7 +51,14 @@ Run "s2s author --help" or "s2s publication --help" for the actions.`;
 /** Set in `main`; the failure handler prints in the same mode the run chose. */
 let jsonMode = false;
 
-function groupHelp(commands: CommandSpec[], group: string, tagline: string): string {
+/** The fields `--help` needs from any command, context-free or not. */
+interface HelpEntry {
+  name: string;
+  summary: string;
+  params?: string;
+}
+
+function groupHelp(commands: readonly HelpEntry[], group: string, tagline: string): string {
   const labels = commands.map((c) => [c.name, c.params].filter(Boolean).join(' '));
   const width = Math.max(...labels.map((label) => label.length));
   const rows = commands
@@ -66,7 +75,8 @@ ${rows}
 Run "s2s ${group} <action> --help" for details on an action.`;
 }
 
-const authorHelp = (): string => groupHelp(authorCommands, 'author', 'content actions');
+const authorHelp = (): string =>
+  groupHelp(authorHelpEntries, 'author', 'author identities and content actions');
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
@@ -102,7 +112,7 @@ async function main(argv: string[]): Promise<number> {
     // An unknown action is reported by runConfigGroup with the list of actions,
     // so skip the strict pass rather than blaming the flags first.
     const parsed = configCommand
-      ? parseCommandArgs(argv, configCommand.flags)
+      ? parseCommandArgs(argv, configCommand.flags as FlagSpecs)
       : { flags: {}, positionals: [] };
     runConfigGroup(out, wantHelp, action, configCommand, {
       flags: parsed.flags,
@@ -123,6 +133,32 @@ async function main(argv: string[]): Promise<number> {
   if (!action) {
     out.result({ help }, help);
     return 0;
+  }
+
+  // The author-store actions (new / switch / list / rm) are dispatched before
+  // buildContext, like `config`: they manage identities, so requiring one to
+  // already be configured would be circular.
+  if (group === 'author') {
+    const storeCommand = findAuthorStoreCommand(action);
+    if (storeCommand) {
+      const text = commandHelp(
+        'author',
+        storeCommand.name,
+        storeCommand.summary,
+        storeCommand.flags,
+        storeCommand.params,
+      );
+      if (wantHelp) {
+        out.result({ help: text }, text);
+        return 0;
+      }
+      const parsed = parseCommandArgs(argv, storeCommand.flags);
+      await storeCommand.run(out, {
+        flags: parsed.flags,
+        positionals: parsed.positionals.slice(2),
+      });
+      return 0;
+    }
   }
 
   const command = findCommand(action);

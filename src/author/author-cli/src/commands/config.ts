@@ -30,29 +30,48 @@ import {
   writeConfigValue,
   type ConfigField,
 } from '../core/configfile';
-import { configKeyValue, hexKey } from '../core/config';
+import { configKeyValue, loadConfig, type LoadConfigOptions } from '../core/config';
 
 /**
  * Read-only pseudo-keys derived from the config — never stored, never written.
- * `eoa` is the signing account derived from `privateKey` locally (no RPC).
- * It is NOT the author id: the author id is the Safe (see `s2s author address`,
+ *
+ * `eoa` is the signing account derived from `privateKey` locally (no RPC). It is
+ * NOT the author id: the author id is the Safe (see `s2s author address`,
  * which is counterfactual and needs an L2 read).
+ *
+ * `author` is the active stored author's pet name and `safe` its recorded Safe;
+ * both are null when the signing key came from the env/project/user layers (or
+ * when no Safe has been predicted for that author yet).
  */
-export const DERIVED_KEYS = ['eoa'] as const;
+export const DERIVED_KEYS = ['eoa', 'author', 'safe'] as const;
 
 export function isDerivedKey(key: string): boolean {
   return (DERIVED_KEYS as readonly string[]).includes(key);
 }
 
-export function derivedConfigValue(key: string): string | null {
-  if (key !== 'eoa') return null;
-  const privateKey = hexKey(configKeyValue('privateKey'));
+export function derivedConfigValue(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: LoadConfigOptions = {},
+): string | null {
+  if (!isDerivedKey(key)) return null;
+  const config = loadConfig(env, opts);
+  if (key === 'author') return config.author?.name ?? null;
+  if (key === 'safe') return config.author?.safe ?? null;
+
+  const privateKey = config.privateKey;
   if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) return null;
   try {
     return privateKeyToAccount(privateKey as Hex).address;
   } catch {
     return null;
   }
+}
+
+/** Human fallback for a derived key that has no value. */
+function derivedFallback(key: string): string {
+  if (key === 'eoa') return '(unset — needs privateKey)';
+  return '(none)';
 }
 
 export interface ConfigCommandSpec {
@@ -95,6 +114,20 @@ function writeTarget(args: ParsedArgs): { file: string; local: boolean; label: s
     : { file: paths.user, local: false, label: 'user' };
 }
 
+/**
+ * `config set/unset privateKey` is a no-op while a stored author is active,
+ * because the store outranks the user file. Say so instead of pretending the
+ * write took effect.
+ */
+function warnIfAuthorStoreShadows(out: CliOut, field: ConfigField): void {
+  if (field.key !== 'privateKey') return;
+  const author = loadConfig().author;
+  if (author?.source !== 'store' || !author.name) return;
+  out.warn(
+    `author '${author.name}' is active, so the stored key still signs — run \`s2s author switch <name>\` to pick another, or \`s2s author rm ${author.name}\` to fall back to this setting`,
+  );
+}
+
 function setCommand(out: CliOut, args: ParsedArgs): void {
   const field = requireField(args);
   const value = args.positionals[1];
@@ -114,6 +147,7 @@ function setCommand(out: CliOut, args: ParsedArgs): void {
         .filter((part) => part.length > 0)
     : value;
   writeConfigValue(target.file, field.key, stored);
+  warnIfAuthorStoreShadows(out, field);
   if (target.local && field.secret) {
     out.warn(
       `storing a secret in the project config file (${target.file}) — make sure .s2sconfig.json is gitignored`,
@@ -129,7 +163,7 @@ function getCommand(out: CliOut, args: ParsedArgs): void {
   const requested = args.positionals[0];
   if (requested !== undefined && isDerivedKey(requested)) {
     const value = derivedConfigValue(requested);
-    out.result({ key: requested, value }, `${requested}: ${value ?? '(unset)'}`);
+    out.result({ key: requested, value }, `${requested}: ${value ?? derivedFallback(requested)}`);
     return;
   }
   const field = requireField(args);
@@ -145,6 +179,7 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
   const field = requireField(args);
   const target = writeTarget(args);
   writeConfigValue(target.file, field.key, undefined);
+  warnIfAuthorStoreShadows(out, field);
   out.result(
     { action: 'config.unset', key: field.key, file: target.file, local: target.local },
     `unset ${field.key} in ${target.label} config (${target.file})`,
@@ -158,8 +193,10 @@ function listCommand(out: CliOut): void {
     return [[f.key, f.secret ? maskSecret(value) : value] as const];
   });
   const table = entries.map(([key, value]) => `${key}: ${value}`).join('\n');
-  const eoa = derivedConfigValue('eoa');
-  const derived = [`eoa: ${eoa ?? '(unset — needs privateKey)'}`].join('\n');
+  const derivedValues = DERIVED_KEYS.map((key) => [key, derivedConfigValue(key)] as const);
+  const derived = derivedValues
+    .map(([key, value]) => `${key}: ${value ?? derivedFallback(key)}`)
+    .join('\n');
   const userEnv = userEnvPath();
   const projectEnv = projectEnvPath();
   const envNotes = [
@@ -167,8 +204,12 @@ function listCommand(out: CliOut): void {
     `project env: ${projectEnv}${existsSync(projectEnv) ? '' : ' [not found]'}`,
   ].join('\n');
   out.result(
-    { config: Object.fromEntries([...entries, ['eoa', eoa] as const].filter(([, v]) => v !== null)) },
-    `Effective configuration (env > project > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
+    {
+      config: Object.fromEntries(
+        [...entries, ...derivedValues].filter(([, value]) => value !== null),
+      ),
+    },
+    `Effective configuration (env > project > author store > user > defaults):\n\n${table}\n\n${derived}\n\n${envNotes}\n\nManage with: s2s config set <key> <value> [--local]`,
   );
 }
 
@@ -253,9 +294,12 @@ ${flagRows({ local: LOCAL_FLAG })}
 Global flags:
 ${flagRows({}, GLOBAL_FLAGS)}
 
-Precedence: environment vars > project config > user config > defaults.
+Precedence: environment vars > project config > author store > user config > defaults.
 Env file:   $XDG_CONFIG_HOME/s2s/.env (default ~/.config/s2s/.env), then ./.env.
 Known keys: ${knownKeys()}
+
+Authors: 's2s author new/switch/list/rm' manage the stored identities the
+'privateKey' fallback comes from.
 
 Run "s2s config <action> --help" for details on an action.`;
 }

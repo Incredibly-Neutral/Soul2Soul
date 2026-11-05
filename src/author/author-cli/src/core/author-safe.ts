@@ -117,6 +117,41 @@ export async function createAuthorWriteRunner(opts: {
 }
 
 /**
+ * What prediction needs: the config for the bundler endpoints, the EOA the Safe
+ * is owned by, and the L2 endpoint to read the counterfactual address from.
+ * Deliberately not a `CliContext` — `s2s author new` predicts a Safe for a key
+ * that is not in the config yet.
+ */
+export interface AuthorSafeTarget {
+  config: CliConfig;
+  /** Owner and sole signer of the Safe. */
+  eoa: Address;
+  rpcUrl: string;
+}
+
+export interface AuthorSafePrediction {
+  /** The author id: the Safe, not the EOA. */
+  address: Address;
+  /** Salt the address is derived from (`s2s_0x…`). */
+  salt: string;
+  /** Whether bytecode already exists at the address. */
+  deployed: boolean;
+}
+
+/**
+ * Predict the author Safe from a target without a `CliContext`: its
+ * counterfactual address plus whether it has been deployed yet. Reads one RPC
+ * (the Safe proxy creation code + a bytecode check), so this is not the offline
+ * `config get` path.
+ */
+export async function predictAuthorSafe(target: AuthorSafeTarget): Promise<AuthorSafePrediction> {
+  const salt = authorSafeSalt(target.eoa);
+  const runner = await authorSafeRunner(target.config, target.eoa, target.rpcUrl, false);
+  const address = (await runner.connectToFreshSafe(salt)) as Address;
+  return { address, salt, deployed: await runner.isDeployed() };
+}
+
+/**
  * Predict the author Safe: its counterfactual address plus whether it has been
  * deployed yet. Reads one RPC (the Safe proxy creation code + bytecode check),
  * so this is not the offline `config get` path.
@@ -126,14 +161,17 @@ export async function authorSafeState(ctx: CliContext): Promise<AuthorSafeState>
   if (!rpcUrl) {
     throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
   }
-  const runner = await authorSafeRunner(ctx.config, ctx.eoaAddress, rpcUrl, false);
-  const address = (await runner.connectToFreshSafe(authorSafeSalt(ctx.eoaAddress))) as Address;
-  return {
-    address,
+  const prediction = await predictAuthorSafe({
+    config: ctx.config,
     eoa: ctx.eoaAddress,
-    salt: authorSafeSalt(ctx.eoaAddress),
+    rpcUrl,
+  });
+  return {
+    address: prediction.address,
+    eoa: ctx.eoaAddress,
+    salt: prediction.salt,
     chain: 'base',
-    deployed: await runner.isDeployed(),
+    deployed: prediction.deployed,
   };
 }
 

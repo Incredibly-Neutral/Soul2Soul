@@ -8,6 +8,7 @@
 // ============================================================================
 
 import type { FlagSpecs, ParsedArgs } from './args';
+import type { CliOut } from './out';
 import type { CliContext } from '../core/context';
 
 export interface CommandSpec {
@@ -17,4 +18,22 @@ export interface CommandSpec {
   params?: string;
   flags: FlagSpecs;
   run(ctx: CliContext, args: ParsedArgs): Promise<void>;
+}
+
+/**
+ * A command that runs WITHOUT a `CliContext`: no private key, no RPC, no
+ * bundler, no Lit. `cli.ts` dispatches these before `buildContext` (the same
+ * contract the `config` group uses), which is what lets `author new` / `switch`
+ * / `list` / `rm` work on a machine where nothing is configured yet.
+ *
+ * Same `flags` / `params` declaration as CommandSpec so strict parsing and
+ * `--help` do not fork; only the `run` signature differs.
+ */
+export interface StoreCommandSpec {
+  name: string;
+  summary: string;
+  /** Positional signature for usage/help, e.g. `<pet-name>`. */
+  params?: string;
+  flags: FlagSpecs;
+  run(out: CliOut, args: ParsedArgs): Promise<void> | void;
 }
