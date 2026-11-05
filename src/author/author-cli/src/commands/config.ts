@@ -42,9 +42,23 @@ import { commandHelp, flagRows, GLOBAL_FLAGS, type FlagSpec, type ParsedArgs } f
 import { projectEnvPath, userEnvPath } from '../lib/env';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
-import { configFilePaths, maskSecret, readConfigFile, writeConfigValue } from '../core/configfile';
+import {
+  configFilePaths,
+  maskSecret,
+  maskUrlCredential,
+  readConfigFile,
+  readConfigRaw,
+  urlHasCredential,
+  writeConfigValue,
+} from '../core/configfile';
 import { configKeyValue, configSections, loadConfig, type LoadConfigOptions } from '../core/config';
-import { CONFIG_FIELDS, matchField, type ConfigFieldSpec } from '../core/configschema';
+import {
+  CONFIG_FIELDS,
+  fieldByPath,
+  matchField,
+  readPath,
+  type ConfigFieldSpec,
+} from '../core/configschema';
 
 /**
  * Read-only pseudo-keys derived from the config — never stored, never written.
@@ -112,6 +126,7 @@ interface ResolvedField {
 function knownKeys(): string {
   return [
     ...CONFIG_FIELDS.map((field) => field.path),
+    'entryPoint (env-only)',
     ...DERIVED_KEYS.map((k) => `${k} (derived)`),
   ].join(' ');
 }
@@ -133,7 +148,7 @@ function fileKeyPresent(path: string): boolean {
   return path !== '' && readConfigFile(path).privateKey !== undefined;
 }
 
-function requireField(args: ParsedArgs): ResolvedField {
+function requireField(args: ParsedArgs, action: 'read' | 'write' = 'read'): ResolvedField {
   const key = args.positionals[0];
   if (!key) {
     throw new UsageError('missing required argument: <key>');
@@ -141,6 +156,15 @@ function requireField(args: ParsedArgs): ResolvedField {
   rejectPrivateKey(key);
   const found = matchField(key);
   if (!found) {
+    const envOnly = fieldByPath(key);
+    if (envOnly) {
+      // `entryPoint` has no file home: only the env is read. `get` can still
+      // report it, but a write would sit in a file doing nothing.
+      if (action === 'read') return { spec: envOnly, path: key };
+      throw new UsageError(
+        `'${key}' is env-only — set it with ${envOnly.env.join(' or ')} (a file value would never be read)`,
+      );
+    }
     throw new UsageError(`unknown config key '${key}' — known keys: ${knownKeys()}`);
   }
   return { spec: found.spec, path: found.path };
@@ -155,9 +179,14 @@ function writeTarget(args: ParsedArgs): { file: string; local: boolean; label: s
     : { file: paths.user, local: false, label: 'custom' };
 }
 
-/** Masks the leaves the registry marks secret, at any depth. Lists stay readable. */
+/** Masks the leaves the registry marks secret (or carries a URL credential). */
 function maskDeep(value: unknown, path = ''): unknown {
-  if (Array.isArray(value)) return value;
+  const spec = path.length > 0 ? matchField(path)?.spec : undefined;
+  if (Array.isArray(value)) {
+    return spec?.url
+      ? value.map((item) => (typeof item === 'string' ? maskUrlCredential(item) : item))
+      : value;
+  }
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, child]) => [
@@ -166,7 +195,23 @@ function maskDeep(value: unknown, path = ''): unknown {
       ]),
     );
   }
-  if (typeof value === 'string' && matchField(path)?.spec.secret) return maskSecret(value);
+  if (typeof value === 'string') {
+    if (spec?.secret) return maskSecret(value);
+    if (spec?.url) return maskUrlCredential(value);
+  }
+  return value;
+}
+
+/** Mask one resolved leaf for `get` (a list is masked entry by entry). */
+function maskedValue(spec: ConfigFieldSpec, value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (spec.secret) return maskSecret(value);
+  if (spec.url) {
+    return value
+      .split(',')
+      .map((part) => maskUrlCredential(part.trim()))
+      .join(',');
+  }
   return value;
 }
 
@@ -195,7 +240,7 @@ function flattenRows(value: unknown, prefix = ''): [string, string][] {
 }
 
 function setCommand(out: CliOut, args: ParsedArgs): void {
-  const { spec, path } = requireField(args);
+  const { spec, path } = requireField(args, 'write');
   const value = args.positionals[1];
   if (value === undefined) {
     throw new UsageError(`missing required argument: <value> for '${path}'`);
@@ -213,9 +258,17 @@ function setCommand(out: CliOut, args: ParsedArgs): void {
         .filter((part) => part.length > 0)
     : value;
   writeConfigValue(target.file, path, stored);
-  if (target.local && spec.secret) {
+  // A project file is the one that gets committed. A secret is obvious; a URL
+  // with `?apikey=` is the same leak wearing a different hat.
+  const carriesCredential =
+    spec.url === true &&
+    (Array.isArray(stored)
+      ? stored.some((part) => typeof part === 'string' && urlHasCredential(part))
+      : typeof stored === 'string' && urlHasCredential(stored));
+  if (target.local && (spec.secret || carriesCredential)) {
+    const kind = spec.secret ? 'secret' : 'credential';
     out.warn(
-      `storing a secret in the project config file (${target.file}) — make sure .s2sconfig.json is gitignored`,
+      `storing a ${kind} in the project config file (${target.file}) — make sure .s2sconfig.json is gitignored`,
     );
   }
   out.result(
@@ -233,7 +286,7 @@ function getCommand(out: CliOut, args: ParsedArgs): void {
   }
   const { spec, path } = requireField(args);
   const value = configKeyValue(path);
-  const shown = spec.secret && value !== undefined ? maskSecret(value) : value;
+  const shown = maskedValue(spec, value);
   out.result({ key: path, value: shown ?? null }, `${path}: ${shown ?? '(unset)'}`);
 }
 
@@ -249,12 +302,40 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
     unsetPrivateKey(out, args);
     return;
   }
-  const { path } = requireField(args);
+  const { path } = requireField(args, 'write');
   const target = writeTarget(args);
-  writeConfigValue(target.file, path, undefined);
+  // A plain delete only works when the target file actually holds the value
+  // and nothing else supplies it. If a lower layer would answer after the
+  // delete (legacy, defaults, builtin), write a null tombstone: the merge reads
+  // it as "unset", so the value really stops resolving. The same is true when
+  // the target holds a copy and a lower layer holds another.
+  const raw = readPath(readConfigRaw(target.file), path);
+  const paths = configFilePaths();
+  const withoutTarget = target.local
+    ? {
+        userConfigPath: paths.user,
+        projectConfigPath: '',
+        legacyConfigPath: paths.legacy,
+        defaultsPath: paths.defaults,
+      }
+    : {
+        userConfigPath: '',
+        projectConfigPath: paths.project,
+        legacyConfigPath: paths.legacy,
+        defaultsPath: paths.defaults,
+      };
+  const stillSupplied = configKeyValue(path, process.env, withoutTarget) !== undefined;
+  const tombstone = raw === null || stillSupplied;
+  writeConfigValue(target.file, path, tombstone ? null : undefined);
   out.result(
-    { action: 'config.unset', key: path, file: target.file, local: target.local },
-    `unset ${path} in ${target.label} config (${target.file})`,
+    {
+      action: 'config.unset',
+      key: path,
+      file: target.file,
+      local: target.local,
+      ...(tombstone ? { tombstone: true } : {}),
+    },
+    `unset ${path} in ${target.label} config (${target.file})${tombstone ? ' (wrote an explicit null so a lower layer stops supplying it)' : ''}`,
   );
 }
 
@@ -297,16 +378,15 @@ function unsetPrivateKey(out: CliOut, args: ParsedArgs): void {
 
 function listCommand(out: CliOut): void {
   const sections = configSections();
-  const rows = flattenRows(sections).map(([path, value]) => {
-    const secret = matchField(path)?.spec.secret === true;
-    return [path, secret ? maskSecret(value) : value] as const;
-  });
+  // Mask before flattening so the table and the JSON payload can never differ.
+  const masked = maskDeep(sections);
+  const rows = flattenRows(masked);
   const derived = Object.fromEntries(
     DERIVED_KEYS.map((key) => [key, derivedConfigValue(key)] as const),
   ) as Record<string, string | null>;
 
   if (out.json) {
-    out.result({ action: 'config.list', config: maskDeep(sections), derived });
+    out.result({ action: 'config.list', config: masked, derived });
     return;
   }
 
@@ -322,7 +402,7 @@ function listCommand(out: CliOut): void {
   ].join('\n');
 
   out.result(
-    { action: 'config.list', config: maskDeep(sections), derived },
+    { action: 'config.list', config: masked, derived },
     `Effective configuration (env > project > custom > legacy > defaults):\n\n${table || '(nothing set)'}\n\n${derivedRows}\n\n${envNotes}\n\nManage with: s2s config set <dotted.path> <value> [--local]`,
   );
 }
@@ -428,10 +508,11 @@ Keys are dotted paths into the service-grouped config:
   paymaster.key          paymaster.url
   filecoin.sessionKeyFile  filecoin.chain       filecoin.rpcUrl
   lit.accountKey         lit.usageKey
-  ens.registry           github.token           entryPoint
+  ens.registry           github.token           entryPoint (env-only)
 
-<label> is any name you choose (e.g. pinning.my-pinner); a higher layer replaces
-that whole entry, it never inherits field-by-field.
+<label> is any name you choose (e.g. pinning.my-pinner). The same provider is
+merged field by field across layers; naming a different provider replaces the
+entry whole. A URL may be written without its key, and the key without its URL.
 
 Precedence: env > project > custom > legacy (read-only) > defaults.
 Layers:     project = ./.s2sconfig.json, custom = ~/.config/s2s/custom.json.

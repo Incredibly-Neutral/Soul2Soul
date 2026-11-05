@@ -11,11 +11,14 @@
 //   builtin  constants compiled in         (core/configschema.ts)
 //
 // Merge rules (they differ per section on purpose):
-//   - `pinning` / `ipfs` are label maps: a higher layer's entry replaces that
-//     label WHOLE, never field by field. A custom `pinata` that only names a
-//     gateway must not silently inherit the default JWT.
-//   - `rpc` is per provider key; `rpc.custom.l1`/`l2` are lists that replace the
-//     derived chain when present.
+//   - `pinning` / `ipfs` are label maps merged per label: the same provider is
+//     filled field by field, so `ipfs.kubo.key` keeps the gateway it belongs to;
+//     a different provider replaces the entry whole (a JWT has no meaning for
+//     Kubo). A credential is never inherited across providers — pinning's key
+//     normalizes to `''`, which counts as "named" and does not fall through.
+//   - `rpc` is per provider key; `rpc.custom.l1`/`l2` replace the derived chain
+//     only when BOTH are set. One alone heads its own chain and the fallbacks
+//     stay behind it; `MAINNET_RPC_URL`/`BASE_RPC_URL` take the same head slot.
 //   - singletons (`paymaster`, `filecoin`, `lit`, `ens`, `github`,
 //     `environment`) are field by field, highest defined value wins.
 //   - the env layer is FLAT (core/configschema.ts names every env var), so it
@@ -41,8 +44,10 @@ import {
 import {
   configFilePaths,
   readConfigFile,
+  readConfigRaw,
   readFileConfig,
   readLegacyFileConfig,
+  stripTombstones,
   type ConfigFilePaths,
 } from './configfile';
 import {
@@ -50,6 +55,8 @@ import {
   CONFIG_FIELDS,
   LABEL_ENV_SHORTHANDS,
   defaultForPath,
+  deletePath,
+  fieldByPath,
   matchField,
   normalizeFileConfig,
   parseList,
@@ -137,15 +144,23 @@ const RUNNER_URL = 'https://run.transport-union.dev/run';
  * Explicit paths when any is given, else the standard locations.
  *
  * Any override pins the WHOLE set: a caller that supplies one path (a test, a
- * harness) must not silently pick up the developer's real `~/.config/s2s`.
+ * harness) must not silently pick up the developer's real `~/.config/s2s` — or,
+ * via `S2S_DEFAULTS_FILE`, a defaults file it never asked for. The standard
+ * locations are resolved with the SAME `env` the layers are read with, so a
+ * relocated `XDG_CONFIG_HOME` moves the files, not just the values.
  */
-function pathsFor(opts: LoadConfigOptions): ConfigFilePaths {
-  const explicit =
+/** Did the caller name any path? One path pins the whole set (see `pathsFor`). */
+function hasExplicitPaths(opts: LoadConfigOptions): boolean {
+  return (
     opts.userConfigPath !== undefined ||
     opts.projectConfigPath !== undefined ||
     opts.legacyConfigPath !== undefined ||
-    opts.defaultsPath !== undefined;
-  if (!explicit) return configFilePaths();
+    opts.defaultsPath !== undefined
+  );
+}
+
+function pathsFor(env: NodeJS.ProcessEnv, opts: LoadConfigOptions): ConfigFilePaths {
+  if (!hasExplicitPaths(opts)) return configFilePaths({ env });
   return {
     user: opts.userConfigPath ?? '',
     project: opts.projectConfigPath ?? '',
@@ -168,13 +183,19 @@ function highest<T>(values: readonly (T | undefined)[]): T | undefined {
 }
 
 /**
- * Label maps: the highest layer that names a label owns that entry whole.
+ * Label maps, per label: one entry per label, filled field by field.
  *
- * Iterating high → low (and skipping labels already taken) does both jobs at
- * once: it implements whole-entry replacement and it keeps insertion order
- * "custom labels first", which is the order `config list` should read in.
+ * A higher layer that names the SAME provider owns the fields it names and
+ * inherits the ones it leaves absent — `config set ipfs.kubo.key` must not drop
+ * the gateway, and `config set pinning.pinata.key` must not drop the gateway
+ * either. A higher layer that names a DIFFERENT provider replaces the entry
+ * whole, so a credential never follows a label across providers (a Kubo token
+ * has no meaning for a pinning service).
+ *
+ * Iterating high → low does the merge and keeps insertion order "custom labels
+ * first", which is the order `config list` should read in.
  */
-function mergeLabels<T extends object>(
+function mergeLabels<T extends { provider?: string }>(
   layers: readonly (Record<string, T> | undefined)[],
 ): Record<string, T> | undefined {
   const out: Record<string, T> = {};
@@ -182,11 +203,20 @@ function mergeLabels<T extends object>(
     const layer = layers[i];
     if (!layer) continue;
     for (const [label, entry] of Object.entries(layer)) {
-      // Copied, never aliased: the env layer writes leaves into this map
-      // (`applyEnv`), and the bottom layers are module constants — the
-      // builtin entry and the cached defaults file would otherwise carry one
-      // process's `S2S_KUBO_GATEWAY` into every later `loadConfig`.
-      if (!Object.hasOwn(out, label)) out[label] = { ...entry };
+      const kept = out[label];
+      if (kept === undefined) {
+        // Copied, never aliased: the env layer writes leaves into this map
+        // (`applyEnv`), and the bottom layers are module constants — the
+        // builtin entry and the cached defaults file would otherwise carry one
+        // process's `S2S_KUBO_GATEWAY` into every later `loadConfig`.
+        out[label] = { ...entry };
+      } else if (kept.provider === entry.provider) {
+        for (const [field, value] of Object.entries(entry)) {
+          if (value === undefined) continue;
+          if ((kept as Record<string, unknown>)[field] !== undefined) continue;
+          (kept as Record<string, unknown>)[field] = value;
+        }
+      }
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -283,24 +313,86 @@ function applyEnv(target: Record<string, unknown>, env: NodeJS.ProcessEnv): void
 }
 
 /**
- * The effective file config for this process: merged layers, env applied, then
- * normalized once more (the env can create an entry — a Pimlico key with no
- * `pinning` section — that needs the same validation the files get).
+ * `config unset` writes an explicit `null` where a plain delete would not take
+ * effect: the value would come straight back from a layer the user cannot edit
+ * (a read-only legacy file, the shipped defaults, the compiled-in floor). Only
+ * the two writable layers can carry one — the CLI writes markers, humans do not.
+ *
+ * The marker is applied to the merged file config, above every file layer and
+ * below the env: a file cannot silence an env var. Each marker is also recorded
+ * so a resolution that would re-derive the value from the registry
+ * (`defaultForPath`) can tell "absent" from "deliberately unset".
  */
-function resolvedFileConfig(env: NodeJS.ProcessEnv, opts: LoadConfigOptions): FileConfig {
-  const paths = pathsFor(opts);
-  const defaults =
-    opts.defaultsPath !== undefined ? readFileConfig(paths.defaults) : loadDefaults(env);
+function applyTombstones(
+  merged: Record<string, unknown>,
+  layers: readonly Record<string, unknown>[],
+  unset: Set<string>,
+): void {
+  // `layers` arrives high → low. The highest layer with an opinion on a leaf
+  // decides: a marker only counts where nothing above it names the leaf (or the
+  // label it sits on), so a project value beats a leftover marker in custom.
+  const answered = new Set<string>();
+  const markers = new Set<string>();
+  const hasMarkerAbove = (path: string): boolean => {
+    const parts = path.split('.');
+    return parts.slice(0, -1).some((_, i) => markers.has(parts.slice(0, i + 1).join('.')));
+  };
 
+  const walk = (node: Record<string, unknown>, prefix: string): void => {
+    for (const [key, value] of Object.entries(node)) {
+      const path = prefix.length === 0 ? key : `${prefix}.${key}`;
+      const nested = value !== null && typeof value === 'object' && !Array.isArray(value);
+      if (!nested) {
+        if (answered.has(path) || hasMarkerAbove(path)) continue;
+        answered.add(path);
+        if (value === null) {
+          // …unless a higher layer already supplied part of the label this
+          // marker would wipe out.
+          const covered = [...answered].some((other) => other.startsWith(`${path}.`));
+          if (covered) continue;
+          markers.add(path);
+          unset.add(path);
+          deletePath(merged, path);
+        }
+        continue;
+      }
+      walk(value as Record<string, unknown>, path);
+    }
+  };
+  for (const layer of layers) walk(layer, '');
+}
+
+/**
+ * The effective file config for this process: merged layers, unset markers,
+ * env applied, then normalized once more (the env can create an entry — a
+ * Pimlico key with no `pinning` section — that needs the same validation the
+ * files get).
+ */
+function resolvedFileConfig(
+  env: NodeJS.ProcessEnv,
+  opts: LoadConfigOptions,
+): { file: FileConfig; unset: ReadonlySet<string> } {
+  const paths = pathsFor(env, opts);
+  // A pinned path set pins the defaults layer too: `S2S_DEFAULTS_FILE` is only a
+  // seam when the caller did not name the whole set.
+  const defaults = hasExplicitPaths(opts) ? readFileConfig(paths.defaults) : loadDefaults(env);
+
+  // Read once, raw: the unset markers live in the raw JSON. They are stripped
+  // before the layer merge, which is what keeps them out of `normalizeFileConfig`.
+  const customRaw = readConfigRaw(paths.user);
+  const projectRaw = readConfigRaw(paths.project);
   const merged = mergeLayers([
     BUILTIN_FILE_CONFIG,
     defaults,
     readLegacyFileConfig(paths.legacy),
-    readFileConfig(paths.user),
-    readFileConfig(paths.project),
+    normalizeFileConfig(stripTombstones(customRaw)),
+    normalizeFileConfig(stripTombstones(projectRaw)),
   ]);
+  const unset = new Set<string>();
+  // High → low: the writable layers are the only ones that can carry a marker.
+  applyTombstones(merged as Record<string, unknown>, [projectRaw, customRaw], unset);
   applyEnv(merged as Record<string, unknown>, env);
-  return normalizeFileConfig(merged as Record<string, unknown>);
+  return { file: normalizeFileConfig(merged as Record<string, unknown>), unset };
 }
 
 // ===========================================================================
@@ -309,7 +401,7 @@ function resolvedFileConfig(env: NodeJS.ProcessEnv, opts: LoadConfigOptions): Fi
 
 /** Enum-valued leaves fall back to the builtin default on an unknown value. */
 function enumOrDefault<T extends string>(value: string | undefined, path: string): T | undefined {
-  const allowed = matchField(path)?.spec.enumValues;
+  const allowed = fieldByPath(path)?.enumValues;
   if (value === undefined) return undefined;
   if (allowed?.includes(value) === true) return value as T;
   return undefined;
@@ -321,12 +413,24 @@ function resolveEntryPoint(env: NodeJS.ProcessEnv): EntryPointVersion {
 }
 
 /**
- * L1/L2 chains, fully resolved and ordered. Custom lists win; otherwise the
- * shared fallback chain (DRPC → public → Alchemy → Infura) is built from the
+ * L1/L2 chains, fully resolved and ordered.
+ *
+ * The shared fallback chain (DRPC → public → Alchemy → Infura) is built from the
  * keys that resolved, so a key in `custom.json` behaves like one in the env.
+ * `MAINNET_RPC_URL` / `BASE_RPC_URL` take the DRPC slot of their own chain: an
+ * explicit endpoint is a preference for the head of the chain, not a reason to
+ * lose the failover behind it.
+ *
+ * `S2S_RPC_L1` / `S2S_RPC_L2` (or `rpc.custom.*`) replace a chain only when BOTH
+ * are set — one chain of private endpoints with the other still on the fallback
+ * list is not a state anyone asked for. One alone heads its own chain, which is
+ * the useful reading of a half-configured override and never drops it silently.
  */
-function resolveRpcs(file: FileConfig): { l1: string[]; l2: string[] } {
-  const keys: NodeJS.ProcessEnv = {};
+function resolveRpcs(env: NodeJS.ProcessEnv, file: FileConfig): { l1: string[]; l2: string[] } {
+  const keys: NodeJS.ProcessEnv = {
+    MAINNET_RPC_URL: env.MAINNET_RPC_URL,
+    BASE_RPC_URL: env.BASE_RPC_URL,
+  };
   const drpc = file.rpc?.drpc?.key;
   const alchemy = file.rpc?.alchemy?.key;
   const infura = file.rpc?.infura?.key;
@@ -337,10 +441,17 @@ function resolveRpcs(file: FileConfig): { l1: string[]; l2: string[] } {
   const fallback = buildFallbackRpcs(keys);
   const l1 = file.rpc?.custom?.l1 ?? [];
   const l2 = file.rpc?.custom?.l2 ?? [];
+  if (l1.length > 0 && l2.length > 0) return { l1, l2 };
   return {
-    l1: l1.length > 0 ? l1 : fallback.L1,
-    l2: l2.length > 0 ? l2 : fallback.L2,
+    l1: head(fallback.L1, l1),
+    l2: head(fallback.L2, l2),
   };
+}
+
+/** `own` in front of `chain`, with the duplicate removed. */
+function head(chain: readonly string[], own: readonly string[]): string[] {
+  const unique = own.filter((url, i) => own.indexOf(url) === i);
+  return [...unique, ...chain.filter((url) => !unique.includes(url))];
 }
 
 /** The signing key plus where it came from. */
@@ -465,12 +576,17 @@ export function hexKey(value: string | undefined): string | undefined {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfigOptions = {}): CliConfig {
-  const paths = pathsFor(opts);
-  const file = resolvedFileConfig(env, opts);
+  const paths = pathsFor(env, opts);
+  const { file, unset } = resolvedFileConfig(env, opts);
   const privateKey = resolvePrivateKey(env, readAuthors(opts.authorsPath), paths);
 
   const pinning = Object.values(file.pinning ?? {});
-  const entries = Object.values(file.ipfs ?? {});
+  // A url-less layer entry is a credential (`config set ipfs.kubo.key`), not an
+  // endpoint: it merged onto its gateway above, so nothing is lost by dropping
+  // the ones that never found one.
+  const entries = Object.values(file.ipfs ?? {}).filter(
+    (entry): entry is IpfsEntry & { url: string } => entry.url !== undefined,
+  );
 
   return {
     environment: file.environment ?? 'prod',
@@ -488,11 +604,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
     github: { token: file.github?.token },
     pinning,
     ipfs: { entries, primary: entries[0] },
-    rpc: resolveRpcs(file),
+    rpc: resolveRpcs(env, file),
     paymaster: { key: file.paymaster?.key, url: file.paymaster?.url },
     filecoin: {
       chain: file.filecoin?.chain ?? 'mainnet',
-      rpcUrl: file.filecoin?.rpcUrl ?? defaultForPath('filecoin.rpcUrl') ?? '',
+      // `unset` wins over the registry default, or `config unset filecoin.rpcUrl`
+      // would write a marker and change nothing.
+      rpcUrl: unset.has('filecoin.rpcUrl')
+        ? ''
+        : (file.filecoin?.rpcUrl ?? defaultForPath('filecoin.rpcUrl') ?? ''),
       sessionKeyFile: file.filecoin?.sessionKeyFile,
       privateKey: textValue(env.S2S_FILECOIN_PRIVATE_KEY),
     },
@@ -525,7 +645,9 @@ export function configKeyValue(
   env: NodeJS.ProcessEnv = process.env,
   opts: LoadConfigOptions = {},
 ): string | undefined {
-  if (!matchField(key)) return undefined;
+  // Settable keys resolve through the wildcard matcher; the env-only ones
+  // (`entryPoint`) have no `config set` path but are still readable.
+  if (!matchField(key) && !fieldByPath(key)) return undefined;
   return displayValue(readPath(configSections(env, opts), key));
 }
 
@@ -542,7 +664,84 @@ export function configSections(
   env: NodeJS.ProcessEnv = process.env,
   opts: LoadConfigOptions = {},
 ): Record<string, unknown> {
-  return { ...resolvedFileConfig(env, opts), entryPoint: resolveEntryPoint(env) };
+  return { ...resolvedFileConfig(env, opts).file, entryPoint: resolveEntryPoint(env) };
+}
+
+/** The layer a dotted leaf resolves from — what `s2s setup` prints per question. */
+export type ConfigValueSource =
+  | 'env'
+  | 'project'
+  | 'custom'
+  | 'legacy'
+  | 'defaults'
+  | 'builtin';
+
+/** Label paths have no env name of their own; the shorthands supply it. */
+const SHORTHAND_ENV = new Map<string, readonly string[]>(
+  LABEL_ENV_SHORTHANDS.map((shorthand) => [shorthand.path, shorthand.env]),
+);
+
+/** Is this leaf — or any object above it — an explicit `null` tombstone? */
+function isTombstoned(raw: Record<string, unknown>, dotted: string): boolean {
+  let node: unknown = raw;
+  for (const part of dotted.split('.')) {
+    if (node === null) return true;
+    if (typeof node !== 'object' || Array.isArray(node)) return false;
+    node = (node as Record<string, unknown>)[part];
+  }
+  return node === null;
+}
+
+/**
+ * Which layer answers for one dotted path today, or undefined when nothing does
+ * (including a path a higher layer marks unset).
+ *
+ * This is the SAME resolution the merge performs, read back per layer, rather
+ * than a second opinion about where a value "probably" came from: `setup` uses
+ * it to label the value it shows, and a wrong label is worse than none. A file
+ * the caller pinned, and the env the caller passed, are the ones consulted.
+ */
+export function configValueSource(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: LoadConfigOptions = {},
+): ConfigValueSource | undefined {
+  const spec = fieldByPath(key) ?? matchField(key)?.spec;
+  const names = [...(spec?.env ?? []), ...(SHORTHAND_ENV.get(key) ?? [])];
+  if (names.some((name) => textValue(env[name]) !== undefined)) return 'env';
+
+  const paths = pathsFor(env, opts);
+  const defaults = hasExplicitPaths(opts) ? readFileConfig(paths.defaults) : loadDefaults(env);
+  const layers: { name: ConfigValueSource; raw: Record<string, unknown>; file: FileConfig }[] = [];
+  const add = (
+    name: ConfigValueSource,
+    path: string,
+    read: (p: string) => Record<string, unknown>,
+  ): void => {
+    const raw = read(path);
+    layers.push({ name, raw, file: normalizeFileConfig(raw) });
+  };
+  add('project', paths.project, readConfigRaw);
+  add('custom', paths.user, readConfigRaw);
+  layers.push({
+    name: 'legacy',
+    raw: {},
+    file: readLegacyFileConfig(paths.legacy),
+  });
+  layers.push({ name: 'defaults', raw: {}, file: defaults });
+  layers.push({ name: 'builtin', raw: {}, file: BUILTIN_FILE_CONFIG });
+
+  for (const layer of layers) {
+    // A marker in a writable file is the user saying "unset": nothing below it
+    // answers for this path either.
+    if (isTombstoned(layer.raw, key)) return undefined;
+    const value = readPath(layer.file as Record<string, unknown>, key);
+    if (value === undefined) continue;
+    // An empty label field (`key: ''` from normalization) is not a value.
+    if (typeof value === 'string' && value.trim().length === 0) continue;
+    return layer.name;
+  }
+  return undefined;
 }
 
 /** Required-setting helper — throws a clear, actionable error for a missing key. */
@@ -594,6 +793,7 @@ export function bundlerEndpoints(
 // callers do not have to know which module of the pair owns it.
 export {
   CONFIG_FIELDS,
+  ENV_ONLY_FIELDS,
   matchField,
   fieldByPath,
   type ConfigFieldSpec,

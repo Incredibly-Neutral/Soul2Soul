@@ -6,7 +6,7 @@
 // blank one for these assertions.
 // ============================================================================
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -102,9 +102,26 @@ describe('loadConfig', () => {
   });
 
   it('parses comma-separated RPC lists and lets them replace the chain', () => {
-    const config = loadConfig({ S2S_RPC_L1: 'a, b , c', BASE_RPC_URL: 'z' }, nowhere);
+    // Both ends, or the failover the render pipeline relies on is gone.
+    const config = loadConfig({ S2S_RPC_L1: 'a, b , c', S2S_RPC_L2: 'y, z' }, nowhere);
     expect(config.rpc.l1).toEqual(['a', 'b', 'c']);
-    expect(config.rpc.l2).toEqual(['z']);
+    expect(config.rpc.l2).toEqual(['y', 'z']);
+  });
+
+  it('puts a lone explicit endpoint at the head of its chain, keeping the fallbacks', () => {
+    // One endpoint is a preference, not a replacement: the public/Alchemy/Infura
+    // failover behind it is what keeps a single flaky RPC from failing a render.
+    const explicit = loadConfig({ MAINNET_RPC_URL: 'https://mine.example' }, nowhere);
+    expect(explicit.rpc.l1[0]).toBe('https://mine.example');
+    expect(explicit.rpc.l1.length).toBeGreaterThan(1);
+    expect(explicit.rpc.l1).toContain('https://eth.llamarpc.com');
+    // and the other chain is untouched
+    expect(explicit.rpc.l2).not.toContain('https://mine.example');
+
+    const lone = loadConfig({ S2S_RPC_L1: 'https://only-l1.example' }, nowhere);
+    expect(lone.rpc.l1[0]).toBe('https://only-l1.example');
+    expect(lone.rpc.l1.length).toBeGreaterThan(1);
+    expect(lone.rpc.l2).not.toContain('https://only-l1.example');
   });
 
   it('derives the failover chain from an Alchemy/DRPC key in the file', () => {
@@ -174,7 +191,7 @@ describe('layer precedence', () => {
     expect(loadConfig({ LIT_USAGE_KEY: 'from-env' }, paths).lit.usageKey).toBe('from-env');
   });
 
-  it('replaces a pinning/ipfs label whole, never field by field', () => {
+  it('never lets a lower layer credential into an entry that names none', () => {
     const config = loadConfig(
       {},
       {
@@ -189,6 +206,60 @@ describe('layer precedence', () => {
     );
     // The custom entry names only a gateway, so the default JWT must NOT leak in.
     expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'mine.example' }]);
+  });
+
+  it('merges a label entry field by field when the provider is unchanged', () => {
+    // `s2s config set ipfs.kubo.key …` writes a credential and nothing else; the
+    // gateway has to come from the layer below or the token resolves to nothing.
+    const config = loadConfig(
+      {},
+      {
+        ...nowhere,
+        userConfigPath: file('custom.json', { ipfs: { kubo: { key: 'kubo-token' } } }),
+      },
+    );
+    expect(config.ipfs.primary).toEqual({
+      provider: 'kubo',
+      url: 'ipfs.transport-union.dev',
+      key: 'kubo-token',
+    });
+    // The credential-only entry is not a second gateway.
+    expect(config.ipfs.entries).toHaveLength(1);
+  });
+
+  it('keeps the lower layer\'s sibling when the higher layer sets one field', () => {
+    // A legacy pinataGateway must survive `config set pinning.pinata.key`.
+    const config = loadConfig(
+      {},
+      {
+        ...nowhere,
+        legacyConfigPath: file('legacy.json', {
+          pinataJwt: 'old-jwt',
+          pinataGateway: 'pinata.example',
+        }),
+        userConfigPath: file('custom.json', { pinning: { pinata: { key: 'new-jwt' } } }),
+      },
+    );
+    expect(config.pinning).toEqual([
+      { provider: 'pinata', key: 'new-jwt', url: 'pinata.example' },
+    ]);
+  });
+
+  it('replaces the entry whole when the higher layer names another provider', () => {
+    const config = loadConfig(
+      {},
+      {
+        ...nowhere,
+        defaultsPath: file('defaults.json', {
+          ipfs: { kubo: { provider: 'kubo', url: 'default.example', key: 'default-token' } },
+        }),
+        userConfigPath: file('custom.json', {
+          ipfs: { kubo: { provider: 'other', url: 'mine.example' } },
+        }),
+      },
+    );
+    // No mixing across providers: the kubo token must not ride along.
+    expect(config.ipfs.primary).toEqual({ provider: 'other', url: 'mine.example' });
   });
 
   it('merges singletons field by field across layers', () => {
@@ -231,6 +302,106 @@ describe('layer precedence', () => {
     expect(config.ipfs.primary?.url).toBe('ipfs.transport-union.dev');
     expect(config.pinning).toEqual([]);
     expect(config.filecoin.chain).toBe('mainnet');
+  });
+});
+
+describe('unset markers', () => {
+  it('lets a custom null clear a value a lower layer still supplies', () => {
+    const paths = {
+      ...nowhere,
+      legacyConfigPath: file('legacy.json', {
+        pinataJwt: 'legacy-jwt',
+        pinataGateway: 'pinata.example',
+      }),
+      userConfigPath: file('custom.json', { pinning: { pinata: { key: null } } }),
+    };
+    const config = loadConfig({}, paths);
+    // The tombstone clears the legacy token; the sibling still resolves.
+    expect(configKeyValue('pinning.pinata.key', {}, paths)).toBeUndefined();
+    expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'pinata.example' }]);
+  });
+
+  it('clears a whole label when the marker sits on the label', () => {
+    const paths = {
+      ...nowhere,
+      defaultsPath: file('defaults.json', {
+        ipfs: {
+          kubo: { provider: 'kubo', url: 'default.example' },
+          mine: { provider: 'custom', url: 'mine.example' },
+        },
+      }),
+      userConfigPath: file('custom.json', { ipfs: { kubo: null } }),
+    };
+    expect(loadConfig({}, paths).ipfs.entries.map((entry) => entry.url)).toEqual(['mine.example']);
+  });
+
+  it('lets a higher layer beat a marker below it', () => {
+    const paths = {
+      ...nowhere,
+      userConfigPath: file('custom.json', { pinning: { pinata: { key: null } } }),
+      projectConfigPath: file('project.json', {
+        pinning: { pinata: { key: 'project-jwt' } },
+      }),
+    };
+    expect(loadConfig({}, paths).pinning).toEqual([{ provider: 'pinata', key: 'project-jwt' }]);
+  });
+
+  it('does not let a label marker wipe a sibling a higher layer sets', () => {
+    const paths = {
+      ...nowhere,
+      defaultsPath: file('defaults.json', {
+        ipfs: { kubo: { provider: 'kubo', url: 'default.example' } },
+      }),
+      userConfigPath: file('custom.json', { ipfs: { kubo: null } }),
+      projectConfigPath: file('project.json', { ipfs: { kubo: { url: 'project.example' } } }),
+    };
+    expect(loadConfig({}, paths).ipfs.primary).toEqual({
+      provider: 'kubo',
+      url: 'project.example',
+    });
+  });
+
+  it('does not let a file tombstone silence the env', () => {
+    const paths = {
+      ...nowhere,
+      userConfigPath: file('custom.json', { pinning: { pinata: { key: null } } }),
+    };
+    // The env layer sits above the files and is not a file statement.
+    expect(loadConfig({ S2S_PINATA_JWT: 'env-jwt' }, paths).pinning).toEqual([
+      { provider: 'pinata', key: 'env-jwt' },
+    ]);
+  });
+});
+
+describe('the path seams', () => {
+  it('pins every layer, defaults included, when any path is given', () => {
+    const defaultsPath = file('defaults.json', {
+      ipfs: { kubo: { provider: 'kubo', url: 'env-named.example' } },
+    });
+    const config = loadConfig(
+      { S2S_DEFAULTS_FILE: defaultsPath },
+      {
+        userConfigPath: file('custom.json', {}),
+        projectConfigPath: join(dir, 'project.json'),
+        legacyConfigPath: join(dir, 'legacy.json'),
+        authorsPath: join(dir, 'authors.json'),
+      },
+    );
+    // No `defaultsPath` ⇒ the compiled-in floor, never the file the env names:
+    // a caller that pins one path pins the whole set.
+    expect(config.ipfs.primary?.url).toBe('ipfs.transport-union.dev');
+  });
+
+  it('resolves the standard locations with the env the caller passed', () => {
+    mkdirSync(join(dir, 's2s'), { recursive: true });
+    writeFileSync(
+      join(dir, 's2s', 'custom.json'),
+      JSON.stringify({ lit: { usageKey: 'from-xdg' } }),
+      'utf8',
+    );
+    // Same env for the paths as for the layers, or a test (or a wrapper with a
+    // relocated XDG) reads the developer's real ~/.config/s2s.
+    expect(loadConfig({ XDG_CONFIG_HOME: dir }, {}).lit.usageKey).toBe('from-xdg');
   });
 });
 
@@ -395,14 +566,16 @@ describe('the defaults layer', () => {
     authorsPath: join(dir, 'authors.json'),
   });
 
-  it('reads S2S_DEFAULTS_FILE as the layer under everything else', () => {
+  it('reads a pinned defaults file as the layer under everything else', () => {
     const defaultsPath = file('defaults.json', {
       environment: 'dev',
       lit: { usageKey: 'from-defaults' },
       ipfs: { kubo: { provider: 'kubo', url: 'shipped.example' } },
     });
 
-    const config = loadConfig({ S2S_DEFAULTS_FILE: defaultsPath }, layers());
+    // An explicit path pins the whole set (finding 10), defaults included, so
+    // the file is named directly rather than through S2S_DEFAULTS_FILE.
+    const config = loadConfig({}, { ...layers(), defaultsPath });
 
     expect(config.environment).toBe('dev');
     expect(config.lit.usageKey).toBe('from-defaults');
@@ -410,7 +583,7 @@ describe('the defaults layer', () => {
   });
 
   it('still yields a usable config when the defaults file is gone', () => {
-    const config = loadConfig({ S2S_DEFAULTS_FILE: join(dir, 'gone.json') }, layers());
+    const config = loadConfig({}, { ...layers(), defaultsPath: join(dir, 'gone.json') });
     // The compiled-in floor (BUILTIN_FILE_CONFIG, core/configschema.ts): the
     // public gateway and the public Filecoin RPC, i.e. "no configuration".
     expect(config.ipfs.primary?.url).toBe('ipfs.transport-union.dev');
@@ -432,7 +605,7 @@ describe('the defaults layer', () => {
       'utf8',
     );
 
-    const config = loadConfig({ S2S_DEFAULTS_FILE: defaultsPath }, layers());
+    const config = loadConfig({}, { ...layers(), defaultsPath });
 
     // A label is replaced WHOLE: the default JWT must not leak into the custom
     // pinata entry, which named only a gateway.

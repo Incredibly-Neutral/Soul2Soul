@@ -13,7 +13,7 @@
 // the non-TTY tests exercise the actual stdin check rather than a fake of it.
 // ============================================================================
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -194,6 +194,27 @@ describe('an interactive run', () => {
     });
     // Every other question was kept as the provided default.
     expect(kept.length).toBeGreaterThan(0);
+  });
+});
+
+describe('the value shown next to each question', () => {
+  it('names the layer the value really comes from', async () => {
+    promptState.interactive = true;
+    mkdirSync(join(dir, 's2s'), { recursive: true });
+    writeFileSync(legacyFile(), JSON.stringify({ pinataJwt: 'legacy-jwt' }), 'utf8');
+    vi.stubEnv('S2S_KUBO_GATEWAY', 'env.example');
+
+    await run([]);
+
+    const question = (needle: string): string =>
+      promptState.asked.find((asked) => asked.includes(needle)) ?? '';
+    // A value in the read-only legacy file resolves as `legacy`, and a label
+    // shorthand in the env as `env` — neither is a "default".
+    expect(question('Pinata JWT')).toContain('legacy: ');
+    expect(question('Pinata JWT')).not.toContain('legacy-jwt');
+    expect(question('Kubo gateway URL')).toContain('env: env.example');
+    // Nothing provides a Filebase token, so that one is still unset.
+    expect(question('Filebase token')).toContain('unset');
   });
 });
 

@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { findConfigCommand } from '../src/commands/config';
+import { configKeyValue, loadConfig } from '../src/core/config';
 import { readConfigFile } from '../src/core/configfile';
 import { UsageError } from '../src/lib/errors';
 import { parseArgs } from '../src/lib/args';
@@ -62,7 +63,7 @@ function capture(): { out: CliOut; results: Record<string, unknown>[]; warnings:
   return { out, results, warnings };
 }
 
-function run(action: 'set' | 'unset', argv: string[]) {
+function run(action: 'get' | 'list' | 'set' | 'unset', argv: string[]) {
   const command = findConfigCommand(action);
   if (!command) throw new Error(`no config action '${action}'`);
   const sink = capture();
@@ -165,5 +166,111 @@ describe('config unset for a real key', () => {
   it('rejects an unknown key', () => {
     configFile('custom.json');
     expect(() => run('unset', ['nope.nope'])).toThrow(/unknown config key/);
+  });
+
+  it('writes a marker for a value the builtin floor supplies', () => {
+    const file = configFile('custom.json', {});
+
+    run('unset', ['filecoin.rpcUrl']);
+
+    expect(JSON.parse(readFileSync(file, 'utf8')) as unknown).toEqual({
+      filecoin: { rpcUrl: null },
+    });
+    expect(configKeyValue('filecoin.rpcUrl')).toBeUndefined();
+    // …and the resolver does not put the registry default back: unset means
+    // unset, even when the value it replaced came from the compiled-in floor.
+    const loaded = loadConfig(
+      {},
+      { userConfigPath: file, projectConfigPath: '', legacyConfigPath: '', authorsPath: '' },
+    );
+    expect(loaded.filecoin.rpcUrl).toBe('');
+  });
+
+  it('writes an unset marker when a lower layer still supplies the value', () => {
+    // Nothing in custom.json to delete, and the value keeps resolving from the
+    // read-only legacy file: deleting is not enough, the marker is.
+    configFile('config.json', { pinataJwt: 'legacy-jwt' });
+    const file = configFile('custom.json', {});
+
+    const sink = run('unset', ['pinning.pinata.key']);
+
+    expect(JSON.parse(readFileSync(file, 'utf8')) as unknown).toEqual({
+      pinning: { pinata: { key: null } },
+    });
+    expect(sink.results[0]).toMatchObject({
+      action: 'config.unset',
+      key: 'pinning.pinata.key',
+      tombstone: true,
+    });
+    // …and the value really is gone from the effective config.
+    expect(configKeyValue('pinning.pinata.key')).toBeUndefined();
+  });
+
+  it('writes a marker when the target holds a copy and a lower layer holds another', () => {
+    configFile('config.json', { pinataJwt: 'legacy-jwt' });
+    const file = configFile('custom.json', { pinning: { pinata: { key: 'custom-jwt' } } });
+
+    const sink = run('unset', ['pinning.pinata.key']);
+
+    // Deleting the custom copy would reveal the legacy one: the marker is what
+    // makes the revocation stick all the way down.
+    expect(JSON.parse(readFileSync(file, 'utf8')) as unknown).toEqual({
+      pinning: { pinata: { key: null } },
+    });
+    expect(sink.results[0]).toMatchObject({ tombstone: true });
+    expect(configKeyValue('pinning.pinata.key')).toBeUndefined();
+  });
+
+  it('leaves no marker when nothing below supplies the value', () => {
+    const file = configFile('custom.json', { pinning: { pinata: { key: 'jwt' } } });
+
+    const sink = run('unset', ['pinning.pinata.key']);
+
+    expect(readConfigFile(file)).toEqual({});
+    expect(sink.results[0]).not.toHaveProperty('tombstone');
+  });
+  it('refuses entryPoint, which is env-only', () => {
+    const file = configFile('custom.json', {});
+
+    expect(() => run('set', ['entryPoint', '0.6'])).toThrow(UsageError);
+    expect(() => run('set', ['entryPoint', '0.6'])).toThrow(/S2S_ENTRY_POINT/);
+    // A file value would never be read — so nothing is written.
+    expect(JSON.parse(readFileSync(file, 'utf8')) as unknown).toEqual({});
+  });
+
+  it('warns when a credential rides in a URL written to the project file', () => {
+    process.chdir(dir);
+    configFile('custom.json', {});
+    const url = 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_live_secret';
+
+    const sink = run('set', ['paymaster.url', url, '--local']);
+
+    expect(sink.warnings[0]).toMatch(/credential/);
+    expect(sink.warnings[0]).toMatch(/\.s2sconfig\.json/);
+  });
+
+  it('does not warn about a plain URL', () => {
+    process.chdir(dir);
+    configFile('custom.json', {});
+
+    const sink = run('set', ['paymaster.url', 'https://bundler.example', '--local']);
+
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('masks a query-string credential in get and list', () => {
+    const url = 'https://api.pimlico.io/v2/8453/rpc?apikey=pk_live_secret';
+    configFile('custom.json', { paymaster: { url } });
+
+    const gotten = run('get', ['paymaster.url']);
+    expect(gotten.results[0]).toMatchObject({
+      key: 'paymaster.url',
+      value: 'https://api.pimlico.io/v2/8453/rpc?apikey=********',
+    });
+    expect(JSON.stringify(gotten.results[0])).not.toContain('pk_live_secret');
+
+    const listed = run('list', []);
+    expect(JSON.stringify(listed.results[0])).not.toContain('pk_live_secret');
+    expect(JSON.stringify(listed.results[0])).toContain('api.pimlico.io');
   });
 });

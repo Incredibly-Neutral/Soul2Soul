@@ -159,9 +159,12 @@ The nested shape, one section per service:
   — an operator may pin to several providers and read through several gateways at once — while
   `paymaster`, `filecoin`, `lit`, `ens`, `github` are singletons (`rpc` is a singleton holding the
   named key providers).
-- **Merge rules differ by kind.** A label entry is replaced **whole** by a higher layer (a custom
-  `ipfs.kubo` with only a `url` does not inherit the default entry's `key`); a singleton merges
-  **field by field** (a custom `paymaster.key` keeps the default `paymaster.url`); a list is
+- **Merge rules differ by kind.** A label entry merges **field by field** while the provider stays
+  the same: a custom `ipfs.kubo.key` keeps the lower layer's `url`, and a lone `ipfs.kubo.url`
+  keeps the lower `key` — a token for a gateway you did not restate is exactly the case that
+  matters, and `ipfs.<label>.url` / `.key` are independently optional. Naming a **different**
+  provider replaces the entry whole (a Kubo token means nothing to a pinning service). A singleton
+  merges field by field (a custom `paymaster.key` keeps the default `paymaster.url`); a list is
   **replaced**, never concatenated. Entries are copied, never aliased, so one `loadConfig` call's
   env can never leak into the next.
 - **Keys are dotted paths** into that shape, one-for-one with the registry in `core/configschema.ts`
@@ -170,11 +173,23 @@ The nested shape, one section per service:
   command line (`ipfs.kubo.url`). `s2s config list` shows the resolved set, `s2s config get <path>`
   one leaf; `s2s config path` prints all five file locations, so a caller can see where each layer
   lives on this machine.
-- **Secrets are masked** in `get`/`list` output (`maskSecret`), and `set --local` warns when a
-  secret lands in the project file — commit risk; keep secrets in the custom file or gitignore
-  `.s2sconfig.json`. List keys (`rpc.custom.l1`, `rpc.custom.l2`) accept comma-separated values and
-  are stored as JSON arrays; enum keys (`environment`, `filecoin.chain`, `entryPoint`) are
-  validated on write.
+- **Secrets are masked** in `get`/`list` output (`maskSecret`), and a URL that carries a
+  credential is masked per value — `https://api.pimlico.io/v2/1/rpc?apikey=********`, the endpoint
+  stays readable. `set --local` warns when either kind lands in the project file — commit risk; keep
+  secrets in the custom file or gitignore `.s2sconfig.json`. List keys (`rpc.custom.l1`,
+  `rpc.custom.l2`) accept comma-separated values and are stored as JSON arrays; enum keys
+  (`environment`, `filecoin.chain`) are validated on write.
+- **`entryPoint` has no file home.** It is `S2S_ENTRY_POINT` + the builtin `0.7` and nothing else:
+  a value in a file would be written and never read, so `config set entryPoint` / `unset` is a usage
+  error naming the env var, while `config get entryPoint` still resolves (the merge is the same one,
+  `ENV_ONLY_FIELDS` in `core/configschema.ts`).
+- **`config unset` writes a tombstone when a delete would not take.** Removing a leaf from the
+  target file only changes the answer if that file held it; when the value would come straight back
+  from a layer the user cannot edit (the legacy file, `defaults.json`, the compiled-in floor) the
+  write is an explicit `null` instead, which the merge reads as "unset" and applies above every file
+  layer and below the env (a file cannot silence an env var). The result says so:
+  `tombstone: true`. A marker is per leaf and per layer: a real value in a *higher* file beats a
+  marker below it, and a marker on a label does not wipe a sibling the higher layer sets.
 - **`privateKey` is not a key of this surface.** A signing key has one on-disk home (`authors.json`, the
   author store), one override surface (`S2S_PRIVATE_KEY`), and is created by `s2s author new` /
   picked by `s2s author switch`. `s2s config set privateKey …` is a usage error naming those two
@@ -204,8 +219,8 @@ The nested shape, one section per service:
 `config set` is the durable, scriptable way to set one value; `setup` is the guided pass for
 someone who does not know which keys exist yet. It walks the services in a fixed order — **pinning,
 ipfs, rpc, paymaster, filecoin** — and for each asks one question showing the value that is in
-effect *and where it comes from* (`custom: pi…abcd`, `default: …`, `unset`). Enter keeps it; pasting
-replaces it.
+effect *and where it comes from* (`custom: pi…abcd`, `legacy: …`, `defaults: …`, `builtin: …`,
+`unset`). Enter keeps it; pasting replaces it.
 
 - **It asks about pinning, ipfs, rpc, paymaster and filecoin only.** Never `lit` or `ens` (fixed
   protocol values that ship in `defaults.json`), never `github` (resolved at publish time), never
@@ -213,9 +228,10 @@ replaces it.
 - **It writes one file: the custom layer.** Pasted values go to `~/.config/s2s/custom.json`; the
   project file is never a wizard output (a project file is a deliberate override, not something
   dropped in the current directory), and defaults are never copied — accepting a default writes
-  nothing. When a value lives under a map label, the implied `provider` is written alongside it,
-  because a higher layer replaces the label whole and a bare `url` would leave the entry
-  unresolvable.
+  nothing. When a value lives under a map label, the implied `provider` is written alongside it so
+  the custom entry reads on its own (the merge would fill it from the label either way). The
+  `[source: value]` marker comes from the same resolution the rest of the CLI uses
+  (`configValueSource`), so a value in the read-only legacy file reports `legacy`, not `custom`.
 - **`--accept-defaults` asks nothing and writes nothing.** It is the answer for "I only wanted to
   see it": every provided default is kept, nothing is asked, outcome is silent — and it needs no
   TTY. A run on a non-interactive stdin (a pipe, CI, the editor plugin) without that flag does not
@@ -536,7 +552,7 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `ipfs
 { key: string; value: string | null }   // secrets masked; `eoa` is derived, not stored
 
 // s2s config unset <key> [--local] [--json]   — the only removal path for a stranded `privateKey`
-{ action: 'config.unset'; key: string; file: string; local: boolean }
+{ action: 'config.unset'; key: string; file: string; local: boolean; tombstone?: true }
 
 // s2s config list [--json]             — all effective values; secrets masked
 { config: Record<string, unknown> }      // plus the derived `eoa`/`author`/`safe` when they resolve
@@ -579,7 +595,8 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_PINATA_JWT` / `S2S_PINATA_GATEWAY` | backups | — | Pinata pinning leg. |
 | `S2S_FILEBASE_TOKEN` | backups | — | Filebase pinning leg. |
 | `S2S_RUNNER_URL` | preview | `https://run.transport-union.dev/run` | Lit-action runner (preview renders use the Bun runner). |
-| `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists; else `MAINNET_RPC_URL`/`BASE_RPC_URL` (+ DRPC/Alchemy/Infura) via shared `buildFallbackRpcs`. |
+| `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it. |
+| `MAINNET_RPC_URL` / `BASE_RPC_URL` | — | fallback chain | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks. |
 | `S2S_ENS_REGISTRY` | — | protocolInfo | Override the ENS OpenSubdomainRegistry address. |
 | `S2S_FILECOIN_CHAIN` | filecoin | `mainnet` | `mainnet` or `calibration`. |
 | `S2S_FILECOIN_RPC` | filecoin | `https://api.node.glif.io/rpc/v1` | Filecoin JSON-RPC. |
@@ -738,6 +755,11 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   graph.
 - **Bin linking**: `s2s` is available via `node dist/cli.cjs`; the `bin` symlink appears when a
   package installs `@s2s/author-cli` (nothing depends on it yet).
+- **The build resolves its own paths**: `esbuild.config.mjs` takes entry, outfile and the
+  `defaults.json` copy from `buildPaths(dirname(import.meta.url))` (`esbuild.paths.mjs`), because
+  esbuild resolves relative paths against the *process cwd* — `pnpm --filter … build` and a build
+  started from the repo root must land in the same `dist/`, not in `./dist` of whatever directory
+  the caller happened to be in.
 
 ## Test seams
 
@@ -746,8 +768,13 @@ the next token, value flags, `--`, `-h`), env config defaults/overrides/aliases,
 `saltNonceFor` (determinism, top-bit-cleared range), `upsertFrontmatter` (upsert, body
 preservation, hex quoting), the config-file layer (field-registry coverage, the full
 `env > project > custom > legacy > defaults > builtin` precedence matrix against temp dirs, the
-`S2S_DEFAULTS_FILE` seam, whole-label replacement vs field-by-field singleton merging, list/enum
-normalization, file round-trip, secret masking), the `privateKey` file fallback (env and store still
+`S2S_DEFAULTS_FILE` seam, per-provider field-by-field label merging vs whole-entry replacement on a
+provider change, unset tombstones (a marker beating a lower layer, losing to a higher one, and never
+silencing the env), the path seams (`userConfigPath`/`projectConfigPath`/`legacyConfigPath`/
+`defaultsPath` pin the whole set, and `XDG_CONFIG_HOME` moves the standard locations themselves),
+list/enum normalization, file round-trip, secret and URL-credential masking), the bundle's
+script-relative paths (`test/esbuild-paths.test.ts`: entry/outfile/defaults derive from the script
+directory, never cwd), the `privateKey` file fallback (env and store still
 win; one stderr warning per file; `config unset privateKey` removing it, refusing to create an empty
 file, and naming a copy left in the legacy file), `s2s setup` (`--accept-defaults` writing nothing
 on a non-TTY, pasted values landing only in `custom.json`, never asking about lit/ens/github/
