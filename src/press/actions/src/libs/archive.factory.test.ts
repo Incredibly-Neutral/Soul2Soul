@@ -39,13 +39,16 @@ import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manusc
 
 // The ambient ethers v5 global a Lit Action provides (`ethers.utils`). It is
 // absent under vitest, so the signature checks would downgrade to
-// 'signature-unrecoverable'; stub the two functions the verdict uses, backed by
-// ethers v6 (identical EIP-712/ecrecover semantics).
+// 'signature-unrecoverable'; stub the functions the verdict uses, backed by
+// ethers v6 (identical EIP-712/ecrecover semantics), plus the keccak helpers
+// JCS/canonicalisation call.
 beforeAll(() => {
   vi.stubGlobal('ethers', {
     utils: {
       _TypedDataEncoder: { hash: TypedDataEncoder.hash },
       recoverAddress,
+      keccak256,
+      toUtf8Bytes,
     },
   });
 });

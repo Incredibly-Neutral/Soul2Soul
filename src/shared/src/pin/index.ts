@@ -26,7 +26,7 @@ export const pinCidFromRemote = async (
 
 async function pinCidFilebase(cid: string, token: string): Promise<boolean> {
   try {
-    console.log('[shared/pin] Pinning CID with Filebase:', cid);
+    console.log(`✓ filebase ${cid}`);
 
     const response = await fetch('https://api.filebase.io/v1/ipfs/pins', {
       method: 'POST',
@@ -42,17 +42,18 @@ async function pinCidFilebase(cid: string, token: string): Promise<boolean> {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[shared/pin] Filebase pin error:', errorText);
-      throw new Error(
-        `Filebase pin failed: ${response.status} ${response.statusText} - ${errorText}`,
-      );
+      throw new Error(`Filebase pin failed: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
-    const result = await response.json();
-    console.log('[shared/pin] Filebase pin result:', result);
+    // Drain the body: the pin request's response is not printed (it is a
+    // provider payload — requestid, delegate list, pin metadata — that says
+    // nothing an operator can act on; the start line already names the CID).
+    await response.json();
     return true;
   } catch (error) {
-    console.error('[shared/pin] Error pinning CID with Filebase:', error);
+    console.error(
+      `✗ filebase ${cid}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return false;
   }
 }
@@ -71,7 +72,7 @@ async function pinCidPinata(cid: string, remote: string, pinataJwt: string): Pro
       },
     };
 
-    console.log('[shared/pin] Pinning CID with Pinata:', body);
+    console.log(`✓ pinata ${cid}`);
 
     const response = await fetch('https://api.pinata.cloud/pinning/pinByHash', {
       method: 'POST',
@@ -84,17 +85,16 @@ async function pinCidPinata(cid: string, remote: string, pinataJwt: string): Pro
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[shared/pin] Pinata pin error:', errorText);
-      throw new Error(
-        `Pinata pin failed: ${response.status} ${response.statusText} - ${errorText}`,
-      );
+      throw new Error(`Pinata pin failed: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
-    const result = await response.json();
-    console.log('[shared/pin] Pinata pinByHash result:', result);
+    // Body drained, not printed — see the Filebase leg.
+    await response.json();
     return true;
   } catch (error) {
-    console.error('[shared/pin] Error pinning CID with Pinata:', error);
+    console.error(
+      `✗ pinata ${cid}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return false;
   }
 }

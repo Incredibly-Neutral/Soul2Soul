@@ -2,6 +2,61 @@ import { LitService } from "../lit";
 import { callWithTimeout } from "../helpers/index.js";
 
 // ===========================================================================
+// Missing-response diagnostics
+// ===========================================================================
+
+/**
+ * Stages whose action logs are operator diagnostics and may be printed.
+ * Prep logs `endpoints` (a gateway auth token can ride along) but never any
+ * rendered plaintext; the render/update logs can, so they stay summarised.
+ * S2S_DEBUG_ACTION_LOGS=1 overrides for both.
+ */
+const LOGS_VISIBLE_STAGES = new Set(['prep']);
+
+const logsVisible = (label: string | undefined): boolean =>
+  process.env.S2S_DEBUG_ACTION_LOGS === '1' ||
+  (label !== undefined && LOGS_VISIBLE_STAGES.has(label));
+
+/**
+ * Describe an envelope that carried no `response`, including the action's own
+ * logs for the stages where that is safe.
+ *
+ * Without this, `undefined` flows into the caller's schema validation and the
+ * only thing the operator sees is `Prep action output validation failed:\n:
+ * Required` — a valid parse of nothing, naming neither the stage nor the logs
+ * the action printed (2026-11 publish failure spent its detail on exactly
+ * that).
+ */
+const describeMissingResponse = (
+  label: string | undefined,
+  envelope: Record<string, unknown> | undefined,
+): string => {
+  const stage = label ?? 'action';
+  if (envelope === undefined) return `${stage}: no envelope returned`;
+
+  const keys = Object.keys(envelope);
+  const logs = Array.isArray(envelope.logs) ? (envelope.logs as unknown[]) : undefined;
+  // A body of exactly `{error: "..."}` is the node answering at HTTP 200 with
+  // its own error envelope instead of a result — that string is the whole
+  // diagnosis, so it is printed (truncated), not summarised.
+  const rawError = envelope.error;
+  const errorText =
+    rawError === undefined || rawError === null
+      ? ''
+      : `: ${String(typeof rawError === 'string' ? rawError : JSON.stringify(rawError)).slice(0, 800)}`;
+  const head =
+    `${stage}: envelope has no \`response\` ` +
+    `(keys {${keys.join(',')}}, has_error=${String(envelope.has_error ?? false)}, ` +
+    `${logs ? `${logs.length} log lines` : 'no logs'})${errorText}`;
+
+  if (!logs || logs.length === 0) return head;
+  if (!logsVisible(label)) {
+    return `${head}\n(action logs withheld — render logs can carry rendered content; set S2S_DEBUG_ACTION_LOGS=1 to print them)`;
+  }
+  return `${head}\n--- ${stage} action logs ---\n${logs.map((line) => String(line)).join('\n')}`;
+};
+
+// ===========================================================================
 // runAction — single source of truth for dev/prod transport
 // ===========================================================================
 
@@ -17,6 +72,8 @@ export async function runAction(
   cid: string,
   inputs: Record<string, unknown>,
   litUsageKey?: string,
+  /** Stage name ('prep', 'render', 'update', ...) used for diagnostics. */
+  label?: string,
 ): Promise<unknown> {
 
   if (preview) {
@@ -41,6 +98,11 @@ export async function runAction(
     }
     // console.log("RUNNER RESPONSE:", JSON.stringify(wrapped, null, 2));
     if (wrapped.success === false) console.log(`bun serverless call failed: ${wrapped.error}`);
+    if (wrapped.response === undefined) {
+      throw new Error(
+        describeMissingResponse(label, wrapped as unknown as Record<string, unknown>),
+      );
+    }
     return wrapped.response; // ActiedonBarResult<T>
   } else {
     let code: string | undefined;
@@ -81,7 +143,13 @@ export async function runAction(
       (signal) => lit.executeAction(code, inputs, litUsageKey, signal),
       EXEC_TIMEOUT_MS,
     );
-    // failure is logged in lit service
-    return raw.response;      // ActionBarResult<T> — same shape
+    // failure is logged in lit service — but a body that carries no `response`
+    // at all (has_error false, logs present) used to reach the caller as
+    // `undefined` and die in schema validation with no usable detail.
+    const envelope = raw as Record<string, unknown> | undefined;
+    if (envelope === undefined || envelope.response === undefined) {
+      throw new Error(describeMissingResponse(label, envelope));
+    }
+    return envelope.response;      // ActionBarResult<T> — same shape
   }
 }

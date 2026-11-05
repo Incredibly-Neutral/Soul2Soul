@@ -76,8 +76,31 @@ Promise.all(
         code = code.substring(start, end);
         code = code.replace(/\s*return __toCommonJS\(main_exports\);\s*$/, '');
 
+        // Hard gate: an action isolate has NO `require`. Every external in this
+        // build (ethers, the node builtins, @lit-protocol/*) is marked external
+        // because the runtime supplies it another way — ethers as a global — so
+        // a real call means some module reachable from a shared action entry
+        // (lit-actions, gates, rendering/action-io) statically imported one.
+        // Left alone, the bundle dies at load with
+        //   Dynamic require of "ethers" is not supported
+        // and the node returns a bare `{error}` body with no logs, which is
+        // undiagnosable from the caller. Fail here, where the CID is made.
+        const dynamicRequire = code.match(/(?:__require|\brequire)\s*\(\s*["'][^"']+["']/g);
+        if (dynamicRequire) {
+          throw new Error(
+            `${outFile} calls require() at runtime (${[...new Set(dynamicRequire)].join(', ')}) ` +
+              '— a Lit Action isolate has none. Do not import an action-build external ' +
+              '(ethers, node builtins) from anything reachable by shared ' +
+              'lit-actions / gates / rendering-action-io; see shared src/action-entries.test.ts',
+          );
+        }
+
         fs.writeFileSync(outFile, code.trim());
         console.log(`Build complete: ${outFile}`);
       }),
   ),
-).catch(() => process.exit(1));
+).catch((err) => {
+  // Print, never swallow: an empty exit-1 is unreadable on CI.
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

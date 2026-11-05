@@ -53,8 +53,12 @@ export {
   hasSpecV1Terms,
 } from './metadata';
 
-// Identity — JCS canonical JSON + body-hash verification. Both are dependency
-// free enough for the Lit Action bundle (they only use ethers v5 utils).
+// Identity — JCS canonical JSON + body-hash verification. Hashing needs no
+// chain library (keccak from @noble/hashes bundles); the EIP-712 signature half
+// takes ethers from the runtime's `ethers` global rather than importing it —
+// see manuscript/identity/ethers-ambient.ts and src/action-entries.test.ts.
+// NOTHING reachable from this entry may import an action-build external
+// (ethers, node builtins): it compiles to require() and the action dies at load.
 export { jcs } from './manuscript/identity/jcs';
 export { verifyBodyHash } from './manuscript/identity/verify-content';
 

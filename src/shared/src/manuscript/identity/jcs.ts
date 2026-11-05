@@ -53,13 +53,29 @@ function serializeObject(obj: Record<string, unknown>): string {
   return '{' + pairs.join(',') + '}';
 }
 
+// keccak from @noble/hashes, not ethers or viem: hashing (unlike EIP-712
+// signing) must not depend on the runtime providing a chain library, the output
+// is byte-identical, and it costs ~10KB in an action bundle — viem's `utils`
+// barrel costs ~800KB there because the action build resolves its CJS entry.
+import { keccak_256 } from '@noble/hashes/sha3';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
+
 /**
  * Compute the keccak256 hash of the JCS-canonicalized JSON of a value.
- * Uses ethers v5's keccak256 (available in shared's deps).
+ *
+ * viem, not ethers: hashing (unlike EIP-712 signing) must not depend on the
+ * runtime providing a chain library, and the output is byte-identical. This
+ * also keeps the hash half of the integrity verdict working in a runtime that
+ * has no typed-data signer.
  */
-import { utils } from 'ethers';
-
 export function keccakOfJson(value: unknown): string {
-  const canonical = jcs(value);
-  return utils.keccak256(utils.toUtf8Bytes(canonical));
+  return keccakOfString(jcs(value));
+}
+
+/**
+ * keccak256 of a UTF-8 string's exact bytes — the contract "hash these bytes".
+ * viem, for the same reason as keccakOfJson: no dependency on a runtime ethers.
+ */
+export function keccakOfString(text: string): string {
+  return '0x' + bytesToHex(keccak_256(utf8ToBytes(text)));
 }

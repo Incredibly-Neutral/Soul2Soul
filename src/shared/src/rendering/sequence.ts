@@ -75,7 +75,7 @@ export async function runRenderActionWithRetry(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (attempt > 1) await sleepMs(RENDER_RETRY_BACKOFF_MS);
     try {
-      const actionResult: any = await runAction(preview, lit, cid, inputs, litUsageKey);
+      const actionResult: any = await runAction(preview, lit, cid, inputs, litUsageKey, 'render');
       // Envelope success (render action returns { ok: ... }). A non-ok result
       // can be a transient transport failure surfaced by the action, so on the
       // live path we re-run the (read-only) render action rather than giving up.
@@ -209,6 +209,7 @@ export const renderwithLitActions = async (
       protocolInfo.litActions.prep,
       prepInputs,
       litUsageKey,
+      'prep',
     );
     const validatedPrep = validatePrepOutput(prepAction);
     if (!validatedPrep.ok) console.log(JSON.stringify(validatedPrep, null, 2));
@@ -369,6 +370,7 @@ export const renderwithLitActions = async (
     protocolInfo.litActions.update,
     evmInputs,
     litUsageKey,
+    'update',
   );
   const validated = validateEvmUpdateOutput(evmAction);
   if (!validated.ok) console.log(JSON.stringify(validated, null, 2));
@@ -411,6 +413,7 @@ export const renderwithLitActions = async (
         protocolInfo.litActions.maintainCache,
         maintainInputs,
         litUsageKey,
+        'maintain-cache',
       );
     } catch (err: any) {
       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing

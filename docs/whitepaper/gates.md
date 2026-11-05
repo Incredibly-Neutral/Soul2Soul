@@ -4,8 +4,8 @@ slug: gates
 position: 6
 tags:
   - polyphony--s2s
-modified_date: 2026-11-03T12:10:46
-kubo_cid: QmeBrCks7txppxUZTWZ3ftFcQHSoBmxCf1jVGmtKHJbyx5
+modified_date: 2026-11-04T13:55:35
+kubo_cid: QmRNjsKNrz1VD2H8pshpXGNMgEZ9U1zZCnVwqwSVGLiGs2
 genesis: "0x32131c8187132fde3e11f1f0977ec783a9bdf085feb9f05d52bac1e32b5cc479"
 author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---

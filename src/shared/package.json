@@ -58,6 +58,7 @@
     "@lens-chain/storage-client": "^1.0.6",
     "@lens-protocol/client": "0.0.0-canary-20250430134539",
     "@lens-protocol/metadata": "^2.1.0",
+    "@noble/hashes": "^1.8.0",
     "@safe-global/api-kit": "^3.0.2",
     "@safe-global/protocol-kit": "^6.1.2",
     "@safe-global/types-kit": "^3.0.0",

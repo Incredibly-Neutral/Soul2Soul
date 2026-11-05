@@ -4,10 +4,11 @@ position: 1
 slug: introduction
 tags:
   - about--s2s
-modified_date: 2026-11-02T18:59:55
-kubo_cid: QmRHcA1isW6ox4UjDrvqTxpSdxoBmU6deBYJUA3eMkN4La
+modified_date: 2026-11-04T14:59:05
 genesis: "0xe0f3f9face812e3da45375ee85d4876936bfa3b8c25032847b6e5b0e79de79f9"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmV8ShLsGWA5V4Ds1DY5EkM7SsdkGzr7fLj8a84bGguuY6
+creation_date: 2026-11-04T14:28:41
 ---
 # Introduction
 

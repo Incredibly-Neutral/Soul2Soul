@@ -2,8 +2,8 @@
 // Verify — authorship verification + public log resolution
 // ============================================================================
 
-import { utils } from 'ethers';
-import { jcs, keccakOfJson } from './jcs';
+import { ethersUtils } from './ethers-ambient';
+import { jcs, keccakOfJson, keccakOfString } from './jcs';
 import { buildSigningView } from './signing-view';
 import {
   type S2SContentItem,
@@ -35,20 +35,25 @@ export async function verifyAuthorship(
   decryptFn: (ciphertext: string) => Promise<string>,
 ): Promise<boolean> {
   try {
+    // ethers v5 from the ambient global — see ethers-ambient.ts (a static
+    // import compiles to __require('ethers') and kills every action bundle).
+    // Only the signature half needs ethers; the hashes below are viem.
+    const utils = ethersUtils();
+
     // 1. Obtain the canonical body JSON
     const bodyJson = item.encryption
       ? await decryptFn(item.body)
       : item.body;
 
     // 2. Verify plaintextHash
-    const computedHash = utils.keccak256(utils.toUtf8Bytes(bodyJson));
+    const computedHash = keccakOfString(bodyJson);
     if (computedHash !== item.public.plaintextHash) {
       return false;
     }
 
     // 3. Verify the same canonicalization was used
     const reCanonical = jcs(JSON.parse(bodyJson));
-    const reHash = utils.keccak256(utils.toUtf8Bytes(reCanonical));
+    const reHash = keccakOfString(reCanonical);
     if (reHash !== computedHash) {
       console.warn('verifyAuthorship: body JSON was not in canonical form (JCS)');
     }
@@ -104,7 +109,7 @@ export async function verifyAuthorship(
  */
 export function verifyBodyHash(bodyJson: string, expectedHex: string): boolean {
   try {
-    const computed = utils.keccak256(utils.toUtf8Bytes(bodyJson));
+    const computed = keccakOfString(bodyJson);
     return computed.toLowerCase() === expectedHex.toLowerCase();
   } catch {
     return false;
@@ -123,7 +128,7 @@ export function verifyPlaintextHash(
   item: S2SContentItem,
   plaintextJson: string,
 ): boolean {
-  const computedHash = utils.keccak256(utils.toUtf8Bytes(plaintextJson));
+  const computedHash = keccakOfString(plaintextJson);
   return computedHash === item.public.plaintextHash;
 }
 // ============================================================================

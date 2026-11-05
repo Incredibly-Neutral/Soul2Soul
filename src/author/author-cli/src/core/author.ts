@@ -628,46 +628,56 @@ function scheduleDurability(
 ): void {
   void (async () => {
     try {
+      // A Filecoin leg that cannot init is not a failure to report on every
+      // publish: with neither a session key nor a signer key the leg would
+      // start, throw 'not configured' and warn — three lines of noise about a
+      // feature the operator has not enabled. Skip the leg entirely instead;
+      // `backupToProviders` then reports 'skipped'.
+      const filecoinConfigured = Boolean(
+        ctx.config.filecoin.sessionKeyPath || ctx.config.filecoin.privateKey,
+      );
       const result = await ctx.ipfs.backupToProviders(kuboCid, {
         providers: ['filebase', 'pinata'],
-        filecoin: (_cid) =>
-          runFilecoinLeg(
-            'article',
-            async () => {
-              const storage = await createFilecoinStorage(ctx.config);
-              if (!storage) {
-                throw new Error(
-                  'Filecoin storage not configured — set S2S_FILECOIN_SESSION_KEY or S2S_FILECOIN_PRIVATE_KEY',
-                );
-              }
-              // The Filecoin CAR is keyed by the publication's Safe, so this is
-              // the one durability leg that needs on-chain resolution. Resolve
-              // it here (not up front) so an upload to a publication that does
-              // not exist yet still completes its pins.
-              const service = await PublicationService.init(
-                {
-                  l1: ctx.l1,
-                  l2: ctx.l2,
-                  l2Runner: ctx.l2Runner,
-                  ensRegistry: ctx.ensRegistry,
-                  ipfs: ctx.ipfs,
-                },
-                publication,
-              );
-              return storage.uploadJson(
-                signedItem,
-                // Both identities, and both Safes: the piece is attributed to the
-                // publication and to the author — never to the signing EOA.
-                [service.getMultiSig(), authorSafe],
-                'article',
-              );
-            },
-            {
-              onFailure: (message) => {
-                ctx.out.warn(`Filecoin backup failed: ${message}`);
-              },
-            },
-          ),
+        ...(filecoinConfigured
+          ? {
+              filecoin: (_cid: string) =>
+                runFilecoinLeg(
+                  'article',
+                  async () => {
+                    const storage = await createFilecoinStorage(ctx.config);
+                    if (!storage) {
+                      throw new Error('Filecoin storage not initialised');
+                    }
+                    // The Filecoin CAR is keyed by the publication's Safe, so this is
+                    // the one durability leg that needs on-chain resolution. Resolve
+                    // it here (not up front) so an upload to a publication that does
+                    // not exist yet still completes its pins.
+                    const service = await PublicationService.init(
+                      {
+                        l1: ctx.l1,
+                        l2: ctx.l2,
+                        l2Runner: ctx.l2Runner,
+                        ensRegistry: ctx.ensRegistry,
+                        ipfs: ctx.ipfs,
+                      },
+                      publication,
+                    );
+                    return storage.uploadJson(
+                      signedItem,
+                      // Both identities, and both Safes: the piece is attributed to the
+                      // publication and to the author — never to the signing EOA.
+                      [service.getMultiSig(), authorSafe],
+                      'article',
+                    );
+                  },
+                  {
+                    onFailure: (message) => {
+                      ctx.out.warn(`Filecoin backup failed: ${message}`);
+                    },
+                  },
+                ),
+            }
+          : {}),
         onFilecoinMismatch: (rootCid) => {
           ctx.out.warn(
             `Filecoin CID mismatch: kubo ${kuboCid.slice(0, 12)}… ≠ filecoin ${rootCid.slice(0, 12)}…`,

@@ -120,9 +120,10 @@ describe('runAction preview branch', () => {
 // ============================================================================
 
 describe('runRenderActionWithRetry — empty runner envelope (504-empty-JSON)', () => {
-  it('produces a non-empty meaningful error when the runner envelope is undefined', async () => {
-    // Runner returns a JSON body with NO `response` field → runAction resolves
-    // to undefined → the retry loop sees a non-ok result and throws.
+  it('names the missing `response` and the envelope keys instead of an empty message', async () => {
+    // Runner returns a JSON body with NO `response` field → runAction throws a
+    // message naming the stage and the envelope's keys (this used to resolve to
+    // undefined and be reported as a bare 'Required' by schema validation).
     fetchMock.mockResolvedValue(jsonResponse({ success: false, error: 'gateway timeout' }));
 
     const err: unknown = await runRenderActionWithRetry(
@@ -135,7 +136,58 @@ describe('runRenderActionWithRetry — empty runner envelope (504-empty-JSON)', 
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toBe('');
-    expect((err as Error).message).toContain('render action returned no result');
-    expect((err as Error).message).toContain('non-ok/empty envelope');
+    expect((err as Error).message).toContain('render');
+    expect((err as Error).message).toContain('no `response`');
+    expect((err as Error).message).toContain('success,error');
+  });
+});
+
+// ============================================================================
+// runAction — missing `response` diagnostics by stage.
+//
+// A Lit body can carry `has_error: false`, `logs` and no `response` at all; the
+// caller then validates `undefined` and reports `: Required`. Prep logs are
+// operator diagnostics (endpoints, gateway/RPC errors) so they are printed;
+// render logs can hold rendered plaintext and stay withheld by default.
+// ============================================================================
+
+describe('runAction — missing response diagnostics', () => {
+  it('prints prep action logs when the envelope carries no response', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ has_error: false, logs: ['prep: rpc 403 eth_getBlockByNumber'] }),
+    );
+
+    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'prep').catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as Error).message).toContain('prep: envelope has no `response`');
+    expect((err as Error).message).toContain('prep action logs');
+    expect((err as Error).message).toContain('rpc 403');
+  });
+
+  it('withholds render logs unless S2S_DEBUG_ACTION_LOGS=1', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ has_error: false, logs: ['<p>plaintext</p>'] }));
+
+    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'render').catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as Error).message).toContain('render: envelope has no `response`');
+    expect((err as Error).message).not.toContain('<p>');
+    expect((err as Error).message).toContain('S2S_DEBUG_ACTION_LOGS=1');
+  });
+
+  it('prints the node\'s own error when the body is a bare {error}', async () => {
+    // HTTP 200 with no result and no has_error: the node's error string is the
+    // only diagnosis there is (this is the 2026-11 prep failure).
+    fetchMock.mockResolvedValue(jsonResponse({ error: 'Action code not found for CID' }));
+
+    const err: unknown = await runAction(true, mockLit, CID, INPUTS, undefined, 'prep').catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as Error).message).toContain('keys {error}');
+    expect((err as Error).message).toContain('Action code not found for CID');
   });
 });

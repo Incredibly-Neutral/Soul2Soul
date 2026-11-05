@@ -2,8 +2,8 @@
 // buildSignedContentItem — produce a signed S2SContentItem from raw inputs
 // ============================================================================
 
-import { utils } from 'ethers';
-import { jcs, keccakOfJson } from './jcs';
+import { ethersUtils } from './ethers-ambient';
+import { jcs, keccakOfJson, keccakOfString } from './jcs';
 import { buildSigningView } from './signing-view';
 import {
   type S2SContentItem,
@@ -50,9 +50,10 @@ export async function buildSignedContentItem(
   encryptFn: (plaintext: string) => Promise<string> | string,
   author?: DidEthr,
 ): Promise<S2SContentItem> {
+  const utils = ethersUtils();
   // 1. Canonicalize the body and compute plaintextHash
   const bodyJson = jcs(body);
-  const plaintextHash = utils.keccak256(utils.toUtf8Bytes(bodyJson));
+  const plaintextHash = keccakOfString(bodyJson);
 
   // 2. Compute tagsHash and attributesHash for EIP-712 (bytes32 fields)
   // 3. Build the signing view — matches S2S_TYPES exactly
@@ -114,6 +115,7 @@ export function noOpEncrypt(plaintext: string): string {
 // ============================================================================
 
 export function computeObjectId(publicPart: S2SPublicContent): string {
+  const utils = ethersUtils();
   const signingView = buildSigningView(publicPart);
   return utils._TypedDataEncoder.hash(
     S2S_DOMAIN,

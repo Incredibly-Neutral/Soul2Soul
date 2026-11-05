@@ -51,6 +51,8 @@ beforeAll(() => {
     utils: {
       _TypedDataEncoder: { hash: TypedDataEncoder.hash },
       recoverAddress,
+      keccak256,
+      toUtf8Bytes,
     },
   });
 });
