@@ -22,10 +22,12 @@
 //     sets individual leaves — including the label shorthands such as
 //     `S2S_PINATA_JWT` → `pinning.pinata.key`.
 //
-// The signing key is not a config-file value. It comes from `S2S_PRIVATE_KEY`
-// or the active author in `authors.json`, and `CliConfig.author` reports which
-// of the two won, so `buildContext` can warn when the env shadows a deliberate
-// `s2s author switch`.
+// The signing key comes from `S2S_PRIVATE_KEY`, the active author in
+// `authors.json`, or — as a deprecated fallback for installs that predate the
+// author store — a `privateKey` left in a config file. `CliConfig.author`
+// reports which layer won, so `buildContext` can warn when the env shadows a
+// deliberate `s2s author switch`, and `loadConfig` warns once when the key came
+// out of a file.
 // ============================================================================
 
 import { buildFallbackRpcs } from '@s2s/soul2soul-shared';
@@ -38,6 +40,7 @@ import {
 } from './authors';
 import {
   configFilePaths,
+  readConfigFile,
   readFileConfig,
   readLegacyFileConfig,
   type ConfigFilePaths,
@@ -171,7 +174,7 @@ function highest<T>(values: readonly (T | undefined)[]): T | undefined {
  * once: it implements whole-entry replacement and it keeps insertion order
  * "custom labels first", which is the order `config list` should read in.
  */
-function mergeLabels<T>(
+function mergeLabels<T extends object>(
   layers: readonly (Record<string, T> | undefined)[],
 ): Record<string, T> | undefined {
   const out: Record<string, T> = {};
@@ -179,7 +182,11 @@ function mergeLabels<T>(
     const layer = layers[i];
     if (!layer) continue;
     for (const [label, entry] of Object.entries(layer)) {
-      if (!Object.hasOwn(out, label)) out[label] = entry;
+      // Copied, never aliased: the env layer writes leaves into this map
+      // (`applyEnv`), and the bottom layers are module constants — the
+      // builtin entry and the cached defaults file would otherwise carry one
+      // process's `S2S_KUBO_GATEWAY` into every later `loadConfig`.
+      if (!Object.hasOwn(out, label)) out[label] = { ...entry };
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -351,18 +358,70 @@ const UNRESOLVED_KEY: PrivateKeyResolution = {
   safe: undefined,
 };
 
+/** A `privateKey` leaf read straight out of one raw config file. */
+function filePrivateKey(path: string): string | undefined {
+  return textValue(readConfigFile(path).privateKey);
+}
+
 /**
- * `S2S_PRIVATE_KEY` > active stored author > nothing.
+ * Config files that already printed the deprecation warning in this process.
  *
- * The store is the only on-disk home for a key: a leftover `privateKey` in
- * `custom.json` or the legacy file is ignored (and the legacy writer is gone),
- * so "who am I signing as" has exactly two possible answers and `author switch`
- * is always effective bar the env.
+ * One warning per offending file, not per `loadConfig` call: the CLI loads the
+ * config several times per run (`setup` asks a question per prompt), and a
+ * wall of identical warnings teaches nobody anything. Keyed by path, so two
+ * different stranded keys both get named.
  */
-function resolvePrivateKey(env: NodeJS.ProcessEnv, authors: AuthorsStore): PrivateKeyResolution {
+const warnedKeyFiles = new Set<string>();
+
+/**
+ * Say — once, on stderr — that the winning signing key came out of a file, and
+ * how to get it into the author store and out of the file.
+ *
+ * stderr only: stdout carries the one result document (`--json` parsed by the
+ * editor plugins), so a deprecation notice must not land there.
+ */
+function warnDeprecatedFileKey(layer: 'project' | 'custom' | 'legacy', path: string): void {
+  if (warnedKeyFiles.has(path)) return;
+  warnedKeyFiles.add(path);
+  const removal =
+    layer === 'project'
+      ? '`s2s config unset privateKey --local`'
+      : layer === 'custom'
+        ? '`s2s config unset privateKey`'
+        : 'delete the `privateKey` line from that file by hand — the CLI never writes it';
+  process.stderr.write(
+    `warning: the signing key was read from the ${layer} config file (${path}). A \`privateKey\` in a config file is deprecated: file it once with \`s2s author new\`, then remove it with ${removal}.\n`,
+  );
+}
+
+/**
+ * `S2S_PRIVATE_KEY` > project file > active stored author > custom file >
+ * legacy file.
+ *
+ * The store is the supported on-disk home for a key. The file layers below it
+ * are the DEPRECATED fallback for installs that predate `authors.json` (or that
+ * kept a key next to the rest of their settings): they still resolve, so an
+ * existing install keeps signing, but they are read-only here and every winner
+ * from a file says so once on stderr. Without the fallback a legacy user would
+ * upgrade into "Missing required setting" — and without `config unset
+ * privateKey` they could not get the secret back out of the file either.
+ */
+function resolvePrivateKey(
+  env: NodeJS.ProcessEnv,
+  authors: AuthorsStore,
+  paths: ConfigFilePaths,
+): PrivateKeyResolution {
   const fromEnv = textValue(env.S2S_PRIVATE_KEY);
   if (fromEnv !== undefined) {
     return { value: hexKey(fromEnv), source: 'env', name: undefined, safe: undefined };
+  }
+
+  // Project file: a deliberate per-repository identity, so it outranks even the
+  // active stored author (as it did before the reorganisation).
+  const fromProject = filePrivateKey(paths.project);
+  if (fromProject !== undefined) {
+    warnDeprecatedFileKey('project', paths.project);
+    return { value: hexKey(fromProject), source: 'project', name: undefined, safe: undefined };
   }
 
   const active = activeAuthorRecord(authors);
@@ -373,6 +432,21 @@ function resolvePrivateKey(env: NodeJS.ProcessEnv, authors: AuthorsStore): Priva
       name: active.name,
       safe: active.safe ?? undefined,
     };
+  }
+
+  // Both user-owned files report `source: 'user'`: they are the same layer
+  // ("a file in ~/.config/s2s") as far as an author is concerned, and the old
+  // flat config.json *was* the user file before `custom.json` replaced it.
+  const fromCustom = filePrivateKey(paths.user);
+  if (fromCustom !== undefined) {
+    warnDeprecatedFileKey('custom', paths.user);
+    return { value: hexKey(fromCustom), source: 'user', name: undefined, safe: undefined };
+  }
+
+  const fromLegacy = filePrivateKey(paths.legacy);
+  if (fromLegacy !== undefined) {
+    warnDeprecatedFileKey('legacy', paths.legacy);
+    return { value: hexKey(fromLegacy), source: 'user', name: undefined, safe: undefined };
   }
 
   return UNRESOLVED_KEY;
@@ -391,8 +465,9 @@ export function hexKey(value: string | undefined): string | undefined {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfigOptions = {}): CliConfig {
+  const paths = pathsFor(opts);
   const file = resolvedFileConfig(env, opts);
-  const privateKey = resolvePrivateKey(env, readAuthors(opts.authorsPath));
+  const privateKey = resolvePrivateKey(env, readAuthors(opts.authorsPath), paths);
 
   const pinning = Object.values(file.pinning ?? {});
   const entries = Object.values(file.ipfs ?? {});

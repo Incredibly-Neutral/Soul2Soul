@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   bundlerEndpoints,
@@ -131,6 +131,18 @@ describe('loadConfig', () => {
     expect(config.lit.usageKey).toBe('lu');
     expect(config.github.token).toBe('gt');
   });
+
+  it('carries nothing from one call into the next', () => {
+    // The bottom layers are module constants (the builtin floor, the cached
+    // defaults file) and the env layer writes leaves into the merged map. If a
+    // merge aliased a label entry instead of copying it, one call's env would
+    // become every later call's default.
+    expect(loadConfig({ S2S_KUBO_GATEWAY: 'first.example' }, nowhere).ipfs.primary?.url).toBe(
+      'first.example',
+    );
+    expect(loadConfig({}, nowhere).ipfs.primary?.url).toBe('ipfs.transport-union.dev');
+    expect(loadConfig({}, nowhere).ipfs.primary?.key).toBeUndefined();
+  });
 });
 
 describe('layer precedence', () => {
@@ -139,9 +151,18 @@ describe('layer precedence', () => {
   it('orders env > project > custom > legacy > defaults > builtin', () => {
     const paths = {
       ...nowhere,
-      defaultsPath: file('defaults.json', { environment: 'dev', lit: { usageKey: 'from-defaults' } }),
-      legacyConfigPath: file('legacy.json', { litUsageKey: 'from-legacy', ensRegistry: 'legacy-ens' }),
-      userConfigPath: file('custom.json', { lit: { usageKey: 'from-custom' }, ens: { registry: 'custom-ens' } }),
+      defaultsPath: file('defaults.json', {
+        environment: 'dev',
+        lit: { usageKey: 'from-defaults' },
+      }),
+      legacyConfigPath: file('legacy.json', {
+        litUsageKey: 'from-legacy',
+        ensRegistry: 'legacy-ens',
+      }),
+      userConfigPath: file('custom.json', {
+        lit: { usageKey: 'from-custom' },
+        ens: { registry: 'custom-ens' },
+      }),
       projectConfigPath: file('.s2sconfig.json', { lit: { usageKey: 'from-project' } }),
     };
     const config = loadConfig(env, paths);
@@ -175,7 +196,9 @@ describe('layer precedence', () => {
       {},
       {
         ...nowhere,
-        defaultsPath: file('defaults.json', { paymaster: { key: 'default-key', url: 'default-url' } }),
+        defaultsPath: file('defaults.json', {
+          paymaster: { key: 'default-key', url: 'default-url' },
+        }),
         userConfigPath: file('custom.json', { paymaster: { key: 'my-key' } }),
       },
     );
@@ -187,7 +210,9 @@ describe('layer precedence', () => {
       {},
       {
         ...nowhere,
-        defaultsPath: file('defaults.json', { ipfs: { kubo: { provider: 'kubo', url: 'd.example' } } }),
+        defaultsPath: file('defaults.json', {
+          ipfs: { kubo: { provider: 'kubo', url: 'd.example' } },
+        }),
         userConfigPath: file('custom.json', {
           ipfs: { mine: { provider: 'custom', url: 'mine.example' } },
         }),
@@ -199,7 +224,10 @@ describe('layer precedence', () => {
 
   it('reads the shipped defaults.json exactly as it ships', () => {
     // The real file, not a fixture: a broken defaults.json is a release bug.
-    const config = loadConfig({}, { ...nowhere, defaultsPath: join(process.cwd(), 'defaults.json') });
+    const config = loadConfig(
+      {},
+      { ...nowhere, defaultsPath: join(process.cwd(), 'defaults.json') },
+    );
     expect(config.ipfs.primary?.url).toBe('ipfs.transport-union.dev');
     expect(config.pinning).toEqual([]);
     expect(config.filecoin.chain).toBe('mainnet');
@@ -207,18 +235,92 @@ describe('layer precedence', () => {
 });
 
 describe('the signing key', () => {
-  it('is never read from a config file', () => {
-    const config = loadConfig(
+  /**
+   * A `privateKey` a config file may still hold (installs that predate the
+   * author store, or a key kept next to the rest of the settings). It resolves
+   * BELOW the store, reports `project`/`user`, and warns exactly once per file.
+   */
+  const keyFile = (name: string, privateKey: string): string =>
+    file(name, { privateKey, lit: { usageKey: 'from-same-file' } });
+
+  it('falls back to a file key below the store: project > custom > legacy', () => {
+    const paths = {
+      ...nowhere,
+      projectConfigPath: keyFile('.s2sconfig.json', `0x${'1'.repeat(64)}`),
+      userConfigPath: keyFile('custom.json', `0x${'2'.repeat(64)}`),
+      legacyConfigPath: keyFile('legacy.json', `0x${'3'.repeat(64)}`),
+    };
+    const fromProject = loadConfig({}, paths);
+    expect(fromProject.privateKey).toBe(`0x${'1'.repeat(64)}`);
+    expect(fromProject.author).toEqual({ name: undefined, safe: undefined, source: 'project' });
+
+    const fromCustom = loadConfig({}, { ...paths, projectConfigPath: join(dir, 'absent.json') });
+    expect(fromCustom.privateKey).toBe(`0x${'2'.repeat(64)}`);
+    expect(fromCustom.author).toEqual({ name: undefined, safe: undefined, source: 'user' });
+
+    const fromLegacy = loadConfig(
       {},
       {
-        ...nowhere,
-        userConfigPath: file('custom.json', { privateKey: '0xfromfile' }),
-        projectConfigPath: file('.s2sconfig.json', { privateKey: '0xfromproject' }),
-        legacyConfigPath: file('legacy.json', { privateKey: '0xfromlegacy' }),
+        ...paths,
+        projectConfigPath: join(dir, 'absent.json'),
+        userConfigPath: join(dir, 'absent-too.json'),
       },
     );
-    expect(config.privateKey).toBeUndefined();
-    expect(config.author).toBeUndefined();
+    // The old flat config.json IS the user layer; it was `source: 'user'` before.
+    expect(fromLegacy.privateKey).toBe(`0x${'3'.repeat(64)}`);
+    expect(fromLegacy.author).toEqual({ name: undefined, safe: undefined, source: 'user' });
+  });
+
+  it('still lets the env and the store win over a file key', () => {
+    const paths = {
+      ...nowhere,
+      userConfigPath: keyFile('custom.json', `0x${'2'.repeat(64)}`),
+      authorsPath: file('authors.json', {
+        active: 'zomi',
+        authors: { zomi: { privateKey: `0x${'c'.repeat(64)}`, safe: '0xSafe' } },
+      }),
+    };
+    expect(loadConfig({}, paths).author).toEqual({ name: 'zomi', safe: '0xSafe', source: 'store' });
+    expect(loadConfig({ S2S_PRIVATE_KEY: `0x${'e'.repeat(64)}` }, paths).author).toEqual({
+      name: undefined,
+      safe: undefined,
+      source: 'env',
+    });
+  });
+
+  it('normalizes a bare-hex file key like every other key', () => {
+    const paths = { ...nowhere, userConfigPath: keyFile('custom.json', '4'.repeat(64)) };
+    expect(loadConfig({}, paths).privateKey).toBe(`0x${'4'.repeat(64)}`);
+  });
+
+  it('warns once per file, on stderr, and says how to retire it', () => {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+      return true;
+    });
+
+    try {
+      const path = keyFile('custom.json', `0x${'5'.repeat(64)}`);
+      const paths = { ...nowhere, userConfigPath: path };
+      // `config list` + every `config get` reload the config; it must not repeat.
+      loadConfig({}, paths);
+      loadConfig({}, paths);
+
+      expect(writes).toHaveLength(1);
+      const warning = writes[0] ?? '';
+      expect(warning).toMatch(/deprecated/);
+      expect(warning).toContain(path);
+      expect(warning).toMatch(/s2s author new/);
+      expect(warning).toMatch(/s2s config unset privateKey/);
+
+      // A key the env or the store supplies is not deprecated: nothing said.
+      writes.length = 0;
+      loadConfig({ S2S_PRIVATE_KEY: `0x${'e'.repeat(64)}` }, paths);
+      expect(writes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('prefers the env and normalizes a bare 64-char key', () => {
@@ -278,6 +380,65 @@ describe('bundlerEndpoints', () => {
 
   it('is undefined without a key or an explicit endpoint', () => {
     expect(bundlerEndpoints(loadConfig({}, nowhere), 8453)).toBeUndefined();
+  });
+});
+
+describe('the defaults layer', () => {
+  // No `defaultsPath`: the defaults layer then comes from `loadDefaults(env)`,
+  // i.e. `S2S_DEFAULTS_FILE` or the file that ships with the CLI. The other
+  // three layers stay pinned to the temp dir so the developer's real config
+  // cannot leak into the assertions.
+  const layers = () => ({
+    userConfigPath: join(dir, 'custom.json'),
+    projectConfigPath: join(dir, '.s2sconfig.json'),
+    legacyConfigPath: join(dir, 'legacy.json'),
+    authorsPath: join(dir, 'authors.json'),
+  });
+
+  it('reads S2S_DEFAULTS_FILE as the layer under everything else', () => {
+    const defaultsPath = file('defaults.json', {
+      environment: 'dev',
+      lit: { usageKey: 'from-defaults' },
+      ipfs: { kubo: { provider: 'kubo', url: 'shipped.example' } },
+    });
+
+    const config = loadConfig({ S2S_DEFAULTS_FILE: defaultsPath }, layers());
+
+    expect(config.environment).toBe('dev');
+    expect(config.lit.usageKey).toBe('from-defaults');
+    expect(config.ipfs.primary?.url).toBe('shipped.example');
+  });
+
+  it('still yields a usable config when the defaults file is gone', () => {
+    const config = loadConfig({ S2S_DEFAULTS_FILE: join(dir, 'gone.json') }, layers());
+    // The compiled-in floor (BUILTIN_FILE_CONFIG, core/configschema.ts): the
+    // public gateway and the public Filecoin RPC, i.e. "no configuration".
+    expect(config.ipfs.primary?.url).toBe('ipfs.transport-union.dev');
+    expect(config.filecoin.rpcUrl).toBe('https://api.node.glif.io/rpc/v1');
+    expect(config.environment).toBe('prod');
+  });
+
+  it('lets a custom label replace a default label whole, field by field for singletons', () => {
+    const defaultsPath = file('defaults.json', {
+      pinning: { pinata: { provider: 'pinata', key: 'default-jwt', url: 'default.example' } },
+      paymaster: { key: 'default-key', url: 'default-bundler' },
+    });
+    writeFileSync(
+      join(dir, 'custom.json'),
+      JSON.stringify({
+        pinning: { pinata: { url: 'mine.example' } },
+        paymaster: { key: 'my-key' },
+      }),
+      'utf8',
+    );
+
+    const config = loadConfig({ S2S_DEFAULTS_FILE: defaultsPath }, layers());
+
+    // A label is replaced WHOLE: the default JWT must not leak into the custom
+    // pinata entry, which named only a gateway.
+    expect(config.pinning).toEqual([{ provider: 'pinata', key: '', url: 'mine.example' }]);
+    // A singleton merges: the custom key wins, the default URL survives.
+    expect(config.paymaster).toEqual({ key: 'my-key', url: 'default-bundler' });
   });
 });
 

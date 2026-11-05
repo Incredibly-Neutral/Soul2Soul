@@ -140,7 +140,7 @@ describe('assertCiphertext', () => {
 describe('buildEncryptFn', () => {
   it('passes a note without the flag straight through with noOpEncrypt', () => {
     const fn = buildEncryptFn(
-      { config: {}, protocolInfo: {}, lit: { encrypt: vi.fn() } },
+      { config: { lit: {} }, protocolInfo: {}, lit: { encrypt: vi.fn() } },
       { encryption: false },
     );
     // Identity matters: shared derives `encryption: false` from `fn !== noOpEncrypt`.
@@ -150,7 +150,7 @@ describe('buildEncryptFn', () => {
   it('fails closed with a UsageError when LIT_USAGE_KEY is missing', () => {
     expect(() =>
       buildEncryptFn(
-        { config: {}, protocolInfo: { pkp: PKP }, lit: { encrypt: vi.fn() } },
+        { config: { lit: {} }, protocolInfo: { pkp: PKP }, lit: { encrypt: vi.fn() } },
         { encryption: true },
         'note.md',
       ),
@@ -160,7 +160,7 @@ describe('buildEncryptFn', () => {
   it('fails closed with a UsageError when LIT_USAGE_KEY is empty', () => {
     expect(() =>
       buildEncryptFn(
-        { config: { litUsageKey: '  ' }, protocolInfo: { pkp: PKP }, lit: { encrypt: vi.fn() } },
+        { config: { lit: { usageKey: '  ' } }, protocolInfo: { pkp: PKP }, lit: { encrypt: vi.fn() } },
         { encryption: true },
       ),
     ).toThrow(/LIT_USAGE_KEY/);
@@ -169,11 +169,11 @@ describe('buildEncryptFn', () => {
   it('fails closed with a UsageError when the protocol PKP is missing or empty', () => {
     const lit = { encrypt: vi.fn() };
     expect(() =>
-      buildEncryptFn({ config: { litUsageKey: 'k' }, protocolInfo: {}, lit }, { encryption: true }),
+      buildEncryptFn({ config: { lit: { usageKey: 'k' } }, protocolInfo: {}, lit }, { encryption: true }),
     ).toThrow(/protocolInfo\.pkp/);
     expect(() =>
       buildEncryptFn(
-        { config: { litUsageKey: 'k' }, protocolInfo: { pkp: '  ' }, lit },
+        { config: { lit: { usageKey: 'k' } }, protocolInfo: { pkp: '  ' }, lit },
         { encryption: true },
       ),
     ).toThrow(/protocolInfo\.pkp/);
@@ -183,7 +183,7 @@ describe('buildEncryptFn', () => {
   it('encrypts to the protocol PKP with the usage key and rejects an error-looking result', async () => {
     const encrypt = vi.fn(() => Promise.resolve('Error: Encrypt failed: action reverted'));
     const fn = buildEncryptFn(
-      { config: { litUsageKey: 'lit-key' }, protocolInfo: { pkp: PKP }, lit: { encrypt } },
+      { config: { lit: { usageKey: 'lit-key' } }, protocolInfo: { pkp: PKP }, lit: { encrypt } },
       { encryption: true },
     );
     await expect(fn('{"a":1}')).rejects.toThrow(CliError);
@@ -196,7 +196,7 @@ describe('buildEncryptFn', () => {
       Promise.resolve(CIPHER),
     );
     const fn = buildEncryptFn(
-      { config: { litUsageKey: 'lit-key' }, protocolInfo: { pkp: PKP }, lit: { encrypt } },
+      { config: { lit: { usageKey: 'lit-key' } }, protocolInfo: { pkp: PKP }, lit: { encrypt } },
       { encryption: true },
     );
 
@@ -215,7 +215,7 @@ describe('buildEncryptFn', () => {
   it('refuses an echoing encryptor through buildEncryptFn (never reaches signing)', async () => {
     const echo = vi.fn((_key: string, _pkp: string, message: string) => Promise.resolve(message));
     const fn = buildEncryptFn(
-      { config: { litUsageKey: 'lit-key' }, protocolInfo: { pkp: PKP }, lit: { encrypt: echo } },
+      { config: { lit: { usageKey: 'lit-key' } }, protocolInfo: { pkp: PKP }, lit: { encrypt: echo } },
       { encryption: true },
     );
     const plaintext = JSON.stringify(body);
@@ -224,7 +224,7 @@ describe('buildEncryptFn', () => {
     const reserialised = vi.fn((_key: string, _pkp: string) => Promise.resolve(plaintext));
     const fn2 = buildEncryptFn(
       {
-        config: { litUsageKey: 'lit-key' },
+        config: { lit: { usageKey: 'lit-key' } },
         protocolInfo: { pkp: PKP },
         lit: { encrypt: reserialised },
       },
@@ -234,7 +234,7 @@ describe('buildEncryptFn', () => {
   });
 
   it('leaves a non-encrypted item plaintext with encryption false', async () => {
-    const fn = buildEncryptFn({ config: {}, protocolInfo: {}, lit: { encrypt: vi.fn() } }, {
+    const fn = buildEncryptFn({ config: { lit: {} }, protocolInfo: {}, lit: { encrypt: vi.fn() } }, {
       encryption: false,
     });
     const item = await buildSignedContentItem(pub, body, fakeSigner, fn, AUTHOR);
@@ -313,7 +313,7 @@ describe('LitService.encrypt really returns error strings (the reason for the wh
       Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
     );
     const fn = buildEncryptFn(
-      { config: { litUsageKey: 'usage-key' }, protocolInfo: { pkp: PKP }, lit: svc },
+      { config: { lit: { usageKey: 'usage-key' } }, protocolInfo: { pkp: PKP }, lit: svc },
       { encryption: true },
     );
     await expect(fn(JSON.stringify(body))).rejects.toThrow(/timeout\/network error/);
@@ -323,7 +323,7 @@ describe('LitService.encrypt really returns error strings (the reason for the wh
     const cipher = JSON.stringify({ ciphertext: 'gAAAAABreal' });
     const svc = litWith(() => ({ response: { ciphertext: cipher } }));
     const fn = buildEncryptFn(
-      { config: { litUsageKey: 'usage-key' }, protocolInfo: { pkp: PKP }, lit: svc },
+      { config: { lit: { usageKey: 'usage-key' } }, protocolInfo: { pkp: PKP }, lit: svc },
       { encryption: true },
     );
     const item = await buildSignedContentItem(pub, body, fakeSigner, fn, AUTHOR);
@@ -349,6 +349,9 @@ describe('authorWrite honors frontmatter encryption', () => {
     return path;
   }
 
+  /** The one IPFS endpoint these fixtures claim — `config.ipfs.primary` today. */
+  const KUBO = { provider: 'kubo', url: 'https://gw.test' };
+
   function fakeCtx(overrides: {
     litUsageKey?: string;
     pkp?: string;
@@ -365,7 +368,10 @@ describe('authorWrite honors frontmatter encryption', () => {
     );
     const warn = vi.fn();
     const ctx = {
-      config: { litUsageKey: overrides.litUsageKey, kuboGateway: 'https://gw.test' },
+      config: {
+        lit: { usageKey: overrides.litUsageKey },
+        ipfs: { entries: [KUBO], primary: KUBO },
+      },
       protocolInfo: { pkp: overrides.pkp },
       lit: { encrypt: overrides.encrypt ?? vi.fn() },
       signer: fakeSigner,
@@ -681,11 +687,13 @@ describe('offerContent verifies the stored item', () => {
   }
 
   const genesis = '0x' + 'cd'.repeat(32);
+  /** The gateway this fixture claims to read through (`config.ipfs.primary`). */
+  const KUBO = { provider: 'kubo', url: 'https://gw.test' };
 
   function fakeCtx(fetchFromKubo: (cid: string) => Promise<unknown>) {
     const spy = vi.fn(fetchFromKubo);
     const ctx = {
-      config: { kuboGateway: 'https://gw.test' },
+      config: { ipfs: { entries: [KUBO], primary: KUBO } },
       ipfs: { fetchFromKubo: spy },
       out: { log: vi.fn(), warn: vi.fn() },
     } as unknown as CliContext;

@@ -139,17 +139,21 @@ describe('the legacy flat file', () => {
     expect(legacy.github).toEqual({ token: 'gt' });
   });
 
-  it('ignores the retired keys the env owns', () => {
+  it('ignores the retired keys the env owns, but still honours a stranded privateKey', () => {
     writeJson(paths().legacyConfigPath, {
       privateKey: `0x${'a'.repeat(64)}`,
       filecoinPrivateKey: 'fckey',
       entryPoint: '0.6',
     });
     const legacy = readLegacyFileConfig(paths().legacyConfigPath);
+    // `privateKey` is not a FileConfig leaf (it is read separately, as the
+    // deprecated fallback below the author store); the other two are env-only.
     expect(legacy).toEqual({});
     const config = loadConfig({}, paths());
-    expect(config.privateKey).toBeUndefined();
+    expect(config.privateKey).toBe(`0x${'a'.repeat(64)}`);
+    expect(config.author).toEqual({ name: undefined, safe: undefined, source: 'user' });
     expect(config.entryPoint).toBe('0.7');
+    expect(config.filecoin.privateKey).toBeUndefined();
   });
 
   it('still resolves through loadConfig, below the custom file', () => {
