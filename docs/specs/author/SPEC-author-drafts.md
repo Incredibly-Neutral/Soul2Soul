@@ -10,7 +10,7 @@
 > **Type:** component spec. It owns one package — `src/author/contracts`, `DraftsModuleV1` and
 > `DraftsModuleV1Factory` — and the meaning of the log it keeps.
 >
-> **Status:** the package is written and tested (`src/author/contracts`, 7 node-test cases); nothing is
+> **Status:** the package is written and tested (`src/author/contracts`, 14 node-test cases); nothing is
 > deployed. The interface below is frozen; anything under [open questions](#open-questions) is not
 > decided and must not be treated as a guarantee.
 
@@ -19,12 +19,19 @@
 ## Responsibility
 
 A UUPS module installed on an author Safe, keeping **drafts**: manuscripts uploaded but never offered to
-a publication. It holds, per Safe:
+a publication. Its storage, per instance, is exactly four declaration-ordered storage variables — the order
+is part of the upgrade contract, so read it here rather than from a diff:
 
-- **the draft list** — `bytes32[]` in insertion order, plus `mapping(bytes32 => bool) isDraft`;
-- **the version log** — `Version[] versions[genesis]` (the count is its length; there is no separate
-  counter);
-- **the binding** — `authorOf[genesis]`.
+| declaration | type | holds |
+|---|---|---|
+| `safe` | `address` | the only writer, set once by `initialize` |
+| `versions` | `mapping(bytes32 => Version[])` | the version log, per genesis; the count **is** the array length, there is no separate counter |
+| `genesisAuthor` | `mapping(bytes32 => address)` | the binding, written once on a genesis's first append |
+| `genesisList` | `bytes32[]` | every bound genesis, insertion order; its length is `count()` |
+
+There is no `mapping(bytes32 => bool) isDraft` and no stored `authorOf` map: both are **view functions**
+over `genesisAuthor` — `isDraft(g)` is `genesisAuthor[g] != address(0)`, `authorOf(g)` returns the
+mapped address (or `address(0)`). `Entry` is assembled on read and never stored.
 
 It does not hold content, encryption, deals, offers, whitelists, config, or the site root. It never
 learns which publication a draft is for, because a draft has none — that is the whole difference from
@@ -53,8 +60,12 @@ function append(bytes32 genesis, string calldata cid) external onlySafe
 ```
 
 - `genesis == bytes32(0)` → `ZeroHash()`; `cid.length == 0` → `EmptyCid()`.
-- **First append of a genesis** — `authorOf[genesis] = safe`, `isDraft[genesis] = true`, the genesis is
-  pushed onto the insertion-ordered list.
+- `initialize(address(0))` → `ZeroAddress()`. A zero `safe` passes no caller check ever, so the module
+  would be born dead — writes and upgrades both unreachable and nothing able to repair it. The guard is
+  what stops `createModule(address(0))` from producing a proxy nobody can use.
+- **First append of a genesis** — `genesisAuthor[genesis] = safe` and the genesis is pushed onto
+  `genesisList`. Nothing else is written: `isDraft` and `authorOf` derive from that one map, so there is
+  no second flag to keep in step.
 - **Every append** — push `Version { cid, timestamp }`, emit
   `Appended(bytes32 indexed genesis, string cid, uint256 versionIndex, address indexed author)`.
 
@@ -89,6 +100,14 @@ struct Entry   { bytes32 genesis; address author; string cid; uint256 timestamp;
 `Entry` is assembled on read and never stored — as on the publication side. Its `cid` and `timestamp` are
 the **latest** version's; `versionCount` is how many there are.
 
+**Call `fetchAllPaged`, not `fetchAll`.** The paged read is what a UI should use: an unpaged `fetchAll`
+builds and returns the whole log in one `eth_call` and fails once the log is big enough to matter. The
+unpaged `fetchAll` and `history` are for scripts and small logs — `history` is per genesis and bounded by
+that genesis's version count, `fetchAll` is bounded by `count()` and is not.
+
+Paging never reverts: `offset >= count` or `limit == 0` returns an empty array, and a limit past the end
+— including `type(uint256).max` — is clamped to `count - offset`, never overflowed.
+
 The first four fields match the publication `Entry` (`genesis, author, cid, timestamp`) field for field;
 this `Entry` appends `versionCount`. The two structs are still distinct types with distinct ABIs — a
 decoder written against one must never be pointed at the other, and nothing catches it for you, but at
@@ -99,9 +118,14 @@ least the shared prefix reads identically.
 - `Appended(bytes32 indexed genesis, string cid, uint256 versionIndex, address indexed author)`
 - `ContractUpgraded(address indexed implementation)`
 
-UUPS. `initialize(address safe)` sets the Safe; `_authorizeUpgrade` is `onlySafe` and the module's own
-`ContractUpgraded` is the record of the implementation swap. Assert the module's event, not the base's —
-OZ's proxy also emits its own, and the two are not the same guarantee.
+UUPS. `initialize(address safe)` sets the Safe and rejects `address(0)`; `_authorizeUpgrade` is
+`onlySafe` and the module's own `ContractUpgraded` is the record of the implementation swap. Assert the
+module's event, not the base's — OZ's proxy also emits its own, and the two are not the same guarantee.
+
+**The Safe upgrades with `upgradeTo`, not `upgradeToAndCall`.** OZ 4.9.6's `upgradeToAndCall` forces the
+delegatecall (`forceCall = true`) and this module has no fallback, so `upgradeToAndCall(impl, "0x")`
+reverts with `Address: low-level delegate call failed` even from the Safe. The empty-calldata upgrade is
+`upgradeTo`.
 
 `NAME()` returns `"S2S Drafts Module V1"`. It is the discovery string, as on the publication module:
 never reuse it for a V2 that changes storage layout.
@@ -113,13 +137,30 @@ never reuse it for a V2 that changes storage layout.
 | member | behaviour |
 |---|---|
 | `createModule(address safe) -> address` | deploy an ERC-1967 proxy over `latestImplementation`, initialised with `safe`; push the proxy onto `safeModules[safe]` |
-| `setImplementation(address)` | set `latestImplementation`, push onto the implementation history |
-| `getModulesForSafe(address) -> address[]` | every proxy this factory made for that Safe |
+| `setImplementation(address)` | **`onlyDeployer`** — set `latestImplementation`, push onto the implementation history |
+| `getModulesForSafe(address) -> address[]` | every proxy anyone told this factory about for that Safe |
 | `implementationCount() -> uint256` | history length |
 | `getImplementationByVersion(uint256) -> address` | 1-based; reverts outside `1..count` |
+| `deployer() -> address` | `immutable`, set to `msg.sender` at construction; the only address `setImplementation` admits (`OnlyDeployer()`) |
 
-A factory call is not an installation: the Safe must still `enableModule` the proxy. The factory is an
-index for readers, not a permission.
+**`setImplementation` is gated because the ungated version is a takeover.** Whoever moves
+`latestImplementation` decides what the next `createModule` deploys, and a proxy over an attacker's
+implementation executes as the Safe the moment that Safe enables it. The gate is an immutable
+constructor-set deployer rather than an owner: there is no admin slot to rotate, and none to compromise.
+
+**`createModule` stays permissionless, deliberately.** Deploying a proxy costs the caller gas and installs
+nothing on any Safe — only the Safe's own `enableModule` makes a proxy live. Gating it would buy nothing
+and would put a trusted party between an author and their own module.
+
+Two consequences of that openness, both of which readers get wrong:
+
+- **`getModulesForSafe` is forgeable.** `createModule(victimSafe)` from any account pushes an entry into
+  `safeModules[victimSafe]`, so the list contains proxies that Safe never created and never enabled.
+  Intersect it with the Safe's actual enabled-module list before treating an entry as installed — and a
+  Safe should enable only a proxy it created itself or verified against a recorded implementation.
+
+The factory is an index for readers, not a permission: neither `getModulesForSafe` nor
+`implementationHistory` authenticates anything.
 
 ## Two logs, one genesis
 
@@ -142,8 +183,9 @@ other. What follows:
 ## Invariants
 
 - **Append-only.** No function removes a version, a draft, or a binding. `onlySafe` cannot delete either.
-- **The genesis binding is write-once.** `authorOf[genesis]` is set on the first append and never
-  reassigned; there is no transfer, no re-bind, no adoption path. Scope caveat: the binding lives in one
+- **The genesis binding is write-once.** `genesisAuthor[genesis]` is set on the first append and never
+  reassigned; there is no transfer, no re-bind, no adoption path. A later append to the same genesis
+  writes only a `Version`, never the binding and never a second list entry. Scope caveat: the binding lives in one
   module instance, so a second drafts module installed on the same Safe has its own empty map. The
   invariant is **per instance**, not per account.
 - **Only the Safe writes.** Every mutating function is `onlySafe`, including the upgrade.
@@ -162,6 +204,10 @@ other. What follows:
 
 ## What V1 does not do
 
+- **No dedupe.** Appending the CID that is already the latest one is not a no-op: it pushes another
+  version with the same `cid` and a new `timestamp`, and `history` then shows it twice. A retried Safe
+  proposal — the same `append` signed and submitted twice — is how it happens in practice, and the log
+  cannot tell a retry from a deliberate re-record. Readers that care compare CID and timestamp.
 - **No delete, no tombstone.** And no `tombstone` field at all — do not copy the publication module's
   dead one.
 - **No encryption.** No ciphertext, no access control, no Lit gate, no collection.
@@ -197,11 +243,14 @@ genesis returns the zeroed `Entry` rather than reverting.
 
 ## Safe-to-change vs do-not-touch
 
-- 🟢 read helpers; events; per-draft metadata; a `tombstone` that does something; explicit paging bounds;
-  a second factory entry point.
-- 🔴 append-only and the write-once binding; the `onlySafe` gate; the `Entry` tuple order once an ABI is
-  generated and consumed; the `NAME()` string; the plaintext statement in V1 (it is a claim the code has
-  to keep true).
+- 🟢 read helpers; events; a `tombstone` that does something; explicit paging bounds; a second factory
+  entry point.
+- 🔴 append-only and the write-once binding; **per-draft metadata** — adding a field to the storage
+  struct `Version` changes its element stride, so every existing `versions[genesis][i]` decodes shifted
+  and every stored version is corrupted. `Entry` is a return type and may grow; `Version` may not.
+  Nothing in the storage declarations may be reordered; the `onlySafe` gate; the `Entry` tuple order once
+  an ABI is generated and consumed; the `NAME()` string; the plaintext statement in V1 (it is a claim the
+  code has to keep true).
 
 ## Test seams
 
@@ -215,6 +264,18 @@ genesis returns the zeroed `Entry` rather than reverting.
 - Factory: two `createModule` calls for one Safe → two proxies, `getModulesForSafe` length 2;
   `setImplementation` then `createModule` → new proxy on the new implementation, old one untouched;
   `getImplementationByVersion(0)` and `(count + 1)` revert.
-- Upgrade: `_authorizeUpgrade` from a non-Safe reverts, from the Safe succeeds and emits
-  `ContractUpgraded`. **Untested** — there is no V2 implementation to upgrade to yet, so the only
-  exercised parts of the UUPS path are `initialize` and the `onlySafe` modifier it shares.
+- Upgrade, all covered today against a second deployment of the same implementation (a V2 is not
+  needed to exercise the gate): `upgradeToAndCall` from a non-Safe reverts `OnlySafe`; `initialize` on the
+  bare implementation reverts `Initializable: contract is already initialized`; a second `initialize`
+  on the proxy reverts the same; the Safe's `upgradeTo` succeeds, emits exactly one `ContractUpgraded`,
+  and leaves `safe`, `count()` and the log readable afterwards.
+- Factory auth: `setImplementation` from a non-deployer reverts `OnlyDeployer` and leaves
+  `latestImplementation` unchanged; the deployer's call moves it, appends to the history, and the next
+  `createModule` deploys over the new implementation. `createModule` from a stranger still succeeds and
+  still lands in `getModulesForSafe` — the forgery is asserted, not assumed.
+- `initialize(address(0))` through `createModule` reverts `ZeroAddress` and records no proxy.
+- Paging edges: `offset + limit == count` returns a full page (not clamped short); `limit =
+  type(uint256).max` returns to the end instead of overflowing; `offset >= count` and `limit == 0` return
+  empty arrays.
+- Repeat append: a second and third append to one genesis leave `authorOf`, `count()` and the binding
+  untouched while `versionCount` and `history` grow — including two appends of the identical CID.
