@@ -38,8 +38,27 @@ const ENS_SUFFIX = '.soul2soul.eth';
 export const newPublication: CommandSpec = {
   name: 'new',
   summary: 'Create a new publication (twin L1+L2 Safes + ENS subdomain + modules).',
-  usage:
-    's2s publication new <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]',
+  params: '<name>',
+  flags: {
+    repo: {
+      type: 'string',
+      value: '<owner/repo>',
+      summary: 'GitHub repo the publication renders from',
+    },
+    branch: { type: 'string', value: '<branch>', summary: 'branch to render from' },
+    author: {
+      type: 'string',
+      value: '<addr>',
+      repeatable: true,
+      summary: 'author Safe address (repeatable, or comma-separated)',
+    },
+    owner: {
+      type: 'string',
+      value: '<addr>',
+      repeatable: true,
+      summary: 'publication Safe owner address (repeatable, or comma-separated)',
+    },
+  },
   async run(ctx, args) {
     const name = requireName(args);
     const repo = requireRepo(args);

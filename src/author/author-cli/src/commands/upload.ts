@@ -10,12 +10,14 @@ import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication } from './helpers';
 import { flagBool } from '../lib/args';
+import { NOTE_FLAGS } from './flags';
 import { ipfsGatewayUrl, ipfsUri } from '../lib/ipfs-link';
 
 export const upload: CommandSpec = {
   name: 'upload',
   summary: 'Upload a note to IPFS + pins, off-chain only (no offer, no render).',
-  usage: 's2s author upload <note> [--publication <ens>] [--allow-plaintext] [--json]',
+  params: '<note>',
+  flags: NOTE_FLAGS,
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);

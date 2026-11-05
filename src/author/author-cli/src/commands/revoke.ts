@@ -8,11 +8,13 @@
 import type { CommandSpec } from '../lib/command';
 import { revokeContent } from '../core/author';
 import { requireNotePath, resolvePublication, rootTxLine } from './helpers';
+import { PUBLICATION_FLAG } from './flags';
 
 export const revoke: CommandSpec = {
   name: 'revoke',
   summary: 'Retract a note on-chain and remove it from the rendered site.',
-  usage: 's2s author revoke <note> [--publication <ens>] [--json]',
+  params: '<note>',
+  flags: { publication: PUBLICATION_FLAG },
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);

@@ -9,11 +9,13 @@ import type { CommandSpec } from '../lib/command';
 import { authorWrite } from '../core/author';
 import { requireNotePath, resolvePublication, rootTxLine } from './helpers';
 import { flagBool } from '../lib/args';
+import { NOTE_FLAGS } from './flags';
 
 export const publish: CommandSpec = {
   name: 'publish',
   summary: 'Upload, offer on-chain, render on the production site, and back it up (one-shot).',
-  usage: 's2s author publish <note> [--publication <ens>] [--allow-plaintext] [--json]',
+  params: '<note>',
+  flags: NOTE_FLAGS,
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const publication = await resolvePublication(ctx, args, notePath);
@@ -26,6 +28,30 @@ export const publish: CommandSpec = {
       // Explicit opt-in to republishing a previously-encrypted genesis in the clear.
       allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
     });
+
+    // The human block drops `tx` (the offer — recorded on-chain but never what
+    // the site serves) and names the object CID `manuscript`, so the two CIDs
+    // read as what they are: the pinned note JSON, and the site-tree root the
+    // ENS write points at. `render`/`path` stay in the --json payload only.
+    const rootCid = result.render?.cid;
+    const sameCid = rootCid !== undefined && rootCid === result.kuboCid;
+    const lines = [
+      `Published ${notePath}`,
+      `  publication : ${result.publication}`,
+      `  objectId    : ${result.objectId}`,
+      sameCid
+        ? `  manuscript  : ${result.kuboCid} (= root cid)`
+        : `  manuscript  : ${result.kuboCid}`,
+    ];
+    if (!result.render) {
+      lines.push('  root cid    : (not rendered)');
+    } else {
+      if (!sameCid) lines.push(`  root cid    : ${result.render.cid}`);
+      // `.link` is the gateway readers actually hit; the bare ENS name is not
+      // an HTTP origin. `path` is already root-absolute (`/manuscript/`).
+      lines.push(`  live        : https://${result.publication}.link${result.render.path}`);
+      lines.push(rootTxLine(result.render));
+    }
 
     ctx.out.result(
       {
@@ -47,21 +73,7 @@ export const publish: CommandSpec = {
             }
           : undefined,
       },
-      [
-        `Published ${notePath}`,
-        `  publication : ${result.publication}`,
-        `  objectId    : ${result.objectId}`,
-        `  cid         : ${result.kuboCid}`,
-        `  tx          : ${result.txHash ?? '(offer step not run)'}`,
-        result.render
-          ? [
-              `  render      : ${result.render.cid}`,
-              `  path        : ${result.render.path}`,
-              `  live        : ${result.render.prodUrl ?? result.render.previewUrl}`,
-              rootTxLine(result.render),
-            ].join('\n')
-          : '  render      : (none)',
-      ].join('\n'),
+      lines.join('\n'),
     );
   },
 };
