@@ -22,8 +22,14 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function paths(): { userConfigPath: string; projectConfigPath: string } {
-  return { userConfigPath: join(dir, 'user', 'config.json'), projectConfigPath: join(dir, 'project', '.s2sconfig.json') };
+function paths(): { userConfigPath: string; projectConfigPath: string; authorsPath: string } {
+  return {
+    userConfigPath: join(dir, 'user', 'config.json'),
+    projectConfigPath: join(dir, 'project', '.s2sconfig.json'),
+    // the author store sits between the project and user config layers, so it
+    // must be pointed at the temp dir too — never the developer's real one
+    authorsPath: join(dir, 'authors.json'),
+  };
 }
 
 describe('config file layer', () => {

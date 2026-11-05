@@ -151,7 +151,11 @@ describe('hexKey normalization', () => {
     const dir = mkdtempSync(join(tmpdir(), 's2s-hex-'));
     const userConfigPath = join(dir, 'config.json');
     writeFileSync(userConfigPath, JSON.stringify({ privateKey: '11'.repeat(32) }));
-    const cfg = loadConfig({}, { userConfigPath, projectConfigPath: join(dir, 'none.json') });
+    const cfg = loadConfig({}, {
+      userConfigPath,
+      projectConfigPath: join(dir, 'none.json'),
+      authorsPath: join(dir, 'none-authors.json'),
+    });
     expect(cfg.privateKey).toBe(`0x${'11'.repeat(32)}`);
     rmSync(dir, { recursive: true, force: true });
   });

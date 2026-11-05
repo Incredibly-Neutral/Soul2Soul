@@ -8,6 +8,7 @@ describe('loadConfig', () => {
   const noFiles = {
     userConfigPath: '/nonexistent/s2s/config.json',
     projectConfigPath: '/nonexistent/.s2sconfig.json',
+    authorsPath: '/nonexistent/s2s/authors.json',
   };
 
   it('applies defaults for an empty environment', () => {
