@@ -235,12 +235,12 @@ Safe's `getOwners()`, compares the set against the last era order-insensitively,
   tenure for every added address (`OwnerAdded` per address), append newly seen addresses to
   `ownersEver()`. Returns `true`.
 
-Its revert is `SafeCallFailed`: `getOwners()` failed, answered with nothing (a proxy with no
-`era 0` — never initialised — or `safe == address(0)`), and the same error stands in for
-"no era 0 yet". It never records a set it could not read: an empty read would silently close
-every tenure and open an empty era, so failure is a revert and the caller retries. A `safe`
-that answers with malformed returndata can also fail inside the ABI decoder; that is the
-Safe's fault and not a supported state.
+Its reverts are `SafeCallFailed` — `getOwners()` failed, or answered with nothing (a proxy
+with no `era 0`, i.e. never initialised, or `safe == address(0)`) — and `ZeroOwners` when the
+Safe answers with an empty set. It never records a set it could not read: an empty read would
+silently close every tenure and open an empty era, so failure is a revert and the caller
+retries. A `safe` that answers with malformed returndata can also fail inside the ABI decoder;
+that is the Safe's fault and not a supported state.
 
 Closing is idempotent: a tenure already closed is skipped, not asserted. That is what lets a
 repair after a missed rotation walk the same address twice without corrupting the pair.
@@ -291,7 +291,7 @@ below is a documented limit, not a defect, and every one of them is **visible on
    correct without the guard; it is merely lossy. The visible form is `lastSyncedBlock()`
    lagging the Safe's real history — `isOwner` disagreeing with `currentEra().owners`.
 4. **The guard can be starved**, by the default proposal path (measured in *The guard*) or
-   by design on a large era: `sync()` costs `~242k + 32.4k × owners`, the guard forwards a
+   by design on a large era: `sync()` costs `≈ 239k + 33.5k × owners`, the guard forwards a
    fixed budget, and past that ceiling the hook misses every time until the set shrinks.
    This is indistinguishable from (2) except that it leaves `SyncFailed(blockNumber)` in the
    very transaction that missed — the only on-chain signal that the history has a hole, and
@@ -328,44 +328,56 @@ recovery but the module hole above. That single fact dictates the shape:
 
 - the call to the module is a **low-level `call` with a gas cap**, never
   `try IOwnerHistory(module).sync{gas: …}() returns (bool)`. A `returns (bool)` decode of a
-  codeless `module` — a proxy whose implementation slot was never written, say — reverts in
-  the *guard's* frame, outside any `catch`, because a call to a codeless address succeeds
-  with empty returndata. That is the brick, and it is why nothing here decodes returndata.
-- the result is discarded; `ok == false` is not a revert, it is a miss.
+  callee that succeeds with empty returndata — a proxy whose implementation slot was never
+  written, say — reverts in the *guard's* frame, outside any `catch`. That is the brick, and
+  it is why nothing here decodes returndata.
+- the result is not decoded: `ok` and the returndata **length** are the only things read from
+  the call, and `ok == false` is a miss, not a revert.
 - a sender other than `safe` is ignored (the Safe is the only legitimate caller).
 - nothing is called on the module before the call — only `code.length` is read — so a
   module that answers badly cannot make the guard revert.
-- the gas budget is a constant (`SYNC_GAS = 600_000`) with a reserve kept back
-  (`SYNC_RESERVE = 20_000`) so the low-level call, its cold-account charge and the Safe's own
-  return path cannot starve the transaction.
+- the gas budget is a constant (`SYNC_GAS = 600_000`) with `SYNC_RESERVE = 20_000` kept back
+  — ~17,050 of it actually survives the cold `code.length` read and the call's encoding — so
+  the call and the Safe's own return path cannot starve the transaction.
 
-**What it does not guarantee.** It is best-effort, and it is measurably lossy on the
-default path. Measured on this build with a 2-owner era and a `+1` rotation:
+**Four ways the hook is skipped, and all four are announced.** A miss is one of: less than
+`SYNC_RESERVE` gas left before the call (the Safe's transaction needs the gas, not the hook);
+`module.code.length == 0` (the deploy typo that `module` being immutable makes permanent, so
+it is reported and not called); the call failed (`ok == false` — a revert or an out-of-gas
+module); or the call succeeded and returned **no data** — a proxy whose implementation slot
+was never written. That last one is caught by the returndata *length* and nothing else:
+decoding a `bool` return there reverts in the guard's own frame, outside any catch, which is
+the permanent brick. “Simplifying” it back to `try … returns (bool)` rebuilds the brick.
 
-| Safe tx gas limit | `gasUsed` | `eraCount` after |
-|---|---|---|
-| `eth_estimateGas` → `381_972` | `360_857` | **1** (hook skipped) |
-| `1_200_000` | `381_972` | 2 |
-
-The estimate is self-consistent with “no sync”: the simulation itself is allowed to skip the
-hook, so the estimate comes back just short of what a sync would need. Hence the operating
-rule, which is part of the install and not a detail:
+**What it does not guarantee.** It is best-effort, and on the default path it is measurably
+lossy: `eth_estimateGas` for a `+1` rotation on a 2-owner era returns `381_972`, which leaves
+`gasUsed 360_857` and **no sync**; the same transaction with a `1_200_000` limit spends
+`381_972` and opens the era. The estimate is self-consistent with “no sync” — the simulation
+itself is allowed to skip the hook — hence the operating rule, which is part of the install
+and not a detail:
 
 > A rotation this project proposes includes an explicit `sync()` in the batch. For any other
 > rotation — the Safe app, a hardware wallet, a script — allow at least `SYNC_GAS + 40_000`
 > (≈ 640k on a small era) and check afterwards that `SyncFailed` was not emitted.
 
-`sync()` cost grows with the set: ~242k + 32.4k per owner, so an era of 10 owners gaining one
-needs ~569k (inside the budget), 11 needs ~604k (outside — the hook misses every time until
-the set shrinks), and a swap on a 13-owner era costs ~715k. Reads are cheap by comparison
-(~29k for a no-op `sync` on 2 owners, ~104k on 13), but the guard runs on **every** Safe
-transaction, so that cost is paid on every proposal, deal and upgrade.
+Measured `sync()` cost for **one owner added**, by era size:
+
+| era size | 2 | 3 | 4 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|
+| gas | 305,895 | 337,617 | 369,688 | 569,421 | 603,928 | 638,784 |
+
+which fits `≈ 239k + 33.5k × owner`. The ceiling is the number that matters: **an era of 10
+gaining one owner fits under `SYNC_GAS`, an era of 11 does not**, so past that every rotation
+misses until the set shrinks. At 13 owners a swap is 667,377 and a removal 492,947 — a swap is
+not the expensive case it looks like; the set size is. A no-op `sync()` is the common case,
+because the guard runs on **every** transaction the Safe executes: 28,784 at 2 owners, 96,991
+at 13, i.e. about 6.2k more per owner, paid on every proposal, deal and upgrade.
 
 **What it does guarantee**, and what makes the loss acceptable:
 
 - it never reverts the Safe (low-level call, no returndata decode, empty `checkTransaction`);
-- a miss is never silent: `SyncFailed(uint256 blockNumber)` fires in the transaction that
-  missed, and `lastSyncedBlock()` stays behind the Safe's real state;
+- a miss is never silent: all four paths emit `SyncFailed(uint256 blockNumber)` in the
+  transaction that missed, and `lastSyncedBlock()` stays behind the Safe's real state;
 - the fix is always available and always permissionless: `sync()`.
 
 **Sharp edges, stated not hidden:**
@@ -382,8 +394,7 @@ transaction, so that cost is paid on every proposal, deal and upgrade.
 
 ## What the gate does with it
 
-This package adds one read to the gate in [`SPEC-gates.md`](../gates/SPEC-gates.md); it does
-not change `canPublish`. Composed with the deal check, the two are independent reads:
+This package supplies the read; using it is a change to the gates package, described below.
 
 ```ts
 // `history` is pinned out of band (config), never resolved by a name or a factory index.
@@ -399,9 +410,7 @@ return (
 
 `isOwnerAt(signer, blockOfTheArtifact)` is *the* call. `isOwnerAt(signer, block.number)`
 is “is an owner now” — the same function, answered live — and is not what a gate wants for
-content older than the current block.
-
-The three reads are independent, and this one does not chain into the others.
+content older than the current block. The three reads are independent: none feeds another.
 
 One consequence the gate cannot dodge: `canPublish()` in `src/shared/src/gates` reads
 `isOwner` **live** as its second half, so a historical check has to *replace* that half, not
@@ -422,8 +431,8 @@ whoever made the proxy named that Safe. The rules:
 2. Where the install was made with `enableModule` (as above), `authorSafe.isModuleEnabled(history)`
    is the stronger check: only the Safe can set it, and the gate already reads the Safe in
    the same call. Prefer it when it is available.
-3. Whichever is checked, a `false` from `history.safe()` comparison is `false` for the gate,
-   not a fallback to a live `isOwner`.
+3. Whichever is checked, a failed comparison is `false` for the gate, never a fallback to a
+   live `isOwner`.
 
 ## Invariants
 
@@ -439,7 +448,10 @@ whoever made the proxy named that Safe. The rules:
   `tenureTimes[who][i]` describe the same spell, and at most one of an address's spells is
   open.
 - **INV-6** No read reverts: not on an unknown address, not on an out-of-range era index, not
-  on a Safe that answers with a non-boolean word, not on a `safe` with no code.
+  on a Safe that answers with a non-boolean word, not on a `safe` with no code. (The one
+  exception is gas: `isOwner`/`wasOwnerAt` staticcall the Safe unbounded, so a `safe` that
+  burns everything forwarded can starve the read — the Safe is the trusted input, not the
+  adversarial one.)
 - **INV-7** For `b < block.number`, `isOwnerAt(who, b)` depends only on stored history; for
   `b >= block.number` it is the Safe's live answer. The post-state guarantee therefore holds
   only *below* the head: inside the rotation's own block the answer depends on how far the
@@ -533,7 +545,7 @@ whoever made the proxy named that Safe. The rules:
 | `the guard never reverts: a reverting module is swallowed` | the catch |
 | `a module address with no code does not revert the Safe, and admits it` | the brick, and `SyncFailed`; `setGuard(0)` still works after |
 | `a module with code but no sync() does not revert the Safe` | same, different failure shape |
-| `a proxy whose implementation slot is empty does not revert the Safe` | the `returns (bool)` decode that would brick — `code.length > 0` cannot catch this one |
+| `a proxy whose implementation slot is empty does not revert the Safe` | the fourth skip path: `code.length > 0` cannot catch it, the miss is announced, and the `returns (bool)` decode that would have bricked is not there |
 | `a gas-tight Safe transaction still succeeds, and the skip is visible` | the reserve; `SyncFailed` + `lastSyncedBlock` lagging |
 | `the guard ignores calls from non-Safe senders` | the sender gate |
 | `unknown address: every read answers false or empty instead of reverting` | INV-6, empty era for out-of-range |
