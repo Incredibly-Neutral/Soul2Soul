@@ -1,9 +1,13 @@
 // ============================================================================
 // s2s author new <pet-name> — file a new author identity in the store.
 //
-//   s2s author new zomi                       # key piped on stdin
-//   echo 0x… | s2s author new zomi
-//   s2s author new zomi --key 0x…
+//   s2s author new zomi                       # generate a fresh key
+//   echo 0x… | s2s author new zomi            # key piped on stdin
+//   s2s author new zomi --key 0x…             # key given on the command line
+//
+// With no key anywhere, one is generated from 32 bytes of CSPRNG output: the
+// common case is "give me an identity", not "I have a key to file". A generated
+// key is printed once, in both modes — the store is its only other copy.
 //
 // The key is the Safe's owner, not the author id: the author id is the
 // counterfactual Safe (`s2s_${eoa}` salt). Its address is predicted here when
@@ -16,6 +20,7 @@
 // Runs without `buildContext`: no Lit keys, no publication, no bundler.
 // ============================================================================
 
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import type { Address } from 'viem';
@@ -48,6 +53,28 @@ function stdinKey(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** A fresh secp256k1 key: 32 bytes of CSPRNG output, hex-encoded. */
+function generateKey(): string {
+  return `0x${randomBytes(32).toString('hex')}`;
+}
+
+/**
+ * The key to file: `--key`, else stdin, else a generated one. Split out (with
+ * both sources injectable) so the no-key path is testable without touching fd 0
+ * or the CSPRNG.
+ */
+export function resolvePrivateKey(
+  flags: Record<string, string | boolean>,
+  sources: {
+    stdin?: () => string | undefined;
+    random?: () => string;
+  } = {},
+): { key: string; generated: boolean } {
+  const explicit = flagString(flags, 'key') ?? (sources.stdin ?? stdinKey)();
+  if (explicit) return { key: explicit, generated: false };
+  return { key: (sources.random ?? generateKey)(), generated: true };
 }
 
 /**
@@ -90,7 +117,7 @@ export const authorNew: StoreCommandSpec = {
   flags: {
     key: {
       type: 'string',
-      summary: 'private key to file (0x…); or pipe it on stdin',
+      summary: 'private key to file (0x…); default: stdin if piped, else a generated key',
       value: '<0x…>',
     },
   },
@@ -105,15 +132,12 @@ export const authorNew: StoreCommandSpec = {
       );
     }
 
-    const rawKey = flagString(args.flags, 'key') ?? stdinKey();
-    if (!rawKey) {
-      throw new UsageError(
-        'no private key given — pass --key <0x…> or pipe the key on stdin (echo 0x… | s2s author new <pet-name>)',
-      );
-    }
+    const { key: rawKey, generated } = resolvePrivateKey(args.flags);
     const privateKey = hexKey(rawKey);
     if (privateKey === undefined) {
-      throw new UsageError('no private key given — pass --key <0x…>');
+      throw new UsageError(
+        'invalid private key — expected 32 bytes of hex (0x followed by 64 hex chars)',
+      );
     }
 
     // Validate by deriving: this is the same call every signing path makes, so
@@ -142,12 +166,17 @@ export const authorNew: StoreCommandSpec = {
         safe,
         active: true,
         file,
+        // Only echoed when we made it: a key the user supplied is already theirs.
+        ...(generated ? { privateKey } : {}),
       },
       [
         `author '${name}' created and activated`,
         `eoa         : ${eoa}`,
         `safe        : ${safe ?? '(not predicted — no L2 RPC)'}`,
         `store       : ${file}`,
+        ...(generated
+          ? [`private key : ${privateKey}`, '              (generated — write it down: the store file is the only other copy)']
+          : []),
       ].join('\n'),
     );
   },

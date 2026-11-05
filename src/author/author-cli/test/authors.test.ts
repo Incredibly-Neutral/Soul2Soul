@@ -21,7 +21,7 @@ import {
 } from '../src/core/authors';
 import { loadConfig, type LoadConfigOptions } from '../src/core/config';
 import { writeConfigValue } from '../src/core/configfile';
-import { authorNew } from '../src/commands/author-new';
+import { authorNew, resolvePrivateKey } from '../src/commands/author-new';
 import { authorSwitch } from '../src/commands/author-switch';
 import { authorList } from '../src/commands/author-list';
 import { authorRm } from '../src/commands/author-rm';
@@ -288,6 +288,30 @@ describe('store command registry', () => {
       expect(command.flags).toBeTypeOf('object');
     }
     expect(findAuthorStoreCommand('upload')).toBeUndefined();
+  });
+});
+
+describe('which key `author new` files', () => {
+  it('prefers --key, then stdin, then generates', () => {
+    const stdin = (): string => KEY_B;
+    const random = (): string => KEY_A;
+    expect(resolvePrivateKey({ key: KEY_A }, { stdin, random })).toEqual({
+      key: KEY_A,
+      generated: false,
+    });
+    expect(resolvePrivateKey({}, { stdin, random })).toEqual({ key: KEY_B, generated: false });
+    expect(resolvePrivateKey({}, { stdin: () => undefined, random })).toEqual({
+      key: KEY_A,
+      generated: true,
+    });
+  });
+
+  it('generates a usable 32-byte key when neither is given', async () => {
+    // Real CSPRNG, not a stub: the point is that the generated key is a key.
+    const { key, generated } = resolvePrivateKey({}, { stdin: () => undefined });
+    expect(generated).toBe(true);
+    expect(key).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(authorEoa(key)).toMatch(/^0x[0-9A-Fa-f]{40}$/);
   });
 });
 
