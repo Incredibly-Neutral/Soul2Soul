@@ -27,7 +27,7 @@ import {
   publicationCommands,
 } from './commands';
 import { findConfigCommand, runConfigGroup } from './commands/config';
-import type { FlagSpecs } from './lib/args';
+import { setup, setupHelp } from './commands/setup';
 
 const VERSION = '0.1.0';
 
@@ -35,11 +35,15 @@ const TOP_HELP = `s2s — Soul2Soul headless authoring CLI (v${VERSION})
 
 Usage:
   s2s <group> <action> [flags]
+  s2s setup [flags]
 
 Groups:
   author        Author identities + content actions (new/switch/list/rm, upload, publish)
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
+
+Commands:
+  setup         Configure this machine: accept the provided defaults or paste your own keys
 
 Global flags:
   --json        emit the result as JSON on stdout (machine-readable)
@@ -112,7 +116,7 @@ async function main(argv: string[]): Promise<number> {
     // An unknown action is reported by runConfigGroup with the list of actions,
     // so skip the strict pass rather than blaming the flags first.
     const parsed = configCommand
-      ? parseCommandArgs(argv, configCommand.flags as FlagSpecs)
+      ? parseCommandArgs(argv, configCommand.flags)
       : { flags: {}, positionals: [] };
     runConfigGroup(out, wantHelp, action, configCommand, {
       flags: parsed.flags,
@@ -121,9 +125,23 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // `setup` is a top-level command (not a member of `author`/`publication`) and
+  // is dispatched before buildContext for the same reason `config` is: it is
+  // how a machine gets configured in the first place.
+  if (group === 'setup') {
+    if (wantHelp) {
+      const text = setupHelp();
+      out.result({ help: text }, text);
+      return 0;
+    }
+    const parsed = parseCommandArgs(argv, setup.flags);
+    await setup.run(out, { flags: parsed.flags, positionals: parsed.positionals.slice(1) });
+    return 0;
+  }
+
   if (group !== 'author' && group !== 'publication') {
     throw new UsageError(
-      `unknown command group '${group}' — expected 'author', 'publication', or 'config'`,
+      `unknown command group '${group}' — expected 'author', 'publication', 'config', or 'setup'`,
     );
   }
 
