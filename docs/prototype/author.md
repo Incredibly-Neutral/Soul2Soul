@@ -4,10 +4,11 @@ position: 2
 slug: author
 tags:
   - about--s2s
-modified_date: 2026-10-30T13:29:37
-kubo_cid: QmbHJhiepGfgnnbAZyyxG7yHgVaVfNk9rHeE1tmi5q1uE7
+modified_date: 2026-11-05T10:59:19
 genesis: "0x8b350da78dcd4ea5d43e72d6c8f6ae7d3f50f08ff0314a9d7cdc48a42b4111b1"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmYPyTxNLfjg1Bj9sZLxFcmvnk1886fL8LY3PQo2n9RoT9
+creation_date: 2026-10-30T13:29:37
 ---
 # The author
 

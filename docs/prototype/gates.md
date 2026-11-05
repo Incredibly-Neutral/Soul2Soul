@@ -4,10 +4,11 @@ position: 6
 slug: gates
 tags:
   - about--s2s
-modified_date: 2026-11-02T10:14:38
-kubo_cid: QmPfxs9dED8M7gt8X8zsxwTfNce2Ppxfkhz7RGzEvG9VgL
+modified_date: 2026-11-05T12:04:06
 genesis: "0x8a3e99ef8fb52ca9582e32012732104cabc8eeaf11c5db8eb13b9c15df9ad52c"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmSXx4YzG2ZQWKk3WRckVKBAJQ9duRHZsdyNQeBcP1v9U4
+creation_date: 2026-11-02T10:14:38
 ---
 # The gates
 

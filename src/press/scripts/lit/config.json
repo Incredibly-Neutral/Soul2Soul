@@ -11,34 +11,34 @@
         },
         {
           "name": "prep",
-          "cid": "QmP8pvvjeTjdAcRE65RWs3JeiP3h6jerQYJLytRHS7DSJc",
-          "hashedCid": "0x2f2aa0b71801010d8c0dbe857eb5a6df677ccbac73497d1394235757becc84b2"
+          "cid": "QmXGejo3UW8xhxSSi13aoDvC7AaXjhG3Az9X9LA6jBBbk4",
+          "hashedCid": "0x5b892ca0bb8cc04c0f4bd4f54b89420353b694c3ee8ee4b8fd6d7d480e47b8b1"
         },
         {
           "name": "render",
-          "cid": "QmZNfp8Kjevt64RAtskCiiTLskX1CSesYsziwNjN4Q9Evz",
-          "hashedCid": "0xda7665f0aa80c18a056f4b6ef2f99d5190df6efab6517db86d678058e901ccf5"
+          "cid": "QmTXT6yPF38qezta42htiST5qc327Pb9HyMcmQhoRKCmF1",
+          "hashedCid": "0x11168f4ec749c02c27f4560f60d770a9f882cd861dabcde009c4334e06d05830"
         },
         {
           "name": "update",
-          "cid": "Qmed1rxbdgfiwJNnBeVDDYZPTAq17UYthUwG3n1AxMVoc3",
-          "hashedCid": "0x1d098c968d3b6772b72861d22cb317c1e62012293dea3a3993ce80659fa35b12"
+          "cid": "QmZU6Woe3a5nQw4ZW2HxkvSoTVvzw6rZ5YvonDyAnDsuph",
+          "hashedCid": "0x2da7ad36710fde662d8c803d6b3063c81a7f883b33ffc458d4d7434ac7550c16"
         },
         {
           "name": "maintain-cache",
-          "cid": "QmeZFEsARkLBJE1Po3wpKDgUhP8uVKVLp1ok7mQ5W5RXL7",
-          "hashedCid": "0x5b1e9e2f3f26c265a8c2b59c55c7ca67c9b04a81b89568fd41eb6ba880e2e1e1"
+          "cid": "QmWdNVttnsQ5uKoMqkDKgegougUuB7RrifhaaPNgyG4gAA",
+          "hashedCid": "0xbd0651f19a96bd53b1dfa1aa37dc623efe74cc9000a556f8e13ff12c99411066"
         },
         {
           "name": "repoint-archive",
-          "cid": "QmcJBjnkfPitYLnQTXKyahhY1hXHg48SAgtz3SN91fk7Mn",
-          "hashedCid": "0x88e5fc65536354ab7e63a54748db8417f0865ed7c5572b60caff8c4a089ed20b"
+          "cid": "QmNsmBaJG6eWL3geuxfqBZwuR32ehtaidHabR7d3Tks4zn",
+          "hashedCid": "0x20696b13bf212eaf715eb2556ad4d5ce06b8a78ca34aa0b9844340aae4cce6c6"
         }
       ],
       "pkps": [
         "0x0522b95938c3a18988bf71da2f964f8a52ae4004"
       ],
-      "usage_key": "REDACTED"
+      "usage_key": "lk_6720065969543d100b2f6d367b24e327bbd7ca8ac44d91fe8bb6d2cb53ce3699"
     }
   ]
 }

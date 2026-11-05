@@ -4,10 +4,11 @@ position: 3
 slug: manuscript
 tags:
   - about--s2s
-modified_date: 2026-10-30T13:31:31
-kubo_cid: QmTk1rK1Drd2PbZAmEW9iG24JXjya1AQVmSmaEehRk5Bzq
+modified_date: 2026-11-05T11:00:49
 genesis: "0x05fffe8a31ae836e10ae9df4ebfea3d5c8cf73f0697773aff8651954fb5dbe71"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmX98CxERtSkE7Y5pHWcwoBMA8xLrocomiacmXXccBS8sk
+creation_date: 2026-10-30T13:31:31
 ---
 # The manuscript
 

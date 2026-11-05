@@ -4,10 +4,11 @@ position: 7
 slug: press
 tags:
   - about--s2s
-modified_date: 2026-11-02T10:01:22
-kubo_cid: QmSDUUzakttHqT2hfvN1AoVeYEpKyDPnhUHSzv9BrVmeGq
+modified_date: 2026-11-05T12:04:49
 genesis: "0x103d2295ba191c0dc9b770e7f933d3afdb3ba5495adcfdd4c9f2dd5af38efb72"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmbUv6pg8eJCKMGTiP9Jx6swmQPxi2AQUs3HVHC4vc8vHK
+creation_date: 2026-11-02T10:01:22
 ---
 # The press
 

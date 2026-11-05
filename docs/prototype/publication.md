@@ -4,10 +4,11 @@ slug: publication
 position: 4
 tags:
   - about--s2s
-modified_date: 2026-10-30T13:34:39
-kubo_cid: QmYTamQWhc6YrPAmU7w2Jy2ZboKf57NDFnhaytPz3vXxPN
+modified_date: 2026-11-05T11:52:30
 genesis: "0xc7bfa0322bf92497b131c1697d9e86b921d02f9e40e13b9ee6fab4b60f660c7f"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmSGT3G6jdpH1b6iUinxVLmS9oTzqu2i2hKzZf6EcfwHJZ
+creation_date: 2026-10-30T13:34:39
 ---
 # The publication
 

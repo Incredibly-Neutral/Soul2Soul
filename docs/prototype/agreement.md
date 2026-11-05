@@ -4,10 +4,11 @@ position: 5
 slug: agreement
 tags:
   - about--s2s
-modified_date: 2026-11-02T10:07:41
-kubo_cid: QmaiZUFGiWcHNUhfxYCsm2rcLa6J55GTtUB2XEtZRjhgeN
+modified_date: 2026-11-05T12:03:09
 genesis: "0x9286c900d744ffafdfdf89a1dd92d8c10fd3a9bce74a78b95e8ab3682ec2b4c2"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"
+cid: QmZQfX6HC8Pt7dzimUtTJ7G2FNyxpvUW2jVhnpBWtkUtbJ
+creation_date: 2026-11-02T10:07:41
 ---
 # The agreement
 
