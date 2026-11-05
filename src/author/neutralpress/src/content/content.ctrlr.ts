@@ -66,6 +66,8 @@ export class ContentController implements IContentController {
 			'title',
 			'modified_date',
 			'creation_date',
+			'cid',
+			'kubo_cid',
 			'genesis',
 			'author',
 		]);

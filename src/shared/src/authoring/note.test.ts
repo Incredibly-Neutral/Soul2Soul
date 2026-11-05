@@ -44,6 +44,18 @@ describe('authoring/note', () => {
     expect(parsed.slug).toBe('a-real-title');
   });
 
+  it('keeps the upload CID out of the custom bag (it is state, not template data)', async () => {
+    const note = NOTE.replace(
+      'custom_field: hello',
+      'custom_field: hello\ncid: QmUBKj5nKvvfQGw9sj1aWEN7ZBj3EgsVXkake5AGio63AT',
+    );
+    const parsed = await parseMarkdownNote(note, 'n.md');
+    expect(parsed.custom).toEqual({ custom_field: 'hello' });
+    // the legacy spelling is excluded too, so an un-migrated note leaks nothing
+    const legacy = NOTE.replace('custom_field: hello', 'custom_field: hello\nkubo_cid: QmLegacy');
+    expect((await parseMarkdownNote(legacy, 'n.md')).custom).toEqual({ custom_field: 'hello' });
+  });
+
   it('splits summary from content on the more marker', async () => {
     const parsed = await parseMarkdownNote(NOTE, 'x.md');
     expect(parsed.summary).toContain('Intro paragraph');

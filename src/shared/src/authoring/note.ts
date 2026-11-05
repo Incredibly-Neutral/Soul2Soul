@@ -53,6 +53,11 @@ export const KNOWN_FRONTMATTER_KEYS = new Set([
   'title',
   'modified_date',
   'creation_date',
+  // The CID of the last upload is written back by the CLI for `offer`; it is
+  // never template data. `kubo_cid` is its pre-rename spelling, kept here until
+  // old notes have been through one upload.
+  'cid',
+  'kubo_cid',
   'genesis',
   'author',
 ]);
