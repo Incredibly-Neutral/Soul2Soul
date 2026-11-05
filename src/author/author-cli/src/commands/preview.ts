@@ -33,7 +33,7 @@ export const preview: CommandSpec = {
         publication: result.publication,
         subdomain: result.subdomain,
         objectId: result.objectId,
-        kuboCid: result.kuboCid,
+        cid: result.kuboCid,
         render: result.render
           ? {
               cid: result.render.cid,
@@ -48,7 +48,7 @@ export const preview: CommandSpec = {
         `Previewed ${notePath}`,
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  kubo cid    : ${result.kuboCid}`,
+        `  cid         : ${result.kuboCid}`,
         result.render
           ? [
               `  render      : ${result.render.cid}`,

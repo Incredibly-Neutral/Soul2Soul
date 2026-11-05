@@ -1,5 +1,5 @@
 // ============================================================================
-// s2s author offer <note> [--cid <kuboCid>] — the on-chain offer step.
+// s2s author offer <note> [--cid <cid>] — the on-chain offer step.
 //
 // Default: sign + upload the note (Kubo + pins, frontmatter write-back) and then
 // append it on-chain with `makeOffer` — i.e. `upload` and `offer` in one pass.
@@ -7,7 +7,7 @@
 // bytes in the note right now, never a stale `cid` left by an earlier
 // upload.
 //
-// `--cid <kuboCid>` keeps the split-out half: anchor an ALREADY-uploaded CID
+// `--cid <cid>` keeps the split-out half: anchor an ALREADY-uploaded CID
 // (re-offer after a failed chain write, backfill an older revision) with no
 // re-upload, no pins, no render, no frontmatter write.
 // ============================================================================
@@ -22,7 +22,7 @@ export const offer: CommandSpec = {
   name: 'offer',
   summary: 'Upload a note (IPFS + pins) and append it on-chain (makeOffer).',
   usage:
-    's2s author offer <note> [--publication <ens>] [--cid <kuboCid>] [--allow-plaintext] [--json]',
+    's2s author offer <note> [--publication <ens>] [--cid <cid>] [--allow-plaintext] [--json]',
   async run(ctx, args) {
     const notePath = requireNotePath(args);
     const kuboCidFlag = flagString(args.flags, 'cid');
@@ -45,7 +45,7 @@ export const offer: CommandSpec = {
           publication: result.publication,
           subdomain: result.subdomain,
           objectId: result.objectId,
-          kuboCid: result.kuboCid,
+          cid: result.kuboCid,
           txHash: result.txHash,
           ipfsUrl: ipfsUri(result.kuboCid),
           gatewayUrl: ipfsGatewayUrl(result.kuboCid),
@@ -54,7 +54,7 @@ export const offer: CommandSpec = {
           `Offered ${notePath}`,
           `  publication : ${result.publication}`,
           `  objectId    : ${result.objectId}`,
-          `  kubo cid    : ${result.kuboCid} (reused — not re-uploaded)`,
+          `  cid         : ${result.kuboCid} (reused — not re-uploaded)`,
           `  tx          : ${result.txHash}`,
         ].join('\n'),
       );
@@ -83,7 +83,7 @@ export const offer: CommandSpec = {
         publication: result.publication,
         subdomain: result.subdomain,
         objectId: result.objectId,
-        kuboCid: result.kuboCid,
+        cid: result.kuboCid,
         txHash: result.txHash,
         ipfsUrl: ipfsUri(result.kuboCid),
         gatewayUrl: ipfsGatewayUrl(result.kuboCid),
@@ -93,7 +93,7 @@ export const offer: CommandSpec = {
         `Offered ${notePath}`,
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  kubo cid    : ${result.kuboCid}`,
+        `  cid         : ${result.kuboCid}`,
         `  tx          : ${result.txHash}`,
         `  live        : not rendered — run: s2s author publish ${notePath}`,
       ].join('\n'),

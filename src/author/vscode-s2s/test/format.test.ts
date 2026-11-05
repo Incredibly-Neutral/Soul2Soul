@@ -34,8 +34,8 @@ describe('formatResult — one per action', () => {
     const summary = formatResult(uploadResult, { durationMs: 1500 });
     expect(summary.action).toBe('upload');
     expect(summary.title).toBe('uploaded manuscript.md · 1.5s');
-    expect(summary.lines.join('\n')).toContain(uploadResult.kuboCid);
-    expect(summary.copy).toBe(uploadResult.kuboCid);
+    expect(summary.lines.join('\n')).toContain(uploadResult.cid);
+    expect(summary.copy).toBe(uploadResult.cid);
     expect(summary.url).toBeUndefined();
   });
 
@@ -161,8 +161,8 @@ describe('detailRows', () => {
     const indexOf = (needle: string): number => rows.findIndex((row) => row.startsWith(needle));
 
     expect(indexOf('action:')).toBeLessThan(indexOf('objectId:'));
-    expect(indexOf('objectId:')).toBeLessThan(indexOf('kuboCid:'));
-    expect(indexOf('kuboCid:')).toBeLessThan(indexOf('txHash:'));
+    expect(indexOf('objectId:')).toBeLessThan(indexOf('cid:'));
+    expect(indexOf('cid:')).toBeLessThan(indexOf('txHash:'));
     expect(rows).toContain(`render.prodUrl: ${publishResult.render.prodUrl}`);
     expect(rows).toContain(`render.cid: ${publishResult.render.cid}`);
   });

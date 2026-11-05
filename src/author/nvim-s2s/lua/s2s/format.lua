@@ -16,10 +16,10 @@ local M = {}
 -- Known top-level fields per action, in display order. `render` is expanded
 -- into its sub-keys by `known_pairs`.
 local KNOWN = {
-  upload = { 'note', 'publication', 'subdomain', 'objectId', 'kuboCid', 'frontmatterWritten' },
-  propose = { 'note', 'publication', 'subdomain', 'objectId', 'kuboCid', 'txHash' },
-  preview = { 'note', 'publication', 'subdomain', 'objectId', 'kuboCid', 'render' },
-  publish = { 'note', 'publication', 'subdomain', 'objectId', 'kuboCid', 'txHash', 'render' },
+  upload = { 'note', 'publication', 'subdomain', 'objectId', 'cid', 'frontmatterWritten' },
+  propose = { 'note', 'publication', 'subdomain', 'objectId', 'cid', 'txHash' },
+  preview = { 'note', 'publication', 'subdomain', 'objectId', 'cid', 'render' },
+  publish = { 'note', 'publication', 'subdomain', 'objectId', 'cid', 'txHash', 'render' },
   revoke = { 'note', 'publication', 'subdomain', 'objectId', 'txHash', 'render' },
   new = {
     'name',
@@ -407,7 +407,7 @@ function M.summary(result)
       ident = 'tx ' .. ident
     end
   elseif key == 'upload' or key == 'preview' then
-    ident = scalar(result.kuboCid)
+    ident = scalar(result.cid)
   else
     ident = scalar(result.objectId)
   end

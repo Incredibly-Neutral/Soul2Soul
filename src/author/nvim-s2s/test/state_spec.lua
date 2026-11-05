@@ -25,7 +25,7 @@ local function new_buf()
   return buf
 end
 
-local entry = { action = 'upload', result = { action = 'upload', kuboCid = 'bafy1' }, code = 0, at = 1, ms = 5 }
+local entry = { action = 'upload', result = { action = 'upload', cid = 'bafy1' }, code = 0, at = 1, ms = 5 }
 
 -- empty by default
 local a = new_buf()
@@ -35,7 +35,7 @@ eq(state.is_busy(a), false, 'busy: false for a fresh buffer')
 -- set / get / per-buffer isolation
 state.set(a, entry)
 eq(state.get(a), entry, 'set/get: same entry back')
-eq(state.get(a).result.kuboCid, 'bafy1', 'set/get: result payload intact')
+eq(state.get(a).result.cid, 'bafy1', 'set/get: result payload intact')
 
 local b = new_buf()
 eq(state.get(b), nil, 'set/get: results do not leak across buffers')

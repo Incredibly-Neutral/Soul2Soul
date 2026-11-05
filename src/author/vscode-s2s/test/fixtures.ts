@@ -14,7 +14,7 @@ export const uploadResult = {
   publication: PUBLICATION,
   subdomain: 'polyphony',
   objectId: '0x9f2c1a',
-  kuboCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+  cid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   ipfsUrl: 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   gatewayUrl: 'https://ipfs.io/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   frontmatterWritten: true,
@@ -26,7 +26,7 @@ export const offerResult = {
   publication: PUBLICATION,
   subdomain: 'polyphony',
   objectId: '0x9f2c1a',
-  kuboCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+  cid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   txHash: '0x5d0e1c2b3a49586778899aabbccddeeff00112233445566778899aabbccddeeff',
 } as const;
 
@@ -36,7 +36,7 @@ export const previewResult = {
   publication: PUBLICATION,
   subdomain: 'polyphony',
   objectId: '0x9f2c1a',
-  kuboCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+  cid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   render: {
     cid: 'bafkreirender000000000000000000000000000000000000000000000000',
     path: 'preview/manuscript/index.html',
@@ -50,7 +50,7 @@ export const publishResult = {
   publication: PUBLICATION,
   subdomain: 'polyphony',
   objectId: '0x9f2c1a',
-  kuboCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+  cid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   txHash: '0x5d0e1c2b3a49586778899aabbccddeeff00112233445566778899aabbccddeeff',
   render: {
     cid: 'bafkreirender000000000000000000000000000000000000000000000000',
@@ -117,7 +117,7 @@ export const futureResult = {
   publication: PUBLICATION,
   subdomain: 'polyphony',
   objectId: '0x9f2c1a',
-  kuboCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+  cid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   frontmatterWritten: true,
   // Unknown scalars — must be passed through in the detail view.
   authorContract: '0x5555555555555555555555555555555555555555',

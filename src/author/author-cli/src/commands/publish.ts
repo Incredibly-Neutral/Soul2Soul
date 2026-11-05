@@ -34,7 +34,7 @@ export const publish: CommandSpec = {
         publication: result.publication,
         subdomain: result.subdomain,
         objectId: result.objectId,
-        kuboCid: result.kuboCid,
+        cid: result.kuboCid,
         txHash: result.txHash,
         render: result.render
           ? {
@@ -51,7 +51,7 @@ export const publish: CommandSpec = {
         `Published ${notePath}`,
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  kubo cid    : ${result.kuboCid}`,
+        `  cid         : ${result.kuboCid}`,
         `  tx          : ${result.txHash ?? '(offer step not run)'}`,
         result.render
           ? [

@@ -81,7 +81,7 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   `S2SContentItem.encryption` comes out `false` — `shared/src/identity/sign-content.ts:104` derives
   the flag from the encrypt function's identity, not from the frontmatter `encryption` (which
   `parseNote` parses and nothing reads) → `uploadToKubo(signedItem, kuboUrl)` →
-  `makeOffer(objectId, kuboCid)` (the single append+deal tx in V2 — no separate grant tx) → if
+  `makeOffer(objectId, cid)` (the single append+deal tx in V2 — no separate grant tx) → if
   rendering, `renderCalls(... litUsageKey ...)` → **fire-and-forget** `backupToProviders`
   (filebase/pinata pins + `runFilecoinLeg` → `uploadJson(signedItem, [pubSafe, authorEoa], 'article')`,
   whose CID mismatch surfaces as an `onFilecoinMismatch` Notice). Durability never blocks the flow.

@@ -48,7 +48,7 @@ describe('parseResult — the locate path', () => {
     expect(outcome.kind).toBe('result');
     if (outcome.kind !== 'result') return;
     expect(outcome.contaminated).toBe(true);
-    expect(outcome.result['kuboCid']).toBe(uploadResult.kuboCid);
+    expect(outcome.result['cid']).toBe(uploadResult.cid);
   });
 
   it('recovers the result when junk follows the document', () => {
@@ -89,7 +89,7 @@ describe('parseResult — failures', () => {
   });
 
   it('refuses plain human text', () => {
-    const outcome = parseResult('uploaded manuscript.md\nkubo cid bafy...\n');
+    const outcome = parseResult('uploaded manuscript.md\ncid bafy...\n');
     expect(outcome.kind).toBe('failure');
     if (outcome.kind !== 'failure') return;
     expect(outcome.message).toMatch(/is a JSON result/);

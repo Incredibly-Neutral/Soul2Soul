@@ -4,7 +4,7 @@
   "publication": "joera.soul2soul.eth",
   "subdomain": "joera",
   "objectId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-  "kuboCid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+  "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
   "frontmatterWritten": false,
   "authorContract": "0x5555555555555555555555555555555555555555",
   "authorGenesis": "0x6666666666666666666666666666666666666666666666666666666666666666",

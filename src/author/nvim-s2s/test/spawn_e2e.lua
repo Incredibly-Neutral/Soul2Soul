@@ -139,7 +139,7 @@ eq(code_of(res), 0, 'exit 0: code')
 ok(type(res.json) == 'table', 'exit 0: json decoded')
 eq(res.json and res.json.action, 'upload', 'exit 0: action preserved')
 eq(
-  res.json and res.json.kuboCid,
+  res.json and res.json.cid,
   'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
   'exit 0: fixture body intact'
 )

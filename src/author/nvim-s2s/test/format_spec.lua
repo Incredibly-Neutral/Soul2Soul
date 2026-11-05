@@ -108,7 +108,7 @@ local future = fixture('open-shape')
 
 local ul = format.lines(upload)
 eq(line_for(ul, 'note'), '/home/joera/notes/hello-s2s.md', 'upload lines: note whole path')
-eq(line_for(ul, 'kuboCid'), upload.kuboCid, 'upload lines: kuboCid whole (no truncation)')
+eq(line_for(ul, 'cid'), upload.cid, 'upload lines: cid whole (no truncation)')
 eq(line_for(ul, 'frontmatterWritten'), 'yes', 'upload lines: boolean renders as yes')
 ok(not has_key(ul, 'txHash'), 'upload lines: no txHash line')
 ok(ul[1]:find('^note') ~= nil, 'upload lines: known order starts at note')
@@ -128,7 +128,7 @@ eq(line_for(pub, 'txHash'), publish.txHash, 'publish lines: txHash')
 
 local rv = format.lines(revoke)
 eq(line_for(rv, 'txHash'), revoke.txHash, 'revoke lines: txHash')
-ok(not has_key(rv, 'kuboCid'), 'revoke lines: no kuboCid (not in revoke shape)')
+ok(not has_key(rv, 'cid'), 'revoke lines: no cid (not in revoke shape)')
 
 local nl = format.lines(new_pub)
 eq(line_for(nl, 'name'), new_pub.name, 'new lines: name')
@@ -168,7 +168,7 @@ aligned(nl, 'new lines')
 
 eq(
   format.summary(upload),
-  'uploaded hello-s2s.md · ' .. upload.kuboCid,
+  'uploaded hello-s2s.md · ' .. upload.cid,
   'summary: upload → verb + basename + CID'
 )
 eq(
@@ -179,10 +179,10 @@ eq(
 ok(format.summary(publish):find('published hello-s2s.md', 1, true) == 1, 'summary: publish verb')
 contains(format.summary(publish), publish.txHash, 'summary: publish identifies by txHash')
 ok(
-  format.summary(publish):find(publish.kuboCid, 1, true) == nil,
+  format.summary(publish):find(publish.cid, 1, true) == nil,
   'summary: publish does not dump the CID'
 )
-eq(format.summary(preview), 'previewed hello-s2s.md · ' .. preview.kuboCid, 'summary: preview')
+eq(format.summary(preview), 'previewed hello-s2s.md · ' .. preview.cid, 'summary: preview')
 eq(format.summary(revoke), 'revoked hello-s2s.md · tx ' .. revoke.txHash, 'summary: revoke')
 eq(
   format.summary(new_pub),
@@ -192,7 +192,7 @@ eq(
 ok(format.summary(upload):find('hello-s2s.md', 1, true) ~= nil, 'summary: basename present')
 ok(format.summary(upload):find('/home/joera', 1, true) == nil, 'summary: full path not leaked')
 ok(format.summary(upload):find('\n', 1, true) == nil, 'summary: single line')
-eq(format.summary(future), 'uploaded hello world.md · ' .. future.kuboCid, 'summary: path basename')
+eq(format.summary(future), 'uploaded hello world.md · ' .. future.cid, 'summary: path basename')
 eq(format.summary(failure), nil, 'summary: nil for the failure envelope')
 
 -- ---------------------------------------------------------------------------

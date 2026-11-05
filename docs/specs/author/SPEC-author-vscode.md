@@ -38,7 +38,7 @@ Locked 2026-11-01:
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter**, as in [SPEC-author-nvim](SPEC-author-nvim.md) decision 1. `upload` writes `kubo_cid`; `offer` falls back to it, `--cid` overrides. The extension holds **no** CID state. |
+| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter**, as in [SPEC-author-nvim](SPEC-author-nvim.md) decision 1. `upload` writes `cid`; `offer` falls back to it, `--cid` overrides. The extension holds **no** CID state. |
 | 2 | Where it lives | **`src/author/vscode-s2s/`** — it is TypeScript with a build, unlike the build-free root-level `nvim-s2s/`, and `pnpm-workspace.yaml`'s `src/author/*` glob picks it up unchanged. |
 | 3 | Extension kind | **`"extensionKind": ["workspace"]`** — the extension host is the remote one, so `child_process` spawns the binary where the files and keys live. No UI-side half, no companion extension. |
 | 4 | Runtime floor | **VS Code `^1.90`**, `@types/node@20`. Nothing here needs newer; the floor exists so the `engines` value is honest rather than aspirational. |
@@ -185,7 +185,7 @@ leak is fixed in the binary this fallback becomes dead code that can be deleted.
 
 ### Fields
 
-Exactly the nvim set: `action`, `objectId`, `kuboCid`, `txHash`, `render.*`, `frontmatterWritten`,
+Exactly the nvim set: `action`, `objectId`, `cid`, `txHash`, `render.*`, `frontmatterWritten`,
 `publication`, `subdomain`, `error`. Open-shape rule unchanged — known fields formatted, extra
 scalars appended as `key: value` in the detail view, unknown nested objects ignored, never fatal.
 That is what lets `upload` grow an author-contract record without an extension release.
@@ -230,7 +230,7 @@ binary hands back a *stale* note if the buffer was never written.
 - **Errors**: the envelope `error` verbatim (it is written for humans and points at the fix) in
   `showErrorMessage`, and the long form in the output channel. No stack traces, no "something went
   wrong".
-- **Clipboard**: `objectId`/`kuboCid`/`txHash` copyable from the detail document; `upload` also puts
+- **Clipboard**: `objectId`/`cid`/`txHash` copyable from the detail document; `upload` also puts
   the CID in the clipboard when `s2s.copyCid` (default `false`).
 
 ## Commands
@@ -270,7 +270,7 @@ binary hands back a *stale* note if the buffer was never written.
   "s2s.cwd": "auto",          // "auto" (workspace folder of the note) | absolute path
   "s2s.notify": true,         // false → silent successes; errors still notify
   "s2s.open": true,           // open render URLs on preview/publish
-  "s2s.copyCid": false,       // put upload's kuboCid in the clipboard
+  "s2s.copyCid": false,       // put upload's cid in the clipboard
   "s2s.confirmRevoke": true,
   "s2s.timeout": 0,           // ms; 0 = none
   "s2s.verboseStderr": false  // stderr is ALWAYS mirrored to the channel; true widens the
@@ -321,7 +321,7 @@ is verified by the manual smoke above.
 ## Hard rules
 
 1. **The extension never opens the note.** No markdown/frontmatter/YAML parsing, no reading
-   `kubo_cid`/`genesis`, no writes to it. Path in, JSON out.
+   `cid`/`genesis`, no writes to it. Path in, JSON out.
 2. **The extension never re-implements config precedence.** It asks the binary (`config get/list`).
 3. **`--json` on every invocation**, and only the parsed result is ever formatted. Raw stdout is
    never logged — at most a byte count and "not a clean document" line.

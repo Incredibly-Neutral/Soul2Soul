@@ -75,7 +75,7 @@ describe('s2s author upload result', () => {
       publication: 'test.soul2soul.eth',
       subdomain: 'test',
       objectId: RESULT.objectId,
-      kuboCid: CID,
+      cid: CID,
       frontmatterWritten: true,
     });
     expect(payload.ipfsUrl).toBe(`ipfs://${CID}`);
@@ -89,23 +89,23 @@ describe('s2s author upload result', () => {
       'publication',
       'subdomain',
       'objectId',
-      'kuboCid',
+      'cid',
       'frontmatterWritten',
     ]) {
       expect(Object.keys(payload), `missing pre-existing key ${key}`).toContain(key);
     }
   });
 
-  it('prints the gateway link under the kubo cid line in human mode', async () => {
+  it('prints the gateway link under the cid line in human mode', async () => {
     const path = note();
     await upload.run({ out: createOut(false) } as CliContext, argsFor(path));
 
     const text = stdout.join('');
-    expect(text).toContain(`  kubo cid    : ${CID}`);
+    expect(text).toContain(`  cid         : ${CID}`);
     expect(text).toContain(`  link        : https://ipfs.io/ipfs/${CID}`);
     // the link line follows the cid line, as specified
     const lines = text.split('\n');
-    const cidAt = lines.findIndex((l) => l.includes(`kubo cid    : ${CID}`));
+    const cidAt = lines.findIndex((l) => l.includes(`  cid         : ${CID}`));
     expect(lines[cidAt + 1]).toBe(`  link        : https://ipfs.io/ipfs/${CID}`);
   });
 });

@@ -36,7 +36,7 @@ export const upload: CommandSpec = {
         publication: result.publication,
         subdomain: result.subdomain,
         objectId: result.objectId,
-        kuboCid: result.kuboCid,
+        cid: result.kuboCid,
         // Public links for the uploaded CID — additive scalars, existing keys unchanged.
         ipfsUrl: ipfsUri(result.kuboCid),
         gatewayUrl: ipfsGatewayUrl(result.kuboCid),
@@ -46,7 +46,7 @@ export const upload: CommandSpec = {
         `Uploaded ${notePath}`,
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  kubo cid    : ${result.kuboCid}`,
+        `  cid         : ${result.kuboCid}`,
         `  link        : ${ipfsGatewayUrl(result.kuboCid)}`,
         `  offer       : not offered on-chain — run: s2s author offer ${notePath}${result.frontmatterWritten ? '' : ` --cid ${result.kuboCid}`}`,
         `  note        : \`offer\` re-uploads; pass --cid ${result.kuboCid} to anchor these exact bytes without one`,

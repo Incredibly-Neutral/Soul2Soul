@@ -40,7 +40,7 @@ publication), `publication` (publication lifecycle), and `config` (CLI settings)
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
 s2s author init      [--json]                                                                     # deploy the author Safe (idempotent)
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
-s2s author propose   <note> [--cid <kuboCid>] [--publication <ens>] [--allow-plaintext] [--json]  # on-chain offer only
+s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
@@ -54,12 +54,13 @@ s2s config path      [--local] [--json]                                         
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
 legs, and writes `genesis`/`author` back — but **never writes to the chain**. `author`
-in that frontmatter is the **author Safe** (`did:ethr:<safe>`), not the signing EOA;
+in that frontmatter is the **author Safe** as a bare `0x…` address (the `did:ethr:` form is the
+signed item's, not the note's), not the signing EOA;
 `author` sits inside the EIP-712 signing view, so it is part of `genesis`. The on-chain
-`makeOffer` is the separate **`propose`** step, which takes the `kuboCid` that `upload`
+`makeOffer` is the separate **`propose`** step, which takes the `cid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
 `content_id`, mirroring neutralpress' revoke genesis resolution). `upload` also writes the
-CID it just produced into the frontmatter as `kubo_cid`, so `propose` works with no flags
+CID it just produced into the frontmatter as `cid`, so `propose` works with no flags
 after an upload; `--cid` overrides. `publish` remains the
 one-shot convenience that does upload + propose + prod render + pins together.
 
@@ -78,8 +79,8 @@ Global flags parse anywhere in the argv:
 | `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). |
 | `--version` | Print `s2s v<version>` and exit 0. |
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. |
-| `--cid <kuboCid>` | (propose) Explicit content CID. Defaults to the `kubo_cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
-| `--allow-plaintext` | (consumed by upload / preview / publish / propose; declared in `BOOLEAN_FLAGS` in `lib/args.ts`, so it is boolean — never consumes a value token — and every other command parses it and ignores it) Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `kubo_cid`. It skips only that guard — `propose`'s "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. |
+| `--cid <cid>` | (propose) Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. |
+| `--allow-plaintext` | (consumed by upload / preview / publish / propose; declared in `BOOLEAN_FLAGS` in `lib/args.ts`, so it is boolean — never consumes a value token — and every other command parses it and ignores it) Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — `propose`'s "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. |
 | `--repo <owner/repo>` | (new) Dev repository of the publication — required. |
 | `--branch <b>` | (new) Default render branch; empty string when omitted. |
 | `--author <addr>,...` | (new) Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. |
@@ -243,23 +244,23 @@ s2s <group> <action> [positionals…] [flags…]
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
 { action: 'upload'; note: string; publication: string; subdomain: string;
-  objectId: string; kuboCid: string;
-  ipfsUrl: string;        // 'ipfs://<kuboCid>'
-  gatewayUrl: string;     // 'https://ipfs.io/ipfs/<kuboCid>'
+  objectId: string; cid: string;
+  ipfsUrl: string;        // 'ipfs://<cid>'
+  gatewayUrl: string;     // 'https://ipfs.io/ipfs/<cid>'
   frontmatterWritten: boolean }          // no txHash
 
-// s2s author propose <note> [--cid <kuboCid>] [--publication <ens>] [--json] — on-chain offer only
+// s2s author propose <note> [--cid <cid>] [--publication <ens>] [--json] — on-chain offer only
 { action: 'propose'; note: string; publication: string; subdomain: string;
-  objectId: string; kuboCid: string; txHash: string }
+  objectId: string; cid: string; txHash: string }
 
 // s2s author preview <note> [--publication <ens>] [--json]    — ipfs + preview render (off-chain)
 { action: 'preview'; note: string; publication: string; subdomain: string;
-  objectId: string; kuboCid: string;
+  objectId: string; cid: string;
   render?: { cid: string; path: string; previewUrl: string } }
 
 // s2s author publish <note> [--publication <ens>] [--json]    — all-in-one: upload + offer + render + pins
 { action: 'publish'; note: string; publication: string; subdomain: string;
-  objectId: string; kuboCid: string; txHash: string;
+  objectId: string; cid: string; txHash: string;
   render?: { cid: string; path: string; previewUrl: string; prodUrl: string } }
 
 // s2s author revoke <note> [--publication <ens>] [--json]     — on-chain retract + remove re-render
@@ -276,12 +277,12 @@ Shared field meanings:
 | `publication` | Resolved publication ENS (flag, else first `--s2s` frontmatter tag). |
 | `subdomain` | Publication subdomain (bytes32 → string via shared `subdomainOf`). |
 | `objectId` | Stable on-chain content identity (frontmatter `genesis`, else signed item id). |
-| `kuboCid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
-| `ipfsUrl` | (upload only) `ipfs://<kuboCid>` — gateway-agnostic URI, from `ipfsUri` in `lib/ipfs-link.ts`. |
-| `gatewayUrl` | (upload only) `https://ipfs.io/ipfs/<kuboCid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `kubo cid`. |
+| `cid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
+| `ipfsUrl` | (upload only) `ipfs://<cid>` — gateway-agnostic URI, from `ipfsUri` in `lib/ipfs-link.ts`. |
+| `gatewayUrl` | (upload only) `https://ipfs.io/ipfs/<cid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `cid`. |
 | `txHash` | L2 transaction hash of the on-chain action. |
 | `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
-| `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author` on first publish, `kubo_cid` and `modified_date` always). |
+| `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author`/`creation_date` on first publish, `cid` and `modified_date` always). |
 
 `ipfsUrl`/`gatewayUrl` are **additive scalars** on `upload` alone — existing keys are unchanged, so
 hosts that read the result as an open shape need no change: the Neovim plugin formats known fields,
@@ -442,9 +443,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   (`author.ts:386`; legacy `content_id`-only notes are covered), and refuses three states, each with
   its own message: the previous item is encrypted (restore `encryption: true`, or
   `--allow-plaintext`); the previous revision cannot be read, cause-classified — a recorded CID that
-  does not resolve gets "fix or remove the stale `kubo_cid`", while a timeout or a gateway fault gets
+  does not resolve gets "fix or remove the stale `cid`", while a timeout or a gateway fault gets
   "re-run …, or pass `--allow-plaintext`", so that first remedy does not name the flag; and an
-  identity with no recorded `kubo_cid`, where nothing can be checked at all, also a `UsageError`
+  identity with no recorded `cid`, where nothing can be checked at all, also a `UsageError`
   naming the flag. No silent plaintext fallback. The code records one open risk in its header: the
   writer's ciphertext shape is inferred from the read path, not from a recorded live `/lit_action`
   encrypt response, so if a live encrypt returns bare base64 the fix belongs on the read path
@@ -455,16 +456,24 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   exists for the note.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
   It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
-  only the name label, taken from the ENS name itself.
-  It writes `kubo_cid` into the frontmatter (the CID of that upload — ephemeral: the next
+  only the name label, taken from the ENS name itself. On the **first** write-back it also stamps
+  `creation_date`: neutralpress has always filled it on save, the CLI never did, and the real
+  first-write time is not recoverable from the file — so an existing note gets the `modified_date`
+  it already carried (a lower bound on its age), never `now`. `genesis` stays quoted, because a
+  bare 64-hex `0x…` parses as a YAML number.
+  It writes `cid` into the frontmatter (the CID of that upload — ephemeral: the next
   upload overwrites it, and it describes the note as of that upload, not current edits).
+  `cid` succeeded `kubo_cid`; the old key is still **read** (by `propose`'s fallback and by the
+  downgrade guard, both through `resolveKuboCid`) and is **deleted** on the next write-back, so a
+  note never carries two CIDs naming different revisions. `cid` is not template data, so it is
+  excluded from the shared `custom` bag like every other protocol key.
   `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
-  the `makeOffer(objectId, kuboCid)` for `--cid` if given, else the stored `kubo_cid`; it
+  the `makeOffer(objectId, cid)` for `--cid` if given, else the stored `cid`; it
   expects `upload` to have run first (no identity — `genesis` or `content_id` — or no CID and no
   `--cid`, → usage error pointing at `s2s author upload`). When the note says `encryption: true`,
   `propose` also verifies the item it is about to anchor: it fetches that CID and refuses if the
   stored item does not declare `encryption: true`, has no string body, or cannot be read or parsed —
-  and the check is on the anchored CID (including `--cid`), not on the frontmatter's `kubo_cid`. It
+  and the check is on the anchored CID (including `--cid`), not on the frontmatter's `cid`. It
   runs the same downgrade guard as the write path.
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
   signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,

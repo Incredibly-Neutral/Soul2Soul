@@ -30,7 +30,7 @@ Locked 2026-10-22 (the handoff's open §0 questions):
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter.** `upload` writes `kubo_cid` back; `propose` falls back to it, `--cid` overrides. The plugin holds **no** CID state. |
+| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter.** `upload` writes `cid` back; `propose` falls back to it, `--cid` overrides. The plugin holds **no** CID state. |
 | 2 | Neovim runtime floor | **0.10** (`vim.system`, `vim.ui.open`, `vim.notify` with replaceable id). No `jobstart` fallback. The dev VM runs **0.12.6**. |
 | 3 | Where the plugin lives | **`nvim-s2s/` at the s2s repo root**, pure Lua, no build step, `dir`-installable. Not a pnpm workspace package. |
 | 4 | CID prefill UX | Moot — there is no prefill. `:S2sPropose` needs no prompt after `:S2sUpload`. |
@@ -38,7 +38,7 @@ Locked 2026-10-22 (the handoff's open §0 questions):
 | 6 | Result-shape tolerance | Results are an **open shape**: format known fields, pass unknown scalars through, never reject extras. |
 | 7 | `schema: 1` in the JSON envelope | **Deferred** (not built). Version check is `s2s --version` only, for now. |
 
-Decision 1 detail: `kubo_cid` is *ephemeral* — it names one upload of one revision, is overwritten
+Decision 1 detail: `cid` is *ephemeral* — it names one upload of one revision, is overwritten
 by the next upload, and describes the note as of that upload. That staleness is only detectable by
 the binary, which is why the value lives in the note it belongs to rather than in an editor
 session. Consequence for the plugin: **no `changedtick` guard, no buffer cache** — a stale upload
@@ -100,7 +100,7 @@ these fields and treats everything else as decoration:
 |---|---|
 | `action` | routing to the formatter; sanity check that the binary did what we asked |
 | `objectId` | identity line + clipboard |
-| `kuboCid` | identity line + clipboard (`upload` → `+` register, opt-in) |
+| `cid` | identity line + clipboard (`upload` → `+` register, opt-in) |
 | `txHash` | "on-chain" line, copyable |
 | `render.previewUrl` / `render.prodUrl` / `render.path` | openable target (`vim.ui.open`, `opts.open`) / quickfix entry |
 | `frontmatterWritten` | buffer↔disk sync (below) |
@@ -136,7 +136,7 @@ This is the only place the plugin cares that the note is also a file on disk.
   returned are ever opened or printed.
 - **Errors**: notify ERROR with the envelope `error` verbatim (it's written for humans and already
   points at the fix). No Lua stack traces, no "something went wrong".
-- **Clipboard**: `objectId`/`kuboCid`/`txHash` copyable via the detail float keys; `upload` also
+- **Clipboard**: `objectId`/`cid`/`txHash` copyable via the detail float keys; `upload` also
   offers the CID in `+` when `opts.copy_cid = true` (default `false` — silently mutating a register
   on every upload is rude).
 
@@ -171,7 +171,7 @@ require('s2s').setup({
   cwd = 'auto',           -- 'auto' | absolute path
   notify = true,          -- false → silent successes, errors still notify
   open = true,            -- open render URLs on preview/publish
-  copy_cid = false,       -- put upload's kuboCid in the + register
+  copy_cid = false,       -- put upload's cid in the + register
   confirm_revoke = true,
   timeout = nil,          -- ms; nil = no timeout
 })
@@ -206,7 +206,7 @@ path. CI is out of scope for now — the gate is "runs in this VM's 0.12.6".
 ## Hard rules
 
 1. **The plugin never opens the note.** No markdown parsing, no frontmatter parsing, no YAML, no
-   reading `kubo_cid`/`genesis` out of the file, no writing to it. Path in, JSON out.
+   reading `cid`/`genesis` out of the file, no writing to it. Path in, JSON out.
 2. **The plugin never re-implements config precedence.** It asks the binary (`config get/list`).
 3. **`--json` on every invocation**, and only the parsed result is ever formatted — stdout is never
    logged raw, only surfaced as a one-line "not JSON" diagnostic.

@@ -48,7 +48,7 @@ const KNOWN_ORDER = [
   'publication',
   'subdomain',
   'objectId',
-  'kuboCid',
+  'cid',
   'ipfsUrl',
   'gatewayUrl',
   'txHash',
@@ -139,13 +139,13 @@ function identityLines(action: string | undefined, result: ResultObject): string
 
   switch (action) {
     case 'upload': {
-      const cid = str(result['kuboCid']);
-      if (cid !== undefined) lines.push(`kubo cid  ${cid}`);
+      const cid = str(result['cid']);
+      if (cid !== undefined) lines.push(`cid       ${cid}`);
       break;
     }
     case 'offer': {
-      const cid = str(result['kuboCid']);
-      if (cid !== undefined) lines.push(`kubo cid  ${cid}`);
+      const cid = str(result['cid']);
+      if (cid !== undefined) lines.push(`cid       ${cid}`);
       const tx = str(result['txHash']);
       if (tx !== undefined) lines.push(`offer tx  ${tx}`);
       break;
@@ -232,7 +232,7 @@ export function formatResult(
     title: `${head}${formatDuration(options.durationMs)}`,
     lines: identityLines(action, result),
     url: openableUrl(action, result),
-    copy: action === 'upload' ? str(result['kuboCid']) : undefined,
+    copy: action === 'upload' ? str(result['cid']) : undefined,
   };
 }
 

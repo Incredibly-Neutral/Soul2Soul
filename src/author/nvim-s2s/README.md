@@ -80,7 +80,7 @@ require('s2s').setup({
   cwd = 'auto',           -- 'auto' walks up for .s2sconfig.json / .git / package.json
   notify = true,          -- false → silent successes; failures still notify
   open = true,            -- open render URLs after preview/publish
-  copy_cid = false,       -- put upload's kuboCid in the + register
+  copy_cid = false,       -- put upload's cid in the + register
   confirm_revoke = true,  -- :S2S revoke asks first
   confirm_save = true,    -- ask before uploading when the buffer has unsaved edits
   abbrev = true,          -- `:s2s …` expands to `:S2S …`

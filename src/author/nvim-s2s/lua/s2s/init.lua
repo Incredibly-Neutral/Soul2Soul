@@ -167,7 +167,7 @@ local function copy_cid(action, result)
   if not opts.copy_cid or action ~= 'upload' then
     return
   end
-  local cid = type(result) == 'table' and result.kuboCid or nil
+  local cid = type(result) == 'table' and result.cid or nil
   if type(cid) == 'string' and cid ~= '' then
     pcall(vim.fn.setreg, '+', cid)
   end

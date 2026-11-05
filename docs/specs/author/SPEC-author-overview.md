@@ -46,7 +46,7 @@ driving the same pure orchestration out of `shared`, with its own thin adapters.
   identity that may publish). These are deliberately different fields — see the actor invariant
   below.
 - Frontmatter is the note's memory of that object: `genesis` (stable bytes32 identity), `author`
-  (the Safe), `kubo_cid` (the CID of the last upload — ephemeral, overwritten by the next upload),
+  (the Safe), `cid` (the CID of the last upload — ephemeral, overwritten by the next upload),
   `slug` (moves the rendered path), and the legacy `content_id` (the Lens-era name for `genesis`,
   still read as a fallback).
 
