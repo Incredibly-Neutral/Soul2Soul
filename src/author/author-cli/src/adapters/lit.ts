@@ -9,5 +9,5 @@ import { LitService } from '@s2s/soul2soul-shared';
 import type { CliConfig } from '../core/config';
 
 export function createLitService(config: CliConfig): LitService {
-  return new LitService({ environment: config.environment, accountKey: config.litAccountKey });
+  return new LitService({ environment: config.environment, accountKey: config.lit.accountKey });
 }

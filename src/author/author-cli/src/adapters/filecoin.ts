@@ -27,8 +27,8 @@ export async function createFilecoinStorage(
 ): Promise<FilecoinStorage | undefined> {
   const { filecoin } = config;
 
-  if (filecoin.sessionKeyPath) {
-    const raw = readFileSync(filecoin.sessionKeyPath, 'utf8');
+  if (filecoin.sessionKeyFile) {
+    const raw = readFileSync(filecoin.sessionKeyFile, 'utf8');
     const skData = JSON.parse(raw) as FilecoinSessionKeyData;
     const storage = new FilecoinStorage({}, nodeFilecoinBuilder);
     await storage.initWithSessionKey(skData, filecoin.rpcUrl, filecoin.chain);

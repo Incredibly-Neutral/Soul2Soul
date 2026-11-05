@@ -441,7 +441,7 @@ async function assertStoredItemEncrypted(
  * known — a note with an identity but no `cid` can hide an encrypted
  * revision), a CID that does not resolve (a stale/hand-edited `cid`), or a
  * gateway that is unreachable/slow. `fetchFromKubo` is an ordinary HTTPS call to
- * `ctx.config.kuboGateway` (repo default `ipfs.transport-union.dev`) bounded by
+ * `ctx.config.ipfs.primary.url` (repo default `ipfs.transport-union.dev`) bounded by
  * the shared 60s `MFS_TIMEOUTS.cp` — that ceiling is on the now-blocking
  * default path, and it cannot be shortened from here because `fetchFromKubo`
  * takes no signal/options; a client-side race would only leak the pending
@@ -545,7 +545,7 @@ async function renderContent(
   opts: AuthorWriteOptions,
 ): Promise<RenderOutcome> {
   const signature = await ctx.signer.signMessage('lit actions auth');
-  const litUsageKey = requireSetting(ctx.config.litUsageKey, 'LIT_USAGE_KEY');
+  const litUsageKey = requireSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY');
 
   const res = await renderwithLitActions(
     !opts.publish,
@@ -562,7 +562,7 @@ async function renderContent(
     undefined,
     opts.remove !== undefined && opts.remove.length > 0 ? opts.remove : undefined,
     undefined,
-    ctx.config.kuboToken ? `Bearer ${ctx.config.kuboToken}` : undefined,
+    ctx.config.ipfs.primary?.key ? `Bearer ${ctx.config.ipfs.primary.key}` : undefined,
   );
 
   if (!res.success) {
@@ -634,7 +634,7 @@ function scheduleDurability(
       // feature the operator has not enabled. Skip the leg entirely instead;
       // `backupToProviders` then reports 'skipped'.
       const filecoinConfigured = Boolean(
-        ctx.config.filecoin.sessionKeyPath || ctx.config.filecoin.privateKey,
+        ctx.config.filecoin.sessionKeyFile || ctx.config.filecoin.privateKey,
       );
       const result = await ctx.ipfs.backupToProviders(kuboCid, {
         providers: ['filebase', 'pinata'],
