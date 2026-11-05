@@ -29,14 +29,14 @@ import {
   addAuthor,
   authorEoa,
   authorsFilePath,
-  findAuthorByKey,
-  findAuthorName,
   isValidPetName,
   PET_NAME_MAX_LENGTH,
   readAuthors,
   writeAuthors,
+  writeBackAuthorSafe,
 } from '../core/authors';
-import { authorSafeSalt, predictAuthorSafe } from '../core/author-safe';
+import { predictAuthorSafe } from '../core/author-safe';
+import { buildRpcEndpoints } from '../adapters/rpc';
 import { hexKey, loadConfig, type CliConfig } from '../core/config';
 
 /** The key piped on stdin, when stdin is not a terminal (`echo 0x… | s2s …`). */
@@ -61,7 +61,9 @@ async function predictSafe(
   privateKey: string,
   eoa: Address,
 ): Promise<string | null> {
-  const rpcUrl = config.rpc.L2[0];
+  // `config.rpc.L2` holds only the explicit overrides; every other author path
+  // reads `ctx.rpcs.L2`, i.e. the DRPC → public → Alchemy → Infura chain.
+  const rpcUrl = buildRpcEndpoints(config).L2[0];
   if (!rpcUrl) {
     out.warn(
       'no L2 RPC configured — author Safe not predicted; run `s2s author address` once one is set',
@@ -117,22 +119,13 @@ export const authorNew: StoreCommandSpec = {
     }
 
     const file = authorsFilePath();
-    const store = readAuthors(file);
-    const existing = findAuthorName(store, name);
-    if (existing) {
-      throw new UsageError(
-        `author '${existing}' already exists — pick another name, or \`s2s author rm ${existing}\` first`,
-      );
-    }
-    const owner = findAuthorByKey(store, privateKey);
-    if (owner) {
-      throw new UsageError(
-        `that private key already belongs to author '${owner}' — one key, one author`,
-      );
-    }
+    // The key is written first, with no Safe: prediction is a network read, and
+    // an interrupted one must not lose the key the user just handed over.
+    // `addAuthor` rejects a duplicate name or key before anything is written.
+    writeAuthors(addAuthor(readAuthors(file), name, privateKey, null), file);
 
     const safe = await predictSafe(out, loadConfig(), privateKey, eoa);
-    writeAuthors(addAuthor(store, name, privateKey, safe), file);
+    if (safe !== null) writeBackAuthorSafe(name, safe, file);
 
     out.result(
       {

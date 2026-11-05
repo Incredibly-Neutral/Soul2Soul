@@ -21,7 +21,7 @@ export const authorAddress: CommandSpec = {
       ctx.out.warn(message);
     });
     ctx.out.result(
-      { action: 'author.address', ...state, author: ctx.config.author?.name },
+      { action: 'author.address', ...state, author: ctx.config.author?.name ?? null },
       [
         `author safe : ${state.address}`,
         `eoa (owner) : ${state.eoa}`,

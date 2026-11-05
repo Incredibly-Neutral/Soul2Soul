@@ -106,6 +106,20 @@ function writeTarget(args: ParsedArgs): { file: string; local: boolean; label: s
     : { file: paths.user, local: false, label: 'user' };
 }
 
+/**
+ * `config set/unset privateKey` is a no-op while a stored author is active,
+ * because the store outranks the user file. Say so instead of pretending the
+ * write took effect.
+ */
+function warnIfAuthorStoreShadows(out: CliOut, field: ConfigField): void {
+  if (field.key !== 'privateKey') return;
+  const author = loadConfig().author;
+  if (author?.source !== 'store' || !author.name) return;
+  out.warn(
+    `author '${author.name}' is active, so the stored key still signs — run \`s2s author switch <name>\` to pick another, or \`s2s author rm ${author.name}\` to fall back to this setting`,
+  );
+}
+
 function setCommand(out: CliOut, args: ParsedArgs): void {
   const field = requireField(args);
   const value = args.positionals[1];
@@ -125,6 +139,7 @@ function setCommand(out: CliOut, args: ParsedArgs): void {
         .filter((part) => part.length > 0)
     : value;
   writeConfigValue(target.file, field.key, stored);
+  warnIfAuthorStoreShadows(out, field);
   if (target.local && field.secret) {
     out.warn(
       `storing a secret in the project config file (${target.file}) — make sure .s2sconfig.json is gitignored`,
@@ -156,6 +171,7 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
   const field = requireField(args);
   const target = writeTarget(args);
   writeConfigValue(target.file, field.key, undefined);
+  warnIfAuthorStoreShadows(out, field);
   out.result(
     { action: 'config.unset', key: field.key, file: target.file, local: target.local },
     `unset ${field.key} in ${target.label} config (${target.file})`,

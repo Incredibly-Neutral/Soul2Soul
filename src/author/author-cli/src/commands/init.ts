@@ -26,7 +26,7 @@ export const authorInit: CommandSpec = {
         : `deployment submitted for ${result.address} — not confirmed yet`
       : `author Safe already deployed at ${result.address}`;
     ctx.out.result(
-      { action: 'author.init', ...result, author: ctx.config.author?.name },
+      { action: 'author.init', ...result, author: ctx.config.author?.name ?? null },
       [
         headline,
         `author safe : ${result.address}`,

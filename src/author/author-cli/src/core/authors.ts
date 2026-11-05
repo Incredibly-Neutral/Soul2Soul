@@ -19,12 +19,15 @@
 // (tmp + rename) and 0600 — the file holds private keys.
 // ============================================================================
 
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import type { Address, Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+
+import { UsageError } from '../lib/errors';
 
 /** One stored author: the signing key and its (predicted) author Safe. */
 export interface AuthorRecord {
@@ -119,19 +122,36 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
     }
   }
 
+  // `active` resolves case-insensitively, like every other name lookup: a
+  // hand-edited "ZOMI" still points at the stored `zomi`.
   const rawActive = raw.active;
   const active =
-    typeof rawActive === 'string' && Object.hasOwn(authors, rawActive) ? rawActive : null;
+    typeof rawActive === 'string' ? (findAuthorName({ active: null, authors }, rawActive) ?? null) : null;
   return { active, authors };
 }
 
-/** Write the store atomically (tmp + rename) at mode 0600. Returns the path. */
+/**
+ * Write the store atomically (tmp + rename) at mode 0600. Returns the path.
+ *
+ * The tmp name is unique per process and write: a fixed `${path}.tmp` lets two
+ * concurrent invocations interleave, and a crash would leave a sidecar holding
+ * a private key.
+ */
 export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath()): string {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${String(process.pid)}.${randomUUID()}.tmp`;
   const next = { active: data.active, authors: data.authors };
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, path);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // nothing to clean up
+    }
+    throw err;
+  }
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -176,13 +196,31 @@ export function findAuthor(data: AuthorsStore, name: string): ActiveAuthor | und
   return { name: key, ...record };
 }
 
-/** Add an author and make it active (a new author is the one you want next). */
+/**
+ * Add an author and make it active (a new author is the one you want next).
+ *
+ * Uniqueness lives here, not in `author new`, so any caller gets it: a pet name
+ * is unique case-insensitively and one key belongs to one name.
+ */
 export function addAuthor(
   data: AuthorsStore,
   name: string,
   privateKey: string,
   safe: string | null,
 ): AuthorsStore {
+  if (!isValidPetName(name)) {
+    throw new UsageError(`invalid author name '${name}'`);
+  }
+  const existing = findAuthorName(data, name);
+  if (existing) {
+    throw new UsageError(
+      `author '${existing}' already exists — pick another name, or \`s2s author rm ${existing}\` first`,
+    );
+  }
+  const owner = findAuthorByKey(data, privateKey);
+  if (owner) {
+    throw new UsageError(`that private key already belongs to author '${owner}' — one key, one author`);
+  }
   return {
     active: name,
     authors: { ...data.authors, [name]: { privateKey: normalizeKey(privateKey), safe } },
