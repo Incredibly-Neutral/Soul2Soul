@@ -10,9 +10,10 @@
 //
 // Why nested: the CLI is configured by a person who is asked, per service,
 // "bring your own, or accept the provided default". A service is a section
-// (`pinning`, `ipfs`, `rpc`, `paymaster`, `filecoin`, `lit`, `ens`, `github`),
-// not a flat key. `pinning` and `ipfs` are label maps, because an operator may
-// pin to several providers and read through several gateways at once.
+// (`pinning`, `ipfs`, `rpc`, `bundler`, `paymaster`, `filecoin`, `lit`, `ens`,
+// `github`), not a flat key. `pinning` and `ipfs` are label maps, because an
+// operator may pin to several providers and read through several gateways at
+// once.
 //
 // `privateKey` is deliberately NOT a key here. A signing key has exactly one
 // on-disk home (`authors.json`, see core/authors.ts) and one override surface
@@ -37,13 +38,15 @@ export type Environment = 'prod' | 'dev';
 export type FilecoinChain = 'mainnet' | 'calibration';
 
 /**
- * One pinning provider. `key: ''` means "labelled but no credential" — a
- * gateway-only entry is legal, and the empty key is what tells the adapters to
- * skip the pin.
+ * One pinning provider. Every field but `provider` is optional and, exactly as
+ * in the `ipfs` map, an absent field is omitted rather than blanked: a layer
+ * that names only a gateway must not overwrite the credential the layer below
+ * supplies. A provider with no key at all is a gateway-only label, and the
+ * adapters skip its pin.
  */
 export interface PinningEntry {
   provider: string;
-  key: string;
+  key?: string;
   url?: string;
 }
 
@@ -69,6 +72,8 @@ export interface FileConfig {
   environment?: Environment;
   pinning?: Record<string, PinningEntry>;
   ipfs?: Record<string, IpfsEntry>;
+  /** Explicit bundler endpoint (a non-Pimlico bundler); keyless by design. */
+  bundler?: { url?: string };
   rpc?: {
     drpc?: { key?: string };
     alchemy?: { key?: string };
@@ -115,9 +120,9 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'environment', env: ['S2S_ENV'], default: 'prod', enumValues: ['prod', 'dev'] },
   { path: 'pinning.*.provider', env: [] },
   { path: 'pinning.*.key', env: [], secret: true },
-  { path: 'pinning.*.url', env: [] },
+  { path: 'pinning.*.url', env: [], url: true },
   { path: 'ipfs.*.provider', env: [] },
-  { path: 'ipfs.*.url', env: [] },
+  { path: 'ipfs.*.url', env: [], url: true },
   { path: 'ipfs.*.key', env: [], secret: true },
   { path: 'rpc.drpc.key', env: ['S2S_DRPC_KEY', 'VITE_DRPC_API_KEY'], secret: true },
   { path: 'rpc.alchemy.key', env: ['S2S_ALCHEMY_KEY', 'VITE_ALCHEMY_KEY'], secret: true },
@@ -132,7 +137,11 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
     env: ['S2S_PIMLICO_KEY', 'PIMLICO_KEY', 'PIMLICO_API_KEY'],
     secret: true,
   },
-  { path: 'paymaster.url', env: ['S2S_PAYMASTER_URL', 'S2S_BUNDLER_URL'], url: true },
+  // The two endpoints are independent escape hatches, not one setting: an
+  // explicit bundler with no Pimlico key means NO sponsorship (see
+  // `bundlerEndpoints`), and a paymaster URL never moves the bundler.
+  { path: 'bundler.url', env: ['S2S_BUNDLER_URL'], url: true },
+  { path: 'paymaster.url', env: ['S2S_PAYMASTER_URL'], url: true },
   { path: 'filecoin.sessionKeyFile', env: ['S2S_FILECOIN_SESSION_KEY'] },
   {
     path: 'filecoin.chain',
@@ -200,17 +209,45 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
 // Path plumbing
 // ===========================================================================
 
-/** Split a dotted path, rejecting empty segments (a bug, not a user error). */
+/**
+ * Segments that would walk onto `Object.prototype` instead of the data.
+ *
+ * `config set ipfs.__proto__.url …` is argv, not a file a human wrote wrong:
+ * without this the walker descends into the prototype and assigns a *global*
+ * property. Rejected as a path segment wherever a path is split.
+ */
+const UNSAFE_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+/** Is this segment a prototype footgun rather than a label? */
+export function isUnsafeSegment(segment: string): boolean {
+  return UNSAFE_SEGMENTS.has(segment.trim());
+}
+
+/** Split a dotted path, rejecting empty or unsafe segments. */
 function splitPath(dotted: string): string[] {
   const parts = dotted.split('.').map((part) => part.trim());
   if (parts.some((part) => part.length === 0)) {
     throw new Error(`invalid config path '${dotted}'`);
   }
+  if (parts.some(isUnsafeSegment)) {
+    throw new Error(`invalid config path '${dotted}': '__proto__', 'prototype' and 'constructor' are not labels`);
+  }
   return parts;
+}
+
+/** Own-property read — an inherited name is not a value in this config. */
+function own(node: object, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(node, key)
+    ? (node as Record<string, unknown>)[key]
+    : undefined;
 }
 
 /** Exact or `*`-aware match, returning the spec plus the concrete path. */
 export function matchField(key: string): { spec: ConfigFieldSpec; path: string } | undefined {
+  // An unsafe segment never matches: `matchField` is the gate `config set`
+  // passes through, so rejecting here keeps the walkers unreachable.
+  if (key.split('.').some(isUnsafeSegment)) return undefined;
+
   const exact = CONFIG_FIELDS.find((spec) => spec.path === key);
   if (exact) return { spec: exact, path: key };
 
@@ -244,7 +281,7 @@ export function readPath(root: Record<string, unknown>, dotted: string): unknown
   let node: unknown = root;
   for (const part of splitPath(dotted)) {
     if (node === null || typeof node !== 'object' || Array.isArray(node)) return undefined;
-    node = (node as Record<string, unknown>)[part];
+    node = own(node, part);
   }
   return node;
 }
@@ -254,9 +291,11 @@ export function writePath(root: Record<string, unknown>, dotted: string, value: 
   const parts = splitPath(dotted);
   let node = root;
   for (const part of parts.slice(0, -1)) {
-    const next = node[part];
+    const next = own(node, part);
     if (next === null || typeof next !== 'object' || Array.isArray(next)) {
-      const created: Record<string, unknown> = {};
+      // Null-prototype: a created node cannot inherit (or be confused with) a
+      // property of `Object.prototype`.
+      const created: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       node[part] = created;
       node = created;
     } else {
@@ -274,7 +313,7 @@ export function deletePath(root: Record<string, unknown>, dotted: string): void 
   const parts = splitPath(dotted);
   const chain: Record<string, unknown>[] = [root];
   for (const part of parts.slice(0, -1)) {
-    const next = chain[chain.length - 1]?.[part];
+    const next = own(chain[chain.length - 1] as Record<string, unknown>, part);
     if (next === null || typeof next !== 'object' || Array.isArray(next)) return;
     chain.push(next as Record<string, unknown>);
   }
@@ -346,9 +385,13 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
     const entry = objectValue(value);
     if (!entry) continue;
     const url = textValue(entry.url);
+    const key = textValue(entry.key);
     pinning[label] = {
       provider: textValue(entry.provider) ?? label,
-      key: textValue(entry.key) ?? '',
+      // Absent fields are OMITTED, never blanked: `mergeLabels` copies every
+      // defined field, so a `key: ''` here would wipe the credential a lower
+      // layer supplies for the same provider. Same rule as the `ipfs` map.
+      ...(key === undefined ? {} : { key }),
       ...(url === undefined ? {} : { url }),
     };
   }
@@ -388,6 +431,9 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
     url: textValue(objectValue(raw.paymaster)?.url),
   });
   if (paymaster) out.paymaster = paymaster;
+
+  const bundler = compact({ url: textValue(objectValue(raw.bundler)?.url) });
+  if (bundler) out.bundler = bundler;
 
   const filecoinRaw = objectValue(raw.filecoin);
   const filecoin: NonNullable<FileConfig['filecoin']> = {};

@@ -148,6 +148,7 @@ The nested shape, one section per service:
   "pinning": { "pinata": { "provider": "pinata", "key": "…", "url": "gateway.example" } },
   "ipfs":    { "kubo":   { "provider": "kubo",   "url": "gw.example", "key": "…" } },
   "rpc":     { "drpc": { "key": "…" }, "custom": { "l1": ["…"], "l2": ["…"] } },
+  "bundler": { "url": "…" },
   "paymaster": { "key": "…", "url": "…" },
   "filecoin":  { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
   "lit": { "accountKey": "…", "usageKey": "…" }, "ens": { "registry": "0x…" },
@@ -157,28 +158,43 @@ The nested shape, one section per service:
 - **Sections are services**, not flat keys, because a machine owner is asked one question per
   service: bring your own, or accept the provided default. `pinning` and `ipfs` are **label maps**
   — an operator may pin to several providers and read through several gateways at once — while
-  `paymaster`, `filecoin`, `lit`, `ens`, `github` are singletons (`rpc` is a singleton holding the
-  named key providers).
+  `paymaster`, `bundler`, `filecoin`, `lit`, `ens`, `github` are singletons (`rpc` is a singleton
+  holding the named key providers).
 - **Merge rules differ by kind.** A label entry merges **field by field** while the provider stays
   the same: a custom `ipfs.kubo.key` keeps the lower layer's `url`, and a lone `ipfs.kubo.url`
   keeps the lower `key` — a token for a gateway you did not restate is exactly the case that
-  matters, and `ipfs.<label>.url` / `.key` are independently optional. Naming a **different**
-  provider replaces the entry whole (a Kubo token means nothing to a pinning service). A singleton
-  merges field by field (a custom `paymaster.key` keeps the default `paymaster.url`); a list is
-  **replaced**, never concatenated. Entries are copied, never aliased, so one `loadConfig` call's
-  env can never leak into the next.
+  matters, and `ipfs.<label>.url` / `.key` are independently optional. The same holds for
+  `pinning.<label>`: an absent field is **omitted**, never blanked, so
+  `config set pinning.pinata.url …` keeps the JWT the layer below supplies. Naming a **different**
+  provider replaces the entry whole (a Kubo token means nothing to a pinning service); provider
+  identity is the *only* isolation rule, and a credential is inherited within a provider, never
+  across one. A singleton merges field by field (a custom `paymaster.key` keeps the default
+  `paymaster.url`); a list is **replaced**, never concatenated. Entries are copied, never aliased,
+  so one `loadConfig` call's env can never leak into the next.
+- **Two ERC-4337 endpoints, two leaves.** `bundler.url` is the bundler and `paymaster.url` the
+  paymaster; a Pimlico key derives **both** (`https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`,
+  the same URL for the two roles, which is how Pimlico exposes them). Each URL is its own escape
+  hatch, resolved independently: `bundlerUrl = bundler.url ?? pimlico`,
+  `paymasterUrl = paymaster.url ?? pimlico`. An explicit bundler with no key therefore means
+  **no sponsorship** (`paymasterUrl` undefined, the userOp runs unsponsored) — never "call the
+  bundler as if it were a paymaster" — and an explicit paymaster URL never moves the bundler. The
+  legacy flat keys map to their own leaves (`bundlerUrl` → `bundler.url`, `paymasterUrl` →
+  `paymaster.url`), not onto one shared path.
 - **Keys are dotted paths** into that shape, one-for-one with the registry in `core/configschema.ts`
   — `s2s config set pinning.pinata.key <jwt>`, `s2s config set rpc.custom.l1 https://a,https://b`,
   `s2s config unset paymaster.key --local`. A map key is `*` in a registry path and concrete on the
   command line (`ipfs.kubo.url`). `s2s config list` shows the resolved set, `s2s config get <path>`
-  one leaf; `s2s config path` prints all five file locations, so a caller can see where each layer
-  lives on this machine.
+  one leaf; `s2s config path` prints the four file locations (custom, project, legacy, defaults)
+  plus the two env-file paths, so a caller can see where each layer lives on this machine.
 - **Secrets are masked** in `get`/`list` output (`maskSecret`), and a URL that carries a
   credential is masked per value — `https://api.pimlico.io/v2/1/rpc?apikey=********`, the endpoint
-  stays readable. `set --local` warns when either kind lands in the project file — commit risk; keep
-  secrets in the custom file or gitignore `.s2sconfig.json`. List keys (`rpc.custom.l1`,
-  `rpc.custom.l2`) accept comma-separated values and are stored as JSON arrays; enum keys
-  (`environment`, `filecoin.chain`) are validated on write.
+  stays readable. That applies to the label-map URLs too (`pinning.<label>.url`,
+  `ipfs.<label>.url`), so a gateway carrying `?token=` is masked in `get`, in `list` and in the
+  `setup` wizard's `[source: value]` preview. An empty leaf is **not** masked (there is nothing to
+  hide, and `********` for it would invent a credential). `set --local` warns when either kind
+  lands in the project file — commit risk; keep secrets in the custom file or gitignore
+  `.s2sconfig.json`. List keys (`rpc.custom.l1`, `rpc.custom.l2`) accept comma-separated values and
+  are stored as JSON arrays; enum keys (`environment`, `filecoin.chain`) are validated on write.
 - **`entryPoint` has no file home.** It is `S2S_ENTRY_POINT` + the builtin `0.7` and nothing else:
   a value in a file would be written and never read, so `config set entryPoint` / `unset` is a usage
   error naming the env var, while `config get entryPoint` still resolves (the merge is the same one,
@@ -190,6 +206,17 @@ The nested shape, one section per service:
   layer and below the env (a file cannot silence an env var). The result says so:
   `tombstone: true`. A marker is per leaf and per layer: a real value in a *higher* file beats a
   marker below it, and a marker on a label does not wipe a sibling the higher layer sets.
+- **A tombstone only suppresses layers BELOW it, so `unset` refuses to write one when a HIGHER
+  layer wins.** If the winning source is the env, or the project file while the target is the
+  custom one, a `null` in the target would change nothing while the result claimed the value was
+  gone — for a secret that is a false "I removed it". The command warns naming that layer and the
+  edit that would work (`unset S2S_GITHUB_TOKEN` here, or `s2s config unset <path> --local` in the
+  project file), writes no marker, and reports `suppliedBy: 'env' | 'project'`. A duplicate the
+  target itself holds is still deleted (that delete cannot touch a higher layer). Same rule as
+  `unset privateKey`, and it never creates a file just to say "nothing to do".
+- **No path segment may be `__proto__`, `prototype` or `constructor`.** They are rejected as a
+  label (so `config set ipfs.__proto__.url …` is a usage error, not a write to
+  `Object.prototype`), and the path walkers only follow own properties.
 - **`privateKey` is not a key of this surface.** A signing key has one on-disk home (`authors.json`, the
   author store), one override surface (`S2S_PRIVATE_KEY`), and is created by `s2s author new` /
   picked by `s2s author switch`. `s2s config set privateKey …` is a usage error naming those two
@@ -322,8 +349,11 @@ reproduced deliberately. `author init` is idempotent and is where modules get
 installed later; today it only deploys. Both steps need an L2 RPC; `init` also
 needs an ERC-4337 endpoint: `S2S_PIMLICO_KEY` (what the plugin stores as
 `pimlico_key`) is enough — the per-chain Pimlico URL is derived and doubles as
-bundler and paymaster. `S2S_BUNDLER_URL` / `S2S_PAYMASTER_URL` remain as
-escape hatches for a different bundler.
+bundler and paymaster. `S2S_BUNDLER_URL` / `S2S_PAYMASTER_URL` (or
+`config set bundler.url` / `paymaster.url`) remain as escape hatches for a
+different bundler and a different paymaster, independently: an explicit bundler
+with no key means the userOp runs **unsponsored**, not that the bundler is also
+the paymaster.
 
 The env files exist because **the CLI ships to people who do not have this
 repo**: `~/.config/s2s/.env` is the primary configuration surface for an
@@ -363,8 +393,12 @@ Keys marked `secret` in the registry (`pinning.*.key`, `ipfs.*.key`,
 `rpc.*.key`, `paymaster.key`, `lit.*Key`, `github.token`) are **masked** in
 `get`/`list` output, and `set --local` warns when a secret lands in the project
 file (commit risk — keep secrets in the custom file or gitignore
-`.s2sconfig.json`). The signing key is not among them: it belongs to the author
-store (`s2s author new`), and `config set privateKey` is refused.
+`.s2sconfig.json`). Leaves marked `url` (`rpc.custom.*`, `bundler.url`,
+`paymaster.url`, `filecoin.rpcUrl`, `pinning.*.url`, `ipfs.*.url`) are masked
+per **value** instead: a query-string credential becomes `********` and the
+endpoint stays readable — and the `--local` warning covers them too. The signing
+key is not among them: it belongs to the author store (`s2s author new`), and
+`config set privateKey` is refused.
 
 ### Exit codes
 
@@ -552,7 +586,8 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `ipfs
 { key: string; value: string | null }   // secrets masked; `eoa` is derived, not stored
 
 // s2s config unset <key> [--local] [--json]   — the only removal path for a stranded `privateKey`
-{ action: 'config.unset'; key: string; file: string; local: boolean; tombstone?: true }
+{ action: 'config.unset'; key: string; file: string; local: boolean; tombstone?: true;
+  suppliedBy?: 'env' | 'project' }   // set instead of `tombstone` when a higher layer wins
 
 // s2s config list [--json]             — all effective values; secrets masked
 { config: Record<string, unknown> }      // plus the derived `eoa`/`author`/`safe` when they resolve
@@ -603,8 +638,8 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_FILECOIN_SESSION_KEY` | filecoin (protocol-payer) | — | Path to a `session-key.json`. Mutually exclusive with private key. |
 | `S2S_FILECOIN_PRIVATE_KEY` | filecoin (direct) | — | Direct Filecoin signer key. Mutually exclusive with session key. |
 | `S2S_PIMLICO_KEY` | `new`, `author init` | — | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler *and* paymaster. |
-| `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch: explicit bundler RPC, overriding the derived Pimlico URL. On its own it means no sponsorship. |
-| `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch: explicit paymaster RPC, overriding the Pimlico one. |
+| `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
+| `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler. |
 | `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 

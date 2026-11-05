@@ -51,7 +51,14 @@ import {
   urlHasCredential,
   writeConfigValue,
 } from '../core/configfile';
-import { configKeyValue, configSections, loadConfig, type LoadConfigOptions } from '../core/config';
+import {
+  configKeyValue,
+  configSections,
+  configValueSource,
+  envNamesFor,
+  loadConfig,
+  type LoadConfigOptions,
+} from '../core/config';
 import {
   CONFIG_FIELDS,
   fieldByPath,
@@ -195,7 +202,8 @@ function maskDeep(value: unknown, path = ''): unknown {
       ]),
     );
   }
-  if (typeof value === 'string') {
+  // An empty leaf is not a credential: masking it would invent one.
+  if (typeof value === 'string' && value.length > 0) {
     if (spec?.secret) return maskSecret(value);
     if (spec?.url) return maskUrlCredential(value);
   }
@@ -204,7 +212,7 @@ function maskDeep(value: unknown, path = ''): unknown {
 
 /** Mask one resolved leaf for `get` (a list is masked entry by entry). */
 function maskedValue(spec: ConfigFieldSpec, value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value.length === 0) return undefined;
   if (spec.secret) return maskSecret(value);
   if (spec.url) {
     return value
@@ -304,13 +312,52 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
   }
   const { path } = requireField(args, 'write');
   const target = writeTarget(args);
+  const paths = configFilePaths();
+  const raw = readPath(readConfigRaw(target.file), path);
+  const source = configValueSource(path);
+
+  // A tombstone only suppresses the layers BELOW the file it is written into.
+  // If the winning value comes from above the target — the env, or the project
+  // file when the target is the custom one — a marker there would change
+  // nothing while the result claimed the value was gone. Say which layer holds
+  // it instead, and write no marker (same rule as `unset privateKey`).
+  const aboveTarget: readonly string[] = target.local ? ['env'] : ['env', 'project'];
+  if (source !== undefined && aboveTarget.includes(source)) {
+    // A copy in the target is still a duplicate worth removing; that delete
+    // cannot touch the higher layer, so it is honest on its own.
+    if (raw !== undefined) writeConfigValue(target.file, path, undefined);
+    const names = envNamesFor(path);
+    const holder =
+      source === 'env'
+        ? `the environment (${names.length > 0 ? names.join(' / ') : 'an env var'})`
+        : `the project config file (${paths.project})`;
+    const how =
+      source === 'env'
+        ? `unset ${names.length > 0 ? names.join(' or ') : 'it'} there`
+        : `run \`s2s config unset ${path} --local\``;
+    out.warn(
+      `${path} is still supplied by ${holder}, which sits above the ${target.label} config — a marker there cannot suppress it, so none was written. To drop it, ${how}.`,
+    );
+    out.result(
+      {
+        action: 'config.unset',
+        key: path,
+        file: target.file,
+        local: target.local,
+        suppliedBy: source,
+      },
+      raw !== undefined
+        ? `removed the duplicate in the ${target.label} config (${target.file}) — ${path} still comes from ${source === 'env' ? 'the environment' : 'the project config file'}`
+        : `nothing to remove from the ${target.label} config (${target.file}) — ${path} comes from ${source === 'env' ? 'the environment' : 'the project config file'}`,
+    );
+    return;
+  }
+
   // A plain delete only works when the target file actually holds the value
   // and nothing else supplies it. If a lower layer would answer after the
   // delete (legacy, defaults, builtin), write a null tombstone: the merge reads
   // it as "unset", so the value really stops resolving. The same is true when
   // the target holds a copy and a lower layer holds another.
-  const raw = readPath(readConfigRaw(target.file), path);
-  const paths = configFilePaths();
   const withoutTarget = target.local
     ? {
         userConfigPath: paths.user,
@@ -326,7 +373,11 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
       };
   const stillSupplied = configKeyValue(path, process.env, withoutTarget) !== undefined;
   const tombstone = raw === null || stillSupplied;
-  writeConfigValue(target.file, path, tombstone ? null : undefined);
+  // Only write when it does something: a delete of a leaf the target does not
+  // hold, and a marker nothing below needs, must not create an empty
+  // custom.json for someone who never had one.
+  if (tombstone) writeConfigValue(target.file, path, null);
+  else if (raw !== undefined) writeConfigValue(target.file, path, undefined);
   out.result(
     {
       action: 'config.unset',
@@ -335,7 +386,9 @@ function unsetCommand(out: CliOut, args: ParsedArgs): void {
       local: target.local,
       ...(tombstone ? { tombstone: true } : {}),
     },
-    `unset ${path} in ${target.label} config (${target.file})${tombstone ? ' (wrote an explicit null so a lower layer stops supplying it)' : ''}`,
+    tombstone
+      ? `unset ${path} in ${target.label} config (${target.file}) (wrote an explicit null so a lower layer stops supplying it)`
+      : `unset ${path} in ${target.label} config (${target.file})`,
   );
 }
 
@@ -505,7 +558,7 @@ Keys are dotted paths into the service-grouped config:
   ipfs.<label>.url       ipfs.<label>.key       ipfs.<label>.provider
   rpc.drpc.key           rpc.alchemy.key        rpc.infura.key
   rpc.custom.l1          rpc.custom.l2          (comma-separated)
-  paymaster.key          paymaster.url
+  paymaster.key          paymaster.url          bundler.url
   filecoin.sessionKeyFile  filecoin.chain       filecoin.rpcUrl
   lit.accountKey         lit.usageKey
   ens.registry           github.token           entryPoint (env-only)
