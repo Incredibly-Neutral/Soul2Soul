@@ -17,10 +17,10 @@ App backend ──(session JWT)──► Frontend ──(JSON-RPC + JWT)──�
 
 ## Endpoints
 
-| Route | What it does |
-| --- | --- |
+| Route                | What it does                                  |
+| -------------------- | --------------------------------------------- |
 | `POST /rpc/:chainId` | JSON-RPC 2.0, single call or batch (up to 20) |
-| `GET /healthz` | `{"ok":true}`, no auth |
+| `GET /healthz`       | `{"ok":true}`, no auth                        |
 
 ## Run
 
@@ -68,8 +68,7 @@ that one contract.
 
 Checks run in order; the first failure returns and nothing is forwarded.
 
-1. **Origin** — a present `Origin` must match `CORS_ORIGINS` exactly, otherwise
-   403. A request with no `Origin` (server-to-server, curl) is let through; CORS
+1. **Origin** — a present `Origin` must match `CORS_ORIGINS` exactly, otherwise 403. A request with no `Origin` (server-to-server, curl) is let through; CORS
    headers are only ever sent to an allowed origin. This is a gate, not decoration:
    a cross-site `text/plain` POST gets no preflight, so header-only CORS would still
    let it reach the pipeline.
@@ -95,16 +94,16 @@ policy violation with a reason, `-32005` rate limited, `-32603` upstream trouble
 `userOp.callData` is an account `execute` wrapper. Each supported wrapper is
 decoded into `{ target, value, data }[]` and every inner call is judged:
 
-| Account | Selector |
-| --- | --- |
-| Simple / Light single `execute(address,uint256,bytes)` | `0xb61d27f6` |
-| Simple v0.7 `executeBatch(address[],uint256[],bytes[])` | `0x47e1da2a` |
-| Simple v0.6 / Light v1 `executeBatch(address[],bytes[])` | `0x18dfb3c7` |
+| Account                                                          | Selector     |
+| ---------------------------------------------------------------- | ------------ |
+| Simple / Light single `execute(address,uint256,bytes)`           | `0xb61d27f6` |
+| Simple v0.7 `executeBatch(address[],uint256[],bytes[])`          | `0x47e1da2a` |
+| Simple v0.6 / Light v1 `executeBatch(address[],bytes[])`         | `0x18dfb3c7` |
 | Simple v0.8 / Light v2 `executeBatch((address,uint256,bytes)[])` | `0x34fcd5be` |
-| ERC-7579 `execute(bytes32,bytes)` (Kernel v3, Nexus) | `0xe9ae5c53` |
-| Kernel v2 `execute(address,uint256,bytes,uint8)` | `0x51945447` |
-| Safe 4337 `executeUserOp(address,uint256,bytes,uint8)` | `0x7bb37428` |
-| Safe 4337 `executeUserOpWithErrorString(...)` | `0x541d63c8` |
+| ERC-7579 `execute(bytes32,bytes)` (Kernel v3, Nexus)             | `0xe9ae5c53` |
+| Kernel v2 `execute(address,uint256,bytes,uint8)`                 | `0x51945447` |
+| Safe 4337 `executeUserOp(address,uint256,bytes,uint8)`           | `0x7bb37428` |
+| Safe 4337 `executeUserOpWithErrorString(...)`                    | `0x541d63c8` |
 
 Anything else is rejected. Delegatecall and staticcall are rejected. Safe batches go
 through MultiSend as a delegatecall, so they are rejected too. `value > 0` is
@@ -118,10 +117,10 @@ Point permissionless.js at the proxy — no API key, no policy ID. `fetchFn` rea
 current session token on every call.
 
 ```ts
-import { http } from 'viem'
-import { entryPoint07Address } from 'viem/account-abstraction'
-import { createSmartAccountClient } from 'permissionless'
-import { createPimlicoClient } from 'permissionless/clients/pimlico'
+import { http } from 'viem';
+import { entryPoint07Address } from 'viem/account-abstraction';
+import { createSmartAccountClient } from 'permissionless';
+import { createPimlicoClient } from 'permissionless/clients/pimlico';
 
 const transport = http(`${PROXY_ORIGIN}/rpc/${chain.id}`, {
   fetchFn: (url, init) =>
@@ -129,12 +128,12 @@ const transport = http(`${PROXY_ORIGIN}/rpc/${chain.id}`, {
       ...init,
       headers: { ...init?.headers, Authorization: `Bearer ${getSessionToken()}` },
     }),
-})
+});
 
 const pimlicoClient = createPimlicoClient({
   transport,
   entryPoint: { address: entryPoint07Address, version: '0.7' },
-})
+});
 
 const smartAccountClient = createSmartAccountClient({
   account,
@@ -144,7 +143,7 @@ const smartAccountClient = createSmartAccountClient({
   userOperation: {
     estimateFeesPerGas: async () => (await pimlicoClient.getUserOperationGasPrice()).fast,
   },
-})
+});
 ```
 
 The account type you use must have a decoder in `src/callPolicy.ts`. A new account

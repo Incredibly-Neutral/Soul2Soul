@@ -248,11 +248,7 @@ function sweepOnInterval(server: HttpServer, limiter: RateLimiter, now: () => nu
   });
 }
 
-async function handleRequest(
-  ctx: Ctx,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
+async function handleRequest(ctx: Ctx, req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Computed before the clock read, so even the 500 below keeps its CORS headers.
   const cors = corsHeaders(ctx.cfg, req.headers.origin);
   try {

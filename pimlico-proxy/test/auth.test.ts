@@ -28,14 +28,11 @@ function tokenParts(token: string): readonly [string, string, string] {
 }
 
 function expectAuthError(fn: () => unknown, matcher: RegExp): void {
-  assert.throws(
-    fn,
-    (error: unknown) => {
-      assert.ok(error instanceof AuthError, `expected AuthError, got ${String(error)}`);
-      assert.match(error.message, matcher);
-      return true;
-    },
-  );
+  assert.throws(fn, (error: unknown) => {
+    assert.ok(error instanceof AuthError, `expected AuthError, got ${String(error)}`);
+    assert.match(error.message, matcher);
+    return true;
+  });
 }
 
 describe('verifyJwt', () => {
@@ -82,9 +79,7 @@ describe('verifyJwt', () => {
   });
 
   test('rejects a signature of the wrong length without throwing RangeError', () => {
-    const [header, payload] = tokenParts(
-      sign({ alg: 'HS256' }, { sub: 'user-1', exp: NOW + 60 }),
-    );
+    const [header, payload] = tokenParts(sign({ alg: 'HS256' }, { sub: 'user-1', exp: NOW + 60 }));
 
     expectAuthError(
       () => verifyJwt(`${header}.${payload}.AAAA`, SECRET, { now: NOW }),
@@ -181,9 +176,7 @@ describe('verifyJwt', () => {
   });
 
   test('rejects a two-part token', () => {
-    const [header, payload] = tokenParts(
-      sign({ alg: 'HS256' }, { sub: 'user-1', exp: NOW + 60 }),
-    );
+    const [header, payload] = tokenParts(sign({ alg: 'HS256' }, { sub: 'user-1', exp: NOW + 60 }));
 
     expectAuthError(
       () => verifyJwt(`${header}.${payload}`, SECRET, { now: NOW }),
@@ -200,9 +193,7 @@ describe('verifyJwt', () => {
   test('rejects a non-JSON header or payload without leaking the token', () => {
     const header = base64url(JSON.stringify({ alg: 'HS256' }));
     const payload = base64url(JSON.stringify({ sub: 'user-1', exp: NOW + 60 }));
-    const signature = createHmac('sha256', SECRET)
-      .update(`${header}.not-json`)
-      .digest('base64url');
+    const signature = createHmac('sha256', SECRET).update(`${header}.not-json`).digest('base64url');
 
     expectAuthError(
       () => verifyJwt(`${header}.not-json.${signature}`, SECRET, { now: NOW }),

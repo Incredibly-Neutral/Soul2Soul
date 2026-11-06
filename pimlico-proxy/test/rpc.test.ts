@@ -629,10 +629,7 @@ describe('handleCall upstream responses', () => {
 
   test('keeps an upstream message of exactly 4096 characters', async () => {
     const message = 'y'.repeat(4096);
-    const { fetchFn } = recorder(
-      { jsonrpc: '2.0', id: 1, error: { code: -32500, message } },
-      400,
-    );
+    const { fetchFn } = recorder({ jsonrpc: '2.0', id: 1, error: { code: -32500, message } }, 400);
 
     const response = await handleCall(
       { jsonrpc: '2.0', id: 33, method: 'eth_chainId', params: [] },

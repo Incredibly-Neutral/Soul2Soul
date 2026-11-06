@@ -54,9 +54,7 @@ const MAX_UPSTREAM_MESSAGE_LENGTH = 4096;
 
 /** Swap every occurrence of the proxy's secrets for a marker. */
 function scrubSecrets(message: string, cfg: Config): string {
-  const secrets = [cfg.pimlicoApiKey, cfg.sponsorshipPolicyId].filter(
-    (secret) => secret !== '',
-  );
+  const secrets = [cfg.pimlicoApiKey, cfg.sponsorshipPolicyId].filter((secret) => secret !== '');
   let scrubbed = message;
   for (const secret of secrets) {
     scrubbed = scrubbed.split(secret).join('[redacted]');
@@ -75,9 +73,7 @@ function toErrorObject(value: unknown, cfg: Config): RpcErrorObject {
   const rawMessage = record['message'];
   const scrubbed = typeof rawMessage === 'string' ? scrubSecrets(rawMessage, cfg) : '';
   const message =
-    scrubbed === '' || scrubbed.length > MAX_UPSTREAM_MESSAGE_LENGTH
-      ? 'upstream error'
-      : scrubbed;
+    scrubbed === '' || scrubbed.length > MAX_UPSTREAM_MESSAGE_LENGTH ? 'upstream error' : scrubbed;
   return {
     code: typeof code === 'number' && Number.isFinite(code) ? code : -32603,
     message,
@@ -85,11 +81,7 @@ function toErrorObject(value: unknown, cfg: Config): RpcErrorObject {
 }
 
 /** The one error shape every rejection uses. */
-export function rpcError(
-  id: JsonRpcId | undefined,
-  code: number,
-  message: string,
-): RpcResponse {
+export function rpcError(id: JsonRpcId | undefined, code: number, message: string): RpcResponse {
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message } };
 }
 
