@@ -334,6 +334,32 @@ function isHex(value: unknown): value is Hex {
 }
 
 /**
+ * EIP-7702 authorization fields: an absent one is `undefined`, `null`, the
+ * empty string, `0x` or an empty list. Anything else is a real authorization.
+ */
+const AUTHORIZATION_FIELDS = ['eip7702Auth', 'authorizationList'] as const;
+
+function isAuthorizationPresent(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value !== '' && value !== '0x';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * An EIP-7702 authorization replaces the sender's code with a delegate of the
+ * client's choosing, so the `execute` wrapper in `callData` is not the code that
+ * runs and the target/selector allowlist would be advisory. Reject outright.
+ */
+function checkAuthorizations(userOp: Record<string, unknown>): void {
+  for (const field of AUTHORIZATION_FIELDS) {
+    if (isAuthorizationPresent(userOp[field])) {
+      throw new PolicyError(`${field} not allowed`);
+    }
+  }
+}
+
+/**
  * Enforce the call allowlist, the native-value gate and the deployment gate on
  * one user operation. Throws `PolicyError` on the first violation.
  */
@@ -341,6 +367,7 @@ export function checkUserOp(userOp: unknown, chainId: number, cfg: Config): void
   if (!isRecord(userOp)) {
     throw new PolicyError('userOperation must be an object');
   }
+  checkAuthorizations(userOp);
   const callData = userOp['callData'];
   if (!isHex(callData)) {
     throw new PolicyError('callData must be a hex string');

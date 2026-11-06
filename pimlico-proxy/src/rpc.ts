@@ -49,14 +49,38 @@ function withPolicy(target: unknown, policyId: string): Record<string, unknown> 
   return { ...base, sponsorshipPolicyId: policyId };
 }
 
-/** Copy only `code` and `message` out of an upstream error object. */
-function toErrorObject(value: unknown): RpcErrorObject {
+/** Upstream error text longer than this is dropped rather than relayed. */
+const MAX_UPSTREAM_MESSAGE_LENGTH = 4096;
+
+/** Swap every occurrence of the proxy's secrets for a marker. */
+function scrubSecrets(message: string, cfg: Config): string {
+  const secrets = [cfg.pimlicoApiKey, cfg.sponsorshipPolicyId].filter(
+    (secret) => secret !== '',
+  );
+  let scrubbed = message;
+  for (const secret of secrets) {
+    scrubbed = scrubbed.split(secret).join('[redacted]');
+  }
+  return scrubbed;
+}
+
+/**
+ * Copy only `code` and `message` out of an upstream error object, with the key
+ * and the policy id scrubbed out of the message. The revert reason is what the
+ * frontend needs, so it is relayed — just not verbatim.
+ */
+function toErrorObject(value: unknown, cfg: Config): RpcErrorObject {
   const record = isPlainObject(value) ? value : {};
   const code = record['code'];
-  const message = record['message'];
+  const rawMessage = record['message'];
+  const scrubbed = typeof rawMessage === 'string' ? scrubSecrets(rawMessage, cfg) : '';
+  const message =
+    scrubbed === '' || scrubbed.length > MAX_UPSTREAM_MESSAGE_LENGTH
+      ? 'upstream error'
+      : scrubbed;
   return {
     code: typeof code === 'number' && Number.isFinite(code) ? code : -32603,
-    message: typeof message === 'string' ? message : 'upstream error',
+    message,
   };
 }
 
@@ -73,7 +97,7 @@ export function rpcError(
  * Filter, rewrite and forward one JSON-RPC call for `chainId`.
  *
  * The first failure returns and nothing is forwarded. Upstream messages are
- * replaced with fixed strings because the URL carries the API key.
+ * relayed with the key and the policy id scrubbed out of them.
  */
 export async function handleCall(
   call: RpcRequest,
@@ -119,7 +143,8 @@ async function forward(
   fetchFn: FetchFn,
 ): Promise<RpcResponse> {
   // One attempt, no retry, no redirect: the body and the timeout are the only
-  // knobs. The query string holds the key, so it never reaches a message.
+  // knobs. The query string holds the key, so it is scrubbed from any message
+  // that reaches the client (see `scrubSecrets`).
   const query = `apikey=${encodeURIComponent(cfg.pimlicoApiKey)}`;
   const url = `${cfg.pimlicoBaseUrl}/v2/${chainId}/rpc?${query}`;
 
@@ -154,10 +179,16 @@ async function forward(
   // the status. Only a non-2xx without an error body is a transport failure.
   const upstreamError = parsed['error'];
   if (upstreamError !== undefined && upstreamError !== null) {
-    return { jsonrpc: '2.0', id, error: toErrorObject(upstreamError) };
+    return { jsonrpc: '2.0', id, error: toErrorObject(upstreamError, cfg) };
   }
 
   if (!response.ok) {
+    return rpcError(call.id, -32603, 'upstream error');
+  }
+
+  // Neither `result` nor `error`: a body with no answer in it is a failure, not
+  // a response with an undefined result.
+  if (!('result' in parsed)) {
     return rpcError(call.id, -32603, 'upstream error');
   }
 

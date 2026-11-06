@@ -265,6 +265,25 @@ describe('handleCall calldata policy', () => {
     assert.equal(calls.length, 0);
   });
 
+  test('rejects a userOp carrying an EIP-7702 authorization before forwarding', async () => {
+    const { calls, fetchFn } = recorder(OK_BODY);
+
+    const response = await handleCall(
+      {
+        jsonrpc: '2.0',
+        id: 26,
+        method: 'eth_sendUserOperation',
+        params: [{ ...GOOD_OP, eip7702Auth: `0x${'11'.repeat(97)}` }, ENTRY_POINT],
+      },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.deepEqual(errorOf(response), { code: -32602, message: 'eip7702Auth not allowed' });
+    assert.equal(calls.length, 0);
+  });
+
   test('does not run the calldata policy on read-only methods', async () => {
     const { calls, fetchFn } = recorder(OK_BODY);
 
@@ -499,6 +518,130 @@ describe('handleCall upstream responses', () => {
     );
 
     assert.deepEqual(errorOf(response), { code: -32603, message: 'upstream error' });
+  });
+
+  test('a 200 body with neither result nor error becomes -32603', async () => {
+    const { fetchFn } = recorder({ jsonrpc: '2.0', id: 1 }, 200);
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 27, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.deepEqual(response, {
+      jsonrpc: '2.0',
+      id: 27,
+      error: { code: -32603, message: 'upstream error' },
+    });
+  });
+
+  test('a null result is still a result', async () => {
+    const { fetchFn } = recorder({ jsonrpc: '2.0', id: 1, result: null });
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 28, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.deepEqual(response, { jsonrpc: '2.0', id: 28, result: null });
+  });
+
+  test('scrubs the API key out of an upstream message', async () => {
+    const { fetchFn } = recorder(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32500, message: `invalid key ${API_KEY} for this chain` },
+      },
+      401,
+    );
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 29, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    const error = errorOf(response);
+    assert.equal(error.code, -32500);
+    assert.equal(error.message, 'invalid key [redacted] for this chain');
+    assert.ok(!JSON.stringify(response).includes(API_KEY));
+  });
+
+  test('scrubs the sponsorship policy id out of an upstream message', async () => {
+    const { fetchFn } = recorder(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32500, message: `policy ${POLICY_ID} is not configured` },
+      },
+      400,
+    );
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 30, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.equal(errorOf(response).message, 'policy [redacted] is not configured');
+    assert.ok(!JSON.stringify(response).includes(POLICY_ID));
+  });
+
+  test('relays a normal revert reason untouched', async () => {
+    const reason = 'execution reverted: ERC20: transfer amount exceeds balance';
+    const { fetchFn } = recorder(
+      { jsonrpc: '2.0', id: 1, error: { code: -32521, message: reason } },
+      400,
+    );
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 31, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.deepEqual(errorOf(response), { code: -32521, message: reason });
+  });
+
+  test('drops an upstream message longer than 4096 characters', async () => {
+    const { fetchFn } = recorder(
+      { jsonrpc: '2.0', id: 1, error: { code: -32500, message: `revert ${'x'.repeat(4096)}` } },
+      400,
+    );
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 32, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.deepEqual(errorOf(response), { code: -32500, message: 'upstream error' });
+  });
+
+  test('keeps an upstream message of exactly 4096 characters', async () => {
+    const message = 'y'.repeat(4096);
+    const { fetchFn } = recorder(
+      { jsonrpc: '2.0', id: 1, error: { code: -32500, message } },
+      400,
+    );
+
+    const response = await handleCall(
+      { jsonrpc: '2.0', id: 33, method: 'eth_chainId', params: [] },
+      CHAIN,
+      makeConfig(),
+      fetchFn,
+    );
+
+    assert.equal(errorOf(response).message, message);
   });
 
   test('a non-JSON body becomes -32603 and leaks neither the URL nor the key', async () => {

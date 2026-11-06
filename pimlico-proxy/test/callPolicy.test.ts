@@ -557,6 +557,44 @@ describe('checkUserOp', () => {
     expectPolicyError(() => checkUserOp({ callData: '0x' }, CHAIN, cfg), /empty callData/);
   });
 
+  test('rejects an EIP-7702 authorization: the delegate would be the code that runs', () => {
+    const cfg = makeAllowedConfig();
+    const callData = executeCallData(TARGET, 0n, TRANSFER_DATA);
+    const auth = {
+      chainId: String(CHAIN),
+      address: OTHER,
+      nonce: '0x0',
+      yParity: '0x0',
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    };
+
+    expectPolicyError(
+      () => checkUserOp({ callData, eip7702Auth: auth }, CHAIN, cfg),
+      /eip7702Auth not allowed/,
+    );
+    expectPolicyError(
+      () => checkUserOp({ callData, authorizationList: [auth] }, CHAIN, cfg),
+      /authorizationList not allowed/,
+    );
+    // A packed auth tuple on its own is a present authorization too.
+    expectPolicyError(
+      () => checkUserOp({ callData, eip7702Auth: `0x${'33'.repeat(97)}` }, CHAIN, cfg),
+      /eip7702Auth not allowed/,
+    );
+  });
+
+  test('accepts an absent, null or empty authorization field', () => {
+    const cfg = makeAllowedConfig();
+    const callData = executeCallData(TARGET, 0n, TRANSFER_DATA);
+
+    checkUserOp({ callData }, CHAIN, cfg);
+    for (const empty of [undefined, null, '', '0x', []]) {
+      checkUserOp({ callData, eip7702Auth: empty }, CHAIN, cfg);
+      checkUserOp({ callData, authorizationList: empty }, CHAIN, cfg);
+    }
+  });
+
   test('error messages never contain the Pimlico API key', () => {
     const cfg = makeAllowedConfig();
     const error = expectPolicyError(() =>
