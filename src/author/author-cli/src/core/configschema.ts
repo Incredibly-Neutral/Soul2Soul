@@ -89,6 +89,13 @@ export interface FileConfig {
   lit?: { accountKey?: string; usageKey?: string };
   ens?: { registry?: string };
   github?: { token?: string };
+  /**
+   * Protocol contracts this CLI installs through, per environment. Only the
+   * `AuthorContractsFactory` for now: the two implementations and the factory
+   * are deployed once and shared, and every author Safe is installed through
+   * the same factory.
+   */
+  contracts?: { authorFactory?: string };
 }
 
 /** One settable leaf. `path` uses `*` for "one map label" (e.g. `pinning.*.key`). */
@@ -159,6 +166,14 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   { path: 'lit.usageKey', env: ['LIT_USAGE_KEY'], secret: true },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
+  // The deployed `AuthorContractsFactory` on Base. A protocol constant with a
+  // shipped default, not a preference — overridable so a dev deployment (or a
+  // redeploy) does not need a new CLI build.
+  {
+    path: 'contracts.authorFactory',
+    env: ['S2S_AUTHOR_CONTRACTS_FACTORY'],
+    default: '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A',
+  },
 ];
 
 /**
@@ -203,6 +218,11 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   environment: 'prod',
   ipfs: { kubo: { provider: 'kubo', url: 'ipfs.transport-union.dev' } },
   filecoin: { chain: 'mainnet', rpcUrl: 'https://api.node.glif.io/rpc/v1' },
+  // The deployed `AuthorContractsFactory` (Base). Typed here as well as in
+  // `defaults.json` and the field registry, exactly as the gateway and the
+  // Filecoin RPC are: a missing or replaced defaults file must not leave the
+  // author contracts uninstallable.
+  contracts: { authorFactory: '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A' },
 };
 
 // ===========================================================================
@@ -456,6 +476,9 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
 
   const github = compact({ token: textValue(objectValue(raw.github)?.token) });
   if (github) out.github = github;
+
+  const contracts = compact({ authorFactory: textValue(objectValue(raw.contracts)?.authorFactory) });
+  if (contracts) out.contracts = contracts;
 
   return out;
 }

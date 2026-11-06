@@ -18,9 +18,11 @@
 
 import { base } from 'viem/chains';
 import type { Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import { createSafeRunner, type SafeRunnerHandle } from '../adapters/tx-runner';
 import { UsageError } from '../lib/errors';
+import type { CliOut } from '../lib/out';
 import { bundlerEndpoints, type CliConfig } from './config';
 import type { CliContext } from './context';
 
@@ -56,16 +58,39 @@ export interface AuthorSafeState {
 }
 
 /**
- * Build a Safe runner bound to the author's counterfactual Safe on Base.
- * `requireBundler` is false for pure prediction: the address is derived
- * locally from the factory's create2 inputs, no userOp is sent.
+ * The inputs of an author-Safe runner: the config for the bundler endpoints,
+ * the owner KEY explicitly, and the L2 endpoint.
+ *
+ * The key is a parameter rather than `config.privateKey` because the author
+ * contracts are installed for a key that may not be the active one —
+ * `s2s author new` files a key and then installs its contracts before it is
+ * ever selected (`core/author-contracts.ts`).
  */
-async function authorSafeRunner(
-  config: CliConfig,
-  eoa: Address,
-  rpcUrl: string,
-  requireBundler: boolean,
+export interface AuthorSafeRunnerOptions {
+  config: CliConfig;
+  /** Owner and sole signer of the Safe. */
+  privateKey: `0x${string}`;
+  /** The owner's address (derived by the caller when it already knows it). */
+  eoa: Address;
+  rpcUrl: string;
+  /**
+   * true → a missing bundler is a `UsageError`; false → prediction only (the
+   * address is derived locally from the factory's create2 inputs, no userOp is
+   * sent), so the bundler is not required.
+   */
+  requireBundler: boolean;
+}
+
+/**
+ * Build a Safe runner bound to the author's counterfactual Safe on Base.
+ * Exported so every author write goes through the SAME pinned SafeL2 v1.4.1
+ * singleton / proxy factory / EntryPoint — a second copy of those constants
+ * would be a second author id.
+ */
+export async function createAuthorSafeRunner(
+  opts: AuthorSafeRunnerOptions,
 ): Promise<SafeRunnerHandle> {
+  const { config, eoa, rpcUrl, requireBundler, privateKey } = opts;
   const endpoints = bundlerEndpoints(config, base.id);
   if (requireBundler && !endpoints) {
     throw new UsageError(
@@ -76,7 +101,7 @@ async function authorSafeRunner(
   const runner = await createSafeRunner({
     chain: base,
     rpcUrl,
-    privateKey: config.privateKey as `0x${string}`,
+    privateKey,
     bundlerUrl: endpoints?.bundlerUrl ?? 'http://127.0.0.1:0',
     paymasterUrl: endpoints?.paymasterUrl,
     // Pinned, not config-driven: 0xobsidian hardcodes EntryPoint v0.7, and the
@@ -113,7 +138,15 @@ export async function createAuthorWriteRunner(opts: {
   eoa: Address;
   rpcUrl: string;
 }): Promise<SafeRunnerHandle> {
-  return authorSafeRunner(opts.config, opts.eoa, opts.rpcUrl, true);
+  return createAuthorSafeRunner({
+    config: opts.config,
+    // The write runner is only built for the key the config resolved; a caller
+    // holding another key builds its runner directly.
+    privateKey: opts.config.privateKey as `0x${string}`,
+    eoa: opts.eoa,
+    rpcUrl: opts.rpcUrl,
+    requireBundler: true,
+  });
 }
 
 /**
@@ -146,7 +179,13 @@ export interface AuthorSafePrediction {
  */
 export async function predictAuthorSafe(target: AuthorSafeTarget): Promise<AuthorSafePrediction> {
   const salt = authorSafeSalt(target.eoa);
-  const runner = await authorSafeRunner(target.config, target.eoa, target.rpcUrl, false);
+  const runner = await createAuthorSafeRunner({
+    config: target.config,
+    privateKey: target.config.privateKey as `0x${string}`,
+    eoa: target.eoa,
+    rpcUrl: target.rpcUrl,
+    requireBundler: false,
+  });
   const address = (await runner.connectToFreshSafe(salt)) as Address;
   return { address, salt, deployed: await runner.isDeployed() };
 }
@@ -180,35 +219,91 @@ export interface AuthorSafeInitResult extends AuthorSafeState {
   txHash: string | undefined;
 }
 
+/** What deploying-if-needed needs. The key is explicit: `s2s author new`
+ * passes the key it just filed, not the active one. */
+export interface EnsureAuthorSafeOptions {
+  config: CliConfig;
+  privateKey: `0x${string}`;
+  rpcUrl: string;
+  out: CliOut;
+}
+
+export interface EnsuredAuthorSafe {
+  /** The author id: the Safe, not the EOA. */
+  address: Address;
+  /** The EOA that owns (and signs for) the Safe. */
+  eoa: Address;
+  /** Whether bytecode exists now — false when the userOp had not landed yet. */
+  deployed: boolean;
+  /** Set when this call sent the deployment; undefined when already live. */
+  txHash: string | undefined;
+}
+
+/** How long to wait for a submitted deployment before reporting "not yet". */
+const DEPLOY_POLL_ATTEMPTS = 30;
+const DEPLOY_POLL_INTERVAL_MS = 2000;
+
+/**
+ * Deploy the author Safe if it is not deployed yet, and report the address plus
+ * whether THIS call deployed it. Idempotent by construction: a live Safe is a
+ * read and a return.
+ *
+ * The key is a parameter rather than `config.privateKey` so `s2s author new`
+ * can deploy the Safe for the identity it just filed — the store's active key is
+ * still the OLD one at that moment.
+ */
+export async function ensureAuthorSafe(opts: EnsureAuthorSafeOptions): Promise<EnsuredAuthorSafe> {
+  const eoa = privateKeyToAccount(opts.privateKey).address;
+  const runner = await createAuthorSafeRunner({
+    config: opts.config,
+    privateKey: opts.privateKey,
+    eoa,
+    rpcUrl: opts.rpcUrl,
+    requireBundler: true,
+  });
+  const address = (await runner.connectToFreshSafe(authorSafeSalt(eoa))) as Address;
+
+  if (await runner.isDeployed()) {
+    return { address, eoa, deployed: true, txHash: undefined };
+  }
+
+  opts.out.log(`deploying author Safe ${address} (owner ${eoa})…`);
+  const txHash = await runner.deploy();
+
+  // The userOp is submitted; give the bundler a short window to land it so the
+  // caller learns "deployed" rather than a maybe.
+  let deployed = false;
+  for (let i = 0; i < DEPLOY_POLL_ATTEMPTS && !deployed; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, DEPLOY_POLL_INTERVAL_MS));
+    deployed = await runner.isDeployed();
+  }
+
+  return { address, eoa, deployed, txHash };
+}
+
 /**
  * Initialise the author Safe: deploy it if it isn't already, then report.
  * Idempotent — a second `init` is a no-op that returns `txHash: undefined`.
- * Modules will be installed from here (the plugin extends `newAuthor` the same
- * way); the deployment is the first step only.
+ * The contracts install (`core/author-contracts.ts`) is the next step; the
+ * deployment is the first one only.
  */
 export async function initAuthorSafe(ctx: CliContext): Promise<AuthorSafeInitResult> {
   const rpcUrl = ctx.rpcs.L2[0];
   if (!rpcUrl) {
     throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
   }
-  const runner = await authorSafeRunner(ctx.config, ctx.eoaAddress, rpcUrl, true);
-  const address = (await runner.connectToFreshSafe(authorSafeSalt(ctx.eoaAddress))) as Address;
-  const salt = authorSafeSalt(ctx.eoaAddress);
-
-  if (await runner.isDeployed()) {
-    return { address, eoa: ctx.eoaAddress, salt, chain: 'base', deployed: true, txHash: undefined };
-  }
-
-  ctx.out.log(`deploying author Safe ${address} (owner ${ctx.eoaAddress})…`);
-  const txHash = await runner.deploy();
-
-  // The userOp is submitted; give the bundler a short window to land it so the
-  // caller learns "deployed" rather than a maybe.
-  let deployed = false;
-  for (let i = 0; i < 30 && !deployed; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    deployed = await runner.isDeployed();
-  }
-
-  return { address, eoa: ctx.eoaAddress, salt, chain: 'base', deployed, txHash };
+  const ensured = await ensureAuthorSafe({
+    config: ctx.config,
+    privateKey: ctx.config.privateKey as `0x${string}`,
+    rpcUrl,
+    out: ctx.out,
+  });
+  return {
+    address: ensured.address,
+    eoa: ensured.eoa,
+    salt: authorSafeSalt(ensured.eoa),
+    chain: 'base',
+    deployed: ensured.deployed,
+    txHash: ensured.txHash,
+  };
 }

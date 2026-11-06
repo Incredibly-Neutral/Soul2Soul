@@ -15,5 +15,8 @@
   },
   "lit": {},
   "ens": {},
-  "github": {}
+  "github": {},
+  "contracts": {
+    "authorFactory": "0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A"
+  }
 }
