@@ -552,9 +552,17 @@ s2s <group> <action> [positionals…] [flags…]
 ### `author` group — result types
 
 ```ts
+// The install block on every result that runs it. Always present, so a script
+// never has to tell "absent" from "skipped".
+Contracts = { factory: string | null; drafts: string | null; ownerHistory: string | null;
+  guard: string | null; state: 'installed' | 'already' | 'pending-safe' | 'skipped';
+  txs: string[];                      // userOp hashes, in send order
+  note?: string;                      // why not installed / what the owners must do
+  safeTx?: { to: string; data: string } }   // `pending-safe` only: the setGuard call
+
 // s2s author new <pet-name> [--key <0x…>] [--json] — file an identity, activate it, install the contracts
 { action: 'author.new'; name: string; eoa: string; safe: string | null;
-  active: true; file: string }      // no salt: it is `s2s_` + eoa, nothing to record
+  active: true; file: string; contracts: Contracts }   // no salt: it is `s2s_` + eoa, nothing to record
 
 // s2s author switch <pet-name> [--json] — make a stored author active
 { action: 'author.switch'; name: string; eoa: string; safe: string | null; file: string }
@@ -574,6 +582,7 @@ s2s <group> <action> [positionals…] [flags…]
 // s2s author init [--json]         — deploy the Safe and install the author contracts (idempotent)
 { action: 'author.init'; address: string; eoa: string; salt: string;
   chain: 'base'; deployed: boolean; txHash: string | null;
+  contracts: Contracts;            // see above
   author: string | null }
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)
