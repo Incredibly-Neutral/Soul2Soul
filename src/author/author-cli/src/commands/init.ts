@@ -29,6 +29,7 @@ interface ContractsReport {
   guard: string | null;
   state: InstallState;
   txs: string[];
+  /** Why the install is `skipped` or `pending-safe`, as core reported it. */
   note?: string;
   safeTx?: { to: string; data: string };
 }
@@ -85,8 +86,11 @@ async function installContracts(
         `author contracts not installed${result.note ? ` — ${result.note}` : ''}; re-run \`s2s author init\``,
       );
     } else {
+      // `pending-safe` is not "undeployed": core returns it for a Safe the key
+      // does not solely own, or one already carrying a guard that is not ours.
+      // The note says which, and it must be the thing we print.
       out.log(
-        'the author Safe is not deployed yet — its owners must install the author contracts (the call to propose is below)',
+        `${result.note ?? 'the Safe owners must install the guard'} — the call to propose is below`,
       );
     }
 
@@ -123,7 +127,7 @@ function contractsLines(report: ContractsReport): string[] {
       : report.state === 'already'
         ? 'already installed'
         : report.state === 'pending-safe'
-          ? 'pending — the author Safe is not deployed yet'
+          ? `pending — ${report.note ?? 'the Safe owners must install the guard'}`
           : 'skipped (re-run `s2s author init` once the cause is fixed)';
   const lines = [`contracts   : ${state}`];
   if (report.state === 'skipped') return lines;

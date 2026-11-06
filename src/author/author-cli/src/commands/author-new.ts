@@ -24,10 +24,11 @@
 //
 // A new author is not usable until the author contracts sit on its Safe, so the
 // last step deploys the Safe and installs them (drafts/ownerHistory/guard). It
-// runs strictly AFTER the key is filed: the store order is unchanged, every
-// failure here is a warning naming the recovery (`s2s author init`), and a
-// multi-owner Safe that is not deployed yet leaves the install as a
-// `pending-safe` transaction its owners must propose.
+// runs strictly AFTER the key is filed: the store order is unchanged, and every
+// failure here is a warning naming the recovery (`s2s author init`). A Safe this
+// run cannot install on — its owners are not solely the filed key, or it already
+// carries a guard that is not ours — leaves the install as a `pending-safe`
+// transaction its owners must propose, reported with the reason core returns.
 //
 // A new author becomes the active one — adding an identity is a switch.
 // Runs without `buildContext`: no Lit keys, no publication, no bundler.
@@ -182,7 +183,7 @@ export interface ContractsReport {
   state: InstallState;
   /** The userOps / txs the install sent. */
   txs: string[];
-  /** Why the install did not happen (`skipped`). */
+  /** Why the install is `skipped` or `pending-safe`, as core reported it. */
   note?: string;
   /** The Safe call the owners must propose (`pending-safe`). */
   safeTx?: { to: string; data: string };
@@ -265,8 +266,11 @@ async function installContracts(
         `author contracts not installed${result.note ? ` — ${result.note}` : ''}; run \`s2s author init\` to install them`,
       );
     } else {
+      // `pending-safe` is not "undeployed": core returns it for a Safe the filed
+      // key does not solely own, or one already carrying a guard that is not
+      // ours. The note says which, and it must be the thing we print.
       out.log(
-        'the author Safe is not deployed yet — its owners must install the author contracts (the call to propose is below)',
+        `${result.note ?? 'the Safe owners must install the guard'} — the call to propose is below`,
       );
     }
 
@@ -295,7 +299,7 @@ function contractsLines(report: ContractsReport): string[] {
       : report.state === 'already'
         ? 'already installed'
         : report.state === 'pending-safe'
-          ? 'pending — the author Safe is not deployed yet'
+          ? `pending — ${report.note ?? 'the Safe owners must install the guard'}`
           : 'skipped (run `s2s author init`)';
   const lines = [`contracts   : ${state}`];
   if (report.state === 'skipped') return lines;

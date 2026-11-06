@@ -6,8 +6,9 @@
 //     install does;
 //   * the install runs against the key that was just filed, not the one the
 //     active config holds (`author new` may run with S2S_PRIVATE_KEY set);
-//   * `pending-safe` (a Safe that is not deployed yet) is reported with the
-//     exact Safe call to propose, not an error;
+//   * `pending-safe` is reported with its REASON (core's note: a Safe the key
+//     does not solely own, or a guard that is not ours) and the exact Safe call
+//     to propose — not as an undeployed Safe, and not as an error;
 //   * `skipped` and a thrown chain error are warnings naming `s2s author init`.
 //
 // `installAuthorContracts` and the Safe prediction are the core worker's
@@ -250,21 +251,37 @@ describe('author new installs the author contracts', () => {
     expect(store().authors.zomi?.safe).toBe(SAFE);
   });
 
-  it('reports pending-safe with the call the owners must propose, and does not fail', async () => {
+  it('reports pending-safe by its reason, with the call the owners must propose', async () => {
     const safeTx = { to: DRAFTS, data: '0xdeadbeef' };
-    installState.answer = () => installResult('pending-safe', { safeTx });
+    const note = 'the author Safe has owners this key does not control (2-of-3)';
+    installState.answer = () => installResult('pending-safe', { safeTx, note });
     const sink = recorder();
     await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });
 
     const contracts = sink.data.contracts as Record<string, unknown>;
     expect(contracts.state).toBe('pending-safe');
     expect(contracts.safeTx).toEqual(safeTx);
+    expect(contracts.note).toBe(note);
+    // The reason is core's, not a guess about deployment.
+    expect(sink.human).toContain(`pending — ${note}`);
+    expect(sink.human).not.toContain('not deployed yet');
+    expect(sink.logs.join('\n')).toContain(note);
     expect(sink.human).toContain(`to   ${DRAFTS}`);
     expect(sink.human).toContain('data 0xdeadbeef');
     // The drafts module is appended through the proxy: nothing to install.
     expect(sink.human).toContain('needs no install');
     // Still not an error: the author was created.
     expect(sink.data.active).toBe(true);
+  });
+
+  it('falls back to the guard wording when pending-safe carries no note', async () => {
+    installState.answer = () =>
+      installResult('pending-safe', { safeTx: { to: DRAFTS, data: '0xbeef' } });
+    const sink = recorder();
+    await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });
+
+    expect(sink.human).toContain('pending — the Safe owners must install the guard');
+    expect(sink.logs.join('\n')).toContain('the Safe owners must install the guard');
   });
 
   it('turns a skipped install into a warning pointing at author init', async () => {
