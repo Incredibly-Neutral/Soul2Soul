@@ -6,6 +6,21 @@ This file is the entry point for any agent working in this repo. It replaces `br
 which is retired: `brain/` no longer exists and nothing belongs there. **Do not create a second
 tree beside `docs/`.** Product material goes in `docs/`, code goes in `src/`.
 
+## Mode — state it before you touch anything
+
+Every task opens with one line naming the mode: `mode: team` or `mode: solo — <reason>`. No
+silent choice, no drift into one or the other halfway through.
+
+- `mode: team` runs the `orchestrate` skill in full: plan, worktrees, fan-out, review, one PR,
+then teardown. The task is not finished until `git worktree list` and `herdr pane list` show no
+leftovers from this run — teardown is a completion condition, not a tidy-up afterwards.
+- `mode: solo` is for genuinely mechanical work: a one-line fix, a typo, a doc sentence, a
+read-only question. Name the reason. Anything that changes behaviour, touches more than one
+file, or needs a review is not solo.
+
+If the run gets messy, the mode does not lapse. Either restart the team run cleanly or say
+plainly that it is being abandoned, and why.
+
 ## Read before code
 
 Read the twin for the domain you are touching, then the branch for the package. A PR that
@@ -50,51 +65,30 @@ src/                          the code, by domain: author/, press/, publication/
 
 ## Agents
 
+The team is herdr panes running `pi`, not the omnigent registry. One shape:
+
 ```
-s2s-prof  (orchestrator)  ──spawns──▶  s2s-builder  (leaf implementer)
-   │                                        │
-   │ plans, delegates, reviews              │ implements, worktree-isolated, no spawning
-   ▼                                        ▼
-the task             ──────────────────▶  git worktree on feat/<slug> → PR
+lead (you, this pane)  ──spawns──▶  one pi per subtask, own worktree, own pane
+       │                                    │
+       │ plans, reviews, gates the PR       │ implements; never spawns
+       ▼                                    ▼
+     the task  ─────────────────────▶  branch → one PR a human approves
 ```
 
-- **s2s-prof** — the dispatcher. Decomposes goals, spawns builders in worktrees, reviews branch
-  diffs, merges via PR (a human approves). Future direction: a polly-style orchestrator config.
-- **s2s-builder** — the leaf. Implements from a handoff. Does NOT spawn. Works in a worktree,
-  one writer per worktree.
+- Spawn with `herdr agent start <name> --kind pi --pane <id> -- --thinking off`. Workers run with
+  reasoning **off** (the lead keeps `medium`) and are always started in a fresh worktree with the
+  absolute path baked into the handoff; verify `pwd` and branch before anything else.
+- One writer per worktree. The lead does not edit source, and does not work in the same checkout
+  as a live worker.
+- The omnigent/hermes path (s2s-prof, s2s-builder, agent-id registry) is retired: no sessions
+  since October. Do not reuse those ids, and do not add new registrations — the ids below are
+  dead and only listed so nobody resurrects one by accident.
 
-### Canonical registrations
-
-**s2s-builder**
-- Config: `.omnigent/agent-configs/s2s-builder/config.yaml` (versioned; agent-directory form —
-  the bundle loader requires the file named `config.yaml`)
-- **agent_id (CANONICAL):** `155255a6ab9a45228112cadea587d8c7` — registered 2026-08-08 from the
-  repo config. Reuse this id for every spawn; re-upload via `config_path` only on an intentional
-  revision, then update this line.
-- Model: `deepseek-v4-flash-0731` — **always pin at spawn** (`args.model`). The profile default
-  proved unreliable (2026-08-08: corruption and DeepSeek special-token leakage on unpinned spawn).
-- Harness: `hermes-native`, profile `s2s-builder`.
-- Spawn contract: make the worktree, bake the absolute path into the message, verify `pwd` +
-  `branch` before anything else.
-- Thinking: builders run with reasoning **off**; the orchestrator keeps `medium`. Reasoning is the
-  lead's job.
-
-**s2s-prof**
-- agent_id: `cc3c9d2b9d9e49269d52d7c0860fe071` (registered once, reused — the clean pattern; do
-  not re-upload unless intentionally revising).
-
-### Stale s2s-builder ids — DO NOT REUSE
-
-Machine-local re-uploads of iterated configs from the pre-repo-config era; every backing session
-is `failed`, and the registry has no GC. Launching from one runs a stale, unknown config revision:
-
+`s2s-builder` ids, all retired: `155255a6ab9a45228112cadea587d8c7` ·
 `1c99df88b14c41199402223982cc62d2` · `fb4e35f7c8e0461f80096427d09f1c02` ·
 `7dc96f3b44c3478280616d3d7deb5960` · `ae1dcfc53ae9423b97fb57ee683a2d81` ·
 `182d3471074f49dcb3097015f1d28ceb` · `deb9e89cf26446bf8f2be02a86e9f930` ·
 `0050e254be174935a298bad7bab111c3` · `6bad9d80a6ed4ae688e1c0991423e5b5`
-
-If `sys_agent_list` shows a new unlisted `s2s-builder` id, someone re-uploaded ad hoc:
-re-register from the repo config and update this file.
 
 ## Merge & PR protocol
 
@@ -106,7 +100,8 @@ Every complete task ends in a PR a human approves — never a silent ff-merge in
   human approves/merges → `git fetch origin && git merge --ff-only origin/main` → remove the
   worktree and branch.
 - PRs base on `origin/main`; keep local main equal to it before opening one.
-- Trivial/mechanical one-liners may be merged directly, but the record goes in the commit message.
+- Trivial/mechanical one-liners may be merged directly, but only in a `mode: solo` task, and the
+  record goes in the commit message.
 - **Update the spec after every PR**: the branch for the package, the ADR or RFC it settles, and
   the twin's index if the record set changed. Specs are the read-before-code contract; a PR that
   drifts from its spec is how specs rot.
