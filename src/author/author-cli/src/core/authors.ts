@@ -343,13 +343,12 @@ export function writeBackAuthorContracts(
   const record = store.authors[name];
   if (!record) return false;
   const current = record.contracts;
-  if (
-    current !== undefined &&
-    current.drafts === contracts.drafts &&
-    current.ownerHistory === contracts.ownerHistory &&
-    current.guard === contracts.guard
-  ) {
-    return false;
+  if (current !== undefined) {
+    const unchanged =
+      current.drafts === contracts.drafts &&
+      current.ownerHistory === contracts.ownerHistory &&
+      current.guard === contracts.guard;
+    if (unchanged) return false;
   }
   writeAuthors(
     { ...store, authors: { ...store.authors, [name]: { ...record, contracts } } },
@@ -371,7 +370,7 @@ export function rememberAuthorContracts(
   name: string | undefined,
   contracts: AuthorContractsRecord,
   file: string = authorsFilePath(),
-  warn: (message: string) => void = () => {},
+  warn: (message: string) => void = () => undefined,
 ): boolean {
   if (!name) return false;
   try {

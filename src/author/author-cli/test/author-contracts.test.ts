@@ -42,7 +42,12 @@ const PRIVATE_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6
 /** The EOA the test key derives to: `installAuthorContracts` derives it itself. */
 const PRIVATE_KEY_ADDRESS = privateKeyToAccount(PRIVATE_KEY).address;
 
-const quietOut: CliOut = { json: false, log: () => {}, warn: () => {}, result: () => {} };
+const quietOut: CliOut = {
+  json: false,
+  log: () => undefined,
+  warn: () => undefined,
+  result: () => undefined,
+};
 
 /** A config with a bundler endpoint and the factory — enough for the install. */
 function configWith(overrides: Record<string, unknown> = {}): CliConfig {
@@ -91,44 +96,54 @@ function fakeChain(options: FakeChainOptions = {}) {
   const calls: Call[] = [];
   const seen = { ensureSafe: 0, openRunner: 0, readGuard: 0, readOwners: 0 };
 
-  const readContracts = async (): Promise<AuthorContracts> => {
-    if (options.unreachable) throw new Error('fetch failed');
+  const readContracts = (): Promise<AuthorContracts> => {
+    if (options.unreachable) return Promise.reject(new Error('fetch failed'));
     const drafts = state.drafts[state.drafts.length - 1] ?? null;
     const ownerHistory = state.history[state.history.length - 1] ?? null;
-    return {
+    return Promise.resolve({
       factory: FACTORY,
       drafts,
       ownerHistory,
       guard: ownerHistory === null ? null : state.boundGuard,
-    };
+    });
   };
 
   const seam: AuthorContractsSeam = {
     readContracts,
-    readGuard: async () => {
+    readGuard: () => {
       seen.readGuard += 1;
-      return state.slotGuard;
+      return Promise.resolve(state.slotGuard);
     },
-    readOwners: async () => {
+    readOwners: () => {
       seen.readOwners += 1;
-      return { owners: state.owners, threshold: state.threshold };
+      return Promise.resolve({ owners: state.owners, threshold: state.threshold });
     },
-    ensureSafe: async () => {
+    ensureSafe: () => {
       seen.ensureSafe += 1;
-      if (options.unreachable) throw new Error('fetch failed');
-      return { address: SAFE, eoa: PRIVATE_KEY_ADDRESS, deployed: state.deployed, txHash: undefined };
+      if (options.unreachable) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve({
+        address: SAFE,
+        eoa: PRIVATE_KEY_ADDRESS,
+        deployed: state.deployed,
+        txHash: undefined,
+      });
     },
-    openRunner: async () => {
+    openRunner: () => {
       seen.openRunner += 1;
-      return {
-        genericTx: async (to: string, _signature: string, functionName: string, args: unknown[]) => {
+      return Promise.resolve({
+        genericTx: (
+          to: string,
+          _signature: string,
+          functionName: string,
+          args: unknown[],
+        ): Promise<string> => {
           calls.push({ to, functionName, args });
           if (functionName === 'createDraftsModule') state.drafts.push(DRAFTS);
           if (functionName === 'createOwnerHistoryModule') state.history.push(HISTORY);
           if (functionName === 'setGuard') state.slotGuard = args[0] as Address;
-          return `0x${String(calls.length).padStart(64, '0')}`;
+          return Promise.resolve(`0x${String(calls.length).padStart(64, '0')}`);
         },
-      };
+      });
     },
   };
 
@@ -306,12 +321,13 @@ describe('installAuthorContracts', () => {
       { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
       {
         ...seam,
-        readContracts: async () => ({
-          factory: FACTORY,
-          drafts: DRAFTS,
-          ownerHistory: null,
-          guard: null,
-        }),
+        readContracts: () =>
+          Promise.resolve({
+            factory: FACTORY,
+            drafts: DRAFTS,
+            ownerHistory: null,
+            guard: null,
+          }),
       },
     );
 
@@ -378,7 +394,8 @@ describe('the author contracts record', () => {
     expect(writeBackAuthorContracts('alice', contracts, file)).toBe(false);
     // An unknown pet name writes nothing rather than creating a half-row.
     expect(writeBackAuthorContracts('nobody', contracts, file)).toBe(false);
-    expect(JSON.parse(readFileSync(file, 'utf8')).authors.nobody).toBeUndefined();
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { authors: Record<string, unknown> };
+    expect(parsed.authors.nobody).toBeUndefined();
   });
 
   it('tolerates a row without the contracts field (no migration)', () => {

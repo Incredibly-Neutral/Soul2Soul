@@ -117,7 +117,9 @@ export interface InstallResult extends AuthorContracts {
  * and `authorContractsFactory` falls back to the env var and the shipped
  * default in that case.
  */
-export type AuthorContractsConfig = CliConfig & { contracts?: { authorFactory?: string } };
+export type AuthorContractsConfig = Omit<CliConfig, 'contracts'> & {
+  contracts?: { authorFactory?: string };
+};
 
 /** A 20-byte hex address, checksummed; throws `UsageError` for anything else. */
 function asAddress(value: string, source: string): Address {
@@ -184,7 +186,7 @@ function clientFor(rpcUrl: string) {
  */
 function newest(addresses: readonly Address[] | undefined): Address | null {
   const last = addresses?.[addresses.length - 1];
-  return last === undefined ? null : last;
+  return last ?? null;
 }
 
 /**
@@ -220,13 +222,13 @@ export async function readAuthorContracts(opts: ReadAuthorContractsOptions): Pro
   // leans on), so a zero means "this module has no guard we may install".
   let guard: Address | null = null;
   if (ownerHistory !== null) {
-    const bound = (await client.readContract({
+    const bound = await client.readContract({
       address: factory,
       abi: AuthorContractsFactory,
       functionName: 'guardFor',
       args: [ownerHistory],
-    })) as Address;
-    guard = bound && bound !== ZERO_ADDRESS ? getAddress(bound.toLowerCase()) : null;
+    });
+    guard = bound !== ZERO_ADDRESS ? getAddress(bound.toLowerCase()) : null;
   }
 
   return { factory, drafts, ownerHistory, guard };
@@ -390,7 +392,7 @@ export async function installAuthorContracts(
   let runner: Pick<SafeRunnerHandle, 'genericTx'> | undefined;
   /** Built on the first write: an 'already' Safe never needs a bundler client. */
   const getRunner = async (): Promise<Pick<SafeRunnerHandle, 'genericTx'>> => {
-    if (!runner) runner = await seam.openRunner({ config, privateKey, rpcUrl, safe });
+    runner ??= await seam.openRunner({ config, privateKey, rpcUrl, safe });
     return runner;
   };
 
@@ -476,7 +478,7 @@ export async function installAuthorContracts(
         state: 'pending-safe',
         txs,
         safeTx: guardSafeTx(safe, guard),
-        note: `the Safe needs owner signatures (${owners.threshold}-of-${owners.owners.length}) to install the guard — propose the Safe transaction in safeTx`,
+        note: `the Safe needs owner signatures (${String(owners.threshold)}-of-${String(owners.owners.length)}) to install the guard — propose the Safe transaction in safeTx`,
       };
     }
 
