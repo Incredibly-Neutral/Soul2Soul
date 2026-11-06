@@ -33,6 +33,9 @@ const MAX_BODY_BYTES = 262_144;
 /** A batch beyond this size is rejected outright rather than fanned out. */
 const MAX_BATCH_SIZE = 20;
 
+/** How often the limiter's expired windows are dropped. */
+const SWEEP_INTERVAL_MS = 60_000;
+
 const RPC_PATH = /^\/rpc\/(\d+)$/;
 
 const ANONYMOUS = 'anonymous';
@@ -82,8 +85,10 @@ function clientIp(cfg: Config, req: IncomingMessage): string {
   const header = req.headers['x-forwarded-for'];
   const raw = Array.isArray(header) ? header[0] : header;
   if (raw === undefined) return socket;
-  const first = raw.split(',')[0];
-  return first === undefined || first.trim() === '' ? socket : normalizeIp(first);
+  // The rightmost entry is the one the hop closest to us appended; everything
+  // to its left was supplied by the client and can be anything.
+  const last = raw.split(',').at(-1);
+  return last === undefined || last.trim() === '' ? socket : normalizeIp(last);
 }
 
 function pathOf(req: IncomingMessage): string {
@@ -210,11 +215,36 @@ export function createServer(cfg: Config, deps: ServerDeps = {}): HttpServer {
     },
   };
 
-  return createHttpServer((req: IncomingMessage, res: ServerResponse): void => {
+  const server = createHttpServer((req: IncomingMessage, res: ServerResponse): void => {
     // Late socket errors must never surface as an unhandled 'error' event.
     req.on('error', (): void => undefined);
     res.on('error', (): void => undefined);
     void handleRequest(ctx, req, res);
+  });
+  sweepOnInterval(server, ctx.limiter, ctx.now);
+  return server;
+}
+
+/**
+ * Drop expired rate-limit windows on a timer, so one caller cycling through
+ * many addresses cannot grow the map without bound. The timer is unref'd, so
+ * it never keeps the process alive, and stopped when the server closes.
+ */
+function sweepOnInterval(server: HttpServer, limiter: RateLimiter, now: () => number): void {
+  const sweep = (): void => {
+    try {
+      limiter.sweep(now());
+    } catch {
+      // A sweep must never take the process down.
+    }
+  };
+
+  sweep();
+  const timer = setInterval(sweep, SWEEP_INTERVAL_MS);
+  timer.unref();
+
+  server.on('close', (): void => {
+    clearInterval(timer);
   });
 }
 
@@ -260,6 +290,16 @@ async function route(
     return;
   }
 
+  // An origin that is not allowlisted is refused outright, not merely denied
+  // CORS headers: a safelisted `text/plain` POST never gets a preflight, so
+  // header-only CORS would still let another site's page reach the pipeline.
+  const origin = req.headers.origin;
+  if (origin !== undefined && !ctx.cfg.corsOrigins.includes(origin)) {
+    logHttp(403);
+    sendJson(res, 403, cors, { error: 'forbidden' });
+    return;
+  }
+
   const path = pathOf(req);
 
   if (path === '/healthz') {
@@ -279,12 +319,9 @@ async function route(
   }
 
   const chainId = Number(rawChainId);
-  if (!Number.isSafeInteger(chainId) || !ctx.cfg.allowedChainIds.has(chainId)) {
-    logHttp(404, { chainId });
-    sendJson(res, 404, cors, { error: 'unknown chain' });
-    return;
-  }
 
+  // Auth first: an unauthenticated caller must not learn which chain ids are
+  // configured by comparing 401 against 404.
   let userId: string;
   if (ctx.cfg.authMode === 'none') {
     userId = ANONYMOUS;
@@ -308,6 +345,12 @@ async function route(
       sendJson(res, 401, cors, { error: 'unauthorized' });
       return;
     }
+  }
+
+  if (!Number.isSafeInteger(chainId) || !ctx.cfg.allowedChainIds.has(chainId)) {
+    logHttp(404, { chainId });
+    sendJson(res, 404, cors, { error: 'unknown chain' });
+    return;
   }
 
   const read = await readBody(req);

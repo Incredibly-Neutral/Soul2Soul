@@ -199,13 +199,22 @@ function parseAllowedFactories(raw: string | undefined): readonly string[] {
   });
 }
 
-function parseAuthMode(raw: string | undefined, nodeEnv: string | undefined): AuthMode {
+function parseAuthMode(
+  raw: string | undefined,
+  nodeEnv: string | undefined,
+  allowInsecureRaw: string | undefined,
+): AuthMode {
   if (raw === undefined) return 'jwt';
   if (raw !== 'jwt' && raw !== 'none') {
     throw new ConfigError('AUTH_MODE must be "jwt" or "none"');
   }
-  if (raw === 'none' && nodeEnv === 'production') {
-    throw new ConfigError('AUTH_MODE=none is not allowed when NODE_ENV is production');
+  if (raw === 'none') {
+    if (nodeEnv === 'production') {
+      throw new ConfigError('AUTH_MODE=none is not allowed when NODE_ENV is production');
+    }
+    if (!parseBoolean('ALLOW_INSECURE_AUTH', allowInsecureRaw, false)) {
+      throw new ConfigError('AUTH_MODE=none requires ALLOW_INSECURE_AUTH=true');
+    }
   }
   return raw;
 }
@@ -217,7 +226,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const allowedCalls = parseAllowedCalls(required(env, 'ALLOWED_CALLS'));
   const corsOrigins = parseCorsOrigins(required(env, 'CORS_ORIGINS'));
 
-  const authMode = parseAuthMode(optional(env, 'AUTH_MODE'), optional(env, 'NODE_ENV'));
+  const authMode = parseAuthMode(
+    optional(env, 'AUTH_MODE'),
+    optional(env, 'NODE_ENV'),
+    optional(env, 'ALLOW_INSECURE_AUTH'),
+  );
 
   let jwtSecret: string | undefined;
   if (authMode === 'jwt') {
@@ -253,7 +266,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? new Set(DEFAULT_ALLOWED_METHODS)
       : new Set(splitList('ALLOWED_METHODS', allowedMethodsRaw));
 
-  const trustProxy = parseBoolean('TRUST_PROXY', optional(env, 'TRUST_PROXY'), true);
+  const trustProxy = parseBoolean('TRUST_PROXY', optional(env, 'TRUST_PROXY'), false);
   const upstreamTimeoutMs = parseInteger(
     'UPSTREAM_TIMEOUT_MS',
     optional(env, 'UPSTREAM_TIMEOUT_MS'),

@@ -49,6 +49,11 @@ Every variable is documented in [`.env.example`](./.env.example). The required s
 is `PIMLICO_API_KEY`, `PIMLICO_SPONSORSHIP_POLICY_ID`, `ALLOWED_CHAIN_IDS`,
 `ALLOWED_CALLS`, `CORS_ORIGINS` and, in `jwt` mode, `AUTH_JWT_SECRET`.
 
+`AUTH_MODE=none` additionally requires `ALLOW_INSECURE_AUTH=true`, and is refused
+when `NODE_ENV=production`. `TRUST_PROXY` defaults to `false`; set it to `true` only
+behind a reverse proxy you control, because it makes the last `X-Forwarded-For`
+entry the rate-limit key.
+
 `ALLOWED_CALLS` is a comma-separated list of `address:selector` or
 `chainId:address:selector`, with `*` for any selector:
 
@@ -63,10 +68,16 @@ that one contract.
 
 Checks run in order; the first failure returns and nothing is forwarded.
 
-1. **CORS** — exact origin match, no headers otherwise.
-2. **Body** — JSON, max 256 KB.
-3. **Auth** — `Authorization: Bearer <JWT>`, HS256, requires `exp` and `sub`.
-4. **Chain** — must be in `ALLOWED_CHAIN_IDS`, otherwise 404.
+1. **Origin** — a present `Origin` must match `CORS_ORIGINS` exactly, otherwise
+   403. A request with no `Origin` (server-to-server, curl) is let through; CORS
+   headers are only ever sent to an allowed origin. This is a gate, not decoration:
+   a cross-site `text/plain` POST gets no preflight, so header-only CORS would still
+   let it reach the pipeline.
+2. **Auth** — `Authorization: Bearer <JWT>`, HS256, requires `exp` and `sub`. Runs
+   before the chain check, so an unauthenticated caller cannot map
+   `ALLOWED_CHAIN_IDS` by comparing 401 against 404.
+3. **Chain** — must be in `ALLOWED_CHAIN_IDS`, otherwise 404.
+4. **Body** — JSON, max 256 KB.
 5. **Rate limit** — per user and per IP, charged per call in a batch.
 6. **Method** — allowlisted only. `pm_validateSponsorshipPolicies` and everything
    else not on the list is refused.
@@ -141,7 +152,9 @@ type needs a new decoder before it will work.
 
 ## Deploy
 
-A single stateless container or Node service behind HTTPS, with `TRUST_PROXY=true`.
+A single stateless container or Node service behind HTTPS, with `TRUST_PROXY=true`
+(the default is `false`: an instance reachable directly must not believe
+`X-Forwarded-For`).
 Secrets in the platform's secret store, never in the image, never in `.env` on the
 image.
 

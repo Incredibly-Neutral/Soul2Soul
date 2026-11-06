@@ -8,6 +8,7 @@ import { createRateLimiter } from '../src/rateLimit.js';
 import { createServer } from '../src/server.js';
 
 import type { CallLogEntry } from '../src/logging.js';
+import type { RateLimiter } from '../src/rateLimit.js';
 import type { ServerDeps } from '../src/server.js';
 import type { Config, FetchFn, RpcErrorObject, RpcResponse } from '../src/types.js';
 import type { AddressInfo } from 'node:net';
@@ -194,21 +195,37 @@ describe('cors', () => {
     assert.equal(response.headers.get('vary'), 'Origin');
   });
 
-  test('a disallowed origin gets no CORS headers at all', async (t) => {
+  test('a disallowed origin is 403 and gets no CORS headers at all', async (t) => {
     const h = await start(t);
 
     const response = await h.post(
       `/rpc/${CHAIN}`,
       { jsonrpc: '2.0', id: 1, method: ALLOWED_METHOD },
-      { origin: 'https://evil.example.com', authorization: `Bearer ${token()}` },
+      { origin: 'https://evil.example.com' },
     );
 
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 403);
+    assert.deepEqual(await json(response), { error: 'forbidden' });
     assert.equal(response.headers.get('access-control-allow-origin'), null);
     assert.equal(response.headers.get('access-control-allow-methods'), null);
     assert.equal(response.headers.get('access-control-allow-headers'), null);
     assert.equal(response.headers.get('access-control-max-age'), null);
     assert.equal(response.headers.get('vary'), 'Origin');
+    assert.equal(h.upstream.length, 0);
+  });
+
+  test('a request with no origin passes', async (t) => {
+    const h = await start(t);
+
+    const response = await h.post(
+      `/rpc/${CHAIN}`,
+      { jsonrpc: '2.0', id: 1, method: ALLOWED_METHOD },
+      { authorization: `Bearer ${token()}` },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+    assert.equal(h.upstream.length, 1);
   });
 
   test('OPTIONS answers 204 with the preflight headers and no upstream call', async (t) => {
@@ -263,10 +280,28 @@ describe('health and routing', () => {
     assert.equal(unknownPath.status, 404);
     assert.deepEqual(await json(unknownPath), { error: 'not found' });
 
-    const unknownChain = await h.post('/rpc/1', { jsonrpc: '2.0', method: ALLOWED_METHOD });
+    const unknownChain = await h.post(
+      '/rpc/1',
+      { jsonrpc: '2.0', method: ALLOWED_METHOD },
+      { authorization: `Bearer ${token()}` },
+    );
     assert.equal(unknownChain.status, 404);
     assert.deepEqual(await json(unknownChain), { error: 'unknown chain' });
 
+    assert.equal(h.upstream.length, 0);
+  });
+
+  test('an unauthenticated request gets 401 for any chain id', async (t) => {
+    const h = await start(t);
+    const call = { jsonrpc: '2.0', id: 1, method: ALLOWED_METHOD };
+
+    const unknown = await h.post('/rpc/1', call);
+    const known = await h.post(`/rpc/${CHAIN}`, call);
+
+    assert.equal(unknown.status, 401);
+    assert.equal(known.status, 401);
+    assert.deepEqual(await json(unknown), { error: 'unauthorized' });
+    assert.deepEqual(await json(known), { error: 'unauthorized' });
     assert.equal(h.upstream.length, 0);
   });
 
@@ -551,16 +586,28 @@ describe('rate limiting', () => {
 /* ------------------------------------------------------------ trustProxy */
 
 describe('client ip', () => {
-  test('trustProxy reads the first x-forwarded-for entry', async (t) => {
+  test('trustProxy reads the last x-forwarded-for entry', async (t) => {
     const h = await start(t, { cfg: { trustProxy: true } });
 
     const response = await h.post(
       `/rpc/${CHAIN}`,
       { jsonrpc: '2.0', id: 1, method: ALLOWED_METHOD },
-      { authorization: `Bearer ${token()}`, 'x-forwarded-for': '203.0.113.9, 10.0.0.1' },
+      { authorization: `Bearer ${token()}`, 'x-forwarded-for': '1.2.3.4, 5.6.7.8' },
     );
 
     assert.equal(response.status, 200);
+    assert.equal(h.logs[0]?.ip, '5.6.7.8');
+  });
+
+  test('trustProxy reads a single-entry x-forwarded-for as itself', async (t) => {
+    const h = await start(t, { cfg: { trustProxy: true } });
+
+    await h.post(
+      `/rpc/${CHAIN}`,
+      { jsonrpc: '2.0', id: 1, method: ALLOWED_METHOD },
+      { authorization: `Bearer ${token()}`, 'x-forwarded-for': '203.0.113.9' },
+    );
+
     assert.equal(h.logs[0]?.ip, '203.0.113.9');
   });
 
@@ -654,6 +701,28 @@ describe('lifecycle', () => {
 
     assert.equal(server.listening, false);
     server.close();
+  });
+
+  test('the limiter is swept without holding the process open', async (t) => {
+    let sweeps = 0;
+    const limiter: RateLimiter = {
+      check: () => ({ allowed: true, remaining: 1, retryAfterSeconds: 0 }),
+      sweep: (): void => {
+        sweeps += 1;
+      },
+      size: 0,
+    };
+
+    const server = createServer(makeConfig(), { limiter, logger: () => undefined });
+    assert.equal(sweeps, 1, 'a sweep runs as soon as the server exists');
+    assert.equal(server.listening, false);
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   test('two servers do not share a limiter', async (t) => {

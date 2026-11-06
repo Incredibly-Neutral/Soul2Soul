@@ -59,7 +59,7 @@ describe('loadConfig', () => {
     assert.equal(config.port, 8080);
     assert.equal(config.rateLimitPerMinute, 60);
     assert.equal(config.upstreamTimeoutMs, 15000);
-    assert.equal(config.trustProxy, true);
+    assert.equal(config.trustProxy, false);
     assert.equal(config.allowNativeValue, false);
     assert.equal(config.allowDeployment, false);
   });
@@ -148,15 +148,31 @@ describe('loadConfig', () => {
     expectConfigError(makeEnv({ ALLOWED_CHAIN_IDS: '1,' }), /ALLOWED_CHAIN_IDS/);
   });
 
-  test('AUTH_MODE=none is refused in production and accepted elsewhere', () => {
+  test('AUTH_MODE=none needs ALLOW_INSECURE_AUTH=true, and never in production', () => {
     expectConfigError(
-      makeEnv({ AUTH_MODE: 'none', NODE_ENV: 'production' }),
+      makeEnv({ AUTH_MODE: 'none' }),
+      /AUTH_MODE=none requires ALLOW_INSECURE_AUTH=true/,
+    );
+    expectConfigError(
+      makeEnv({ AUTH_MODE: 'none', ALLOW_INSECURE_AUTH: 'false' }),
+      /AUTH_MODE=none requires ALLOW_INSECURE_AUTH=true/,
+    );
+    expectConfigError(
+      makeEnv({ AUTH_MODE: 'none', ALLOW_INSECURE_AUTH: 'true', NODE_ENV: 'production' }),
       /AUTH_MODE=none is not allowed when NODE_ENV is production/,
     );
 
-    const config = loadConfig(makeEnv({ AUTH_MODE: 'none', AUTH_JWT_SECRET: undefined }));
+    const config = loadConfig(
+      makeEnv({ AUTH_MODE: 'none', ALLOW_INSECURE_AUTH: 'true', AUTH_JWT_SECRET: undefined }),
+    );
     assert.equal(config.authMode, 'none');
     assert.equal(config.jwtSecret, undefined);
+  });
+
+  test('ALLOW_INSECURE_AUTH is only consulted for AUTH_MODE=none', () => {
+    const config = loadConfig(makeEnv({ ALLOW_INSECURE_AUTH: 'nonsense' }));
+
+    assert.equal(config.authMode, 'jwt');
   });
 
   test('rejects an unknown AUTH_MODE', () => {
