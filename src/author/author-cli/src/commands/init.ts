@@ -87,11 +87,11 @@ async function installContracts(
       );
     } else {
       // `pending-safe` is not "undeployed": core returns it for a Safe the key
-      // does not solely own, or one already carrying a guard that is not ours.
-      // The note says which, and it must be the thing we print.
-      out.log(
-        `${result.note ?? 'the Safe owners must install the guard'} — the call to propose is below`,
-      );
+      // does not solely own, one already carrying a guard that is not ours, or a
+      // transaction that may have reverted. The note says which, and it must be
+      // the thing we print. Only the multisig case carries a call to propose.
+      const note = result.note ?? 'the Safe owners must install the guard';
+      out.log(result.safeTx ? `${note} — the call to propose is below` : note);
     }
 
     return {
@@ -137,15 +137,11 @@ function contractsLines(report: ContractsReport): string[] {
   lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
   if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
-  if (report.state === 'pending-safe') {
+  if (report.state === 'pending-safe' && report.safeTx) {
     lines.push('              the drafts module needs no install — the Safe calls append');
     lines.push('              on the drafts proxy directly. Propose this call instead:');
-    if (report.safeTx) {
-      lines.push(`              to   ${report.safeTx.to}`);
-      lines.push(`              data ${report.safeTx.data}`);
-    } else {
-      lines.push('              (the exact call could not be built — re-run `s2s author init`)');
-    }
+    lines.push(`              to   ${report.safeTx.to}`);
+    lines.push(`              data ${report.safeTx.data}`);
   }
   return lines;
 }

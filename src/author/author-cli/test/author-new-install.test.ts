@@ -284,6 +284,27 @@ describe('author new installs the author contracts', () => {
     expect(sink.logs.join('\n')).toContain('the Safe owners must install the guard');
   });
 
+  it('prints no proposal when pending-safe carries no safeTx', async () => {
+    // A reverted setGuard, a submitted-but-invisible userOp, a foreign guard:
+    // core has no call to hand over, so the output must not promise one.
+    const note =
+      'the setGuard transaction did not install the guard (the Safe\'s guard slot is empty) — it may have reverted; run again';
+    installState.answer = () => installResult('pending-safe', { note });
+    const sink = recorder();
+    await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });
+
+    const contracts = sink.data.contracts as Record<string, unknown>;
+    expect(contracts.state).toBe('pending-safe');
+    expect(contracts.safeTx).toBeUndefined();
+    expect(sink.human).toContain(`pending — ${note}`);
+    expect(sink.human).not.toContain('Propose this call');
+    expect(sink.human).not.toContain('could not be built');
+    expect(sink.logs.join('\n')).not.toContain('the call to propose is below');
+    // The reason is still the thing said, on every channel.
+    expect(sink.logs.join('\n')).toContain(note);
+    expect(sink.warnings).toHaveLength(0);
+  });
+
   it('turns a skipped install into a warning pointing at author init', async () => {
     installState.answer = () =>
       installResult('skipped', {
