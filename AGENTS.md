@@ -110,3 +110,15 @@ Every complete task ends in a PR a human approves — never a silent ff-merge in
 - **Update the spec after every PR**: the branch for the package, the ADR or RFC it settles, and
   the twin's index if the record set changed. Specs are the read-before-code contract; a PR that
   drifts from its spec is how specs rot.
+
+## Invariants
+
+`INV-*` numbers are the whitepaper's. They name requirements the paper actually states, and
+nothing else. Never mint one: not for an implementation rule, not for a nice property a component
+happens to have, not "to be consistent". Most invariants live in the protocol and the gates; a
+component that carries one cites the existing number.
+
+Everything else is a note, and notes are fine — a bullet under local gotchas, a sentence in a
+sequence, a line in the spec's own prose. Unnumbered. A change that is merely correct does not
+become important by getting a number, and the numbering stops meaning anything if everything gets
+one.
