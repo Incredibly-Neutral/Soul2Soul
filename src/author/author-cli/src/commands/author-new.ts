@@ -22,6 +22,14 @@
 // the key is the thing that cannot be recovered later, the Safe can be derived
 // again at any time by `author address`.
 //
+// A new author is not usable until the author contracts sit on its Safe, so the
+// last step deploys the Safe and installs them (drafts/ownerHistory/guard). It
+// runs strictly AFTER the key is filed: the store order is unchanged, and every
+// failure here is a warning naming the recovery (`s2s author init`). A Safe this
+// run cannot install on — its owners are not solely the filed key, or it already
+// carries a guard that is not ours — leaves the install as a `pending-safe`
+// transaction its owners must propose, reported with the reason core returns.
+//
 // A new author becomes the active one — adding an identity is a switch.
 // Runs without `buildContext`: no Lit keys, no publication, no bundler.
 // ============================================================================
@@ -44,10 +52,16 @@ import {
   isValidPetName,
   PET_NAME_MAX_LENGTH,
   readAuthors,
+  rememberAuthorContracts,
   writeAuthors,
   writeBackAuthorSafe,
 } from '../core/authors';
 import { predictAuthorSafe } from '../core/author-safe';
+import {
+  authorContractsFactory,
+  installAuthorContracts,
+  type InstallState,
+} from '../core/author-contracts';
 import { buildRpcEndpoints } from '../adapters/rpc';
 import { hexKey, loadConfig, type CliConfig } from '../core/config';
 
@@ -74,7 +88,7 @@ function fromMnemonic(mnemonic: string): { privateKey: string; mnemonic: string 
     );
   }
   if (!key) {
-    throw new UsageError('invalid mnemonic — the phrase derives no key at m/44\'/60\'/0\'/0/0');
+    throw new UsageError("invalid mnemonic — the phrase derives no key at m/44'/60'/0'/0/0");
   }
   return { privateKey: bytesToHex(key), mnemonic: phrase };
 }
@@ -133,7 +147,7 @@ async function predictSafe(
   config: CliConfig,
   privateKey: string,
   eoa: Address,
-): Promise<string | null> {
+): Promise<Address | null> {
   // `config.rpc.l2` is already the fully resolved chain (custom endpoints, else
   // DRPC → public → Alchemy → Infura), the same one `ctx.rpcs.L2` carries.
   const rpcUrl = buildRpcEndpoints(config).L2[0];
@@ -154,6 +168,157 @@ async function predictSafe(
     );
     return null;
   }
+}
+
+/**
+ * What the result says about the author contracts, whether or not they landed.
+ * Always present, so a script never has to distinguish "absent" from "skipped".
+ */
+export interface ContractsReport {
+  /** The factory the contracts were installed from (null when unreadable). */
+  factory: string | null;
+  drafts: string | null;
+  ownerHistory: string | null;
+  guard: string | null;
+  state: InstallState;
+  /** The userOps / txs the install sent. */
+  txs: string[];
+  /** Why the install is `skipped` or `pending-safe`, as core reported it. */
+  note?: string;
+  /** The Safe call the owners must propose (`pending-safe`). */
+  safeTx?: { to: string; data: string };
+}
+
+/** The contracts block for a run that never reached the chain. */
+function notInstalled(config: CliConfig, state: InstallState, note?: string): ContractsReport {
+  let factory: string | null = null;
+  try {
+    factory = authorContractsFactory(config);
+  } catch {
+    // An unconfigured factory is reported as unknown, never a failure: the key
+    // is already filed and `s2s author init` is the place to fix this.
+    factory = null;
+  }
+  return {
+    factory,
+    drafts: null,
+    ownerHistory: null,
+    guard: null,
+    state,
+    txs: [],
+    ...(note ? { note } : {}),
+  };
+}
+
+/**
+ * Deploy the author Safe (when needed) and install the author contracts on it.
+ * Never throws: a missing RPC, a missing bundler, an undeployed Safe or a chain
+ * error all degrade to a warning that names `s2s author init`, because at this
+ * point the user's key is safe and nothing here is irreplaceable.
+ */
+async function installContracts(
+  out: CliOut,
+  config: CliConfig,
+  name: string,
+  privateKey: string,
+  safe: Address | null,
+): Promise<ContractsReport> {
+  const rpcUrl = buildRpcEndpoints(config).L2[0];
+  if (!rpcUrl) {
+    const note = 'no L2 RPC configured';
+    out.warn(
+      'author contracts not installed — no L2 RPC configured; the key is filed, run `s2s author init` once an L2 RPC is set',
+    );
+    return notInstalled(config, 'skipped', note);
+  }
+  if (!safe) {
+    // The Safe address is unknown, so there is nothing to install on (and no
+    // owner to install as). Same recovery as any other skip.
+    const note = 'author Safe not predicted';
+    out.warn(`author contracts not installed — ${note}; run \`s2s author init\``);
+    return notInstalled(config, 'skipped', note);
+  }
+
+  try {
+    const result = await installAuthorContracts({
+      // The key just filed, not the active one: `author new` may have been run
+      // with S2S_PRIVATE_KEY set to somebody else.
+      config: { ...config, privateKey },
+      safe,
+      rpcUrl,
+      privateKey: privateKey as `0x${string}`,
+      out,
+    });
+
+    if (result.state === 'installed' || result.state === 'already') {
+      try {
+        // Offline reporting for `author list` / `author switch`.
+        rememberAuthorContracts(name, result);
+      } catch (err) {
+        out.warn(
+          `could not record the author contracts in the authors file: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    } else if (result.state === 'skipped') {
+      out.warn(
+        `author contracts not installed${result.note ? ` — ${result.note}` : ''}; run \`s2s author init\` to install them`,
+      );
+    } else {
+      // `pending-safe` is not "undeployed": core returns it for a Safe the filed
+      // key does not solely own, or one already carrying a guard that is not
+      // ours. The note says which, and it must be the thing we print.
+      out.log(
+        `${result.note ?? 'the Safe owners must install the guard'} — the call to propose is below`,
+      );
+    }
+
+    return {
+      factory: result.factory,
+      drafts: result.drafts,
+      ownerHistory: result.ownerHistory,
+      guard: result.guard,
+      state: result.state,
+      txs: result.txs,
+      ...(result.note ? { note: result.note } : {}),
+      ...(result.safeTx ? { safeTx: result.safeTx } : {}),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    out.warn(`author contracts not installed: ${message} — run \`s2s author init\` to finish`);
+    return notInstalled(config, 'skipped', message);
+  }
+}
+
+/** The human block for `contracts` — the state, then what it installed. */
+function contractsLines(report: ContractsReport): string[] {
+  const state =
+    report.state === 'installed'
+      ? 'installed'
+      : report.state === 'already'
+        ? 'already installed'
+        : report.state === 'pending-safe'
+          ? `pending — ${report.note ?? 'the Safe owners must install the guard'}`
+          : 'skipped (run `s2s author init`)';
+  const lines = [`contracts   : ${state}`];
+  if (report.state === 'skipped') return lines;
+
+  lines.push(`factory     : ${report.factory ?? '(unknown)'}`);
+  lines.push(`drafts      : ${report.drafts ?? '(none)'}`);
+  lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
+  lines.push(`guard       : ${report.guard ?? '(none)'}`);
+  if (report.state === 'pending-safe') {
+    lines.push('              the drafts module needs no install — the Safe calls append');
+    lines.push('              on the drafts proxy directly. Propose this call instead:');
+    if (report.safeTx) {
+      lines.push(`              to   ${report.safeTx.to}`);
+      lines.push(`              data ${report.safeTx.data}`);
+    } else {
+      lines.push('              (the exact call could not be built — run `s2s author init`)');
+    }
+  }
+  return lines;
 }
 
 export const authorNew: StoreCommandSpec = {
@@ -206,8 +371,13 @@ export const authorNew: StoreCommandSpec = {
     // `addAuthor` rejects a duplicate name or key before anything is written.
     writeAuthors(addAuthor(readAuthors(file), name, privateKey, null), file);
 
-    const safe = await predictSafe(out, loadConfig(), privateKey, eoa);
+    const config = loadConfig();
+    const safe = await predictSafe(out, config, privateKey, eoa);
     if (safe !== null) writeBackAuthorSafe(name, safe, file);
+
+    // Only now, with the key on disk and the Safe recorded, does anything touch
+    // the chain — and nothing below may turn this into a failed command.
+    const contracts = await installContracts(out, config, name, privateKey, safe);
 
     out.result(
       {
@@ -217,6 +387,7 @@ export const authorNew: StoreCommandSpec = {
         safe,
         active: true,
         file,
+        contracts,
         // The phrase is echoed when it is the thing to write down; a key the
         // user supplied is already theirs and never comes back at them.
         ...(source.mnemonic ? { mnemonic: source.mnemonic } : {}),
@@ -226,6 +397,7 @@ export const authorNew: StoreCommandSpec = {
         `author '${name}' created and activated`,
         `eoa         : ${eoa}`,
         `safe        : ${safe ?? '(not predicted — no L2 RPC)'}`,
+        ...contractsLines(contracts),
         `store       : ${file}`,
         ...(source.mnemonic
           ? [
