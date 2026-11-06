@@ -38,7 +38,7 @@
  * Anyone can repair a miss with a permissionless `sync()`.
  */
 
-import { createPublicClient, createWalletClient, getContractAddress, http } from 'viem';
+import { createPublicClient, createWalletClient, getContractAddress, http, type Account } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 import { readFileSync, existsSync } from 'fs';
@@ -93,13 +93,32 @@ async function waitForAddress(rpcUrl: string, hash: `0x${string}`): Promise<stri
 }
 
 /**
+ * The wallet client, with its chain and local signer baked into the type.
+ *
+ * A bare `ReturnType<typeof createWalletClient>` is the generic default, which
+ * makes `deployContract` reject a chain-and-account-bound client — and, worse,
+ * tempts the account back in as an address string. An address string makes
+ * viem ask the RPC to sign (`eth_sendTransaction`), which no hosted Base node
+ * offers. The account must travel as an object so the key signs locally.
+ */
+type DeployClient = ReturnType<
+  typeof createWalletClient<
+    ReturnType<typeof http>,
+    typeof base,
+    ReturnType<typeof privateKeyToAccount>
+  >
+>;
+
+/**
+ * Deploy one contract and wait for its receipt.
+ *
  * No explicit `gas`: the node estimates. A hard-coded limit is how a deploy
  * lands under the cost of its own constructor one day — and the old drafts
  * script carried a `3_000_000n` that was already a guess.
  */
 async function deployContract(
-  client: ReturnType<typeof createWalletClient>,
-  account: `0x${string}`,
+  client: DeployClient,
+  account: Account,
   name: string,
   args: any[],
   rpcUrl: string,
@@ -177,11 +196,11 @@ async function main() {
   ]);
 
   console.log('1/3 Deploying DraftsModuleV1 (implementation)...');
-  const draftsImplementation = await deployContract(client, account.address, 'DraftsModuleV1', [], rpcUrl);
+  const draftsImplementation = await deployContract(client, account, 'DraftsModuleV1', [], rpcUrl);
   console.log(`   ✅ Implementation at ${draftsImplementation}\n`);
 
   console.log('2/3 Deploying OwnerHistoryModuleV1 (implementation)...');
-  const ownerHistoryImplementation = await deployContract(client, account.address, 'OwnerHistoryModuleV1', [], rpcUrl);
+  const ownerHistoryImplementation = await deployContract(client, account, 'OwnerHistoryModuleV1', [], rpcUrl);
   console.log(`   ✅ Implementation at ${ownerHistoryImplementation}\n`);
 
   for (const [name, address] of [
@@ -198,7 +217,7 @@ async function main() {
   console.log('3/3 Deploying AuthorContractsFactory...');
   const factory = await deployContract(
     client,
-    account.address,
+    account,
     'AuthorContractsFactory',
     [draftsImplementation, ownerHistoryImplementation],
     rpcUrl,
