@@ -160,6 +160,24 @@ image.
 Only one instance until rate limiting moves somewhere shared: the limiter is an
 in-process `Map`.
 
+### Docker
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+
+`.env` is the only file you have to create, and it is the same file the bare-metal
+path uses: Compose reads it with `env_file`, and nothing from it is baked into the
+image. The container runs as the non-root `node` user with a read-only root
+filesystem, `node dist/index.js` is PID 1 so SIGTERM reaches the process directly,
+and Docker's stop grace period is 25 s against the 20 s forced exit in
+`src/index.ts`.
+
+The port is published on the loopback interface only, `127.0.0.1:8080`, because
+nginx on the host is the public edge. Set `TRUST_PROXY=true` in `.env` for the
+same reason.
+
 ### Nginx in front
 
 ```nginx
