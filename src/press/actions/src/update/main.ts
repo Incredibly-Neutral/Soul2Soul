@@ -84,6 +84,13 @@ const TIMEOUTS = {
   pinLs: 5_000,
 };
 
+// A Kubo `files/ls?long=true` entry. Only `Type === 0` (a file) is mirrorable —
+// directories are skipped. `files/ls` is flat, so a Name never contains a `/`.
+interface TxtEntry {
+  Name?: string;
+  Type?: number;
+}
+
 async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>> {
   let trace: any[] = [];
 
@@ -378,6 +385,80 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         throw `Failed to cp assets: ${text}`;
       }
       trace.push(`✓ assets (${config.assetsCid.slice(0, 9)})`);
+
+      // Mirror assets/txt/*.txt (robots.txt, llms.txt) to the tree ROOT, so the
+      // published site answers both /assets/txt/robots.txt and /robots.txt.
+      // These files arrive inside the owner-controlled assetsCid, so they never
+      // pass the provenance/path gate — and that is exactly why the site's front
+      // page (root index.html) is never a copy target here.
+      const txtDirPath = `${assetsDestPath}/txt`;
+      let txtEntries: TxtEntry[] = [];
+      try {
+        const txtLsRes = await fetchWithTimeout(
+          `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(txtDirPath)}&long=true`,
+          { method: 'POST' },
+          TIMEOUTS.stat,
+        );
+        if (!txtLsRes.ok) {
+          // Normal case: the site has no assets/txt directory. Not fatal.
+          trace.push(`no ${txtDirPath} — no root txt files`);
+        } else {
+          const txtLsData = (await txtLsRes.json()) as { Entries?: unknown };
+          txtEntries = Array.isArray(txtLsData.Entries) ? (txtLsData.Entries as TxtEntry[]) : [];
+        }
+      } catch (e) {
+        trace.push(`no ${txtDirPath} — no root txt files: ${String(e)}`);
+      }
+
+      for (const entry of txtEntries) {
+        const txtName = typeof entry.Name === 'string' ? entry.Name : '';
+        if (entry.Type !== 0 || txtName === '') {
+          trace.push(`skip root txt ${txtName}: not a file`);
+          continue;
+        }
+        // HARD RULE: the root front page is not reachable from the txt
+        // directory, at all, in any casing.
+        if (txtName.toLowerCase() === 'index.html') {
+          trace.push(`skip root txt ${txtName}: root index.html is reserved`);
+          continue;
+        }
+
+        const txtDestPath = `${mfsPath}/${txtName}`;
+        // Kubo files/cp does not overwrite, and the previous-root copy already
+        // put last run's /robots.txt (etc.) at the root — clear it first.
+        try {
+          const txtStatRes = await fetchWithTimeout(
+            `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(txtDestPath)}`,
+            { method: 'POST' },
+            TIMEOUTS.stat,
+          );
+          if (txtStatRes.ok) {
+            await fetchWithTimeout(
+              `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
+              { method: 'POST' },
+              TIMEOUTS.rm,
+            ).catch((e: unknown) =>
+              trace.push(`warn: rm root txt failed ${txtName}: ${String(e)}`),
+            );
+            trace.push(`rm existing root ${txtName}`);
+          }
+        } catch (e) {
+          trace.push(`warn: stat root txt failed ${txtName}: ${String(e)}`);
+        }
+
+        trace.push(`cp root txt ${txtName}`);
+        const txtUrl =
+          `${gateway}/api/v0/files/cp?` +
+          `arg=${encodeURIComponent(`${txtDirPath}/${txtName}`)}` +
+          `&arg=${encodeURIComponent(txtDestPath)}` +
+          `&parents=false&flush=false`;
+        const txtRes = await fetchWithTimeout(txtUrl, { method: 'POST' }, TIMEOUTS.cpFile);
+        if (!txtRes.ok) {
+          const text = await txtRes.text();
+          throw `Failed to cp root txt ${txtName}: ${text}`;
+        }
+        trace.push(`✓ root txt ${txtName}`);
+      }
     }
 
     // Log the MFS tree structure for debugging

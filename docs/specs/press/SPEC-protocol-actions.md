@@ -15,7 +15,7 @@
 > **I/O contract** for unit/integration tests: every action's Inputs/Outputs table is also its
 > fixture definition.
 >
-> Invariants carried by this component: INV-1, 2, 5, 6, 7, 8, 9, 11 (see SPEC-00 §4).
+> Invariants carried by this component: INV-1, 2, 5, 6, 7, 8, 9, 11, 14 (see SPEC-00 §4).
 
 ---
 
@@ -223,8 +223,9 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
-`files/stat` new root → `pin/add` → **if `!preview`**: `toHexString(root)` + `evmWrite
-setText(node,"contenthash_wrapped")` with the **PKP** (INV-10) → `finally` rm temp MFS.
+mirror every file in `assets/txt/` to the tree root (INV-14) → `files/stat` new root → `pin/add` →
+**if `!preview`**: `toHexString(root)` + `evmWrite setText(node,"contenthash_wrapped")` with the
+**PKP** (INV-10) → `finally` rm temp MFS.
 
 **Tree-path removal (`remove`) — new 2026-08-06:** after the copy loop, before stat+pin, the action
 processes `input.remove[]`. For each `{ path, replacedBy? }`: strip leading/trailing `/` (skip
@@ -241,7 +242,7 @@ blocking prerequisite (trusted path→genesis resolution).
 **Network/chain:** Kubo MFS/pin on `ipfs.transport-union.dev`; BASE read (`getText`) + BASE write
 (`setText`, PKP-signed). **Runs on Lit (prod) / Bun (preview, no write).**
 
-**Invariants:** INV-1, 4, 6, 8, 9, 10, 11. **Gotchas:** Kubo `files/cp` does not overwrite — code
+**Invariants:** INV-1, 4, 6, 8, 9, 10, 11, 14. **Gotchas:** Kubo `files/cp` does not overwrite — code
 `rm`s first; CID is CIDv0 (INV-6 / OPEN-TASK-1). **Tree-mutation integrity gate implemented 2026-08-07** — see §A3 Decision Tree below.
 
 ## A3 Decision Tree — update action logic gates (implemented 2026-08-07)
@@ -365,7 +366,7 @@ input.remove[] →  per-entry (parallel)
 1. canPublish gate (authorised to act on publication)
 2. copy loop:  verifyProvenance() for each job → cp
 3. remove loop: sanitizeRemovePath() → replacedBy|hasDeal checks → files/rm
-4. assets copy
+4. assets copy → root txt mirror (assets/txt/*.txt → root)
 5. stat root → pin → setText on-chain
 6. finally: rm temp MFS
 ```
@@ -532,7 +533,14 @@ pkp{ethAddress,publicKey,tokenId}, litActionPrep/Single/Cbor/RootUpdate }`.
 
 INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` gotcha), INV-4
 (module NAME discovery), INV-5 (provenance canonicalization), INV-6 (contenthash codec), INV-7
-(runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453 hardcoded), INV-11 (assets→/assets).
+(runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453 hardcoded), INV-11 (assets→/assets),
+INV-14 (root txt).
+
+**INV-14 — root txt.** The owner-controlled `assetsCid` may carry `txt/*.txt` (`robots.txt`,
+`llms.txt`); the update action mirrors every such file to the tree root, so the site answers both
+`/assets/txt/<name>` and `/<name>`. The mirror runs inside the assets block (no `assetsCid` → no root
+txt), never targets a root `index.html` in any casing, and a failed copy is fatal — a publish must
+not silently keep last run's `robots.txt`. Registered here; the SPEC-00 §4 row is still to be added.
 
 ## Local gotchas (component-specific, beyond SPEC-00 gaps)
 
