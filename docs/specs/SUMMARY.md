@@ -62,11 +62,15 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   CIDs, PKP fields, `ens_records` address); read/write via `getRecords`/`setRecord`.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**
-- **`DraftsModuleV1`** (author side, built in `src/author/contracts`, not deployed) — per author Safe, the append-only log of
+- **`DraftsModuleV1`** (author side, in `src/author/contracts`, deployed on Base behind
+  `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-author proxy is
+  installed by `s2s author new` / `s2s author init`) — per author Safe, the append-only log of
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
-- **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, built in `src/author/contracts`, not deployed) — one module per
+- **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, in `src/author/contracts`, deployed on
+Base behind the same factory; the per-Safe proxy and guard are installed by the CLI, and the Safe's
+`setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per
 author Safe, mirroring the Safe's owner set and keeping every past set with the block and timestamp it
 held, plus a storage-free, non-upgradeable guard whose `checkAfterExecution` calls the module's
 permissionless `sync()`. It exists because Safe 1.4.1 has no hook on owner rotation: every rotation is
