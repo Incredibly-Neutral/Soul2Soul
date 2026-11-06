@@ -223,8 +223,10 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
-`files/stat` new root → `pin/add` → **if `!preview`**: `toHexString(root)` + `evmWrite
-setText(node,"contenthash_wrapped")` with the **PKP** (INV-10) → `finally` rm temp MFS.
+mirror every file in `assets/txt/` to the tree root and drop the stale root txt →
+`files/stat` new root → `pin/add` →
+**if `!preview`**: `toHexString(root)` + `evmWrite setText(node,"contenthash_wrapped")` with the
+**PKP** (INV-10) → `finally` rm temp MFS.
 
 **Tree-path removal (`remove`) — new 2026-08-06:** after the copy loop, before stat+pin, the action
 processes `input.remove[]`. For each `{ path, replacedBy? }`: strip leading/trailing `/` (skip
@@ -365,7 +367,7 @@ input.remove[] →  per-entry (parallel)
 1. canPublish gate (authorised to act on publication)
 2. copy loop:  verifyProvenance() for each job → cp
 3. remove loop: sanitizeRemovePath() → replacedBy|hasDeal checks → files/rm
-4. assets copy
+4. assets copy → root txt mirror (every file in assets/txt → root; stale root txt cleared)
 5. stat root → pin → setText on-chain
 6. finally: rm temp MFS
 ```
@@ -536,6 +538,19 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
 
 ## Local gotchas (component-specific, beyond SPEC-00 gaps)
 
+- **Root txt mirror (update action, not an invariant).** The owner-controlled `assetsCid` may carry a
+  `txt/` directory; every FILE in it is mirrored to the tree root, so the site answers both
+  `/assets/txt/<name>` and `/<name>`. The directory is the opt-in, not an extension: `robots.txt` and
+  `llms.txt` are the usual two, but any file in `assets/txt/` is mirrored. A name that is not a
+  single path segment (`.`, `..`, or anything containing `/`) is refused before it touches a path,
+  and a root `index.html` in any casing is never a target. Where a page's slug already owns the
+  path — a directory at the root — the page wins: the file is skipped, and the path is never removed
+  recursively. A copy failure is fatal; a publish must not silently keep last run's `robots.txt`. A
+  root txt name the previous tree carried that the new `txt/` no longer holds is removed from the
+  root — non-recursive, and a failed `rm` is a trace rather than a failure — so deleting the file
+  upstream, or dropping `assetsCid` altogether, does not leave it published forever. The `ls` of
+  `assets/txt` is fatal on any failure other than kubo's "file does not exist": only an absent
+  directory may read as "no root txt", or a broken call would publish a site with no `/robots.txt`.
 - **Shape mismatch (illustrative of the whole testing rationale):** `getProtocolInfo` returns
   `assetsGateway` (camelCase); `initTemplateData` reads `protocolInfo.assets_gateway` (snake) →
   silently `undefined`. Likely vestigial post the assets-into-`/assets` refactor (templates now use
