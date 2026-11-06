@@ -69,9 +69,10 @@ a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that cost
 The normal path is the CLI: `s2s author new` installs on the author it just created, and
 `s2s author init` does the same for an author that already exists (a key filed before these
 contracts were deployed). What is installed is decided by the Safe's own guard slot, not by the
-factory index: `guardFor` says what a module was *minted* with, and only the Safe can write the
-slot. So a re-run reads `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M` with
-`guardFor(M) == G` and `M.safe() == safe`, reports `already` for a proven install, and only calls
+factory index: `guardFor` says what a module was *minted* with and only answers for one factory, and
+only the Safe can write the slot. So a re-run reads `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then
+`G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — three immutables, no factory in the
+proof — reports `already` for a proven install, and only calls
 `createOwnerHistoryModule(safe)` when nothing is proven — checking the index first so it deploys
 nothing that already exists. It then sends the Safe transaction below, re-reads the slot, and calls
 itself `installed` only when the slot carries the guard it sent. On a multisig Safe, where one key

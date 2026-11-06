@@ -436,9 +436,12 @@ Both commands run the same sequence, in order:
    nothing for this step.
 2. **Read the guard the Safe carries, and prove it is ours.** The guard slot is the only thing
    only the Safe can write, so it — not the factory index — decides what is installed:
-   `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `factory.guardFor(M) == G`,
-   `M.safe() == safe`. A guard that survives that is the install; the run reports `already` and
-   sends nothing, whatever else the permissionless index has accumulated since.
+   `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `G.safe() == safe`,
+   `M.safe() == safe`. All three are immutables, so the proof needs no factory to agree and survives
+   `contracts.authorFactory` pointing somewhere else. A guard that survives it is the install; the
+   run reports `already` and sends nothing, whatever the permissionless index has accumulated since.
+   If the drafts proxy is missing while the guard is proven, that one step still runs, because
+   `already` with no drafts proxy would leave it missing for ever.
 3. **Nothing in the slot:** `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` on the
    factory, for the entries the index lacks. Both are permissionless (`createDraftsModule` /
    `createOwnerHistoryModule` in [SPEC-author-drafts](SPEC-author-drafts.md) and
@@ -466,10 +469,12 @@ key cannot complete the install — `setGuard` is a Safe transaction — so the 
 and the command stops at `pending-safe`, printing the `to` and `data` for the owners to propose.
 
 Three other cases are also `pending-safe`, and each says which one it is in `note`: a guard this
-factory did not mint for this Safe is in the slot (never overwritten, and no `safeTx` is printed for
-it — there is no call here that is safe to make); a submitted userOp has not shown up in the reads
-yet; or a send is done but its re-read is unchanged, i.e. it may have reverted. A Safe with no code
-yet after the deploy attempt is `skipped`, and nothing is sent to it.
+package did not install is in the slot (never overwritten, and no `safeTx` is printed for it — there
+is no call here that is safe to make); a submitted userOp has not shown up in the reads yet; or a
+send is done but its re-read is unchanged, i.e. it may have reverted. A guard read that fails on the
+network is not a foreign guard: the read is retried/propagated and the run says it could not look,
+because naming a healthy author's guard foreign would tell its owner to remove it. A Safe with no
+code yet after the deploy attempt is `skipped`, and nothing is sent to it.
 
 **Nothing here can cost the key.** Any install failure degrades to a warning naming
 `s2s author init`: the key and the Safe stay in the store, and the commands are re-runnable. The
