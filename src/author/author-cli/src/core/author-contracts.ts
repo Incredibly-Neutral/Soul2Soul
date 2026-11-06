@@ -110,7 +110,7 @@ export type InstallState = 'installed' | 'already' | 'pending-safe' | 'skipped';
 
 export interface InstallResult extends AuthorContracts {
   state: InstallState;
-  /** userOp hashes in the order they were sent; empty when nothing was sent. */
+  /** transaction hashes in the order they were sent; empty when nothing was sent. */
   txs: string[];
   /** one human line explaining 'pending-safe' / 'skipped'. */
   note?: string;

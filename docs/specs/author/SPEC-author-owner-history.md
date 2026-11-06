@@ -68,12 +68,16 @@ a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that cost
 
 The normal path is the CLI: `s2s author new` installs on the author it just created, and
 `s2s author init` does the same for an author that already exists (a key filed before these
-contracts were deployed). It calls `createOwnerHistoryModule(safe)`, checks the factory's
-`getOwnerHistoryModulesForSafe` first so a re-run deploys nothing, and then sends the Safe
-transaction below — so a second run reports `already` and sends nothing. On a multisig Safe, where
-one key cannot execute that transaction, it stops at `pending-safe` and prints the `to`/`data` for
-the owners to propose; a guard someone else already installed is never overwritten. The same two
-steps by hand are the manual path.
+contracts were deployed). What is installed is decided by the Safe's own guard slot, not by the
+factory index: `guardFor` says what a module was *minted* with, and only the Safe can write the
+slot. So a re-run reads `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M` with
+`guardFor(M) == G` and `M.safe() == safe`, reports `already` for a proven install, and only calls
+`createOwnerHistoryModule(safe)` when nothing is proven — checking the index first so it deploys
+nothing that already exists. It then sends the Safe transaction below, re-reads the slot, and calls
+itself `installed` only when the slot carries the guard it sent. On a multisig Safe, where one key
+cannot execute that transaction, it stops at `pending-safe` and prints the `to`/`data` for the
+owners to propose. A guard someone else already installed is never overwritten, and no `safeTx` is
+offered to replace it. The same two steps by hand are the manual path.
 
 Two steps, and only the second one is a Safe transaction:
 

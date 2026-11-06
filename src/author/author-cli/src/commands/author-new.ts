@@ -252,7 +252,7 @@ async function installContracts(
 
     if (result.state === 'installed' || result.state === 'already') {
       try {
-        // Offline reporting for `author list` / `author switch`.
+        // Only a proven install is worth recording; the guard slot, not this row, is the truth.
         rememberAuthorContracts(name, result);
       } catch (err) {
         out.warn(

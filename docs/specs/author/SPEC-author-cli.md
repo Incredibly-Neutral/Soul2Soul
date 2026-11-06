@@ -434,15 +434,23 @@ Both commands run the same sequence, in order:
 
 1. **Predict the Safe, deploy it if it is not deployed.** `author init` on a live Safe sends
    nothing for this step.
-2. **`createDraftsModule(safe)` and `createOwnerHistoryModule(safe)`** on the factory. Both are
-   permissionless (`createDraftsModule` / `createOwnerHistoryModule` in
-   [SPEC-author-drafts](SPEC-author-drafts.md) and [SPEC-author-owner-history](SPEC-author-owner-history.md)),
-   and the install is what makes them idempotent: it checks the factory's index for the Safe
-   (`getDraftsModulesForSafe`, `getOwnerHistoryModulesForSafe`) first and calls them only when the
-   Safe has no entry. That index is a lead, not proof — creation is open, so anyone can add an
-   entry for any Safe — so an existing entry means "nothing to deploy" here, which is the safe
-   direction for a second run.
-3. **One Safe self-call, `setGuard(guard)`**, with the guard `createOwnerHistoryModule` returned.
+2. **Read the guard the Safe carries, and prove it is ours.** The guard slot is the only thing
+   only the Safe can write, so it — not the factory index — decides what is installed:
+   `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `factory.guardFor(M) == G`,
+   `M.safe() == safe`. A guard that survives that is the install; the run reports `already` and
+   sends nothing, whatever else the permissionless index has accumulated since.
+3. **Nothing in the slot:** `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` on the
+   factory, for the entries the index lacks. Both are permissionless (`createDraftsModule` /
+   `createOwnerHistoryModule` in [SPEC-author-drafts](SPEC-author-drafts.md) and
+   [SPEC-author-owner-history](SPEC-author-owner-history.md)) — anyone can add an entry for any
+   Safe — so the index is read as "what still needs creating", never as evidence of an install.
+4. **One Safe self-call, `setGuard(guard)`**, with the guard `createOwnerHistoryModule` returned.
+
+**A sent userOp is not an install.** `genericTx` resolves with a transaction hash that may have
+reverted (`setGuard` reverts `GS300` on a guard that does not answer ERC-165), so every send is
+followed by a re-read of the state it was supposed to change, and only a changed read counts.
+`installed` and `already` therefore both mean *the guard is on the Safe*, read back; `pending-safe`
+means it is not.
 
 Only the guard needs a Safe transaction: the drafts proxy's gate is `msg.sender == safe`, so the
 Safe sends `append` to the proxy directly and there is nothing to install for it.
@@ -456,12 +464,18 @@ none are granted.
 `already` for every step that is in place and sends nothing. On a **multisig** author Safe one CLI
 key cannot complete the install — `setGuard` is a Safe transaction — so the factory calls still run
 and the command stops at `pending-safe`, printing the `to` and `data` for the owners to propose.
-The same `pending-safe` outcome, and never an overwrite, when a guard is already installed on the
-Safe by someone else.
+
+Three other cases are also `pending-safe`, and each says which one it is in `note`: a guard this
+factory did not mint for this Safe is in the slot (never overwritten, and no `safeTx` is printed for
+it — there is no call here that is safe to make); a submitted userOp has not shown up in the reads
+yet; or a send is done but its re-read is unchanged, i.e. it may have reverted. A Safe with no code
+yet after the deploy attempt is `skipped`, and nothing is sent to it.
 
 **Nothing here can cost the key.** Any install failure degrades to a warning naming
 `s2s author init`: the key and the Safe stay in the store, and the commands are re-runnable. The
-addresses land in the author row's `contracts` field as they are obtained.
+addresses are recorded in the author row's `contracts` field when — and only when — the run ends
+`installed` or `already`, i.e. when the guard is really on the Safe; the chain stays the truth and
+the row is only what saves a read.
 
 ### Exit codes
 
@@ -556,7 +570,7 @@ s2s <group> <action> [positionals…] [flags…]
 // never has to tell "absent" from "skipped".
 Contracts = { factory: string | null; drafts: string | null; ownerHistory: string | null;
   guard: string | null; state: 'installed' | 'already' | 'pending-safe' | 'skipped';
-  txs: string[];                      // userOp hashes, in send order
+  txs: string[];                      // transaction hashes, in send order (empty when nothing was sent)
   note?: string;                      // why not installed / what the owners must do
   safeTx?: { to: string; data: string } }   // `pending-safe` only: the setGuard call
 
