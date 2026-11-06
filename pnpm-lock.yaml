@@ -250,6 +250,9 @@ importers:
 
   src/author/author-cli:
     dependencies:
+      '@s2s/author-contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@s2s/publication-contracts':
         specifier: workspace:*
         version: link:../../publication/contracts
@@ -18469,9 +18472,9 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@18.19.130)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3)
     optionalDependencies:
-      '@vitest/browser': 4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@18.19.130)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)
+      '@vitest/browser': 4.1.9(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.27.2)(jiti@2.7.0)(sass@1.101.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.9)
 
   '@vitest/expect@4.1.9':
     dependencies:

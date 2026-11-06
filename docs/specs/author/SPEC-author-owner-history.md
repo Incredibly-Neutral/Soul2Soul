@@ -9,8 +9,10 @@
 > `test/MockSafe.t.sol` and 44 passing tests in the package;
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
-> surface: a signature change there is a breaking change for every gate and reader. Nothing
-> is deployed.
+> surface: a signature change there is a breaking change for every gate and reader. Deployed on
+> Base: `OwnerHistoryModuleV1` implementation `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` behind
+> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-Safe proxy and
+> guard are installed by `s2s author new` / `s2s author init` (see *The install*).
 
 ## Responsibility
 
@@ -63,6 +65,20 @@ run against the canonical singleton: there is no Safe dependency and no fork tes
 a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that costs.
 
 ## The install
+
+The normal path is the CLI: `s2s author new` installs on the author it just created, and
+`s2s author init` does the same for an author that already exists (a key filed before these
+contracts were deployed). What is installed is decided by the Safe's own guard slot, not by the
+factory index: `guardFor` says what a module was *minted* with and only answers for one factory, and
+only the Safe can write the slot. So a re-run reads `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then
+`G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — three immutables, no factory in the
+proof — reports `already` for a proven install, and only calls
+`createOwnerHistoryModule(safe)` when nothing is proven — checking the index first so it deploys
+nothing that already exists. It then sends the Safe transaction below, re-reads the slot, and calls
+itself `installed` only when the slot carries the guard it sent. On a multisig Safe, where one key
+cannot execute that transaction, it stops at `pending-safe` and prints the `to`/`data` for the
+owners to propose. A guard someone else already installed is never overwritten, and no `safeTx` is
+offered to replace it. The same two steps by hand are the manual path.
 
 Two steps, and only the second one is a Safe transaction:
 
