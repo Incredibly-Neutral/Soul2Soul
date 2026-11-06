@@ -186,7 +186,11 @@ Keep `CORS_ORIGINS` in sync with the frontend origins actually allowed to call i
 
 - One sponsorship policy for all chains.
 - Rate limits are per instance, per process.
-- No Safe batching, no EIP-7702 accounts.
+- No Safe batching. EIP-7702 user operations are refused outright: an
+  authorization sets the sender's code to a delegate of the client's choosing, which
+  would make the `execute` wrapper in `callData` and the allowlist advisory.
+- The `Origin` gate only gates browsers. Any script can omit the header and call
+  directly, so the JWT is the real gate; CORS is defence in depth.
 - Selector-level checks only: arguments such as amounts and recipients are not
   inspected, so an allowed selector can still be called with any arguments. Keep the
   permissioned selector set narrow.
