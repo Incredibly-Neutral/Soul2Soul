@@ -11,7 +11,12 @@
 > `DraftsModuleV1` and its side of `AuthorContractsFactory` — and the meaning of the log it keeps.
 >
 > **Status:** the package is written and tested (`src/author/contracts`, 15 node-test cases for this
-> module); nothing is deployed. The interface below is frozen; anything under [open questions](#open-questions) is not
+> module) and deployed on Base — implementation `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6`, via
+> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`. The **per-Safe proxy is
+> installed by the CLI** (`s2s author new`, or `s2s author init` for an author that already exists),
+> which calls `createDraftsModule(safe)` and needs no Safe transaction for it — see
+> [SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The interface below is
+> frozen; anything under [open questions](#open-questions) is not
 > decided and must not be treated as a guarantee.
 
 ---
@@ -153,7 +158,10 @@ the other.
 
 **`createDraftsModule` stays permissionless, deliberately.** Deploying a proxy costs the caller gas and
 installs nothing on any Safe — the Safe must still call the module in its own transaction. Gating it would
-buy nothing and would put a trusted party between an author and their own module.
+buy nothing and would put a trusted party between an author and their own module. That is why the CLI can
+run it for any author Safe (`s2s author new` / `s2s author init`, which check
+`getDraftsModulesForSafe` first so a second run deploys nothing): the drafts side has **no** Safe step at
+all, because the proxy's only gate is `msg.sender == safe` and the Safe sends `append` to it directly.
 
 One consequence of that openness, which readers get wrong:
 
@@ -219,7 +227,8 @@ other. What follows:
   draft log.
 - **No metadata beyond `cid` and `timestamp`.** No title, slug, tags, or locale — those stay in the note
   and in the signed content item.
-- **No host wiring.** No CLI or plugin command appends to this module; the package is contracts only.
+- **No host writes.** No CLI or plugin command appends to this module. The CLI installs a proxy for an
+  author Safe and stops there; the package's own surface is contracts only.
 
 ## Open questions
 
@@ -232,7 +241,8 @@ other. What follows:
    something, or an `onlySafe` hide flag, is undecided — and the publication module's dead field is the
    cautionary example of adding one without a feature.
 4. **Should the CLI read drafts?** Listing a Safe's drafts would let a host resume local work, but it is
-   a chain read per document and nothing in `author-cli` imports the module today.
+   a chain read per document and nothing in `author-cli` reads the log today (it installs the proxy, and
+   that is all).
 5. **Is this the works list (AUTHOR-9)?** No — [RFC-001](../../rfc/RFC-001-portable-byline.md) is the
    byline and covers works that carry agreements. Whether the byline should also read drafts is open.
 6. **Is a draft entry ever pruned?** Not in V1 (INV: append-only). If storage cost on Base becomes the

@@ -9,8 +9,10 @@
 > `test/MockSafe.t.sol` and 44 passing tests in the package;
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
-> surface: a signature change there is a breaking change for every gate and reader. Nothing
-> is deployed.
+> surface: a signature change there is a breaking change for every gate and reader. Deployed on
+> Base: `OwnerHistoryModuleV1` implementation `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` behind
+> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-Safe proxy and
+> guard are installed by `s2s author new` / `s2s author init` (see *The install*).
 
 ## Responsibility
 
@@ -63,6 +65,15 @@ run against the canonical singleton: there is no Safe dependency and no fork tes
 a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that costs.
 
 ## The install
+
+The normal path is the CLI: `s2s author new` installs on the author it just created, and
+`s2s author init` does the same for an author that already exists (a key filed before these
+contracts were deployed). It calls `createOwnerHistoryModule(safe)`, checks the factory's
+`getOwnerHistoryModulesForSafe` first so a re-run deploys nothing, and then sends the Safe
+transaction below — so a second run reports `already` and sends nothing. On a multisig Safe, where
+one key cannot execute that transaction, it stops at `pending-safe` and prints the `to`/`data` for
+the owners to propose; a guard someone else already installed is never overwritten. The same two
+steps by hand are the manual path.
 
 Two steps, and only the second one is a Safe transaction:
 
