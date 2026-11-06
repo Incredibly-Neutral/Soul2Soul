@@ -25,6 +25,11 @@
 > owns it; a file copy still resolves, deprecated). See
 > [Config file](#config-file-bring-your-own-infra).
 >
+> **The author contracts are installed by the CLI (2026-11-06):** the drafts module, the owner
+> history module and its guard are deployed on Base, and putting them on an author Safe is this
+> binary's job — `author new` installs after the key is filed, `author init` is the recovery path.
+> See [Installing the author contracts](#installing-the-author-contracts).
+>
 > **Blank-slate rule (SPEC-author-hosts):** this package reuses **only** what already lives in
 > `@s2s/soul2soul-shared`. It never imports `neutralpress`/`0xobsidian` internals; every runtime
 > adapter is written fresh for node.
@@ -50,12 +55,12 @@ publication), `publication` (publication lifecycle), `config` (CLI settings), an
 guided first-run pass over those settings — see [Config file](#config-file-bring-your-own-infra)).
 
 ```
-s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; phrase generated when omitted)
+s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
 s2s author list      [--json]                                                                     # stored authors, active one marked
 s2s author rm        <pet-name> [--json]                                                          # forget a stored author
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
-s2s author init      [--json]                                                                     # deploy the author Safe (idempotent)
+s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
 s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
@@ -276,7 +281,7 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
 
 ```json
 { "active": "zomi",
-  "authors": { "zomi": { "privateKey": "0x…", "safe": "0x…" },
+  "authors": { "zomi": { "privateKey": "0x…", "safe": "0x…", "contracts": { … } },
                "work": { "privateKey": "0x…", "safe": null } } }
 ```
 
@@ -323,6 +328,11 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   irreplaceable part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
   signing key came from the store and the stored value is missing or different, so `author list`
   and `author switch` can report the identity offline (no RPC, no bundler).
+- **`contracts`** — optional, per author: the addresses the install produced (drafts proxy,
+  owner-history proxy, guard). Absent on an author filed before the contracts existed;
+  `s2s author init` fills it. It records what was installed, it does not prove adoption — adoption
+  is the Safe's own guard slot, see
+  [Installing the author contracts](#installing-the-author-contracts).
 - **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
   (the `config` group's contract): no private key, no RPC, no bundler, no Lit keys. Every other
   `author` action still builds a context.
@@ -345,8 +355,10 @@ Safe      = SafeL2 v1.4.1, owners [eoa], threshold 1, EntryPoint v0.7
 Because the salt excludes the chain, the same author has one address on L1 and
 L2. The Safe is deployed on Base on first use (`s2s author init`) and left
 undeployed on mainnet until a publication needs it — the plugin's asymmetry,
-reproduced deliberately. `author init` is idempotent and is where modules get
-installed later; today it only deploys. Both steps need an L2 RPC; `init` also
+reproduced deliberately. `author init` is idempotent, deploys the Safe when it is not live, and
+installs the author contracts on it
+([below](#installing-the-author-contracts)); `author new` does the same inline, after the key is
+filed. Both steps need an L2 RPC; `init` also
 needs an ERC-4337 endpoint: `S2S_PIMLICO_KEY` (what the plugin stores as
 `pimlico_key`) is enough — the per-chain Pimlico URL is derived and doubles as
 bundler and paymaster. `S2S_BUNDLER_URL` / `S2S_PAYMASTER_URL` (or
@@ -399,6 +411,76 @@ per **value** instead: a query-string credential becomes `********` and the
 endpoint stays readable — and the `--local` warning covers them too. The signing
 key is not among them: it belongs to the author store (`s2s author new`), and
 `config set privateKey` is refused.
+
+### Installing the author contracts
+
+The author contracts are deployed once on Base — `src/author/contracts`, from
+`scripts/deploy-author-contracts.ts` — and the **per-Safe install is this binary's job**. `author
+new` runs it after the key is filed (always after, so no network failure can lose the key);
+`author init` is the recovery and idempotent path for an author that already exists, e.g. a key
+filed before the contracts were deployed.
+
+| contract | address (Base, `prod`) |
+|---|---|
+| `DraftsModuleV1` (implementation) | `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6` |
+| `OwnerHistoryModuleV1` (implementation) | `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` |
+| `AuthorContractsFactory` | `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A` |
+
+That table is a record of the deploy, not the authority: the factory is selected by the
+`contracts.authorFactory` config key (`S2S_AUTHOR_CONTRACTS_FACTORY`), so an environment can point
+at its own copy, and both implementations are whatever that factory reports.
+
+Both commands run the same sequence, in order:
+
+1. **Predict the Safe, deploy it if it is not deployed.** `author init` on a live Safe sends
+   nothing for this step.
+2. **Read the guard the Safe carries, and prove it is ours.** The guard slot is the only thing
+   only the Safe can write, so it — not the factory index — decides what is installed:
+   `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `G.safe() == safe`,
+   `M.safe() == safe`. All three are immutables, so the proof needs no factory to agree and survives
+   `contracts.authorFactory` pointing somewhere else. A guard that survives it is the install; the
+   run reports `already` and sends nothing, whatever the permissionless index has accumulated since.
+   If the drafts proxy is missing while the guard is proven, that one step still runs, because
+   `already` with no drafts proxy would leave it missing for ever.
+3. **Nothing in the slot:** `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` on the
+   factory, for the entries the index lacks. Both are permissionless (`createDraftsModule` /
+   `createOwnerHistoryModule` in [SPEC-author-drafts](SPEC-author-drafts.md) and
+   [SPEC-author-owner-history](SPEC-author-owner-history.md)) — anyone can add an entry for any
+   Safe — so the index is read as "what still needs creating", never as evidence of an install.
+4. **One Safe self-call, `setGuard(guard)`**, with the guard `createOwnerHistoryModule` returned.
+
+**A sent userOp is not an install.** `genericTx` resolves with a transaction hash that may have
+reverted (`setGuard` reverts `GS300` on a guard that does not answer ERC-165), so every send is
+followed by a re-read of the state it was supposed to change, and only a changed read counts.
+`installed` and `already` therefore both mean *the guard is on the Safe*, read back; `pending-safe`
+means it is not.
+
+Only the guard needs a Safe transaction: the drafts proxy's gate is `msg.sender == safe`, so the
+Safe sends `append` to the proxy directly and there is nothing to install for it.
+
+**`enableModule` is never called on an author Safe.** An enabled module can call
+`execTransactionFromModule`, i.e. execute anything as the Safe; `setGuard` is `onlySelf`, the guard
+calls a permissionless `sync()`, and every read is a view call — so no module powers are needed and
+none are granted.
+
+**Idempotency, and what a second or a blocked run says.** A second run of either command reports
+`already` for every step that is in place and sends nothing. On a **multisig** author Safe one CLI
+key cannot complete the install — `setGuard` is a Safe transaction — so the factory calls still run
+and the command stops at `pending-safe`, printing the `to` and `data` for the owners to propose.
+
+Three other cases are also `pending-safe`, and each says which one it is in `note`: a guard this
+package did not install is in the slot (never overwritten, and no `safeTx` is printed for it — there
+is no call here that is safe to make); a submitted userOp has not shown up in the reads yet; or a
+send is done but its re-read is unchanged, i.e. it may have reverted. A guard read that fails on the
+network is not a foreign guard: the read is retried/propagated and the run says it could not look,
+because naming a healthy author's guard foreign would tell its owner to remove it. A Safe with no
+code yet after the deploy attempt is `skipped`, and nothing is sent to it.
+
+**Nothing here can cost the key.** Any install failure degrades to a warning naming
+`s2s author init`: the key and the Safe stay in the store, and the commands are re-runnable. The
+addresses are recorded in the author row's `contracts` field when — and only when — the run ends
+`installed` or `already`, i.e. when the guard is really on the Safe; the chain stays the truth and
+the row is only what saves a read.
 
 ### Exit codes
 
@@ -489,9 +571,17 @@ s2s <group> <action> [positionals…] [flags…]
 ### `author` group — result types
 
 ```ts
-// s2s author new <pet-name> [--key <0x…>] [--json] — file an identity and activate it
+// The install block on every result that runs it. Always present, so a script
+// never has to tell "absent" from "skipped".
+Contracts = { factory: string | null; drafts: string | null; ownerHistory: string | null;
+  guard: string | null; state: 'installed' | 'already' | 'pending-safe' | 'skipped';
+  txs: string[];                      // transaction hashes, in send order (empty when nothing was sent)
+  note?: string;                      // why not installed / what the owners must do
+  safeTx?: { to: string; data: string } }   // `pending-safe` only: the setGuard call
+
+// s2s author new <pet-name> [--key <0x…>] [--json] — file an identity, activate it, install the contracts
 { action: 'author.new'; name: string; eoa: string; safe: string | null;
-  active: true; file: string }      // no salt: it is `s2s_` + eoa, nothing to record
+  active: true; file: string; contracts: Contracts }   // no salt: it is `s2s_` + eoa, nothing to record
 
 // s2s author switch <pet-name> [--json] — make a stored author active
 { action: 'author.switch'; name: string; eoa: string; safe: string | null; file: string }
@@ -508,9 +598,10 @@ s2s <group> <action> [positionals…] [flags…]
   chain: 'base'; deployed: boolean;
   author: string | null }         // pet name when the key came from the store
 
-// s2s author init [--json]         — deploy the author Safe if not deployed
+// s2s author init [--json]         — deploy the Safe and install the author contracts (idempotent)
 { action: 'author.init'; address: string; eoa: string; salt: string;
   chain: 'base'; deployed: boolean; txHash: string | null;
+  contracts: Contracts;            // see above
   author: string | null }
 
 // s2s author upload <note> [--publication <ens>] [--json]     — ipfs + pins only (off-chain)

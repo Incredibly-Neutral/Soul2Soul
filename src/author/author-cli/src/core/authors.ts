@@ -3,7 +3,13 @@
 //
 //   ~/.config/s2s/authors.json   (XDG_CONFIG_HOME honored), mode 0600
 //   { "active": "zomi" | null,
-//     "authors": { "<pet name>": { "privateKey": "0x…", "safe": "0x…" | null } } }
+//     "authors": { "<pet name>": { "privateKey": "0x…", "safe": "0x…" | null,
+//                                "contracts"?: { "drafts", "ownerHistory", "guard" } } } }
+//
+// `contracts` is the install record and is OPTIONAL: rows written before the
+// author contracts existed have no such field and read the same with or without
+// it. It is a cache of what the chain already says (the factory index), never a
+// gate — a missing or stale record costs one RPC read, nothing more.
 //
 // The pet name is the key of an insertion-ordered map, so `author list` and the
 // active-reassignment in `author rm` follow the order authors were added. One
@@ -29,11 +35,24 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { UsageError } from '../lib/errors';
 
+/** The author-contracts addresses installed on an author's Safe. */
+export interface AuthorContractsRecord {
+  drafts: string | null;
+  ownerHistory: string | null;
+  guard: string | null;
+}
+
 /** One stored author: the signing key and its (predicted) author Safe. */
 export interface AuthorRecord {
   privateKey: string;
   /** The author id (counterfactual Safe), once predicted; null when never derived. */
   safe: string | null;
+  /**
+   * The `@s2s/author-contracts` modules installed on that Safe, once installed.
+   * Optional and absent on every row written before this field existed — the
+   * record reads the same with or without it, so no migration is needed.
+   */
+  contracts?: AuthorContractsRecord;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -85,15 +104,29 @@ function normalizeKey(value: string): string {
   return /^[0-9a-fA-F]{64}$/.test(trimmed) ? `0x${trimmed}` : trimmed;
 }
 
+function parseContracts(value: unknown): AuthorContractsRecord | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const address = (field: unknown): string | null =>
+    typeof field === 'string' && field.trim().length > 0 ? field.trim() : null;
+  return {
+    drafts: address(record.drafts),
+    ownerHistory: address(record.ownerHistory),
+    guard: address(record.guard),
+  };
+}
+
 function parseRecord(value: unknown): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const privateKey = record.privateKey;
   if (typeof privateKey !== 'string' || privateKey.trim().length === 0) return undefined;
   const safe = record.safe;
+  const contracts = parseContracts(record.contracts);
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
+    ...(contracts === undefined ? {} : { contracts }),
   };
 }
 
@@ -289,5 +322,65 @@ export function rememberAuthorSafe(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  }
+}
+
+/**
+ * Record the author-contracts addresses installed on `name`'s Safe. Returns
+ * true when the file changed; a no-op when every recorded address already
+ * matches, so a re-run of an idempotent install writes nothing.
+ *
+ * Same shape as `writeBackAuthorSafe`: tolerant read, atomic 0600 write, and
+ * the caller's `warn` for a failure — losing the record is a convenience lost,
+ * not the install lost (the chain is the truth; the store only saves a read).
+ */
+export function writeBackAuthorContracts(
+  name: string,
+  contracts: AuthorContractsRecord,
+  path: string = authorsFilePath(),
+): boolean {
+  const store = readAuthors(path);
+  const record = store.authors[name];
+  if (!record) return false;
+  const current = record.contracts;
+  if (current !== undefined) {
+    const unchanged =
+      current.drafts === contracts.drafts &&
+      current.ownerHistory === contracts.ownerHistory &&
+      current.guard === contracts.guard;
+    if (unchanged) return false;
+  }
+  writeAuthors(
+    { ...store, authors: { ...store.authors, [name]: { ...record, contracts } } },
+    path,
+  );
+  return true;
+}
+
+/**
+ * `rememberAuthorContracts` for a command: tolerant write-back of the
+ * install record, never fatal — a read-only config dir must not fail an
+ * install that already succeeded on chain.
+ *
+ * `name` is the pet name the command knows (`ctx.config.author?.name`); an
+ * unknown name writes nothing (`writeBackAuthorContracts` returns false), so a
+ * key from the env or a file is simply not recorded.
+ */
+export function rememberAuthorContracts(
+  name: string | undefined,
+  contracts: AuthorContractsRecord,
+  file: string = authorsFilePath(),
+  warn: (message: string) => void = () => undefined,
+): boolean {
+  if (!name) return false;
+  try {
+    return writeBackAuthorContracts(name, contracts, file);
+  } catch (err) {
+    warn(
+      `could not record the author contracts in the authors file: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return false;
   }
 }

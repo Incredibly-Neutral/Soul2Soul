@@ -11,6 +11,18 @@ One factory, `AuthorContractsFactory`, deploys every per-author proxy in this pa
 | `OwnerHistoryModuleV1` | who was an owner of the author Safe, and from which block |
 | `OwnerHistoryGuard` | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
 
+## Deployed on Base
+
+| contract | address |
+|---|---|
+| `DraftsModuleV1` (implementation) | `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6` |
+| `OwnerHistoryModuleV1` (implementation) | `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` |
+| `AuthorContractsFactory` | `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A` |
+
+These are the `prod` defaults the CLI carries. `contracts.authorFactory`
+(`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides the factory per environment, and the two
+implementations are whatever that factory reports.
+
 `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` are **permissionless**, and
 neither installs anything: deploying a proxy (and, for the history, a guard) spends the
 caller's gas and writes nothing to any Safe. Adoption is the Safe's own transaction —
@@ -27,6 +39,30 @@ so anyone can append an entry for any Safe.
 Source in `src/`, tests in `test/`, deploy script in `scripts/`.
 `pnpm compile && pnpm test`; `pnpm deploy:authorcontracts` deploys both implementations then
 the factory and prints the three addresses.
+
+## Per author Safe — the CLI does this
+
+The per-Safe steps are not a manual chore any more: `s2s author new <pet>` installs on the author
+it just created, and `s2s author init` does the same for an author that already exists. Both call
+`createDraftsModule(safe)` and `createOwnerHistoryModule(safe)`, check `getDraftsModulesForSafe` /
+`getOwnerHistoryModulesForSafe` first so a re-run deploys nothing, and then send the Safe's
+`setGuard(guard)`. On a multisig author Safe — where one key cannot execute that transaction — the
+factory calls still run, the command stops at `pending-safe` and prints the `to`/`data` to propose,
+and an existing guard is never overwritten. See
+`docs/specs/author/SPEC-author-cli.md#installing-the-author-contracts`.
+
+The same three steps by hand, when the CLI is not the tool in hand:
+
+1. `createDraftsModule(safe)` on the factory → the drafts proxy. Nothing else to do: its gate is
+   `msg.sender == safe`, so the Safe sends `append` to the proxy directly.
+2. `createOwnerHistoryModule(safe)` on the factory → `(module, guard)`.
+3. One transaction **from the Safe**: `setGuard(guard)` (`to = safe`, `data = setGuard(guard)`
+   calldata, proposed in the Safe app or any Safe client). `setGuard` checks ERC-165 first and
+   reverts `GS300` for anything that does not answer `Guard`'s interface id.
+
+Do **not** `enableModule` on the author Safe on top of that: an enabled module can
+`execTransactionFromModule`, i.e. execute anything as the Safe, and nothing here needs it —
+`setGuard` is `onlySelf`, `sync()` is permissionless, and every read is a `view` call.
 
 ## The owner-history hook is best-effort. Read this before proposing a rotation.
 

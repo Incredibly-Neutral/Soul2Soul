@@ -20,6 +20,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
+    "@s2s/author-contracts": "workspace:*",
     "@s2s/publication-contracts": "workspace:*",
     "@s2s/soul2soul-shared": "workspace:*",
     "dotenv": "^16.6.1",
