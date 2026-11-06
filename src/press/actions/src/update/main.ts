@@ -91,6 +91,56 @@ interface TxtEntry {
   Type?: number;
 }
 
+/** Kubo's error body for a MFS path that is not there. */
+const isMissingMfsPath = (body: string): boolean => /file does not exist/i.test(body);
+
+/**
+ * `files/ls` a directory in the temp tree.
+ *
+ * `null` means the directory does not exist (Kubo's "file does not exist") —
+ * the normal case for a site with no `assets/txt`. EVERY other failure (401
+ * from the token gate, 502, a timeout, an unparseable body) THROWS: a broken
+ * call must never be read as "this site has no txt files", which would publish
+ * a site with no /robots.txt — the exact failure this block prevents.
+ */
+async function lsMfsDir(gateway: string, dirPath: string): Promise<TxtEntry[] | null> {
+  const res = await fetchWithTimeout(
+    `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(dirPath)}&long=true`,
+    { method: 'POST' },
+    TIMEOUTS.stat,
+  );
+  const body = await res.text();
+  if (!res.ok) {
+    if (isMissingMfsPath(body)) return null;
+    throw `Failed to ls ${dirPath}: ${res.status} ${body}`;
+  }
+  let data: { Entries?: unknown };
+  try {
+    data = JSON.parse(body) as { Entries?: unknown };
+  } catch {
+    throw `Failed to ls ${dirPath}: unparseable body`;
+  }
+  return Array.isArray(data.Entries) ? (data.Entries as TxtEntry[]) : [];
+}
+
+/**
+ * Why an `assets/txt` entry must never be written to — or removed from — the
+ * tree root. `null` = safe.
+ *
+ * Root `index.html` is the site's front page, and this whole path bypasses the
+ * provenance/path gate (the content is owner-controlled via `config.assetsCid`),
+ * so it is never a txt target in any casing. A name that is not a single path
+ * segment (`.`, `..`, or anything containing `/`) is refused before it can touch
+ * a root path at all.
+ */
+function rootTxtSkipReason(name: string): string | null {
+  if (name === '' || name === '.' || name === '..' || name.includes('/')) {
+    return 'not a file name';
+  }
+  if (name.toLowerCase() === 'index.html') return 'root index.html is reserved';
+  return null;
+}
+
 async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>> {
   let trace: any[] = [];
 
@@ -202,7 +252,8 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     // A reset forces the fresh `mkdir` branch even when a previous root exists:
     // the old (confused) tree is never copied, so every page dir AND root
     // index.html vanish; assets are still re-copied below; the root is rewritten.
-    if (prevEncoded && prevEncoded.length > 0 && !reset) {
+    const hasPrevRoot = Boolean(prevEncoded && prevEncoded.length > 0 && !reset);
+    if (hasPrevRoot) {
       const prevCid = contenthashToIPFS(prevEncoded);
       trace.push(`cp root ${prevCid} → ${mfsPath}`);
 
@@ -356,9 +407,24 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       );
     }
 
+    // Names of the root txt files the PREVIOUS tree carried: read the copied
+    // tree's own assets/txt now, before the assets copy below replaces /assets
+    // wholesale. A file that has since disappeared from the site repo — or a
+    // config that has since lost its assetsCid — must not leave its copy at the
+    // root forever.
+    const assetsDestPath = `${mfsPath}/assets`;
+    const txtDirPath = `${assetsDestPath}/txt`;
+    const previousRootTxtNames = new Set<string>();
+    if (hasPrevRoot) {
+      for (const entry of (await lsMfsDir(gateway!, txtDirPath)) ?? []) {
+        if (entry.Type === 0 && typeof entry.Name === 'string')
+          previousRootTxtNames.add(entry.Name);
+      }
+    }
+
     // Copy assets into /assets
+    const mirroredRootTxt = new Set<string>();
     if (config.assetsCid) {
-      const assetsDestPath = `${mfsPath}/assets`;
       trace.push(`cp assets ${config.assetsCid} → ${assetsDestPath}`);
 
       // Remove existing /assets if present
@@ -386,53 +452,43 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       }
       trace.push(`✓ assets (${config.assetsCid.slice(0, 9)})`);
 
-      // Mirror assets/txt/*.txt (robots.txt, llms.txt) to the tree ROOT, so the
-      // published site answers both /assets/txt/robots.txt and /robots.txt.
-      // These files arrive inside the owner-controlled assetsCid, so they never
-      // pass the provenance/path gate — and that is exactly why the site's front
-      // page (root index.html) is never a copy target here.
-      const txtDirPath = `${assetsDestPath}/txt`;
-      let txtEntries: TxtEntry[] = [];
-      try {
-        const txtLsRes = await fetchWithTimeout(
-          `${gateway}/api/v0/files/ls?arg=${encodeURIComponent(txtDirPath)}&long=true`,
-          { method: 'POST' },
-          TIMEOUTS.stat,
-        );
-        if (!txtLsRes.ok) {
-          // Normal case: the site has no assets/txt directory. Not fatal.
-          trace.push(`no ${txtDirPath} — no root txt files`);
-        } else {
-          const txtLsData = (await txtLsRes.json()) as { Entries?: unknown };
-          txtEntries = Array.isArray(txtLsData.Entries) ? (txtLsData.Entries as TxtEntry[]) : [];
-        }
-      } catch (e) {
-        trace.push(`no ${txtDirPath} — no root txt files: ${String(e)}`);
-      }
+      // Mirror every file in assets/txt (robots.txt, llms.txt, …) to the tree
+      // ROOT, so the published site answers both /assets/txt/robots.txt and
+      // /robots.txt. The DIRECTORY is the opt-in: any file in it is mirrored.
+      const txtEntries = await lsMfsDir(gateway!, txtDirPath);
+      if (txtEntries === null) {
+        trace.push(`no ${txtDirPath}: no root txt files`);
+      } else {
+        for (const entry of txtEntries) {
+          const txtName = typeof entry.Name === 'string' ? entry.Name : '';
+          if (entry.Type !== 0) {
+            trace.push(`skip root txt ${txtName}: not a file`);
+            continue;
+          }
+          const reserved = rootTxtSkipReason(txtName);
+          if (reserved) {
+            trace.push(`skip root txt ${txtName}: ${reserved}`);
+            continue;
+          }
 
-      for (const entry of txtEntries) {
-        const txtName = typeof entry.Name === 'string' ? entry.Name : '';
-        if (entry.Type !== 0 || txtName === '') {
-          trace.push(`skip root txt ${txtName}: not a file`);
-          continue;
-        }
-        // HARD RULE: the root front page is not reachable from the txt
-        // directory, at all, in any casing.
-        if (txtName.toLowerCase() === 'index.html') {
-          trace.push(`skip root txt ${txtName}: root index.html is reserved`);
-          continue;
-        }
-
-        const txtDestPath = `${mfsPath}/${txtName}`;
-        // Kubo files/cp does not overwrite, and the previous-root copy already
-        // put last run's /robots.txt (etc.) at the root — clear it first.
-        try {
+          const txtDestPath = `${mfsPath}/${txtName}`;
+          // Kubo files/cp does not overwrite, and the previous-root copy
+          // already put last run's /robots.txt (etc.) at the root — clear it
+          // first. A stat on a path that is not there is simply "no entry".
           const txtStatRes = await fetchWithTimeout(
             `${gateway}/api/v0/files/stat?arg=${encodeURIComponent(txtDestPath)}`,
             { method: 'POST' },
             TIMEOUTS.stat,
           );
           if (txtStatRes.ok) {
+            const existing = (await txtStatRes.json().catch(() => ({}))) as { Type?: unknown };
+            // A page whose slug is this name owns a DIRECTORY here. The page
+            // wins: never rm recursively, never cp over it, never throw — the
+            // prev tree is re-copied every run, so a wedge here never recovers.
+            if (existing.Type === 1 || existing.Type === 'directory') {
+              trace.push(`skip root txt ${txtName}: a page occupies this path`);
+              continue;
+            }
             await fetchWithTimeout(
               `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(txtDestPath)}`,
               { method: 'POST' },
@@ -442,22 +498,50 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
             );
             trace.push(`rm existing root ${txtName}`);
           }
-        } catch (e) {
-          trace.push(`warn: stat root txt failed ${txtName}: ${String(e)}`);
-        }
 
-        trace.push(`cp root txt ${txtName}`);
-        const txtUrl =
-          `${gateway}/api/v0/files/cp?` +
-          `arg=${encodeURIComponent(`${txtDirPath}/${txtName}`)}` +
-          `&arg=${encodeURIComponent(txtDestPath)}` +
-          `&parents=false&flush=false`;
-        const txtRes = await fetchWithTimeout(txtUrl, { method: 'POST' }, TIMEOUTS.cpFile);
-        if (!txtRes.ok) {
-          const text = await txtRes.text();
-          throw `Failed to cp root txt ${txtName}: ${text}`;
+          trace.push(`cp root txt ${txtName}`);
+          const txtUrl =
+            `${gateway}/api/v0/files/cp?` +
+            `arg=${encodeURIComponent(`${txtDirPath}/${txtName}`)}` +
+            `&arg=${encodeURIComponent(txtDestPath)}` +
+            `&parents=false&flush=false`;
+          const txtRes = await fetchWithTimeout(txtUrl, { method: 'POST' }, TIMEOUTS.cpFile);
+          if (!txtRes.ok) {
+            const text = await txtRes.text();
+            throw `Failed to cp root txt ${txtName}: ${text}`;
+          }
+          trace.push(`✓ root txt ${txtName}`);
+          mirroredRootTxt.add(txtName);
         }
-        trace.push(`✓ root txt ${txtName}`);
+      }
+    }
+
+    // Stale root txt: a name the previous tree put at the root that is no
+    // longer in assets/txt — or that has no assets at all any more — must not
+    // linger. Non-recursive on purpose: where a page now owns the path it is a
+    // directory, the rm fails and is traced; a page is never deleted to clear a
+    // txt file, and a failed rm is never fatal.
+    for (const oldName of previousRootTxtNames) {
+      if (mirroredRootTxt.has(oldName)) continue;
+      const reserved = rootTxtSkipReason(oldName);
+      if (reserved) {
+        trace.push(`skip stale root txt ${oldName}: ${reserved}`);
+        continue;
+      }
+      const stalePath = `${mfsPath}/${oldName}`;
+      try {
+        const staleRes = await fetchWithTimeout(
+          `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(stalePath)}`,
+          { method: 'POST' },
+          TIMEOUTS.rm,
+        );
+        trace.push(
+          staleRes.ok
+            ? `rm stale root ${oldName}`
+            : `warn: rm stale root ${oldName} failed: ${await staleRes.text()}`,
+        );
+      } catch (e) {
+        trace.push(`warn: rm stale root ${oldName} failed: ${String(e)}`);
       }
     }
 
