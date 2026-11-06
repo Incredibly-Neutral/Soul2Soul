@@ -15,7 +15,7 @@
 > **I/O contract** for unit/integration tests: every action's Inputs/Outputs table is also its
 > fixture definition.
 >
-> Invariants carried by this component: INV-1, 2, 5, 6, 7, 8, 9, 11, 14 (see SPEC-00 §4).
+> Invariants carried by this component: INV-1, 2, 5, 6, 7, 8, 9, 11 (see SPEC-00 §4).
 
 ---
 
@@ -223,7 +223,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
-mirror every file in `assets/txt/` to the tree root and drop the stale root txt (INV-14) →
+mirror every file in `assets/txt/` to the tree root and drop the stale root txt →
 `files/stat` new root → `pin/add` →
 **if `!preview`**: `toHexString(root)` + `evmWrite setText(node,"contenthash_wrapped")` with the
 **PKP** (INV-10) → `finally` rm temp MFS.
@@ -243,7 +243,7 @@ blocking prerequisite (trusted path→genesis resolution).
 **Network/chain:** Kubo MFS/pin on `ipfs.transport-union.dev`; BASE read (`getText`) + BASE write
 (`setText`, PKP-signed). **Runs on Lit (prod) / Bun (preview, no write).**
 
-**Invariants:** INV-1, 4, 6, 8, 9, 10, 11, 14. **Gotchas:** Kubo `files/cp` does not overwrite — code
+**Invariants:** INV-1, 4, 6, 8, 9, 10, 11. **Gotchas:** Kubo `files/cp` does not overwrite — code
 `rm`s first; CID is CIDv0 (INV-6 / OPEN-TASK-1). **Tree-mutation integrity gate implemented 2026-08-07** — see §A3 Decision Tree below.
 
 ## A3 Decision Tree — update action logic gates (implemented 2026-08-07)
@@ -534,26 +534,23 @@ pkp{ethAddress,publicKey,tokenId}, litActionPrep/Single/Cbor/RootUpdate }`.
 
 INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` gotcha), INV-4
 (module NAME discovery), INV-5 (provenance canonicalization), INV-6 (contenthash codec), INV-7
-(runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453 hardcoded), INV-11 (assets→/assets),
-INV-14 (root txt).
-
-**INV-14 — root txt.** The owner-controlled `assetsCid` may carry a `txt/` directory; every FILE
-in it is mirrored to the tree root, so the site answers both `/assets/txt/<name>` and `/<name>`.
-The directory is the opt-in, not an extension: `robots.txt` and `llms.txt` are the usual two, but
-any file in `assets/txt/` is mirrored. A name that is not a single path segment (`.`, `..`, or
-anything containing `/`) is refused before it touches a path, and a root `index.html` in any casing
-is never a target. Where a page's slug already owns the path — a directory at the root — the page
-wins: the file is skipped, and the path is never removed recursively. A copy failure is fatal; a
-publish must not silently keep last run's `robots.txt`. A root txt name the previous tree carried
-that the new `txt/` no longer holds is removed from the root — non-recursive, and a failed `rm` is a
-trace rather than a failure — so deleting the file upstream, or dropping `assetsCid` altogether,
-does not leave it published forever. The `ls` of `assets/txt` is fatal on any failure other than
-kubo's "file does not exist": only an absent directory may read as "no root txt", or a broken call
-would publish a site with no `/robots.txt`. Registered here; the SPEC-00 §4 row is still to be
-added.
+(runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453 hardcoded), INV-11 (assets→/assets).
 
 ## Local gotchas (component-specific, beyond SPEC-00 gaps)
 
+- **Root txt mirror (update action, not an invariant).** The owner-controlled `assetsCid` may carry a
+  `txt/` directory; every FILE in it is mirrored to the tree root, so the site answers both
+  `/assets/txt/<name>` and `/<name>`. The directory is the opt-in, not an extension: `robots.txt` and
+  `llms.txt` are the usual two, but any file in `assets/txt/` is mirrored. A name that is not a
+  single path segment (`.`, `..`, or anything containing `/`) is refused before it touches a path,
+  and a root `index.html` in any casing is never a target. Where a page's slug already owns the
+  path — a directory at the root — the page wins: the file is skipped, and the path is never removed
+  recursively. A copy failure is fatal; a publish must not silently keep last run's `robots.txt`. A
+  root txt name the previous tree carried that the new `txt/` no longer holds is removed from the
+  root — non-recursive, and a failed `rm` is a trace rather than a failure — so deleting the file
+  upstream, or dropping `assetsCid` altogether, does not leave it published forever. The `ls` of
+  `assets/txt` is fatal on any failure other than kubo's "file does not exist": only an absent
+  directory may read as "no root txt", or a broken call would publish a site with no `/robots.txt`.
 - **Shape mismatch (illustrative of the whole testing rationale):** `getProtocolInfo` returns
   `assetsGateway` (camelCase); `initTemplateData` reads `protocolInfo.assets_gateway` (snake) →
   silently `undefined`. Likely vestigial post the assets-into-`/assets` refactor (templates now use
