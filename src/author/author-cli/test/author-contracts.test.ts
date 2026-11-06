@@ -3,9 +3,9 @@
 //
 // No network, no bundler, no Safe: the seam (`AuthorContractsSeam`) is replaced
 // with a mutable fake that answers the factory index, the guard slot, the guard
-// proof (`module()` / `safe()` / `guardFor`) and the owners, and records every
-// userOp the install sends. What is under test is the DECISION — which of the
-// four states a Safe is in, and what gets sent — not viem's encoding.
+// proof (`module()` / `safe()` on the guard and the module) and the owners, and
+// records every userOp the install sends. What is under test is the DECISION —
+// which of the four states a Safe is in, and what gets sent — not viem's encoding.
 // ============================================================================
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -78,6 +78,8 @@ interface FakeChainOptions {
   deployed?: boolean;
   /** Function names whose userOp is sent but changes nothing (a reverted tx). */
   reverted?: string[];
+  /** Make the guard-proof reads fail as a flaky RPC does (a transport error). */
+  guardReadFails?: boolean;
   /** Make every read fail, as a dead RPC does. */
   unreachable?: boolean;
 }
@@ -87,10 +89,10 @@ interface FakeChainOptions {
  * Each fake write updates the state the next read sees, so a re-read after a
  * `create*Module` returns what the real factory index would.
  *
- * The guard proof is faked the same way the chain answers it: `module()` on the
- * guard, `safe()` on the module, `guardFor(module)` on the factory. `GUARD` names
- * `HISTORY`; `FOREIGN_GUARD` names a module this factory never minted a guard
- * for, so it can never be proved ours.
+ * The guard proof is faked the same way the chain answers it: `module()` and
+ * `safe()` on the guard, `safe()` on the module. No factory takes part. `GUARD`
+ * names `HISTORY`; `FOREIGN_GUARD` names a module that is not an owner-history
+ * module of this Safe, so it can never be proved ours.
  */
 function fakeChain(options: FakeChainOptions = {}) {
   const state = {
@@ -107,11 +109,17 @@ function fakeChain(options: FakeChainOptions = {}) {
     [GUARD.toLowerCase(), HISTORY],
     [FOREIGN_GUARD.toLowerCase(), FOREIGN_MODULE],
   ]);
+  /** guard → the Safe it was minted for (`OwnerHistoryGuard.safe()`). */
+  const guardSafes = new Map<string, Address>([
+    [GUARD.toLowerCase(), SAFE],
+    // A guard from another product, installed on another Safe.
+    [FOREIGN_GUARD.toLowerCase(), OTHER_SAFE],
+  ]);
   /** module → the Safe it is bound to (`OwnerHistoryModuleV1.safe()`). */
   const moduleSafes = new Map<string, Address>([
     [HISTORY.toLowerCase(), SAFE],
     [DRAFTS.toLowerCase(), SAFE],
-    [FOREIGN_MODULE.toLowerCase(), SAFE],
+    // Not a module at all: it answers nothing, hence no `safe()` binding.
   ]);
   /** module → the guard the factory minted for it (`guardFor`). */
   const minted = new Map<string, Address>();
@@ -133,17 +141,27 @@ function fakeChain(options: FakeChainOptions = {}) {
     });
   };
 
+  /** A flaky RPC read: a transport error, not an answer from the address. */
+  const guardReadFails = options.guardReadFails === true;
+
   const seam: AuthorContractsSeam = {
     readContracts,
     readGuard: () => {
       seen.readGuard += 1;
       return Promise.resolve(state.slotGuard);
     },
-    readGuardModule: ({ guard }) =>
-      Promise.resolve(guardModules.get(guard.toLowerCase()) ?? null),
-    readModuleSafe: ({ module }) =>
-      Promise.resolve(moduleSafes.get(module.toLowerCase()) ?? null),
-    readGuardFor: ({ module }) => Promise.resolve(minted.get(module.toLowerCase()) ?? null),
+    readGuardModule: ({ guard }) => {
+      if (guardReadFails) return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      return Promise.resolve(guardModules.get(guard.toLowerCase()) ?? null);
+    },
+    readGuardSafe: ({ guard }) => {
+      if (guardReadFails) return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      return Promise.resolve(guardSafes.get(guard.toLowerCase()) ?? null);
+    },
+    readModuleSafe: ({ module }) => {
+      if (guardReadFails) return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      return Promise.resolve(moduleSafes.get(module.toLowerCase()) ?? null);
+    },
     readOwners: () => {
       seen.readOwners += 1;
       return Promise.resolve({ owners: state.owners, threshold: state.threshold });
@@ -280,14 +298,13 @@ describe('installAuthorContracts', () => {
     expect(result.state).toBe('pending-safe');
     expect(calls).toHaveLength(0);
     expect(result.note).toContain(FOREIGN_GUARD);
-    // `guardFor(module())` does not match the slot guard: not proof of ours.
+    // `safe()` names another Safe: the immutables cannot prove it is ours.
     expect(result.safeTx).toBeUndefined();
   });
 
   it('is `already` when a griefer appends a module to the factory index', async () => {
-    // Any address can push an index entry. The slot proof (guard → module →
-    // factory.guardFor → module.safe()) is what decides, so the healthy author
-    // stays installed and no new transaction is offered.
+    // Any address can push an index entry. The guard's own immutables are what
+    // decide, so the healthy author stays installed and nothing is sent.
     const { seam, calls, state } = fakeChain({
       drafts: [DRAFTS],
       history: [HISTORY, FOREIGN_MODULE],
@@ -305,6 +322,91 @@ describe('installAuthorContracts', () => {
     expect(result.safeTx).toBeUndefined();
     expect(calls).toHaveLength(0);
     expect(state.slotGuard).toBe(GUARD);
+  });
+
+  it('is `already` when the configured factory is another deployment', async () => {
+    // The guard was minted by a factory this config no longer names (a dev chain,
+    // a redeploy). The proof has no factory in it, so the author is installed.
+    const { seam, calls } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      // `guardFor` answers nothing: this factory never minted this guard.
+      boundGuard: null,
+      slotGuard: GUARD,
+    });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(result.state).toBe('already');
+    expect(result.guard).toBe(GUARD);
+    expect(result.ownerHistory).toBe(HISTORY);
+    expect(result.note).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not call an unreadable guard foreign — a transport error is reported', async () => {
+    // A flaky RPC read is not an answer from the chain. It must reach the
+    // caller's note, not the "remove that guard" advice.
+    const { seam, calls } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      slotGuard: GUARD,
+      guardReadFails: true,
+    });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(result.state).toBe('skipped');
+    expect(result.note).toContain('ECONNRESET');
+    expect(result.note).not.toMatch(/did not install/);
+    expect(result.safeTx).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('creates a missing drafts proxy on a Safe that already carries the guard', async () => {
+    // The README's manual order with step 1 skipped: the guard is right, the
+    // drafts proxy is absent. `already` would leave it absent for ever.
+    const { seam, calls } = fakeChain({ history: [HISTORY], slotGuard: GUARD });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(calls.map((call) => call.functionName)).toEqual(['createDraftsModule']);
+    expect(calls[0]?.to).toBe(FACTORY);
+    expect(result.state).toBe('installed');
+    expect(result.drafts).toBe(DRAFTS);
+    expect(result.ownerHistory).toBe(HISTORY);
+    expect(result.guard).toBe(GUARD);
+    expect(result.txs).toHaveLength(1);
+  });
+
+  it('is `pending-safe` when the drafts proxy could not be created', async () => {
+    const { seam, calls } = fakeChain({
+      history: [HISTORY],
+      slotGuard: GUARD,
+      reverted: ['createDraftsModule'],
+    });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(calls.map((call) => call.functionName)).toEqual(['createDraftsModule']);
+    expect(result.state).toBe('pending-safe');
+    expect(result.drafts).toBeNull();
+    expect(result.guard).toBe(GUARD);
+    expect(result.txs).toHaveLength(1);
+    expect(result.note).toMatch(/drafts proxy/);
+    expect(result.safeTx).toBeUndefined();
   });
 
   it('does not report `installed` when the setGuard userOp reverted', async () => {

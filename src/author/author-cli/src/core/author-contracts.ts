@@ -25,9 +25,10 @@
 //     any account pushes an entry into `getDraftsModulesForSafe(victimSafe)`
 //     (SPEC-author-drafts). The index is read as "what should be installed",
 //     never as proof of use. What the Safe *carries* is proved from the guard in
-//     its own guard slot: `G.module()` → `M`, then `factory.guardFor(M) == G`
-//     with `M.safe() == safe`. Nobody can forge that, and a griefer's extra index
-//     entry cannot turn a healthy author into `pending-safe`.
+//     its own guard slot, from the guard's own immutables: `G.module()` → `M`,
+//     `G.safe() == safe`, `M.safe() == safe`. Nobody can forge those, no factory
+//     has to agree, and a griefer's extra index entry cannot turn a healthy
+//     author into `pending-safe`.
 //   - **A foreign guard is never overwritten.** A Safe may carry a guard this
 //     package did not install (a policy guard, another product's). Replacing it
 //     silently would change the Safe's transaction semantics behind its owners'
@@ -47,6 +48,9 @@
 
 import { base } from 'viem/chains';
 import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
   createPublicClient,
   encodeFunctionData,
   getAddress,
@@ -253,50 +257,81 @@ export async function readAuthorContracts(opts: ReadAuthorContractsOptions): Pro
   // module. Zero for an unknown module — never a revert (it is the read a gate
   // leans on), so a zero means "this module has no guard we may install".
   // This is what SHOULD be on the Safe, not what is: only the guard slot (plus
-  // `proveInstalledGuard`) answers that, and the index is permissionless.
-  let guard: Address | null = null;
-  if (ownerHistory !== null) {
-    const bound = await client.readContract({
-      address: factory,
-      abi: AuthorContractsFactory,
-      functionName: 'guardFor',
-      args: [ownerHistory],
-    });
-    guard = bound !== ZERO_ADDRESS ? getAddress(bound.toLowerCase()) : null;
-  }
+  // `proveInstalledGuard`, which uses the guard's own immutables) answers that,
+  // and the index is permissionless. It also only answers for THIS factory, so
+  // it must never decide whether an installed guard is ours.
+  const guard =
+    ownerHistory === null
+      ? null
+      : await readGuardFor({ factory, module: ownerHistory, rpcUrl: opts.rpcUrl });
 
   return { factory, drafts, ownerHistory, guard };
 }
 
 /**
+ * Whether a failed read means "this address is not the contract we hoped", as
+ * opposed to "the network failed".
+ *
+ * A revert, or empty return data from an address with no matching function, is
+ * an answer: the address does not expose `module()` / `safe()`. A transport or
+ * node failure is NOT an answer, and must propagate — treating it as "foreign"
+ * would tell a healthy author to remove a guard that is ours.
+ */
+function answersForeign(err: unknown): boolean {
+  if (err instanceof ContractFunctionRevertedError) return true;
+  if (err instanceof ContractFunctionZeroDataError) return true;
+  // `readContract` wraps both in `ContractFunctionExecutionError`; the cause is
+  // what distinguishes them, since a transport failure lands there too.
+  if (err instanceof ContractFunctionExecutionError) return answersForeign(err.cause);
+  return false;
+}
+
+/**
  * The module a guard names (`OwnerHistoryGuard.module()`), or null when the
- * address answers nothing — a guard this package did not mint has no `module()`
- * to read, which is exactly the "cannot prove it is ours" answer.
+ * guard does not answer — an address that is not an owner-history guard.
+ * Transport errors propagate: an unreadable guard is not a foreign one.
  */
 export async function readGuardModule(opts: GuardReadOptions): Promise<Address | null> {
   try {
-    const module = (await clientFor(opts.rpcUrl).readContract({
+    const module = await clientFor(opts.rpcUrl).readContract({
       address: opts.guard,
       abi: OwnerHistoryGuard,
       functionName: 'module',
-    }));
+    });
     return module === ZERO_ADDRESS ? null : getAddress(module.toLowerCase());
-  } catch {
-    return null;
+  } catch (err) {
+    if (answersForeign(err)) return null;
+    throw err;
+  }
+}
+
+/** The Safe a guard is bound to (`OwnerHistoryGuard.safe()`), or null. */
+export async function readGuardSafe(opts: GuardReadOptions): Promise<Address | null> {
+  try {
+    const safe = await clientFor(opts.rpcUrl).readContract({
+      address: opts.guard,
+      abi: OwnerHistoryGuard,
+      functionName: 'safe',
+    });
+    return safe === ZERO_ADDRESS ? null : getAddress(safe.toLowerCase());
+  } catch (err) {
+    if (answersForeign(err)) return null;
+    throw err;
   }
 }
 
 /** The Safe a module is bound to (`OwnerHistoryModuleV1.safe()`), or null. */
 export async function readModuleSafe(opts: ModuleReadOptions): Promise<Address | null> {
   try {
-    const safe = (await clientFor(opts.rpcUrl).readContract({
+    const safe = await clientFor(opts.rpcUrl).readContract({
       address: opts.module,
       abi: OwnerHistoryModuleV1,
       functionName: 'safe',
-    }));
+    });
     return safe === ZERO_ADDRESS ? null : getAddress(safe.toLowerCase());
-  } catch {
-    return null;
+  } catch (err) {
+    if (answersForeign(err)) return null;
+    throw err;
   }
 }
 
@@ -365,10 +400,10 @@ export interface AuthorContractsSeam {
   readGuard(opts: ReadSafeOptions): Promise<Address | null>;
   /** `guard.module()` — what the guard in the slot was minted for. */
   readGuardModule(opts: GuardReadOptions): Promise<Address | null>;
+  /** `guard.safe()` — the Safe the guard is bound to. */
+  readGuardSafe(opts: GuardReadOptions): Promise<Address | null>;
   /** `module.safe()` — the Safe a module is bound to. */
   readModuleSafe(opts: ModuleReadOptions): Promise<Address | null>;
-  /** `factory.guardFor(module)` — the guard this factory minted for it. */
-  readGuardFor(opts: GuardForOptions): Promise<Address | null>;
   readOwners(opts: ReadSafeOptions): Promise<SafeOwners>;
   ensureSafe(opts: EnsureAuthorSafeOptions): Promise<EnsuredAuthorSafe>;
   /** A runner bound to `safe`; only `genericTx` is used. */
@@ -384,8 +419,8 @@ export const defaultAuthorContractsSeam: AuthorContractsSeam = {
   readContracts: readAuthorContracts,
   readGuard: readSafeGuard,
   readGuardModule,
+  readGuardSafe,
   readModuleSafe,
-  readGuardFor,
   readOwners: readSafeOwners,
   ensureSafe: ensureAuthorSafe,
   openRunner: async (opts) => {
@@ -438,27 +473,31 @@ function sameAddress(a: `0x${string}` | null, b: `0x${string}`): boolean {
 }
 
 /**
- * Prove the guard in the Safe's slot is ours, from what the Safe carries:
- * `G.module()` → `M`, `factory.guardFor(M) == G`, `M.safe() == safe`.
+ * Prove the guard in the Safe's slot is ours, from the guard's own immutables:
+ * `G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe`.
  *
- * This is the identity nobody can forge — a factory-index entry can be pushed by
- * any address — so it, not `newest(ownerHistoryModules)`, decides whether an
- * install is ours. `null` means "cannot prove": a foreign guard, or one this
- * factory did not mint for this Safe.
+ * No factory appears here on purpose: the addresses are immutable constructor
+ * arguments, so this holds whatever `contracts.authorFactory` points at (a dev
+ * chain, a redeploy) — and it is what a factory-index entry can never fake.
+ *
+ * `null` means "cannot prove": an address that answers none of the reads, or
+ * answers with a different Safe. A transport failure propagates instead — an
+ * unreadable guard is not a foreign one.
  */
 async function proveInstalledGuard(
-  args: { factory: `0x${string}`; safe: `0x${string}`; guard: Address; rpcUrl: string },
+  args: { safe: `0x${string}`; guard: Address; rpcUrl: string },
   seam: AuthorContractsSeam,
 ): Promise<{ module: Address; guard: Address } | null> {
-  const module = await seam.readGuardModule({ guard: args.guard, rpcUrl: args.rpcUrl });
+  const read = { rpcUrl: args.rpcUrl };
+  const module = await seam.readGuardModule({ guard: args.guard, ...read });
   if (module === null) return null;
 
-  const [minted, boundSafe] = await Promise.all([
-    seam.readGuardFor({ factory: args.factory, module, rpcUrl: args.rpcUrl }),
-    seam.readModuleSafe({ module, rpcUrl: args.rpcUrl }),
+  const [guardSafe, moduleSafe] = await Promise.all([
+    seam.readGuardSafe({ guard: args.guard, ...read }),
+    seam.readModuleSafe({ module, ...read }),
   ]);
-  if (!sameAddress(minted, args.guard)) return null;
-  if (!sameAddress(boundSafe, args.safe)) return null;
+  if (!sameAddress(guardSafe, args.safe)) return null;
+  if (!sameAddress(moduleSafe, args.safe)) return null;
 
   return { module, guard: args.guard };
 }
@@ -530,13 +569,40 @@ export async function installAuthorContracts(
   };
 
   try {
-    // 1. What the Safe carries decides. A guard in the slot that this factory
-    //    minted for a module bound to this Safe IS the install — the index only
-    //    says what could be created, and any address can append to it.
+    // 1. What the Safe carries decides. A guard in the slot whose own immutables
+    //    name a module bound to this Safe IS the install — the index only says
+    //    what could be created, and any address can append to it.
     const slotGuard = await seam.readGuard({ safe, rpcUrl });
     if (slotGuard !== null) {
-      const proof = await proveInstalledGuard({ factory, safe, guard: slotGuard, rpcUrl }, seam);
+      const proof = await proveInstalledGuard({ safe, guard: slotGuard, rpcUrl }, seam);
       if (proof !== null) {
+        // The guard is right, so nothing else may move — but the drafts proxy is
+        // still missing on a Safe installed by hand (step 1 skipped) or by a
+        // `createDraftsModule` that reverted earlier. An `already` with
+        // `drafts: null` would leave it missing for ever.
+        if (contracts.drafts === null) {
+          out.log(`installing the drafts module for ${safe}…`);
+          await send(factory, JSON.stringify(AuthorContractsFactory), 'createDraftsModule', [safe]);
+          contracts = await seam.readContracts({ factory, safe, rpcUrl });
+          if (contracts.drafts === null) {
+            return {
+              ...contracts,
+              state: 'pending-safe',
+              txs,
+              note: 'the Safe carries the owner-history guard but has no drafts proxy — the createDraftsModule transaction may have reverted; run again',
+            };
+          }
+
+          return {
+            factory,
+            drafts: contracts.drafts,
+            ownerHistory: proof.module,
+            guard: proof.guard,
+            state: 'installed',
+            txs,
+          };
+        }
+
         return {
           factory,
           drafts: contracts.drafts,
@@ -553,7 +619,7 @@ export async function installAuthorContracts(
         ...contracts,
         state: 'pending-safe',
         txs: [],
-        note: `the Safe already carries a guard this factory did not mint for it (${slotGuard}) — this package never replaces a guard; remove it through the Safe first if the owner-history guard is wanted`,
+        note: `the Safe already carries a guard this package did not install (${slotGuard}) — this package never replaces a guard; remove it through the Safe first if the owner-history guard is wanted`,
       };
     }
 
