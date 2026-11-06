@@ -1,7 +1,7 @@
 # specs
 
 What must hold, and what this implementation made of it. One folder per domain,
-mirroring `docs/whitepaper/` and `docs/prototype/` by filename.
+mirroring the paper's chapters (`~/code/polyphony/whitepaper/`) and `docs/prototype/` by filename.
 
 Each domain folder has a **twin** — `SPEC-<domain>.md` — and, where the detail
 has grown, **branches** beside it. The twin is the document to read: the
@@ -32,7 +32,7 @@ docs/specs/
 
 | layer | question | register | authority |
 |---|---|---|---|
-| `docs/whitepaper/` | why, and what for | argument, for a reader | intent |
+| the paper (`~/code/polyphony/whitepaper/`, separate repo) | why, and what for | argument, for a reader | intent |
 | `docs/specs/` | what must hold, and what this build chose | invariants, then decisions/proposals/gaps | **the protocol**, then this implementation |
 | `docs/prototype/` | what this implementation is, told plainly | prose, for a reader | this implementation |
 | `docs/research/`, `docs/audits/` | what we found out, and when | dated notes, immutable | evidence — never authority |

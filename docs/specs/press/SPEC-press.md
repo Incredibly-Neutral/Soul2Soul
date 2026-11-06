@@ -1,6 +1,6 @@
 # PRESS — the only place plaintext is held
 
-Read against: `../../whitepaper/press.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/press.md` (2026-10-29).
 
 Branch: [SPEC-protocol-actions](SPEC-protocol-actions.md) — PREP → RENDER → UPDATE, the I/O contract, the decision tree.
 

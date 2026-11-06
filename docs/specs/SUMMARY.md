@@ -213,7 +213,7 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 
 ## 8. Where the details live (cross-references)
 
-- Orientation: `whitepaper/introduction.md` (read first) · renderer: `whitepaper/press.md`.
+- Orientation: `~/code/polyphony/whitepaper/introduction.md` (read first) · renderer: `~/code/polyphony/whitepaper/press.md`.
 - System contract + invariants + gaps: `specs/system/SPEC-system-contract.md`.
 - Actions (I/O contracts, decision tree): `specs/press/SPEC-protocol-actions.md`.
 - Shared types + validation + entry points: `specs/system/SPEC-shared.md`.

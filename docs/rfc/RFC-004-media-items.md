@@ -143,13 +143,13 @@ it so it doesn't regress. The invariant bites at **render output**, not the sign
 
 ## Cross-references
 
-- **Component 2** (`whitepaper/manuscript.md`) — schema, `body`/`public`/`proof`, DR-2.2/2.3/2.4;
+- **Component 2** (`~/code/polyphony/whitepaper/manuscript.md`) — schema, `body`/`public`/`proof`, DR-2.2/2.3/2.4;
   this RFC reuses the schema unchanged with shifted semantics.
-- **Component 4** (`whitepaper/publication.md`) — deal lifecycle; the photographer
+- **Component 4** (`~/code/polyphony/whitepaper/publication.md`) — deal lifecycle; the photographer
   role + image licensing land here, no new contract surface.
-- **Component 5** (`whitepaper/press.md`) + **Component 6** (`whitepaper/publication.md`)
+- **Component 5** (`~/code/polyphony/whitepaper/press.md`) + **Component 6** (`~/code/polyphony/whitepaper/publication.md`)
   — the `update` action's MFS-tree build; the vision's `/media/<CID_I>` resolve pass lives here.
-- **Component 8** (`whitepaper/reader.md`) — page-level provenance today; the
+- **Component 8** (`~/code/polyphony/whitepaper/reader.md`) — page-level provenance today; the
   vision adds per-image provenance (each image carries its own `proof`).
 - **SPEC-00** — INV-7 (action runtime-agnostic), INV-11 (`/assets` root-absolute ↔ `/media` parity),
   INV-13 (CID parity across tiers), §3.2 storage tiers (Kubo canonical, Filecoin+Pinata durable),

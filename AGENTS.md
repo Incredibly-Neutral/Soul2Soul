@@ -29,15 +29,16 @@ Scratch notes for a live task go in `.work/` (gitignored). Nothing durable lives
 spec, ADR or RFC may cite it — if a finding matters, it gets promoted to `docs/research/`, an RFC,
 an ADR or the branch spec. A review is the PR, not a file. See `docs/conventions.md`.
 
-`docs/whitepaper/` is the protocol's argument, `docs/prototype/` is what this build is; neither
-is authority for behaviour. The twin spec is. `docs/research/` and `docs/audits/` are dated
+The paper — the protocol's argument — lives in its own repo, `~/code/polyphony/whitepaper/`
+(published: polyphony.eth.link). `docs/prototype/` is what this build is. Neither is authority
+for behaviour. The twin spec is. `docs/research/` and `docs/audits/` are dated
 evidence — never authority.
 
 ## Where things live
 
 ```
-docs/whitepaper/<domain>.md   the paper          (published: polyphony.eth.link)
 docs/prototype/<domain>.md    this implementation (published: about.soul2soul.eth.link)
+# separate repo: ~/code/polyphony/whitepaper/<domain>.md   the paper (polyphony.eth.link)
 docs/specs/<domain>/          invariants + branches (read these)
 docs/adr/  docs/rfc/          decisions and proposals, numbered forever, one namespace each
 docs/research/  docs/audits/  dated evidence

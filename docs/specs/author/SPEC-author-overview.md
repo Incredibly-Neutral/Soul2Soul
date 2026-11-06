@@ -144,7 +144,7 @@ Point-in-time material that explains *why* the tree looks like this, and that is
 - `docs/prototype/author.md` — the implementation decisions behind it (D1…D12).
 - `docs/audits/polyphony-authoring-compliance-2026-10-25.md` — the prototype read against Polyphony
   §2, with the scorecard and the trade of each choice.
-- `docs/whitepaper/author.md` — the protocol-level intent.
+- `~/code/polyphony/whitepaper/author.md` — the protocol-level intent.
 
 ## Old → new paths
 

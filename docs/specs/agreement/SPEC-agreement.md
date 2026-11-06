@@ -1,6 +1,6 @@
 # AGREEMENT — a manuscript, two parties, and terms neither can rewrite
 
-Read against: `../../whitepaper/agreement.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/agreement.md` (2026-10-29).
 
 Branch: [publication/SPEC-publication-agreements](../publication/SPEC-publication-agreements.md) — the contract as built (`S2SPublicationModuleV2`), offer/deal/retract, the version log.
 

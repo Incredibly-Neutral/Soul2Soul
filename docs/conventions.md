@@ -9,7 +9,7 @@
 
 | artifact | where | purpose | lifecycle |
 |---|---|---|---|
-| **whitepaper** | `docs/whitepaper/<domain>.md` | Why, as argument. What any implementation is for. | Published. Changes when the protocol's intent changes. |
+| **whitepaper** | `~/code/polyphony/whitepaper/<domain>.md` (own repo) | Why, as argument. What any implementation is for. | Published. Changes when the protocol's intent changes. |
 | **twin spec** | `docs/specs/<domain>/SPEC-<domain>.md` | The invariants for that domain, then the record index. Read this before touching code in the domain. | Invariants only change when the protocol changes; the index changes with every record. |
 | **branch spec** | `docs/specs/<domain>/SPEC-<domain>-<part>.md` | Settled behaviour of one package or host: the I/O contract, invariants, gotchas, test seams, safe-to-change. | Updated with settled outcomes. |
 | **prototype doc** | `docs/prototype/<domain>.md` | What this build chose, in prose, for a reader. Published. | Follows the build. |

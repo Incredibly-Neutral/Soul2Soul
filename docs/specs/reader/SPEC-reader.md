@@ -1,6 +1,6 @@
 # READER — checking a page without trusting who serves it
 
-Read against: `../../whitepaper/reader.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/reader.md` (2026-10-29).
 
 Branch: [publication/SPEC-contracts-ens](../publication/SPEC-contracts-ens.md) — the name layer, the CCIP-Read resolver, the L2 records contract.
 

@@ -44,7 +44,7 @@ it is *not* isolated — escalate or read the adjacent spec too.
 implementation**. The implementation-agnostic requirements (signed pages, provable
 authorship + licensing, client-side verification, protocol-key-only root writes, revocability) live
 in the twins — `docs/specs/<domain>/SPEC-<domain>.md`, invariants first — which the paper
-(`docs/whitepaper/`) argues for. This document specs *this implementation*: its concrete
+(the paper, `~/code/polyphony/whitepaper/`, in its own repo) argues for. This document specs *this implementation*: its concrete
 components, contracts, and invariants.
 Where a constraint is a swappable implementation choice rather than a deep requirement, that is
 noted inline (e.g. Lens — see §8 Q5), so an agent knows what is safe to replace.

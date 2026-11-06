@@ -1,6 +1,6 @@
 # MONETIZATION — three rails, and nothing in the middle
 
-Read against: `../../whitepaper/monetization-and-costs.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/monetization-and-costs.md` (2026-10-29).
 
 No branch: no rail is built. The one proposal is [RFC-002](../../rfc/RFC-002-payee-wallet.md).
 

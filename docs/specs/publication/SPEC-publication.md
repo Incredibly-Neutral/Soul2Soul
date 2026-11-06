@@ -1,6 +1,6 @@
 # PUBLICATION — the name, the look, and the line
 
-Read against: `../../whitepaper/publication.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/publication.md` (2026-10-29).
 
 Branches: [overview](SPEC-publication-overview.md) · [account](SPEC-publication-account.md) · [agreements](SPEC-publication-agreements.md) · [admin-app](SPEC-publication-admin-app.md) · [look](SPEC-publication-look.md) · [review](SPEC-publication-review.md) · [storage](SPEC-publication-storage.md) · [contracts-ens](SPEC-contracts-ens.md).
 

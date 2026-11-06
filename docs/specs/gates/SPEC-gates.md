@@ -1,6 +1,6 @@
 # GATES — who may decrypt, and who may ask for a build
 
-Read against: `../../whitepaper/gates.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/gates.md` (2026-10-29).
 
 No branch: the gates are small enough to read at `src/shared/src/gates`.
 

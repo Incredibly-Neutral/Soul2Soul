@@ -63,9 +63,11 @@ website-starter/
 cid-mirror/
   src/{api,ipfs}/  src/{config,ens,mirror,index}.ts  tests/  Dockerfile  docker-compose.yml  .env.example
 docs/
-  whitepaper/  prototype/            the two published sites
+  prototype/                         the published prototype site
   specs/{system,author,publication,agreement,gates,press,monetization,reader}/
   adr/  rfc/  research/  audits/  code-map/  conventions.md
+(the paper moved out on 2026-11-06: `~/code/polyphony/whitepaper/` is its own repo, published at
+polyphony.eth.link; `docs/whitepaper/` here is gone.)
 (repo root: AGENTS.md, README.md, docs/, src/, pnpm-workspace.yaml, eslint.config.js, vitest.config.base.ts)
 (2026-11-04: the packages above moved under `src/`, and `brain/` was retired into `docs/` — this
 snapshot's package paths are historical; `src/<domain>/<package>/` is the live layout.)

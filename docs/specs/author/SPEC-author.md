@@ -1,6 +1,6 @@
 # AUTHOR — the author's guarantees
 
-Read against: `../../whitepaper/author.md` (2026-10-29).
+Read against: `~/code/polyphony/whitepaper/author.md` (2026-10-29).
 
 Branches: [overview](SPEC-author-overview.md) (the model, host matrix, reading order) · [identity](SPEC-author-identity.md) · [publishing](SPEC-author-publishing.md) · [shared](SPEC-author-shared.md) · [hosts](SPEC-author-hosts.md) · [cli](SPEC-author-cli.md) · [nvim](SPEC-author-nvim.md) · [vscode](SPEC-author-vscode.md) · [nvim-s2s](SPEC-nvim-s2s.md) · [drafts](SPEC-author-drafts.md) (the draft log on the author Safe — uploaded and never offered) · [owner-history](SPEC-author-owner-history.md) (who was an owner of the author Safe, and when — the guard plus the module behind it).
 
