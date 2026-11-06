@@ -18,7 +18,7 @@ docs/specs/
   README.md                        this file
   SUMMARY.md                       the whole protocol in one read, for orientation
   system/                          SPEC-system-contract.md, SPEC-shared.md
-  author/         SPEC-author.md + SPEC-author-overview.md + 9 branches
+  author/         SPEC-author.md + SPEC-author-overview.md + 10 branches
   publication/    SPEC-publication.md + SPEC-publication-overview.md + 7 branches
   agreement/      SPEC-agreement.md
   gates/          SPEC-gates.md
@@ -94,8 +94,9 @@ own area.
 - `SUMMARY.md` — the protocol and the pipeline end to end, enough to write a proposal without
   re-reading everything
 - `author/` — nine invariants, ADR-001..002, RFC-001..002, RFC-003, RFC-004; branches:
-  `identity`, `publishing`, `shared`, `hosts`, `cli`, `nvim`, `vscode`, `nvim-s2s`, `drafts`
-  (the append log of manuscripts uploaded and never offered, on the author Safe)
+  `identity`, `publishing`, `shared`, `hosts`, `cli`, `nvim`, `vscode`, `nvim-s2s`, `drafts`,
+  `owner-history` (who was an owner of the author Safe, and when — the module, the guard and
+  the era model)
 - `publication/` — thirteen invariants, two additions, five gaps; branches: `account`,
   `agreements`, `admin-app`, `look`, `review`, `storage`, `contracts-ens` (the name layer, which
   implements PUBLICATION-1, -8 and -9)

@@ -7,11 +7,11 @@
 > module is installed on a Safe; [SPEC-author-shared](SPEC-author-shared.md) — where the genesis id comes
 > from.
 >
-> **Type:** component spec. It owns one package — `src/author/contracts`, `DraftsModuleV1` and
-> `DraftsModuleV1Factory` — and the meaning of the log it keeps.
+> **Type:** component spec. It owns the drafts half of one package — `src/author/contracts`,
+> `DraftsModuleV1` and its side of `AuthorContractsFactory` — and the meaning of the log it keeps.
 >
-> **Status:** the package is written and tested (`src/author/contracts`, 14 node-test cases); nothing is
-> deployed. The interface below is frozen; anything under [open questions](#open-questions) is not
+> **Status:** the package is written and tested (`src/author/contracts`, 15 node-test cases for this
+> module); nothing is deployed. The interface below is frozen; anything under [open questions](#open-questions) is not
 > decided and must not be treated as a guarantee.
 
 ---
@@ -62,7 +62,7 @@ function append(bytes32 genesis, string calldata cid) external onlySafe
 - `genesis == bytes32(0)` → `ZeroHash()`; `cid.length == 0` → `EmptyCid()`.
 - `initialize(address(0))` → `ZeroAddress()`. A zero `safe` passes no caller check ever, so the module
   would be born dead — writes and upgrades both unreachable and nothing able to repair it. The guard is
-  what stops `createModule(address(0))` from producing a proxy nobody can use.
+  what stops `createDraftsModule(address(0))` from producing a proxy nobody can use.
 - **First append of a genesis** — `genesisAuthor[genesis] = safe` and the genesis is pushed onto
   `genesisList`. Nothing else is written: `isDraft` and `authorOf` derive from that one map, so there is
   no second flag to keep in step.
@@ -132,35 +132,38 @@ never reuse it for a V2 that changes storage layout.
 
 ## The factory
 
-`DraftsModuleV1Factory(address implementation)`, same shape as the publication factory:
+One factory for the whole package — `AuthorContractsFactory(draftsImplementation, ownerHistoryImplementation)`,
+shared with [owner history](SPEC-author-owner-history.md). The drafts half:
 
 | member | behaviour |
 |---|---|
-| `createModule(address safe) -> address` | deploy an ERC-1967 proxy over `latestImplementation`, initialised with `safe`; push the proxy onto `safeModules[safe]` |
-| `setImplementation(address)` | **`onlyDeployer`** — set `latestImplementation`, push onto the implementation history |
-| `getModulesForSafe(address) -> address[]` | every proxy anyone told this factory about for that Safe |
-| `implementationCount() -> uint256` | history length |
-| `getImplementationByVersion(uint256) -> address` | 1-based; reverts outside `1..count` |
-| `deployer() -> address` | `immutable`, set to `msg.sender` at construction; the only address `setImplementation` admits (`OnlyDeployer()`) |
+| `createDraftsModule(address safe) -> address` | deploy an ERC-1967 proxy over `draftsImplementation()`, initialised with `safe`; push the proxy onto `getDraftsModulesForSafe(safe)` |
+| `setDraftsImplementation(address)` | **`onlyDeployer`** — set `draftsImplementation()`, push onto the drafts implementation history |
+| `getDraftsModulesForSafe(address) -> address[]` | every proxy anyone told this factory about for that Safe |
+| `draftsImplementationCount() -> uint256` | history length |
+| `getDraftsImplementationByVersion(uint256) -> address` | 1-based; reverts `InvalidVersion()` outside `1..count` |
+| `deployer() -> address` | `immutable`, set to `msg.sender` at construction; the only address either `set*Implementation` admits (`OnlyDeployer()`) |
 
-**`setImplementation` is gated because the ungated version is a takeover.** Whoever moves
-`latestImplementation` decides what the next `createModule` deploys, and a proxy over an attacker's
-implementation executes as the Safe the moment that Safe enables it. The gate is an immutable
+**`setDraftsImplementation` is gated because the ungated version is a takeover.** Whoever moves
+`draftsImplementation()` decides what the next `createDraftsModule` deploys, and a proxy over an
+attacker's implementation executes as the Safe the moment that Safe uses it. The gate is an immutable
 constructor-set deployer rather than an owner: there is no admin slot to rotate, and none to compromise.
+The owner-history pointer is a separate slot with a separate history, so moving one never silently moves
+the other.
 
-**`createModule` stays permissionless, deliberately.** Deploying a proxy costs the caller gas and installs
-nothing on any Safe — only the Safe's own `enableModule` makes a proxy live. Gating it would buy nothing
-and would put a trusted party between an author and their own module.
+**`createDraftsModule` stays permissionless, deliberately.** Deploying a proxy costs the caller gas and
+installs nothing on any Safe — the Safe must still call the module in its own transaction. Gating it would
+buy nothing and would put a trusted party between an author and their own module.
 
-Two consequences of that openness, both of which readers get wrong:
+One consequence of that openness, which readers get wrong:
 
-- **`getModulesForSafe` is forgeable.** `createModule(victimSafe)` from any account pushes an entry into
-  `safeModules[victimSafe]`, so the list contains proxies that Safe never created and never enabled.
-  Intersect it with the Safe's actual enabled-module list before treating an entry as installed — and a
-  Safe should enable only a proxy it created itself or verified against a recorded implementation.
+- **`getDraftsModulesForSafe` is forgeable.** `createDraftsModule(victimSafe)` from any account pushes an
+  entry into the index for `victimSafe`, so the list contains proxies that Safe never created and never
+  used. A Safe's own record of use — an event it emitted, a call it made — is the only proof; treat an
+  index entry as a lead, not as installation.
 
-The factory is an index for readers, not a permission: neither `getModulesForSafe` nor
-`implementationHistory` authenticates anything.
+The factory is an index for readers, not a permission: neither `getDraftsModulesForSafe` nor the
+implementation history authenticates anything.
 
 ## Two logs, one genesis
 
@@ -261,19 +264,19 @@ genesis returns the zeroed `Entry` rather than reverting.
 - `fetch(unknown)` → zeroed `Entry`, `versionCount == 0`, no revert; `fetchAll` order equals append
   order; paged windows tile `fetchAll` exactly.
 - `history` returns arrays of equal length, same order, non-decreasing timestamps.
-- Factory: two `createModule` calls for one Safe → two proxies, `getModulesForSafe` length 2;
-  `setImplementation` then `createModule` → new proxy on the new implementation, old one untouched;
-  `getImplementationByVersion(0)` and `(count + 1)` revert.
+- Factory: two `createDraftsModule` calls for one Safe → two proxies, `getDraftsModulesForSafe`
+  length 2; `setDraftsImplementation` then `createDraftsModule` → new proxy on the new implementation,
+  old one untouched; `getDraftsImplementationByVersion(0)` and `(count + 1)` revert `InvalidVersion()`.
 - Upgrade, all covered today against a second deployment of the same implementation (a V2 is not
   needed to exercise the gate): `upgradeToAndCall` from a non-Safe reverts `OnlySafe`; `initialize` on the
   bare implementation reverts `Initializable: contract is already initialized`; a second `initialize`
   on the proxy reverts the same; the Safe's `upgradeTo` succeeds, emits exactly one `ContractUpgraded`,
   and leaves `safe`, `count()` and the log readable afterwards.
-- Factory auth: `setImplementation` from a non-deployer reverts `OnlyDeployer` and leaves
-  `latestImplementation` unchanged; the deployer's call moves it, appends to the history, and the next
-  `createModule` deploys over the new implementation. `createModule` from a stranger still succeeds and
-  still lands in `getModulesForSafe` — the forgery is asserted, not assumed.
-- `initialize(address(0))` through `createModule` reverts `ZeroAddress` and records no proxy.
+- Factory auth: `setDraftsImplementation` from a non-deployer reverts `OnlyDeployer` and leaves
+  `draftsImplementation()` unchanged; the deployer's call moves it, appends to the history, and the next
+  `createDraftsModule` deploys over the new implementation. `createDraftsModule` from a stranger still
+  succeeds and still lands in `getDraftsModulesForSafe` — the forgery is asserted, not assumed.
+- `initialize(address(0))` through `createDraftsModule` reverts `ZeroAddress` and records no proxy.
 - Paging edges: `offset + limit == count` returns a full page (not clamped short); `limit =
   type(uint256).max` returns to the end instead of overflowing; `offset >= count` and `limit == 0` return
   empty arrays.
