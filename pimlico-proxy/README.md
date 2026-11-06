@@ -174,9 +174,10 @@ filesystem, `node dist/index.js` is PID 1 so SIGTERM reaches the process directl
 and Docker's stop grace period is 25 s against the 20 s forced exit in
 `src/index.ts`.
 
-The port is published on the loopback interface only, `127.0.0.1:8080`, because
-nginx on the host is the public edge. Set `TRUST_PROXY=true` in `.env` for the
-same reason.
+The port is published on the loopback interface only, `127.0.0.1:2004`, because
+nginx on the host is the public edge. Both sides read `PORT` from `.env`, which
+ships as `2004`, so the published port and the port the service listens on cannot
+drift apart. Set `TRUST_PROXY=true` in `.env` for the same reason.
 
 ### Nginx in front
 
@@ -187,7 +188,7 @@ server {
     client_max_body_size 300k;      # the proxy caps at 256 KB and answers 413 itself
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:2004;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;   # TRUST_PROXY=true reads this

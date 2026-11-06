@@ -38,13 +38,18 @@ COPY --from=build /app/dist ./dist
 # write access anywhere.
 USER node
 
+# Documentation only: the port is chosen by PORT at run time, and Compose publishes
+# whatever PORT says. Kept at the default so `docker run -p 2004:2004` is the only
+# thing to remember when running the image without Compose.
 EXPOSE 8080
 
 # busybox wget is already in Alpine, so no curl. A non-2xx status makes wget exit
 # non-zero and prints nothing, and a 200 with anything but `{"ok":true}` fails the
 # `grep`: both are unhealthy. The start period covers config load and listen.
+# `$PORT` is expanded by the shell at run time, so the check follows the port the
+# service was actually told to listen on; 8080 is only the default.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/healthz | grep -q '"ok":true' || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/healthz" | grep -q '"ok":true' || exit 1
 
 # Exec form, so `node` is PID 1 and receives SIGTERM directly: `index.ts` closes
 # the server on SIGTERM/SIGINT and force-exits after 20 s. `npm start` would put

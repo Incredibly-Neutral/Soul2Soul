@@ -13,9 +13,11 @@ services:
     env_file: .env
 
     # Loopback only. nginx on the host is the public edge and proxies to
-    # 127.0.0.1:8080; nothing else should be able to reach the container directly.
+    # 127.0.0.1:2004; nothing else should be able to reach the container directly.
+    # Both sides read PORT from .env, so the host port and the port the service
+    # listens on inside the container cannot drift apart. Default 8080.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${PORT:-8080}:${PORT:-8080}"
 
     # `index.ts` closes the server on SIGTERM and force-exits after 20 s, so 25 s
     # leaves Docker a margin before it resorts to SIGKILL.
