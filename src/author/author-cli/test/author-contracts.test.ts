@@ -2,21 +2,19 @@
 // The author contracts install, against a fake chain.
 //
 // No network, no bundler, no Safe: the seam (`AuthorContractsSeam`) is replaced
-// with a mutable fake that answers the factory index, the guard slot and the
-// owners, and records every userOp the install sends. What is under test is the
-// DECISION — which of the four states a Safe is in, and what gets sent — not
-// viem's encoding.
+// with a mutable fake that answers the factory index, the guard slot, the guard
+// proof (`module()` / `safe()` / `guardFor`) and the owners, and records every
+// userOp the install sends. What is under test is the DECISION — which of the
+// four states a Safe is in, and what gets sent — not viem's encoding.
 // ============================================================================
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { encodeFunctionData, type Address } from 'viem';
+import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it } from 'vitest';
-
-import { safeAbi } from '@s2s/soul2soul-shared';
 
 import {
   authorContractsFactory,
@@ -37,6 +35,8 @@ const DRAFTS = '0x0000000000000000000000000000000000000d01' as Address;
 const HISTORY = '0x0000000000000000000000000000000000000d02' as Address;
 const GUARD = '0x0000000000000000000000000000000000000d03' as Address;
 const FOREIGN_GUARD = '0x0000000000000000000000000000000000000d04' as Address;
+/** A module the factory index names but never minted a guard for. */
+const FOREIGN_MODULE = '0x0000000000000000000000000000000000000d05' as Address;
 
 const PRIVATE_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 /** The EOA the test key derives to: `installAuthorContracts` derives it itself. */
@@ -74,6 +74,10 @@ interface FakeChainOptions {
   slotGuard?: Address | null;
   owners?: Address[];
   threshold?: number;
+  /** What `ensureSafe` reports: false = no code at the address. */
+  deployed?: boolean;
+  /** Function names whose userOp is sent but changes nothing (a reverted tx). */
+  reverted?: string[];
   /** Make every read fail, as a dead RPC does. */
   unreachable?: boolean;
 }
@@ -82,19 +86,40 @@ interface FakeChainOptions {
  * The fake chain: mutable state the seam reads, and the userOps written into it.
  * Each fake write updates the state the next read sees, so a re-read after a
  * `create*Module` returns what the real factory index would.
+ *
+ * The guard proof is faked the same way the chain answers it: `module()` on the
+ * guard, `safe()` on the module, `guardFor(module)` on the factory. `GUARD` names
+ * `HISTORY`; `FOREIGN_GUARD` names a module this factory never minted a guard
+ * for, so it can never be proved ours.
  */
 function fakeChain(options: FakeChainOptions = {}) {
   const state = {
     drafts: [...(options.drafts ?? [])],
     history: [...(options.history ?? [])],
-    boundGuard: options.boundGuard ?? GUARD,
+    boundGuard: options.boundGuard === undefined ? GUARD : options.boundGuard,
     slotGuard: options.slotGuard ?? null,
     owners: options.owners ?? [PRIVATE_KEY_ADDRESS],
     threshold: options.threshold ?? 1,
-    deployed: true,
+    deployed: options.deployed ?? true,
   };
+  /** guard → the module it names (`OwnerHistoryGuard.module()`). */
+  const guardModules = new Map<string, Address>([
+    [GUARD.toLowerCase(), HISTORY],
+    [FOREIGN_GUARD.toLowerCase(), FOREIGN_MODULE],
+  ]);
+  /** module → the Safe it is bound to (`OwnerHistoryModuleV1.safe()`). */
+  const moduleSafes = new Map<string, Address>([
+    [HISTORY.toLowerCase(), SAFE],
+    [DRAFTS.toLowerCase(), SAFE],
+    [FOREIGN_MODULE.toLowerCase(), SAFE],
+  ]);
+  /** module → the guard the factory minted for it (`guardFor`). */
+  const minted = new Map<string, Address>();
+  if (state.boundGuard !== null) minted.set(HISTORY.toLowerCase(), state.boundGuard);
+
   const calls: Call[] = [];
   const seen = { ensureSafe: 0, openRunner: 0, readGuard: 0, readOwners: 0 };
+  const reverts = new Set(options.reverted ?? []);
 
   const readContracts = (): Promise<AuthorContracts> => {
     if (options.unreachable) return Promise.reject(new Error('fetch failed'));
@@ -104,7 +129,7 @@ function fakeChain(options: FakeChainOptions = {}) {
       factory: FACTORY,
       drafts,
       ownerHistory,
-      guard: ownerHistory === null ? null : state.boundGuard,
+      guard: ownerHistory === null ? null : (minted.get(ownerHistory.toLowerCase()) ?? null),
     });
   };
 
@@ -114,6 +139,11 @@ function fakeChain(options: FakeChainOptions = {}) {
       seen.readGuard += 1;
       return Promise.resolve(state.slotGuard);
     },
+    readGuardModule: ({ guard }) =>
+      Promise.resolve(guardModules.get(guard.toLowerCase()) ?? null),
+    readModuleSafe: ({ module }) =>
+      Promise.resolve(moduleSafes.get(module.toLowerCase()) ?? null),
+    readGuardFor: ({ module }) => Promise.resolve(minted.get(module.toLowerCase()) ?? null),
     readOwners: () => {
       seen.readOwners += 1;
       return Promise.resolve({ owners: state.owners, threshold: state.threshold });
@@ -138,16 +168,30 @@ function fakeChain(options: FakeChainOptions = {}) {
           args: unknown[],
         ): Promise<string> => {
           calls.push({ to, functionName, args });
-          if (functionName === 'createDraftsModule') state.drafts.push(DRAFTS);
-          if (functionName === 'createOwnerHistoryModule') state.history.push(HISTORY);
+          if (reverts.has(functionName)) return Promise.resolve(hashFor(calls.length));
+          if (functionName === 'createDraftsModule') {
+            state.drafts.push(DRAFTS);
+            moduleSafes.set(DRAFTS.toLowerCase(), SAFE);
+          }
+          if (functionName === 'createOwnerHistoryModule') {
+            state.history.push(HISTORY);
+            moduleSafes.set(HISTORY.toLowerCase(), SAFE);
+            minted.set(HISTORY.toLowerCase(), GUARD);
+            guardModules.set(GUARD.toLowerCase(), HISTORY);
+          }
           if (functionName === 'setGuard') state.slotGuard = args[0] as Address;
-          return Promise.resolve(`0x${String(calls.length).padStart(64, '0')}`);
+          return Promise.resolve(hashFor(calls.length));
         },
       });
     },
   };
 
   return { seam, calls, state, seen };
+}
+
+/** The hash the n-th userOp of a fake run resolves with. */
+function hashFor(n: number): string {
+  return `0x${String(n).padStart(64, '0')}`;
 }
 
 describe('installAuthorContracts', () => {
@@ -221,7 +265,7 @@ describe('installAuthorContracts', () => {
     expect(calls.some((call) => call.functionName === 'createDraftsModule')).toBe(false);
   });
 
-  it('never overwrites a foreign guard — reports the Safe transaction instead', async () => {
+  it('never overwrites a foreign guard — and offers no call that would', async () => {
     const { seam, calls } = fakeChain({
       drafts: [DRAFTS],
       history: [HISTORY],
@@ -236,10 +280,71 @@ describe('installAuthorContracts', () => {
     expect(result.state).toBe('pending-safe');
     expect(calls).toHaveLength(0);
     expect(result.note).toContain(FOREIGN_GUARD);
-    expect(result.safeTx).toEqual({
-      to: SAFE,
-      data: encodeFunctionData({ abi: safeAbi, functionName: 'setGuard', args: [GUARD] }),
+    // `guardFor(module())` does not match the slot guard: not proof of ours.
+    expect(result.safeTx).toBeUndefined();
+  });
+
+  it('is `already` when a griefer appends a module to the factory index', async () => {
+    // Any address can push an index entry. The slot proof (guard → module →
+    // factory.guardFor → module.safe()) is what decides, so the healthy author
+    // stays installed and no new transaction is offered.
+    const { seam, calls, state } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY, FOREIGN_MODULE],
+      slotGuard: GUARD,
     });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(result.state).toBe('already');
+    expect(result.ownerHistory).toBe(HISTORY);
+    expect(result.guard).toBe(GUARD);
+    expect(result.safeTx).toBeUndefined();
+    expect(calls).toHaveLength(0);
+    expect(state.slotGuard).toBe(GUARD);
+  });
+
+  it('does not report `installed` when the setGuard userOp reverted', async () => {
+    // `genericTx` resolves with a hash either way: only a re-read of the slot
+    // proves the guard landed.
+    const { seam, calls, state } = fakeChain({
+      drafts: [DRAFTS],
+      history: [HISTORY],
+      reverted: ['setGuard'],
+    });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(calls.map((call) => call.functionName)).toEqual(['setGuard']);
+    expect(result.state).toBe('pending-safe');
+    expect(result.txs).toHaveLength(1);
+    expect(result.txs[0]).toBe(hashFor(1));
+    expect(result.note).toMatch(/revert/i);
+    // Nothing is claimed on the Safe: the slot is still empty, so no command may
+    // record this run as a finished install.
+    expect(state.slotGuard).toBeNull();
+  });
+
+  it('skips when the Safe is still not deployed after ensureSafe', async () => {
+    const { seam, calls, seen } = fakeChain({ deployed: false });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(result.state).toBe('skipped');
+    expect(result.txs).toEqual([]);
+    expect(result.note).toContain('not deployed');
+    // No userOp to an address with no code, and no bundler client opened.
+    expect(calls).toHaveLength(0);
+    expect(seen.openRunner).toBe(0);
   });
 
   it('installs the permissionless modules but leaves the guard to a multisig', async () => {
@@ -312,28 +417,35 @@ describe('installAuthorContracts', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('reports the modules as installed when the guard cannot be bound yet', async () => {
-    // The history module was submitted but the index has not caught up: the
-    // modules are real, the guard step is the next run's.
-    const { seam } = fakeChain({ drafts: [DRAFTS] });
+  it('is `pending-safe` when the modules exist but the guard is not bound yet', async () => {
+    // The create's index has not caught up: `guardFor` yields nothing, so the
+    // guard is not on the Safe. That is not `installed` — it is not usable yet.
+    const { seam } = fakeChain({ drafts: [DRAFTS], history: [HISTORY], boundGuard: null });
 
     const result = await installAuthorContracts(
       { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
-      {
-        ...seam,
-        readContracts: () =>
-          Promise.resolve({
-            factory: FACTORY,
-            drafts: DRAFTS,
-            ownerHistory: null,
-            guard: null,
-          }),
-      },
+      seam,
     );
 
-    expect(result.state).toBe('installed');
+    expect(result.state).toBe('pending-safe');
+    expect(result.txs).toEqual([]);
+    expect(result.safeTx).toBeUndefined();
+    expect(result.note).toContain('run again to install the guard');
+  });
+
+  it('is `pending-safe` when a create userOp left the index unchanged', async () => {
+    // The same no-proof rule for the creates: the index is the read-back.
+    const { seam, calls } = fakeChain({ reverted: ['createDraftsModule'] });
+
+    const result = await installAuthorContracts(
+      { config: configWith(), safe: SAFE, rpcUrl: 'http://127.0.0.1:8545', privateKey: PRIVATE_KEY, out: quietOut },
+      seam,
+    );
+
+    expect(calls.map((call) => call.functionName)).toEqual(['createDraftsModule']);
+    expect(result.state).toBe('pending-safe');
     expect(result.txs).toHaveLength(1);
-    expect(result.note).toContain('run again');
+    expect(result.note).toMatch(/revert/i);
   });
 });
 

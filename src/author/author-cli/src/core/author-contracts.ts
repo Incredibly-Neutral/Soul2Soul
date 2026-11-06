@@ -24,12 +24,20 @@
 //   - **The factory index is forgeable.** `createDraftsModule(victimSafe)` from
 //     any account pushes an entry into `getDraftsModulesForSafe(victimSafe)`
 //     (SPEC-author-drafts). The index is read as "what should be installed",
-//     never as proof of use.
+//     never as proof of use. What the Safe *carries* is proved from the guard in
+//     its own guard slot: `G.module()` → `M`, then `factory.guardFor(M) == G`
+//     with `M.safe() == safe`. Nobody can forge that, and a griefer's extra index
+//     entry cannot turn a healthy author into `pending-safe`.
 //   - **A foreign guard is never overwritten.** A Safe may carry a guard this
 //     package did not install (a policy guard, another product's). Replacing it
 //     silently would change the Safe's transaction semantics behind its owners'
-//     back, so a non-zero guard that is not ours is reported as `pending-safe`
-//     and left alone.
+//     back, so a non-zero guard that cannot be proved ours is reported as
+//     `pending-safe`, left alone, and no `safeTx` is offered for it.
+//
+// A userOp hash is not proof of an install: `genericTx` resolves with the hash of
+// a transaction that may have reverted. Every send is therefore followed by a
+// re-read of the state it was supposed to change, and only a changed read counts
+// as done.
 //
 // Nothing here throws for a missing bundler, a dead RPC or a multisig Safe:
 // `s2s author new` calls `installAuthorContracts` after it has filed the key,
@@ -48,7 +56,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { AuthorContractsFactory } from '@s2s/author-contracts';
+import { AuthorContractsFactory, OwnerHistoryGuard, OwnerHistoryModuleV1 } from '@s2s/author-contracts';
 import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeRunnerHandle } from '../adapters/tx-runner';
@@ -90,9 +98,13 @@ export interface AuthorContracts {
 }
 
 /**
- * 'installed' = this run sent the txs; 'already' = nothing to do;
- * 'pending-safe' = needs Safe owner signatures; 'skipped' = no chain
- * reachable/configured.
+ * 'installed' = the guard is on the Safe and this run sent the txs;
+ * 'already' = the guard is on the Safe and nothing was to do;
+ * 'pending-safe' = the guard is not on the Safe yet (owner signatures needed, a
+ * submitted tx not visible, or one that may have reverted);
+ * 'skipped' = no chain reachable/configured, or the Safe is not deployed.
+ *
+ * `installed` and `already` always mean the guard was read back from the Safe.
  */
 export type InstallState = 'installed' | 'already' | 'pending-safe' | 'skipped';
 
@@ -102,7 +114,11 @@ export interface InstallResult extends AuthorContracts {
   txs: string[];
   /** one human line explaining 'pending-safe' / 'skipped'. */
   note?: string;
-  /** when 'pending-safe': the Safe self-call the owners must propose. */
+  /**
+   * when 'pending-safe': the Safe self-call the owners must propose. Absent
+   * whenever no call is safe to hand over — a foreign guard in the slot, a
+   * submitted userOp not yet visible, or one that may have reverted.
+   */
   safeTx?: { to: `0x${string}`; data: `0x${string}` };
 }
 
@@ -166,6 +182,22 @@ export interface ReadSafeOptions {
   rpcUrl: string;
 }
 
+export interface GuardReadOptions {
+  guard: `0x${string}`;
+  rpcUrl: string;
+}
+
+export interface ModuleReadOptions {
+  module: `0x${string}`;
+  rpcUrl: string;
+}
+
+export interface GuardForOptions {
+  factory: `0x${string}`;
+  module: `0x${string}`;
+  rpcUrl: string;
+}
+
 /** Owners and threshold of a Safe — what tells a single-owner Safe from an N-of-M one. */
 export interface SafeOwners {
   owners: Address[];
@@ -220,6 +252,8 @@ export async function readAuthorContracts(opts: ReadAuthorContractsOptions): Pro
   // `guardFor` is the factory's own binding: the guard minted WITH that history
   // module. Zero for an unknown module — never a revert (it is the read a gate
   // leans on), so a zero means "this module has no guard we may install".
+  // This is what SHOULD be on the Safe, not what is: only the guard slot (plus
+  // `proveInstalledGuard`) answers that, and the index is permissionless.
   let guard: Address | null = null;
   if (ownerHistory !== null) {
     const bound = await client.readContract({
@@ -232,6 +266,49 @@ export async function readAuthorContracts(opts: ReadAuthorContractsOptions): Pro
   }
 
   return { factory, drafts, ownerHistory, guard };
+}
+
+/**
+ * The module a guard names (`OwnerHistoryGuard.module()`), or null when the
+ * address answers nothing — a guard this package did not mint has no `module()`
+ * to read, which is exactly the "cannot prove it is ours" answer.
+ */
+export async function readGuardModule(opts: GuardReadOptions): Promise<Address | null> {
+  try {
+    const module = (await clientFor(opts.rpcUrl).readContract({
+      address: opts.guard,
+      abi: OwnerHistoryGuard,
+      functionName: 'module',
+    }));
+    return module === ZERO_ADDRESS ? null : getAddress(module.toLowerCase());
+  } catch {
+    return null;
+  }
+}
+
+/** The Safe a module is bound to (`OwnerHistoryModuleV1.safe()`), or null. */
+export async function readModuleSafe(opts: ModuleReadOptions): Promise<Address | null> {
+  try {
+    const safe = (await clientFor(opts.rpcUrl).readContract({
+      address: opts.module,
+      abi: OwnerHistoryModuleV1,
+      functionName: 'safe',
+    }));
+    return safe === ZERO_ADDRESS ? null : getAddress(safe.toLowerCase());
+  } catch {
+    return null;
+  }
+}
+
+/** The guard the factory minted for `module` (`guardFor`), or null for zero. */
+export async function readGuardFor(opts: GuardForOptions): Promise<Address | null> {
+  const guard = (await clientFor(opts.rpcUrl).readContract({
+    address: opts.factory,
+    abi: AuthorContractsFactory,
+    functionName: 'guardFor',
+    args: [opts.module],
+  }));
+  return guard === ZERO_ADDRESS ? null : getAddress(guard.toLowerCase());
 }
 
 /**
@@ -275,17 +352,23 @@ export async function readSafeOwners(opts: ReadSafeOptions): Promise<SafeOwners>
 // ===========================================================================
 
 /**
- * The six things the install does to the outside world, as one injectable
+ * The eight things the install does to the outside world, as one injectable
  * object. The tests replace all of them; production uses `defaultSeam`.
  *
- * This is the smallest seam that reaches every branch (four states, the foreign
- * guard, the multisig path): the reads, the Safe deployment and the runner are
- * the only calls that leave the process, so faking them fakes the decision
- * logic without a chain or a bundler.
+ * This is the smallest seam that reaches every branch (four states, the guard
+ * proof, the foreign guard, the multisig path): the reads, the Safe deployment
+ * and the runner are the only calls that leave the process, so faking them
+ * fakes the decision logic without a chain or a bundler.
  */
 export interface AuthorContractsSeam {
   readContracts(opts: ReadAuthorContractsOptions): Promise<AuthorContracts>;
   readGuard(opts: ReadSafeOptions): Promise<Address | null>;
+  /** `guard.module()` — what the guard in the slot was minted for. */
+  readGuardModule(opts: GuardReadOptions): Promise<Address | null>;
+  /** `module.safe()` — the Safe a module is bound to. */
+  readModuleSafe(opts: ModuleReadOptions): Promise<Address | null>;
+  /** `factory.guardFor(module)` — the guard this factory minted for it. */
+  readGuardFor(opts: GuardForOptions): Promise<Address | null>;
   readOwners(opts: ReadSafeOptions): Promise<SafeOwners>;
   ensureSafe(opts: EnsureAuthorSafeOptions): Promise<EnsuredAuthorSafe>;
   /** A runner bound to `safe`; only `genericTx` is used. */
@@ -300,6 +383,9 @@ export interface AuthorContractsSeam {
 export const defaultAuthorContractsSeam: AuthorContractsSeam = {
   readContracts: readAuthorContracts,
   readGuard: readSafeGuard,
+  readGuardModule,
+  readModuleSafe,
+  readGuardFor,
   readOwners: readSafeOwners,
   ensureSafe: ensureAuthorSafe,
   openRunner: async (opts) => {
@@ -346,6 +432,37 @@ function unreachableNote(rpcUrl: string, err: unknown): string {
   return `could not reach Base (${rpcUrl}) — ${describeError(err)}. Check S2S_RPC_L2 (or BASE_RPC_URL) and the bundler keys S2S_PIMLICO_KEY / S2S_BUNDLER_URL`;
 }
 
+/** Address equality, checksum-insensitively. */
+function sameAddress(a: `0x${string}` | null, b: `0x${string}`): boolean {
+  return a !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * Prove the guard in the Safe's slot is ours, from what the Safe carries:
+ * `G.module()` → `M`, `factory.guardFor(M) == G`, `M.safe() == safe`.
+ *
+ * This is the identity nobody can forge — a factory-index entry can be pushed by
+ * any address — so it, not `newest(ownerHistoryModules)`, decides whether an
+ * install is ours. `null` means "cannot prove": a foreign guard, or one this
+ * factory did not mint for this Safe.
+ */
+async function proveInstalledGuard(
+  args: { factory: `0x${string}`; safe: `0x${string}`; guard: Address; rpcUrl: string },
+  seam: AuthorContractsSeam,
+): Promise<{ module: Address; guard: Address } | null> {
+  const module = await seam.readGuardModule({ guard: args.guard, rpcUrl: args.rpcUrl });
+  if (module === null) return null;
+
+  const [minted, boundSafe] = await Promise.all([
+    seam.readGuardFor({ factory: args.factory, module, rpcUrl: args.rpcUrl }),
+    seam.readModuleSafe({ module, rpcUrl: args.rpcUrl }),
+  ]);
+  if (!sameAddress(minted, args.guard)) return null;
+  if (!sameAddress(boundSafe, args.safe)) return null;
+
+  return { module, guard: args.guard };
+}
+
 /**
  * Idempotent install of the author contracts on `safe`. Deploys the Safe first
  * if needed. Never throws for a missing bundler or a multisig Safe — it reports
@@ -379,11 +496,20 @@ export async function installAuthorContracts(
     return { ...empty(current), state: 'skipped', txs: [], note: BUNDLER_NOTE };
   }
 
-  // Deploy the Safe if it is not live yet, then read the indexes. Both are
-  // network work, and either failing means "we could not even look" — skipped.
+  // Deploy the Safe if it is not live yet, then read the indexes. Either
+  // failing means "we could not even look" — skipped.
   let contracts: AuthorContracts;
   try {
-    await seam.ensureSafe({ config, privateKey, rpcUrl, out });
+    const ensured: EnsuredAuthorSafe = await seam.ensureSafe({ config, privateKey, rpcUrl, out });
+    if (!ensured.deployed) {
+      // No code at the address: every userOp would be sent to nothing.
+      return {
+        ...empty(),
+        state: 'skipped',
+        txs: [],
+        note: `the author Safe ${safe} is not deployed${ensured.txHash ? ` (deployment ${ensured.txHash} submitted)` : ''} — run again once it is on chain`,
+      };
+    }
     contracts = await seam.readContracts({ factory, safe, rpcUrl });
   } catch (err) {
     return { ...empty(), state: 'skipped', txs: [], note: unreachableNote(rpcUrl, err) };
@@ -404,66 +530,81 @@ export async function installAuthorContracts(
   };
 
   try {
-    // 1. drafts — one userOp, permissionless. Re-read rather than parse the
-    //    userOp receipt: the factory index is the same answer and the runner
-    //    has no return-data channel.
+    // 1. What the Safe carries decides. A guard in the slot that this factory
+    //    minted for a module bound to this Safe IS the install — the index only
+    //    says what could be created, and any address can append to it.
+    const slotGuard = await seam.readGuard({ safe, rpcUrl });
+    if (slotGuard !== null) {
+      const proof = await proveInstalledGuard({ factory, safe, guard: slotGuard, rpcUrl }, seam);
+      if (proof !== null) {
+        return {
+          factory,
+          drafts: contracts.drafts,
+          ownerHistory: proof.module,
+          guard: proof.guard,
+          state: 'already',
+          txs: [],
+        };
+      }
+
+      // Never overwrite: it may be why the Safe behaves the way its owners
+      // expect, and there is no call to offer that would be safe to make.
+      return {
+        ...contracts,
+        state: 'pending-safe',
+        txs: [],
+        note: `the Safe already carries a guard this factory did not mint for it (${slotGuard}) — this package never replaces a guard; remove it through the Safe first if the owner-history guard is wanted`,
+      };
+    }
+
+    // 2. Nothing in the slot: the index decides what to create. A re-read after
+    //    each send is the only proof it landed — `genericTx` resolves with the
+    //    hash of a userOp that may have reverted.
     if (contracts.drafts === null) {
       out.log(`installing the drafts module for ${safe}…`);
       await send(factory, JSON.stringify(AuthorContractsFactory), 'createDraftsModule', [safe]);
       contracts = await seam.readContracts({ factory, safe, rpcUrl });
+      if (contracts.drafts === null) {
+        return {
+          ...contracts,
+          state: 'pending-safe',
+          txs,
+          note: 'the drafts module transaction did not change the factory index — it may have reverted; run again',
+        };
+      }
     }
 
-    // 2. owner history — also mints the guard, bound to that module.
+    // 3. owner history — also mints the guard, bound to that module.
     if (contracts.ownerHistory === null) {
       out.log(`installing the owner-history module for ${safe}…`);
       await send(factory, JSON.stringify(AuthorContractsFactory), 'createOwnerHistoryModule', [safe]);
       contracts = await seam.readContracts({ factory, safe, rpcUrl });
+      if (contracts.ownerHistory === null) {
+        return {
+          ...contracts,
+          state: 'pending-safe',
+          txs,
+          note: 'the owner-history module transaction did not change the factory index — it may have reverted; run again',
+        };
+      }
     }
 
     const guard = contracts.guard;
     if (guard === null) {
-      // The history module (and with it the guard) is not visible yet: the
-      // userOp was submitted but the index has not caught up. Nothing more can
-      // be decided now — the guard step is the next run's, and the modules are
-      // already a real install.
-      return txs.length > 0
-        ? {
-            ...contracts,
-            state: 'installed',
-            txs,
-            note: 'the owner-history module was submitted — run again to install its guard once it lands',
-          }
-        : {
-            ...contracts,
-            state: 'skipped',
-            txs: [],
-            note: 'no owner-history module is bound to this Safe yet — run again once the factory index catches up',
-          };
-    }
-
-    // 3. the guard. Read the Safe's own slot: `guardFor(module)` says what the
-    //    module was MINTED with, the slot says what the Safe actually carries.
-    const [slotGuard, owners] = await Promise.all([
-      seam.readGuard({ safe, rpcUrl }),
-      seam.readOwners({ safe, rpcUrl }),
-    ]);
-
-    if (slotGuard !== null && slotGuard.toLowerCase() !== guard.toLowerCase()) {
-      // Never overwrite: a guard we did not install may be why the Safe behaves
-      // the way its owners expect. Report the call and leave the slot alone.
+      // The modules may exist, but nothing is on the Safe yet: `installed` must
+      // always mean the guard is bound, because that is what makes the author
+      // usable.
       return {
         ...contracts,
         state: 'pending-safe',
         txs,
-        safeTx: guardSafeTx(safe, guard),
-        note: `a guard is already installed on the Safe (${slotGuard}) — this package never replaces a guard; remove it through the Safe first if the owner-history guard is wanted`,
+        note: 'the modules are submitted; run again to install the guard',
       };
     }
 
-    if (slotGuard !== null) {
-      // Ours, and already installed.
-      return { ...contracts, state: txs.length > 0 ? 'installed' : 'already', txs };
-    }
+    // 4. the guard. `guardFor(module)` says what the module was MINTED with;
+    //    only the slot can prove what the Safe carries.
+    const owners = await seam.readOwners({ safe, rpcUrl });
 
     // A multisig (or a Safe this key does not solely own) cannot take a self-call
     // from one signer: install what is permissionless, then hand the owners the
@@ -484,13 +625,26 @@ export async function installAuthorContracts(
 
     out.log(`installing the owner-history guard on ${safe}…`);
     await send(safe, JSON.stringify(safeAbi), 'setGuard', [guard]);
+
+    // The userOp hash proves nothing: require the slot to carry the guard we
+    // sent, else the transaction reverted (a GS300 `setGuard`, e.g.).
+    const installed = await seam.readGuard({ safe, rpcUrl });
+    if (!sameAddress(installed, guard)) {
+      return {
+        ...contracts,
+        state: 'pending-safe',
+        txs,
+        note: `the setGuard transaction did not install the guard (the Safe's guard slot is ${installed ?? 'empty'}) — it may have reverted; run again`,
+      };
+    }
+
     return { ...contracts, state: 'installed', txs };
   } catch (err) {
-    // A submitted-then-reverted userOp, a bundler that refused, an encode error:
-    // report the state reached so far instead of throwing the key away.
+    // A bundler that refused, an encode error, a dead RPC mid-run: report the
+    // state reached so far. With no re-read there is no proof of an install.
     return {
       ...contracts,
-      state: txs.length > 0 ? 'installed' : 'skipped',
+      state: txs.length > 0 ? 'pending-safe' : 'skipped',
       txs,
       note: `installing the author contracts stopped: ${describeError(err)}`,
     };
