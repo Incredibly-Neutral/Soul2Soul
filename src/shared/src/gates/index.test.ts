@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { canPublish, canRead, canReset, type GateRead } from './index';
+import { canPublish, canRead, canReset, canReview, type GateRead } from './index';
 
 // The gates are pure decision logic over an injected read, so they can be
 // tested without a chain: record every question asked, answer from a table.
@@ -115,6 +115,29 @@ describe('canRead without an ethers runtime', () => {
 
     expect(await canRead(read, 'bafyrawwcid', AUTHOR_SAFE, PUBLICATION, SIGNER, toId)).toBe(true);
     expect(seen).toEqual(['hashed:bafyrawwcid']);
+  });
+});
+
+describe('canReview', () => {
+  it('asks the publication only, with the normalised genesis and the signer', async () => {
+    const { read, asked } = makeRead({ [`canReview:${PUBLICATION}`]: true });
+    expect(await canReview(read, HEX32, PUBLICATION, SIGNER)).toBe(true);
+    expect(asked).toEqual([{ target: PUBLICATION, fn: 'canReview', args: [HEX32, SIGNER] }]);
+  });
+
+  it('refuses an address the publication does not list as a reviewer', async () => {
+    const { read } = makeRead({ [`canReview:${PUBLICATION}`]: false });
+    expect(await canReview(read, HEX32, PUBLICATION, SIGNER)).toBe(false);
+  });
+
+  it('hashes a raw reference through the host normaliser', async () => {
+    let seen: unknown[] | undefined;
+    const read: GateRead = async (_target, _abi, fn, args) => {
+      if (fn === 'canReview') seen = args;
+      return true;
+    };
+    await canReview(read, 'bafyrawwcid', PUBLICATION, SIGNER, (ref) => `hashed:${ref}`);
+    expect(seen).toEqual(['hashed:bafyrawwcid', SIGNER]);
   });
 });
 

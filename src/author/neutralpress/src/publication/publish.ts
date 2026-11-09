@@ -71,7 +71,21 @@ export async function publishToPublication(
 	// Record the version on-chain via the publication module
 	// genesis = signedItem.objectId (first version IS the genesis for a new note)
 	const rootCid = kuboCid;
-	const appendResult = await service.makeOffer(signedItem.objectId, rootCid);
+	let appendResult: string;
+	try {
+		appendResult = await service.makeOffer(signedItem.objectId, rootCid);
+	} catch (error) {
+		// `retract` (revoke) is terminal: it ends the genesis, and makeOffer then
+		// reverts `Ended()`. Name that instead of leaving the raw revert under a
+		// completed upload, which reads like a rendering problem.
+		const message = error instanceof Error ? error.message : String(error);
+		if (/\bEnded\b/.test(message)) {
+			throw new Error(
+				`this note's genesis is ended — it was revoked, and revoking is terminal — so no version can be appended: publish the content as a new note to get a new genesis. (${message})`,
+			);
+		}
+		throw error;
+	}
 	console.log('[append] tx:', appendResult);
 
 	if (opts.render) {

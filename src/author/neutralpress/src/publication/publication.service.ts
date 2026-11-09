@@ -2,7 +2,7 @@ import { IMainController } from "../main.ctrlr";
 import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
-import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
+import { S2SPublication, safeAbi, isPublicationModuleName } from "@s2s/soul2soul-shared";
 import { S2SPublicationModuleV2 } from "@s2s/publication-contracts"
 import { toBytes32Id } from '@s2s/soul2soul-shared'; 
 
@@ -92,9 +92,14 @@ export class PublicationService implements IPublicationSrv{
 	}
 
 	/**
-	 * Retract — asymmetric by caller:
-	 *   author → full withdrawal (removed from deals and/or offers)
-	 *   safe   → demotes deal back to offer, or rejects an offer
+	 * Retract — the AUTHOR's verb, sent by the author Safe (the genesis author).
+	 * V3 makes it terminal: on an agreement it sets `_ended`, tombstones the
+	 * latest version and drops the agreement, so `makeOffer`/`admit` revert
+	 * `Ended()` afterwards; on a bare offer it just withdraws the offer.
+	 *
+	 * The publication's own takedown is a different verb — `reject` — and it is
+	 * reversible. Do not use this from the publication Safe: it reverts
+	 * `NotAuthorized()`.
 	 */
 	async retract(genesis: string) {
 	  return await this.main.oxo.ctrlr.account[L2].genericTx(
@@ -135,10 +140,8 @@ export class PublicationService implements IPublicationSrv{
 					
 					if (moduleName === "S2S Records Module") {
 						configModule = moduleAddress;
-					} else if (
-					  moduleName === "S2S Publication Module V2" ||
-					  moduleName === "S2S Publication Module"   // keep for backwards compat
-					) {
+					} else if (isPublicationModuleName(moduleName)) {
+					  // Any version: V1/V2 publications still serve reads and author writes.
 					  publicationModule = moduleAddress;
 					} 
 				} catch (error) {

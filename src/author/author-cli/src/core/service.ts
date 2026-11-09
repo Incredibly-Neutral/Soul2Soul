@@ -4,7 +4,7 @@
 // Resolves a publication's Safe (L1 ENS NameWrapper) and its Records +
 // Publication module addresses (L2 Safe module sniffing) via the shared pure
 // resolvers, then exposes the two author flows: `makeOffer` (append) and
-// `retract` (author-caller full withdrawal) — both sent by the AUTHOR SAFE
+// `retract` (author's own, terminal withdrawal) — both sent by the AUTHOR SAFE
 // through ERC-4337 (`options.author`), because that is the identity the module
 // keys the whitelist and `genesisAuthor` on. The EOA runner stays for reads.
 // ============================================================================
@@ -107,7 +107,13 @@ export class PublicationService {
     return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV2), 'makeOffer', [id, cid], false);
   }
 
-  /** Retract — author-caller path fully withdraws (removed from deals and/or offers). */
+  /**
+   * Retract — the AUTHOR's verb, and terminal. On an agreement it ends the
+   * genesis (tombstones the latest version, drops the agreement) so a later
+   * `makeOffer`/`admit` reverts `Ended()`; on a bare offer it withdraws the
+   * offer. The publication's reversible takedown is `reject`, a different verb
+   * the author Safe has no authority to send.
+   */
   async retract(genesis: string): Promise<string> {
     const module = this.requirePublicationModule();
     const author = this.requireAuthor();
@@ -168,6 +174,16 @@ export class PublicationService {
       }
     } catch (err) {
       const reason = err instanceof BaseError ? err.shortMessage : String(err);
+      // `Ended()` is not a permissions problem and has one cause: the genesis
+      // was retracted (the author's terminal verb). Saying "not whitelisted"
+      // here would send the user to fix the wrong thing, after the upload.
+      if (/\bEnded\b/.test(reason)) {
+        throw new CliError(
+          `${method} from the author Safe ${author.address} would revert with Ended(): this genesis is spent.\n` +
+            '  It was retracted (revoke) or the publication ended it for good, and nothing re-opens it.\n' +
+            '  Publish the content as a new note: a new note gets a new genesis.',
+        );
+      }
       throw new CliError(
         `${method} from the author Safe ${author.address} would revert — ${reason}\n` +
           '  The author identity is the Safe: it must be whitelisted on the publication (whitelistAuthor),\n' +

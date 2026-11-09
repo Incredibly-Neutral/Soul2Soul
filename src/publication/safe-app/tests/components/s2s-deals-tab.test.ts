@@ -96,8 +96,8 @@ const m = vi.hoisted(() => {
       async () => ({ deals: [], offers: [] }),
     ),
     hasDeal: vi.fn(async () => true),
-    acceptOffer: vi.fn(async () => {}),
-    retract: vi.fn(async () => {}),
+    admit: vi.fn(async () => {}),
+    reject: vi.fn(async () => {}),
     signWithSigner: vi.fn(async () => 'sig'),
     getSafeInfo: vi.fn(() => ({ safeAddress: '0xSafe', s2sPublication: '0xPub', chainId: 8453 })),
   };
@@ -247,10 +247,21 @@ describe('s2s-deals-tab', () => {
     expect(store.offers).toHaveLength(1);
 
 
-    const acceptBtn = findRowButton(root, 'button[data-action="accept"]');
+    // Both rows carry a data-action="reject" button now (Refuse an offer,
+    // Revoke a deal), so a bare selector would be satisfied by either and
+    // would not prove the deal row was rendered. Qualify by data-status and
+    // assert the genesis each button targets.
+    const acceptBtn = findRowButton(root, 'button[data-action="accept"][data-status="offer"]');
     expect(acceptBtn).not.toBeNull();
     expect(acceptBtn!.getAttribute('data-genesis')).toBe('0xOffer1');
-    expect(findRowButton(root, 'button[data-action="retract"]')).not.toBeNull();
+
+    const refuseBtn = findRowButton(root, 'button[data-action="reject"][data-status="offer"]');
+    expect(refuseBtn).not.toBeNull();
+    expect(refuseBtn!.getAttribute('data-genesis')).toBe('0xOffer1');
+
+    const revokeBtn = findRowButton(root, 'button[data-action="reject"][data-status="deal"]');
+    expect(revokeBtn).not.toBeNull();
+    expect(revokeBtn!.getAttribute('data-genesis')).toBe('0xDeal1');
   });
 
   it('checks deal status via the s2s-check flow and reports an active deal', async () => {
@@ -357,13 +368,13 @@ describe('s2s-deals-tab', () => {
     });
   });
 
-  it('accepts an offer and shows the pending-approval notification', async () => {
+  it('admits an offer and shows the pending-approval notification', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
       offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
     });
     m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
-    m.safeIntegration.acceptOffer.mockResolvedValue(undefined);
+    m.safeIntegration.admit.mockResolvedValue(undefined);
 
     const el = await mountTab();
     const root = el.shadowRoot!;
@@ -379,8 +390,8 @@ describe('s2s-deals-tab', () => {
     acceptBtn.click();
 
     await vi.waitFor(() => {
-      expect(notificationTexts().join(' | ')).toContain('Offer accepted!');
+      expect(notificationTexts().join(' | ')).toContain('Offer admitted!');
     });
-    expect(m.safeIntegration.acceptOffer).toHaveBeenCalledWith('0xOffer1');
+    expect(m.safeIntegration.admit).toHaveBeenCalledWith('0xOffer1');
   });
 });
