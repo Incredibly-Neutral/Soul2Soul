@@ -5,6 +5,7 @@ import { ENS_NAMEWRAPPER } from './constants';
 import { isPublicationModuleName } from './module-name';
 
 export * from './module-name';
+export * from './factories';
 
 export type { S2SProtocolInfo };
 export type { Metered, S2SSignerSecrets, S2SPublishSecrets, StorageCredential, FilecoinSessionKeyData } from './types';

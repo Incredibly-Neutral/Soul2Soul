@@ -6,9 +6,12 @@
 // pure lib, PR #147):
 //
 //   1. propose create-batch  (buildCreateModuleBatch)      → Safe queue
-//      — SKIPPED when a scan of both factories' ModuleCreated logs finds both
-//      modules for this Safe already (scanExistingModules): the factory is
-//      plain CREATE, so re-proposing would deploy a duplicate pair. The scan
+//      — SKIPPED when a scan of the ModuleCreated logs finds both modules for
+//      this Safe already (scanExistingModules): the factory is plain CREATE, so
+//      re-proposing would deploy a duplicate pair. The scan reads the factory in
+//      the protocol record AND the retired factories
+//      (LEGACY_PUBLICATION_FACTORIES), because a publication made before the
+//      record moved to a new factory has its log on the old one only. It
 //      escalates once — default 10k-block window, then 250k, because the pair
 //      is often days old; a failed wide scan just means "no answer". On a hit
 //      it adopts the existing addresses and jumps straight to the enable+name
@@ -109,6 +112,9 @@ import {
   type MetaTransactionData,
   type ProtocolInfo,
 } from '../lib/publication-init.js';
+// Narrow entry, not the package root: the root graph drags in
+// rendering/sequence.ts, which touches `global` and breaks the browser bundle.
+import { LEGACY_PUBLICATION_FACTORIES } from '@s2s/soul2soul-shared/protocol';
 import { ENS_L1_CHAIN_ID, ENS_REGISTRY_ADDRESS, ZERO_ADDRESS } from '../lib/domain-validation.js';
 import {
   buildRegisterSubdomainCall,
@@ -1033,6 +1039,10 @@ export class S2SPublicationInit extends LitElement {
           safeAddress,
           recordsFactory: info.recordsFactory,
           publicationFactory: info.publicationFactory,
+          // A publication created before `publication_factory` moved to the V3
+          // deployment has its ModuleCreated log on the retired factory only;
+          // without these the scan sees "no pair" and proposes a duplicate.
+          legacyPublicationFactories: LEGACY_PUBLICATION_FACTORIES,
           getBlockNumber: () => si.getProvider().getBlockNumber(),
         };
         const scanAt = (lookbackBlocks: number) =>

@@ -60,6 +60,18 @@ export type DetectModuleAddressesDeps = {
   safeAddress: string;
   recordsFactory: string;
   publicationFactory: string;
+  /**
+   * Retired publication factories whose `ModuleCreated` logs still describe
+   * live publications (shared: LEGACY_PUBLICATION_FACTORIES).
+   *
+   * Only the existence check (`scanExistingModules`) counts them, because it
+   * answers "does this Safe already have a pair?" and a publication created
+   * before the protocol record moved to a new factory has its log on the old
+   * one only. Detection after a create batch leaves them out on purpose: the
+   * batch was sent to `publicationFactory`, so only that factory's logs can
+   * describe what it just deployed.
+   */
+  legacyPublicationFactories?: readonly string[];
   getBlockNumber: () => Promise<number>;
   now?: () => number;
 };
@@ -403,11 +415,31 @@ type ModuleScanResult = {
 };
 
 /**
- * One pass over both factories' ModuleCreated logs: the shared primitive
- * behind detectModuleAddresses (which polls it) and scanExistingModules
- * (which calls it exactly once). Each factory's topic0 comes from its own ABI
- * (moduleCreatedTopic0), so the differing event signatures resolve to distinct
- * topic0. Missing modules are `undefined` — this never waits, never throws.
+ * Every publication factory a scan reads: the one from the protocol record
+ * first, then the retired deployments, each address once (case-insensitive).
+ * Order is the preference order — a module logged by the current factory wins
+ * over one logged by a retired factory.
+ */
+function publicationFactoryCandidates(deps: DetectModuleAddressesDeps): string[] {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const factory of [deps.publicationFactory, ...(deps.legacyPublicationFactories ?? [])]) {
+    if (!factory) continue;
+    const key = factory.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(factory);
+  }
+  return candidates;
+}
+
+/**
+ * One pass over the records factory's and every publication factory's
+ * ModuleCreated logs: the shared primitive behind detectModuleAddresses (which
+ * polls it) and scanExistingModules (which calls it exactly once). Each
+ * factory's topic0 comes from its own ABI (moduleCreatedTopic0), so the
+ * differing event signatures resolve to distinct topic0. Missing modules are
+ * `undefined` — this never waits, never throws.
  */
 async function scanModuleLogs(
   deps: DetectModuleAddressesDeps,
@@ -420,22 +452,37 @@ async function scanModuleLogs(
   const blockNumber = await deps.getBlockNumber();
   const fromBlock = Math.max(0, blockNumber - lookbackBlocks);
 
-  const [recordsLogs, publicationLogs] = await Promise.all([
+  const publicationFactories = publicationFactoryCandidates(deps);
+
+  const [recordsLogs, publicationLogsByFactory] = await Promise.all([
     deps.fetchModuleCreatedLogs(deps.recordsFactory, deps.safeAddress, recordsTopic0, fromBlock),
-    deps.fetchModuleCreatedLogs(
-      deps.publicationFactory,
-      deps.safeAddress,
-      publicationTopic0,
-      fromBlock,
+    Promise.all(
+      publicationFactories.map((factory) =>
+        deps.fetchModuleCreatedLogs(factory, deps.safeAddress, publicationTopic0, fromBlock),
+      ),
     ),
   ]);
+
+  // Dedupe by module address: one address is one module, whichever factory's
+  // log named it. `findModuleAddress` already prefers the newest log within a
+  // factory, and the candidate order above decides between factories.
+  const seenModules = new Set<string>();
+  const publicationModules: string[] = [];
+  for (const logs of publicationLogsByFactory) {
+    const module = findModuleAddress(logs, paddedSafe);
+    if (!module) continue;
+    const key = module.toLowerCase();
+    if (seenModules.has(key)) continue;
+    seenModules.add(key);
+    publicationModules.push(module);
+  }
 
   return {
     blockNumber,
     recordsLogs: recordsLogs.length,
-    publicationLogs: publicationLogs.length,
+    publicationLogs: publicationLogsByFactory.reduce((total, logs) => total + logs.length, 0),
     recordsModule: findModuleAddress(recordsLogs, paddedSafe),
-    publicationModule: findModuleAddress(publicationLogs, paddedSafe),
+    publicationModule: publicationModules[0],
   };
 }
 
@@ -445,6 +492,11 @@ async function scanModuleLogs(
  * factories are plain CREATE (non-idempotent), so re-creating a pair that
  * already exists deploys a duplicate (and anything the user built on the old
  * modules is orphaned).
+ *
+ * The look covers the record's publication factory AND the retired ones
+ * (`legacyPublicationFactories`): a publication created before the protocol
+ * record moved to a new factory has its ModuleCreated log on the old factory
+ * only, and would otherwise look uninitialised.
  *
  * Returns a PARTIAL result when only one factory has a log for this Safe; the
  * caller decides whether a lone module is usable (it is not: the flow needs
@@ -466,6 +518,8 @@ export async function scanExistingModules(
  * found (or the timeout elapses). Each factory's topic0 is derived from its
  * own ABI (moduleCreatedTopic0), so the differing event signatures resolve to
  * distinct topic0. Throws a descriptive error naming the missing module(s).
+ * Reads `publicationFactory` only — this runs after a create batch sent to
+ * that factory, so its logs are the only ones that can describe the new pair.
  */
 export async function detectModuleAddresses(
   deps: DetectModuleAddressesDeps,
@@ -490,7 +544,11 @@ export async function detectModuleAddresses(
       );
     }
 
-    const poll = await scanModuleLogs(deps, lookbackBlocks);
+    // Detection answers a different question from the existence check: the
+    // create batch was just sent to `publicationFactory`, so only that
+    // factory's logs describe the pair being waited for. A retired factory's
+    // log would name a module from an earlier run and short-circuit the wait.
+    const poll = await scanModuleLogs({ ...deps, legacyPublicationFactories: undefined }, lookbackBlocks);
     console.log(
       `[init] detect poll block=${poll.blockNumber} recordsLogs=${poll.recordsLogs} publicationLogs=${poll.publicationLogs}`,
     );
