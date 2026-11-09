@@ -262,8 +262,9 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     trace.push(templateData);
 
     // Revoke detection via on-chain deal state: the decrypt-path
-    // `revoked` flag only covers decrypt failures, not on-chain retract.
-    // Check hasDeal so a retracted (revoked) plaintext item also renders
+    // `revoked` flag only covers decrypt failures, not a takedown on chain —
+    // the author's terminal `retract` or the publication's `reject`.
+    // Check hasDeal so a revoked plaintext item also renders
     // as revoked (empty html + preserved path for the orchestrator's
     // remove entry). The path is kept so the orchestrator can derive the
     // remove entry from the revoked job itself (no separate caller-supplied
