@@ -11,6 +11,11 @@ export type Abi_S2SPublicationModuleV3 = [
   },
   {
     "inputs": [],
+    "name": "Ended",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidAuthorAddress",
     "type": "error"
   },
@@ -831,6 +836,25 @@ export type Abi_S2SPublicationModuleV3 = [
       }
     ],
     "name": "hasDeal",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "hasEnded",
     "outputs": [
       {
         "internalType": "bool",
@@ -1144,6 +1168,11 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
   },
   {
     "inputs": [],
+    "name": "Ended",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidAuthorAddress",
     "type": "error"
   },
@@ -1964,6 +1993,25 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
       }
     ],
     "name": "hasDeal",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "hasEnded",
     "outputs": [
       {
         "internalType": "bool",

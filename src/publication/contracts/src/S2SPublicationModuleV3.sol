@@ -19,11 +19,20 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     can keep calling `makeOffer` to edit while it is still an offer (each call
  *     appends a version) before the publication agrees.
  *   - `acceptOffer` (onlySafe) promotes an offer to an agreement.
- *   - `retract` is asymmetric: the author withdraws entirely (removed from
- *     agreements/offers); the publication (safe) demotes an agreement back to an
- *     offer, or rejects an offer.
+ *   - `retract` is asymmetric, and that asymmetry is the point:
+ *     - the author's retract is terminal. Ending an agreement burns that
+ *       genesis for this publication permanently and tombstones its latest
+ *       version. The publication can never re-strike it. Coming back means a
+ *       new manuscript with a new genesis.
+ *     - the publication's retract is not terminal. It demotes an agreement
+ *       back to a pending offer, or rejects a pending offer, and the safe may
+ *       accept again.
+ *     An ended genesis is frozen: `makeOffer` and `acceptOffer` revert. Its
+ *     versions stay on the ledger and remain readable through `getVersion`.
  *   - `_append` does not gate the first version of a genesis. An untrusted
- *     author can always leave a pending offer instead of reverting.
+ *     author can always leave a pending offer instead of reverting. After the
+ *     first version only the genesis author appends, so the publication cannot
+ *     write a version onto somebody else's genesis.
  *
  * Read gates (frozen signatures; sibling branches code against them):
  *   - `canRead(genesis, reader)` — the safe, the genesis author and reviewers
@@ -47,7 +56,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *
  * Storage: `safe` is slot 101; 102–114 is V2's layout unchanged under the new
  * agreement names (declaration order preserved); 115 `reviewers`,
- * 116 `reviewerList`, 117 `agreementsHeldBy`.
+ * 116 `reviewerList`, 117 `agreementsHeldBy`, 118 `_ended`.
  *
  * Agreements and offers are enumerable sets of genesis pointing into the one
  * log; `getAgreements`/`getOffers` read each entry's latest version via a
@@ -102,11 +111,12 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     mapping(bytes32 genesis => uint256) private offerPos;
     mapping(bytes32 genesis => uint256) private offerAt;
 
-    // ── Reviewers (appended after V2's layout: 115–116) ────────────
+    // ── Reviewers & ended genesis (appended after V2's layout) ─────
 
     mapping(address reviewer => bool) private reviewers;
     address[] private reviewerList;
     mapping(address author => uint256) private agreementsHeldBy;
+    mapping(bytes32 genesis => bool) private _ended;
 
     // ── Events ─────────────────────────────────────────────────────
 
@@ -138,6 +148,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     error InvalidReviewerAddress();
     error EmptyCid();
     error ZeroHash();
+    error Ended();
 
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
@@ -201,6 +212,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         bytes32 genesis,
         string calldata cid
     ) external returns (bool agreed) {
+        if (_ended[genesis]) revert Ended();
         _append(genesis, cid, msg.sender);
 
         if (msg.sender == safe || _inArray(whitelisted_authors, msg.sender)) {
@@ -224,6 +236,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
 
     /// @dev Publication accepts a pending offer → agreement.
     function acceptOffer(bytes32 genesis) external onlySafe {
+        if (_ended[genesis]) revert Ended();
         require(_isOffer[genesis], "no offer");
         _removeOffer(genesis);
         if (!_isAgreement[genesis]) _addAgreement(genesis);
@@ -232,14 +245,22 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
 
     /**
      * @dev Retract, asymmetric by caller:
-     *      - author  → removed from agreements and/or offers (full withdrawal)
-     *      - safe     → an agreement is demoted back to an offer; an offer is rejected
+     *      - author  → terminal. An agreement ends for good: `_ended` is set and
+     *        the latest version is tombstoned, then the genesis leaves both sets.
+     *        A pending offer with no agreement is simply withdrawn, and is not
+     *        marked ended — there is nothing to end.
+     *      - safe     → not terminal. An agreement is demoted back to a pending
+     *        offer; a pending offer is rejected. The safe may accept again.
      */
     function retract(bytes32 genesis) external {
         require(_isAgreement[genesis] || _isOffer[genesis], "not an agreement or offer");
 
         if (msg.sender == genesisAuthor[genesis]) {
-            if (_isAgreement[genesis]) _removeAgreement(genesis);
+            if (_isAgreement[genesis]) {
+                _ended[genesis] = true;
+                versions[genesis][latestIndex[genesis]].tombstone = true;
+                _removeAgreement(genesis);
+            }
             if (_isOffer[genesis]) _removeOffer(genesis);
             emit Retracted(genesis, msg.sender, false);
         } else if (msg.sender == safe) {
@@ -296,6 +317,12 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     ///      publish gate: `canPublish` stays the whitelist predicate.
     function ownerHasAgreement(address _address) external view returns (bool) {
         return agreementsHeldBy[_address] > 0;
+    }
+
+    /// @dev True iff the author has ended this genesis for this publication.
+    ///      Permanent: `makeOffer` and `acceptOffer` revert for an ended genesis.
+    function hasEnded(bytes32 genesis) external view returns (bool) {
+        return _ended[genesis];
     }
 
     // ── Enumeration (agreements / offers with their latest version) ─
@@ -477,7 +504,9 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
             // be able to leave a pending offer rather than revert here.
             genesisAuthor[genesis] = author;
         } else {
-            if (author != genesisAuthor[genesis] && author != safe) revert OnlySafe();
+            // Later versions: only the genesis author writes. The publication
+            // cannot append onto somebody else's genesis.
+            if (author != genesisAuthor[genesis]) revert OnlySafe();
         }
 
         uint256 idx = versions[genesis].length;
