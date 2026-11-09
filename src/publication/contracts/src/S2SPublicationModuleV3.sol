@@ -31,19 +31,23 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     genesis is never readable.
  *   - `canReview(genesis, who)` — a reviewer, for an agreement or an offer.
  *
- * The two layers are separate. Agreements and offers govern read access, per
- * genesis: one manuscript, one publication. `canPublish` governs only who may
- * write into this module at all — the safe, a whitelisted dev or a whitelisted
- * author. It is the V2 whitelist predicate unchanged; holding an agreement
- * never grants module-level publish rights.
+ * Three layers, deliberately separate:
+ *   - `canPublish(address)` is the whitelist predicate for "may write into this
+ *     module at all" — the safe, a whitelisted dev or a whitelisted author. It
+ *     is V2's body unchanged and nothing about agreements feeds it.
+ *   - `agreementsHeldBy` / `ownerHasAgreement(address)` answer a different,
+ *     per-author question: does this address currently hold any agreement with
+ *     this publication. It never grants publish rights.
+ *   - `canRead` / `canReview` are the per-genesis read gates: one manuscript,
+ *     one publication, one reader.
  *
  * Reviewers are an enumerable set capped at `MAX_REVIEWERS`, managed by the
- * safe.
+ * safe. A live proxy upgraded from V2 backfills `agreementsHeldBy` through
+ * `reinitializeV3`.
  *
- * Storage: `safe` is slot 101, slots 102–114 are V2's layout unchanged under
- * the new agreement names (declaration order preserved). `reviewers` and
- * `reviewerList` occupy 115–116. Slot 117 is free and stays free: do not reuse
- * it for anything except a future append at the end of the layout.
+ * Storage: `safe` is slot 101; 102–114 is V2's layout unchanged under the new
+ * agreement names (declaration order preserved); 115 `reviewers`,
+ * 116 `reviewerList`, 117 `agreementsHeldBy`.
  *
  * Agreements and offers are enumerable sets of genesis pointing into the one
  * log; `getAgreements`/`getOffers` read each entry's latest version via a
@@ -102,6 +106,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
 
     mapping(address reviewer => bool) private reviewers;
     address[] private reviewerList;
+    mapping(address author => uint256) private agreementsHeldBy;
 
     // ── Events ─────────────────────────────────────────────────────
 
@@ -159,6 +164,20 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         for (uint i = 0; i < _devs.length; i++) {
             if (_devs[i] == address(0)) revert InvalidDevAddress();
             if (!_inArray(whitelisted_devs, _devs[i])) whitelisted_devs.push(_devs[i]);
+        }
+    }
+
+    /**
+     * @dev Run once at upgrade time on a live proxy, so `agreementsHeldBy`
+     *      reflects the agreements struck while the proxy ran V2. The list holds
+     *      unique genesis and the reinitializer can only run once, so nothing is
+     *      cleared first. A fresh deployment does not need it: the list is empty
+     *      and the call is a no-op.
+     */
+    function reinitializeV3() external reinitializer(2) onlySafe {
+        for (uint i = 0; i < agreementList.length; i++) {
+            address author = genesisAuthor[agreementList[i]];
+            if (author != address(0)) agreementsHeldBy[author] += 1;
         }
     }
 
@@ -271,6 +290,12 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
 
     function hasOffer(bytes32 genesis) external view returns (bool) {
         return _isOffer[genesis];
+    }
+
+    /// @dev True iff `_address` currently holds at least one agreement. Not a
+    ///      publish gate: `canPublish` stays the whitelist predicate.
+    function ownerHasAgreement(address _address) external view returns (bool) {
+        return agreementsHeldBy[_address] > 0;
     }
 
     // ── Enumeration (agreements / offers with their latest version) ─
@@ -474,6 +499,9 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         agreementList.push(g);
         _isAgreement[g] = true;
         agreementAt[g] = block.timestamp;
+
+        address author = genesisAuthor[g];
+        if (author != address(0)) agreementsHeldBy[author] += 1;
     }
 
     function _removeAgreement(bytes32 g) private {
@@ -488,6 +516,9 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         delete agreementPos[g];
         delete _isAgreement[g];
         delete agreementAt[g];
+
+        address author = genesisAuthor[g];
+        if (author != address(0) && agreementsHeldBy[author] > 0) agreementsHeldBy[author] -= 1;
     }
 
     function _addOffer(bytes32 g) private {
