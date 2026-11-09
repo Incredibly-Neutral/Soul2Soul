@@ -28,3 +28,21 @@ const PUBLICATION_MODULE_NAME = /^S2S Publication Module(?: V[0-9]+)?$/;
 /** True iff `name` is a publication module's `NAME()`, at any version. */
 export const isPublicationModuleName = (name: string | undefined | null): boolean =>
   typeof name === 'string' && PUBLICATION_MODULE_NAME.test(name);
+
+const VERSION_SUFFIX = / V([0-9]+)$/;
+
+/**
+ * The version a publication module's `NAME()` reports: 1 for the bare name,
+ * the number in ` V<n>` otherwise, `undefined` when it is not a publication
+ * module at all.
+ *
+ * Callers use it to pick the ABI and the verbs a module actually implements:
+ * V1 has no agreements surface, V2 has `acceptOffer`/`retract`, V3 has
+ * `admit`/`reject`. Reading is not enough to tell them apart — the read
+ * selectors are aliased across V2 and V3 — so the name is the only signal.
+ */
+export const publicationModuleVersion = (name: string | undefined | null): number | undefined => {
+  if (!isPublicationModuleName(name)) return undefined;
+  const suffix = VERSION_SUFFIX.exec(name as string);
+  return suffix ? Number(suffix[1]) : 1;
+};
