@@ -184,7 +184,7 @@ export async function revokeContent(
 		`[retract] caveat: non-default templateConfig.path (on-chain mapping.json) could make this remove path drift; actual path is re-verified at update time by verifyRevocable`,
 	);
 	new Notice(
-		`Revoked '${slug}' from ${publication}; on-chain retract complete. Removal requested — if the publication uses a custom template path, it completes on the next full render.`,
+		`Revoked '${slug}' from ${publication}; on-chain retract complete. This ends the note's genesis, so the note id cannot be published again — a re-publish must be a new note. Removal requested: if the publication uses a custom template path, it completes on the next full render.`,
 	);
 
 	// Re-render the REVOKED contentId itself (B2). The on-chain retract already
