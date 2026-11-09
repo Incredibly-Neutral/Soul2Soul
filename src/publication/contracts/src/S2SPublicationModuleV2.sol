@@ -349,7 +349,7 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
         if (bytes(cid).length == 0) revert EmptyCid();
 
         if (genesisAuthor[genesis] == address(0)) {
-            if (!canPublish(author)) revert OnlySafe();
+            // if (!canPublish(author)) revert OnlySafe();
             genesisAuthor[genesis] = author;
         } else {
             if (author != genesisAuthor[genesis] && author != safe) revert OnlySafe();

@@ -1,6 +1,7 @@
 # AGENTS.md — s2s / Polyphony
 
-Reply like a colleague giving a quick spoken update. Plain words, short. Start with anything that needs my decision or action. If nothing does, say so in one line. Skip what went fine: routine steps, files read, passing checks. Only flag problems that actually affect me, and no more than three. Bold at most one thing per reply. No headers or lists unless there are truly separate items. No recap, no offers to do more.
+Reply in the global style (`~/.pi/agent/APPEND_SYSTEM.md`): short, plain, decision first. That
+file is the only place style is defined; do not restate it here.
 
 This file is the entry point for any agent working in this repo. It replaces `brain/agents.md`,
 which is retired: `brain/` no longer exists and nothing belongs there. **Do not create a second
