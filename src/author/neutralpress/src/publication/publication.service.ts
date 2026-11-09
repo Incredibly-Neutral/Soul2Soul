@@ -92,9 +92,14 @@ export class PublicationService implements IPublicationSrv{
 	}
 
 	/**
-	 * Retract — asymmetric by caller:
-	 *   author → full withdrawal (removed from deals and/or offers)
-	 *   safe   → demotes deal back to offer, or rejects an offer
+	 * Retract — the AUTHOR's verb, sent by the author Safe (the genesis author).
+	 * V3 makes it terminal: on an agreement it sets `_ended`, tombstones the
+	 * latest version and drops the agreement, so `makeOffer`/`admit` revert
+	 * `Ended()` afterwards; on a bare offer it just withdraws the offer.
+	 *
+	 * The publication's own takedown is a different verb — `reject` — and it is
+	 * reversible. Do not use this from the publication Safe: it reverts
+	 * `NotAuthorized()`.
 	 */
 	async retract(genesis: string) {
 	  return await this.main.oxo.ctrlr.account[L2].genericTx(
