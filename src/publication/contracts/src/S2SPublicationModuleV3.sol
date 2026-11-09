@@ -18,7 +18,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     AGREEMENT immediately; anyone else → it becomes a pending OFFER. An author
  *     can keep calling `makeOffer` to edit while it is still an offer (each call
  *     appends a version) before the publication agrees.
- *   - `acceptOffer` (onlySafe) promotes an offer to an agreement.
+ *   - `admit` (onlySafe) promotes an offer to an agreement.
  *   - Ending is asymmetric, and the two verbs are separate functions so a caller
  *     cannot mean both:
  *     - the author `retract`s. Terminal: `_ended` is set, the latest version is
@@ -26,7 +26,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *       it again. Coming back means a new manuscript with a new genesis.
  *     - the publication `reject`s. Not terminal: an agreement returns to the
  *       pending offer set, an offer is declined, and the safe may accept again.
- *     An ended genesis is frozen: `makeOffer` and `acceptOffer` revert. Its
+ *     An ended genesis is frozen: `makeOffer` and `admit` revert. Its
  *     versions stay on the ledger and remain readable through `getVersion`.
  *   - `_append` does not gate the first version of a genesis. An untrusted
  *     author can always leave a pending offer instead of reverting. After the
@@ -236,14 +236,17 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         return _isAgreement[genesis];
     }
 
-    /// @dev Publication accepts a pending offer → agreement.
-    function acceptOffer(bytes32 genesis) external onlySafe {
+    /// @dev Publication admits a pending offer → agreement.
+    function admit(bytes32 genesis) public onlySafe {
         if (_ended[genesis]) revert Ended();
         require(_isOffer[genesis], "no offer");
         _removeOffer(genesis);
         if (!_isAgreement[genesis]) _addAgreement(genesis);
         emit OfferAccepted(genesis, genesisAuthor[genesis]);
     }
+
+    /// @custom:deprecated V2 name; use `admit`.
+    function acceptOffer(bytes32 genesis) external onlySafe { admit(genesis); }
 
     /**
      * @dev The author's verb, and terminal. Ending an agreement sets `_ended`
@@ -327,7 +330,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     }
 
     /// @dev True iff the author has ended this genesis for this publication.
-    ///      Permanent: `makeOffer` and `acceptOffer` revert for an ended genesis.
+    ///      Permanent: `makeOffer` and `admit` revert for an ended genesis.
     function hasEnded(bytes32 genesis) external view returns (bool) {
         return _ended[genesis];
     }

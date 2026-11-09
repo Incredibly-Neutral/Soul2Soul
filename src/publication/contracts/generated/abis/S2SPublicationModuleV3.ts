@@ -443,6 +443,19 @@ export type Abi_S2SPublicationModuleV3 = [
         "type": "bytes32"
       }
     ],
+    "name": "admit",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
     "name": "authorOf",
     "outputs": [
       {
@@ -1631,6 +1644,19 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
       }
     ],
     "name": "acceptOffer",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "admit",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
