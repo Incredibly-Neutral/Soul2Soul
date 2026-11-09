@@ -19,14 +19,13 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     can keep calling `makeOffer` to edit while it is still an offer (each call
  *     appends a version) before the publication agrees.
  *   - `acceptOffer` (onlySafe) promotes an offer to an agreement.
- *   - `retract` is asymmetric, and that asymmetry is the point:
- *     - the author's retract is terminal. Ending an agreement burns that
- *       genesis for this publication permanently and tombstones its latest
- *       version. The publication can never re-strike it. Coming back means a
- *       new manuscript with a new genesis.
- *     - the publication's retract is not terminal. It demotes an agreement
- *       back to a pending offer, or rejects a pending offer, and the safe may
- *       accept again.
+ *   - Ending is asymmetric, and the two verbs are separate functions so a caller
+ *     cannot mean both:
+ *     - the author `retract`s. Terminal: `_ended` is set, the latest version is
+ *       tombstoned, the genesis is frozen and this publication can never strike
+ *       it again. Coming back means a new manuscript with a new genesis.
+ *     - the publication `reject`s. Not terminal: an agreement returns to the
+ *       pending offer set, an offer is declined, and the safe may accept again.
  *     An ended genesis is frozen: `makeOffer` and `acceptOffer` revert. Its
  *     versions stay on the ledger and remain readable through `getVersion`.
  *   - `_append` does not gate the first version of a genesis. An untrusted
@@ -126,7 +125,9 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     event AgreementStruck(bytes32 indexed genesis, address indexed author);
     /// @custom:deprecated V2 name; emitted alongside `AgreementStruck` for old indexers.
     event DealStruck(bytes32 indexed genesis, address indexed author);
+    // V2 shape kept for old indexers; now emitted only by `retract`, bool always false.
     event Retracted(bytes32 indexed genesis, address indexed by, bool keptAsOffer);
+    event Rejected(bytes32 indexed genesis, address indexed author, bool keptAsOffer);
 
     event AuthorWhitelisted(address indexed author);
     event AuthorRemovedFromWhitelist(address indexed author);
@@ -244,36 +245,41 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     }
 
     /**
-     * @dev Retract, asymmetric by caller:
-     *      - author  → terminal. An agreement ends for good: `_ended` is set and
-     *        the latest version is tombstoned, then the genesis leaves both sets.
-     *        A pending offer with no agreement is simply withdrawn, and is not
-     *        marked ended — there is nothing to end.
-     *      - safe     → not terminal. An agreement is demoted back to a pending
-     *        offer; a pending offer is rejected. The safe may accept again.
+     * @dev The author's verb, and terminal. Ending an agreement sets `_ended`
+     *      and tombstones the latest version, then removes the genesis from the
+     *      agreement set; the publication can never strike it again. Withdrawing
+     *      a pending offer that is under no agreement sets no flag: there is
+     *      nothing to end. Only the genesis author reaches this function.
      */
     function retract(bytes32 genesis) external {
+        if (msg.sender != genesisAuthor[genesis]) revert NotAuthorized();
         require(_isAgreement[genesis] || _isOffer[genesis], "not an agreement or offer");
 
-        if (msg.sender == genesisAuthor[genesis]) {
-            if (_isAgreement[genesis]) {
-                _ended[genesis] = true;
-                versions[genesis][latestIndex[genesis]].tombstone = true;
-                _removeAgreement(genesis);
-            }
-            if (_isOffer[genesis]) _removeOffer(genesis);
-            emit Retracted(genesis, msg.sender, false);
-        } else if (msg.sender == safe) {
-            if (_isAgreement[genesis]) {
-                _removeAgreement(genesis);
-                if (!_isOffer[genesis]) _addOffer(genesis);
-                emit Retracted(genesis, msg.sender, true);
-            } else {
-                _removeOffer(genesis);
-                emit Retracted(genesis, msg.sender, false);
-            }
+        if (_isAgreement[genesis]) {
+            _ended[genesis] = true;
+            versions[genesis][latestIndex[genesis]].tombstone = true;
+            _removeAgreement(genesis);
         } else {
-            revert NotAuthorized();
+            _removeOffer(genesis);
+        }
+        emit Retracted(genesis, msg.sender, false);
+    }
+
+    /**
+     * @dev The publication's verb, and reversible. `reject` never sets `_ended`:
+     *      an agreement returns to the pending offer set, an offer is declined,
+     *      and the safe may accept again.
+     */
+    function reject(bytes32 genesis) external onlySafe {
+        require(_isAgreement[genesis] || _isOffer[genesis], "not an agreement or offer");
+
+        if (_isAgreement[genesis]) {
+            _removeAgreement(genesis);
+            if (!_isOffer[genesis]) _addOffer(genesis);
+            emit Rejected(genesis, genesisAuthor[genesis], true);
+        } else {
+            _removeOffer(genesis);
+            emit Rejected(genesis, genesisAuthor[genesis], false);
         }
     }
 

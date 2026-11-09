@@ -288,6 +288,31 @@ export type Abi_S2SPublicationModuleV3 = [
       {
         "indexed": true,
         "internalType": "address",
+        "name": "author",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "keptAsOffer",
+        "type": "bool"
+      }
+    ],
+    "name": "Rejected",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
         "name": "by",
         "type": "address"
       },
@@ -1023,6 +1048,19 @@ export type Abi_S2SPublicationModuleV3 = [
   {
     "inputs": [],
     "name": "reinitializeV3",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "reject",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1445,6 +1483,31 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
       {
         "indexed": true,
         "internalType": "address",
+        "name": "author",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "keptAsOffer",
+        "type": "bool"
+      }
+    ],
+    "name": "Rejected",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
         "name": "by",
         "type": "address"
       },
@@ -2180,6 +2243,19 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
   {
     "inputs": [],
     "name": "reinitializeV3",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "reject",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

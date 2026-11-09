@@ -317,7 +317,7 @@ export const Artifact_S2SRecordsModule: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "6678": [
+    "6697": [
       {
         "length": 32,
         "start": 317
@@ -427,7 +427,7 @@ export const Artifact_S2SRecordsModule: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "6678": [
+        "6697": [
           {
             "length": 32,
             "start": 317
@@ -495,7 +495,7 @@ export const Artifact_S2SRecordsModule: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 6682,
+        "astId": 6701,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "records",
         "offset": 0,
@@ -503,7 +503,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_mapping(t_string_memory_ptr,t_string_storage)"
       },
       {
-        "astId": 6685,
+        "astId": 6704,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "recordKeys",
         "offset": 0,
@@ -511,7 +511,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_array(t_string_storage)dyn_storage"
       },
       {
-        "astId": 6689,
+        "astId": 6708,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "keyIndex",
         "offset": 0,
@@ -519,7 +519,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_mapping(t_string_memory_ptr,t_uint256)"
       },
       {
-        "astId": 6693,
+        "astId": 6712,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "keyExists",
         "offset": 0,
@@ -936,7 +936,7 @@ export const Artifact_S2SRecordsModule: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "6678": [
+    "6697": [
       {
         "length": 32,
         "start": 317
@@ -1046,7 +1046,7 @@ export const Artifact_S2SRecordsModule: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "6678": [
+        "6697": [
           {
             "length": 32,
             "start": 317
@@ -1114,7 +1114,7 @@ export const Artifact_S2SRecordsModule: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 6682,
+        "astId": 6701,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "records",
         "offset": 0,
@@ -1122,7 +1122,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_mapping(t_string_memory_ptr,t_string_storage)"
       },
       {
-        "astId": 6685,
+        "astId": 6704,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "recordKeys",
         "offset": 0,
@@ -1130,7 +1130,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_array(t_string_storage)dyn_storage"
       },
       {
-        "astId": 6689,
+        "astId": 6708,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "keyIndex",
         "offset": 0,
@@ -1138,7 +1138,7 @@ export const Artifact_S2SRecordsModule: {
         "type": "t_mapping(t_string_memory_ptr,t_uint256)"
       },
       {
-        "astId": 6693,
+        "astId": 6712,
         "contract": "project/src/S2SRecordsModule.sol:S2SRecordsModule",
         "label": "keyExists",
         "offset": 0,
