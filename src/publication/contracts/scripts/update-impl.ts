@@ -19,7 +19,7 @@
  *
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY             deployer key for the implementation
- *   PUBLICATION_FACTORY_ADDRESS      the V3 factory (legacy name PUBLICATION_FACTORY_V2_ADDRESS also read)
+ *   PUBLICATION_FACTORY_ADDRESS      the V3 factory, as printed by pnpm deploy:pubfac
  *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  */
 
@@ -130,7 +130,9 @@ async function main() {
     process.exit(1);
   }
 
-  const factoryEnv = process.env.PUBLICATION_FACTORY_ADDRESS || process.env.PUBLICATION_FACTORY_V2_ADDRESS;
+  // One name across every script and the deploy output. No V2 alias: this
+  // only ever points at an existing factory, and a V2 one is refused below.
+  const factoryEnv = process.env.PUBLICATION_FACTORY_ADDRESS;
   if (!factoryEnv) {
     console.error('❌ PUBLICATION_FACTORY_ADDRESS not set — nothing to update.');
     console.error('   (Deploy the factory once with pnpm deploy:pubfac, then re-run this.)');
