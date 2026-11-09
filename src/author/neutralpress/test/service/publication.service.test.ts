@@ -152,6 +152,22 @@ describe('PublicationService', () => {
 			expect(svc.publicationModule).toBe(MODULE_PUBLICATION);
 		});
 
+		it('discovers a V3 publication module (the name the live V3 answers)', async () => {
+			const { main, svc } = makeService();
+			main.oxo.ctrlr.viem.read.mockImplementation(
+				async (address: string, _abi: unknown[], fn: string) => {
+					if (fn === 'getModulesPaginated') return [[MODULE_RECORDS, MODULE_PUBLICATION], '0xend'];
+					if (fn === 'NAME') {
+						if (address === MODULE_PUBLICATION) return 'S2S Publication Module V3';
+						return 'S2S Records Module';
+					}
+					return undefined;
+				},
+			);
+			await svc.init();
+			expect(svc.publicationModule).toBe(MODULE_PUBLICATION);
+		});
+
 		it('accepts the legacy "S2S Publication Module" name for backwards compat', async () => {
 			const { main, svc } = makeService();
 			main.oxo.ctrlr.viem.read.mockImplementation(

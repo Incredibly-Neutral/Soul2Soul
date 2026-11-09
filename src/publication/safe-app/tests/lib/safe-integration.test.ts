@@ -191,6 +191,19 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.hasPublicationModule()).toBe(true);
   });
 
+  it('discovers a V3 publication module by the name the live V3 answers', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module V3');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+    expect(si.hasPublicationModule()).toBe(true);
+  });
+
+  it('discovers a V1 publication module (bare name, no version suffix)', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+  });
+
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {
     await initInstance();
     expect(eth.rpcUrls).toEqual(['https://lb.drpc.live/base/testkey']);

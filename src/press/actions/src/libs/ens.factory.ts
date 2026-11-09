@@ -1,4 +1,5 @@
 import { evmRead } from './evm';
+import { isPublicationModuleName } from '@s2s/soul2soul-shared/lit-actions';
 
 declare const ethers: any;
 
@@ -189,10 +190,7 @@ export const getDomainOwnerAndModules = async (
     if (result.status === 'fulfilled') {
       if (result.value === 'S2S Records Module') {
         configModule = probeableModules[i];
-      } else if (
-        result.value === 'S2S Publication Module V2' ||
-        result.value === 'S2S Publication Module' // backwards compat
-      ) {
+      } else if (isPublicationModuleName(result.value)) {
         publicationModule = probeableModules[i];
       }
     }

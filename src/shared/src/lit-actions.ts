@@ -69,3 +69,7 @@ export {
   encodeContenthashWrapped,
   toPreviewLabel,
 } from './ipfs/contenthash';
+
+// Module identity — one pure string test, no chain library, so the action-side
+// module discovery answers the same question as the hosts'.
+export { isPublicationModuleName } from './protocol/module-name';

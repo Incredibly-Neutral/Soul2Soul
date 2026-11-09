@@ -2,7 +2,7 @@ import { IMainController } from "../main.ctrlr";
 import { newPublicationSafe } from "./new";
 
 import { getPublicationMultiSig } from "./ens";
-import { S2SPublication, safeAbi } from "@s2s/soul2soul-shared";
+import { S2SPublication, safeAbi, isPublicationModuleName } from "@s2s/soul2soul-shared";
 import { S2SPublicationModuleV2 } from "@s2s/publication-contracts"
 import { toBytes32Id } from '@s2s/soul2soul-shared'; 
 
@@ -140,10 +140,8 @@ export class PublicationService implements IPublicationSrv{
 					
 					if (moduleName === "S2S Records Module") {
 						configModule = moduleAddress;
-					} else if (
-					  moduleName === "S2S Publication Module V2" ||
-					  moduleName === "S2S Publication Module"   // keep for backwards compat
-					) {
+					} else if (isPublicationModuleName(moduleName)) {
+					  // Any version: V1/V2 publications still serve reads and author writes.
 					  publicationModule = moduleAddress;
 					} 
 				} catch (error) {

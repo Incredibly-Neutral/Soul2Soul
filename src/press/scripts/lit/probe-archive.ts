@@ -30,6 +30,7 @@ import {
   getProtocolControllerAndModules,
   getRecords,
   decodeContenthashWrapped,
+  isPublicationModuleName,
 } from '@s2s/soul2soul-shared';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -98,7 +99,7 @@ async function resolvePublicationModule(name: string) {
     try {
       const n = await l2.readContract({ address: addr, abi: ABIS.name, functionName: 'NAME' });
       if (n === 'S2S Records Module') configModule = addr;
-      else if (n === 'S2S Publication Module V2' || n === 'S2S Publication Module') publicationModule = addr;
+      else if (isPublicationModuleName(n)) publicationModule = addr;
     } catch { /* no NAME() */ }
   }
   return { node, multisig, configModule, publicationModule };

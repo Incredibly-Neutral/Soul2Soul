@@ -2,7 +2,7 @@
 import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
 
-import { toBytes32Id } from '@s2s/soul2soul-shared';
+import { toBytes32Id, isPublicationModuleName } from '@s2s/soul2soul-shared';
 
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -129,7 +129,9 @@ export class SafeIntegration {
               provider,
             );
             console.log('Found Records Module:', moduleAddress);
-          } else if (name === 'S2S Publication Module V2') {
+          } else if (isPublicationModuleName(name)) {
+            // Any version — V1/V2 publications keep working, and the wrapper
+            // must be bound to the V3 ABI so `admit`/`reject` can be encoded.
             // Create full contract instance with complete ABI
             publicationModule = new window.ethers.Contract(
               moduleAddress,
