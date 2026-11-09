@@ -51,6 +51,11 @@ export type Abi_S2SPublicationModuleV3 = [
   },
   {
     "inputs": [],
+    "name": "NotGenesisAuthor",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlySafe",
     "type": "error"
   },
@@ -1242,6 +1247,11 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
   {
     "inputs": [],
     "name": "NotAuthorized",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotGenesisAuthor",
     "type": "error"
   },
   {

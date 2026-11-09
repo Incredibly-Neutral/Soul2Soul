@@ -140,6 +140,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     // ── Errors ─────────────────────────────────────────────────────
 
     error OnlySafe();
+    error NotGenesisAuthor();
     error NotAuthorized();
     error MaxAuthorsReached();
     error MaxDevsReached();
@@ -512,7 +513,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         } else {
             // Later versions: only the genesis author writes. The publication
             // cannot append onto somebody else's genesis.
-            if (author != genesisAuthor[genesis]) revert OnlySafe();
+            if (author != genesisAuthor[genesis]) revert NotGenesisAuthor();
         }
 
         uint256 idx = versions[genesis].length;
