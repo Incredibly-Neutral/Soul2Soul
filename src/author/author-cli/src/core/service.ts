@@ -174,6 +174,16 @@ export class PublicationService {
       }
     } catch (err) {
       const reason = err instanceof BaseError ? err.shortMessage : String(err);
+      // `Ended()` is not a permissions problem and has one cause: the genesis
+      // was retracted (the author's terminal verb). Saying "not whitelisted"
+      // here would send the user to fix the wrong thing, after the upload.
+      if (/\bEnded\b/.test(reason)) {
+        throw new CliError(
+          `${method} from the author Safe ${author.address} would revert with Ended(): this genesis is spent.\n` +
+            '  It was retracted (revoke) or the publication ended it for good, and nothing re-opens it.\n' +
+            '  Publish the content as a new note: a new note gets a new genesis.',
+        );
+      }
       throw new CliError(
         `${method} from the author Safe ${author.address} would revert — ${reason}\n` +
           '  The author identity is the Safe: it must be whitelisted on the publication (whitelistAuthor),\n' +
