@@ -965,25 +965,6 @@ export type Abi_S2SPublicationModuleV3 = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_address",
-        "type": "address"
-      }
-    ],
-    "name": "ownerHasAgreement",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "proxiableUUID",
     "outputs": [
@@ -994,13 +975,6 @@ export type Abi_S2SPublicationModuleV3 = [
       }
     ],
     "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "reinitializeV3",
-    "outputs": [],
-    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -2098,25 +2072,6 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_address",
-        "type": "address"
-      }
-    ],
-    "name": "ownerHasAgreement",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "proxiableUUID",
     "outputs": [
@@ -2127,13 +2082,6 @@ export const Abi_S2SPublicationModuleV3: Abi_S2SPublicationModuleV3 = [
       }
     ],
     "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "reinitializeV3",
-    "outputs": [],
-    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
