@@ -250,7 +250,7 @@ export class S2SDealsTab extends LitElement {
         this.requestUpdate();
       }
     } catch (error: any) {
-      this.showNotification(`Error accepting offer: ${error.message}`, 'error');
+      this.showNotification(`Error admitting offer: ${error.message}`, 'error');
     }
   }
 
@@ -393,7 +393,7 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell offer-actions">
-          <s2s-button action="accept" genesis="${offer.genesis}" variant="spin"
+          <s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
             @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
           <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
             @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>

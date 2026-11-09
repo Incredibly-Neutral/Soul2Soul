@@ -247,10 +247,21 @@ describe('s2s-deals-tab', () => {
     expect(store.offers).toHaveLength(1);
 
 
-    const acceptBtn = findRowButton(root, 'button[data-action="accept"]');
+    // Both rows carry a data-action="reject" button now (Refuse an offer,
+    // Revoke a deal), so a bare selector would be satisfied by either and
+    // would not prove the deal row was rendered. Qualify by data-status and
+    // assert the genesis each button targets.
+    const acceptBtn = findRowButton(root, 'button[data-action="accept"][data-status="offer"]');
     expect(acceptBtn).not.toBeNull();
     expect(acceptBtn!.getAttribute('data-genesis')).toBe('0xOffer1');
-    expect(findRowButton(root, 'button[data-action="reject"]')).not.toBeNull();
+
+    const refuseBtn = findRowButton(root, 'button[data-action="reject"][data-status="offer"]');
+    expect(refuseBtn).not.toBeNull();
+    expect(refuseBtn!.getAttribute('data-genesis')).toBe('0xOffer1');
+
+    const revokeBtn = findRowButton(root, 'button[data-action="reject"][data-status="deal"]');
+    expect(revokeBtn).not.toBeNull();
+    expect(revokeBtn!.getAttribute('data-genesis')).toBe('0xDeal1');
   });
 
   it('checks deal status via the s2s-check flow and reports an active deal', async () => {

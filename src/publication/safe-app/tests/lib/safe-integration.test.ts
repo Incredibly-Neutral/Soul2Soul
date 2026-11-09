@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
+import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../../src/lib/safe-integration';
 
@@ -121,7 +123,8 @@ function makeRecordsStub() {
 
 function makePubStub() {
   return {
-    NAME: vi.fn(async () => 'S2S Publication Module V2'),
+    // The live deployment. Tests that care about an earlier version override it.
+    NAME: vi.fn(async () => 'S2S Publication Module V3'),
     interface: makeInterface(),
     hasDeal: vi.fn(),
     getDeals: vi.fn(),
@@ -191,17 +194,70 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.hasPublicationModule()).toBe(true);
   });
 
-  it('discovers a V3 publication module by the name the live V3 answers', async () => {
+  /**
+   * The ABI the wrapper for P_ADDR was constructed with. The NAME() probe also
+   * constructs a Contract for that address with a minimal ABI, so ignore that
+   * one: a real binding carries more than the single NAME fragment.
+   */
+  function boundPublicationAbi(): unknown {
+    const args = eth.contractCtorArgs
+      .filter(([addr]) => addr === P_ADDR)
+      .filter(([, abi]) => Array.isArray(abi) && abi.length > 1)
+      .pop();
+    return args?.[1];
+  }
+
+  it('binds the V3 ABI to a V3 publication, so admit/reject exist', async () => {
     pub.NAME.mockImplementation(async () => 'S2S Publication Module V3');
     const si = await initInstance();
     expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
     expect(si.hasPublicationModule()).toBe(true);
+    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV3);
+
+    await si.admit(`0x${'c'.repeat(64)}`);
+    await si.reject(`0x${'c'.repeat(64)}`);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('admit', [expect.anything()]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('reject', [expect.anything()]);
   });
 
-  it('discovers a V1 publication module (bare name, no version suffix)', async () => {
-    pub.NAME.mockImplementation(async () => 'S2S Publication Module');
+  // V2 implements acceptOffer/retract, not admit/reject. Binding the V3 ABI to
+  // it made every Accept/Refuse revert on the live V2 publications.
+  it('binds the V2 ABI to a V2 publication, so accept and refuse still work', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module V2');
     const si = await initInstance();
     expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV2);
+
+    const genesis = `0x${'d'.repeat(64)}`;
+    await si.admit(genesis);
+    await si.reject(genesis);
+
+    // The selectors the V2 proxy actually implements.
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    // ... and not the V3 verbs it does not have.
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
+    // Same tx path: the Safe proposes, nothing is sent directly.
+    expect(sdk.txsSend).toHaveBeenCalledTimes(2);
+    expect(eth.directCalls[P_ADDR]?.['acceptOffer']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['retract']).toBeUndefined();
+  });
+
+  // V1 (bare name) has no getDeals/getOffers/hasDeal at all, so there is no
+  // agreements surface to bind. It is left unadopted, which is what the app did
+  // before V3: the deals tab degrades to "no publication module" instead of
+  // calling functions the module does not implement.
+  it('leaves a V1 publication (bare name) unadopted rather than binding a deals surface', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe('');
+    expect(si.hasPublicationModule()).toBe(false);
+    expect(boundPublicationAbi()).toBeUndefined();
+
+    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.getAllDealsAndOffers()).rejects.toThrow(/[Pp]ublication module not/);
   });
 
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {

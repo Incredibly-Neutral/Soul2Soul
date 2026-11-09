@@ -1,8 +1,14 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
 
-import { toBytes32Id, isPublicationModuleName } from '@s2s/soul2soul-shared';
+import { toBytes32Id } from '@s2s/soul2soul-shared';
+import { isPublicationModuleName } from '@s2s/soul2soul-shared/protocol';
+
+import {
+  CURRENT_PUBLICATION_BINDING,
+  publicationBindingFor,
+  type PublicationBinding,
+} from './publication-version';
 
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -27,6 +33,12 @@ export class SafeIntegration {
   private safeSdk: SafeAppsSDK | null = null;
   public recordsModule: EthersContract | null = null;
   public publicationModule: any | null = null;
+  /**
+   * Which verbs this publication's module implements, decided once from its
+   * NAME() when the wrapper is constructed. `null` while no module is bound.
+   * Every mutation reads it; nothing else in the app inspects a version.
+   */
+  private publicationBinding: PublicationBinding | null = null;
   private safeInfo: SafeInfo = {
     safeAddress: '',
     s2sRecords: '',
@@ -91,8 +103,10 @@ export class SafeIntegration {
       // replaced the field under us.
       const capturedRecords = this.recordsModule;
       const capturedPublication = this.publicationModule;
+      const capturedBinding = this.publicationBinding;
       let recordsModule: EthersContract | null = capturedRecords;
       let publicationModule: any | null = capturedPublication;
+      let publicationBinding: PublicationBinding | null = capturedBinding;
 
       // Drop a module the Safe used to list and no longer does (reset), so
       // hasRecordsModule()/hasPublicationModule() cannot keep claiming it.
@@ -105,6 +119,7 @@ export class SafeIntegration {
       if (knownPublication && wasListed(knownPublication) && !isListed(knownPublication)) {
         console.log('Publication module is gone from the Safe, clearing it:', knownPublication);
         publicationModule = null;
+        publicationBinding = null;
       }
 
       const rpcUrl = getRpcUrl(safeData.chainId);
@@ -130,15 +145,25 @@ export class SafeIntegration {
             );
             console.log('Found Records Module:', moduleAddress);
           } else if (isPublicationModuleName(name)) {
-            // Any version — V1/V2 publications keep working, and the wrapper
-            // must be bound to the V3 ABI so `admit`/`reject` can be encoded.
-            // Create full contract instance with complete ABI
-            publicationModule = new window.ethers.Contract(
-              moduleAddress,
-              Abi_S2SPublicationModuleV3,
-              provider,
-            );
-            console.log('Found Publication Module:', moduleAddress);
+            // The version decides the ABI and the verbs: V3 has
+            // admit/reject, V2 has acceptOffer/retract, V1 has no agreements
+            // surface and is left unbound (the app then shows "no publication
+            // module", exactly as before agreements existed).
+            const binding = publicationBindingFor(name);
+            if (binding) {
+              publicationModule = new window.ethers.Contract(
+                moduleAddress,
+                binding.abi,
+                provider,
+              );
+              publicationBinding = binding;
+              console.log(
+                `Found Publication Module (${name}, ${binding.accept}/${binding.reject}):`,
+                moduleAddress,
+              );
+            } else {
+              console.log(`Publication Module ${moduleAddress} (${name}) has no agreements surface`);
+            }
           }
         } catch (error) {
           // Module doesn't have NAME() function, skip it. The previously known
@@ -158,6 +183,7 @@ export class SafeIntegration {
       }
       if (this.publicationModule && this.publicationModule !== capturedPublication) {
         publicationModule = this.publicationModule;
+        publicationBinding = this.publicationBinding;
       }
 
       // Single, complete publication of the discovery result. The addresses in
@@ -165,6 +191,7 @@ export class SafeIntegration {
       // address" is not representable.
       this.recordsModule = recordsModule;
       this.publicationModule = publicationModule;
+      this.publicationBinding = publicationBinding;
       this.safeInfo = {
         safeAddress: safeData.safeAddress,
         s2sRecords: contractAddress(recordsModule),
@@ -305,13 +332,38 @@ export class SafeIntegration {
       if (this.safeInfo) this.safeInfo.s2sRecords = recordsModule;
     }
     if (publicationModule && !this.publicationModule) {
+      // Adoption hands over an address with no name, and the version decides
+      // the ABI. Probe it, the same way initialize() does; the fallback is the
+      // current deployment, which is what a factory deploys today.
+      const binding = await this.readPublicationBinding(publicationModule);
       this.publicationModule = new window.ethers.Contract(
         publicationModule,
-        Abi_S2SPublicationModuleV3,
+        binding.abi,
         this.getProvider(),
       );
+      this.publicationBinding = binding;
       if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
     }
+  }
+
+  /**
+   * NAME() a publication module address and return the surface it implements.
+   * A module that cannot be probed (RPC pressure, or a module mid-deploy) binds
+   * the current deployment's surface, because that is what a factory deploys
+   * now and an unbound wrapper would hide a live publication.
+   */
+  private async readPublicationBinding(address: string): Promise<PublicationBinding> {
+    try {
+      const provider = this.getProvider();
+      const probe = new window.ethers.Contract(address, ['function NAME() view returns (string)'], provider);
+      const name = (await probe.NAME()) as string;
+      const binding = publicationBindingFor(name);
+      if (binding) return binding;
+      console.log(`Publication module ${address} (${name}) has no agreements surface`);
+    } catch (error) {
+      console.log(`Publication module ${address} NAME() failed, binding the current surface`, error);
+    }
+    return CURRENT_PUBLICATION_BINDING;
   }
 
   // ===== RECORDS MODULE METHODS =====
@@ -349,6 +401,16 @@ export class SafeIntegration {
       throw new Error('records module not found on this Safe');
     }
     return module;
+  }
+
+  /** The accept verb of the bound module (`admit` on V3, `acceptOffer` on V2). */
+  private acceptVerb(): string {
+    return (this.publicationBinding ?? CURRENT_PUBLICATION_BINDING).accept;
+  }
+
+  /** The reversible takedown verb (`reject` on V3, `retract` on V2). */
+  private rejectVerb(): string {
+    return (this.publicationBinding ?? CURRENT_PUBLICATION_BINDING).reject;
   }
 
   /** Same contract for the publication module. */
@@ -420,13 +482,17 @@ export class SafeIntegration {
     });
   }
 
-  /** Admit a pending offer → agreement. The publication's accept verb. */
+  /**
+   * Admit a pending offer → agreement. The publication's accept verb, which is
+   * `admit` on V3 and `acceptOffer` on V2 — encoded through the ABI bound to
+   * this module, so the selector always exists on the implementation.
+   */
   async admit(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData('admit', [
+    const txData = publicationModule.interface.encodeFunctionData(this.acceptVerb(), [
       toBytes32Id(genesis),
     ]);
     await this.safeSdk.txs.send({
@@ -435,17 +501,18 @@ export class SafeIntegration {
   }
 
   /**
-   * Reject — the publication's reversible takedown. An agreement returns to the
-   * pending offer set, an offer is declined, and either may be admitted again.
-   * Not `retract`: that verb is the genesis author's and terminal, so calling it
-   * from the publication Safe reverts `NotAuthorized()`.
+   * Reject — the publication's reversible takedown: `reject` on V3,
+   * `retract` on V2. An agreement returns to the pending offer set and an
+   * offer is declined; either may be admitted again, unless the genesis author
+   * has since ended the publication (`retract` by the author is terminal, and
+   * `admit` then reverts `Ended()`).
    */
   async reject(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData('reject', [
+    const txData = publicationModule.interface.encodeFunctionData(this.rejectVerb(), [
       toBytes32Id(genesis),
     ]);
     await this.safeSdk.txs.send({
