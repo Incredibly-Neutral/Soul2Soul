@@ -19,7 +19,7 @@
  *   BASE_RPC_URL / VITE_DRPC_API_KEY
  */
 
-import {createPublicClient, createWalletClient, getAddress, http, isAddress} from 'viem';
+import {createPublicClient, createWalletClient, encodeDeployData, getAddress, http, isAddress} from 'viem';
 import type {Account, HttpTransport, PublicClient, WalletClient} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import {base} from 'viem/chains';
@@ -28,7 +28,12 @@ import {resolve, dirname, join} from 'path';
 import {fileURLToPath} from 'url';
 import {config} from 'dotenv';
 
-config({path: resolve(process.cwd(), '../.env')});
+// Load <repo>/.env, the same file hardhat.config.ts loads. Resolved from this
+// file, not from cwd: `pnpm` runs with cwd = the package dir, where `../.env`
+// is src/publication/.env and does not exist, so the documented
+// `cd src/publication/contracts && pnpm deploy:pubfac` silently found nothing.
+// Four levels up: scripts -> contracts -> publication -> src -> repo.
+config({path: fileURLToPath(new URL('../../../../.env', import.meta.url))});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ARTIFACT_ROOT = resolve(__dirname, '../artifacts');
@@ -67,12 +72,27 @@ async function deployContract(
     process.exit(1);
   }
   const artifact = JSON.parse(readFileSync(artifactPath, 'utf-8'));
+  const abi = artifact.abi;
+  const bytecode = artifact.bytecode as `0x${string}`;
+
+  // Estimate per contract instead of carrying one flat limit. The fixed
+  // 3_000_000n was sized for a 9.9 KB module; the V3 module's init code is
+  // 12,040 bytes, whose floor alone is 2,466,902 gas on Base before the
+  // constructor body runs (21,000 tx + 49,948 calldata + 32,000 CREATE + 754
+  // EIP-3860 + 11,816 × 200 code deposit). That left 22% and no per-contract
+  // check. A quarter on top of the estimate covers the L1 data fee drift.
+  const estimate = await publicClient.estimateGas({
+    account: client.account,
+    data: encodeDeployData({abi, bytecode, args}),
+  });
+  const gas = estimate + estimate / 4n;
+  console.log(`   Gas estimate: ${estimate} (limit ${gas})`);
 
   const hash = await client.deployContract({
-    abi: artifact.abi,
-    bytecode: artifact.bytecode as `0x${string}`,
+    abi,
+    bytecode,
     args,
-    gas: 3_000_000n,
+    gas,
   });
   console.log(`   Deploy tx: ${hash}`);
 

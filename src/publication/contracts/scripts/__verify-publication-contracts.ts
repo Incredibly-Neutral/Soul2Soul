@@ -17,7 +17,12 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 
-config({ path: resolve(process.cwd(), '../.env') });
+// Load <repo>/.env, the same file hardhat.config.ts loads. Resolved from this
+// file, not from cwd: `pnpm` runs with cwd = the package dir, where `../.env`
+// is src/publication/.env and does not exist, so the documented
+// `cd src/publication/contracts && pnpm deploy:pubfac` silently found nothing.
+// Four levels up: scripts -> contracts -> publication -> src -> repo.
+config({path: fileURLToPath(new URL('../../../../.env', import.meta.url))});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
