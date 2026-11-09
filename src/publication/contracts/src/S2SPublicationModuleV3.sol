@@ -26,13 +26,15 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     author can always leave a pending offer instead of reverting.
  *
  * Read gates (frozen signatures; sibling branches code against them):
- *   - `canRead(genesis, reader)` — safe or the genesis author, only once the
- *     genesis is under an agreement; a reviewer, for an agreement or an offer.
+ *   - `canRead(genesis, reader)` — the safe, the genesis author and reviewers
+ *     all read a genesis once it is under an agreement or an offer; an unknown
+ *     genesis is never readable.
  *   - `canReview(genesis, who)` — a reviewer, for an agreement or an offer.
  *
  * Reviewers are an enumerable set capped at `MAX_REVIEWERS`, managed by the
  * safe. `agreementsHeldBy` counts live agreements per genesis author and is
- * folded into `canPublish`; `ownerHasAgreement` exposes it.
+ * folded into `canPublish`; `ownerHasAgreement` exposes it. A proxy upgraded
+ * from V2 backfills that counter through `reinitializeV3`.
  *
  * Agreements and offers are enumerable sets of genesis pointing into the one
  * log; `getAgreements`/`getOffers` read each entry's latest version via a
@@ -99,6 +101,8 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     event OfferMade(bytes32 indexed genesis, address indexed author);
     event OfferAccepted(bytes32 indexed genesis, address indexed author);
     event AgreementStruck(bytes32 indexed genesis, address indexed author);
+    /// @custom:deprecated V2 name; emitted alongside `AgreementStruck` for old indexers.
+    event DealStruck(bytes32 indexed genesis, address indexed author);
     event Retracted(bytes32 indexed genesis, address indexed by, bool keptAsOffer);
 
     event AuthorWhitelisted(address indexed author);
@@ -150,6 +154,20 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
         }
     }
 
+    /**
+     * @dev Run once at upgrade time to backfill `agreementsHeldBy` from
+     *      `agreementList`, which a V2 proxy carries over with a zero counter.
+     *      The reinitializer can only run once and the list holds unique
+     *      genesis, so no clearing is needed. A fresh deployment does not need
+     *      it: the list is empty and the call is a no-op.
+     */
+    function reinitializeV3() external reinitializer(2) onlySafe {
+        for (uint i = 0; i < agreementList.length; i++) {
+            address author = genesisAuthor[agreementList[i]];
+            if (author != address(0)) agreementsHeldBy[author] += 1;
+        }
+    }
+
     function _authorizeUpgrade(address newImplementation) internal onlySafe override {
         emit ContractUpgraded(newImplementation);
     }
@@ -177,6 +195,7 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
             if (!_isAgreement[genesis]) {
                 _addAgreement(genesis);
                 emit AgreementStruck(genesis, genesisAuthor[genesis]);
+                emit DealStruck(genesis, genesisAuthor[genesis]);
             }
             return true;
         }
@@ -227,16 +246,14 @@ contract S2SPublicationModuleV3 is Initializable, UUPSUpgradeable {
     // ── The gates clients and the Lit actions read ─────────────────
 
     /**
-     * @dev Read access for `genesis`.
-     *      - safe or the genesis author: readable once the genesis is under an
-     *        agreement only.
-     *      - anything else (a reviewer): readable for an agreement or an offer.
-     *      Unknown genesis (no author) is never readable.
+     * @dev Read access for `genesis`. The safe, the genesis author and reviewers
+     *      all read a genesis once it is under an agreement or an offer; an
+     *      unknown genesis (no author) is never readable.
      */
     function canRead(bytes32 genesis, address reader) external view returns (bool) {
         if (genesisAuthor[genesis] == address(0)) return false;
         if (reader == safe || reader == genesisAuthor[genesis]) {
-            return _isAgreement[genesis];
+            return _isAgreement[genesis] || _isOffer[genesis];
         }
         if (reviewers[reader]) {
             return _isAgreement[genesis] || _isOffer[genesis];
