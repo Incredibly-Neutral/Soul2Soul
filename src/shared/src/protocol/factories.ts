@@ -19,15 +19,20 @@
 // ============================================================================
 
 /**
- * Retired publication factories whose `ModuleCreated` logs still describe live
- * publications.
+ * The V2 publication factory: `S2SPublicationModuleFactory`, the deployment that
+ * created every publication that exists today.
  *
- * `0xe948…d554` — the S2SPublicationModuleFactory deployment
- * (`Abi_S2SPublicationModuleV2Factory`: same `ModuleCreated(address indexed
- * safe, address indexed moduleProxy, address implementation)` signature, so one
- * topic0 matches logs from either generation). Every publication that exists
- * today was created by it.
+ * Its `ModuleCreated(address indexed safe, address indexed moduleProxy, address
+ * implementation)` signature is shared with the V3 factory, so one topic0
+ * matches logs from either generation. This constant is the one home for the
+ * address: the settings default that still points at it imports it rather than
+ * repeating the literal.
  */
-export const LEGACY_PUBLICATION_FACTORIES: readonly string[] = [
-  '0xe948735151c43183accd8e85b992952b2711d554',
-];
+export const PUBLICATION_FACTORY_V2 = '0xe948735151c43183accd8e85b992952b2711d554';
+
+/**
+ * Retired publication factories whose `ModuleCreated` logs still describe live
+ * publications — read together with the factory in the protocol record, because
+ * a factory can only answer for the modules it deployed.
+ */
+export const LEGACY_PUBLICATION_FACTORIES: readonly string[] = [PUBLICATION_FACTORY_V2];

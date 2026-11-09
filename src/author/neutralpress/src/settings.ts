@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { getProtocolInfo, S2SPublication } from "@s2s/soul2soul-shared";
+import { PUBLICATION_FACTORY_V2 } from "@s2s/soul2soul-shared/protocol";
 
 export interface Settings {
 	dev: boolean;
@@ -29,7 +30,9 @@ export const DEFAULT_SETTINGS: Settings = {
 	ens_resolver: "0x5ED9023eaDbE9757E347E92D1Da97F2e0b010b61", // custom resolver with ccip read // move to protocolInfo
 	ens_records: "0x5D42f9b016B4251FC6407d5e8154DA887F394900", // move to protocolInfo
 	safe_records_factory: "0xed933AB957aa3440133cdf1236662635d4eb2Ccf", // move to protocolInfo
-	safe_publication_factory: "0xe948735151c43183accd8e85b992952b2711d554", // move to protocolInfo
+	// The V2 factory, from its one home in the shared protocol package; the live
+	// value is replaced by the protocol record on first read (getProtocolInfo).
+	safe_publication_factory: PUBLICATION_FACTORY_V2, // move to protocolInfo
 	proxy_admin: "0x66d5549fdfaCc3606EB5bcD702D989A846A936c0", // is tis used ? 
 	chain_id: "8453",
 };
