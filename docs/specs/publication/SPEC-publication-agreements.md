@@ -6,10 +6,11 @@
 > what a holder may decrypt, which is a different question from what is a deal.
 >
 > **Type:** component spec. It owns the *state machine*: what an agreement is, how one is made, what
-> accepting and retracting do, and what the version log means. Contract semantics only — the operator
-> workflow that drives them is in [the admin app](SPEC-publication-admin-app.md).
+> admitting, rejecting and ending do, and what the version log means. Contract semantics only — the
+> operator workflow that drives them is in [the admin app](SPEC-publication-admin-app.md).
 >
-> **Audited against live code:** 2026-10-30 (`S2SPublicationModuleV2.sol` at `85e9671`).
+> **Audited against live code:** 2026-11-09 (`S2SPublicationModuleV3.sol`; the V2 pair it replaced is
+> `S2SPublicationModuleV2.sol` at `85e9671`, still what a V2 publication runs).
 >
 > **Folded from:** `SPEC-contracts-publication` — the C1 write/read API, the permissions matrix, and the
 > V1→V2 migration table.
@@ -83,45 +84,59 @@ only *adds* an offer when neither a deal nor an offer exists. So a whitelisted a
 later removed keeps their existing deal, and their next version appends to the log without touching the
 deal set. Deals end by `retract`, not by losing a whitelist entry.
 
-### `acceptOffer(bytes32 genesis)` — `onlySafe`
+### `admit(bytes32 genesis)` — `onlySafe`
 
 ```solidity
 require(_isOffer[genesis], "no offer");
+require(!_ended[genesis], Ended());
 _removeOffer(genesis);
 if (!_isDeal[genesis]) _addDeal(genesis);
 emit OfferAccepted(genesis, genesisAuthor[genesis]);
 ```
 
 Offer → deal. One-sided: there is no author-side equivalent, which is the point — admission is the
-publication's act alone.
+publication's act alone. `acceptOffer(bytes32 genesis)` is kept as a deprecated alias of the same write:
+a V2 module implements only that name, so a caller of a V2 publication still sends it.
 
-### `retract(bytes32 genesis)` — asymmetric by caller
+### Ending has two verbs now, and only one is reversible
+
+V2 had a single `retract` that branched on `msg.sender`. V3 splits it. The Safe's half is `reject`:
 
 ```solidity
-require(_isDeal[genesis] || _isOffer[genesis], "not a deal or offer");
-
-if (msg.sender == genesisAuthor[genesis]) {   // full withdrawal
-    if (_isDeal[genesis])  _removeDeal(genesis);
-    if (_isOffer[genesis]) _removeOffer(genesis);
-} else if (msg.sender == safe) {             // demote or reject
-    if (_isDeal[genesis]) { _removeDeal(genesis); if (!_isOffer[genesis]) _addOffer(genesis); }
-    else                  { _removeOffer(genesis); }
-} else revert NotAuthorized();
+function reject(bytes32 genesis) external onlySafe {
+    require(_isDeal[genesis] || _isOffer[genesis], "not a deal or offer");
+    if (_isDeal[genesis]) { _removeDeal(genesis); _addOffer(genesis); }  // demote
+    else                  { _removeOffer(genesis); }                     // decline
+    emit Rejected(genesis, genesisAuthor[genesis], _isOffer[genesis]);
+}
 ```
 
-| caller | on a deal | on an offer |
-|---|---|---|
-| `genesisAuthor` | removed from deals; offer too if present | removed |
-| `safe` | **demoted**: leaves deals, re-enters offers (`hasDeal` flips false) | rejected |
-| anyone else | `NotAuthorized()` | `NotAuthorized()` |
+The author's half is `retract`, and it is terminal:
 
-**Nothing is ever deleted from the version log.** A withdrawn work keeps its versions, its CIDs, and its
-`genesisAuthor`. Retraction is a statement about the sets, not about history — a publication that
-retracts and re-accepts returns to the same log position.
+```solidity
+function retract(bytes32 genesis) external {
+    require(msg.sender == genesisAuthor[genesis], NotAuthorized());
+    _ended[genesis] = true;                 // nothing re-opens it
+    if (_isDeal[genesis])  _removeDeal(genesis);
+    if (_isOffer[genesis]) _removeOffer(genesis);
+    _tombstoneLatest(genesis);
+    emit Retracted(genesis, msg.sender);
+}
+```
+
+| verb | caller | on a deal | on an offer | afterwards |
+|---|---|---|---|---|
+| `reject` | `safe` only | **demoted**: leaves deals, re-enters offers (`hasDeal` flips false) | declined | admit is possible again |
+| `retract` | `genesisAuthor` only | removed from deals | removed | genesis **ended**: `makeOffer` and `admit` revert `Ended()` |
+
+**Nothing is ever deleted from the version log.** A rejected work keeps its versions, its CIDs, and its
+`genesisAuthor`. Rejection is a statement about the sets, not about history — a publication that rejects
+and re-admits returns to the same log position.
 
 The Safe's demote-instead-of-delete is a design statement: a publication can stop publishing something
 and cannot erase it. That is why the admin app's "Revoke" leaves the page live until a render removes
-it, and why the author's own withdrawal is the only path that takes a work out entirely.
+it, and why the author's own `retract` is the only path that takes a work out entirely — and the only
+one that ends it, so a re-publish under the same genesis is not possible.
 
 ## The sets are enumerable, unordered, and swap-popped
 
@@ -184,9 +199,9 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 
 | claim | code |
 |---|---|
-| `retract` is `safe ∨ genesisAuthor` "withdraws fully" for the author **and** the safe demotes | correct in substance, but the spec listed `retract` under a row implying the Safe could also fully withdraw — it cannot; the Safe only demotes/rejects |
+| `retract` is `safe ∨ genesisAuthor` "withdraws fully" for the author **and** the safe demotes | V2: correct in substance, but the spec listed `retract` under a row implying the Safe could also fully withdraw — it cannot, the Safe only demotes/rejects. V3: two verbs, `reject` (Safe, reversible) and `retract` (genesis author, terminal) |
 | "a whitelisted author's first version is still a deal, so the offer path is only reachable through the publication Safe" | **wrong**: a whitelisted **developer** passes `canPublish` and their genesis becomes an offer |
-| `NAME() == "S2S Publication Module V2"` with V1 accepted "for backwards-compatible discovery" | true of `shared`, false of `safe-app` — see [the account child](SPEC-publication-account.md#what-is-hung-on-the-safe) |
+| `NAME() == "S2S Publication Module V2"` with V1 accepted "for backwards-compatible discovery" | true of every site now: one predicate accepts any version, and the app binds the surface the version it found implements — see [the account child](SPEC-publication-account.md#what-is-hung-on-the-safe) |
 
 ## V1 → V2 migration (kept for readers of older material)
 
@@ -194,7 +209,7 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 |---|---|---|
 | `grantLicense(pub, content_id)` | `makeOffer(genesis, cid)` | single author write; entitled caller → deal, else offer |
 | `acceptLicense(content_id)` | `acceptOffer(genesis)` | `onlySafe` |
-| `revokeLicense(content_id)` | `retract(genesis)` | asymmetric by caller |
+| `revokeLicense(content_id)` | `retract(genesis)` | V2: asymmetric by caller. V3: the Safe's half is `reject` (reversible), the author's is `retract` (terminal) |
 | `isLicensed(string)` | `hasDeal(bytes32)` | the read the gate uses |
 | `isLicensedBulk(string[])` | — | replaced by `getDeals(offset, limit)` |
 | `getAllContentIds()` | `getDeals(offset, limit)` | `Entry[]`, not id arrays |
@@ -219,17 +234,18 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 | target | `onlySafe` | also allowed |
 |---|---|---|
 | whitelist add/remove | ✓ | — |
-| `acceptOffer` | ✓ | — |
+| `admit` (`acceptOffer` alias) | ✓ | — |
 | `upgradeToAndCall` | ✓ | — |
 | `makeOffer` | ✓ (as entitled) | `genesisAuthor` for later versions; any `canPublish` address for a genesis's first version |
-| `retract` | ✓ (demote/reject) | `genesisAuthor` (full withdrawal) |
+| `reject` | ✓ (demote a deal, or decline an offer — reversible) | — |
+| `retract` | ✗ (`NotAuthorized()`) | `genesisAuthor` only (withdrawal, terminal) |
 | records writes | ✓ | — |
 
 ## Safe-to-change vs do-not-touch
 
 - 🟢 add read helpers; add events (e.g. a real decline event); add a decision record keyed by genesis;
   make `tombstone` mean something; add pagination bounds.
-- 🔴 change `_append`'s gate (it is the whole authoring contract); make `acceptOffer` author-callable;
+- 🔴 change `_append`'s gate (it is the whole authoring contract); make `admit` author-callable;
   let the Safe delete log entries; reorder storage; remove the swap-pop unless every reader is fixed
   first (the tree tab depends on snapshot diffing *because* of it).
 

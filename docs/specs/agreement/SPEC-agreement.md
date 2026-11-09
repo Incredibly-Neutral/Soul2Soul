@@ -60,7 +60,7 @@ including one made through the protocol's governance, MAY make a manuscript usab
 
 # This implementation
 
-Read against `src/publication/contracts/src/S2SPublicationModuleV2.sol`,
+Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
 `src/shared/src/gates`, `src/press/actions/src/render/main.ts`.
 
 ## Readings
