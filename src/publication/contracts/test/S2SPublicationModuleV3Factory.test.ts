@@ -1,7 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { network } from 'hardhat';
-import { encodeErrorResult, encodeFunctionData, parseAbi, zeroAddress } from 'viem';
+import {
+  decodeEventLog,
+  encodeErrorResult,
+  encodeFunctionData,
+  parseAbi,
+  parseAbiItem,
+  toEventSelector,
+  zeroAddress,
+} from 'viem';
 
 /**
  * The two properties this factory exists for, plus the constructor refusals
@@ -83,12 +91,82 @@ async function deploy() {
 
   const implementation = await viem.deployContract('S2SPublicationModuleV3');
   const caller = await viem.deployContract('MockCaller');
-  const factory = await viem.deployContract('S2SPublicationModuleV3Factory', [
-    caller.address,
-    implementation.address,
-  ]);
+  // `sendDeploymentTransaction` rather than `deployContract` so the factory's
+  // own `ImplementationDeployed` log can be decoded; the constructor's emit is
+  // the only record that version 1 was announced.
+  const { contract: factory, deploymentTransaction } = await viem.sendDeploymentTransaction(
+    'S2SPublicationModuleV3Factory',
+    [caller.address, implementation.address],
+  );
 
-  return { deployer, other, safeOwner, implementation, caller, factory };
+  return {
+    deployer,
+    other,
+    safeOwner,
+    implementation,
+    caller,
+    factory,
+    factoryDeployHash: deploymentTransaction.hash,
+  };
+}
+
+/**
+ * ERC1967 implementation slot:
+ * keccak256('eip1967.proxy.implementation') - 1. Reading it is the only way to
+ * see what a proxy actually delegates to, which is what `setImplementation`
+ * exists to change; `latestImplementation` is the factory's own bookkeeping.
+ */
+const IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc' as const;
+
+async function implementationOf(proxy: Hex): Promise<Hex> {
+  const word = await publicClient.getStorageAt({ address: proxy, slot: IMPL_SLOT });
+  assert.ok(word, `no storage at the implementation slot for ${proxy}`);
+  return `0x${word.slice(-40)}`.toLowerCase() as Hex;
+}
+
+/** Lowercase the address values of an expected-args object, for the same reason. */
+function lo(args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [
+      key,
+      typeof value === 'string' ? value.toLowerCase() : value,
+    ]),
+  );
+}
+
+const MODULE_CREATED = parseAbiItem(
+  'event ModuleCreated(address indexed safe, address indexed moduleProxy, address implementation)',
+);
+const IMPLEMENTATION_DEPLOYED = parseAbiItem(
+  'event ImplementationDeployed(address indexed implementation, uint256 version)',
+);
+
+/**
+ * Decode every log of `item` emitted by `address` in `hash`'s receipt.
+ * `logs.length > 0` is not the assertion: the ERC1967 proxy's own `Upgraded`
+ * event satisfies it while `ModuleCreated` is missing.
+ */
+async function eventsFrom(
+  hash: Hex,
+  address: Hex,
+  item: typeof MODULE_CREATED | typeof IMPLEMENTATION_DEPLOYED,
+) {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const topic0 = toEventSelector(item);
+  return receipt.logs
+    .filter((log) => log.address.toLowerCase() === address.toLowerCase() && log.topics[0] === topic0)
+    .map((log) => {
+      const decoded = decodeEventLog({ abi: [item], data: log.data, topics: log.topics });
+      // Lowercase address args: the chain returns checksummed strings and these
+      // tests are about identity, not EIP-55.
+      const args = Object.fromEntries(
+        Object.entries(decoded.args as Record<string, unknown>).map(([key, value]) => [
+          key,
+          typeof value === 'string' ? value.toLowerCase() : value,
+        ]),
+      );
+      return { ...decoded, args };
+    });
 }
 
 /** Call the factory as the protocol safe, through the forwarding fixture. */
@@ -166,7 +244,15 @@ describe('S2SPublicationModuleV3Factory — constructor', () => {
   });
 
   it('records the constructor implementation as version 1', async () => {
-    const { caller, implementation, factory } = await deploy();
+    const { caller, implementation, factory, factoryDeployHash } = await deploy();
+
+    const deployed = await eventsFrom(factoryDeployHash, factory.address, IMPLEMENTATION_DEPLOYED);
+    assert.equal(deployed.length, 1, 'constructor must emit ImplementationDeployed once');
+    assert.equal(deployed[0]!.eventName, 'ImplementationDeployed');
+    assert.deepEqual(deployed[0]!.args, lo({
+      implementation: implementation.address,
+      version: 1n,
+    }));
 
     assert.equal((await factory.read.protocolSafe()).toLowerCase(), caller.address.toLowerCase());
     assert.equal(
@@ -209,7 +295,11 @@ describe('S2SPublicationModuleV3Factory — setImplementation', () => {
     const d = await deploy();
     const next = await viem.deployContract('S2SPublicationModuleV3');
 
-    await asProtocolSafe(d, setImplData(next.address));
+    const hash = await asProtocolSafe(d, setImplData(next.address));
+
+    const announced = await eventsFrom(hash, d.factory.address, IMPLEMENTATION_DEPLOYED);
+    assert.equal(announced.length, 1, 'setImplementation must emit ImplementationDeployed once');
+    assert.deepEqual(announced[0]!.args, { implementation: next.address, version: 2n });
 
     assert.equal(
       (await d.factory.read.latestImplementation()).toLowerCase(),
@@ -272,13 +362,12 @@ describe('S2SPublicationModuleV3Factory — createModule', () => {
   });
 
   it('accepts the safe naming itself, and deploys a proxied module for it', async () => {
-    const { deployer, factory } = await deploy();
+    const { deployer, implementation, factory } = await deploy();
     const safe = deployer.account.address;
 
     const hash = await factory.write.createModule([safe, [deployer.account.address], []], {
       account: deployer.account,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
     const modules = await factory.read.getModulesForSafe([safe]);
     assert.equal(modules.length, 1);
@@ -286,21 +375,130 @@ describe('S2SPublicationModuleV3Factory — createModule', () => {
     const module = await viem.getContractAt('S2SPublicationModuleV3', modules[0]!);
     assert.equal((await module.read.safe()).toLowerCase(), safe.toLowerCase());
     assert.equal(await module.read.isWhitelistedAuthor([deployer.account.address]), true);
-    assert.notEqual(await publicClient.getCode({ address: modules[0]! }), undefined);
+    assert.notEqual(await publicClient.getCode({ address: modules[0]! }), '0x');
 
-    assert.ok(receipt.logs.length > 0, 'ModuleCreated: nothing emitted');
+    const created = await eventsFrom(hash, factory.address, MODULE_CREATED);
+    assert.equal(created.length, 1, 'createModule must emit ModuleCreated once');
+    assert.equal(created[0]!.eventName, 'ModuleCreated');
+    assert.deepEqual(created[0]!.args, lo({
+      safe,
+      moduleProxy: modules[0]!,
+      implementation: implementation.address,
+    }));
   });
 
   it('accepts the protocol safe on the named safe\'s behalf', async () => {
     const d = await deploy();
     const safe = d.other.account.address;
 
-    await asProtocolSafe(d, createModuleData(safe, [], []));
+    const hash = await asProtocolSafe(d, createModuleData(safe, [], []));
 
     const modules = await d.factory.read.getModulesForSafe([safe]);
     assert.equal(modules.length, 1);
 
     const module = await viem.getContractAt('S2SPublicationModuleV3', modules[0]!);
     assert.equal((await module.read.safe()).toLowerCase(), safe.toLowerCase());
+
+    const created = await eventsFrom(hash, d.factory.address, MODULE_CREATED);
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0]!.args, lo({
+      safe,
+      moduleProxy: modules[0]!,
+      implementation: d.implementation.address,
+    }));
+  });
+
+  /**
+   * `update-protocol.ts` refuses to write a factory that cannot answer
+   * `protocolSafe()`. That probe only discriminates if V2 really lacks the
+   * function, so assert both sides here rather than trusting the ABI listing.
+   */
+  it('answers protocolSafe(), which the superseded V2 factory cannot', async () => {
+    const { caller, implementation, factory } = await deploy();
+
+    assert.equal(
+      (await factory.read.protocolSafe()).toLowerCase(),
+      caller.address.toLowerCase(),
+    );
+
+    const v2 = await viem.deployContract('S2SPublicationModuleV2Factory', [
+      implementation.address,
+    ]);
+    const probe = parseAbi(['function protocolSafe() view returns (address)']);
+
+    let answered = false;
+    try {
+      await publicClient.readContract({
+        address: v2.address,
+        abi: probe,
+        functionName: 'protocolSafe',
+      });
+      answered = true;
+    } catch {
+      answered = false;
+    }
+    assert.equal(answered, false, 'the V2 factory must not answer protocolSafe()');
+  });
+
+  /**
+   * The point of `setImplementation`: a module created afterwards must delegate
+   * to the new code. Read off the proxy's ERC1967 slot, which is what the EVM
+   * dispatches through — `latestImplementation` alone would pass even if the
+   * factory deployed `implementationHistory[0]`.
+   */
+  it('delegates to whichever implementation was current at creation time', async () => {
+    const d = await deploy();
+    const next = await viem.deployContract('S2SPublicationModuleV3');
+    const safe = d.deployer.account.address;
+    const before = d.implementation.address.toLowerCase();
+
+    const firstHash = await d.factory.write.createModule([safe, [], []], {
+      account: d.deployer.account,
+    });
+    const [first] = await d.factory.read.getModulesForSafe([safe]);
+    assert.equal(await implementationOf(first!), before, 'module 1 must use version 1');
+
+    const [firstLog] = await eventsFrom(firstHash, d.factory.address, MODULE_CREATED);
+    assert.deepEqual(firstLog!.args, lo({
+      safe,
+      moduleProxy: first!,
+      implementation: d.implementation.address,
+    }));
+
+    const setHash = await asProtocolSafe(d, setImplData(next.address));
+    assert.equal(
+      (await d.factory.read.latestImplementation()).toLowerCase(),
+      next.address.toLowerCase(),
+    );
+
+    const secondHash = await d.factory.write.createModule([safe, [], []], {
+      account: d.deployer.account,
+    });
+    const modules = await d.factory.read.getModulesForSafe([safe]);
+    assert.equal(modules.length, 2, 'two separate modules for one safe');
+
+    assert.equal(
+      await implementationOf(modules[1]!),
+      next.address.toLowerCase(),
+      'module 2 must delegate to the implementation set after the first',
+    );
+    assert.equal(
+      await implementationOf(modules[0]!),
+      before,
+      'an existing module must not be repointed by setImplementation',
+    );
+
+    const [secondLog] = await eventsFrom(secondHash, d.factory.address, MODULE_CREATED);
+    assert.deepEqual(secondLog!.args, lo({
+      safe,
+      moduleProxy: modules[1]!,
+      implementation: next.address,
+    }));
+
+    assert.equal(
+      (await eventsFrom(setHash, d.factory.address, IMPLEMENTATION_DEPLOYED)).length,
+      1,
+      'setImplementation must announce the version it recorded',
+    );
   });
 });
