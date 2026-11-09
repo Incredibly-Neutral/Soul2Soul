@@ -77,7 +77,8 @@ The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 | `makeOffer` | ✓ (lands as a deal) | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer |
 | whitelist add/remove | ✓ | — |
 | `upgradeToAndCall` | ✓ | — |
-| factory `createModule` / `setImplementation` | **nobody** | anyone — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
+| factory `createModule` / `createModuleEmpty` | ✓ (the safe it names) | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
+| factory `setImplementation` | **not the publication** | the protocol safe only, fixed at construction |
 | ENS `contenthash_wrapped` | **not the publication** | the PKP (INV-12), granted by the protocol |
 
 ## Invariants across the tree

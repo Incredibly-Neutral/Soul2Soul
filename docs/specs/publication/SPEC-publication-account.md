@@ -116,20 +116,27 @@ Two independent upgrade surfaces, and they are not equally guarded.
 implements `_authorizeUpgrade` as `onlySafe`. Only the publication's own Safe can replace its
 implementation. Storage layout is append-only (INV-3), so an upgrade cannot reorder what exists.
 
-**Per deployment — not guarded.** `S2SPublicationModuleV2Factory`:
+**Per deployment — guarded, one address.** `S2SPublicationModuleV3Factory`:
 
 | fn | access control | effect |
 |---|---|---|
-| `createModule(safe, authors[], devs[])` | **none** | deploys a proxy; emits `ModuleCreated` |
-| `createModuleEmpty(...)` | **none** | same, empty lists |
-| `setImplementation(address)` | **none** | changes what *future* publications get |
-| `implementationHistory` | read | append-only list of former implementations |
+| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | deploys a proxy; emits `ModuleCreated` |
+| `createModuleEmpty(safe)` | same | same, empty lists |
+| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get |
+| `implementationHistory` | read | append-only list of former implementations, 1-based |
 | `safeModules` / `getModulesForSafe` | read | the factory's own index |
 
-So the honest statement of the trust edge is: **a per-publication upgrade needs that publication's
-holders; what code a publication is born with needs nobody in particular.** A publication created
-tomorrow trusts whoever last called `setImplementation`. `S2SRecordsModuleFactory.createModule` has
-the same shape (plain `CREATE`, no access control, non-idempotent).
+The protocol safe is `immutable`, fixed at construction, and it is the only address that can name an
+implementation. `createModule` names a safe the caller must be: a third party cannot mint a module
+carrying somebody else's safe, which is what keeps `getModulesForSafe` honest. The constructor refuses
+an address without code for either role, so an EOA cannot be set as "safe".
+
+So the trust edge is: **a per-publication upgrade needs that publication's holders, and what code a
+publication is born with needs one named address — the protocol safe.** Nobody else can change it.
+The V2 factory deployed at `0xe948735151c43183accd8e85b992952b2711d554` cannot be patched: no admin,
+no proxy, no initializer, so its `setImplementation` stays callable by anyone forever. V3 supersedes
+it; the migration is a new factory address in the `publication_factory` record, not a repair.
+`S2SRecordsModuleFactory.createModule` is still ungated (plain `CREATE`, non-idempotent).
 
 `_authorizeUpgrade` being `onlySafe` is why the app's whole write model — propose, never send — is
 also the upgrade model, and why removing upgradeability changes the app as well as the contract.
