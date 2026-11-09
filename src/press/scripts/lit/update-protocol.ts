@@ -52,6 +52,27 @@ const ensRecordsAbi = [
 const RECORDS_MODULE_ADDRESS = "0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29";
 const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
 
+// The V3 factory gates setImplementation on the protocol safe; the V2 factory has
+// no access control at all, so advertising its address lets anyone take over
+// future publication modules. Prefer V3 and say so when falling back.
+function resolvePublicationFactory(): string {
+  const v3 = process.env.PUBLICATION_FACTORY_V3_ADDRESS;
+  if (v3) return v3;
+
+  const v2 = process.env.PUBLICATION_FACTORY_V2_ADDRESS;
+  if (v2) {
+    console.warn(
+      `WARNING: PUBLICATION_FACTORY_V3_ADDRESS unset — writing the ungated V2 factory ` +
+      `${v2} to the publication_factory record. Its setImplementation is callable by ` +
+      `anyone, so any address can point future publications at its own logic. ` +
+      `Deploy S2SPublicationModuleV3Factory and set PUBLICATION_FACTORY_V3_ADDRESS.`
+    );
+  }
+  return v2 || "";
+}
+
+const PUBLICATION_FACTORY_ADDRESS = resolvePublicationFactory();
+
 // Keys that were written under old names and must be removed from on-chain storage.
 // Leaving them means any reader still asking for these keys gets stale data.
 // deleteRecord removes them cleanly (emits RecordDeleted, frees the slot).
@@ -153,7 +174,7 @@ export const updateProtocol = async (
     setRecord("ens_records", ENS_RECORDS_ADDRESS),
     setRecord("data_gateway", process.env.IPFS_URL || ""),
     setRecord("ens_registry", process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || ""),
-    setRecord("publication_factory", process.env.PUBLICATION_FACTORY_V2_ADDRESS || ""),
+    setRecord("publication_factory", PUBLICATION_FACTORY_ADDRESS),
     setRecord("records_factory", process.env.RECORDS_FACTORY_ADDRESS || ""),
   
 
