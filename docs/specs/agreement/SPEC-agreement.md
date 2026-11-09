@@ -71,11 +71,16 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV2.sol`,
   and nothing to enumerate beyond the two lists of deals and offers.
 - **Offering and accepting are one call each.** `makeOffer(genesis, cid)` appends a version and then
   decides: the publication's own safe, or a trusted author, strikes the deal immediately; anyone else
-  leaves the manuscript as an offer. `acceptOffer(genesis)` turns an offer into a deal.
-- **Ending is asymmetric** — recorded in `publication.md` as the domain's first ADR. The author's
-  `retract` removes the manuscript from both sets; the publication's `retract` demotes a deal to an
-  offer, so the manuscript stays in its queue and can be re-admitted without the author signing
-  again.
+  leaves the manuscript as an offer. `admit(genesis)` turns an offer into a deal; `acceptOffer` is kept
+  as its deprecated alias, and it is the only name a V2 module implements, which is why a caller of an
+  older publication still sends that one.
+- **Ending is split in two, and only one half is reversible.** `reject(genesis)` is the publication's
+  verb: `onlySafe`, and it demotes a deal to an offer or declines an offer, so the manuscript stays in the
+  publication's queue and can be admitted again without the author signing again. `retract(genesis)` is the
+  genesis author's verb: it ends the genesis, tombstones the latest version and drops the agreement, and
+  nothing re-opens it — a later `makeOffer` or `admit` reverts `Ended()`. Ending was asymmetric in V2 as
+  one function branching on `msg.sender`, and the first ADR in `publication.md` still records that shape;
+  V3 made the asymmetry two functions with different guards.
 - **AGREEMENT-5 is the live one.** `canRead` asks `hasDeal(genesis)` and nothing else about the
   publication's side, so the boolean is exactly the ground the invariant names.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may
