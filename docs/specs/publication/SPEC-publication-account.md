@@ -128,8 +128,13 @@ implementation. Storage layout is append-only (INV-3), so an upgrade cannot reor
 
 The protocol safe is `immutable`, fixed at construction, and it is the only address that can name an
 implementation. `createModule` names a safe the caller must be: a third party cannot mint a module
-carrying somebody else's safe, which is what keeps `getModulesForSafe` honest. The constructor refuses
-an address without code for either role, so an EOA cannot be set as "safe".
+carrying somebody else's safe, which is what keeps `getModulesForSafe` honest.
+
+The constructor's two code checks cover the protocol safe and the implementation only. An EOA cannot
+be set as the **protocol safe**; that is the point, since a key-controlled "safe" would make one
+leaked key enough to redirect every future publication. The named safe in `createModule` is not
+code-checked: the gate already requires `msg.sender == safe`, so an address without code can only
+ever name itself, and a module bound to an EOA is one nobody else can upgrade or write to.
 
 So the trust edge is: **a per-publication upgrade needs that publication's holders, and what code a
 publication is born with needs one named address — the protocol safe.** Nobody else can change it.
