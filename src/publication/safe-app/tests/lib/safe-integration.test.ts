@@ -413,6 +413,80 @@ describe('initialize — module discovery by NAME()', () => {
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
   });
 
+  // Adoption is the path an EXISTING publication takes: the init flow learned the
+  // address from factory logs and has no name to hand over. The version decides
+  // the verbs, and a V2 proxy does not implement admit/reject.
+  it('adopts a V2 publication with the V2 ABI, so accept and refuse work', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationV2';
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
+      async () => 'S2S Publication Module V2',
+    );
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+    expect(si.hasPublicationModule()).toBe(false);
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(true);
+
+    const abi = eth.contractCtorArgs
+      .filter(([addr]) => addr === ADOPTED_PUB)
+      .filter(([, a]) => Array.isArray(a) && a.length > 1)
+      .pop()?.[1];
+    expect(abi).toBe(Abi_S2SPublicationModuleV2);
+
+    const genesis = `0x${'e'.repeat(64)}`;
+    await si.admit(genesis);
+    await si.reject(genesis);
+    const iface = (eth.contractStubs[ADOPTED_PUB] as any).interface;
+    expect(iface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
+    expect(iface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
+    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
+  });
+
+  // A probe that fails is not a version. Guessing V3 here bound an ABI the (V2)
+  // module does not implement, and the failure only showed on the first write.
+  it('does not adopt a publication whose version cannot be probed', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationUnprobeable';
+    eth.contractStubs[ADOPTED_PUB] = {
+      NAME: vi.fn(async () => {
+        throw new Error('RPC unavailable');
+      }),
+      interface: makeInterface(),
+    };
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(false);
+    expect(si.getSafeInfo().s2sPublication).toBe('');
+    // Nothing bound, so nothing is encoded: no guessed selector is ever sent.
+    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
+    expect(eth.directCalls[ADOPTED_PUB]?.['admit']).toBeUndefined();
+    expect(eth.directCalls[ADOPTED_PUB]?.['reject']).toBeUndefined();
+  });
+
+  it('does not adopt a V1 publication, which has no agreements surface to bind', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationV1';
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
+      async () => 'S2S Publication Module',
+    );
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(false);
+  });
+
   it('keeps a module adopted mid-init that the Safe does not list yet (deployed, enable tx pending)', async () => {
     const ADOPTED = '0xAdoptedRecordsModule';
     eth.contractStubs[ADOPTED] = makeRecordsStub();

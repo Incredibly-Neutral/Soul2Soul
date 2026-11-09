@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
 import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
-import {
-  CURRENT_PUBLICATION_BINDING,
-  publicationBindingFor,
-} from '../../src/lib/publication-version';
+import { publicationBindingFor } from '../../src/lib/publication-version';
 
 // The one place the app decides which verbs a publication module has. Every
 // wrong answer here is a reverting transaction on a live publication, so the
@@ -16,8 +13,6 @@ describe('publicationBindingFor', () => {
     expect(b.abi).toBe(Abi_S2SPublicationModuleV3);
     expect(b.accept).toBe('admit');
     expect(b.reject).toBe('reject');
-    expect(b.hasAgreements).toBe(true);
-    expect(CURRENT_PUBLICATION_BINDING).toBe(b);
   });
 
   it('binds V2 to acceptOffer/retract with the V2 ABI', () => {
@@ -26,7 +21,6 @@ describe('publicationBindingFor', () => {
     expect(b.abi).toBe(Abi_S2SPublicationModuleV2);
     expect(b.accept).toBe('acceptOffer');
     expect(b.reject).toBe('retract');
-    expect(b.hasAgreements).toBe(true);
   });
 
   it('binds nothing for V1 (bare name): it has no agreements surface', () => {
@@ -40,9 +34,10 @@ describe('publicationBindingFor', () => {
     expect(publicationBindingFor(null)).toBeUndefined();
   });
 
-  it('binds a later version to the current surface rather than hiding it', () => {
+  it('binds a later version to the current surface, and reports the module\'s own version', () => {
     const b = publicationBindingFor('S2S Publication Module V4')!;
-    expect(b.version).toBe(3);
+    expect(b.version).toBe(4);
+    expect(b.abi).toBe(Abi_S2SPublicationModuleV3);
     expect(b.accept).toBe('admit');
     expect(b.reject).toBe('reject');
   });

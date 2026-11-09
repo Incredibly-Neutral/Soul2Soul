@@ -4,11 +4,7 @@ import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecords
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 import { isPublicationModuleName } from '@s2s/soul2soul-shared/protocol';
 
-import {
-  CURRENT_PUBLICATION_BINDING,
-  publicationBindingFor,
-  type PublicationBinding,
-} from './publication-version';
+import { publicationBindingFor, type PublicationBinding } from './publication-version';
 
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -333,37 +329,52 @@ export class SafeIntegration {
     }
     if (publicationModule && !this.publicationModule) {
       // Adoption hands over an address with no name, and the version decides
-      // the ABI. Probe it, the same way initialize() does; the fallback is the
-      // current deployment, which is what a factory deploys today.
+      // the ABI. Probe it exactly as initialize() does, and degrade the same
+      // way when it cannot be known: an unbound module means the deals tab
+      // disappears, which beats encoding a selector that may not exist.
       const binding = await this.readPublicationBinding(publicationModule);
-      this.publicationModule = new window.ethers.Contract(
-        publicationModule,
-        binding.abi,
-        this.getProvider(),
-      );
-      this.publicationBinding = binding;
-      if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
+      if (!binding) {
+        console.log(
+          `[si] not adopting publication module ${publicationModule}: its version could not be determined`,
+        );
+      } else {
+        this.publicationModule = new window.ethers.Contract(
+          publicationModule,
+          binding.abi,
+          this.getProvider(),
+        );
+        this.publicationBinding = binding;
+        if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
+      }
     }
   }
 
   /**
-   * NAME() a publication module address and return the surface it implements.
-   * A module that cannot be probed (RPC pressure, or a module mid-deploy) binds
-   * the current deployment's surface, because that is what a factory deploys
-   * now and an unbound wrapper would hide a live publication.
+   * NAME() a publication module address and return the surface it implements,
+   * or `undefined` when that cannot be known: the probe failed (RPC pressure, a
+   * module still mid-deploy) or the module is V1, which has no agreements
+   * surface to bind.
+   *
+   * No fallback on purpose. This is the path taken by every publication that
+   * already exists — the legacy-factory scan feeds it an address with no name —
+   * and both versions answer reads through the same selectors, so a guessed
+   * V3 binding looks healthy until the first Accept or Refuse fails
+   * client-side, with no transaction to inspect.
    */
-  private async readPublicationBinding(address: string): Promise<PublicationBinding> {
+  private async readPublicationBinding(address: string): Promise<PublicationBinding | undefined> {
     try {
       const provider = this.getProvider();
       const probe = new window.ethers.Contract(address, ['function NAME() view returns (string)'], provider);
       const name = (await probe.NAME()) as string;
       const binding = publicationBindingFor(name);
-      if (binding) return binding;
-      console.log(`Publication module ${address} (${name}) has no agreements surface`);
+      if (!binding) {
+        console.log(`Publication module ${address} (${name}) has no agreements surface`);
+      }
+      return binding;
     } catch (error) {
-      console.log(`Publication module ${address} NAME() failed, binding the current surface`, error);
+      console.log(`Publication module ${address} NAME() failed, version unknown`, error);
+      return undefined;
     }
-    return CURRENT_PUBLICATION_BINDING;
   }
 
   // ===== RECORDS MODULE METHODS =====
@@ -403,14 +414,29 @@ export class SafeIntegration {
     return module;
   }
 
+  /**
+   * The binding a write has to encode through. A wrapper without one is a bug
+   * (the module was bound without a version), and the one thing it must not do
+   * is pick a verb anyway.
+   */
+  private requirePublicationBinding(): PublicationBinding {
+    const binding = this.publicationBinding;
+    if (!binding) {
+      throw new Error(
+        'publication module version unknown — could not determine which accept/reject verbs it implements, so no transaction was proposed',
+      );
+    }
+    return binding;
+  }
+
   /** The accept verb of the bound module (`admit` on V3, `acceptOffer` on V2). */
   private acceptVerb(): string {
-    return (this.publicationBinding ?? CURRENT_PUBLICATION_BINDING).accept;
+    return this.requirePublicationBinding().accept;
   }
 
   /** The reversible takedown verb (`reject` on V3, `retract` on V2). */
   private rejectVerb(): string {
-    return (this.publicationBinding ?? CURRENT_PUBLICATION_BINDING).reject;
+    return this.requirePublicationBinding().reject;
   }
 
   /** Same contract for the publication module. */
