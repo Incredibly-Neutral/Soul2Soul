@@ -2,7 +2,7 @@
 //
 // Filtering is a pure display concern: `filterRows` / `filterByColumn` always
 // return a NEW filtered copy and never mutate the input, so the store stays
-// the source of truth and row actions (accept/retract/delete/terminate) keep
+// the source of truth and row actions (accept/reject/delete/terminate) keep
 // targeting the correct rows. The column `get` extractors from the table
 // column configs (see sort.ts) are reused so filter and sort agree on values.
 

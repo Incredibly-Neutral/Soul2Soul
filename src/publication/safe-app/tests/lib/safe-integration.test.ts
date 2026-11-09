@@ -542,7 +542,7 @@ describe('readIsModuleEnabled — standard Safe module check', () => {
   });
 });
 
-describe('publication mutations — makeOffer / acceptOffer / retract / whitelists', () => {
+describe('publication mutations — makeOffer / admit / reject / whitelists', () => {
   it('makeOffer encodes the bytes32 genesis + cid and proposes to the publication module', async () => {
     const si = await initInstance();
     const genesis = `0x${'a'.repeat(64)}`;
@@ -555,17 +555,21 @@ describe('publication mutations — makeOffer / acceptOffer / retract / whitelis
     expect(eth.directCalls[P_ADDR]?.['makeOffer']).toBeUndefined();
   });
 
-  it('acceptOffer and retract encode the bytes32 genesis', async () => {
+  it('admit and reject encode the bytes32 genesis, never the deprecated retract/acceptOffer', async () => {
     const si = await initInstance();
     const genesis = `0x${'b'.repeat(64)}`;
-    await si.acceptOffer(genesis);
-    await si.retract(genesis);
+    await si.admit(genesis);
+    await si.reject(genesis);
 
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('admit', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('reject', [toBytes32Id(genesis)]);
     expect(sdk.txsSend).toHaveBeenCalledTimes(2);
-    expect(eth.directCalls[P_ADDR]?.['acceptOffer']).toBeUndefined();
-    expect(eth.directCalls[P_ADDR]?.['retract']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['admit']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['reject']).toBeUndefined();
+    // The publication Safe has no authority to `retract`: V3 reserves it for the
+    // genesis author and reverts NotAuthorized() for anyone else.
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('retract', expect.anything());
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('acceptOffer', expect.anything());
   });
 
   it('whitelistAuthor / removeWhitelistedAuthor / whitelistDev / removeWhitelistedDev', async () => {
@@ -589,7 +593,8 @@ describe('publication mutations — makeOffer / acceptOffer / retract / whitelis
   it('throws when publication methods are called without initialization', async () => {
     const si = new SafeIntegration();
     await expect(si.makeOffer('0x', 'cid')).rejects.toThrow(/Safe SDK not initialized/);
-    await expect(si.acceptOffer('0x')).rejects.toThrow(/Safe SDK not initialized/);
+    await expect(si.admit('0x')).rejects.toThrow(/Safe SDK not initialized/);
+    await expect(si.reject('0x')).rejects.toThrow(/Safe SDK not initialized/);
   });
 
   it('refuses to propose publication txs with no publication module', async () => {

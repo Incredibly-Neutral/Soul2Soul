@@ -1,5 +1,5 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
+import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
 
 import { toBytes32Id } from '@s2s/soul2soul-shared';
@@ -133,7 +133,7 @@ export class SafeIntegration {
             // Create full contract instance with complete ABI
             publicationModule = new window.ethers.Contract(
               moduleAddress,
-              Abi_S2SPublicationModuleV2,
+              Abi_S2SPublicationModuleV3,
               provider,
             );
             console.log('Found Publication Module:', moduleAddress);
@@ -305,7 +305,7 @@ export class SafeIntegration {
     if (publicationModule && !this.publicationModule) {
       this.publicationModule = new window.ethers.Contract(
         publicationModule,
-        Abi_S2SPublicationModuleV2,
+        Abi_S2SPublicationModuleV3,
         this.getProvider(),
       );
       if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
@@ -402,7 +402,7 @@ export class SafeIntegration {
     });
   }
 
-  // ===== PUBLICATION MODULE — DEALS & OFFERS =====
+  // ===== PUBLICATION MODULE — AGREEMENTS & OFFERS =====
 
   async makeOffer(genesis: string, cid: string): Promise<void> {
     if (!this.safeSdk) {
@@ -418,12 +418,13 @@ export class SafeIntegration {
     });
   }
 
-  async acceptOffer(genesis: string): Promise<void> {
+  /** Admit a pending offer → agreement. The publication's accept verb. */
+  async admit(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData('acceptOffer', [
+    const txData = publicationModule.interface.encodeFunctionData('admit', [
       toBytes32Id(genesis),
     ]);
     await this.safeSdk.txs.send({
@@ -431,12 +432,18 @@ export class SafeIntegration {
     });
   }
 
-  async retract(genesis: string): Promise<void> {
+  /**
+   * Reject — the publication's reversible takedown. An agreement returns to the
+   * pending offer set, an offer is declined, and either may be admitted again.
+   * Not `retract`: that verb is the genesis author's and terminal, so calling it
+   * from the publication Safe reverts `NotAuthorized()`.
+   */
+  async reject(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData('retract', [
+    const txData = publicationModule.interface.encodeFunctionData('reject', [
       toBytes32Id(genesis),
     ]);
     await this.safeSdk.txs.send({

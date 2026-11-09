@@ -236,10 +236,10 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
-  private async acceptOffer(genesis: string) {
+  private async admitOffer(genesis: string) {
     try {
-      await this.safeIntegration.acceptOffer(genesis);
-      this.showNotification('Offer accepted! Transaction pending approval.', 'success');
+      await this.safeIntegration.admit(genesis);
+      this.showNotification('Offer admitted! Transaction pending approval.', 'success');
       await this.loadDeals();
       // Update internal state
       const idx = this.offers.findIndex((o) => o.genesis === genesis);
@@ -254,9 +254,15 @@ export class S2SDealsTab extends LitElement {
     }
   }
 
-  private async retract(genesis: string, status: 'deal' | 'offer') {
+  /**
+   * Reject a deal or an offer. The publication's reversible takedown: a deal
+   * returns to the pending offer set and can be admitted again, an offer is
+   * declined. Not `retract` — that is the author's verb and it reverts
+   * `NotAuthorized()` for the publication Safe.
+   */
+  private async reject(genesis: string, status: 'deal' | 'offer') {
     try {
-      await this.safeIntegration.retract(genesis);
+      await this.safeIntegration.reject(genesis);
 
       if (status === 'offer') {
         this.showNotification('Offer rejected! Transaction pending approval.', 'success');
@@ -267,7 +273,7 @@ export class S2SDealsTab extends LitElement {
           store.setOffers(this.offers);
         }
       } else {
-        this.showNotification('Deal retracted! Transaction pending approval.', 'success');
+        this.showNotification('Deal rejected — back in pending offers.', 'success');
         // Deal → offer demotion (existing logic)
         const idx = this.deals.findIndex((d) => d.genesis === genesis);
         if (idx !== -1) {
@@ -282,7 +288,7 @@ export class S2SDealsTab extends LitElement {
       await this.loadDeals();
       this.requestUpdate();
     } catch (error: any) {
-      console.error('Error retracting:', error);
+      console.error('Error rejecting:', error);
       this.showNotification(`Failed: ${error.message}`, 'error');
     }
   }
@@ -388,9 +394,9 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell offer-actions">
           <s2s-button action="accept" genesis="${offer.genesis}" variant="spin"
-            @click=${() => this.acceptOffer(offer.genesis)}>Accept</s2s-button>
+            @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
           <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
-            @click=${() => this.retract(offer.genesis, 'offer')}>Refuse</s2s-button>
+            @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>
         </div>
       </div>
     `;
@@ -406,8 +412,8 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
         <div class="table-cell deal-actions">
-          <s2s-button action="retract" genesis="${deal.genesis}" status="deal" type="secondary"
-            @click=${() => this.retract(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
+          <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
+            @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
         </div>
       </div>
