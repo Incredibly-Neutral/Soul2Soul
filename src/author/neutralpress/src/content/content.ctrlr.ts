@@ -13,6 +13,28 @@ import {
 } from '@s2s/soul2soul-shared';
 
 /**
+ * Frontmatter key stating whether this note's last publish was encrypted.
+ * Always written as a real YAML boolean, on every publish.
+ */
+export const ENCRYPTED_KEY = 'encrypted';
+
+/**
+ * Pre-rename spelling of {@link ENCRYPTED_KEY}. Read so a note written before
+ * the rename keeps behaving as encrypted; never written, and dropped by the
+ * same write-back that writes the new key.
+ */
+export const LEGACY_ENCRYPTION_KEY = 'encryption';
+
+/**
+ * The note's encryption state: `encrypted` first, then the legacy `encryption`
+ * key. Neither present means plaintext.
+ */
+function encryptionOf(frontmatter: Record<string, any>): boolean {
+	const stated = frontmatter[ENCRYPTED_KEY] ?? frontmatter[LEGACY_ENCRYPTION_KEY];
+	return Boolean(stated);
+}
+
+/**
  * Parse a frontmatter date to unix seconds: `YYYY-MM-DD`, or a datetime with
  * optional fractional seconds and an optional `Z`/`±HH:MM` zone. An unzoned
  * value is UTC, as the writer emits it (`new Date().toJSON()` with the zone
@@ -128,7 +150,8 @@ export class ContentController implements IContentController {
 			'tags',
 			'parent',
 			'position',
-			'encryption',
+			ENCRYPTED_KEY,
+			LEGACY_ENCRYPTION_KEY,
 			'title',
 			'modified_date',
 			'creation_date',
@@ -181,7 +204,7 @@ export class ContentController implements IContentController {
 			tags,
 			parent: frontmatter.parent ? parseInt(frontmatter.parent) : 0,
 			position: frontmatter.position ? parseInt(frontmatter.position) : 0,
-			encryption: frontmatter.encryption || false,
+			encryption: encryptionOf(frontmatter),
 			title: resolvedTitle,
 			slug,
 			content,
@@ -265,6 +288,22 @@ export class ContentController implements IContentController {
 			// Only the very first publish creates a new identity.
 			const objectId = existingGenesis ?? signedItem.objectId;
 			console.log('oid', objectId);
+
+			// Record the state this publish produced, as a real YAML boolean. Written
+			// on every publish, not only when absent, so the file always states what
+			// the last publish did and the author edits it to change the next one.
+			// The value is the flag that drove the body — `signedItem.encryption`,
+			// set from the encrypt function in buildSignedContentItem — not a second
+			// read of the note.
+			// Dropping the legacy key in the same pass leaves a migrated note with
+			// one key — `encryption` is read, never written.
+			await this.updateFrontMatter(
+				this.main.plugin.app,
+				file,
+				ENCRYPTED_KEY,
+				signedItem.encryption === true,
+				[LEGACY_ENCRYPTION_KEY],
+			);
 
 			// Store signed metadata to frontmatter (genesis publish only)
 			if (!existingGenesis) {
@@ -350,10 +389,24 @@ export class ContentController implements IContentController {
 		return slugify(title, options);
 	}
 
-	updateFrontMatter = async (app: App, file: TFile, key: string, value: string | string[]) => {
+	/**
+	 * Assign `value` to `key`, then drop `remove` — one frontmatter pass.
+	 *
+	 * The value is assigned as given: a boolean stays a boolean, so
+	 * `encrypted: false` serialises unquoted. A stringified `'false'` is truthy
+	 * and would silently encrypt on the next publish.
+	 */
+	updateFrontMatter = async (
+		app: App,
+		file: TFile,
+		key: string,
+		value: string | string[] | boolean,
+		remove: string[] = [],
+	) => {
 		if (file != null) {
 			await app.fileManager.processFrontMatter(file, (frontmatter) => {
 				frontmatter[key] = value;
+				for (const legacyKey of remove) delete frontmatter[legacyKey];
 			});
 		}
 	};
