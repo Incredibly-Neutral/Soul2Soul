@@ -79,8 +79,8 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   content, summary, custom}` → **no encryption step**: `buildSignedContentItem` is passed
   `noOpEncrypt` (`content.ctrlr.ts:174`), so the body is signed as a plain JSON string and
   `S2SContentItem.encryption` comes out `false` — `shared/src/identity/sign-content.ts:104` derives
-  the flag from the encrypt function's identity, not from the frontmatter `encryption` (which
-  `parseNote` parses and nothing reads) → `uploadToKubo(signedItem, kuboUrl)` →
+  the flag from the encrypt function's identity, not from the frontmatter (which `parseNote`
+  parses into `encryption` and nothing here acts on) → `uploadToKubo(signedItem, kuboUrl)` →
   `makeOffer(objectId, cid)` (the single append+deal tx in V2 — no separate grant tx) → if
   rendering, `renderCalls(... litUsageKey ...)` → **fire-and-forget** `backupToProviders`
   (filebase/pinata pins + `runFilecoinLeg` → `uploadJson(signedItem, [pubSafe, authorEoa], 'article')`,
@@ -122,6 +122,13 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   `genesis = signedItem.objectId`); the render pipeline fetches by it as a genesis (`prep`
   `fetchById`→`getLatest(bytes32)`). Don't break this round-trip — a non-bytes32 value breaks ABI
   encoding at `getLatest`.
+- **Encryption ⇄ frontmatter contract:** `publishContent` writes `encrypted` on every publish with the
+  state the publish produced — `signedItem.encryption`, the flag that drove the body, not a second
+  read of the note. Written as a real YAML boolean, never the string `'false'` (truthy, so it would
+  encrypt the next publish). The value records the last publish; the author edits it to change the
+  next one. `parseNote` reads `encrypted` first, then the pre-rename `encryption`, so an old note
+  keeps its state; only the new key is written, and the write-back deletes `encryption`. The
+  published item's own field stays `encryption` on `S2SContentItem`.
 - **Slug override:** `content/content.ctrlr.ts:parseNote` reads `frontmatter?.slug` and uses it
   in preference to `slug(title)`. The chosen slug propagates as `body.slug` through the pipeline
   into the Lit render action's `createPath` (which interpolates `{slug}`). A changed `slug`

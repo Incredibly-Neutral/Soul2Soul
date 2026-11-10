@@ -10,8 +10,24 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { parse, stringify } from 'yaml';
 import { ContentController } from '../../src/content/content.ctrlr';
 import { makeMain, makeVaultFile } from '../helpers/main';
+
+// The writer hard-codes `noOpEncrypt`, so an encrypted publish cannot be reached
+// through the controller: it is modelled at the signed item the write-back reads
+// its flag from. Off by default, so the other tests see the real builder.
+const signedItemFixture = vi.hoisted(() => ({ encrypted: false }));
+vi.mock('@s2s/soul2soul-shared', async (importOriginal) => {
+	const actual = await importOriginal<Record<string, any>>();
+	return {
+		...actual,
+		buildSignedContentItem: async (...args: any[]) => {
+			const item = await actual.buildSignedContentItem(...args);
+			return signedItemFixture.encrypted ? { ...item, encryption: true } : item;
+		},
+	};
+});
 
 const ADDR = '0x111122223333444455556666777788889999AaaA';
 const DID = `did:ethr:${ADDR}`;
@@ -39,6 +55,11 @@ function setupPublish(frontmatter: Record<string, any>, raw: string) {
 }
 
 const RAW = '---\ntags: [acme--s2s]\n---\n# My Title\n\nBody <!--more--> rest';
+
+/** Serialise frontmatter the way Obsidian does, then read it back. */
+function yamlRoundTrip(frontmatter: Record<string, any>): Record<string, any> {
+	return parse(stringify(frontmatter)) as Record<string, any>;
+}
 
 describe('ContentController.publishContent', () => {
 	it('builds a signed content item and writes genesis/author to frontmatter', async () => {
@@ -173,6 +194,75 @@ describe('ContentController.publishContent', () => {
 		await expect(
 			ctrlr.publishContent(makeVaultFile('note.md', RAW), 'acme.soul2soul.eth'),
 		).rejects.toThrow(/not a date/);
+	});
+
+	it('writes encrypted: false for a plaintext publish, as a real boolean', async () => {
+		const { ctrlr, sharedFm } = setupPublish({}, RAW);
+		const result = await ctrlr.publishContent(
+			makeVaultFile('note.md', RAW),
+			'acme.soul2soul.eth',
+		);
+
+		expect(result!.encryption).toBe(false);
+		expect(sharedFm.encrypted).toBe(false);
+		expect(typeof sharedFm.encrypted).toBe('boolean');
+		// Unquoted: a string 'false' is truthy and would encrypt the next publish.
+		expect(stringify({ encrypted: sharedFm.encrypted }).trim()).toBe('encrypted: false');
+		const reread = yamlRoundTrip(sharedFm);
+		expect(reread.encrypted).toBe(false);
+		expect(typeof reread.encrypted).toBe('boolean');
+	});
+
+	it('writes encrypted: true when the signed item is encrypted', async () => {
+		signedItemFixture.encrypted = true;
+		try {
+			const { ctrlr, sharedFm } = setupPublish({}, RAW);
+			const result = await ctrlr.publishContent(
+				makeVaultFile('note.md', RAW),
+				'acme.soul2soul.eth',
+			);
+
+			expect(result!.encryption).toBe(true);
+			expect(sharedFm.encrypted).toBe(true);
+			expect(typeof sharedFm.encrypted).toBe('boolean');
+			expect(stringify({ encrypted: sharedFm.encrypted }).trim()).toBe('encrypted: true');
+			const reread = yamlRoundTrip(sharedFm);
+			expect(reread.encrypted).toBe(true);
+			expect(typeof reread.encrypted).toBe('boolean');
+		} finally {
+			signedItemFixture.encrypted = false;
+		}
+	});
+
+	it('records the signed state, not what the note asked for', async () => {
+		// The note says encrypted, but this writer signs plaintext: the file
+		// states what the publish produced.
+		const { ctrlr, sharedFm } = setupPublish({ encrypted: true }, RAW);
+		const result = await ctrlr.publishContent(
+			makeVaultFile('note.md', RAW),
+			'acme.soul2soul.eth',
+		);
+
+		expect(result!.encryption).toBe(false);
+		expect(sharedFm.encrypted).toBe(false);
+	});
+
+	it('migrates a legacy encryption key on the next publish: one key, no legacy', async () => {
+		const { ctrlr, sharedFm } = setupPublish({ encryption: true }, RAW);
+		await ctrlr.publishContent(makeVaultFile('note.md', RAW), 'acme.soul2soul.eth');
+
+		expect('encryption' in sharedFm).toBe(false);
+		expect(sharedFm.encrypted).toBe(false); // noOpEncrypt: this publish was plaintext
+		expect(Object.keys(sharedFm).filter((k) => k === 'encrypted')).toHaveLength(1);
+	});
+
+	it('does not duplicate the key on a second publish', async () => {
+		const { ctrlr, sharedFm } = setupPublish({}, RAW);
+		await ctrlr.publishContent(makeVaultFile('note.md', RAW), 'acme.soul2soul.eth');
+		await ctrlr.publishContent(makeVaultFile('note.md', RAW), 'acme.soul2soul.eth');
+
+		expect(Object.keys(sharedFm).filter((k) => k === 'encrypted')).toHaveLength(1);
+		expect(sharedFm.encrypted).toBe(false);
 	});
 
 	it('returns null when no BASE signer is available', async () => {
