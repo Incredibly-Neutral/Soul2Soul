@@ -72,16 +72,48 @@ export const s2sProofSchema = z.object({
 });
 
 // ============================================================================
-// S2SContentItem (flat — no discriminated union)
+// S2SContentItem — three storage layouts
+//
+// The v1/v2 layout holds one `body` string. The v3 layout holds one body per
+// key holder under `bodies`, keyed by the key holder's name (`s2s`, plus a
+// publication's own key when it has one). The two are told apart by which key
+// is present, not by public.specVersion: a v3 item still carries the v2
+// envelope. Acceptance of the v1/v2 shape is unchanged.
 // ============================================================================
 
-export const s2sContentItemSchema = z.object({
+const s2sContentItemSchemaWithBody = z.object({
   public: s2sPublicContentSchema,
   objectId: z.string().min(1, 'objectId is required'),
   proof: s2sProofSchema,
   encryption: z.boolean(),
   body: z.string(),
 });
+
+export const s2sContentItemSchemaV3 = z.object({
+  public: s2sPublicContentSchemaV2,
+  objectId: z.string().min(1, 'objectId is required'),
+  proof: s2sProofSchema,
+  encryption: z.boolean(),
+  bodies: z.record(z.string(), z.string()),
+});
+
+// ============================================================================
+// An item that carries both keys is ambiguous. The body branch strips unknown
+// keys, so parsing it would silently drop `bodies` and lose a ciphertext; no
+// producer writes both, so refuse the input rather than pick a layout.
+const rejectBothLayouts = z.any().superRefine((raw: unknown, ctx) => {
+  if (raw === null || typeof raw !== 'object') return;
+  if ('bodies' in raw && 'body' in raw) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'item carries both `body` and `bodies`; the storage layout is one or the other',
+    });
+  }
+});
+
+export const s2sContentItemSchema = rejectBothLayouts.pipe(
+  z.union([s2sContentItemSchemaV3, s2sContentItemSchemaWithBody]),
+);
 
 // ============================================================================
 // S2SContentBody (what goes into .body)
