@@ -1,6 +1,13 @@
+import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
-import { resolveKuboCid, upsertFrontmatter } from '../src/lib/frontmatter';
+import {
+  ENCRYPTED_KEY,
+  LEGACY_ENCRYPTED_KEY,
+  resolveEncryption,
+  resolveKuboCid,
+  upsertFrontmatter,
+} from '../src/lib/frontmatter';
 
 describe('upsertFrontmatter', () => {
   it('updates an existing key and preserves the rest of the block and the body', () => {
@@ -95,5 +102,63 @@ describe('cid write-back', () => {
     const next = upsertFrontmatter(raw, {}, ['kubo_cid']);
     expect(next).not.toContain('kubo_cid');
     expect(next).not.toContain('null');
+  });
+});
+
+describe('resolveEncryption', () => {
+  it('reads `encrypted` first and the legacy `encryption` key after it', () => {
+    expect(resolveEncryption({ encrypted: true })).toBe(true);
+    expect(resolveEncryption({ encrypted: false })).toBe(false);
+    expect(resolveEncryption({ encryption: true })).toBe(true);
+  });
+
+  it('lets the new key win when a note carries both', () => {
+    expect(resolveEncryption({ encrypted: false, encryption: true })).toBe(false);
+    expect(resolveEncryption({ encrypted: true, encryption: false })).toBe(true);
+  });
+
+  it('keeps Boolean() semantics, so a quoted "false" still encrypts', () => {
+    expect(resolveEncryption({ encrypted: 'false' })).toBe(true);
+    expect(resolveEncryption({ encryption: 'false' })).toBe(true);
+  });
+
+  it('treats absent, empty and null as plaintext', () => {
+    expect(resolveEncryption({})).toBe(false);
+    expect(resolveEncryption({ encrypted: null })).toBe(false);
+    expect(resolveEncryption({ encrypted: '' })).toBe(false);
+  });
+});
+
+describe('encrypted write-back', () => {
+  it('emits an unquoted YAML boolean, so the value re-parses as a boolean', () => {
+    const raw = '---\ntitle: Hi\n---\n\nBody.';
+    for (const value of [true, false]) {
+      const next = upsertFrontmatter(raw, { encrypted: value });
+      const block = /^---\n([\s\S]*?)\n---\n/.exec(next)?.[1] ?? '';
+      expect(block).toContain(`encrypted: ${value}`);
+      expect(parse(block)).toEqual({ title: 'Hi', encrypted: value });
+      expect(typeof (parse(block) as { encrypted: unknown }).encrypted).toBe('boolean');
+    }
+  });
+
+  it('migrates the legacy key in one pass: the new key written, the old one gone', () => {
+    const raw = '---\ntitle: Hi\nencryption: true\n---\n\nBody.';
+    const next = upsertFrontmatter(raw, { encrypted: true }, [LEGACY_ENCRYPTED_KEY]);
+    expect(next).toContain('encrypted: true');
+    expect(next).not.toMatch(/^encryption:/m);
+    expect(next.match(/^encrypted:/gm)).toHaveLength(1);
+  });
+
+  it('overwrites the value in place, so a second publish keeps one key', () => {
+    const raw = '---\ntitle: Hi\nencrypted: true\n---\n\nBody.';
+    const next = upsertFrontmatter(raw, { encrypted: false }, [LEGACY_ENCRYPTED_KEY]);
+    expect(next.match(/^encrypted:/gm)).toHaveLength(1);
+    expect(next).toContain('encrypted: false');
+    expect(next).not.toContain('encrypted: true');
+  });
+
+  it('names the keys the writers use, so a rename cannot drift one of them', () => {
+    expect(ENCRYPTED_KEY).toBe('encrypted');
+    expect(LEGACY_ENCRYPTED_KEY).toBe('encryption');
   });
 });

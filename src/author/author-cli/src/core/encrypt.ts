@@ -49,11 +49,14 @@
 //     render action decrypts with (`press/actions/src/render/data.ctrlr.ts`
 //     — `decryptRaw(protocolInfo.pkp, …)`).
 //
-// FRONTMATTER COERCION (owned by shared/src/authoring/note.ts:218,
-// `Boolean(frontmatter.encryption)` — not edited here): only YAML `false`,
-// `null`/`~`, `0` and `""` mean "plaintext". `"false"` (quoted), `no`, `off`,
-// `yes`, `1`, `"encrypted"` are all truthy → encrypt. Note the inversion:
-// `encryption: 0` publishes in the clear while `encryption: "false"` encrypts.
+// FRONTMATTER COERCION: the CLI resolves the flag from the note before this
+// seam (`lib/frontmatter.ts resolveEncryption` — `encrypted` first, then the
+// legacy `encryption` spelling shared still parses at
+// shared/src/authoring/note.ts:218, `Boolean(frontmatter.encryption)`). Only
+// YAML `false`, `null`/`~`, `0` and `""` mean "plaintext". `"false"` (quoted),
+// `no`, `off`, `yes`, `1`, `"encrypted"` are all truthy → encrypt. Note the
+// inversion: `encrypted: 0` publishes in the clear while `encrypted: "false"`
+// encrypts — which is why the publish writes back the boolean it used.
 //
 // Kept pure/injectable (no Lit credentials, no network) so the guards are
 // unit-testable; the one I/O is the stored-item read, injected as a function.
@@ -236,7 +239,7 @@ export function buildEncryptFn(
 ): EncryptFn {
   if (!parsed.encryption) return noOpEncrypt;
 
-  const why = `cannot encrypt ${notePath ?? 'note'}: frontmatter \`encryption: true\``;
+  const why = `cannot encrypt ${notePath ?? 'note'}: frontmatter \`encrypted: true\` (or legacy \`encryption: true\`)`;
   const litUsageKey = requireEncryptionSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY', why);
   const pkp = requireEncryptionSetting(ctx.protocolInfo.pkp, 'protocolInfo.pkp', why);
 
