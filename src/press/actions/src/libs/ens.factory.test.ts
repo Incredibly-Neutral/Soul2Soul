@@ -35,6 +35,10 @@ const state = vi.hoisted(() => ({
   MODULES: [] as string[],
   nameProbes: [] as string[],
   recordsAddr: '0x' + '11'.repeat(20),
+  // What the publication module answers for NAME(). The live V3 answers
+  // 'S2S Publication Module V3'; tests below vary it to prove every version is
+  // discovered (V1 bare name, V2, V3).
+  publicationName: 'S2S Publication Module V2',
 }));
 
 vi.mock('./evm', () => ({
@@ -55,7 +59,7 @@ vi.mock('./evm', () => ({
           return 'S2S Records Module';
         }
         if (contractAddress === PUBLICATION) {
-          return 'S2S Publication Module V2';
+          return state.publicationName;
         }
         throw new Error('no NAME function');
       default:
@@ -71,6 +75,7 @@ beforeEach(() => {
   };
   state.MODULES = [];
   state.nameProbes = [];
+  state.publicationName = 'S2S Publication Module V2';
 });
 
 describe('getProtocolControllerAndModules — skips NAME() probe for the Safe 4337 module', () => {
@@ -110,6 +115,23 @@ describe('getDomainOwnerAndModules — skips NAME() probe for the Safe 4337 modu
     // no-NAME) — the 4337 module in the middle was never probed.
     expect(state.nameProbes).toEqual([RECORDS, PUBLICATION, NO_NAME].map((a) => a.toLowerCase()));
     expect(state.nameProbes).not.toContain(SAFE_4337_LOWER);
+  });
+
+  it('finds the publication module whatever version its NAME() reports', async () => {
+    for (const name of [
+      'S2S Publication Module', // V1
+      'S2S Publication Module V2',
+      'S2S Publication Module V3', // the name the live V3 answers
+      'S2S Publication Module V4', // a version this build has never seen
+    ]) {
+      state.MODULES = [RECORDS, PUBLICATION];
+      state.publicationName = name;
+
+      const result = await getDomainOwnerAndModules('example.eth');
+
+      expect(result.configModule, name).toBe(RECORDS);
+      expect(result.publicationModule, name).toBe(PUBLICATION);
+    }
   });
 
   it('skips the 4337 module when it is the only module (empty name probe set)', async () => {

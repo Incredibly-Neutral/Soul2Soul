@@ -10,7 +10,7 @@ import { mainnet, base } from 'viem/chains';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
-import { getProtocolControllerAndModules, getRecords } from '@s2s/soul2soul-shared';
+import { getProtocolControllerAndModules, getRecords, isPublicationModuleName } from '@s2s/soul2soul-shared';
 
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, '../../../../.env'), quiet: true });
@@ -48,7 +48,7 @@ async function resolvePublicationModule(name: string) {
     if (KNOWN_NON_S2S.some((k) => k.toLowerCase() === addr.toLowerCase())) continue;
     try {
       const n = await l2.readContract({ address: addr, abi: ABIS.name, functionName: 'NAME' });
-      if (n === 'S2S Publication Module V2' || n === 'S2S Publication Module') return addr;
+      if (isPublicationModuleName(n)) return addr;
     } catch { /* no NAME() */ }
   }
   return null;

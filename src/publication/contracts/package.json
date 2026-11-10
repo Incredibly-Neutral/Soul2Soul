@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "compile": "hardhat compile",
+    "test": "hardhat test",
     "export": "ldenv rocketh-export -e @@MODE @@",
     "deploy:pubfac": "tsx scripts/deploy-publication-factory.ts",
     "deploy:pub": "tsx scripts/update-impl.ts",

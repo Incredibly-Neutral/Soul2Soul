@@ -44,6 +44,11 @@ const RECORDS_MODULE = getAddress('0x4444444444444444444444444444444444444444');
 const PUB_MODULE = getAddress('0x5555555555555555555555555555555555555555');
 const AUTHOR1 = getAddress('0x6666666666666666666666666666666666666666');
 const AUTHOR2 = getAddress('0x7777777777777777777777777777777777777777');
+// A retired publication factory (e.g. the V2 deployment the protocol record has
+// moved away from). Its logs still name the modules of every existing
+// publication.
+const LEGACY_PUB_FACTORY = getAddress('0x8888888888888888888888888888888888888888');
+const OLD_PUB_MODULE = getAddress('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
 
 const recordsTopic0 = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
 const pubTopic0 = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
@@ -433,6 +438,87 @@ describe('scanExistingModules', () => {
     expect(result).toEqual({ recordsModule: undefined, publicationModule: undefined });
     expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
     expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('finds a pair whose publication log sits on a retired factory only', async () => {
+    // The state after the protocol record moves to a new factory: the record's
+    // factory has never seen this Safe, the old one has its ModuleCreated log.
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
+      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, PUB_MODULE)];
+      return [];
+    });
+
+    const result = await scanExistingModules({
+      ...detectDeps,
+      fetchModuleCreatedLogs,
+      legacyPublicationFactories: [LEGACY_PUB_FACTORY],
+    });
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
+  });
+
+  it('prefers the record factory over a retired one when both logged a module', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
+      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, OLD_PUB_MODULE)];
+      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
+    });
+
+    const result = await scanExistingModules({
+      ...detectDeps,
+      fetchModuleCreatedLogs,
+      legacyPublicationFactories: [LEGACY_PUB_FACTORY],
+    });
+
+    expect(result.publicationModule).toBe(PUB_MODULE);
+  });
+
+  it('reads a factory once when the retired list repeats the record address', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
+
+    await scanExistingModules({
+      ...detectDeps,
+      fetchModuleCreatedLogs,
+      // Same factory, different case, plus one genuinely retired address.
+      legacyPublicationFactories: [PUB_FACTORY.toLowerCase(), LEGACY_PUB_FACTORY],
+    });
+
+    const probed = fetchModuleCreatedLogs.mock.calls.map((call) => String(call[0]).toLowerCase());
+    expect(probed.filter((address) => address === PUB_FACTORY.toLowerCase())).toHaveLength(1);
+    expect(probed).toHaveLength(3); // records + the record factory + the retired one
+  });
+
+  it('detection stays on the record factory: a retired log must not end the wait', async () => {
+    // The create batch went to PUB_FACTORY; a legacy log names an older module
+    // from a previous run and would short-circuit detection if it counted.
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
+      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
+      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, OLD_PUB_MODULE)];
+      return []; // the new factory has not deployed yet
+    });
+    const probed: string[] = [];
+    // A clock that advances on every read, so the poll loop times out instead
+    // of spinning forever on a frozen one.
+    let clock = 0;
+    const now = () => (clock += 1);
+
+    await expect(
+      detectModuleAddresses(
+        {
+          ...detectDeps,
+          fetchModuleCreatedLogs: (factory, safe, topic0, fromBlock) => {
+            probed.push(factory.toLowerCase());
+            return fetchModuleCreatedLogs(factory);
+          },
+          legacyPublicationFactories: [LEGACY_PUB_FACTORY],
+          now,
+        },
+        { timeoutMs: 1, pollIntervalMs: 0 },
+      ),
+    ).rejects.toThrow(/missing module: publication/);
+
+    expect(probed).not.toContain(LEGACY_PUB_FACTORY.toLowerCase());
   });
 
   it('queries each factory with its own topic0 and the lookback window', async () => {

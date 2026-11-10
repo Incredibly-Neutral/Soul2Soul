@@ -57,7 +57,6 @@ export function makeMain(overrides: { main?: Record<string, any> } = {}) {
 				ens_resolver: '0x0',
 				ens_records: '0x0',
 				safe_records_factory: '0x0',
-				safe_publication_factory: '0x0',
 				proxy_admin: '0x0',
 				chain_id: '8453',
 			},

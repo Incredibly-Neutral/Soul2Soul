@@ -17,6 +17,7 @@ import {
     canPublish as gateCanPublish,
     canRead as gateCanRead,
     canReset as gateCanReset,
+    canReview as gateCanReview,
     type GateRead,
 } from '@s2s/soul2soul-shared/gates';
 
@@ -44,6 +45,14 @@ export const canPublish = (
     rpcs?: string[],
 ): Promise<boolean> =>
     gateCanPublish(bindRead(rpcs), authorSafeAddress, publicationModule, signerAddress);
+
+export const canReview = (
+    contentId: string,
+    publicationModule: string,
+    signerAddress: string,
+    rpcs?: string[],
+): Promise<boolean> =>
+    gateCanReview(bindRead(rpcs), contentId, publicationModule, signerAddress);
 
 export const canReset = (
     multisig: string,

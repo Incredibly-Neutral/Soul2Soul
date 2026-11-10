@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
+import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../../src/lib/safe-integration';
 
@@ -121,7 +123,8 @@ function makeRecordsStub() {
 
 function makePubStub() {
   return {
-    NAME: vi.fn(async () => 'S2S Publication Module V2'),
+    // The live deployment. Tests that care about an earlier version override it.
+    NAME: vi.fn(async () => 'S2S Publication Module V3'),
     interface: makeInterface(),
     hasDeal: vi.fn(),
     getDeals: vi.fn(),
@@ -189,6 +192,72 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.isConnected()).toBe(true);
     expect(si.hasRecordsModule()).toBe(true);
     expect(si.hasPublicationModule()).toBe(true);
+  });
+
+  /**
+   * The ABI the wrapper for P_ADDR was constructed with. The NAME() probe also
+   * constructs a Contract for that address with a minimal ABI, so ignore that
+   * one: a real binding carries more than the single NAME fragment.
+   */
+  function boundPublicationAbi(): unknown {
+    const args = eth.contractCtorArgs
+      .filter(([addr]) => addr === P_ADDR)
+      .filter(([, abi]) => Array.isArray(abi) && abi.length > 1)
+      .pop();
+    return args?.[1];
+  }
+
+  it('binds the V3 ABI to a V3 publication, so admit/reject exist', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module V3');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+    expect(si.hasPublicationModule()).toBe(true);
+    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV3);
+
+    await si.admit(`0x${'c'.repeat(64)}`);
+    await si.reject(`0x${'c'.repeat(64)}`);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('admit', [expect.anything()]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('reject', [expect.anything()]);
+  });
+
+  // V2 implements acceptOffer/retract, not admit/reject. Binding the V3 ABI to
+  // it made every Accept/Refuse revert on the live V2 publications.
+  it('binds the V2 ABI to a V2 publication, so accept and refuse still work', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module V2');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV2);
+
+    const genesis = `0x${'d'.repeat(64)}`;
+    await si.admit(genesis);
+    await si.reject(genesis);
+
+    // The selectors the V2 proxy actually implements.
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    // ... and not the V3 verbs it does not have.
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
+    // Same tx path: the Safe proposes, nothing is sent directly.
+    expect(sdk.txsSend).toHaveBeenCalledTimes(2);
+    expect(eth.directCalls[P_ADDR]?.['acceptOffer']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['retract']).toBeUndefined();
+  });
+
+  // V1 (bare name) has no getDeals/getOffers/hasDeal at all, so there is no
+  // agreements surface to bind. It is left unadopted, which is what the app did
+  // before V3: the deals tab degrades to "no publication module" instead of
+  // calling functions the module does not implement.
+  it('leaves a V1 publication (bare name) unadopted rather than binding a deals surface', async () => {
+    pub.NAME.mockImplementation(async () => 'S2S Publication Module');
+    const si = await initInstance();
+    expect(si.getSafeInfo().s2sPublication).toBe('');
+    expect(si.hasPublicationModule()).toBe(false);
+    expect(boundPublicationAbi()).toBeUndefined();
+
+    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.getAllDealsAndOffers()).rejects.toThrow(/[Pp]ublication module not/);
   });
 
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {
@@ -342,6 +411,80 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.hasRecordsModule()).toBe(false);
     expect(si.hasPublicationModule()).toBe(false);
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
+  });
+
+  // Adoption is the path an EXISTING publication takes: the init flow learned the
+  // address from factory logs and has no name to hand over. The version decides
+  // the verbs, and a V2 proxy does not implement admit/reject.
+  it('adopts a V2 publication with the V2 ABI, so accept and refuse work', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationV2';
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
+      async () => 'S2S Publication Module V2',
+    );
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+    expect(si.hasPublicationModule()).toBe(false);
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(true);
+
+    const abi = eth.contractCtorArgs
+      .filter(([addr]) => addr === ADOPTED_PUB)
+      .filter(([, a]) => Array.isArray(a) && a.length > 1)
+      .pop()?.[1];
+    expect(abi).toBe(Abi_S2SPublicationModuleV2);
+
+    const genesis = `0x${'e'.repeat(64)}`;
+    await si.admit(genesis);
+    await si.reject(genesis);
+    const iface = (eth.contractStubs[ADOPTED_PUB] as any).interface;
+    expect(iface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
+    expect(iface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
+    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
+  });
+
+  // A probe that fails is not a version. Guessing V3 here bound an ABI the (V2)
+  // module does not implement, and the failure only showed on the first write.
+  it('does not adopt a publication whose version cannot be probed', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationUnprobeable';
+    eth.contractStubs[ADOPTED_PUB] = {
+      NAME: vi.fn(async () => {
+        throw new Error('RPC unavailable');
+      }),
+      interface: makeInterface(),
+    };
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(false);
+    expect(si.getSafeInfo().s2sPublication).toBe('');
+    // Nothing bound, so nothing is encoded: no guessed selector is ever sent.
+    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
+    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
+    expect(eth.directCalls[ADOPTED_PUB]?.['admit']).toBeUndefined();
+    expect(eth.directCalls[ADOPTED_PUB]?.['reject']).toBeUndefined();
+  });
+
+  it('does not adopt a V1 publication, which has no agreements surface to bind', async () => {
+    const ADOPTED_PUB = '0xAdoptedPublicationV1';
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
+      async () => 'S2S Publication Module',
+    );
+
+    const si = new SafeIntegration();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
+    await si.initialize();
+
+    await si.adoptModules(undefined, ADOPTED_PUB);
+    expect(si.hasPublicationModule()).toBe(false);
   });
 
   it('keeps a module adopted mid-init that the Safe does not list yet (deployed, enable tx pending)', async () => {
@@ -542,7 +685,7 @@ describe('readIsModuleEnabled — standard Safe module check', () => {
   });
 });
 
-describe('publication mutations — makeOffer / acceptOffer / retract / whitelists', () => {
+describe('publication mutations — makeOffer / admit / reject / whitelists', () => {
   it('makeOffer encodes the bytes32 genesis + cid and proposes to the publication module', async () => {
     const si = await initInstance();
     const genesis = `0x${'a'.repeat(64)}`;
@@ -555,17 +698,21 @@ describe('publication mutations — makeOffer / acceptOffer / retract / whitelis
     expect(eth.directCalls[P_ADDR]?.['makeOffer']).toBeUndefined();
   });
 
-  it('acceptOffer and retract encode the bytes32 genesis', async () => {
+  it('admit and reject encode the bytes32 genesis, never the deprecated retract/acceptOffer', async () => {
     const si = await initInstance();
     const genesis = `0x${'b'.repeat(64)}`;
-    await si.acceptOffer(genesis);
-    await si.retract(genesis);
+    await si.admit(genesis);
+    await si.reject(genesis);
 
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('admit', [toBytes32Id(genesis)]);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('reject', [toBytes32Id(genesis)]);
     expect(sdk.txsSend).toHaveBeenCalledTimes(2);
-    expect(eth.directCalls[P_ADDR]?.['acceptOffer']).toBeUndefined();
-    expect(eth.directCalls[P_ADDR]?.['retract']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['admit']).toBeUndefined();
+    expect(eth.directCalls[P_ADDR]?.['reject']).toBeUndefined();
+    // The publication Safe has no authority to `retract`: V3 reserves it for the
+    // genesis author and reverts NotAuthorized() for anyone else.
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('retract', expect.anything());
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('acceptOffer', expect.anything());
   });
 
   it('whitelistAuthor / removeWhitelistedAuthor / whitelistDev / removeWhitelistedDev', async () => {
@@ -589,7 +736,8 @@ describe('publication mutations — makeOffer / acceptOffer / retract / whitelis
   it('throws when publication methods are called without initialization', async () => {
     const si = new SafeIntegration();
     await expect(si.makeOffer('0x', 'cid')).rejects.toThrow(/Safe SDK not initialized/);
-    await expect(si.acceptOffer('0x')).rejects.toThrow(/Safe SDK not initialized/);
+    await expect(si.admit('0x')).rejects.toThrow(/Safe SDK not initialized/);
+    await expect(si.reject('0x')).rejects.toThrow(/Safe SDK not initialized/);
   });
 
   it('refuses to propose publication txs with no publication module', async () => {

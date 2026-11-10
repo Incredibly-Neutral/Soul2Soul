@@ -3,6 +3,7 @@ import { Interface, namehash } from 'ethers';
 import type { S2SPublicationInit } from '../../src/components/s2s-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
 import { INIT_SESSION_KEY, saveInitSession, type InitSession } from '../../src/lib/init-session';
+import { LEGACY_PUBLICATION_FACTORIES } from '@s2s/soul2soul-shared/protocol';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/s2s-init';
 
@@ -1190,9 +1191,43 @@ describe('s2s-publication-init', () => {
       expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
     });
 
-    // A narrow hit is one RPC pair — no second, wider pass.
-    expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledTimes(2);
+    // A narrow hit is ONE pass — no second, wider window. That pass reads
+    // three factories: the records factory, the publication factory named by
+    // the protocol record, and the retired publication factory.
+    expect(si.fetchFactoryModuleCreatedLogs).toHaveBeenCalledTimes(3);
     expect(si.createProposals()).toEqual([]);
+  });
+
+  it('finds a pair whose logs sit only on the retired factory, and does not create a duplicate', async () => {
+    // The state after `publication_factory` moves to the V3 deployment: the
+    // record's factory has never seen this Safe, the retired one holds the
+    // ModuleCreated logs for the pair that already exists.
+    const si = makeSafeIntegration({ enabled: false });
+    const legacy = LEGACY_PUBLICATION_FACTORIES[0]!;
+    si.fetchFactoryModuleCreatedLogs = vi.fn(async (factoryAddress: string) => {
+      const address = factoryAddress.toLowerCase();
+      if (address === RECORDS_FACTORY.toLowerCase()) {
+        return [{ topics: [TOPIC0, PADDED_SAFE, PADDED_RECORDS] }];
+      }
+      if (address === legacy.toLowerCase()) {
+        return [{ topics: [TOPIC0, PADDED_SAFE, PADDED_PUB] }];
+      }
+      return []; // the record's publication factory, and anything else
+    });
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    // No create batch: the pair is adopted from the retired factory's logs.
+    expect(si.createProposals()).toEqual([]);
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
   });
 
   it('finds a pair older than the default window by widening the scan', async () => {

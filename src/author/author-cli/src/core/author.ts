@@ -5,9 +5,10 @@
 //   Kubo upload (2-space JSON to match the Filecoin CAR rootCid) →
 //   on-chain makeOffer → frontmatter write-back → durability legs.
 //
-// Flow (revoke):          on-chain retract FIRST (author-caller path, fully
-//   withdraws), then a remove-plumbing re-render so the revoked path stops
-//   resolving on the production site.
+// Flow (revoke):          on-chain retract FIRST (the genesis author's verb,
+//   and terminal: it ends the genesis and tombstones the latest version, so the
+//   note id can never be offered again), then a remove-plumbing re-render so the
+//   revoked path stops resolving on the production site.
 // ============================================================================
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -710,9 +711,14 @@ export interface RevokeResult {
 }
 
 /**
- * Revoke a publication's content on-chain FIRST (author-caller path fully
- * withdraws from deals and/or offers), then re-render the removed path so the
- * production site stops resolving it.
+ * Revoke a publication's content on-chain FIRST, then re-render the removed path
+ * so the production site stops resolving it.
+ *
+ * `retract` is terminal: for the genesis author it sets the ended flag and
+ * tombstones the latest version, which drops the agreement or withdraws the bare
+ * offer. Nothing re-opens it — a later `makeOffer` (or `admit`) on the same
+ * genesis reverts `Ended()`. So this ends the note id: republishing it means a
+ * new note, a new genesis. Revoking is stated as such in the log line.
  */
 export async function revokeContent(
   ctx: CliContext,
@@ -743,9 +749,13 @@ export async function revokeContent(
   );
   const authorSafeAddress = author.address;
 
-  // 1. Retract first — removes the version from deals/offers.
+  // 1. Retract first. Terminal: it ends the genesis as well as withdrawing the
+  // version, so say so here rather than letting publish revert `Ended()` later.
   const txHash = await service.retract(genesis);
   ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
+  ctx.out.warn(
+    `genesis ${genesis.slice(0, 12)}… is now ENDED: this note id cannot be published again — a re-publish must be a new note (new genesis)`,
+  );
 
   // 2. Remove-plumbing re-render so the published site stops resolving it.
   const localePaths = await service.localePathsOf();

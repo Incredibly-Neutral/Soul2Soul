@@ -93,12 +93,20 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 **Initialisation (existing Safe):** two proposals, log-based module discovery, 10-minute human wait —
 detailed in [the account child](SPEC-publication-account.md#route-b--admin-app).
 
-**Accept / refuse / revoke:** `acceptOffer(genesis)`, or `retract(genesis)` for both refusal of an offer
-and demotion of a deal; the contract distinguishes them by whether the genesis is in the deal set. The
-app's rows and the contract's asymmetry are described in
-[the agreements child](SPEC-publication-agreements.md#retractbytes32-genesis--asymmetric-by-caller). **Revoke
-proposes no render**, so a revoked page stays live until something renders it as a removal — that is a
-known gap, not behaviour to rely on.
+**Accept / refuse / revoke:** `admit(genesis)` accepts an offer, `reject(genesis)` declines an offer or
+demotes a deal back to one; the contract distinguishes the two by whether the genesis is in the deal set,
+and `reject` is reversible. Both are `onlySafe`. The author's `retract` is not the app's verb at all: it is
+the genesis author's and terminal, so an app that sent it would revert `NotAuthorized()`. **Revoke proposes
+no render**, so a revoked page stays live until something renders it as a removal — that is a known gap,
+not behaviour to rely on.
+
+**One version, one surface.** The app binds the publication wrapper to the surface the module's `NAME()`
+reports, because a publication deployed before V3 does not implement `admit`/`reject`: V3 →
+`admit`/`reject` with the V3 ABI, V2 → `acceptOffer`/`retract` with the V2 ABI, V1 (the bare name) → no
+agreements surface at all, the tab degrading to "no publication module" as it did before agreements
+existed. `src/lib/publication-version.ts` is the single place that decides this; the component never
+inspects a version. Reads cannot substitute for the probe — V3 aliases V2's read selectors and structs, so
+the difference only shows on the write.
 
 **Bulk Render / preview:** one button, two behaviours, the same `renderwithLitActions` call with
 `preview` flipped. The item list is `store.deals` (the app's cache, not the module), a preview filters out
@@ -123,8 +131,8 @@ The folded text named V1 functions throughout its workflow table (`grantLicense`
 |---|---|
 | "grant license → immediate license (safe == msg.sender)" | `makeOffer` from the Safe → immediate **deal**; from a whitelisted author → also immediate deal; from anyone else → offer |
 | "a *non-whitelisted author* calling `grantLicense` elsewhere creates a pending offer" | true, and also true for a **whitelisted developer** — the list that decides is the author list |
-| "approve pending license (`acceptLicense`)" | `acceptOffer(genesis)` |
-| "revoke license → license=false → next render removes the page → implies a rebuild" | `retract` from the Safe **demotes** a deal to an offer; the app proposes no render, so no rebuild is implied by the action itself |
+| "approve pending license (`acceptLicense`)" | `admit(genesis)` — V3's accept; on a V2 publication the app sends `acceptOffer(genesis)`, its alias and the only name V2 implements |
+| "revoke license → license=false → next render removes the page → implies a rebuild" | `reject` from the Safe **demotes** a deal to an offer, and the author's later `admit` can re-strike it; the app proposes no render, so no rebuild is implied by the action itself. (`retract` is the author's own terminal verb, not the Safe's: on a V2 publication the Safe's demotion is still spelled `retract`, which is why the two must not be conflated) |
 | "remove whitelisted author/dev — does NOT revoke existing licenses" | true, and stronger: it does not touch deals, offers, or the log |
 
 ## Local gotchas / gaps

@@ -11,6 +11,7 @@
 import { keccak256, toBytes, type Address, type PublicClient } from 'viem';
 
 import { ensSubdomainRegistryAbi, safeAbi } from '../contracts';
+import { isPublicationModuleName } from '../protocol/module-name';
 
 /** Minimal NameWrapper `ownerOf` ABI — the ENS registry points at it. */
 const NAME_WRAPPER_ABI = [
@@ -87,8 +88,10 @@ export interface ResolvedPublicationModules {
 
 /**
  * Discover a publication Safe's Records (`S2S Records Module`) and Publication
- * (`S2S Publication Module V2`) module addresses by reading the Safe's enabled
- * modules and sniffing each one's `NAME()`. Mirrors neutralpress'
+ * module addresses by reading the Safe's enabled modules and sniffing each one's
+ * `NAME()`. The publication test accepts every version (V1, V2, V3, …) through
+ * `isPublicationModuleName`, because a publication on an older implementation
+ * still serves reads and author writes. Mirrors neutralpress'
  * `PublicationService.getModuleAdresses`.
  */
 export async function resolvePublicationModules(
@@ -115,7 +118,7 @@ export async function resolvePublicationModules(
 
       if (moduleName === 'S2S Records Module') {
         configModule = moduleAddress;
-      } else if (moduleName === 'S2S Publication Module V2' || moduleName === 'S2S Publication Module') {
+      } else if (isPublicationModuleName(moduleName)) {
         publicationModule = moduleAddress;
       }
     } catch {

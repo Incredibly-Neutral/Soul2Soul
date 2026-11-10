@@ -12,10 +12,15 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 
-config({ path: resolve(process.cwd(), '../.env') });
+// Load <repo>/.env, the same file hardhat.config.ts loads. Resolved from this
+// file, not from cwd: `pnpm` runs with cwd = the package dir, where `../.env`
+// is src/publication/.env and does not exist, so the documented
+// `cd src/publication/contracts && pnpm deploy:pubfac` silently found nothing.
+// Four levels up: scripts -> contracts -> publication -> src -> repo.
+config({path: fileURLToPath(new URL('../../../../.env', import.meta.url))});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ARTIFACT_DIR = resolve(__dirname, '../artifacts/contracts/contracts');
+const ARTIFACT_DIR = resolve(__dirname, '../artifacts/src');
 const BUILD_INFO_DIR = resolve(__dirname, '../artifacts/build-info');
 
 interface ContractToVerify {
@@ -25,8 +30,14 @@ interface ContractToVerify {
 
 const CONTRACTS: ContractToVerify[] = [
   { name: 'S2SPublicationModuleV2', address: '0x4d05a336700644De60F09aF8104DC96047023C1f' },
-  // { name: 'S2SPublicationModuleFactory', address: '0xe948735151c43183accd8e85b992952b2711d554' },
-];
+  { name: 'S2SPublicationModuleV3Factory', address: process.env.PUBLICATION_FACTORY_ADDRESS || '' },
+].filter((c) => {
+  if (!c.address) {
+    console.log(`  ⏭  ${c.name}: no address yet (set PUBLICATION_FACTORY_ADDRESS after deploying)`);
+    return false;
+  }
+  return true;
+});
 
 function readBuildInfo(id: string): any {
   const files = readdirSync(BUILD_INFO_DIR);

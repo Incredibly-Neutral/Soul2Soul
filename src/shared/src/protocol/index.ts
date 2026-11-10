@@ -2,6 +2,10 @@ import { namehash as viemNamehash } from 'viem/ens';
 import { PublicClient, getContract, decodeFunctionResult } from 'viem';
 import type { S2SProtocolInfo } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
+import { isPublicationModuleName } from './module-name';
+
+export * from './module-name';
+export * from './factories';
 
 export type { S2SProtocolInfo };
 export type { Metered, S2SSignerSecrets, S2SPublishSecrets, StorageCredential, FilecoinSessionKeyData } from './types';
@@ -259,10 +263,7 @@ export const getProtocolControllerAndModules = async (
 
       if (name === 'S2S Records Module') {
         configModule = moduleAddress;
-      } else if (
-        name === 'S2S Publication Module V2' ||
-        name === 'S2S Publication Module'   // backwards compat
-      ) {
+      } else if (isPublicationModuleName(name)) {
         publicationModule = moduleAddress;
       }
     } catch (error) {

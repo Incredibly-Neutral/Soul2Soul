@@ -72,9 +72,11 @@ the iframe and there is no private key in the browser.
 
 Contract ground-truth that makes this valid:
 
-- `S2SPublicationModuleV2Factory.createModule(safe, owners, delegates)` is plain `external`, but
-  the proxy's `initialize` is `onlySafe` (`S2SPublicationModuleV2.sol:101,111`) — the creation tx
-  **must come from the Safe**.
+- `S2SPublicationModuleV3Factory.createModule(safe, owners, delegates)` accepts only the safe it
+  names, or the protocol safe on that safe's behalf (`NotSafeOrProtocolSafe`), so the creation tx
+  **must come from the Safe**. Under the superseded V2 factory the function was plain `external`,
+  and the proxy's `initialize` being `onlySafe` (`S2SPublicationModuleV2.sol:101,111`) is what made
+  it Safe-bound.
 - `S2SRecordsModuleFactory.createModule(safe)` and `S2SRecordsModule.setRecord` are likewise
   Safe-bound (`S2SRecordsModule.sol:82,246`).
 - `enableModule` / `getModulesPaginated` / `isModuleEnabled` are standard Safe functions
