@@ -2,7 +2,7 @@
 
 Read against: `~/code/polyphony/whitepaper/publication.md` (2026-10-29).
 
-Branches: [overview](SPEC-publication-overview.md) · [account](SPEC-publication-account.md) · [agreements](SPEC-publication-agreements.md) · [admin-app](SPEC-publication-admin-app.md) · [look](SPEC-publication-look.md) · [review](SPEC-publication-review.md) · [storage](SPEC-publication-storage.md) · [contracts-ens](SPEC-contracts-ens.md).
+Branches: [overview](SPEC-publication-overview.md) · [account](SPEC-publication-account.md) · [agreements](SPEC-publication-agreements.md) · [admin-app](SPEC-publication-admin-app.md) · [look](SPEC-publication-look.md) · [review](SPEC-publication-review.md) · [must-not](SPEC-publication-must-not.md) · [storage](SPEC-publication-storage.md) · [contracts-ens](SPEC-contracts-ens.md).
 
 A publication is three things at once: a name its pages are served from, a look it designs
 itself, and an editorial line — whom it trusts and what it carries. The protocol fixes none of
