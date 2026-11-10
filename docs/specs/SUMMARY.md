@@ -136,7 +136,8 @@ chooses transport (Bun fetch vs Lit `executeAction`), nothing else.
 **New canonical content-item (identity/provenance) — flat, no union:**
 `S2SContentItem = { public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string) }`
 - `S2SPublicContent` (signed, EIP-712): `specVersion, author(DidEthr), postType, mediaType, parent,
-  position, publication, locale, createdAt(unixts), base?, tags[], attributes?, plaintextHash`
+  position, publication, locale, creationDate(unixts, genesis signing time), modifiedDate(unixts, this
+  version), base?, tags[], attributes?, plaintextHash`; a v1 item carries a single `createdAt` instead
 - `secret` = stringified JSON `{ title, slug, content, custom? }` when `encryption:false`, ciphertext
   when `true`. **`secret` is not signed** — `plaintextHash` commits the plaintext instead.
 - `objectId` = EIP-712 digest of `public`, available pre-upload/pre-CID.

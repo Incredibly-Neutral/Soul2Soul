@@ -4,15 +4,17 @@
 
 import { ethersUtils } from './ethers-ambient';
 import { jcs, keccakOfJson, keccakOfString } from './jcs';
-import { buildSigningView } from './signing-view';
+import { signingEnvelope } from './signing-view';
 import {
+  type AnyS2SContentItem,
   type S2SContentItem,
+  type S2SContentItemV2,
   type S2SPublicContent,
+  type S2SPublicContentV2,
   type S2SProof,
   type S2SContentBody,
   type DidEthr,
   S2S_DOMAIN,
-  S2S_TYPES,
   toDidEthr,
 } from '../types';
 
@@ -35,30 +37,57 @@ export interface TypedDataSigner {
  * The order is load-bearing: hash → digest(=objectId) → sign → encrypt
  * The objectId exists at sign time; the CID does not.
  *
- * NOTE on EIP-712 shape: S2S_TYPES uses tagsHash/attributesHash (bytes32)
+ * NOTE on EIP-712 shape: the struct commits tagsHash/attributesHash (bytes32)
  * rather than the raw arrays. This function computes those hashes from
  * the tags/attributes fields on the public metadata before signing.
+ *
+ * Two envelope versions: a `specVersion` of '2' takes creationDate + modifiedDate
+ * and signs the S2SContentV2 struct; anything else takes createdAt and signs
+ * S2SContent exactly as before. The input types pin the literal, so a v1
+ * specVersion carrying the two dates does not compile.
  *
  * @param author - explicit did:ethr for the author (e.g. the Safe address).
  *                 When omitted, falls back to signer.getAddress() for compat.
  *                 The proof.signer always records the actual signing key (EOA).
  */
+export type PublicInputV1 = Omit<S2SPublicContent, 'author' | 'plaintextHash' | 'specVersion'> & {
+  specVersion: '1';
+};
+export type PublicInputV2 = Omit<
+  S2SPublicContentV2,
+  'author' | 'plaintextHash' | 'specVersion'
+> & { specVersion: '2' };
+
 export async function buildSignedContentItem(
-  pub: Omit<S2SPublicContent, 'author' | 'plaintextHash'>,
+  pub: PublicInputV2,
   body: S2SContentBody,
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
   author?: DidEthr,
-): Promise<S2SContentItem> {
+): Promise<S2SContentItemV2>;
+export async function buildSignedContentItem(
+  pub: PublicInputV1,
+  body: S2SContentBody,
+  signer: TypedDataSigner,
+  encryptFn: (plaintext: string) => Promise<string> | string,
+  author?: DidEthr,
+): Promise<S2SContentItem>;
+export async function buildSignedContentItem(
+  pub: PublicInputV1 | PublicInputV2,
+  body: S2SContentBody,
+  signer: TypedDataSigner,
+  encryptFn: (plaintext: string) => Promise<string> | string,
+  author?: DidEthr,
+): Promise<AnyS2SContentItem> {
   const utils = ethersUtils();
   // 1. Canonicalize the body and compute plaintextHash
   const bodyJson = jcs(body);
   const plaintextHash = keccakOfString(bodyJson);
 
-  // 2. Compute tagsHash and attributesHash for EIP-712 (bytes32 fields)
-  // 3. Build the signing view — matches S2S_TYPES exactly
+  // 2. Assemble the public metadata for the envelope version in play.
+  //    v1 keeps createdAt and the exact field set it always had.
   const authorAddr = author ?? toDidEthr(signer.getAddress());
-  const publicPart: S2SPublicContent = {
+  const shared = {
     specVersion: pub.specVersion,
     author: authorAddr,
     postType: pub.postType,
@@ -67,25 +96,28 @@ export async function buildSignedContentItem(
     position: pub.position,
     publication: pub.publication,
     locale: pub.locale,
-    createdAt: pub.createdAt,
     base: pub.base,
     tags: pub.tags,
     attributes: pub.attributes,
     plaintextHash,
   };
-  const signingView = buildSigningView(publicPart);
+  const publicPart: S2SPublicContent | S2SPublicContentV2 =
+    pub.specVersion === '2'
+      ? { ...shared, creationDate: pub.creationDate, modifiedDate: pub.modifiedDate }
+      : { ...shared, createdAt: pub.createdAt };
+  const { types, view: signingView } = signingEnvelope(publicPart);
 
-  // 4. Compute objectId = EIP-712 digest of signingView
+  // 3. Compute objectId = EIP-712 digest of signingView
   const objectId = utils._TypedDataEncoder.hash(
     S2S_DOMAIN,
-    S2S_TYPES,
+    types,
     signingView,
   );
 
-  // 5. Sign the typed data
+  // 4. Sign the typed data
   const signature = await signer.signTypedData(
     S2S_DOMAIN as unknown as Record<string, unknown>,
-    S2S_TYPES,
+    types,
     signingView,
   );
 
@@ -95,14 +127,14 @@ export async function buildSignedContentItem(
     signature: signature as `0x${string}`,
   };
 
-  // 6. Encrypt (or pass through) — result goes into .body
+  // 5. Encrypt (or pass through) — result goes into .body
   const bodyContent = await encryptFn(bodyJson);
 
-  // 7. Already built publicPart above with the original arrays (not hashes)
+  // 6. Already built publicPart above with the original arrays (not hashes)
   //    The EIP-712 signature commits the hash values;
   //    a verifier re-computes them from the arrays and checks the signature.
 
-  return { public: publicPart, objectId, proof, encryption: encryptFn !== noOpEncrypt, body: bodyContent };
+  return { public: publicPart, objectId, proof, encryption: encryptFn !== noOpEncrypt, body: bodyContent } as AnyS2SContentItem;
 }
 
 /** Pass-through encrypt function — for non-encrypted content */
@@ -114,13 +146,13 @@ export function noOpEncrypt(plaintext: string): string {
 // EIP-712 digest helper (deterministic, no signing)
 // ============================================================================
 
-export function computeObjectId(publicPart: S2SPublicContent): string {
+export function computeObjectId(publicPart: S2SPublicContent | S2SPublicContentV2): string {
   const utils = ethersUtils();
-  const signingView = buildSigningView(publicPart);
+  const { types, view } = signingEnvelope(publicPart);
   return utils._TypedDataEncoder.hash(
     S2S_DOMAIN,
-    S2S_TYPES,
-    signingView,
+    types,
+    view,
   );
 }
 

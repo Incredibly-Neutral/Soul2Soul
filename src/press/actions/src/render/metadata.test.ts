@@ -25,7 +25,7 @@ import {
   type S2SContentInfo,
   type S2SProtocolInfo,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { addAndSignMetadata } from './metadata';
+import { addAndSignMetadata, type S2SContentInfoWithDates } from './metadata';
 
 // metadata.ts runs inside a Lit Action: `ethers` and `Lit` are injected globals.
 const PRIV = ethers.utils.keccak256(ethers.utils.toUtf8Bytes('s2s-metadata-test-key'));
@@ -48,7 +48,7 @@ const PROTOCOL_INFO = {
 const PAGE = `<!DOCTYPE html>
 <html lang="en"><head><title>t</title></head><body><h1>Hello</h1></body></html>`;
 
-const contentInfo = (overrides: Partial<S2SContentInfo> = {}): S2SContentInfo => ({
+const contentInfo = (overrides: Partial<S2SContentInfoWithDates> = {}): S2SContentInfoWithDates => ({
   author: {
     did: 'did:ethr:0x1111111111111111111111111111111111111111',
     createdAt: '2025-01-02T03:04:05.000Z',
@@ -98,7 +98,7 @@ function recover(toSign: string, signature: string): string {
 }
 
 async function render(
-  info: S2SContentInfo,
+  info: S2SContentInfoWithDates,
   html: string = PAGE,
 ): Promise<{ html: string; schema: JsonLd }> {
   const out = await addAndSignMetadata(GENESIS, html, PROTOCOL_INFO, info);
@@ -384,5 +384,65 @@ describe('addAndSignMetadata — structural invariants', () => {
     expect(schema.encoding.sha256).toBe(sha256Of(fragment));
     expect(extractHashableHtml(html)).toBe(fragment);
     expect(recover(payloadOf(schema), schema.proof.proofValue)).toBe(PKP);
+  });
+});
+
+describe('addAndSignMetadata — the two signed dates', () => {
+  it('page dateCreated is creationDate (genesis), dateModified is modifiedDate (this version)', async () => {
+    const { schema } = await render(
+      contentInfo({ creationDate: '1600000000', modifiedDate: '1700000100' }),
+    );
+
+    // Unix-second strings, as the rest of the block uses them.
+    expect(schema.dateCreated).toBe('1600000000');
+    expect(schema.dateModified).toBe('1700000100');
+    // The author node keeps its own dateCreated (the genesis signing time).
+    expect(schema.author.dateCreated).toBe('2025-01-02T03:04:05.000Z');
+  });
+
+  it('a v1 item, whose two dates are equal, emits them equal', async () => {
+    const { schema } = await render(
+      contentInfo({ creationDate: '1700000000', modifiedDate: '1700000000' }),
+    );
+    expect(schema.dateCreated).toBe('1700000000');
+    expect(schema.dateModified).toBe('1700000000');
+  });
+
+  it('omits both when the envelope carries no dates', async () => {
+    const { schema } = await render(contentInfo());
+    expect(schema.dateCreated).toBeUndefined();
+    expect(schema.dateModified).toBeUndefined();
+  });
+
+  it('signs the dates INTO the payload, so a later edit to either breaks the proof', async () => {
+    const { schema } = await render(
+      contentInfo({ creationDate: '1600000000', modifiedDate: '1700000100' }),
+    );
+
+    // The signed bytes must contain both dates, not just the emitted page.
+    const payload = payloadOf(schema);
+    expect(payload).toContain('1600000000');
+    expect(payload).toContain('1700000100');
+    expect(recover(payload, schema.proof.proofValue)).toBe(PKP);
+
+    // Editing dateModified after signing invalidates the proof: this fails if
+    // the dates ever leave the canonical payload.
+    const tampered = { ...schema, dateModified: '1800000000' };
+    expect(recover(payloadOf(tampered), schema.proof.proofValue)).not.toBe(PKP);
+  });
+
+  it('leaves isBasedOn.dateModified as the parent timestamp', async () => {
+    const { schema } = await render(
+      contentInfo({
+        creationDate: '1600000000',
+        modifiedDate: '1700000100',
+        isBasedOn: {
+          genesis: '0x' + '44'.repeat(32),
+          contentHash: 'aa',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      }),
+    );
+    expect(schema.isBasedOn.dateModified).toBe('2025-01-01T00:00:00.000Z');
   });
 });

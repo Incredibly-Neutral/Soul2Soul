@@ -28,7 +28,7 @@ interface S2SContentItem {
 }
 
 interface S2SPublicContent {
-  specVersion: string;        // "1"
+  specVersion: string;        // "2"; a v1 item carries a single createdAt instead
   author: string;             // 0x<the author's Safe>
   postType: string;           // post, page, or a custom type
   mediaType: string;          // how to read the body
@@ -36,7 +36,8 @@ interface S2SPublicContent {
   position: string;           // for ordering
   publication: string;        // the publication's name
   locale: string;             // language
-  createdAt: number;          // unix seconds, this version
+  creationDate: number;       // unix seconds, when the first version was signed
+  modifiedDate: number;       // unix seconds, when this version was signed
   tags: string[];
   plaintextHash: string;      // keccak256 of the body before encryption
 }
@@ -44,7 +45,7 @@ interface S2SPublicContent {
 
 ## Public part and body: split by who needs to read them
 
-The public part holds what a publication needs before it decrypts anything: who wrote the manuscript, for which publication, what kind of post it is, when, and its tags. A publication can sort and filter what it has been offered without the press, and anyone can see what an author has signed.
+The public part holds what a publication needs before it decrypts anything: who wrote the manuscript, for which publication, what kind of post it is, when it was born and when this version was signed, and its tags. A publication can sort and filter what it has been offered without the press, and anyone can see what an author has signed.
 
 The body holds the title, the slug, the text and any custom fields. The author decides per manuscript whether to encrypt it, with a boolean in the note's frontmatter. Encrypted, it can be decrypted only through the press, when a gate passes. The body is stored as a string, so encryption replaces that string and sets `encryption` to true, and the rest of the object is the same either way.
 
@@ -58,7 +59,7 @@ A manuscript is identified by its genesis id: the `objectId` of its first versio
 
 ## Versions: appended, never replaced
 
-A revision is a new signed object with its own `objectId`, published under the same genesis id. Each version is stored at its own CID and recorded on the publication's contract as a CID and a timestamp, appended to the manuscript's list of versions. Earlier versions stay at their CIDs and the list only grows, so a manuscript's history can be read but not rewritten. The renderer builds the page from the latest version.
+A revision is a new signed object with its own `objectId`, published under the same genesis id. It signs a new `modifiedDate` and keeps the `creationDate` of the first version, so the pair dates the document, not the version, and the renderer exposes both to templates as `creationDate` and `modifiedDate`. Each version is stored at its own CID and recorded on the publication's contract as a CID and a timestamp, appended to the manuscript's list of versions. Earlier versions stay at their CIDs and the list only grows, so a manuscript's history can be read but not rewritten. The renderer builds the page from the latest version.
 
 ## Roadmap
 
