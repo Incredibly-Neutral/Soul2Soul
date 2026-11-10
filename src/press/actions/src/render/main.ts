@@ -22,7 +22,7 @@ import {
   pathsForCollections,
   shouldWriteBackCache,
 } from './data.ctrlr';
-import { addAndSignMetadata } from './metadata';
+import { addAndSignMetadata, type S2SContentInfoWithDates } from './metadata';
 import { renderHTML } from '../renderer/html.ctrlr';
 
 import { extractSignerAddress } from '../libs/gates';
@@ -463,9 +463,11 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         // CID carried by toBody (the old `body.cid || body.id` fallback emitted
         // `ipfs://0x…` for the bytes32 genesis, which is not a CID).
         const authorProof = toAuthorProof(body.proof, body.objectId);
-        const metadata: S2SContentInfo = {
+        const metadata: S2SContentInfoWithDates = {
           author: {
             did: body.author || '',
+            // Genesis signing time: the author node's dateCreated does not move
+            // when the document is republished.
             createdAt: body.creationDate || '',
             ...(authorProof ? { proof: authorProof } : {}),
           },
@@ -475,6 +477,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             ...(authorSafeAddress ? { safe: authorSafeAddress } : {}),
           },
           contentGenesis: job.id,
+          // The page's two signed dates: genesis signing time and this
+          // version's. On a v1 item both are the item's single createdAt.
+          creationDate: body.creationDate || '',
+          modifiedDate: body.modifiedDate || '',
           // The item's own EIP-712 digest (sibling of proof), NOT the genesis.
           objectId: typeof body.objectId === 'string' ? body.objectId : undefined,
           contentCid: body.cid,
@@ -486,6 +492,10 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             ? {
                 genesis: toBytes32Id(body.parent),
                 contentHash: '',
+                // NOT the parent's timestamp: the flat body carries this
+                // document's genesis signing time, and the parent's dates are
+                // never read. Kept as-is so the emitted isBasedOn node does not
+                // change shape.
                 timestamp: body.creationDate || '',
               }
             : undefined,

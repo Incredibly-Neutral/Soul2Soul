@@ -70,8 +70,16 @@ import type { SingleInput, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-a
 // verdict CAN compute the EIP-712 digest and recover a signer here. The stored
 // item must therefore be MINTED (JCS body → keccak → digest → signature): a
 // hand-shaped objectId/proof is, correctly, a forgery the read path refuses.
-import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import {
+  buildSigningView,
+  buildSigningViewV2,
+} from '../../../../shared/dist/manuscript/identity/signing-view';
+import {
+  S2S_DOMAIN,
+  S2S_TYPES,
+  S2S_TYPES_V2,
+  toDidEthr,
+} from '../../../../shared/dist/manuscript/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -86,6 +94,9 @@ const SIGNER = '0xSigner';
 const AUTHOR_SAFE = '0xAuthorSafe';
 const SIGNATURE = '0x' + 'ab'.repeat(65);
 const SIGNED_CREATED_AT = 1700000000;
+// A v2 item signs two different instants: genesis, then this version.
+const SIGNED_CREATION_DATE = 1600000000;
+const SIGNED_MODIFIED_DATE = 1700000100;
 
 const PLAINTEXT = JSON.stringify({ content: 'Hello', custom: {}, slug: 'hello', title: 'Hello' });
 const PLAINTEXT_HASH = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(PLAINTEXT));
@@ -141,6 +152,44 @@ const contentItem = (body = PLAINTEXT) => {
       type: 'eip712' as const,
       signer: AUTHOR_SIGNER,
       // ethers v5: joinSignature(signDigest(...)) — v5's Signature has no `.serialized`
+      signature: ethers.utils.joinSignature(AUTHOR_WALLET._signingKey().signDigest(digest)),
+    },
+    encryption: false,
+    body,
+  };
+};
+
+/**
+ * The v2 counterpart of {@link contentItem}: same mint, but over S2SContentV2
+ * (creationDate + modifiedDate instead of createdAt). The two dates differ on
+ * purpose, so a wiring mistake that feeds one field from the other is visible.
+ */
+const contentItemV2 = (body = PLAINTEXT) => {
+  const pub = {
+    specVersion: '2',
+    author: AUTHOR,
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '0',
+    publication: PUBLICATION,
+    locale: 'en',
+    creationDate: SIGNED_CREATION_DATE,
+    modifiedDate: SIGNED_MODIFIED_DATE,
+    tags: [] as string[],
+    plaintextHash: PLAINTEXT_HASH,
+  };
+  const digest = ethers.utils._TypedDataEncoder.hash(
+    S2S_DOMAIN as never,
+    S2S_TYPES_V2 as never,
+    buildSigningViewV2(pub as never),
+  );
+  return {
+    public: pub,
+    objectId: digest,
+    proof: {
+      type: 'eip712' as const,
+      signer: AUTHOR_SIGNER,
       signature: ethers.utils.joinSignature(AUTHOR_WALLET._signingKey().signDigest(digest)),
     },
     encryption: false,
@@ -259,6 +308,9 @@ describe('render action — plaintext integrity (direct read path)', () => {
     expect(metadata?.specVersion).toBe('1');
     expect(metadata?.author?.did).toBe(AUTHOR);
     expect(metadata?.author?.createdAt).toBe(String(SIGNED_CREATED_AT));
+    // v1 carries one signed date, so both page dates are it.
+    expect(metadata?.creationDate).toBe(String(SIGNED_CREATED_AT));
+    expect(metadata?.modifiedDate).toBe(String(SIGNED_CREATED_AT));
     // proof is projected from the item's SIBLING objectId (a real item carries
     // {type, signer, signature}; the digest is not inside proof).
     const item = contentItem();
@@ -271,6 +323,25 @@ describe('render action — plaintext integrity (direct read path)', () => {
 
     const data = (result as { data?: { job?: { html?: string } } }).data;
     expect(data?.job?.html).toBe('QmRenderedHtml');
+  });
+});
+
+describe('render action — v2 envelope dates', () => {
+  it('hands the page dateCreated from creationDate and dateModified from modifiedDate', async () => {
+    vi.mocked(catFile).mockResolvedValue(JSON.stringify(contentItemV2()));
+
+    const result = await main(input());
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(addAndSignMetadata)).toHaveBeenCalledTimes(1);
+    const [, , , metadata] = vi.mocked(addAndSignMetadata).mock.calls[0];
+
+    expect(metadata?.specVersion).toBe('2');
+    // Each page date comes from its OWN field: the two values differ, so
+    // swapping the wiring in main.ts fails here.
+    expect(metadata?.creationDate).toBe(String(SIGNED_CREATION_DATE));
+    expect(metadata?.modifiedDate).toBe(String(SIGNED_MODIFIED_DATE));
+    // The author node keeps the genesis signing time.
+    expect(metadata?.author?.createdAt).toBe(String(SIGNED_CREATION_DATE));
   });
 });
 
