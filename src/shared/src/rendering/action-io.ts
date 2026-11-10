@@ -72,16 +72,34 @@ export const s2sProofSchema = z.object({
 });
 
 // ============================================================================
-// S2SContentItem (flat — no discriminated union)
+// S2SContentItem — three storage layouts
+//
+// The v1/v2 layout holds one `body` string. The v3 layout holds one body per
+// key holder under `bodies`, keyed by the key holder's name (`s2s`, plus a
+// publication's own key when it has one). The two are told apart by which key
+// is present, not by public.specVersion: a v3 item still carries the v2
+// envelope. Acceptance of the v1/v2 shape is unchanged.
 // ============================================================================
 
-export const s2sContentItemSchema = z.object({
+const s2sContentItemSchemaWithBody = z.object({
   public: s2sPublicContentSchema,
   objectId: z.string().min(1, 'objectId is required'),
   proof: s2sProofSchema,
   encryption: z.boolean(),
   body: z.string(),
 });
+
+export const s2sContentItemSchemaV3 = z.object({
+  public: s2sPublicContentSchemaV2,
+  objectId: z.string().min(1, 'objectId is required'),
+  proof: s2sProofSchema,
+  encryption: z.boolean(),
+  bodies: z.record(z.string(), z.string()),
+});
+
+// The v3 branch is tried first so an item that carries `bodies` keeps its map;
+// a v1/v2 item has no `bodies` and falls through to the body branch unchanged.
+export const s2sContentItemSchema = z.union([s2sContentItemSchemaV3, s2sContentItemSchemaWithBody]);
 
 // ============================================================================
 // S2SContentBody (what goes into .body)
