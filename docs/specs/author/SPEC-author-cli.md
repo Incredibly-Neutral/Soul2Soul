@@ -110,7 +110,7 @@ silent no-op:
 |---|---|---|
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
 | `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
-| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encryption: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encryption: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. | upload, offer, preview, publish |
+| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. | upload, offer, preview, publish |
 | `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
 | `--branch <b>` | Default render branch; empty string when omitted. | publication new |
 | `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
@@ -644,7 +644,7 @@ Shared field meanings:
 | `gatewayUrl` | (upload only) `https://ipfs.io/ipfs/<cid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `cid`. |
 | `txHash` | L2 transaction hash of the on-chain action. |
 | `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
-| `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author`/`creation_date` on first publish, `cid` and `modified_date` always). |
+| `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author`/`creation_date` on first publish, `cid`, `modified_date` and `encrypted` always). |
 
 `ipfsUrl`/`gatewayUrl` are **additive scalars** on `upload` alone — existing keys are unchanged, so
 hosts that read the result as an open shape need no change: the Neovim plugin formats known fields,
@@ -795,7 +795,8 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   when it was missing. This write path is the missing half of the port: `author.ts:2` calls it the CLI
   port of neutralpress' `publishToPublication`, the step `SPEC-neutralpress.md:73-75` records as never
   wired there — that package publishes plaintext.
-- **Encrypted notes** (`encryption: true` in the frontmatter): `core/encrypt.ts buildEncryptFn`
+- **Encrypted notes** (`encrypted: true` in the frontmatter; the legacy `encryption` spelling is still
+  read): `core/encrypt.ts buildEncryptFn`
   returns a Lit encryptor bound to `ctx.protocolInfo.pkp` with `LIT_USAGE_KEY`; shared's
   `buildSignedContentItem` calls it **after signing, before upload**. That order is safe because the
   signature covers `plaintextHash`, not the body: `plaintextHash` is the keccak of the JCS-canonical
@@ -815,7 +816,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   re-serialised) is refused rather than publishing the body in the clear under a lying
   `encryption: true`. The downgrade guard keys on the identity, `genesis` else `content_id`
   (`author.ts:386`; legacy `content_id`-only notes are covered), and refuses three states, each with
-  its own message: the previous item is encrypted (restore `encryption: true`, or
+  its own message: the previous item is encrypted (restore `encrypted: true`, or
   `--allow-plaintext`); the previous revision cannot be read, cause-classified — a recorded CID that
   does not resolve gets "fix or remove the stale `cid`", while a timeout or a gateway fault gets
   "re-run …, or pass `--allow-plaintext`", so that first remedy does not name the flag; and an
@@ -841,10 +842,25 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   downgrade guard, both through `resolveKuboCid`) and is **deleted** on the next write-back, so a
   note never carries two CIDs naming different revisions. `cid` is not template data, so it is
   excluded from the shared `custom` bag like every other protocol key.
+  It also writes `encrypted`: the encryption state **that publish actually used**, taken from the
+  flag that drove the encryptor rather than from a second read of the file, and written on every
+  publish — not only when absent — so the note always states what the last publish did and editing
+  the key changes the next one. The value is a real YAML boolean (`encrypted: true` /
+  `encrypted: false`), never a quoted string: `'false'` is truthy under `Boolean()`, so a quoted
+  value would silently encrypt a note its author meant to publish in the clear. Reading resolves
+  `encrypted` first, then the legacy `encryption` spelling (`lib/frontmatter.ts resolveEncryption`,
+  the same read-then-rename precedent as `cid`/`kubo_cid`); the legacy key is deleted on the next
+  write-back, so a migrated note carries one key and no stale one. The published item's own field is
+  unchanged: it stays `encryption: boolean` on `S2SContentItem`. Like `cid`, the key is a protocol
+  key, not template data — it is stripped from the `custom` bag before signing, because shared's
+  `KNOWN_FRONTMATTER_KEYS` predates the new name and would otherwise sign the flag into the body's
+  `custom`. The read side is otherwise untouched: `Boolean(frontmatter.encryption)` in
+  `shared/src/authoring/note.ts` still means a note carrying the string `'false'` encrypts, and the
+  write-back's `true` then makes the file truthful.
   `propose` re-resolves the note's on-chain identity (`genesis`, else `content_id`) and sends
   the `makeOffer(objectId, cid)` for `--cid` if given, else the stored `cid`; it
   expects `upload` to have run first (no identity — `genesis` or `content_id` — or no CID and no
-  `--cid`, → usage error pointing at `s2s author upload`). When the note says `encryption: true`,
+  `--cid`, → usage error pointing at `s2s author upload`). When the note says `encrypted: true`,
   `propose` also verifies the item it is about to anchor: it fetches that CID and refuses if the
   stored item does not declare `encryption: true`, has no string body, or cannot be read or parsed —
   and the check is on the anchored CID (including `--cid`), not on the frontmatter's `cid`. It
@@ -870,7 +886,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   talk to a Lens-compatible API with the owner session; a headless equivalent is a follow-up.
 - **Frontmatter write-back** re-serializes the whole `---` block via yaml `Document`: existing key
   order and scalar values survive, **comments do not**, and `0x`-looking strings are **quoted**
-  (so they round-trip as strings rather than re-parsing as numbers). Both are documented caveats.
+  (so they round-trip as strings rather than re-parsing as numbers). `encrypted` is the one boolean
+  written back, so it stays unquoted (`upsertFrontmatter` takes `string | boolean` and `Document.set`
+  emits a YAML boolean). Both are documented caveats.
 - **Live-chain paths** (`upload`/`preview`/`publish`/`revoke`/`new` against real RPCs) are not
   exercised by the automated suite — the dev chain is unreachable here and the full shared suite's
   live-chain `sequence` tests fail pre-session. See below.

@@ -104,6 +104,38 @@ describe('ContentController.parseNote — frontmatter-driven fields', () => {
 		expect(parsed.tags).toEqual(['art']);
 	});
 
+	it('reads encrypted first, then the legacy encryption key', async () => {
+		const encrypted = await parse('---\nencrypted: true\n---\n# T\n\nBody', {
+			encrypted: true,
+		});
+		expect(encrypted.encryption).toBe(true);
+
+		const legacy = await parse('---\nencryption: true\n---\n# T\n\nBody', {
+			encryption: true,
+		});
+		expect(legacy.encryption).toBe(true);
+
+		const legacyFalse = await parse('---\nencryption: false\n---\n# T\n\nBody', {
+			encryption: false,
+		});
+		expect(legacyFalse.encryption).toBe(false);
+
+		// The new key wins when a note somehow carries both.
+		const both = await parse('---\nencrypted: false\nencryption: true\n---\n# T\n\nBody', {
+			encrypted: false,
+			encryption: true,
+		});
+		expect(both.encryption).toBe(false);
+	});
+
+	it('keeps both encryption keys out of the custom bag', async () => {
+		const parsed = await parse('---\n---\n# T\n\nBody', {
+			encrypted: true,
+			encryption: false,
+		});
+		expect(parsed.custom).toEqual({});
+	});
+
 	it('applies defaults when frontmatter fields are absent', async () => {
 		const parsed = await parse('---\ntags: []\n---\n# T\n\nBody', {
 			tags: [],
