@@ -19,7 +19,7 @@ docs/specs/
   SUMMARY.md                       the whole protocol in one read, for orientation
   system/                          SPEC-system-contract.md, SPEC-shared.md
   author/         SPEC-author.md + SPEC-author-overview.md + 10 branches
-  publication/    SPEC-publication.md + SPEC-publication-overview.md + 7 branches
+  publication/    SPEC-publication.md + SPEC-publication-overview.md + 8 branches
   agreement/      SPEC-agreement.md
   gates/          SPEC-gates.md
   press/          SPEC-press.md + SPEC-protocol-actions.md
@@ -98,7 +98,8 @@ own area.
   `owner-history` (who was an owner of the author Safe, and when — the module, the guard and
   the era model)
 - `publication/` — thirteen invariants, two additions, five gaps; branches: `account`,
-  `agreements`, `admin-app`, `look`, `review`, `storage`, `contracts-ens` (the name layer, which
+  `agreements`, `admin-app`, `look`, `review`, `must-not` (the impossible states of the area, with
+  the mechanism and the receipt for each), `storage`, `contracts-ens` (the name layer, which
   implements PUBLICATION-1, -8 and -9)
 - `agreement/` — seven invariants, two additions, four gaps; the agreement is a boolean per
   manuscript, not an object (`S2SPublicationModuleV2`), and its detail is the
