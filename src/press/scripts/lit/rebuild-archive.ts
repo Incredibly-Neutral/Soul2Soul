@@ -24,7 +24,9 @@ import {
   encodeContenthashWrapped,
 } from '@s2s/soul2soul-shared';
 import { mergeArchive, reconcile, serialize } from '../../actions/src/libs/archive.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+// Type-only dist import (same source the action libs use): the union of storage
+// layouts, so nothing here can read `item.body` on a v3 item.
+import type { AnyS2SContentItem } from '../../../shared/dist/manuscript/types';
 
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, '../../../../.env'), quiet: true });
@@ -52,11 +54,13 @@ async function main() {
   const deals: { genesis: string; author: string; cid: string; timestamp: string }[] = manifest.deals;
   console.log(`deals from manifest: ${deals.length}`);
 
-  // Load each staged item and rebuild the refreshed map genesis → S2SContentItem.
-  const refreshed = new Map<string, S2SContentItem>();
+  // Load each staged item and rebuild the refreshed map genesis → item.
+  const refreshed = new Map<string, AnyS2SContentItem>();
   for (const f of manifest.fetched) {
     const raw = readFileSync(f.file, 'utf8');
-    const item = JSON.parse(raw) as S2SContentItem;
+    // Cast needed: JSON.parse yields `unknown`. This script's own content-hash
+    // check below and parseArchive's shape gate are what validate the bytes.
+    const item = JSON.parse(raw) as AnyS2SContentItem;
     refreshed.set(f.genesis, item);
   }
   console.log(`staged items loaded: ${refreshed.size}`);

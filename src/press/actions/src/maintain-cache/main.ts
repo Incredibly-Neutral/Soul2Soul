@@ -5,7 +5,7 @@ import {
   MaintainCacheInput,
   MaintainCacheData,
 } from '@s2s/soul2soul-shared/lit-actions';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
 import { getProtocolInfo } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
@@ -156,7 +156,7 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
     // turn every invocation into another pin + setText write for an item that
     // can never become valid (an unbounded write loop). Rejected items are
     // reported in the trace and left out of the next snapshot.
-    const refreshed = new Map<string, S2SContentItem>();
+    const refreshed = new Map<string, AnyS2SContentItem>();
     const rejected: { genesis: string; cid: string; code: ItemIssueCode; reason: string }[] = [];
     await Promise.all(
       needsFetch.map(async (entry) => {
@@ -184,7 +184,10 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
           });
           return;
         }
-        refreshed.set(entry.genesis, item as S2SContentItem);
+        // Cast needed: `item` is JSON.parse's `unknown`, and judgeRefetchedItem
+        // returns a verdict rather than a narrowed value. The verdict above is
+        // what licenses the claim that this is a canonical item.
+        refreshed.set(entry.genesis, item as AnyS2SContentItem);
       }),
     );
 

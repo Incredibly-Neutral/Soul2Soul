@@ -5,6 +5,7 @@ import {
   inspectItemIntegrity,
   isValidContentItem,
   skipReason,
+  storedBody,
   type ItemIssueCode,
 } from './item-integrity';
 import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
@@ -13,6 +14,10 @@ import type {
   S2SPublicContent,
   DataAvailabilityEntry,
 } from '@s2s/soul2soul-shared/lit-actions';
+// `AnyS2SContentItem` is not re-exported from the zod-free `lit-actions` entry,
+// so it comes from the compiled manuscript types — the same dist import
+// item-integrity.ts already uses, and a type-only one (erased from the bundle).
+import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 
 // ── Module ABIs (Base) ────────────────────────────────────────────────────
 // Entry tuple returned by getLatest / getDeals / getOffers.
@@ -87,12 +92,21 @@ const toEntry = (e: any): Entry => ({
 /**
  * A content item as read from IPFS.
  *
- * Newer items are the full canonical S2SContentItem (objectId/proof plus
+ * Newer items are the full canonical content item (objectId/proof plus
  * public.plaintextHash/specVersion/mediaType). Legacy items predate that
  * envelope, so those identity fields are OPTIONAL here while the fields the
  * render path has always read (public.author …) stay required.
+ *
+ * The body is optional in both layouts: a v3 item carries `bodies` and no
+ * `body` at all. Read it through `storedBody` (item-integrity), never by
+ * property — that is the only accessor that resolves both layouts.
  */
-export type StoredContentItem = Omit<S2SContentItem, 'objectId' | 'proof' | 'public'> & {
+export type StoredContentItem = Omit<
+  S2SContentItem,
+  'objectId' | 'proof' | 'public' | 'body'
+> & {
+  body?: string;
+  bodies?: Record<string, string>;
   objectId?: string;
   proof?: S2SContentItem['proof'];
   public: Partial<Omit<S2SPublicContent, 'author'>> &
@@ -151,7 +165,13 @@ export type ItemCheck =
   | { ok: false; code: ItemIssueCode; reason: string };
 
 export type ItemRead =
-  | { ok: true; item: StoredContentItem }
+  /**
+   * The canonical item as it was read, in whichever storage layout it was
+   * written: `bodies` on a v3 item, `body` on a v1/v2 item. Typed on the union,
+   * not on one member, so `item.body` does not compile — the body is read with
+   * `storedBody` or not at all.
+   */
+  | { ok: true; item: AnyS2SContentItem }
   | { ok: false; kind: ItemFailureKind; reason: string; error?: unknown };
 
 /** A skipped collection item: the availability shape plus its failure kind. */
@@ -308,9 +328,12 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
     };
   }
 
+  const body = storedBody(item);
   if (isPlaintextItem(item)) {
     try {
-      JSON.parse(item.body);
+      // Non-null: checkItemIntegrity refused this item above unless it carries
+      // an `s2s` body, and that refusal is the same call that read it.
+      JSON.parse(body as string);
     } catch (e) {
       return {
         ok: false,
@@ -369,12 +392,16 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     ...identity,
   };
 
+  // The body bytes this press renders: the protocol's (`s2s`) entry in the
+  // item's body map, whatever storage layout the item was written in.
+  const body = storedBody(item);
+
   if (!isPlaintextItem(item)) {
     // content is the ciphertext string; decrypt.ts does JSON.parse(body.content)
-    return { ...base, encryption: true, content: item.body };
+    return { ...base, encryption: true, content: body };
   }
 
-  const parsed = JSON.parse(item.body); // { title, slug, content, custom? }
+  const parsed = JSON.parse(body as string); // { title, slug, content, custom? }
   return {
     ...base,
     encryption: false,
@@ -440,7 +467,7 @@ export const fetchItemById = async (
   publicationModule: string,
   rpcs?: string[],
   gateway?: string,
-): Promise<{ entry: Entry; item: StoredContentItem } | undefined> => {
+): Promise<{ entry: Entry; item: AnyS2SContentItem } | undefined> => {
   const entry = await getLatestEntry(genesis, publicationModule, rpcs);
   if (!entry.cid) return undefined;
 
@@ -544,7 +571,7 @@ const readPublicationItems = async (
   gateway?: string,
 ): Promise<{
   bodies: any[];
-  items: Map<string, S2SContentItem>;
+  items: Map<string, AnyS2SContentItem>;
   entries: Entry[];
   skips: ItemSkip[];
 }> => {
@@ -552,7 +579,7 @@ const readPublicationItems = async (
   const reads = await Promise.all(entries.map((entry) => readItemByEntry(entry, gateway)));
 
   const bodies: any[] = [];
-  const items = new Map<string, S2SContentItem>();
+  const items = new Map<string, AnyS2SContentItem>();
   const skips: ItemSkip[] = [];
   entries.forEach((entry, i) => {
     const read = reads[i];
@@ -567,8 +594,8 @@ const readPublicationItems = async (
       return;
     }
     // read.item is the same object read off IPFS; the map is the archive seed
-    // (canonical items), so keep its declared type.
-    items.set(entry.genesis, read.item as S2SContentItem);
+    // (canonical items), so it keeps its own type — no widening needed.
+    items.set(entry.genesis, read.item);
     bodies.push(toBody(entry, read.item));
   });
   return { bodies, items, entries, skips };
@@ -600,7 +627,7 @@ export const fetchByPublicationWithSkips = async (
  *
  * Returns the SAME flat bodies as fetchByPublication (single pass, byte-identical
  * ordering) but ALSO captures, in that same single cat per entry, the full
- * canonical S2SContentItem (keyed by genesis) and the deal entries — exactly
+ * canonical content item (keyed by genesis) and the deal entries — exactly
  * what the T4 write-back needs to SEED the first archive snapshot. There is NO
  * second fetch: build bodies and archive-source items together.
  *
@@ -613,7 +640,7 @@ export const fetchByPublicationDetailed = async (
   gateway?: string,
 ): Promise<{
   bodies: any[];
-  items: Map<string, S2SContentItem>;
+  items: Map<string, AnyS2SContentItem>;
   entries: Entry[];
   skips: ItemSkip[];
 }> => {
