@@ -2,9 +2,10 @@
 // Encryption seam for the author write path.
 //
 // WHAT THE READ PATH REQUIRES (this is the contract the write path must meet):
-//   - An encrypted item stores the ciphertext as TEXT in `item.body`
-//     (`press/actions/src/libs/module.factory.ts:359-361` — `toBody` passes
-//     it through as `content`).
+//   - An encrypted item stores the ciphertext as TEXT in its body for the
+//     protocol key — `bodies.s2s` in the current layout, `body` in the v1/v2
+//     ones (`press/actions/src/libs/module.factory.ts:359-361` — `toBody`
+//     passes it through as `content`).
 //   - `decryptRaw` does `JSON.parse(body.content)` and hands the parsed value
 //     to `Lit.Actions.Decrypt({ pkpId, ciphertext })`
 //     (`press/actions/src/libs/decrypt.ts:36`).
@@ -62,7 +63,7 @@
 // unit-testable; the one I/O is the stored-item read, injected as a function.
 // ============================================================================
 
-import { noOpEncrypt } from '@s2s/soul2soul-shared';
+import { bodyForKey, noOpEncrypt, type AnyS2SContentItem } from '@s2s/soul2soul-shared';
 
 import { CliError, UsageError } from '../lib/errors';
 import { requireSetting } from './config';
@@ -91,8 +92,12 @@ export interface StoredItemReader {
 export interface StoredItemState {
   /** `true` only when the item says `encryption: true` (absent = plaintext). */
   encryption: boolean;
-  /** `item.body` when it is a string, else undefined. */
-  body: string | undefined;
+  /**
+   * The body the protocol key holds — `bodies.s2s` in the current layout, the
+   * single `body` in a v1/v2 item. Undefined when that entry is absent or is
+   * not a string; a second key holder's entry is not this function's concern.
+   */
+  s2sBody: string | undefined;
 }
 
 /**
@@ -283,14 +288,26 @@ export async function fetchStoredItem(
   if (typeof item !== 'object' || item === null) {
     throw new UsageError(`content item ${cid} for ${notePath} is not a JSON object`);
   }
-  const record = item as { encryption?: unknown; body?: unknown };
+  const record = item as { encryption?: unknown; bodies?: unknown };
   if (record.encryption !== undefined && typeof record.encryption !== 'boolean') {
     throw new UsageError(
       `content item ${cid} for ${notePath} has a non-boolean \`encryption\` field (${JSON.stringify(record.encryption)})`,
     );
   }
+  if (
+    record.bodies !== undefined &&
+    (typeof record.bodies !== 'object' || record.bodies === null)
+  ) {
+    throw new UsageError(
+      `content item ${cid} for ${notePath} has a non-object \`bodies\` field (${JSON.stringify(record.bodies)})`,
+    );
+  }
+  // One read of the item, then the protocol key's body out of whatever layout
+  // it was written in. `bodyForKey` maps a v1/v2 `body` under `s2s`, so a stored
+  // item from before the layout change reads here unchanged.
+  const body = bodyForKey(item as AnyS2SContentItem);
   return {
     encryption: record.encryption === true,
-    body: typeof record.body === 'string' ? record.body : undefined,
+    s2sBody: typeof body === 'string' ? body : undefined,
   };
 }

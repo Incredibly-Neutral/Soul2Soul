@@ -95,6 +95,7 @@ describe('s2sContentItemSchema accepts all three storage layouts', () => {
     const single = { ...V3_ITEM, bodies: { s2s: 'ciphertext' } };
     expect(s2sContentItemSchema.safeParse(single).success).toBe(true);
   });
+<<<<<<< HEAD
 });
 
 describe('s2sContentItemSchema rejects an item carrying both layouts', () => {
@@ -117,6 +118,17 @@ describe('s2sContentItemSchema rejects an item carrying both layouts', () => {
       bodies: { s2s: 'c' },
     };
     expect(s2sContentItemSchema.safeParse(v1WithMap).success).toBe(false);
+=======
+
+  it('reads bodies, not body, when an item carries both', () => {
+    // Presence of `bodies` is the discriminator: the v3 branch is tried first,
+    // so a stale `body` beside a map cannot win and truncate the map.
+    const both = { ...V3_ITEM, body: 'stale' };
+    const parsed = s2sContentItemSchema.safeParse(both);
+    expect(parsed.success).toBe(true);
+    const bodies = parsed.success && 'bodies' in parsed.data ? parsed.data.bodies : undefined;
+    expect(bodies).toEqual(V3_ITEM.bodies);
+>>>>>>> agent/cli
   });
 });
 
@@ -146,6 +158,7 @@ describe('s2sContentItemSchemaV3', () => {
   });
 
   it('requires objectId, proof and encryption', () => {
+<<<<<<< HEAD
     const { objectId: _objectId, ...noObjectId } = V3_ITEM;
     const { proof: _proof, ...noProof } = V3_ITEM;
     const { encryption: _encryption, ...noEncryption } = V3_ITEM;
@@ -154,6 +167,10 @@ describe('s2sContentItemSchemaV3', () => {
     expect(s2sContentItemSchemaV3.safeParse(noObjectId).success).toBe(false);
     expect(s2sContentItemSchemaV3.safeParse(noProof).success).toBe(false);
     expect(s2sContentItemSchemaV3.safeParse(noEncryption).success).toBe(false);
+=======
+    const { objectId: _o, ...noObjectId } = V3_ITEM;
+    expect(s2sContentItemSchemaV3.safeParse(noObjectId).success).toBe(false);
+>>>>>>> agent/cli
   });
 });
 

@@ -12,7 +12,10 @@ import {
   S2S_BODIES_KEY,
   bodyForKey,
   itemBodies,
+<<<<<<< HEAD
   type AnyS2SContentItem,
+=======
+>>>>>>> agent/cli
   type S2SContentBody,
   type S2SContentItem,
   type S2SContentItemV2,
@@ -21,7 +24,10 @@ import {
   toDidEthr,
 } from './types';
 import { buildSignedContentItem, noOpEncrypt, type TypedDataSigner } from './identity/sign-content';
+<<<<<<< HEAD
 import { verifyAuthorship } from './identity/verify-content';
+=======
+>>>>>>> agent/cli
 
 beforeAll(() => {
   (globalThis as { ethers?: unknown }).ethers = { utils };
@@ -98,6 +104,15 @@ describe('itemBodies', () => {
       'pub.eth': 'ciphertext-for-pub',
     });
   });
+<<<<<<< HEAD
+=======
+
+  it('keeps a v3 item distinguishable by the presence of bodies', () => {
+    expect('bodies' in V3_ITEM).toBe(true);
+    expect('bodies' in V1_ITEM).toBe(false);
+    expect('bodies' in V2_ITEM).toBe(false);
+  });
+>>>>>>> agent/cli
 });
 
 describe('bodyForKey', () => {
@@ -120,6 +135,7 @@ describe('bodyForKey', () => {
     expect(S2S_BODIES_KEY).toBe('s2s');
     expect(bodyForKey(V3_ITEM, S2S_BODIES_KEY)).toBe(V3_ITEM.bodies.s2s);
   });
+<<<<<<< HEAD
 
   it('returns undefined for an inherited property name, not the prototype value', () => {
     // On a plain object these resolve through the prototype chain: without an
@@ -204,6 +220,8 @@ describe('itemBodies falling back to a legacy body', () => {
     expect(bodyForKey(item)).toBe('ciphertext-for-s2s');
     expect(bodyForKey(item, 'pub.eth')).toBe('ciphertext-for-pub');
   });
+=======
+>>>>>>> agent/cli
 });
 
 // ============================================================================
