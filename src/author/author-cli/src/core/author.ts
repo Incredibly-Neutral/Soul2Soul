@@ -245,12 +245,6 @@ export async function authorWrite(
     );
   }
   const custom = { ...parsed.custom };
-  // The encryption flag is a write-back key, not template data. Shared's
-  // KNOWN_FRONTMATTER_KEYS predates `encrypted`, so without this the flag would
-  // be signed into `custom` and change the objectId of every encrypted note; the
-  // legacy spelling is dropped for the same reason once the new one is written.
-  delete custom[ENCRYPTED_KEY];
-  delete custom[LEGACY_ENCRYPTED_KEY];
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
 
   const signedItem = await buildSignedContentItem(

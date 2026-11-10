@@ -49,6 +49,12 @@ export const KNOWN_FRONTMATTER_KEYS = new Set([
   'tags',
   'parent',
   'position',
+  // Whether the body is encrypted. `encrypted` is what the writers record now;
+  // `encryption` is its pre-rename spelling, still read until old notes have
+  // been through one publish. Both stay out of the custom bag: the flag is a
+  // write-back key, not template data, and letting it through would sign it
+  // into the body and change the objectId of every note that carries it.
+  'encrypted',
   'encryption',
   'title',
   'modified_date',
@@ -220,7 +226,13 @@ export async function parseMarkdownNote(raw: string, filename: string): Promise<
     tags,
     parent: frontmatter.parent ? Number.parseInt(asString(frontmatter.parent) ?? '', 10) || 0 : 0,
     position: frontmatter.position ? Number.parseInt(asString(frontmatter.position) ?? '', 10) || 0 : 0,
-    encryption: Boolean(frontmatter.encryption),
+    // The new key wins when it is present at all: a note that says
+    // `encrypted: false` is plaintext even if a stale `encryption: true` is
+    // still sitting beside it from before the rename.
+    encryption:
+      'encrypted' in frontmatter
+        ? Boolean(frontmatter.encrypted)
+        : Boolean(frontmatter.encryption),
     title: resolvedTitle,
     slug,
     content,

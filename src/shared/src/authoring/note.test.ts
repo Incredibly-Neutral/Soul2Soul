@@ -101,4 +101,28 @@ describe('authoring/note', () => {
     expect(summary).toBe('before');
     expect(content).toBe('after');
   });
+
+  describe('encryption flag', () => {
+    const note = (frontmatter: string) => `---\n${frontmatter}\n---\n\n# Title\n\nBody.\n`;
+
+    it('reads encrypted, and the pre-rename encryption key as a fallback', async () => {
+      expect((await parseMarkdownNote(note('encrypted: true'), 'n.md')).encryption).toBe(true);
+      expect((await parseMarkdownNote(note('encrypted: false'), 'n.md')).encryption).toBe(false);
+      expect((await parseMarkdownNote(note('encryption: true'), 'n.md')).encryption).toBe(true);
+      expect((await parseMarkdownNote(note(''), 'n.md')).encryption).toBe(false);
+    });
+
+    it('lets the new key win over a stale legacy one', async () => {
+      const parsed = await parseMarkdownNote(note('encrypted: false\nencryption: true'), 'n.md');
+      expect(parsed.encryption).toBe(false);
+    });
+
+    it('keeps both spellings out of the custom bag', async () => {
+      const parsed = await parseMarkdownNote(
+        note('encrypted: true\nencryption: false\ncustom_field: hello'),
+        'n.md',
+      );
+      expect(parsed.custom).toEqual({ custom_field: 'hello' });
+    });
+  });
 });
