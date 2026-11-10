@@ -11,6 +11,19 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
+ * `S2SContentInfo` plus the v2 signed dates. Shared's interface predates the v2
+ * envelope and is out of scope here; the two dates ride alongside it so the
+ * page can name the genesis and this version's signing time separately.
+ * Both unix seconds, as strings, matching the author node's `dateCreated`.
+ */
+export type S2SContentInfoWithDates = S2SContentInfo & {
+  /** Signing time of the genesis version — the document's birth. */
+  creationDate?: string;
+  /** Signing time of this version. */
+  modifiedDate?: string;
+};
+
+/**
  * Build the page's schema.org JSON-LD provenance block and sign it with the
  * protocol PKP.
  *
@@ -24,7 +37,7 @@ export const addAndSignMetadata = async (
   id: string,
   html: string,
   protocolInfo: S2SProtocolInfo,
-  contentInfo?: S2SContentInfo,
+  contentInfo?: S2SContentInfoWithDates,
 ) => {
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));
 
@@ -54,6 +67,16 @@ export const addAndSignMetadata = async (
       identifier: id,
     };
 
+    // The document's own dates, from the SIGNED envelope (never the chain
+    // timestamp): dateCreated is the genesis version's signing time, and
+    // dateModified is this version's — a republication moves only the latter.
+    if (contentInfo?.creationDate) {
+      schema.dateCreated = contentInfo.creationDate;
+    }
+    if (contentInfo?.modifiedDate) {
+      schema.dateModified = contentInfo.modifiedDate;
+    }
+
     // Author (provenance). The author's EIP-712 proof is nested HERE, not on
     // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
     if (contentInfo?.author) {
@@ -66,7 +89,8 @@ export const addAndSignMetadata = async (
         },
       };
 
-      // Add profile creation timestamp if available
+      // The author node keeps the genesis signing time: who authored the
+      // document, and when it was born, do not change on republication.
       if (contentInfo.author.createdAt) {
         author.dateCreated = contentInfo.author.createdAt;
       }

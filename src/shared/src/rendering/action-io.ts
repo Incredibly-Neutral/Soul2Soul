@@ -12,10 +12,19 @@ export const didEthrSchema = z
 
 // ============================================================================
 // S2SPublicContent (signed public metadata)
+//
+// One union of two shapes, keyed on specVersion. v1 carries the single
+// createdAt; v2 carries creationDate (genesis signing time) and modifiedDate
+// (this version's signing time). The v2 branch pins specVersion to the literal
+// "2", and the v1 branch refuses that literal, so a v2 item cannot fall back
+// to the v1 branch when a date is misspelled or missing.
 // ============================================================================
 
-export const s2sPublicContentSchema = z.object({
-  specVersion: z.string().min(1, 'specVersion is required'),
+export const s2sPublicContentSchemaV1 = z.object({
+  specVersion: z
+    .string()
+    .min(1, 'specVersion is required')
+    .refine((v) => v !== '2', 'specVersion "2" requires creationDate and modifiedDate'),
   author: didEthrSchema,
   postType: z.string().min(1, 'postType is required'),
   mediaType: z.string().min(1, 'mediaType is required'),
@@ -29,6 +38,28 @@ export const s2sPublicContentSchema = z.object({
   attributes: z.record(z.unknown()).optional(),
   plaintextHash: z.string().min(1, 'plaintextHash is required'),
 });
+
+export const s2sPublicContentSchemaV2 = z.object({
+  specVersion: z.literal('2'),
+  author: didEthrSchema,
+  postType: z.string().min(1, 'postType is required'),
+  mediaType: z.string().min(1, 'mediaType is required'),
+  parent: z.string(),
+  position: z.string(),
+  publication: z.string().min(1, 'publication is required'),
+  locale: z.string().min(1, 'locale is required'),
+  creationDate: z.number().int('creationDate must be a unix timestamp (integer)'),
+  modifiedDate: z.number().int('modifiedDate must be a unix timestamp (integer)'),
+  base: z.string().optional(),
+  tags: z.array(z.string()),
+  attributes: z.record(z.unknown()).optional(),
+  plaintextHash: z.string().min(1, 'plaintextHash is required'),
+});
+
+export const s2sPublicContentSchema = z.union([
+  s2sPublicContentSchemaV2,
+  s2sPublicContentSchemaV1,
+]);
 
 // ============================================================================
 // S2SProof (EIP-712 author signature)

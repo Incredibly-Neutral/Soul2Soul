@@ -8,6 +8,8 @@ import {
   validateEvmUpdateOutput,
   validateMaintainCacheInput,
   validateMaintainCacheOutput,
+  s2sPublicContentSchema,
+  s2sPublicContentSchemaV1,
 } from './action-io';
 
 // ============================================================================
@@ -416,5 +418,75 @@ describe('validateSingleOutput — maintainCache drift signal', () => {
   it('accepts data.maintainCache omitted (backward compatible)', () => {
     const result: any = validateSingleOutput(validSingleOutput);
     expect(result.data.maintainCache).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// s2sPublicContentSchema — one union, two envelope versions
+// ============================================================================
+
+describe('s2sPublicContentSchema', () => {
+  const v1 = {
+    specVersion: '1',
+    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '',
+    publication: 'example.eth',
+    locale: 'en',
+    createdAt: 1700000000,
+    tags: ['a', 'b'],
+    plaintextHash: '0x' + 'ab'.repeat(32),
+  };
+
+  const v2 = {
+    specVersion: '2',
+    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '',
+    publication: 'example.eth',
+    locale: 'en',
+    creationDate: 1700000000,
+    modifiedDate: 1700000100,
+    tags: ['a', 'b'],
+    plaintextHash: '0x' + 'ab'.repeat(32),
+  };
+
+  it('accepts a v1 item', () => {
+    expect(s2sPublicContentSchema.safeParse(v1).success).toBe(true);
+  });
+
+  it('accepts a v2 item', () => {
+    const parsed = s2sPublicContentSchema.safeParse(v2) as { success: boolean; data?: any };
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.creationDate).toBe(1700000000);
+    expect(parsed.data.modifiedDate).toBe(1700000100);
+  });
+
+  it('rejects a v2 item missing modifiedDate', () => {
+    const { modifiedDate, ...missing } = v2;
+    expect(s2sPublicContentSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it('rejects a v2 item missing creationDate', () => {
+    const { creationDate, ...missing } = v2;
+    expect(s2sPublicContentSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it('rejects a v1 item missing createdAt', () => {
+    const { createdAt, ...missing } = v1;
+    expect(s2sPublicContentSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it('rejects a v2 specVersion carrying createdAt instead of the two dates', () => {
+    const { creationDate, modifiedDate, ...rest } = v2;
+    const asV1Shape = { ...rest, createdAt: 1700000000 };
+
+    expect(s2sPublicContentSchema.safeParse(asV1Shape).success).toBe(false);
+    // Rejected by the v1 branch's specVersion guard, not by a missing field.
+    expect(s2sPublicContentSchemaV1.safeParse(asV1Shape).success).toBe(false);
   });
 });

@@ -57,14 +57,15 @@ const FAKE_SAFE = {
 };
 
 const pub = {
-  specVersion: '1',
+  specVersion: '2' as const,
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '0',
   position: '0',
   publication: 'test',
   locale: 'en',
-  createdAt: 1_700_000_000,
+  creationDate: 1_700_000_000,
+  modifiedDate: 1_700_000_100,
   base: 'hello',
   tags: [] as string[],
   attributes: undefined,
@@ -455,6 +456,71 @@ describe('authorWrite honors frontmatter encryption', () => {
     // the author keeps its address, loses only the prefix
     expect(written).toContain('author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"');
     expect(written).not.toContain('did:ethr:');
+  });
+
+  it("signs a revision with the note's creation_date and this upload as modifiedDate", async () => {
+    const path = noteWith([
+      'title: Hello',
+      'genesis: "0x' + 'ab'.repeat(32) + '"',
+      'cid: bafyprevious',
+      'creation_date: 2021-03-04T05:06:07',
+      'modified_date: 2026-01-02T03:04:05',
+    ]);
+    const { ctx, uploaded } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    const before = Math.floor(Date.now() / 1000);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const item = JSON.parse(uploaded[0] ?? '') as {
+      public: { specVersion: string; creationDate: number; modifiedDate: number };
+    };
+    expect(item.public.specVersion).toBe('2');
+    // the note's own birth, not the upload time
+    expect(item.public.creationDate).toBe(Date.UTC(2021, 2, 4, 5, 6, 7) / 1000);
+    expect(item.public.modifiedDate).toBeGreaterThanOrEqual(before);
+    expect(item.public.modifiedDate).not.toBe(item.public.creationDate);
+  });
+
+  it('signs one instant as both dates on a first publish', async () => {
+    const path = noteWith(['title: Hello']);
+    const { ctx, uploaded } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const item = JSON.parse(uploaded[0] ?? '') as {
+      public: { creationDate: number; modifiedDate: number };
+    };
+    expect(item.public.creationDate).toBe(item.public.modifiedDate);
+  });
+
+  it('signs and writes back the modified_date it inherits, so the next revision does not drift', async () => {
+    const path = noteWith(['title: Hello', 'modified_date: 2026-01-02T03:04:05']);
+    const { ctx, uploaded } = fakeCtx({});
+    const declared = Date.UTC(2026, 0, 2, 3, 4, 5) / 1000;
+    vi.mocked(authorSafeState).mockResolvedValue(FAKE_SAFE); // both uploads
+
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    const first = JSON.parse(uploaded[0] ?? '') as {
+      public: { creationDate: number; modifiedDate: number };
+    };
+    expect(first.public.creationDate).toBe(declared);
+    // the write-back records the signed value, not a different one
+    expect(readFileSync(path, 'utf8')).toContain('creation_date: 2026-01-02T03:04:05');
+
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    const second = JSON.parse(uploaded[1] ?? '') as {
+      public: { creationDate: number; modifiedDate: number };
+    };
+    expect(second.public.creationDate).toBe(declared);
+    expect(second.public.modifiedDate).toBeGreaterThanOrEqual(first.public.modifiedDate);
+  });
+
+  it('refuses a creation_date that is not a date instead of re-birthing the note', async () => {
+    const path = noteWith(['title: Hello', 'creation_date: last tuesday']);
+    const { ctx, addToKubo } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await expect(authorWrite(ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(/not a date/);
+    expect(addToKubo).not.toHaveBeenCalled();
   });
 
   it('uploads the body unchanged for a note without the flag', async () => {

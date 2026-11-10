@@ -4,12 +4,10 @@
 
 import { ethersUtils } from './ethers-ambient';
 import { jcs, keccakOfJson, keccakOfString } from './jcs';
-import { buildSigningView } from './signing-view';
+import { signingEnvelope } from './signing-view';
 import {
-  type S2SContentItem,
-  type S2SPublicContent,
+  type AnyS2SContentItem,
   S2S_DOMAIN,
-  S2S_TYPES,
   eoaOf,
 } from '../types';
 
@@ -31,7 +29,7 @@ import {
  * Returns true if all checks pass, false otherwise.
  */
 export async function verifyAuthorship(
-  item: S2SContentItem,
+  item: AnyS2SContentItem,
   decryptFn: (ciphertext: string) => Promise<string>,
 ): Promise<boolean> {
   try {
@@ -58,11 +56,13 @@ export async function verifyAuthorship(
       console.warn('verifyAuthorship: body JSON was not in canonical form (JCS)');
     }
 
-    // 4. Recover the signer from the EIP-712 signature
+    // 4. Recover the signer from the EIP-712 signature. The struct and view are
+    //    chosen by specVersion: v1 items keep the S2SContent type hash.
+    const { types, view } = signingEnvelope(item.public);
     const digest = utils._TypedDataEncoder.hash(
       S2S_DOMAIN,
-      S2S_TYPES,
-      buildSigningView(item.public),
+      types,
+      view,
     );
     const recovered = utils.recoverAddress(digest, item.proof.signature);
 
@@ -125,7 +125,7 @@ export function verifyBodyHash(bodyJson: string, expectedHex: string): boolean {
  * Useful when you already trust the source and just want integrity.
  */
 export function verifyPlaintextHash(
-  item: S2SContentItem,
+  item: AnyS2SContentItem,
   plaintextJson: string,
 ): boolean {
   const computedHash = keccakOfString(plaintextJson);
