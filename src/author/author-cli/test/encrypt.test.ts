@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { LitService, buildSignedContentItem, noOpEncrypt, parseMarkdownNote } from '@s2s/soul2soul-shared';
+import { parse as parseYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 // Both modules pull things vitest cannot resolve/run offline: the Filecoin
@@ -732,6 +733,158 @@ describe('authorWrite honors frontmatter encryption', () => {
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
     expect(fetchFromKubo).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // The `encrypted` write-back: the note states what the last publish did
+  // -------------------------------------------------------------------------
+
+  /** The written `---` block re-parsed by YAML — what a reader of the file sees. */
+  function writtenFrontmatter(path: string): Record<string, unknown> {
+    const text = readFileSync(path, 'utf8');
+    const block = /^---\n([\s\S]*?)\n---\n/.exec(text);
+    if (!block?.[1]) throw new Error(`no frontmatter block in:\n${text}`);
+    return parseYaml(block[1]) as Record<string, unknown>;
+  }
+
+  /** How many times `key` appears as a frontmatter key (a duplicate is a bug). */
+  function keyCount(path: string, key: string): number {
+    return (readFileSync(path, 'utf8').match(new RegExp(`^${key}:`, 'gm')) ?? []).length;
+  }
+
+  it('writes `encrypted: false` for a plaintext publish, as an unquoted YAML boolean', async () => {
+    const path = noteWith(['title: Hello']);
+    const { ctx } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const written = readFileSync(path, 'utf8');
+    // the exact line, unquoted: a quoted "false" is truthy and would encrypt
+    expect(written).toContain('\nencrypted: false\n');
+    expect(written).not.toContain('encrypted: "false"');
+    expect(written).not.toContain("encrypted: 'false'");
+    const frontmatter = writtenFrontmatter(path);
+    expect(frontmatter.encrypted).toBe(false);
+    expect(typeof frontmatter.encrypted).toBe('boolean');
+  });
+
+  it('writes `encrypted: true` for an encrypted publish', async () => {
+    // Declared as a quoted string on purpose: a fixture that already holds
+    // `encrypted: true` would pass with the write-back removed, because the upsert
+    // preserves a value it does not set. Here the file holds something else, so
+    // only the write makes it `true`.
+    const path = noteWith(['title: Hello', 'encrypted: "true"']);
+    const { ctx } = fakeCtx({
+      litUsageKey: 'lit-key',
+      pkp: PKP,
+      encrypt: () => Promise.resolve(JSON.stringify('gAAAAABwholeflow')),
+    });
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const written = readFileSync(path, 'utf8');
+    expect(written).toContain('\nencrypted: true\n');
+    expect(written).not.toContain('"true"');
+    const frontmatter = writtenFrontmatter(path);
+    expect(frontmatter.encrypted).toBe(true);
+    expect(typeof frontmatter.encrypted).toBe('boolean');
+    expect(frontmatter.encryption).toBeUndefined();
+  });
+
+  it('migrates a legacy `encryption: false` to `encrypted: false` and drops the old key', async () => {
+    // The plaintext half of the rename: the legacy key was explicit `false`, and
+    // the write-back must leave the boolean, not inherit the legacy spelling.
+    const path = noteWith(['title: Hello', 'encryption: false']);
+    const { ctx, uploaded } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const item = JSON.parse(uploaded[0] ?? '') as { encryption: boolean };
+    expect(item.encryption).toBe(false);
+    const written = readFileSync(path, 'utf8');
+    expect(written).toContain('\nencrypted: false\n');
+    expect(written).not.toMatch(/^encryption:/m);
+    expect(writtenFrontmatter(path).encrypted).toBe(false);
+  });
+
+  it('keeps the encryption flag out of the signed body, so it cannot shift an objectId', async () => {
+    // `encrypted` is not in shared's KNOWN_FRONTMATTER_KEYS, so without the
+    // delete in `authorWrite` it lands in `custom` and is signed into the body —
+    // changing `plaintextHash` and with it the objectId of every encrypted note.
+    const bare = noteWith(['title: Hello']);
+    const flagged = noteWith(['title: Hello', 'encrypted: false']);
+    const legacy = noteWith(['title: Hello', 'encryption: false']);
+    const { ctx, uploaded } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValue(FAKE_SAFE);
+    await authorWrite(ctx, bare, 'test.soul2soul.eth', opts);
+    await authorWrite(ctx, flagged, 'test.soul2soul.eth', opts);
+    await authorWrite(ctx, legacy, 'test.soul2soul.eth', opts);
+
+    const customs = uploaded.map((payload) => {
+      const item = JSON.parse(payload) as { body: string };
+      return (JSON.parse(item.body) as { custom?: Record<string, unknown> }).custom;
+    });
+    for (const custom of customs) {
+      expect(custom ?? {}).not.toHaveProperty('encrypted');
+      expect(custom ?? {}).not.toHaveProperty('encryption');
+    }
+    // not template data: the same note text signs the same custom bag with or
+    // without the flag in the file
+    expect(customs[1]).toEqual(customs[0]);
+    expect(customs[2]).toEqual(customs[0]);
+  });
+
+  it('migrates a legacy `encryption: true` to `encrypted: true` and drops the old key', async () => {
+    // The legacy spelling is still read, so the note keeps encrypting; the
+    // write-back leaves one key, naming the state that publish used.
+    const path = noteWith(['title: Hello', 'encryption: true']);
+    const encrypt = vi.fn(() => Promise.resolve(JSON.stringify('gAAAAABwholeflow')));
+    const { ctx, uploaded } = fakeCtx({ litUsageKey: 'lit-key', pkp: PKP, encrypt });
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    expect(encrypt).toHaveBeenCalledTimes(1);
+    const item = JSON.parse(uploaded[0] ?? '') as { encryption: boolean };
+    // the published item's field keeps its own name
+    expect(item.encryption).toBe(true);
+    const written = readFileSync(path, 'utf8');
+    expect(written).toContain('\nencrypted: true\n');
+    expect(written).not.toMatch(/^encryption:/m);
+    expect(writtenFrontmatter(path).encrypted).toBe(true);
+  });
+
+  it('states the state it used, not the declared one, when the note said a string "false"', async () => {
+    // `encrypted: "false"` is truthy, so this publish encrypts; the write-back
+    // replaces the string with the boolean it actually used.
+    const path = noteWith(['title: Hello', 'encrypted: "false"']);
+    const { ctx } = fakeCtx({
+      litUsageKey: 'lit-key',
+      pkp: PKP,
+      encrypt: () => Promise.resolve(JSON.stringify('gAAAAABwholeflow')),
+    });
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const written = readFileSync(path, 'utf8');
+    expect(written).toContain('\nencrypted: true\n');
+    expect(written).not.toContain('"false"');
+    expect(writtenFrontmatter(path).encrypted).toBe(true);
+  });
+
+  it('does not duplicate or reformat the key on a second publish', async () => {
+    const path = noteWith(['title: Hello']);
+    const { ctx } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValue(FAKE_SAFE); // both publishes
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    const first = writtenFrontmatter(path);
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    const second = writtenFrontmatter(path);
+
+    expect(keyCount(path, 'encrypted')).toBe(1);
+    expect(second.encrypted).toBe(false);
+    // one key, same position and same spelling as after the first publish
+    expect(Object.keys(second)).toEqual(Object.keys(first));
+    expect(readFileSync(path, 'utf8')).toContain('\nencrypted: false\n');
   });
 });
 
