@@ -13,19 +13,15 @@
 //   object. Anything else is a body the render path cannot decrypt, so it is
 //   refused here rather than published.
 //
-// OPEN RISK — THE WRITER'S SHAPE IS INFERRED FROM THE READER, NOT OBSERVED:
-//   No recorded live `/lit_action` encrypt response exists in this repo. The
-//   authoring client has never run against Lit ("Live status: never invoked by
-//   an authoring client", brain/prototype/02-authoring-implementation.md §5.4),
-//   and the whitepaper's "encryption returns ciphertext only (no
-//   `dataToEncryptHash`)" (brain/whitepaper/03-encryption-access-control.md:88)
-//   can be read as "a bare base64 string". `LitService.encrypt` returns
-//   `result.response.ciphertext` verbatim from the action's
-//   `Lit.Actions.Encrypt({ pkpId, message })`, so its type is genuinely unknown
-//   here. If a live run shows raw base64, the JSON requirement still stands:
-//   the fix belongs in the READ path (`press/actions/src/libs/decrypt.ts:36`
-//   must stop assuming `JSON.parse`), not in loosening the writer — publishing a
-//   body nothing can render is worse than refusing to publish it.
+// WHAT THE FIRST LIVE RUN SHOWED: bare base64, no JSON, no `dataToEncryptHash`.
+//   `Lit.Actions.Encrypt({ pkpId, message })` returns a raw base64 string, and
+//   `LitService.encrypt` hands it back verbatim, so `JSON.parse` on the stored
+//   body would throw on every encrypted item. The writer therefore wraps a
+//   non-JSON result as JSON text (`JSON.stringify(value)`): the read path's
+//   `JSON.parse(body.content)` then yields exactly the bytes Lit returned, and
+//   `decrypt.ts` needs no change. Storing the bare string instead would mean
+//   teaching the read path to parse-and-fallback, for no gain: one shape in
+//   storage, one place that knows about it.
 //
 // WHY A WHITELIST AND NOT A BLACKLIST OF ERRORS:
 //   `LitService.encrypt` swallows its own failures and returns
@@ -118,13 +114,6 @@ function usableCiphertextValue(parsed: unknown): boolean {
   return false;
 }
 
-/** Describe a value that is not JSON text, for the failure message. */
-function describeUnparseable(value: string): string {
-  const looksBase64 = /^[A-Za-z0-9+/=_-]{40,}$/.test(value);
-  const kind = looksBase64 ? 'raw base64-like text' : 'non-JSON text';
-  return `${kind} (${String(value.length)} chars, starts ${JSON.stringify(value.slice(0, 32))})`;
-}
-
 /**
  * Whether `value` is the plaintext coming back out (an echoing encryptor).
  * Covers the direct echo (`value === plaintext`), a JSON-string echo, and a
@@ -148,7 +137,9 @@ function isEcho(value: string, parsed: unknown, plaintext: string): boolean {
  * unchanged.
  *
  * Requires: a string, non-empty, not error-shaped, not the plaintext echoed
- * back, `JSON.parse`-able, and parsing to a non-empty string or object.
+ * back. Returns JSON text: a result that already parses to a non-empty string
+ * or object is kept as is, and any other result is wrapped with
+ * `JSON.stringify` so the read path's `JSON.parse(body.content)` yields it.
  *
  * @param plaintext - the plaintext that was sent to the encryptor, when known
  *                    (enables the echo check).
@@ -172,17 +163,23 @@ export function assertCiphertext(value: unknown, plaintext?: string): string {
   }
 
   let parsed: unknown;
+  let isJson = false;
   try {
     parsed = JSON.parse(value) as unknown;
+    isJson = true;
   } catch {
-    // Diagnose rather than blame Lit: the point is to make the FIRST live run
-    // self-explanatory, because a raw-base64 return is a read-path bug, not a
-    // Lit outage.
-    throw new CliError(
-      `encryption failed: got ${describeUnparseable(value)}, which cannot be stored as an encrypted body — nothing was published. ` +
-        'The read path requires JSON text: press/actions/src/libs/decrypt.ts:36 does `JSON.parse(body.content)` and passes the parsed value to `Lit.Actions.Decrypt`. ' +
-        'If this really is Lit\'s ciphertext, the read path has to accept that shape before any encrypted note can be published.',
-    );
+    isJson = false;
+  }
+
+  // Not JSON text: this is what Lit actually returns, a bare base64 ciphertext.
+  // Wrap it, so the stored body stays JSON and the read path is untouched.
+  if (!isJson) {
+    if (plaintext !== undefined && isEcho(value, undefined, plaintext)) {
+      throw new CliError(
+        'encryption failed: the encryptor returned the plaintext unchanged, which would publish the body in the clear — nothing was published',
+      );
+    }
+    return JSON.stringify(value);
   }
 
   if (!usableCiphertextValue(parsed)) {
@@ -198,6 +195,25 @@ export function assertCiphertext(value: unknown, plaintext?: string): string {
   }
 
   return value;
+}
+
+/**
+ * Whether a stored body is ciphertext the read path can decrypt.
+ *
+ * The read path does `JSON.parse(body.content)` and hands the result to
+ * `Lit.Actions.Decrypt` (`press/actions/src/libs/decrypt.ts:36`), and the writer
+ * always stores that shape (`assertCiphertext` wraps a non-JSON result), so a
+ * body that fails here was written by something else, by hand, or by a build
+ * older than the wrap.
+ */
+export function storedBodyIsDecryptable(body: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body) as unknown;
+  } catch {
+    return false;
+  }
+  return usableCiphertextValue(parsed);
 }
 
 /**
