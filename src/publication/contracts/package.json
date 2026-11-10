@@ -30,7 +30,8 @@
     "deploy:pubfac": "tsx scripts/deploy-publication-factory.ts",
     "deploy:pub": "tsx scripts/update-impl.ts",
     "verify": "tsx scripts/verify-pub.ts",
-    "clean": "rm -rf artifacts cache generated"
+    "clean": "rm -rf artifacts cache generated",
+    "upgrade:pub": "tsx scripts/upgrade-publication.ts"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.6",
