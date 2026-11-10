@@ -37,6 +37,31 @@ export interface S2SPublicContent {
   plaintextHash: string; // keccak256 of the canonical secret JSON (computed before encryption)
 }
 
+/**
+ * v2 of the signed public metadata. Same fields in the same order, except the
+ * single `createdAt` becomes two signed dates:
+ *   creationDate — signing time of the genesis version (the document's birth)
+ *   modifiedDate — signing time of this version
+ * Both unix seconds. The different struct name and shape give a different type
+ * hash, so v1 items keep verifying under S2S_TYPES and v2 items under S2S_TYPES_V2.
+ */
+export interface S2SPublicContentV2 {
+  specVersion: string;
+  author: DidEthr;
+  postType: string;
+  mediaType: string;
+  parent: string;
+  position: string;
+  publication: string;
+  locale: string;
+  creationDate: number;
+  modifiedDate: number;
+  base?: string;
+  tags: string[];
+  attributes?: Record<string, unknown>;
+  plaintextHash: string;
+}
+
 /** EIP-712 author signature over S2SPublicContent */
 export interface S2SProof {
   type: 'eip712';
@@ -52,6 +77,18 @@ export interface S2SContentItem {
   encryption: boolean; // true → `body` is ciphertext; false → `body` is stringified JSON
   body: string; // ciphertext OR JSON.stringify({ title, slug, content, custom })
 }
+
+/** The stored object for a v2 envelope */
+export interface S2SContentItemV2 {
+  public: S2SPublicContentV2; // signed
+  objectId: string;
+  proof: S2SProof;
+  encryption: boolean;
+  body: string;
+}
+
+/** Either envelope version, discriminated at runtime by public.specVersion */
+export type AnyS2SContentItem = S2SContentItem | S2SContentItemV2;
 
 /** What goes into the body field of S2SContentItem (the content, optionally encrypted) */
 export interface S2SContentBody {
@@ -83,6 +120,25 @@ export const S2S_TYPES = {
     { name: 'publication', type: 'string' },
     { name: 'locale', type: 'string' },
     { name: 'createdAt', type: 'uint256' },
+    { name: 'base', type: 'string' },
+    { name: 'tagsHash', type: 'bytes32' },
+    { name: 'attributesHash', type: 'bytes32' },
+  ],
+};
+
+export const S2S_TYPES_V2 = {
+  S2SContentV2: [
+    { name: 'specVersion', type: 'string' },
+    { name: 'author', type: 'string' },
+    { name: 'plaintextHash', type: 'bytes32' },
+    { name: 'postType', type: 'string' },
+    { name: 'mediaType', type: 'string' },
+    { name: 'parent', type: 'string' },
+    { name: 'position', type: 'string' },
+    { name: 'publication', type: 'string' },
+    { name: 'locale', type: 'string' },
+    { name: 'creationDate', type: 'uint256' },
+    { name: 'modifiedDate', type: 'uint256' },
     { name: 'base', type: 'string' },
     { name: 'tagsHash', type: 'bytes32' },
     { name: 'attributesHash', type: 'bytes32' },
