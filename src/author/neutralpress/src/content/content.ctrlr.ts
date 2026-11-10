@@ -7,15 +7,80 @@ import * as crypto from 'crypto';
 import { getAddress } from 'viem';
 import {
 	buildSignedContentItem,
-	type S2SContentItem,
+	type S2SContentItemV2,
 	noOpEncrypt,
 	toDidEthr,
 } from '@s2s/soul2soul-shared';
 
+/**
+ * Parse a frontmatter date to unix seconds: `YYYY-MM-DD`, or a datetime with
+ * optional fractional seconds and an optional `Z`/`±HH:MM` zone. An unzoned
+ * value is UTC, as the writer emits it (`new Date().toJSON()` with the zone
+ * stripped); reading it as local time would make the signature machine-bound.
+ *
+ * Absent or empty falls back to `fallback` — with no recorded creation this
+ * publish is the creation. A value that IS there but does not parse throws:
+ * falling back would re-birth the note on every publish.
+ */
+function creationDateOf(value: unknown, fallback: number): number {
+	if (value === undefined || value === null || value === '') return fallback;
+	const seconds = parseDateToUnix(value);
+	if (seconds === undefined) {
+		throw new Error(
+			`creation_date ${JSON.stringify(
+				value,
+			)} is not a date — refusing to publish rather than re-birth the note. Fix it to \`YYYY-MM-DDTHH:mm:ss\` (UTC) or remove the key.`,
+		);
+	}
+	return seconds;
+}
+
+function parseDateToUnix(value: unknown): number | undefined {
+	if (value instanceof Date) {
+		const ms = value.getTime();
+		return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+	}
+	if (typeof value !== 'string') return undefined;
+	const match =
+		/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(
+			value.trim(),
+		);
+	if (!match) return undefined;
+	const [year, month, day, hour, minute, second] = [
+		Number(match[1]),
+		Number(match[2]),
+		Number(match[3]),
+		Number(match[4] ?? 0),
+		Number(match[5] ?? 0),
+		Number(match[6] ?? 0),
+	];
+	const millisecond = Number((match[7] ?? '').slice(0, 3).padEnd(3, '0') || 0);
+	const zone = match[8];
+	const offsetMinutes =
+		zone === undefined || zone === 'Z'
+			? 0
+			: (zone.startsWith('-') ? -1 : 1) *
+				(Number(zone.slice(1, 3)) * 60 + Number(zone.slice(-2)));
+	const ms = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+	const date = new Date(ms);
+	// Reject rollovers (`2021-13-01T…` → next year): only a real calendar time counts.
+	if (
+		date.getUTCFullYear() !== year ||
+		date.getUTCMonth() !== month - 1 ||
+		date.getUTCDate() !== day ||
+		date.getUTCHours() !== hour ||
+		date.getUTCMinutes() !== minute ||
+		date.getUTCSeconds() !== second
+	) {
+		return undefined;
+	}
+	return Math.floor((ms - offsetMinutes * 60_000) / 1000);
+}
+
 export interface IContentController {
 	main: IMainController;
 	/** Build and sign a content item from an Obsidian note, then update frontmatter */
-	publishContent: (file: TFile, subdomain: string) => Promise<S2SContentItem | null>;
+	publishContent: (file: TFile, subdomain: string) => Promise<S2SContentItemV2 | null>;
 }
 
 export class ContentController implements IContentController {
@@ -31,6 +96,7 @@ export class ContentController implements IContentController {
 	 */
 	parseNote = async (
 		file: TFile,
+		now: number = Math.floor(Date.now() / 1000),
 	): Promise<{
 		contentId: string | null;
 		postType: string;
@@ -47,7 +113,7 @@ export class ContentController implements IContentController {
 	}> => {
 		const rawFile = await this.main.plugin.app.vault.read(file);
 
-		const frontmatter = await this.parseContentFrontmatter(file, this.main.plugin.app);
+		const frontmatter = await this.parseContentFrontmatter(file, this.main.plugin.app, now);
 		const title = file.name.replace(/\.[^/.]+$/, '') || frontmatter.title || '';
 
 		let [body, extractedTitle, _baseFileName] = this.extractTitleAndBase(rawFile, title);
@@ -131,8 +197,11 @@ export class ContentController implements IContentController {
 	 * Signing happens via the 0xobsidian BASE account's EOA (asTypedDataSigner).
 	 * The signed object is stored in frontmatter for later use by the render pipeline.
 	 */
-	async publishContent(file: TFile, subdomain: string): Promise<S2SContentItem | null> {
-		const parsed = await this.parseNote(file);
+	async publishContent(file: TFile, subdomain: string): Promise<S2SContentItemV2 | null> {
+		// One sample for both signed dates: on a first publish `creationDate` and
+		// `modifiedDate` are the same instant, even across a second boundary.
+		const now = Math.floor(Date.now() / 1000);
+		const parsed = await this.parseNote(file, now);
 		const baseAccount = this.main.oxo.ctrlr.account['BASE'];
 
 		if (!baseAccount?.signTypedData) {
@@ -141,7 +210,6 @@ export class ContentController implements IContentController {
 		}
 
 		const signer = baseAccount.asTypedDataSigner();
-		const now = Math.floor(Date.now() / 1000);
 
 		// Merge summary into custom bag if present
 		const custom = { ...(parsed.custom || {}) };
@@ -152,17 +220,28 @@ export class ContentController implements IContentController {
 		const existingGenesis: string | null = cache?.frontmatter?.genesis || null;
 		console.log('existing genesis', existingGenesis);
 
+		// Two signed dates: `modifiedDate` is this publish, `creationDate` is the
+		// note's birth and stays fixed across revisions. `now` (sampled above, before
+		// any await) is threaded into parseNote, which writes exactly that instant to
+		// `creation_date` on a first publish — so the recorded birth and the signed
+		// creationDate are the same second, not two samples. A revision reads the
+		// birth back from frontmatter instead.
+		const creationDate = existingGenesis
+			? creationDateOf(cache?.frontmatter?.creation_date, now)
+			: now;
+
 		try {
 			const signedItem = await buildSignedContentItem(
 				{
-					specVersion: '1',
+					specVersion: '2',
 					postType: parsed.postType,
 					mediaType: 'text/markdown',
 					parent: String(parsed.parent),
 					position: String(parsed.position),
 					publication: subdomain,
 					locale: parsed.locale,
-					createdAt: now,
+					creationDate,
+					modifiedDate: now,
 					tags: parsed.tags,
 					attributes: undefined,
 				},
@@ -209,19 +288,25 @@ export class ContentController implements IContentController {
 	}
 
 	/** Parse frontmatter from Obsidian metadata cache — returns raw fields */
-	parseContentFrontmatter = async (file: TFile, app: App): Promise<Record<string, any>> => {
+	parseContentFrontmatter = async (
+		file: TFile,
+		app: App,
+		now: number = Math.floor(Date.now() / 1000),
+	): Promise<Record<string, any>> => {
 		return new Promise((resolve, reject) => {
 			const cache = app.metadataCache.getFileCache(file);
 			const frontmatter = cache?.frontmatter || {};
 
-			// Update modified date
-			const now = new Date().toJSON().split('.')[0];
-			frontmatter.modified_date = now;
-			this.updateFrontMatter(app, file, 'modified_date', now);
+			// The caller's instant, not a second sample: the publish path hands in
+			// the value it signs as `creationDate`, so the recorded birth is the
+			// same second as the signature and the next revision re-signs it.
+			const stamp = new Date(now * 1000).toISOString().slice(0, 19);
+			frontmatter.modified_date = stamp;
+			this.updateFrontMatter(app, file, 'modified_date', stamp);
 
 			if (frontmatter.creation_date == undefined) {
-				frontmatter.creation_date = now;
-				this.updateFrontMatter(app, file, 'creation_date', now);
+				frontmatter.creation_date = stamp;
+				this.updateFrontMatter(app, file, 'creation_date', stamp);
 			}
 
 			resolve(frontmatter);

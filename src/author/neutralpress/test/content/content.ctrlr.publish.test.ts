@@ -43,10 +43,12 @@ const RAW = '---\ntags: [acme--s2s]\n---\n# My Title\n\nBody <!--more--> rest';
 describe('ContentController.publishContent', () => {
 	it('builds a signed content item and writes genesis/author to frontmatter', async () => {
 		const { ctrlr, sharedFm, signTypedData } = setupPublish({}, RAW);
+		const before = Math.floor(Date.now() / 1000);
 		const result = await ctrlr.publishContent(
 			makeVaultFile('note.md', RAW),
 			'acme.soul2soul.eth',
 		);
+		const after = Math.floor(Date.now() / 1000);
 
 		expect(result).not.toBeNull();
 		expect(result!.objectId).toMatch(/^0x[0-9a-f]{64}$/);
@@ -61,8 +63,11 @@ describe('ContentController.publishContent', () => {
 		expect(result!.public.parent).toBe('0');
 		expect(result!.public.position).toBe('0');
 		expect(result!.public.locale).toBe('en');
-		expect(result!.public.specVersion).toBe('1');
-		expect(result!.public.createdAt).toBeGreaterThan(1_700_000_000);
+		expect(result!.public.specVersion).toBe('2');
+		expect(result!.public.creationDate).toBeGreaterThanOrEqual(before);
+		expect(result!.public.creationDate).toBeLessThanOrEqual(after);
+		expect(result!.public.modifiedDate).toBeGreaterThanOrEqual(result!.public.creationDate);
+		expect('createdAt' in result!.public).toBe(false);
 
 		// body is the JSON string of {title, slug, content, custom}
 		const body = JSON.parse(result!.body);
@@ -93,6 +98,81 @@ describe('ContentController.publishContent', () => {
 		expect(result!.objectId).toBe(existing);
 		expect(sharedFm.genesis).toBe(existing); // untouched
 		expect(sharedFm.author).toBeUndefined(); // not re-written
+	});
+
+	it('signs a revision with the note\'s creation_date, not now', async () => {
+		const existing = '0x' + 'cd'.repeat(32);
+		const { ctrlr } = setupPublish(
+			{ genesis: existing, creation_date: '2021-03-04T05:06:07' },
+			RAW,
+		);
+		const before = Math.floor(Date.now() / 1000);
+		const result = await ctrlr.publishContent(
+			makeVaultFile('note.md', RAW),
+			'acme.soul2soul.eth',
+		);
+		const after = Math.floor(Date.now() / 1000);
+
+		expect(result).not.toBeNull();
+		expect(result!.objectId).toBe(existing);
+		expect(result!.public.specVersion).toBe('2');
+		// the note's own birth, not the publish time
+		expect(result!.public.creationDate).toBe(Date.UTC(2021, 2, 4, 5, 6, 7) / 1000);
+		expect(result!.public.modifiedDate).toBeGreaterThanOrEqual(before);
+		expect(result!.public.modifiedDate).toBeLessThanOrEqual(after);
+		expect(result!.public.modifiedDate).not.toBe(result!.public.creationDate);
+	});
+
+	it('signs one instant as both dates on a first publish', async () => {
+		const { ctrlr } = setupPublish({}, RAW);
+		const result = await ctrlr.publishContent(
+			makeVaultFile('note.md', RAW),
+			'acme.soul2soul.eth',
+		);
+
+		expect(result).not.toBeNull();
+		expect(result!.public.creationDate).toBe(result!.public.modifiedDate);
+	});
+
+	it('records the signed birth, not a second clock sample taken during parse', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			const T0 = 1_764_234_567;
+			vi.setSystemTime(T0 * 1000);
+			const { ctrlr, sharedFm, main } = setupPublish({}, RAW);
+			// Move the clock while parseNote waits on the vault read: a write-back
+			// that sampled its own `new Date()` would record T0 + 1.5s.
+			main.plugin.app.vault.read.mockImplementation(async () => {
+				vi.setSystemTime(T0 * 1000 + 1500);
+				return RAW;
+			});
+
+			const result = await ctrlr.publishContent(
+				makeVaultFile('note.md', RAW),
+				'acme.soul2soul.eth',
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.public.creationDate).toBe(T0);
+			expect(result!.public.modifiedDate).toBe(T0);
+			// creation_date is written as UTC with the zone stripped; append it
+			// back so the comparison does not depend on the machine's zone.
+			expect(sharedFm.creation_date).toBe('2025-11-27T09:09:27');
+			expect(Date.parse(`${sharedFm.creation_date}Z`) / 1000).toBe(
+				result!.public.creationDate,
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('refuses an unparseable creation_date instead of re-birthing the note', async () => {
+		const existing = '0x' + 'cd'.repeat(32);
+		const { ctrlr } = setupPublish({ genesis: existing, creation_date: 'last tuesday' }, RAW);
+
+		await expect(
+			ctrlr.publishContent(makeVaultFile('note.md', RAW), 'acme.soul2soul.eth'),
+		).rejects.toThrow(/not a date/);
 	});
 
 	it('returns null when no BASE signer is available', async () => {
