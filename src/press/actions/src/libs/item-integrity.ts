@@ -177,7 +177,17 @@ export const skipReason = (cause: SkipCause, code: ItemIssueCode | null, detail:
 export const storedBody = (item: {
   body?: unknown;
   bodies?: unknown;
-}): string | undefined => bodyForKey(item as unknown as AnyS2SContentItem);
+}): string | undefined => {
+  const map = item.bodies;
+  // A `bodies` key that is present but is not a map (null above all) would make
+  // the shared accessor dereference null and throw. The shape gate accepts such
+  // an item on its legacy `body` branch, so it is a legacy item with a stray
+  // key: read its body, as every reader did before the map existed.
+  if (!map || typeof map !== 'object' || Array.isArray(map)) {
+    return typeof item.body === 'string' ? item.body : undefined;
+  }
+  return bodyForKey(item as unknown as AnyS2SContentItem);
+};
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 /** 32-byte hex digest. Shared with verifyDecryptedBody so the at-rest and

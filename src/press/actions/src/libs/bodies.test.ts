@@ -145,6 +145,16 @@ describe('storedBody — one accessor for both layouts', () => {
     expect(storedBody(mkItemV3({ 'pub.eth': 'ciphertext-for-pub' }))).toBeUndefined();
     expect(storedBody({})).toBeUndefined();
   });
+
+  it('falls back to a legacy body when bodies is present but is not a map', () => {
+    // The shape gate accepts this on the legacy branch (a stray key beside a
+    // body it does not model), so it must read like a legacy item rather than
+    // throw out of the accessor.
+    expect(storedBody({ body: bodyJson, bodies: null })).toBe(bodyJson);
+    expect(storedBody({ body: bodyJson, bodies: 'nonsense' })).toBe(bodyJson);
+    expect(storedBody({ body: bodyJson, bodies: [] })).toBe(bodyJson);
+    expect(storedBody({ bodies: null })).toBeUndefined();
+  });
 });
 
 describe('toBody — v3 and legacy v2 render the same body text', () => {
@@ -270,5 +280,12 @@ describe('read path — a v3 item is served end to end', () => {
     serve(mkItemV3({}));
 
     await expect(fetchById(GENESIS, PUBLICATION, [], GATEWAY)).rejects.toThrow(/unavailable:/);
+  });
+
+  it('a legacy item carrying a stray `bodies: null` still serves its body', async () => {
+    serve({ ...mkItemV2(), bodies: null });
+
+    const direct = await fetchById(GENESIS, PUBLICATION, [], GATEWAY);
+    expect(direct).toMatchObject({ content: 'Hello', title: 'Hello', slug: 'hello' });
   });
 });
