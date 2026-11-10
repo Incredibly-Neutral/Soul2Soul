@@ -95,7 +95,16 @@ const toEntry = (e: any): Entry => ({
 export type StoredContentItem = Omit<S2SContentItem, 'objectId' | 'proof' | 'public'> & {
   objectId?: string;
   proof?: S2SContentItem['proof'];
-  public: Partial<Omit<S2SPublicContent, 'author'>> & Pick<S2SPublicContent, 'author'>;
+  public: Partial<Omit<S2SPublicContent, 'author'>> &
+    Pick<S2SPublicContent, 'author'> & {
+      /**
+       * v2 envelope only (specVersion '2'): signing time of the genesis version
+       * and of this version. Both unix seconds. A v1 item carries `createdAt`
+       * instead; the two are never mixed on one item.
+       */
+      creationDate?: number;
+      modifiedDate?: number;
+    };
 };
 
 /** Anything carrying a plaintext hash: the canonical item or a flat toBody body. */
@@ -340,6 +349,10 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     mediaType: p.mediaType,
     proof: item.proof,
   };
+  // The two flat dates come from the SIGNED dates, never from the chain
+  // Entry.timestamp: the chain says when the deal was recorded, the envelope
+  // says when the author signed (and v2 signs two different instants).
+  const v2 = p.specVersion === '2';
   const base = {
     id: entry.genesis, // job identity is the genesis
     author: p.author, // did:ethr:0x... — pass through from IPFS
@@ -347,8 +360,8 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     parent: p.parent,
     position: p.position,
     postType: p.postType,
-    creationDate: String(p.createdAt), // this version's timestamp
-    modifiedDate: String(p.createdAt),
+    creationDate: v2 ? String(p.creationDate) : String(p.createdAt), // genesis signing time
+    modifiedDate: v2 ? String(p.modifiedDate) : String(p.createdAt), // this version's
     tags: p.tags,
     attributes: p.attributes,
     publication: p.publication,

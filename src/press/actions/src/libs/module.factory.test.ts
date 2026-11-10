@@ -81,6 +81,33 @@ const mkItem = (overrides: Partial<StoredContentItem> = {}): StoredContentItem =
   ...overrides,
 });
 
+/** A v2 item: creationDate (genesis) and modifiedDate (this version), no createdAt. */
+const mkItemV2 = (overrides: Partial<StoredContentItem> = {}): StoredContentItem => ({
+  public: {
+    specVersion: '2',
+    author: AUTHOR,
+    postType: 'post',
+    mediaType: 'text/markdown',
+    parent: '',
+    position: '0',
+    publication: 'test.soul2soul.eth',
+    locale: 'en',
+    creationDate: 1600000000,
+    modifiedDate: 1700000100,
+    tags: [],
+    plaintextHash: PLAINTEXT_HASH,
+  },
+  objectId: '0x' + 'df'.repeat(32),
+  proof: {
+    type: 'eip712',
+    signer: ('0x' + 'b'.repeat(40)) as `0x${string}`,
+    signature: ('0x' + 'cc'.repeat(65)) as `0x${string}`,
+  },
+  encryption: false,
+  body: PLAINTEXT,
+  ...overrides,
+});
+
 /** A pre-specVersion-1 item: no objectId/proof/plaintextHash/specVersion/mediaType. */
 const legacyItem = (body = PLAINTEXT): StoredContentItem => ({
   public: {
@@ -119,6 +146,7 @@ describe('toBody — additive identity', () => {
     expect(body.author).toBe(AUTHOR);
     expect(body.locale).toBe('en');
     expect(body.postType).toBe('post');
+    // v1: one signed date, so both flat dates carry it.
     expect(body.creationDate).toBe('1700000000');
     expect(body.modifiedDate).toBe('1700000000');
     expect(body.publication).toBe('test.soul2soul.eth');
@@ -127,6 +155,26 @@ describe('toBody — additive identity', () => {
     expect(body.slug).toBe('hello');
     expect(body.content).toBe('Hello');
     expect(body.custom).toEqual({});
+  });
+
+  it('maps a v1 item both dates from createdAt, never from the chain timestamp', () => {
+    // The chain entry says a different instant on purpose: the flat dates are
+    // the signed ones, so Entry.timestamp must not leak into either.
+    const chainEntry: Entry = { ...ENTRY, timestamp: 999 };
+    const body = toBody(chainEntry, mkItem());
+
+    expect(body.creationDate).toBe('1700000000');
+    expect(body.modifiedDate).toBe('1700000000');
+  });
+
+  it('maps a v2 item to its own creationDate and modifiedDate', () => {
+    const chainEntry: Entry = { ...ENTRY, timestamp: 999 };
+    const body = toBody(chainEntry, mkItemV2());
+
+    expect(body.creationDate).toBe('1600000000'); // genesis signing time
+    expect(body.modifiedDate).toBe('1700000100'); // this version's signing time
+    expect(body.creationDate).not.toBe(body.modifiedDate);
+    expect(body.specVersion).toBe('2');
   });
 
   it('carries identity on an encrypted body too (ciphertext stays in content)', () => {
