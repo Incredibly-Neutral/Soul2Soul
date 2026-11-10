@@ -30,8 +30,11 @@ import type { Address } from 'viem';
 import { createFilecoinStorage } from '../adapters/filecoin';
 import {
   CID_KEY,
+  ENCRYPTED_KEY,
   LEGACY_CID_KEY,
+  LEGACY_ENCRYPTED_KEY,
   frontmatterDateToUnix,
+  resolveEncryption,
   resolveKuboCid,
   upsertFrontmatter,
 } from '../lib/frontmatter';
@@ -140,7 +143,7 @@ export interface AuthorWriteOptions {
   remove?: { path: string; replacedBy?: string }[];
   /**
    * Allow replacing a previously-encrypted genesis with a plaintext body
-   * (`--allow-plaintext`). Without it, a republish that drops `encryption: true`
+   * (`--allow-plaintext`). Without it, a republish that drops `encrypted: true`
    * is refused — see `guardEncryptionDowngrade`.
    */
   allowPlaintext?: boolean;
@@ -166,9 +169,13 @@ export async function authorWrite(
   // the fallback title, so an absolute path slugifies into `/home/…/note` —
   // `homejoerawhitepaperauthor` — and that becomes the render path.
   const parsed = await parseMarkdownNote(raw, basename(notePath));
+  // `encrypted` is the key this build writes, `encryption` its legacy spelling.
+  // Shared's parser only knows the legacy one, so resolve both here and let the
+  // one value drive the encryptor, the downgrade guard and the write-back.
+  parsed.encryption = resolveEncryption(parsed.frontmatter);
 
   // Resolve the encrypt function FIRST, before any chain/IPFS work: a note with
-  // `encryption: true` and no usable Lit key/PKP must fail closed with a usage
+  // `encrypted: true` and no usable Lit key/PKP must fail closed with a usage
   // error, not upload a plaintext (or error-string) body. `upload`, `preview`
   // and `publish` all land here, so this one place covers them. (`offer` lands
   // here too — it uploads unless `--cid` says the bytes are already on IPFS; on
@@ -238,6 +245,12 @@ export async function authorWrite(
     );
   }
   const custom = { ...parsed.custom };
+  // The encryption flag is a write-back key, not template data. Shared's
+  // KNOWN_FRONTMATTER_KEYS predates `encrypted`, so without this the flag would
+  // be signed into `custom` and change the objectId of every encrypted note; the
+  // legacy spelling is dropped for the same reason once the new one is written.
+  delete custom[ENCRYPTED_KEY];
+  delete custom[LEGACY_ENCRYPTED_KEY];
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
 
   const signedItem = await buildSignedContentItem(
@@ -281,9 +294,15 @@ export async function authorWrite(
   // offers on-chain). The author is written as a bare address — the DID form
   // (`did:ethr:0x…`) is the manuscript's, not the note's.
   const modified = new Date().toISOString().slice(0, 19);
-  const updates: Record<string, string> = {
+  const updates: Record<string, string | boolean> = {
     modified_date: modified,
     [CID_KEY]: kuboCid,
+    // The state this publish actually used — sourced from the flag that drove
+    // the encryptor, never a second read of the file. Written every time, so the
+    // note always says what the last publish did and the author edits it to
+    // change the next one. A boolean, not `"true"`/`"false"`: a quoted `"false"`
+    // is truthy under `Boolean()` and would silently encrypt.
+    [ENCRYPTED_KEY]: parsed.encryption,
   };
   if (!parsed.genesis) {
     updates.genesis = objectId;
@@ -305,7 +324,10 @@ export async function authorWrite(
   if (parsed.genesis && declaredAuthor !== undefined && /^did:ethr:/i.test(declaredAuthor)) {
     updates.author = declaredAuthor.replace(/^did:ethr:/i, '');
   }
-  const frontmatterWritten = writeNoteFrontmatter(notePath, updates, [LEGACY_CID_KEY]);
+  const frontmatterWritten = writeNoteFrontmatter(notePath, updates, [
+    LEGACY_CID_KEY,
+    LEGACY_ENCRYPTED_KEY,
+  ]);
 
   // Durability — real upload/publish only (never preview-only renders).
   if (opts.publish) {
@@ -361,6 +383,9 @@ export async function offerContent(
 ): Promise<OfferResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, basename(notePath));
+  // Same resolution as `authorWrite`: `encrypted` first, then the legacy
+  // `encryption` spelling, so the offer guards ask about the flag the note says.
+  parsed.encryption = resolveEncryption(parsed.frontmatter);
 
   const objectId = parsed.genesis ?? parsed.contentId;
   if (!objectId) {
@@ -504,7 +529,7 @@ async function guardEncryptionDowngrade(
     // the warning channel is stderr, which the plugin never renders on a
     // success envelope.
     throw new UsageError(
-      `refusing to publish ${notePath}: identity ${identity} has no recorded \`${CID_KEY}\`, so the previous revision cannot be checked for encryption and this note has \`encryption: false\`. Re-add the CID, restore \`encryption: true\`, or pass --allow-plaintext to publish a plaintext revision anyway.`,
+      `refusing to publish ${notePath}: identity ${identity} has no recorded \`${CID_KEY}\`, so the previous revision cannot be checked for encryption and this note has \`encrypted: false\`. Re-add the CID, restore \`encrypted: true\`, or pass --allow-plaintext to publish a plaintext revision anyway.`,
     );
   }
 
@@ -517,12 +542,12 @@ async function guardEncryptionDowngrade(
     // ceiling — different problems, different remedies.
     const detail = describePreviousReadFailure(err);
     throw new UsageError(
-      `refusing to publish ${notePath}: could not read the previous revision ${previousCid} of identity ${identity} to check whether it is encrypted — ${detail.reason}. This note has \`encryption: false\`, so publishing could replace a ciphertext body with plaintext. ${detail.remedy}`,
+      `refusing to publish ${notePath}: could not read the previous revision ${previousCid} of identity ${identity} to check whether it is encrypted — ${detail.reason}. This note has \`encrypted: false\`, so publishing could replace a ciphertext body with plaintext. ${detail.remedy}`,
     );
   }
   if (stored.encryption) {
     throw new UsageError(
-      `refusing to republish ${notePath}: the previous item ${previousCid} for identity ${identity} is encrypted, and this note has \`encryption: false\` — that would publish the body in the clear. Restore \`encryption: true\`, or pass --allow-plaintext if the downgrade is intentional.`,
+      `refusing to republish ${notePath}: the previous item ${previousCid} for identity ${identity} is encrypted, and this note has \`encrypted: false\` — that would publish the body in the clear. Restore \`encrypted: true\`, or pass --allow-plaintext if the downgrade is intentional.`,
     );
   }
 }
@@ -836,7 +861,7 @@ function warnOnAuthorMismatch(
 
 function writeNoteFrontmatter(
   notePath: string,
-  updates: Record<string, string>,
+  updates: Record<string, string | boolean>,
   remove: readonly string[] = [],
 ): boolean {
   const raw = readFileSync(notePath, 'utf8');

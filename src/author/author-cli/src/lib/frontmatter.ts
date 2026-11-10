@@ -13,7 +13,8 @@ import { Document } from 'yaml';
 /**
  * Re-serialize a markdown file with `updates` merged into its YAML frontmatter.
  * Keys already present keep their position; new keys are appended. The body is
- * preserved verbatim.
+ * preserved verbatim. A boolean value is set as a YAML boolean (`encrypted:
+ * true`), never as the quoted string, so it re-parses as a boolean.
  */
 /**
  * Frontmatter key holding the CID of the last upload — the value `offer`
@@ -32,6 +33,45 @@ export const CID_KEY = 'cid';
  * Never written: the write-back renames it to `CID_KEY` on the next upload.
  */
 export const LEGACY_CID_KEY = 'kubo_cid';
+
+/**
+ * Frontmatter key recording whether the body is encrypted — the state the last
+ * publish actually used.
+ *
+ * Written on every publish so the file says what the last one did; the author
+ * edits it to change the next one. The value is always a YAML boolean, never a
+ * quoted string: `'false'` is truthy under `Boolean()`, so a quoted value would
+ * silently encrypt a note its author asked to publish in the clear.
+ */
+export const ENCRYPTED_KEY = 'encrypted';
+
+/**
+ * Pre-rename spelling of `ENCRYPTED_KEY`, still read (first publish of an old
+ * note must not lose the flag) and never written: the write-back deletes it, so
+ * a migrated note carries one key and no stale one.
+ */
+export const LEGACY_ENCRYPTED_KEY = 'encryption';
+
+/**
+ * The encryption flag the frontmatter requests: `encrypted` first, then the
+ * legacy `encryption` spelling. Absent means plaintext.
+ *
+ * `Boolean` on purpose — it is exactly what `shared/src/authoring/note.ts`
+ * applies to the legacy key, so a note carrying `encrypted: "false"` (quoted)
+ * has always meant "encrypt" and keeps meaning that. The write-back then records
+ * the boolean the publish used, which is what makes the file truthful.
+ *
+ * A key that is present but empty (`encrypted:`) is an explicit `false`, not a
+ * fallback to the legacy spelling: refusing to guess is what the downgrade guard
+ * is for.
+ */
+export function resolveEncryption(frontmatter: Record<string, unknown>): boolean {
+  const declared =
+    frontmatter[ENCRYPTED_KEY] !== undefined
+      ? frontmatter[ENCRYPTED_KEY]
+      : frontmatter[LEGACY_ENCRYPTED_KEY];
+  return Boolean(declared);
+}
 
 /**
  * Resolve the content CID for `offer`: an explicit `--cid` wins, else the `cid`
@@ -109,7 +149,7 @@ export function frontmatterDateToUnix(value: unknown): number | undefined {
 
 export function upsertFrontmatter(
   raw: string,
-  updates: Record<string, string>,
+  updates: Record<string, string | boolean>,
   remove: readonly string[] = [],
 ): string {
   const { frontmatter, body } = extractFrontmatter(raw);
