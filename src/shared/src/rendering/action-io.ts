@@ -97,9 +97,23 @@ export const s2sContentItemSchemaV3 = z.object({
   bodies: z.record(z.string(), z.string()),
 });
 
-// The v3 branch is tried first so an item that carries `bodies` keeps its map;
-// a v1/v2 item has no `bodies` and falls through to the body branch unchanged.
-export const s2sContentItemSchema = z.union([s2sContentItemSchemaV3, s2sContentItemSchemaWithBody]);
+// ============================================================================
+// An item that carries both keys is ambiguous. The body branch strips unknown
+// keys, so parsing it would silently drop `bodies` and lose a ciphertext; no
+// producer writes both, so refuse the input rather than pick a layout.
+const rejectBothLayouts = z.any().superRefine((raw: unknown, ctx) => {
+  if (raw === null || typeof raw !== 'object') return;
+  if ('bodies' in raw && 'body' in raw) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'item carries both `body` and `bodies`; the storage layout is one or the other',
+    });
+  }
+});
+
+export const s2sContentItemSchema = rejectBothLayouts.pipe(
+  z.union([s2sContentItemSchemaV3, s2sContentItemSchemaWithBody]),
+);
 
 // ============================================================================
 // S2SContentBody (what goes into .body)
