@@ -8,12 +8,13 @@ import { signingEnvelope } from './signing-view';
 import {
   type AnyS2SContentItem,
   type S2SContentItem,
-  type S2SContentItemV2,
+  type S2SContentItemV3,
   type S2SPublicContent,
   type S2SPublicContentV2,
   type S2SProof,
   type S2SContentBody,
   type DidEthr,
+  S2S_BODIES_KEY,
   S2S_DOMAIN,
   toDidEthr,
 } from '../types';
@@ -36,6 +37,16 @@ export interface TypedDataSigner {
  *
  * The order is load-bearing: hash → digest(=objectId) → sign → encrypt
  * The objectId exists at sign time; the CID does not.
+ *
+ * The returned item is storage layout v3 on the v2 envelope: one body per key
+ * holder, keyed by the key holder's name. This function seals only the
+ * protocol's body (`s2s`); a publication with its own key adds its entry to
+ * `bodies` afterwards. The envelope is unaffected — signing still goes through
+ * the v2 struct.
+ *
+ * A v1 envelope keeps the layout it was written with: a single `body`. v3
+ * storage is pinned to the v2 envelope, so a v1 item is never rewritten into a
+ * body map and its frozen bytes stay frozen.
  *
  * NOTE on EIP-712 shape: the struct commits tagsHash/attributesHash (bytes32)
  * rather than the raw arrays. This function computes those hashes from
@@ -64,7 +75,7 @@ export async function buildSignedContentItem(
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
   author?: DidEthr,
-): Promise<S2SContentItemV2>;
+): Promise<S2SContentItemV3>;
 export async function buildSignedContentItem(
   pub: PublicInputV1,
   body: S2SContentBody,
@@ -127,14 +138,33 @@ export async function buildSignedContentItem(
     signature: signature as `0x${string}`,
   };
 
-  // 5. Encrypt (or pass through) — result goes into .body
+  // 5. Encrypt (or pass through). A v2 envelope stores the result in the
+  //    per-key body map under the protocol key's name; a v1 envelope keeps its
+  //    single `body` — its layout is frozen with the rest of it.
   const bodyContent = await encryptFn(bodyJson);
+  const encryption = encryptFn !== noOpEncrypt;
 
   // 6. Already built publicPart above with the original arrays (not hashes)
   //    The EIP-712 signature commits the hash values;
   //    a verifier re-computes them from the arrays and checks the signature.
 
-  return { public: publicPart, objectId, proof, encryption: encryptFn !== noOpEncrypt, body: bodyContent } as AnyS2SContentItem;
+  if (pub.specVersion === '2') {
+    return {
+      public: publicPart,
+      objectId,
+      proof,
+      encryption,
+      bodies: { [S2S_BODIES_KEY]: bodyContent },
+    } as AnyS2SContentItem;
+  }
+
+  return {
+    public: publicPart,
+    objectId,
+    proof,
+    encryption,
+    body: bodyContent,
+  } as AnyS2SContentItem;
 }
 
 /** Pass-through encrypt function — for non-encrypted content */

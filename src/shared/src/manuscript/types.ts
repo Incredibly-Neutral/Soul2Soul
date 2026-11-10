@@ -87,8 +87,38 @@ export interface S2SContentItemV2 {
   body: string;
 }
 
-/** Either envelope version, discriminated at runtime by public.specVersion */
-export type AnyS2SContentItem = S2SContentItem | S2SContentItemV2;
+/**
+ * The key the protocol's PKP holds; every item has this body.
+ *
+ * A body map is keyed by key holder name: `s2s` is the protocol key, and a
+ * publication with its own key adds its own entry beside it. The name is the
+ * key holder, not a CID or a fingerprint, so a reader asks for "the s2s body"
+ * and a publication asks for "my body" without resolving anything first.
+ */
+export const S2S_BODIES_KEY = 's2s';
+
+/**
+ * The stored object, storage layout v3: one body per key holder, keyed by the
+ * key holder's name (`s2s` today; a publication with its own key adds its own
+ * entry). The envelope is unchanged — still specVersion 2 — so objectId,
+ * plaintextHash and the EIP-712 type hash are the same bytes as the v2 item's.
+ *
+ * v3 storage pairs with the v2 envelope; a v1-envelope item is never rewritten.
+ */
+export interface S2SContentItemV3 {
+  public: S2SPublicContentV2; // signed
+  objectId: string;
+  proof: S2SProof;
+  encryption: boolean;
+  bodies: Record<string, string>; // key holder name → ciphertext or stringified JSON
+}
+
+/**
+ * Any stored item, over the three storage layouts. v1/v2 carry a single `body`;
+ * v3 carries `bodies`. Discriminate on the presence of `bodies`, not on
+ * public.specVersion: a v3 item is still an envelope v2 item.
+ */
+export type AnyS2SContentItem = S2SContentItem | S2SContentItemV2 | S2SContentItemV3;
 
 /** What goes into the body field of S2SContentItem (the content, optionally encrypted) */
 export interface S2SContentBody {
@@ -148,6 +178,49 @@ export const S2S_TYPES_V2 = {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * True when a `bodies` value could actually hold a body map. A null,
+ * undefined, array or primitive does not: it is a stray key on an item whose
+ * layout is its single `body`.
+ */
+export function isBodyMap(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * The bodies of an item, whatever storage layout it was written in. v3 returns
+ * its map; v1/v2 wrap their single `body` under the protocol's key.
+ *
+ * A `bodies` value that cannot hold a map (null, undefined, an array, any
+ * non-object) is a stray key, not a layout: the item falls back to a string
+ * `body` when it has one, because that is the body it has always rendered from.
+ * Only an item with neither yields an empty map.
+ */
+export function itemBodies(item: AnyS2SContentItem): Record<string, string> {
+  const bodies = 'bodies' in item ? (item as { bodies?: unknown }).bodies : undefined;
+  if (isBodyMap(bodies)) return bodies;
+  const legacy = (item as { body?: unknown }).body;
+  return typeof legacy === 'string' ? { [S2S_BODIES_KEY]: legacy } : {};
+}
+
+/**
+ * The body a given key holder can read. Defaults to the protocol's key, which
+ * every item has; undefined when that holder has no entry.
+ *
+ * Only own keys count. `constructor`, `toString` and `__proto__` resolve
+ * through the prototype chain on a plain object, so indexing without the own
+ * check hands back the Object constructor or a function where a body belongs.
+ */
+export function bodyForKey(
+  item: AnyS2SContentItem,
+  key: string = S2S_BODIES_KEY,
+): string | undefined {
+  const bodies = itemBodies(item);
+  if (!Object.hasOwn(bodies, key)) return undefined;
+  const body = bodies[key];
+  return typeof body === 'string' ? body : undefined;
+}
 
 export function toDidEthr(address: string): DidEthr {
   const addr = address.startsWith('0x') ? address : `0x${address}`;
