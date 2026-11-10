@@ -28,7 +28,13 @@ import type { ParsedNote } from '@s2s/soul2soul-shared';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
-import { CID_KEY, LEGACY_CID_KEY, resolveKuboCid, upsertFrontmatter } from '../lib/frontmatter';
+import {
+  CID_KEY,
+  LEGACY_CID_KEY,
+  frontmatterDateToUnix,
+  resolveKuboCid,
+  upsertFrontmatter,
+} from '../lib/frontmatter';
 import { UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
@@ -209,19 +215,42 @@ export async function authorWrite(
   const subdomain = service?.subdomain ?? subdomainOf(publication);
 
   const now = Math.floor(Date.now() / 1000);
+  // The two signed dates. `modifiedDate` is this upload; `creationDate` is the
+  // note's own birth and must stay put across revisions. The chain is the same
+  // one the write-back below uses — `creation_date`, else the `modified_date`
+  // the note already had (a lower bound on how long it has existed), else now —
+  // so the first publish signs exactly the date it records.
+  const declaredCreation = parsed.frontmatter['creation_date'];
+  const creationDate =
+    frontmatterDateToUnix(declaredCreation) ??
+    frontmatterDateToUnix(parsed.frontmatter['modified_date']) ??
+    now;
+  if (
+    declaredCreation !== undefined &&
+    declaredCreation !== null &&
+    declaredCreation !== '' &&
+    frontmatterDateToUnix(declaredCreation) === undefined
+  ) {
+    // Falling back to `now` here would re-birth the note on every publish and
+    // change its signature each time, so refuse and name the value.
+    throw new UsageError(
+      `refusing to publish ${notePath}: frontmatter \`creation_date\` is ${JSON.stringify(declaredCreation)}, which is not a date. Fix it to \`YYYY-MM-DDTHH:mm:ss\` (UTC) or remove the key.`,
+    );
+  }
   const custom = { ...parsed.custom };
   if (parsed.summary !== undefined) custom.summary = parsed.summary;
 
   const signedItem = await buildSignedContentItem(
     {
-      specVersion: '1',
+      specVersion: '2',
       postType: parsed.postType,
       mediaType: 'text/markdown',
       parent: String(parsed.parent),
       position: String(parsed.position),
       publication: subdomain,
       locale: parsed.locale,
-      createdAt: now,
+      creationDate,
+      modifiedDate: now,
       base: parsed.slug,
       tags: parsed.tags,
       attributes: undefined,
@@ -263,10 +292,10 @@ export async function authorWrite(
   // The note may predate `creation_date`: neutralpress fills it on save, the CLI
   // never did. There is no way to recover the real first-write time from the
   // file, so an existing note is stamped with the modified time it already had
-  // (a lower bound on how long it has existed) rather than with `now`.
+  // (a lower bound on how long it has existed) rather than with `now`. Write
+  // back the signed value itself, so the next revision signs the same birth.
   if (!nonEmptyString(parsed.frontmatter['creation_date'])) {
-    const declaredModified = nonEmptyString(parsed.frontmatter['modified_date']);
-    updates.creation_date = declaredModified ?? modified;
+    updates.creation_date = new Date(creationDate * 1000).toISOString().slice(0, 19);
   }
   // Format migration: a `did:ethr:` author is rewritten to its bare address,
   // whatever address it is (this is a spelling change, not a re-attribution).
