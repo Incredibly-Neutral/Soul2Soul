@@ -68,7 +68,7 @@ These types are the **single source of truth** for stored content items. They li
 | type | file | shape |
 |---|---|---|
 | `DidEthr` | `protocol/types.ts` | template literal `did:ethr:0x${string}` — canonical author form |
-| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(DidEthr), postType, mediaType, parent, position, publication, locale, createdAt(number unixts), base?, tags[], attributes?(Record), plaintextHash` |
+| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(DidEthr), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
 | `S2SContentItem` | `protocol/types.ts` | **flat stored object** (no union): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string)` |
 | `S2SSecretBody` | `protocol/types.ts` | what goes inside `.secret`: `title, slug, content, custom?(Record)` |
@@ -76,6 +76,7 @@ These types are the **single source of truth** for stored content items. They li
 Key design decisions (from HANDOFF-content-item):
 - **No discriminated union.** Both readings of `secret` are `string` (ciphertext when `encryption=true`, stringified JSON when `false`).
 - **No unsigned public field.** Every field in `S2SPublicContent` is signed via EIP-712.
+- **`specVersion` selects the struct.** A `'2'` envelope verifies under `S2S_TYPES_V2` with `creationDate`/`modifiedDate`; anything else stays under `S2S_TYPES` with `createdAt`, so a v1 digest still reproduces.
 - **`secret` is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
 - **`author` is `DidEthr`**, not bare 0x address.
