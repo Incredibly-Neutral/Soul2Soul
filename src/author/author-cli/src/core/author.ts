@@ -41,7 +41,7 @@ import {
 import { UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
-import { assertCiphertext, buildEncryptFn, fetchStoredItem } from './encrypt';
+import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
 import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -468,7 +468,11 @@ async function assertStoredItemEncrypted(
       `refusing to offer ${notePath}: ${kuboCid} says \`encryption: true\` but has no string body`,
     );
   }
-  assertCiphertext(stored.body);
+  if (!storedBodyIsDecryptable(stored.body)) {
+    throw new UsageError(
+      `refusing to offer ${notePath}: ${kuboCid} says \`encryption: true\` but its body is not JSON ciphertext (got non-JSON text or an unusable value), so the render path could not decrypt it. Re-upload the note.`,
+    );
+  }
 }
 
 /**
