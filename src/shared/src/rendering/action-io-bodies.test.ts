@@ -118,6 +118,43 @@ describe('s2sContentItemSchema rejects an item carrying both layouts', () => {
     };
     expect(s2sContentItemSchema.safeParse(v1WithMap).success).toBe(false);
   });
+
+  it('rejects a body with a body map that holds the protocol body', () => {
+    const both = { ...V1_ITEM, bodies: { s2s: 'c' } };
+    expect(s2sContentItemSchema.safeParse(both).success).toBe(false);
+  });
+});
+
+describe('s2sContentItemSchema keeps a stray bodies beside a body parseable', () => {
+  // A `bodies` that cannot hold a map is not a layout. The item is the legacy
+  // item it always was, and itemBodies falls back to the body it carries; the
+  // shape gate must not be stricter than the accessor.
+  const stray: [string, unknown][] = [
+    ['null', null],
+    ['undefined', undefined],
+    ['an array', ['ciphertext']],
+    ['a string', 'ciphertext'],
+  ];
+
+  for (const [label, value] of stray) {
+    it(`parses a legacy item whose bodies is ${label}`, () => {
+      const item = { ...V1_ITEM, bodies: value };
+      const parsed = s2sContentItemSchema.safeParse(item);
+
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect('body' in parsed.data ? parsed.data.body : undefined).toBe(V1_ITEM.body);
+      expect('bodies' in parsed.data).toBe(false);
+    });
+  }
+
+  it('parses a v2 item whose bodies is null and keeps its body', () => {
+    const parsed = s2sContentItemSchema.safeParse({ ...V2_ITEM, bodies: null });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect('body' in parsed.data ? parsed.data.body : undefined).toBe(V2_ITEM.body);
+  });
 });
 
 describe('s2sContentItemSchema rejects malformed items', () => {

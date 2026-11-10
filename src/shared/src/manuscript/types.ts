@@ -180,6 +180,15 @@ export const S2S_TYPES_V2 = {
 // ============================================================================
 
 /**
+ * True when a `bodies` value could actually hold a body map. A null,
+ * undefined, array or primitive does not: it is a stray key on an item whose
+ * layout is its single `body`.
+ */
+export function isBodyMap(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
  * The bodies of an item, whatever storage layout it was written in. v3 returns
  * its map; v1/v2 wrap their single `body` under the protocol's key.
  *
@@ -190,9 +199,7 @@ export const S2S_TYPES_V2 = {
  */
 export function itemBodies(item: AnyS2SContentItem): Record<string, string> {
   const bodies = 'bodies' in item ? (item as { bodies?: unknown }).bodies : undefined;
-  if (bodies !== null && typeof bodies === 'object' && !Array.isArray(bodies)) {
-    return bodies as Record<string, string>;
-  }
+  if (isBodyMap(bodies)) return bodies;
   const legacy = (item as { body?: unknown }).body;
   return typeof legacy === 'string' ? { [S2S_BODIES_KEY]: legacy } : {};
 }
