@@ -182,7 +182,6 @@ export const S2S_TYPES_V2 = {
 /**
  * The bodies of an item, whatever storage layout it was written in. v3 returns
  * its map; v1/v2 wrap their single `body` under the protocol's key.
-<<<<<<< HEAD
  *
  * A `bodies` value that cannot hold a map (null, undefined, an array, any
  * non-object) is a stray key, not a layout: the item falls back to a string
@@ -196,37 +195,24 @@ export function itemBodies(item: AnyS2SContentItem): Record<string, string> {
   }
   const legacy = (item as { body?: unknown }).body;
   return typeof legacy === 'string' ? { [S2S_BODIES_KEY]: legacy } : {};
-=======
- */
-export function itemBodies(item: AnyS2SContentItem): Record<string, string> {
-  if ('bodies' in item) return item.bodies;
-  return { [S2S_BODIES_KEY]: item.body };
->>>>>>> agent/cli
 }
 
 /**
  * The body a given key holder can read. Defaults to the protocol's key, which
  * every item has; undefined when that holder has no entry.
-<<<<<<< HEAD
  *
  * Only own keys count. `constructor`, `toString` and `__proto__` resolve
  * through the prototype chain on a plain object, so indexing without the own
  * check hands back the Object constructor or a function where a body belongs.
-=======
->>>>>>> agent/cli
  */
 export function bodyForKey(
   item: AnyS2SContentItem,
   key: string = S2S_BODIES_KEY,
 ): string | undefined {
-<<<<<<< HEAD
   const bodies = itemBodies(item);
   if (!Object.hasOwn(bodies, key)) return undefined;
   const body = bodies[key];
   return typeof body === 'string' ? body : undefined;
-=======
-  return itemBodies(item)[key];
->>>>>>> agent/cli
 }
 
 export function toDidEthr(address: string): DidEthr {
