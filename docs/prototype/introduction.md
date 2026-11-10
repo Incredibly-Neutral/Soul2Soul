@@ -28,7 +28,7 @@ Whoever holds the only copy has leverage. So no single party should hold the onl
 
 ## The press: Lit actions
 
-The press needs something unusual: a key that neither author nor publication holds, and only specific code can use. Lit actions bound to a Programmable Key Pair (PKP) provide this. This implementation uses that one key as the press's key, both to decrypt manuscripts and to sign pages. Lit lets only the permitted actions use it. Who decides which actions are permitted? The implementation's governance, currently a Safe multisig with the developer as its only owner.
+The press needs something unusual: a key that neither author nor publication holds, and only specific code can use. Lit actions bound to a Programmable Key Pair (PKP) provide this. This implementation runs on Chipotle, Lit's current network, and uses that one key as the press's key, both to decrypt manuscripts and to sign pages. Lit lets only the permitted actions use it. Who decides which actions are permitted? The implementation's governance, currently a Safe multisig with the developer as its only owner.
 
 This guarantee has weakened. With Naga, the key existed only as threshold shares across an open, incentivized network. With Chipotle, in 2026, it lives in a single trusted execution environment. What remains is collateral freedom: Lit secures DeFi applications with a lot of value at stake, so turning against one small client would put that business at risk. That is an economic guarantee, not a cryptographic one.
 

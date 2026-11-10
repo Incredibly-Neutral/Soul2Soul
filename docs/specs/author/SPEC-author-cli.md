@@ -110,7 +110,7 @@ silent no-op:
 |---|---|---|
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
 | `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
-| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. | upload, offer, preview, publish |
+| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
 | `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
 | `--branch <b>` | Default render branch; empty string when omitted. | publication new |
 | `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
@@ -811,22 +811,25 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   `LIT_USAGE_KEY`/`protocolInfo.pkp` is a `UsageError`; the downgrade guard runs next
   (`author.ts:112`), so on a plaintext note it has already decided before anything is signed; then
   the write signs and encrypts (`author.ts:154` → `encrypt.ts:254`). `assertCiphertext` carries two of
-  the checks in its single call: the ciphertext must be JSON text that parses to a non-empty string
-  or object — the read path does `JSON.parse(body.content)`
-  (`protocol/actions/src/libs/decrypt.ts:36`) — so Lit's swallowed error strings are rejected instead
-  of published, and an encryptor that echoes the plaintext back (directly, as a JSON string, or
-  re-serialised) is refused rather than publishing the body in the clear under a lying
-  `encryption: true`. The downgrade guard keys on the identity, `genesis` else `content_id`
+  the checks in its single call: Lit's swallowed error strings are rejected instead of published, and
+  an encryptor that echoes the plaintext back (directly, as a JSON string, or re-serialised) is
+  refused rather than publishing the body in the clear under a lying `encryption: true`. It also
+  meets the read path's shape: `decrypt.ts:36` does `JSON.parse(body.content)` before handing the
+  value to `Lit.Actions.Decrypt`, and the first live run showed `Lit.Actions.Encrypt` returns bare
+  base64 with no `dataToEncryptHash`, so a result that is not already JSON text is stored wrapped
+  (`JSON.stringify`) — the parse then yields exactly the bytes Lit returned, and the read path needs
+  no change. A stored body that is not JSON text was therefore written by something else, and
+  `storedBodyIsDecryptable` refuses to offer it. The downgrade guard keys on the identity, `genesis` else `content_id`
   (`author.ts:386`; legacy `content_id`-only notes are covered), and refuses three states, each with
   its own message: the previous item is encrypted (restore `encrypted: true`, or
   `--allow-plaintext`); the previous revision cannot be read, cause-classified — a recorded CID that
   does not resolve gets "fix or remove the stale `cid`", while a timeout or a gateway fault gets
   "re-run …, or pass `--allow-plaintext`", so that first remedy does not name the flag; and an
   identity with no recorded `cid`, where nothing can be checked at all, also a `UsageError`
-  naming the flag. No silent plaintext fallback. The code records one open risk in its header: the
-  writer's ciphertext shape is inferred from the read path, not from a recorded live `/lit_action`
-  encrypt response, so if a live encrypt returns bare base64 the fix belongs on the read path
-  (`decrypt.ts:36` must stop assuming `JSON.parse`), not in loosening the writer.
+  naming the flag. No silent plaintext fallback. Whether `Lit.Actions.Decrypt` accepts a bare base64
+  ciphertext without its `dataToEncryptHash` is unverified: the encrypt action returns the ciphertext
+  only, so the writer has no hash to store. If a read fails to decrypt, the fix is in that action
+  (`src/shared/src/lit/actions/encrypt.ts`), which must return the hash the decrypt call needs.
   Reading an encrypted note still has to pass the action's `canRead` gate
   (`protocol/actions/src/libs/gates.ts`: `canPublish(authorSafe)` + `isOwner(signer)` +
   `hasDeal(genesis)`) inside `decryptRaw`, so an author preview renders empty/revoked until a deal

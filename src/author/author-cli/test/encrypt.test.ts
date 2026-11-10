@@ -127,13 +127,21 @@ describe('assertCiphertext', () => {
     }
   });
 
-  it('rejects raw non-JSON text, which the read path could not JSON.parse', () => {
-    // A bare base64 ciphertext is what Lit would return if it did not return JSON.
-    // The message must name what arrived and what the read path needs.
-    const raw = 'gAAAAAB' + 'x'.repeat(60) + '==';
-    expect(() => assertCiphertext(raw)).toThrow(/raw base64-like text/);
-    expect(() => assertCiphertext(raw)).toThrow(/JSON\.parse\(body\.content\)/);
-    expect(() => assertCiphertext(raw)).toThrow(/read path has to accept/);
+  it('wraps raw non-JSON text, which is what Lit actually returns', () => {
+    // The live `/lit_action` encrypt returns bare base64: no JSON, no
+    // `dataToEncryptHash`. The read path does `JSON.parse(body.content)`, so the
+    // writer wraps it and parse yields exactly the bytes Lit returned.
+    const raw = 'gAAAAAB' + 'x'.repeat(60) + '==/';
+    const stored = assertCiphertext(raw);
+    expect(stored).toBe(JSON.stringify(raw));
+    expect(JSON.parse(stored)).toBe(raw);
+  });
+
+  it('keeps a result that is already JSON text', () => {
+    const obj = JSON.stringify({ ciphertext: 'abc', dataToEncryptHash: 'def' });
+    expect(assertCiphertext(obj)).toBe(obj);
+    const str = JSON.stringify('abc');
+    expect(assertCiphertext(str)).toBe(str);
   });
 
   it('rejects an encoder that echoes the plaintext back', () => {
@@ -144,6 +152,10 @@ describe('assertCiphertext', () => {
       /plaintext unchanged/,
     );
     expect(() => assertCiphertext(JSON.stringify(body), plaintext)).toThrow(/plaintext unchanged/);
+    // The same leak in the non-JSON branch: a plaintext that is not JSON text.
+    expect(() => assertCiphertext('just some prose', 'just some prose')).toThrow(
+      /plaintext unchanged/,
+    );
   });
 });
 
@@ -964,7 +976,7 @@ describe('offerContent verifies the stored item', () => {
     ]);
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: true, body: 'raw-not-json' }));
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
-      /got non-JSON text/,
+      /not JSON ciphertext/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -1046,7 +1058,7 @@ describe('offerContent verifies the stored item', () => {
     );
     await expect(
       offerContent(ctx, path, 'test.soul2soul.eth', undefined, { allowPlaintext: true }),
-    ).rejects.toThrow(/encryption failed/);
+    ).rejects.toThrow(/not JSON ciphertext/);
     expect(authorSafeState).not.toHaveBeenCalled();
   });
 
@@ -1136,8 +1148,11 @@ describe('offerContent verifies the stored item', () => {
     const { ctx } = fakeCtx(() =>
       Promise.resolve({ encryption: true, bodies: { s2s: raw } }),
     );
+    // The writer wraps bare base64 (`assertCiphertext`), so an item stored with
+    // the raw string was written by something else: the offer path refuses it,
+    // because the read path's `JSON.parse(body.content)` could not decrypt it.
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
-      /got raw base64-like text/,
+      /not JSON ciphertext/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -1153,7 +1168,7 @@ describe('offerContent verifies the stored item', () => {
       Promise.resolve({ encryption: true, bodies: { s2s: 'raw-not-json' } }),
     );
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
-      /got non-JSON text/,
+      /not JSON ciphertext/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
