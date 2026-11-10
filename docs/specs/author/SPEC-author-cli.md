@@ -801,11 +801,13 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   `buildSignedContentItem` calls it **after signing, before upload**. That order is safe because the
   signature covers `plaintextHash`, not the body: `plaintextHash` is the keccak of the JCS-canonical
   body — `jcs` over `{title, slug, content, custom}` (`shared/src/identity/sign-content.ts:54`) —
-  fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext `.body` still
+  fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext body still
   satisfies the commitment. The signed item carries `encryption: true`; `encryption: false`/absent
-  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. Four checks at three call
-  sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn` resolves the
-  credentials (`author.ts:109` → `encrypt.ts:240`) and a missing or empty
+  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. The stored body sits under a
+  key holder's name in the item's `bodies` map — `buildSignedContentItem` writes the `s2s` entry for
+  the press — and a reader resolves it with `bodyForKey(item)` rather than by field. Four checks at
+  three call sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn`
+  resolves the credentials (`author.ts:109` → `encrypt.ts:240`) and a missing or empty
   `LIT_USAGE_KEY`/`protocolInfo.pkp` is a `UsageError`; the downgrade guard runs next
   (`author.ts:112`), so on a plaintext note it has already decided before anything is signed; then
   the write signs and encrypts (`author.ts:154` → `encrypt.ts:254`). `assertCiphertext` carries two of

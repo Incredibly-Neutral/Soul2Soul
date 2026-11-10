@@ -1,6 +1,5 @@
 /// <reference path="../action_globals.ts" />
 
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io';
 // `S2S_DOMAIN` / `signingEnvelope` are NOT re-exported from
@@ -9,7 +8,11 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // directly — the same pattern data.ctrlr.ts already uses for
 // shared/dist/manuscript/types. Both files are dependency-free (no zod, no viem),
 // so they stay bundle-safe inside a Lit Action.
-import { S2S_DOMAIN } from '../../../../shared/dist/manuscript/types';
+import {
+  type AnyS2SContentItem,
+  S2S_DOMAIN,
+  bodyForKey,
+} from '../../../../shared/dist/manuscript/types';
 import { signingEnvelope } from '../../../../shared/dist/manuscript/identity/signing-view';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -52,7 +55,7 @@ import { signingEnvelope } from '../../../../shared/dist/manuscript/identity/sig
 //      self-consistent forged item (attacker's own author + own hash + own
 //      proof) verifies trivially, because every check below is satisfied
 //      *within* the blob.
-//   2. PLAINTEXT HASH: `keccak256(utf8(item.body))` must equal the item's own
+//   2. PLAINTEXT HASH: `keccak256(utf8(bodies.s2s))` must equal the item's own
 //      signed `public.plaintextHash`. This binds the body bytes to the public
 //      block; on its own it does NOT bind them to the author (see 3/4).
 //   3. OBJECT ID: `item.objectId` must equal the EIP-712 digest of `public` —
@@ -71,7 +74,7 @@ import { signingEnvelope } from '../../../../shared/dist/manuscript/identity/sig
 // 1–4 and is served. Closing that needs on-chain ownership proof (isOwner) of
 // the signing EOA on the publication Safe — a follow-up at the I/O edge.
 //
-// ENCRYPTED items: their `body` is ciphertext, so 2 cannot run here (they are
+// ENCRYPTED items: their `s2s` body is ciphertext, so 2 cannot run here (they are
 // served at 'unverifiable' / 'encrypted' after 1, 3, 4). The PLAINTEXT is
 // verified after decryption, against the item's `public.plaintextHash`, at both
 // places it exists: the page body in `render/data.ctrlr.ts`
@@ -161,6 +164,21 @@ export const SKIP_REASON_RE = /^(integrity\(([a-z-]+)\)|unavailable): /;
 export const skipReason = (cause: SkipCause, code: ItemIssueCode | null, detail: string): string =>
   cause === 'integrity' ? `integrity(${code ?? 'unknown'}): ${detail}` : `unavailable: ${detail}`;
 
+/**
+ * The body bytes this press reads: the protocol's entry in the item's body map.
+ *
+ * Storage layout v3 carries `bodies`, one body per key holder; v1/v2 carry a
+ * single `body`. Both resolve through the same shared helper, so a legacy item
+ * stays readable. `StoredContentItem` loosens `public` for legacy tolerance and
+ * is therefore not assignable to the shared union — the widening lives here and
+ * nowhere else. Undefined when the item has no `s2s` body at all; every caller
+ * below turns that into the failure it already had.
+ */
+export const storedBody = (item: {
+  body?: unknown;
+  bodies?: unknown;
+}): string | undefined => bodyForKey(item as unknown as AnyS2SContentItem);
+
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 /** 32-byte hex digest. Shared with verifyDecryptedBody so the at-rest and
  * post-decryption gates agree about what "a hash we can check" means. */
@@ -237,8 +255,11 @@ export const inspectItemIntegrity = (item: unknown, dealAuthor?: string | null):
   if (!pub || typeof pub !== 'object' || Array.isArray(pub)) {
     return mismatch('malformed-item', 'item.public is missing');
   }
-  if (typeof it.body !== 'string') {
-    return mismatch('malformed-item', 'item.body is not a string');
+  const body = storedBody(it);
+  if (typeof body !== 'string') {
+    // Same verdict as a missing `body` always got: the item cannot be read as
+    // an item, which is 'malformed', not forged.
+    return mismatch('malformed-item', 'item carries no s2s body (item.body / item.bodies.s2s)');
   }
 
   // ── 1. author binding ──
@@ -293,7 +314,7 @@ export const inspectItemIntegrity = (item: unknown, dealAuthor?: string | null):
       // Present but not a digest: cannot check. NOT tampering — the schema only
       // requires a non-empty string, so this must not erase content forever.
       flag('hash-malformed', `public.plaintextHash is not a 32-byte hex digest: ${String(hash)}`);
-    } else if (!verifyBodyHash(it.body, hash as string)) {
+    } else if (!verifyBodyHash(body, hash as string)) {
       return mismatch('hash-mismatch', 'body does not hash to public.plaintextHash');
     }
   }
@@ -400,8 +421,11 @@ const hasPlaintextHash = (item: unknown): boolean => {
 };
 
 /**
- * True when `item` is a structurally valid S2SContentItem per the shared
- * content-item schema (the shape gate, BEFORE any integrity verdict).
+ * True when `item` is a structurally valid content item per the shared
+ * content-item schema (the shape gate, BEFORE any integrity verdict). The
+ * schema is the union over the three storage layouts — v1/v2 `body`, v3
+ * `bodies` — so an item written today and an item written before the body map
+ * both pass.
  *
  * LEGACY TOLERANCE: the shared schema requires `public.specVersion`,
  * `public.mediaType` and `public.plaintextHash`; an item minted before those
@@ -411,7 +435,7 @@ const hasPlaintextHash = (item: unknown): boolean => {
  * specVersion must satisfy the schema as written — a missing field there is a
  * shape defect, and any other schema failure still rejects.
  */
-export const isValidContentItem = (item: unknown): item is S2SContentItem => {
+export const isValidContentItem = (item: unknown): item is AnyS2SContentItem => {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
   if (s2sContentItemSchema.safeParse(item).success) return true;
   const pub = (item as { public?: unknown }).public;

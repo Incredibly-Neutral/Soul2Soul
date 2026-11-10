@@ -17,6 +17,7 @@ import {
 import { getConfig, getTaskConfig } from '../render/config.ctrl';
 import { requireFields, setRpcAuth } from '../libs/helpers';
 import { catFile } from '../libs/ipfs.factory';
+import { storedBody } from '../libs/item-integrity';
 import { rippleFiresForBody } from './ripple-gate';
 
 const ACTION = 'prep';
@@ -36,9 +37,10 @@ async function getOldSlug(
   if (!version || !version.cid) return null;
 
   const item = JSON.parse(await catFile(gateway!, version.cid));
-  if (!item.body) return null;
+  const body = storedBody(item);
+  if (!body) return null;
 
-  const parsed = JSON.parse(item.body);
+  const parsed = JSON.parse(body);
   return parsed.slug || null;
 }
 

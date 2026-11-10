@@ -5,6 +5,7 @@ import {
   inspectItemIntegrity,
   isValidContentItem,
   skipReason,
+  storedBody,
   type ItemIssueCode,
 } from './item-integrity';
 import { verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
@@ -87,12 +88,21 @@ const toEntry = (e: any): Entry => ({
 /**
  * A content item as read from IPFS.
  *
- * Newer items are the full canonical S2SContentItem (objectId/proof plus
+ * Newer items are the full canonical content item (objectId/proof plus
  * public.plaintextHash/specVersion/mediaType). Legacy items predate that
  * envelope, so those identity fields are OPTIONAL here while the fields the
  * render path has always read (public.author …) stay required.
+ *
+ * The body is optional in both layouts: a v3 item carries `bodies` and no
+ * `body` at all. Read it through `storedBody` (item-integrity), never by
+ * property — that is the only accessor that resolves both layouts.
  */
-export type StoredContentItem = Omit<S2SContentItem, 'objectId' | 'proof' | 'public'> & {
+export type StoredContentItem = Omit<
+  S2SContentItem,
+  'objectId' | 'proof' | 'public' | 'body'
+> & {
+  body?: string;
+  bodies?: Record<string, string>;
   objectId?: string;
   proof?: S2SContentItem['proof'];
   public: Partial<Omit<S2SPublicContent, 'author'>> &
@@ -308,9 +318,11 @@ export const readItemByEntry = async (entry: Entry, gateway?: string): Promise<I
     };
   }
 
+  const body = storedBody(item);
   if (isPlaintextItem(item)) {
     try {
-      JSON.parse(item.body);
+      // Non-null: checkItemIntegrity refuses an item with no s2s body above.
+      JSON.parse(body as string);
     } catch (e) {
       return {
         ok: false,
@@ -369,12 +381,16 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     ...identity,
   };
 
+  // The body bytes this press renders: the protocol's (`s2s`) entry in the
+  // item's body map, whatever storage layout the item was written in.
+  const body = storedBody(item);
+
   if (!isPlaintextItem(item)) {
     // content is the ciphertext string; decrypt.ts does JSON.parse(body.content)
-    return { ...base, encryption: true, content: item.body };
+    return { ...base, encryption: true, content: body };
   }
 
-  const parsed = JSON.parse(item.body); // { title, slug, content, custom? }
+  const parsed = JSON.parse(body as string); // { title, slug, content, custom? }
   return {
     ...base,
     encryption: false,

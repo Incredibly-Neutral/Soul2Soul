@@ -70,7 +70,7 @@ These types are the **single source of truth** for stored content items. They li
 | `DidEthr` | `protocol/types.ts` | template literal `did:ethr:0x${string}` — canonical author form |
 | `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(DidEthr), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
-| `S2SContentItem` | `protocol/types.ts` | **flat stored object** (no union): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string)` |
+| `S2SContentItem` | `protocol/types.ts` | **flat stored object** (storage layout v3): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), bodies(Record<string,string>)` — `bodies` holds one body per key holder, keyed by the key holder's name; `s2s` is the protocol PKP's and every item has it. A v1/v2 item stores a single `body` string instead. |
 | `S2SSecretBody` | `protocol/types.ts` | what goes inside `.secret`: `title, slug, content, custom?(Record)` |
 
 Key design decisions (from HANDOFF-content-item):
@@ -80,6 +80,7 @@ Key design decisions (from HANDOFF-content-item):
 - **`secret` is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
 - **`author` is `DidEthr`**, not bare 0x address.
+- **One body per key holder.** `bodies` is keyed by whose key it is: `s2s` is the protocol PKP's, and a publication with its own key adds its own entry beside it. The envelope is unchanged, so `objectId`, `plaintextHash` and the EIP-712 type hash are the same bytes as a single-`body` item's. Read it with `bodyForKey(item)` / `itemBodies(item)` (default key `s2s`), never `item.body`: a body-less item is `malformed-item`.
 - **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the secret.
 
 ### Identity modules (NEW)
@@ -186,8 +187,11 @@ comments them out so they never enter the action bundle (INV-7 / the "zod is ove
 decision). 
 
 **NEW:** `rendering/action-io.ts` now also exports zod schemas for the new content-item types:
-`s2sPublicContentSchema`, `s2sProofSchema`, `s2sContentItemSchema`, `s2sSecretBodySchema`,
-`didEthrSchema`. These are the single source of truth for the new flat content-item shape.
+`s2sPublicContentSchema`, `s2sProofSchema`, `s2sContentItemSchema`, `s2sContentItemSchemaV3`,
+`s2sSecretBodySchema`, `didEthrSchema`. These are the single source of truth for the new flat
+content-item shape. `s2sContentItemSchema` is a union over the three storage layouts — the v3
+`bodies` branch first, then the single-`body` branch — so an item written today and an item written
+before the body map both validate.
 
 **2026-08-06:** `EvmUpdateActionInputSchema` (and the `EvmUpdateInput` interface in
 `lit/actions/types.ts`) gained an optional `remove: { path: string; replacedBy?: string }[]` field —
