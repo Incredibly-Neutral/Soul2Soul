@@ -96,8 +96,10 @@ site as a whole, not to a listing of pages that could disagree with it.
 
 # This implementation
 
-Built as actions executed by a threshold-key runtime whose key set and code hashes are bound on the
-ledger; the actions are bundled deterministically and registered by the hash of their build.
+Built as actions executed inside a TEE enclave (Lit V3, Chipotle): the key is derived in-sandbox and
+never leaves it, and the key, the permitted action CIDs and the usage key are bound on the ledger as
+a Lit Group on Base. The actions are bundled deterministically and registered by the hash of their
+build.
 
 ## Readings
 

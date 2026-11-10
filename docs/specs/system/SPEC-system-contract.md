@@ -108,8 +108,9 @@ argument rests on three legs — (a) action immutability via CID, (b) on-chain p
 of CID→key on Base, (c) TEE attestation that the enclave runs the claimed code — **not** on key
 secrecy from the action itself.
 
-> Migration note: Datil sunsets ~30 days after Chipotle hits production (targeted late
-> Mar 2026). Any code path still assuming Datil/Naga threshold behavior is on borrowed time.
+> Migration note: the move was forced, not chosen. Datil/Naga were retired ~30 days after
+> Chipotle reached production (late Mar 2026). This implementation runs on Chipotle only; Naga
+> appears in these docs solely as the thing that was replaced.
 
 **Critical distinction (agents confuse these):** there are **two** record stores.
 - `S2SRecordsModule` (a.k.a. *configModule*) — KV config for protocol/publication
