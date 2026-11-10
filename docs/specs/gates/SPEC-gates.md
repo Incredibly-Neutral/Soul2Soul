@@ -21,6 +21,13 @@ GATES-6 are constraints on all of them: gates do not move, and ledger state is r
 The author MUST be able to decrypt their own manuscript at any time. No agreement, whitelist or
 gate result MAY be required for it.
 
+Note (this implementation): the gate is `owns()` in `src/shared/src/gates`, which reads `authorOf`
+from the author's own `DraftsModuleV1` and asks the Safe that answers `isOwner` for the signer — the
+Safe is never a parameter. The Lit decrypt action repeats that same read and then requires the
+blob's own signed `public.author` to equal the module's answer: `append` is `onlySafe`, so anyone may
+log another author's genesis and ciphertext CID in their own module, and only the blob's signed
+author refuses that.
+
 ## GATES-2 — reviewers, until the offer ends
 
 The reviewers of a publication MUST be able to decrypt a manuscript offered to it, until the

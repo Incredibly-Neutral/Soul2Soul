@@ -15,6 +15,8 @@ export type {
 export type {
   ActionResult,
   DataAvailabilityEntry,
+  DecryptData,
+  DecryptParams,
   EvmUpdateData,
   EvmUpdateInput,
   MaintainCacheData,
