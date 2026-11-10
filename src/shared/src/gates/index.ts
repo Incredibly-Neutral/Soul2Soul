@@ -14,14 +14,20 @@
 // that second check inline (the isOwner read), so the two together are what
 // the protocol requires of anyone admitting a write.
 //
-// Known gap (GATES-4, implementation shortfall): the on-chain retract path
-// tests `genesisAuthor` only, so an author who has been removed from the
-// whitelist can always retract their own earlier work — "or has carried" is
-// not yet enforced on-chain.
+// V3 splits the takedown in two. `retract` is the genesis author's verb and
+// terminal: it ends the genesis, so `makeOffer` and `admit` revert `Ended()`
+// afterwards. `reject` is the publication's verb and reversible: an agreement
+// returns to the pending offer set and the safe may admit it again. Nothing in
+// this module writes; `canReset` is the publication owner's authority to reject.
 //
-// Note: `hasDeal` is read by canRead, but nothing reads `hasOffer`. Whether
-// holding an offer (rather than a deal) is enough to read is GATES-5's open
-// mechanism question, not decided here.
+// Known gap (GATES-4, implementation shortfall): `retract` tests `genesisAuthor`
+// only, so an author who has been removed from the whitelist can always end
+// their own earlier work — "or has carried" is not yet enforced on-chain.
+//
+// Divergence to know about: the contract's own `canRead` admits an agreement OR
+// an offer, and admits reviewers. `canRead` below still demands an agreement
+// (`hasDeal`) and an owner of the author Safe, so a caller that wants the
+// reviewer path asks `canReview` instead.
 //
 // Runtime note: the Lit Action runtime supplies ethers (an action's `require`
 // resolves it, and a bare global is also present), which is what the default
@@ -52,8 +58,8 @@ export type GateRead = (
 
 const CAN_PUBLISH_ABI = ['function canPublish(address _author) view returns (bool)'];
 const IS_OWNER_ABI = ['function isOwner(address owner) view returns (bool)'];
-// const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
 const CAN_READ_ABI = ['function canRead(bytes32 genesis, address reader) view returns (bool)'];
+const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view returns (bool)'];
 
 /**
  * Can this author Safe write to this publication, on behalf of this signer?
@@ -104,13 +110,32 @@ export const canRead = async (
 };
 
 /**
+ * May this signer read this content item as a reviewer?
+ *
+ * The contract answers this itself: `who` is in the publication's reviewer set
+ * and the genesis sits under an agreement or an offer. No `isOwner` read — a
+ * reviewer is an address on the publication, not an owner of the author Safe.
+ */
+export const canReview = async (
+  read: GateRead,
+  contentId: string,
+  publicationModule: string,
+  signerAddress: string,
+  toId: IdNormaliser = toBytes32Id,
+): Promise<boolean> => {
+  const genesis = toId(contentId);
+  return read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]);
+};
+
+/**
  * May this signer reset the publication's tree?
  *
  * A reset is STRICTER than a publish: only an owner of the PUBLICATION Safe
  * may nuke the tree — not merely an owner of a whitelisted author Safe. Note
  * this is an ADDITION (see docs/protocol/gates.md): the protocol text requires
- * the publication's owner to be able to retract an author's work, and does not
- * say who may rebuild the whole tree.
+ * the publication's owner to be able to reject an author's work — the
+ * reversible takedown, since `retract` belongs to the author — and does not say
+ * who may rebuild the whole tree.
  */
 export const canReset = async (
   read: GateRead,

@@ -1,74 +1,96 @@
 /**
- * Deploy a new S2SPublicationModule implementation and point the EXISTING
- * factory at it via setImplementation().
+ * Deploy a new S2SPublicationModule implementation, then point the factory at it.
  *
- * Run after contract changes. Unlike the old flow, this does NOT deploy a new
- * factory — the current factory (S2SPublicationModuleV2Factory) exposes
- * setImplementation(), so we just register the new implementation on it. The
- * factory address is therefore stable across upgrades.
+ * The factory half is privileged. S2SPublicationModuleV3Factory only accepts
+ * setImplementation from the protocol safe, so this script does not sign that
+ * call unless the configured key *is* the protocol safe. Default behaviour is
+ * to print a ready-to-paste Safe transaction for the protocol safe's owners to
+ * execute; no key can stand in for the safe.
+ *
+ * Deployment of the implementation still needs PROTOCOL_PRIVATE_KEY — that key
+ * pays gas and carries no privilege.
  *
  * Note: this only changes what FUTURE createModule() calls deploy. Existing
- * publication module proxies are UUPS and upgrade independently (upgradeTo on
- * each proxy, authorized by its Safe) — updating the factory does not touch them.
+ * publication proxies are UUPS and upgrade independently (upgradeTo on each
+ * proxy, authorised by its safe) — updating the factory does not touch them.
  *
  * Usage:
- *   npx tsx contracts/scripts/update-impl.ts
+ *   cd src/publication/contracts && pnpm deploy:pub
  *
  * Requires in .env:
- *   PROTOCOL_PRIVATE_KEY           deployer key
- *   PUBLICATION_FACTORY_V2_ADDRESS the existing factory to update
- *   BASE_RPC_URL (or VITE_DRPC_API_KEY)   optional RPC override
+ *   PROTOCOL_PRIVATE_KEY             deployer key for the implementation
+ *   PUBLICATION_FACTORY_ADDRESS      the V3 factory, as printed by pnpm deploy:pubfac
+ *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  */
 
-import { createWalletClient, createPublicClient, http, getAddress } from 'viem';
-import { base } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
-import { readFileSync, existsSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { config } from 'dotenv';
+import {
+  createWalletClient,
+  createPublicClient,
+  encodeFunctionData,
+  getAddress,
+  http,
+  parseAbi,
+} from 'viem';
+import type {Account, HttpTransport, PublicClient, WalletClient} from 'viem';
+import {base} from 'viem/chains';
+import {privateKeyToAccount} from 'viem/accounts';
+import {readFileSync, existsSync, readdirSync, statSync} from 'fs';
+import {resolve, dirname, join} from 'path';
+import {fileURLToPath} from 'url';
+import {config} from 'dotenv';
 
-config({ path: resolve(process.cwd(), '../.env') });
+// Load <repo>/.env, the same file hardhat.config.ts loads. Resolved from this
+// file, not from cwd: `pnpm` runs with cwd = the package dir, where `../.env`
+// is src/publication/.env and does not exist, so the documented
+// `cd src/publication/contracts && pnpm deploy:pubfac` silently found nothing.
+// Four levels up: scripts -> contracts -> publication -> src -> repo.
+config({path: fileURLToPath(new URL('../../../../.env', import.meta.url))});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const artifactDir = resolve(__dirname, '../artifacts/contracts/contracts');
+const ARTIFACT_ROOT = resolve(__dirname, '../artifacts');
 
-// Must match the compiled artifact name (contracts/contracts/<NAME>.sol/<NAME>.json)
-const IMPL_NAME = 'S2SPublicationModuleV2';
+// Must match the compiled artifact name.
+type Wallet = WalletClient<HttpTransport, typeof base, Account>;
+type Pub = PublicClient<HttpTransport, typeof base>;
 
-// Minimal factory ABI — only what this script calls.
-const FACTORY_ABI = [
-  {
-    type: 'function',
-    name: 'setImplementation',
-    stateMutability: 'nonpayable',
-    inputs: [{ name: '_implementation', type: 'address' }],
-    outputs: [],
-  },
-  {
-    type: 'function',
-    name: 'latestImplementation',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ type: 'address' }],
-  },
-  {
-    type: 'function',
-    name: 'implementationCount',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ type: 'uint256' }],
-  },
-] as const;
+const IMPL_NAME = process.env.PUBLICATION_IMPL_CONTRACT || 'S2SPublicationModuleV3';
+
+const FACTORY_ABI = parseAbi([
+  'function setImplementation(address _implementation)',
+  'function latestImplementation() view returns (address)',
+  'function implementationCount() view returns (uint256)',
+  'function protocolSafe() view returns (address)',
+]);
+
+const SAFE_ABI = parseAbi([
+  'function getThreshold() view returns (uint256)',
+  'function getOwners() view returns (address[])',
+]);
+
+/** Hardhat writes `<artifactRoot>/<sourceDir>/<Name>.sol/<Name>.json`. */
+function findArtifact(name: string): string | null {
+  const stack = [ARTIFACT_ROOT];
+  while (stack.length) {
+    const dir = stack.pop()!;
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (entry === `${name}.json`) return path;
+      if (statSync(path).isDirectory()) stack.push(path);
+    }
+  }
+  return null;
+}
 
 async function deployImplementation(
-  walletClient: ReturnType<typeof createWalletClient>,
-  publicClient: ReturnType<typeof createPublicClient>,
+  walletClient: Wallet,
+  publicClient: Pub,
   name: string,
 ): Promise<`0x${string}`> {
-  const artifactPath = resolve(artifactDir, `${name}.sol/${name}.json`);
-  if (!existsSync(artifactPath)) {
-    console.error(`❌ Artifact not found at ${artifactPath}`);
+  const artifactPath = findArtifact(name);
+  if (!artifactPath) {
+    console.error(`❌ Artifact for ${name} not found under ${ARTIFACT_ROOT}`);
+    console.error('   Run pnpm compile first.');
     process.exit(1);
   }
   const artifact = JSON.parse(readFileSync(artifactPath, 'utf-8'));
@@ -81,7 +103,7 @@ async function deployImplementation(
   });
   console.log(`   Deploy tx: ${hash}`);
 
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({hash});
   if (receipt.status !== 'success' || !receipt.contractAddress) {
     console.error(`❌ Implementation deploy failed (status: ${receipt.status})`);
     process.exit(1);
@@ -89,19 +111,37 @@ async function deployImplementation(
   return getAddress(receipt.contractAddress);
 }
 
+async function safeThreshold(safe: `0x${string}`, publicClient: Pub) {
+  try {
+    const [threshold, owners] = await Promise.all([
+      publicClient.readContract({address: safe, abi: SAFE_ABI, functionName: 'getThreshold'}),
+      publicClient.readContract({address: safe, abi: SAFE_ABI, functionName: 'getOwners'}),
+    ]);
+    return `${threshold} of ${owners.length}`;
+  } catch {
+    return 'n of m as configured on that safe';
+  }
+}
+
 async function main() {
   const pk = process.env.PROTOCOL_PRIVATE_KEY;
-  if (!pk) { console.error('❌ PROTOCOL_PRIVATE_KEY not set'); process.exit(1); }
+  if (!pk) {
+    console.error('❌ PROTOCOL_PRIVATE_KEY not set (needed to deploy the implementation)');
+    process.exit(1);
+  }
 
-  const factoryEnv = process.env.PUBLICATION_FACTORY_V2_ADDRESS;
+  // One name across every script and the deploy output. No V2 alias: this
+  // only ever points at an existing factory, and a V2 one is refused below.
+  const factoryEnv = process.env.PUBLICATION_FACTORY_ADDRESS;
   if (!factoryEnv) {
-    console.error('❌ PUBLICATION_FACTORY_V2_ADDRESS not set — nothing to update.');
-    console.error('   (Bootstrap the factory once with the deploy-factory script, then re-run this.)');
+    console.error('❌ PUBLICATION_FACTORY_ADDRESS not set — nothing to update.');
+    console.error('   (Deploy the factory once with pnpm deploy:pubfac, then re-run this.)');
     process.exit(1);
   }
   const factory = getAddress(factoryEnv);
 
-  const rpcUrl = process.env.BASE_RPC_URL ||
+  const rpcUrl =
+    process.env.BASE_RPC_URL ||
     (process.env.VITE_DRPC_API_KEY
       ? `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`
       : 'https://mainnet.base.org');
@@ -109,26 +149,71 @@ async function main() {
   const payerHex = (pk.startsWith('0x') ? pk : `0x${pk}`) as `0x${string}`;
   const account = privateKeyToAccount(payerHex);
 
-  const walletClient = createWalletClient({ account, chain: base, transport: http(rpcUrl) });
-  const publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({account, chain: base, transport: http(rpcUrl)});
+  const publicClient = createPublicClient({chain: base, transport: http(rpcUrl)});
 
   console.log(`Deploying from ${account.address}`);
   console.log(`   RPC:     ${rpcUrl}`);
   console.log(`   Factory: ${factory}\n`);
 
-  // Step 1: deploy the new implementation
+  // Read the gate before doing anything. A V2 factory has no protocolSafe().
+  const factoryCode = await publicClient.getCode({address: factory});
+  if (!factoryCode || factoryCode === '0x') {
+    console.error(`❌ No contract at ${factory}`);
+    process.exit(1);
+  }
+
+  let protocolSafe: `0x${string}`;
+  try {
+    protocolSafe = await publicClient.readContract({
+      address: factory,
+      abi: FACTORY_ABI,
+      functionName: 'protocolSafe',
+    });
+  } catch {
+    console.error(`❌ ${factory} has no protocolSafe() — that is the V2 factory.`);
+    console.error('   V2 setImplementation is callable by anyone and cannot be patched.');
+    console.error('   Deploy S2SPublicationModuleV3Factory (pnpm deploy:pubfac) and update that address instead.');
+    process.exit(1);
+  }
+
+  console.log(`   Protocol safe: ${protocolSafe}`);
+  const prevImpl = await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'latestImplementation',
+  });
+  console.log(`   Previous implementation: ${prevImpl}\n`);
+
   console.log(`1/2 Deploying ${IMPL_NAME}...`);
   const impl = await deployImplementation(walletClient, publicClient, IMPL_NAME);
   console.log(`   ✅ Implementation at ${impl}\n`);
 
-  // Step 2: point the existing factory at the new implementation
-  console.log('2/2 Updating factory implementation (setImplementation)...');
-
-  const prevImpl = await publicClient.readContract({
-    address: factory, abi: FACTORY_ABI, functionName: 'latestImplementation',
+  const data = encodeFunctionData({
+    abi: FACTORY_ABI,
+    functionName: 'setImplementation',
+    args: [impl],
   });
-  console.log(`   Previous implementation: ${prevImpl}`);
 
+  if (account.address !== protocolSafe) {
+    const threshold = await safeThreshold(protocolSafe, publicClient);
+    console.log('2/2 setImplementation must be executed by the protocol safe — not sending.');
+    console.log(`   Signing key ${account.address} is not the protocol safe ${protocolSafe}.\n`);
+    console.log('Safe transaction:');
+    console.log(`  chain id:  ${base.id}`);
+    console.log(`  to:        ${factory}`);
+    console.log(`  value:     0`);
+    console.log(`  data:      ${data}`);
+    console.log(`  safe:      ${protocolSafe}`);
+    console.log(`  threshold: ${threshold}`);
+    console.log(`\nExecute it from the protocol safe ${protocolSafe} (${threshold}).`);
+    console.log('Only that safe can set the implementation; no key here can stand in for it.');
+    console.log(`Until it executes, createModule keeps deploying ${prevImpl}.`);
+    console.log('\nExisting publications are UUPS — upgrade each proxy separately if needed.');
+    return;
+  }
+
+  console.log('2/2 Signing key is the protocol safe — sending setImplementation directly.');
   const txHash = await walletClient.writeContract({
     address: factory,
     abi: FACTORY_ABI,
@@ -137,30 +222,34 @@ async function main() {
   });
   console.log(`   setImplementation tx: ${txHash}`);
 
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  const receipt = await publicClient.waitForTransactionReceipt({hash: txHash});
   if (receipt.status !== 'success') {
     console.error(`❌ setImplementation failed (status: ${receipt.status})`);
     process.exit(1);
   }
 
-  // Confirm
-  const [newImpl] = await Promise.all([
-    publicClient.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'latestImplementation' }),
-  ]);
-
-  if (getAddress(newImpl) !== impl) {
-    console.error(`❌ Mismatch: factory reports ${newImpl}, expected ${impl}`);
+  const current = await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'latestImplementation',
+  });
+  if (getAddress(current) !== impl) {
+    console.error(`❌ Mismatch: factory reports ${current}, expected ${impl}`);
     process.exit(1);
   }
+  const count = await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'implementationCount',
+  });
 
-  console.log(`   ✅ Factory now points at ${newImpl}\n`);
-
+  console.log(`\n========================================`);
+  console.log(` Factory unchanged:   ${factory}`);
+  console.log(` New implementation:  ${impl}`);
+  console.log(` Version count:       ${count}`);
   console.log(`========================================`);
-  console.log(` Factory unchanged: ${factory}`);
-  console.log(` New implementation: ${impl}`);
-  console.log(`========================================`);
-  console.log(`\nNew publications (createModule) will use the new implementation.`);
-  console.log(`Existing publications are UUPS — upgrade each proxy separately if needed.`);
+  console.log('\nNew publications (createModule) use the implementation above.');
+  console.log('Existing publications are UUPS — upgrade each proxy separately if needed.');
 }
 
 main().catch((err) => {

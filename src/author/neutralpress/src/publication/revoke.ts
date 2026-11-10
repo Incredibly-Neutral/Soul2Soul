@@ -4,11 +4,11 @@
  * Turns the `Revoke` intent into the sequence that actually makes a published
  * item disappear from the rendered site:
  *
- *   1. On-chain `service.retract(genesis)` FIRST — the author-caller path
- *      fully withdraws the item from the deal set and flips `hasDeal` → false
- *      (the gate the update action's `verifyRevocable` checks). It does NOT
- *      call `makeOffer`/`publishContent`/sign for the revoked item — that
- *      would re-add the deal.
+ *   1. On-chain `service.retract(genesis)` FIRST — the author's own verb, and
+ *      terminal: it ends the genesis and flips `hasDeal` → false (the gate the
+ *      update action's `verifyRevocable` checks). It does NOT call
+ *      `makeOffer`/`publishContent`/sign for the revoked item — that would
+ *      re-add the deal, and on an ended genesis it reverts `Ended()` anyway.
  *   2. Re-render the REVOKED contentId itself (B2). Because the deal is
  *      already retracted, the render action's hasDeal check — scoped to the
  *      triggered contentIds (the id the caller rendered, threaded through by
@@ -152,8 +152,9 @@ export async function revokeContent(
 	const { slug, locale } = await main.content.parseNote(file);
 	const genesis = (await resolveGenesis(main, file)) ?? subdomain;
 
-	// 1. On-chain retract FIRST (author-caller path fully withdraws;
-	//    flips hasDeal -> false so the update's verifyRevocable passes).
+	// 1. On-chain retract FIRST — the author's own verb, terminal: it ends the
+	//    genesis and flips hasDeal -> false so the update's verifyRevocable
+	//    passes.
 	console.log(`[retract] retracting ${genesis} from ${publication} ...`);
 	await service.retract(genesis);
 	console.log('[retract] on-chain retract complete');
@@ -183,7 +184,7 @@ export async function revokeContent(
 		`[retract] caveat: non-default templateConfig.path (on-chain mapping.json) could make this remove path drift; actual path is re-verified at update time by verifyRevocable`,
 	);
 	new Notice(
-		`Revoked '${slug}' from ${publication}; on-chain retract complete. Removal requested — if the publication uses a custom template path, it completes on the next full render.`,
+		`Revoked '${slug}' from ${publication}; on-chain retract complete. This ends the note's genesis, so the note id cannot be published again — a re-publish must be a new note. Removal requested: if the publication uses a custom template path, it completes on the next full render.`,
 	);
 
 	// Re-render the REVOKED contentId itself (B2). The on-chain retract already

@@ -59,7 +59,9 @@ write itself. Everything a holder does is a Safe transaction; everything a reade
    a CID built from a GitHub repo. See [look](SPEC-publication-look.md).
 3. **Fed** — authors append versions (`makeOffer`); entitled callers become deals, everyone else becomes an
    offer. See [agreements](SPEC-publication-agreements.md).
-4. **Decided** — `acceptOffer`, or `retract` (which the Safe uses to demote a deal or reject an offer).
+4. **Decided** — `admit` (V3; `acceptOffer` is its deprecated alias), or `reject`, which the Safe uses to
+   demote a deal or decline an offer, reversibly. The author's `retract` is a different matter: it is
+   terminal and ends the genesis.
 5. **Rendered** — the press decrypts, renders, signs a colophon, assembles the tree, writes the root as the
    PKP. See [storage](SPEC-publication-storage.md).
 6. **Observed** — the tree tab and the storage tab read the root and probe retrievability.
@@ -72,12 +74,14 @@ The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 | target | `onlySafe` | also allowed |
 |---|---|---|
 | records: `setRecord`, `setRecords`, `deleteRecord` | ✓ | — |
-| `acceptOffer` | ✓ | — |
-| `retract` | ✓ (demote deal → offer, or reject an offer) | the **genesis author** (full withdrawal) |
+| `admit` | ✓ | — (`acceptOffer` is the deprecated alias of the same write) |
+| `reject` | ✓ (demote deal → offer, or decline an offer — reversible) | — |
+| `retract` | ✗ (`NotAuthorized()` for the Safe) | the **genesis author** only, and terminal: ends the genesis |
 | `makeOffer` | ✓ (lands as a deal) | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer |
 | whitelist add/remove | ✓ | — |
 | `upgradeToAndCall` | ✓ | — |
-| factory `createModule` / `setImplementation` | **nobody** | anyone — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
+| factory `createModule` / `createModuleEmpty` | ✓ (the safe it names) | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
+| factory `setImplementation` | **not the publication** | the protocol safe only, fixed at construction |
 | ENS `contenthash_wrapped` | **not the publication** | the PKP (INV-12), granted by the protocol |
 
 ## Invariants across the tree
@@ -98,10 +102,10 @@ Recorded because the folded text was read by people who may still quote it.
 
 | folded claim | code |
 |---|---|
-| `safe-app` workflow uses `grantLicense` / `acceptLicense` / `revokeLicense` | `makeOffer` / `acceptOffer` / `retract` — V2 renamed all three; the semantics are not identical (see [agreements](SPEC-publication-agreements.md#corrections-to-the-folded-spec)) |
+| `safe-app` workflow uses `grantLicense` / `acceptLicense` / `revokeLicense` | `makeOffer` / `admit` / `reject` — V2 renamed the trio, V3 split the ending in two (see [agreements](SPEC-publication-agreements.md#corrections-to-the-folded-spec)) |
 | "the offer path is only reachable through the publication Safe" | false: a whitelisted **developer** passes `canPublish` and their genesis becomes an offer |
-| `retract` "author withdraws fully, safe demotes" listed under one row of `onlySafe` | the function has no modifier; the branch is on `msg.sender` |
-| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | true in `shared`, false in `safe-app`, which matches only V2 |
+| `retract` "author withdraws fully, safe demotes" listed under one row of `onlySafe` | V2: the function has no modifier, the branch is on `msg.sender`. V3: two functions — `reject` is `onlySafe` and reversible, `retract` is the genesis author's and terminal |
+| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | both true now: every site uses one predicate that accepts any version. The app binds the surface the version it found actually implements — V3 `admit`/`reject`, V2 `acceptOffer`/`retract`, V1 nothing |
 | `ConfigBuilder` "fetch `mapping.json` verbatim" as *the* description | still verbatim, but the build also pins the commit, `dagPut`s a template DAG with real IPLD links, and mirrors to two providers |
 | `website-starter` "legacy local render loop" | replaced: the dev loop drives the real render action through `S2S_RUNNER_URL`, with `contract-pull` as a mode |
 | `templateConfig` "filters" implied to work | `templateConfig[].filters` is read by nothing |

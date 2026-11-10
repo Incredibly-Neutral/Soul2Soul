@@ -2,7 +2,7 @@
 //
 // Sorting is a pure display concern: `sortRows` / `sortByColumn` always return
 // a NEW sorted copy and never mutate the input, so the store stays the source
-// of truth and row actions (accept/retract/delete/terminate) keep targeting the
+// of truth and row actions (accept/reject/delete/terminate) keep targeting the
 // correct rows.
 
 export type SortDirection = 'asc' | 'desc';

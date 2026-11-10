@@ -12,7 +12,11 @@
       "types": "./dist/lit-actions.d.ts",
       "default": "./dist/lit-actions.js"
     },
-    "./gates": {
+    "./protocol": {
+   "types": "./dist/protocol/index.d.ts",
+   "default": "./dist/protocol/index.js"
+  },
+  "./gates": {
       "types": "./dist/gates/index.d.ts",
       "default": "./dist/gates/index.js"
     },

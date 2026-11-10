@@ -1,6 +1,6 @@
 import Safe from "@safe-global/protocol-kit";
 import SafeApiKit from "@safe-global/api-kit";
-import { encodeFunctionData, getAddress, recoverMessageAddress } from "viem";
+import { createPublicClient, encodeFunctionData, getAddress, http, recoverMessageAddress } from "viem";
 // @ts-ignore
 import { OperationType } from "@safe-global/types-kit";
 
@@ -36,6 +36,20 @@ const recordsModuleAbi = [
   },
 ] as const;
 
+/**
+ * The one function that tells a gated factory from the superseded one. V2 has
+ * no `protocolSafe()` at all, so the call reverting is the signal.
+ */
+const publicationFactoryAbi = [
+  {
+    name: "protocolSafe",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
 const ensRecordsAbi = [
   {
     name: "authorizeCaller",
@@ -51,6 +65,28 @@ const ensRecordsAbi = [
 
 const RECORDS_MODULE_ADDRESS = "0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29";
 const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
+
+// One name for this address: `PUBLICATION_FACTORY_ADDRESS`, which is what
+// `src/publication/contracts/scripts/deploy-publication-factory.ts` prints and
+// what `check-module.ts` and both verify scripts read. Following the deploy
+// instructions therefore fills the key this line reads.
+//
+// No fallback to `PUBLICATION_FACTORY_V2_ADDRESS`. That factory's
+// `setImplementation` is callable by anyone, and this record is what every
+// client reads, so writing it here would put the hole back on chain and into
+// every new publication. Missing key fails before the batch is built.
+function requirePublicationFactory(): string {
+  const address = process.env.PUBLICATION_FACTORY_ADDRESS;
+  if (address) return address;
+
+  throw new Error(
+    'PUBLICATION_FACTORY_ADDRESS is not set. Deploy S2SPublicationModuleV3Factory ' +
+      '(cd src/publication/contracts && pnpm deploy:pubfac), put the printed ' +
+      'PUBLICATION_FACTORY_ADDRESS in .env, and re-run. Not writing the superseded ' +
+      'V2 factory to the publication_factory record: its setImplementation is ' +
+      'ungated, so anyone could redirect future publications.'
+  );
+}
 
 // Keys that were written under old names and must be removed from on-chain storage.
 // Leaving them means any reader still asking for these keys gets stale data.
@@ -84,6 +120,48 @@ const deleteRecord = (key: string) => ({
   operation: OperationType.Call,
 });
 
+
+/**
+ * Refuse to write a factory that cannot answer `protocolSafe()`.
+ *
+ * The V2 factory has no such function and no gate on `setImplementation`, so
+ * pasting its address into PUBLICATION_FACTORY_ADDRESS would otherwise be
+ * written to the record with a full green run. Same probe `update-impl.ts` uses
+ * before it sends an implementation change.
+ */
+const assertGatedFactory = async (address: string): Promise<void> => {
+  const rpcUrl =
+    process.env.BASE_RPC_URL ||
+    (process.env.VITE_DRPC_API_KEY
+      ? `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`
+      : "");
+
+  if (!rpcUrl) {
+    throw new Error(
+      "BASE_RPC_URL or VITE_DRPC_API_KEY is needed to check the publication factory " +
+        "before writing it to the record."
+    );
+  }
+
+  const client = createPublicClient({ transport: http(rpcUrl) });
+
+  try {
+    const protocolSafe = await client.readContract({
+      address: getAddress(address),
+      abi: publicationFactoryAbi,
+      functionName: "protocolSafe",
+    });
+    console.log(`publication_factory ${address} is gated on ${protocolSafe}`);
+  } catch {
+    throw new Error(
+      `PUBLICATION_FACTORY_ADDRESS ${address} does not answer protocolSafe(). ` +
+        "That is the superseded V2 factory, or not a factory. Its setImplementation is " +
+        "callable by anyone, so writing it to the record would re-open the hole for every " +
+        "publication created from now on. Deploy S2SPublicationModuleV3Factory " +
+        "(cd src/publication/contracts && pnpm deploy:pubfac) and use the address it prints."
+    );
+  }
+};
 
 const proposeToSafe = async (account: any, transactions: any[]) => {
   const protocolKit = await Safe.init({
@@ -132,6 +210,11 @@ export const updateProtocol = async (
   maintainCacheActionCid?: string,
   repointArchiveActionCid?: string
 ) => {
+  // Before the batch is built: an unset or stale factory address fails here
+  // rather than being written to the record, which every client reads.
+  const publicationFactory = requirePublicationFactory();
+  await assertGatedFactory(publicationFactory);
+
   const transactions = [
     // Write current values
     setRecord("pkp_ethAddress", pkpInfo.ethAddress),
@@ -153,7 +236,7 @@ export const updateProtocol = async (
     setRecord("ens_records", ENS_RECORDS_ADDRESS),
     setRecord("data_gateway", process.env.IPFS_URL || ""),
     setRecord("ens_registry", process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || ""),
-    setRecord("publication_factory", process.env.PUBLICATION_FACTORY_V2_ADDRESS || ""),
+    setRecord("publication_factory", publicationFactory),
     setRecord("records_factory", process.env.RECORDS_FACTORY_ADDRESS || ""),
   
 

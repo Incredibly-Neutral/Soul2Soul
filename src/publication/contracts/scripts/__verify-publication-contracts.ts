@@ -7,8 +7,9 @@
  * Usage:
  *   npx tsx contracts/scripts/verify-contracts.ts
  *
- * Requires BASESCAN_API_KEY in the root .env. The deployed
- * addresses are hardcoded below — update them on each deploy.
+ * Requires BASESCAN_API_KEY in the root .env. The V2 addresses are hardcoded below
+ * (deployed code never moves); the V3 factory address comes from
+ * PUBLICATION_FACTORY_ADDRESS and is skipped when unset.
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -16,7 +17,12 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 
-config({ path: resolve(process.cwd(), '../.env') });
+// Load <repo>/.env, the same file hardhat.config.ts loads. Resolved from this
+// file, not from cwd: `pnpm` runs with cwd = the package dir, where `../.env`
+// is src/publication/.env and does not exist, so the documented
+// `cd src/publication/contracts && pnpm deploy:pubfac` silently found nothing.
+// Four levels up: scripts -> contracts -> publication -> src -> repo.
+config({path: fileURLToPath(new URL('../../../../.env', import.meta.url))});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -30,14 +36,23 @@ const CONTRACTS: ContractToVerify[] = [
   {
     name: 'S2SPublicationModuleV2',
     address: '0xbae8877eaeec61f4c443bff04e42bd04fc9b6a73',
-    file: 'contracts/contracts/S2SPublicationModuleV2.sol/S2SPublicationModuleV2.json',
+    file: 'src/S2SPublicationModuleV2.sol/S2SPublicationModuleV2.json',
   },
   {
-    name: 'S2SPublicationModuleV2Factory',
-    address: '0xe948735151c43183accd8e85b992952b2711d554',
-    file: 'contracts/contracts/S2SPublicationModuleV2Factory.sol/S2SPublicationModuleV2Factory.json',
+    // The V2 factory is superseded, not verified: it stays deployed and leaky.
+    name: 'S2SPublicationModuleV3Factory',
+    address: process.env.PUBLICATION_FACTORY_ADDRESS || '',
+    file: 'src/S2SPublicationModuleV3Factory.sol/S2SPublicationModuleV3Factory.json',
   },
 ];
+
+const VERIFIABLE = CONTRACTS.filter((c) => {
+  if (!c.address) {
+    console.log(`  ⏭  ${c.name}: no address yet (set PUBLICATION_FACTORY_ADDRESS after deploying)`);
+    return false;
+  }
+  return true;
+});
 
 const BASESCAN_API = 'https://api.basescan.org/api';
 
@@ -112,11 +127,15 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Verifying ${CONTRACTS.length} contracts on BaseScan...\n`);
+  console.log(`Verifying ${VERIFIABLE.length} contracts on BaseScan...\n`);
+  if (VERIFIABLE.length === 0) {
+    console.error('❌ Nothing to verify — no address configured.');
+    process.exit(1);
+  }
 
   let ok = 0;
   let fail = 0;
-  for (const contract of CONTRACTS) {
+  for (const contract of VERIFIABLE) {
     if (await verifyContract(contract, apiKey)) {
       ok++;
     } else {

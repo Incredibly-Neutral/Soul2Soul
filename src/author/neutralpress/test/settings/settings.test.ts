@@ -59,9 +59,6 @@ describe('DEFAULT_SETTINGS', () => {
 		expect(DEFAULT_SETTINGS.safe_records_factory).toBe(
 			'0xed933AB957aa3440133cdf1236662635d4eb2Ccf',
 		);
-		expect(DEFAULT_SETTINGS.safe_publication_factory).toBe(
-			'0xe948735151c43183accd8e85b992952b2711d554',
-		);
 		expect(DEFAULT_SETTINGS.proxy_admin).toBe('0x66d5549fdfaCc3606EB5bcD702D989A846A936c0');
 	});
 
@@ -72,7 +69,6 @@ describe('DEFAULT_SETTINGS', () => {
 			DEFAULT_SETTINGS.ens_resolver,
 			DEFAULT_SETTINGS.ens_records,
 			DEFAULT_SETTINGS.safe_records_factory,
-			DEFAULT_SETTINGS.safe_publication_factory,
 			DEFAULT_SETTINGS.proxy_admin,
 		];
 		for (const addr of addrs) {

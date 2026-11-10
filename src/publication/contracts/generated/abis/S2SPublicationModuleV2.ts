@@ -371,6 +371,30 @@ export type Abi_S2SPublicationModuleV2 = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "reader",
+        "type": "address"
+      }
+    ],
+    "name": "canRead",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "getDealCount",
     "outputs": [
@@ -1242,6 +1266,30 @@ export const Abi_S2SPublicationModuleV2: Abi_S2SPublicationModuleV2 = [
       }
     ],
     "name": "canPublish",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "reader",
+        "type": "address"
+      }
+    ],
+    "name": "canRead",
     "outputs": [
       {
         "internalType": "bool",
