@@ -277,6 +277,15 @@ contract S2SPublicationModuleV2 is Initializable, UUPSUpgradeable {
 
     // ── Permission checks ──────────────────────────────────────────
 
+    /// @dev True iff `genesis` is under a deal and `reader` is either the
+    ///      publication Safe or the Safe that authored it. The gate the Lit
+    ///      actions read; `hasDeal` alone is not enough because `reader` is
+    ///      supplied by the caller.
+    function canRead(bytes32 genesis, address reader) external view returns (bool) {
+       if (!_isDeal[genesis]) return false;
+       return reader == safe || reader == genesisAuthor[genesis];
+    }
+
     function canPublish(address _address) public view returns (bool) {
         if (_address == safe) return true;
         if (_inArray(whitelisted_devs, _address)) return true;

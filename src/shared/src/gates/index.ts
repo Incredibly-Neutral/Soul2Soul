@@ -52,7 +52,8 @@ export type GateRead = (
 
 const CAN_PUBLISH_ABI = ['function canPublish(address _author) view returns (bool)'];
 const IS_OWNER_ABI = ['function isOwner(address owner) view returns (bool)'];
-const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
+// const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
+const CAN_READ_ABI = ['function canRead(bytes32 genesis, address reader) view returns (bool)'];
 
 /**
  * Can this author Safe write to this publication, on behalf of this signer?
@@ -94,13 +95,12 @@ export const canRead = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
 
-  const [cp, isOwner, isDeal] = await Promise.all([
-    read(publicationModule, CAN_PUBLISH_ABI, 'canPublish', [safeAddress]),
-    read(safeAddress, IS_OWNER_ABI, 'isOwner', [signerAddress]),
-    read(publicationModule, HAS_DEAL_ABI, 'hasDeal', [genesis]),
+  const [isOwner, isDeal] = await Promise.all([
+    read(publicationModule, CAN_READ_ABI, 'canRead', [genesis, safeAddress]),
+    read(safeAddress, IS_OWNER_ABI, 'isOwner', [signerAddress])
   ]);
 
-  return cp && isOwner && isDeal;
+  return isOwner && isDeal;
 };
 
 /**
