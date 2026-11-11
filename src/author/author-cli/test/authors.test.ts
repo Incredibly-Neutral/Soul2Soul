@@ -10,6 +10,7 @@ import {
   addAuthor,
   addSigner,
   authorEoa,
+  authorRowForKey,
   authorsFilePath,
   findAuthor,
   findAuthorByKey,
@@ -20,6 +21,7 @@ import {
   readAuthors,
   rememberAuthorSafe,
   removeAuthor,
+  safeProblem,
   writeAuthors,
   writeBackAuthorSafe,
   type AuthorRecord,
@@ -331,9 +333,9 @@ describe('a given Safe', () => {
     expect(isGivenSafe({ ...record, safeSource: 'derived' })).toBe(false);
   });
 
-  it('refuses a safeSource it does not recognise, and keeps the address', () => {
-    // Reading it as `derived` would derive a different Safe and then overwrite
-    // this address on the next write-back, so the read stops instead.
+  it('keeps a row it cannot interpret, without deriving it', () => {
+    // Reading stays tolerant: `author list`, `switch` and `rm` are how a broken
+    // file gets repaired, and none of them needs a provenance.
     const path = localPath('bogus-source');
     const file = JSON.stringify({
       active: 'zomi',
@@ -341,10 +343,69 @@ describe('a given Safe', () => {
     });
     writeFileSync(path, file);
 
-    expect(() => readAuthors(path)).toThrow(/'zomi' has safeSource "Given"/);
-    expect(() => readAuthors(path)).toThrow(/only values are 'derived', 'given'/);
-    // Nothing was written: the row is still there for the user to fix.
+    const store = readAuthors(path);
+    expect(store.authors.zomi?.safe).toBe(SAFE);
+    expect(isGivenSafe(store.authors.zomi)).toBe(false);
+    expect(store.authors.zomi?.unreadableSafeSource).toBe('Given');
+    expect(safeProblem('zomi', store.authors.zomi as AuthorRecord, path)).toMatch(
+      /'zomi' has safeSource "Given"/,
+    );
+    // Never written back: a derived address would replace the stored one.
+    expect(writeBackAuthorSafe('zomi', SAFE_DERIVED, path)).toBe(false);
     expect(readFileSync(path, 'utf8')).toBe(file);
+    // And the row can still be removed without a text editor, and another
+    // row's write leaves this one byte-identical: the reading is not format.
+    const kept = removeAuthor(store, 'zomi');
+    expect(kept.authors.zomi).toBeUndefined();
+    writeAuthors(
+      { active: null, authors: { ...store.authors, other: { privateKey: KEY_B, safe: null } } },
+      path,
+    );
+    expect(JSON.parse(readFileSync(path, 'utf8')).authors.zomi).toEqual({
+      privateKey: KEY_A,
+      safe: SAFE,
+      safeSource: 'Given',
+    });
+  });
+
+  it('names a given row whose Safe is not an address, and keeps it readable', () => {
+    const path = localPath('bogus-safe');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        active: 'zomi',
+        authors: { zomi: { privateKey: KEY_A, safe: 'not-an-address', safeSource: 'given' } },
+      }),
+    );
+    const store = readAuthors(path);
+    expect(store.authors.zomi?.safe).toBe('not-an-address');
+    expect(safeProblem('zomi', store.authors.zomi as AuthorRecord, path)).toMatch(
+      /has safe not-an-address — that is not an address/,
+    );
+    // A given row with no address is refused too: deriving would deploy one.
+    expect(
+      safeProblem('zomi', { privateKey: KEY_A, safe: null, safeSource: 'given' }, path),
+    ).toMatch(/marked as given but carries no Safe address/);
+    // A derived row's cached address is a prediction, so re-deriving repairs it.
+    expect(
+      safeProblem('zomi', { privateKey: KEY_A, safe: 'not-an-address' }, path),
+    ).toBeUndefined();
+  });
+
+  it('finds a row by key, whichever row is active', () => {
+    const row = authorRowForKey(
+      {
+        active: 'zomi',
+        authors: {
+          zomi: { privateKey: KEY_A, safe: null },
+          signer1: { privateKey: KEY_B, safe: SAFE, safeSource: 'given' },
+        },
+      },
+      KEY_B,
+    );
+    expect(row?.name).toBe('signer1');
+    expect(givenSafeOf(row)).toBe(SAFE);
+    expect(authorRowForKey({ active: 'zomi', authors: {} }, KEY_B)).toBeUndefined();
   });
 
   it('rejects a Safe that is not an address, or a broken checksum', () => {

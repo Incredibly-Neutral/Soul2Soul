@@ -34,7 +34,13 @@ export const authorAddress: CommandSpec = {
         }`,
         `salt        : ${state.salt ?? '(none, the Safe was given, not derived)'}`,
         `chain       : ${state.chain}`,
-        `deployed    : ${state.deployed ? 'yes' : 'no — run: s2s author init'}`,
+        `deployed    : ${
+          state.deployed
+            ? 'yes'
+            : state.safeSource === 'given'
+              ? 'no — this CLI never deploys a given Safe; its owners have to'
+              : 'no — run: s2s author init'
+        }`,
       ].join('\n'),
     );
   },
