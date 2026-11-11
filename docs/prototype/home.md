@@ -6,7 +6,7 @@ tags:
 modified_date: 2026-11-03T14:21:51
 kubo_cid: QmbfZW144V4YDTXkks7xAYuhgYTwJd5bxDuRa2TqSdaBXW
 genesis: "0x4e116a6ce4ba4676f0c6e09aeb40ccf3111577df2f60c001548c819e9c7c7731"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: 0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # Soul2Soul
 

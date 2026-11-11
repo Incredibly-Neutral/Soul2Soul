@@ -67,6 +67,9 @@ Proposed: **DID is the durable identity; keys are rotatable material derived/att
 **Critically, two decisions are bundled in "passkey → DID → derive wallet" and must be separated:**
 
 ### B1 — DID as the identity layer (endorsed)
+
+> **Settled since 2847c81:** the author form is the author Safe's bare `0x` address; the `did:ethr` method this section settles on is retired, and nothing writes it.
+
 Make the author's identity a **DID**, with the **EOA** a *rotatable credential under it*, not
 identity itself. (Not a Safe — see B2's note on smart accounts: a Safe/4337 account, if one's ever
 needed for gasless support, is an execution vehicle the EOA controls, not the identity.)

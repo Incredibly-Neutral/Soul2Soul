@@ -14,6 +14,8 @@ The deals-ledger reports were later moved to `docs/research/`; that line of work
 
 ## Problem
 
+> **Settled since 2847c81:** the author form is the author Safe's bare `0x` address; the `did:ethr` label this RFC leans on is retired, and nothing writes it.
+
 AUTHOR-9 asks for a public, author-curated list of works and agreements. What the paper
 actually promises is larger: a reader can *follow an author*, not a publication, and the
 author's byline survives leaving. None of that exists.

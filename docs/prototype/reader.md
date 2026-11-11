@@ -7,7 +7,7 @@ tags:
 modified_date: 2026-11-02T19:10:06
 kubo_cid: QmVyqDdcHs4zY59dJWUPx4JAz4FVsSTPsfcWDuMfWF8L2b
 genesis: "0x261445d6a8e7ed0d0c85df20b14afcb97067f7fe568de546114d03fa96bab519"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: 0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # The reader
 
