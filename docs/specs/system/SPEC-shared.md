@@ -102,7 +102,9 @@ Nothing writes the prefix; when no readable item carries it, the module goes.
 | `S2SBody` | `protocol/types.ts` | **discriminated union**: `S2SBodyBase` + `S2SBodyPlain` (`encryption: false`, `content`, `title`, `slug`, `custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields) | 🔸 Lens-era — superseded by `S2SContentItem` (`protocol/types.ts`). Actions still use it. |
 | `S2SPublicContent` | `content/types.ts` | Lens-era shape (`creationDate`, `modifiedDate`, `language`, ...) | 🔸 Deprecated — replaced by `protocol/types.ts` version |
 | `S2SContentItem` | `content/types.ts` | empty extension of Lens-era `S2SPublicContent` | 🔸 Deprecated — no purpose |
-| `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.lens`, `publisher`, `contentCid`, `license`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
+| `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.address`, `author.proof`, `publisher.address`, `publisher.safe`, `contentGenesis`, `objectId`, `contentCid`, `plaintextHash`, `mediaType`, `specVersion`, `licenseContract`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
+
+On the page, the author and publisher identifiers are JSON-LD `PropertyValue` nodes: `propertyID: 'address'` for each bare `0x` address, and `propertyID: 'address:safe'` for the publication Safe. The value is the address itself, so no term carries a prefix.
 
 ### Active types (unchanged)
 

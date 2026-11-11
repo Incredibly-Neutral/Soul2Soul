@@ -585,9 +585,11 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
   (handoff §6) + rotate the previously-exposed keys. See SPEC-00 GAP-9.
 - **Lens gone from the action path (GAP-10 ✅):** `api.testnet.lens.xyz` is no longer called by
   actions (`lens.factory.ts` → `module.factory.ts`). Lens remains only on the authoring side.
-- **Provenance (GAP-1):** `render/main.ts` builds the metadata from real signed data (`author.did`
+- **Provenance (GAP-1):** `render/main.ts` builds the metadata from real signed data (`author.address`
   from the signed `S2SPublicContent`, `contentCid = body.id`, `isBasedOn.genesis = toBytes32Id(body.parent)`);
-  PKP-signed in `render/metadata.ts`. GAP-1's only remaining tail is the `S2SContentInfo` type-rename.
+  PKP-signed in `render/metadata.ts`. The identifiers are JSON-LD `PropertyValue` nodes:
+  `propertyID: 'address'` for the author and publisher, `'address:safe'` for the publication Safe.
+  GAP-1's only remaining tail is the `S2SContentInfo` type-rename.
   The A3 trust TODO plans adding the genesis as an explicit signed field (currently implicit via
   `contentUrl`'s `body.cid || body.id` fallback).
 - **Canonicalization (GAP-2):** `render/metadata.ts` sorts only top-level keys.
