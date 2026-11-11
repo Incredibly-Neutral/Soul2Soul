@@ -22,7 +22,7 @@ import {
 } from '../libs/module.factory';
 import { jcs, type S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
 // The ambient ethers v5 global a Lit Action provides; stub the functions the
 // integrity verdict and JCS canonicalisation use (identical
@@ -388,7 +388,7 @@ const mkItem = (genesis: string, opts?: ItemOpts) => {
 
   const pub: Record<string, unknown> = {
     specVersion: '1',
-    author: opts?.author ?? toDidEthr(signer.address),
+    author: opts?.author ?? signer.address,
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -458,7 +458,7 @@ const decryptedParsed = (parsed: unknown) => ({
 const encBody = (overrides: Record<string, unknown> = {}) =>
   ({
     id: 'g1',
-    author: toDidEthr(AUTHOR.address),
+    author: AUTHOR.address,
     locale: 'en',
     parent: '',
     position: '',

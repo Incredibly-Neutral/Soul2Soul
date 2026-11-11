@@ -311,6 +311,14 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
     const html = await addAndSignMetadata(LEGACY_GENESIS, PAGE, PROTOCOL_INFO, contentInfo());
     const incoming = pageIdentityOf(jsonLdOf(html));
     expect(incoming.canonicalization).toBe('JCS-RFC8785');
+    // The pinned page names the author in the pre-change form; the re-render
+    // names it as a bare address. Both are read as the SAME address, and the
+    // `did:ethr` term survives in both — the term is the pinned vocabulary, the
+    // value is the identity.
+    expect(incoming.authorDid).toBe('0x1111111111111111111111111111111111111111');
+    expect(pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML)).authorDid).toBe(
+      '0x1111111111111111111111111111111111111111',
+    );
     await expect(
       verifyPathAvailable(gateway, DEST, LEGACY_GENESIS, PUB_MODULE, [], incoming),
     ).resolves.toBeUndefined();

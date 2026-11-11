@@ -78,7 +78,6 @@ import {
   S2S_DOMAIN,
   S2S_TYPES,
   S2S_TYPES_V2,
-  toDidEthr,
 } from '../../../../shared/dist/manuscript/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -88,7 +87,7 @@ const DEAL_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const ENCRYPTED_CID = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy';
 const PUBLICATION = 'test.soul2soul.eth';
 const AUTHOR_WALLET = new ethers.Wallet('0x' + '11'.repeat(32));
-const AUTHOR = toDidEthr(AUTHOR_WALLET.address);
+const AUTHOR = AUTHOR_WALLET.address;
 const AUTHOR_SIGNER = AUTHOR_WALLET.address;
 const SIGNER = '0xSigner';
 const AUTHOR_SAFE = '0xAuthorSafe';
@@ -316,7 +315,7 @@ describe('render action — plaintext integrity (direct read path)', () => {
     const item = contentItem();
     expect(metadata?.author?.proof).toEqual({ ...item.proof, objectId: item.objectId });
     expect(metadata?.objectId).toBe(item.objectId);
-    expect(metadata?.publisher?.did).toBe(`did:ethr:${SIGNER}`);
+    expect(metadata?.publisher?.did).toBe(SIGNER);
     expect(metadata?.publisher?.url).toBe(PUBLICATION);
     expect(metadata?.publisher?.safe).toBe(AUTHOR_SAFE);
     expect(metadata?.licenseContract).toBe('0xpub');

@@ -24,7 +24,7 @@ import { SKIP_REASON_RE, inspectItemIntegrity } from './item-integrity';
 import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { jcs } from '@s2s/soul2soul-shared/lit-actions';
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
 // ============================================================================
 // PARITY — one item, two readers.
@@ -95,7 +95,7 @@ const mkItem = (opts: ItemOpts = {}): S2SContentItem => {
   const signer = opts.signer ?? AUTHOR;
   const pub: Record<string, unknown> = {
     specVersion: '1',
-    author: opts.author ?? toDidEthr(signer.address),
+    author: opts.author ?? signer.address,
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -304,7 +304,7 @@ describe('parity: the two read paths agree about the same item', () => {
     // required to equal public.author, because a Safe/contract-authored item is
     // signed by an owner EOA. Closing it needs an isOwner read. Both paths
     // behave identically — which is the point of this file.
-    const item = mkItem({ signer: ATTACKER, author: toDidEthr(AUTHOR.address) });
+    const item = mkItem({ signer: ATTACKER, author: AUTHOR.address });
     const { direct, archive } = await both(item);
 
     expect(direct.served).toBe(true);

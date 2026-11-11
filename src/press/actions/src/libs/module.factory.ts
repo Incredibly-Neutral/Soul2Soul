@@ -355,7 +355,9 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
   const v2 = p.specVersion === '2';
   const base = {
     id: entry.genesis, // job identity is the genesis
-    author: p.author, // did:ethr:0x... — pass through from IPFS
+    // Pass through from IPFS exactly as signed: a pre-change item carries the
+    // old prefixed author here, and comparisons normalise it (addressOf).
+    author: p.author,
     locale: p.locale,
     parent: p.parent,
     position: p.position,

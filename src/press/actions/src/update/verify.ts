@@ -10,6 +10,7 @@ import {
   type ProofCanonicalization,
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
+import { identityOf } from '../libs/address';
 
 // Tree-mutation integrity gate — PKP provenance verification
 // Canonicalisation + HTML extraction are shared with render/metadata.ts
@@ -55,7 +56,14 @@ function extractSchema(html: string): any {
  *                        `author.identifier.value` (the claimed author) are
  *                        OUTSIDE the signed bytes.
  *  - `identifier`      — schema.identifier (the genesis the page claims).
- *  - `authorDid`       — the claimed author DID (unsigned on a LEGACY page).
+ *  - `authorDid`       — the claimed author, as an ADDRESS: read through
+ *                        `identityOf` (shared's authorAddress), because a page
+ *                        pinned before the author became bare carries the old
+ *                        prefixed form under the same `did:ethr` term. The term
+ *                        is the pinned vocabulary; the identity is the address,
+ *                        so a caller comparing a re-render against a pinned page
+ *                        compares addresses and never the form. (Unsigned on a
+ *                        LEGACY page.)
  *  - `sha256`          — the claimed digest of the hashed body region
  *                        (unsigned on a LEGACY page).
  */
@@ -79,9 +87,10 @@ const firstString = (value: unknown): string | null => {
 /** Read a page's self-description out of its JSON-LD schema (pure). */
 export const pageIdentityOf = (schema: any): PageIdentity => {
   const proof = schema?.proof;
+  const claimedAuthor = firstString(schema?.author?.identifier?.value);
   return {
     identifier: typeof schema?.identifier === 'string' ? schema.identifier : null,
-    authorDid: firstString(schema?.author?.identifier?.value),
+    authorDid: claimedAuthor === null ? null : identityOf(claimedAuthor),
     canonicalization: proofCanonicalizationOf(proof ?? {}),
     signed: typeof proof?.proofValue === 'string' && proof.proofValue !== '',
     sha256: typeof schema?.encoding?.sha256 === 'string' ? schema.encoding.sha256 : null,

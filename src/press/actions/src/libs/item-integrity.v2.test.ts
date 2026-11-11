@@ -42,7 +42,6 @@ import {
   S2S_DOMAIN,
   S2S_TYPES,
   S2S_TYPES_V2,
-  toDidEthr,
 } from '../../../../shared/dist/manuscript/types';
 
 beforeAll(() => {
@@ -85,7 +84,7 @@ const plaintextHash = keccak256(toUtf8Bytes(bodyJson));
 
 /** The fields both envelope versions share. */
 const commonPublic = {
-  author: toDidEthr(AUTHOR.address),
+  author: AUTHOR.address,
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '',

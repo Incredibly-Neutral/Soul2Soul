@@ -11,6 +11,7 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // so they stay bundle-safe inside a Lit Action.
 import { S2S_DOMAIN } from '../../../../shared/dist/manuscript/types';
 import { signingEnvelope } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { addressOf } from './address';
 
 // ───────────────────────────────────────────────────────────────────────────
 // ONE definition of "this stored item may be served".
@@ -161,23 +162,14 @@ export const SKIP_REASON_RE = /^(integrity\(([a-z-]+)\)|unavailable): /;
 export const skipReason = (cause: SkipCause, code: ItemIssueCode | null, detail: string): string =>
   cause === 'integrity' ? `integrity(${code ?? 'unknown'}): ${detail}` : `unavailable: ${detail}`;
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 /** 32-byte hex digest. Shared with verifyDecryptedBody so the at-rest and
  * post-decryption gates agree about what "a hash we can check" means. */
 export const HASH32_RE = /^0x[0-9a-fA-F]{64}$/;
 
-/**
- * Normalise an address-shaped string to a lowercase 0x address. Accepts both a
- * plain address (what getDeals() returns for a deal) and the `did:ethr:0x…`
- * form (what an item's `public.author` carries). Returns null when the value is
- * not an address at all — callers treat that as "cannot bind" (fail closed for
- * the item side, since the item is attacker-controlled).
- */
-export const addressOf = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const raw = value.startsWith('did:ethr:') ? value.slice('did:ethr:'.length) : value;
-  return ADDRESS_RE.test(raw) ? raw.toLowerCase() : null;
-};
+// The one address normaliser lives in ./address (dependency-free, so the update
+// action can use it without the schema this module imports). Re-exported here
+// because every caller of the verdict already imports this module.
+export { addressOf };
 
 /**
  * The ambient ethers v5 `utils` inside a Lit Action (EIP-712 digest +
@@ -410,6 +402,11 @@ const hasPlaintextHash = (item: unknown): boolean => {
  * accepted (inspectItemIntegrity then reports 'legacy-item'). An item WITH a
  * specVersion must satisfy the schema as written — a missing field there is a
  * shape defect, and any other schema failure still rejects.
+ *
+ * AUTHOR FORM is not a shape defect either: a pre-change item's `public.author`
+ * carries the old prefix, which today's schema does not accept. The validation
+ * copy is normalised through `addressOf` (see below); the served object keeps
+ * the author exactly as the author signed it.
  */
 export const isValidContentItem = (item: unknown): item is S2SContentItem => {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
@@ -420,6 +417,15 @@ export const isValidContentItem = (item: unknown): item is S2SContentItem => {
     ...(item as Record<string, unknown>),
     public: { ...(pub as Record<string, unknown>) },
   };
+  // The author's FORM is not a shape defect. The shared schema accepts the bare
+  // address only; an item pinned before the author became bare carries the
+  // prefixed form and its signature covers those bytes, so it is a well-formed
+  // item that must still be read. Normalise it on the validation copy ONLY (the
+  // object that gets served is always the caller's own), and leave a value that
+  // is not an address untouched so the schema still rejects it.
+  if (typeof patched.public.author === 'string') {
+    patched.public.author = addressOf(patched.public.author) ?? patched.public.author;
+  }
   if (typeof patched.public.specVersion !== 'string' || patched.public.specVersion === '') {
     // Legacy shape: validate it against the fields that existed BEFORE the
     // specVersion-1 envelope, not against today's required set. `specVersion`

@@ -9,6 +9,10 @@ import {
   PROOF_CANONICALIZATION_JCS,
   stripUndefinedDeep,
 } from '@s2s/soul2soul-shared/lit-actions';
+// The one address normaliser in press (folded onto shared's authorAddress):
+// this page builder is the last place a pre-change identity can leave for the
+// pinned page, so it is normalised here, at the emission point.
+import { identityOf } from '../libs/address';
 
 /**
  * `S2SContentInfo` plus the v2 signed dates. Shared's interface predates the v2
@@ -79,13 +83,19 @@ export const addAndSignMetadata = async (
 
     // Author (provenance). The author's EIP-712 proof is nested HERE, not on
     // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
+    //
+    // The `propertyID` TERM stays `did:ethr` even though the value is a bare
+    // address now: the term is part of the signed JSON-LD of pages pinned before
+    // this change, and it is a fixed vocabulary label, not a claim about the
+    // value's form. The value is the ADDRESS (`identityOf`), so a page rendered
+    // from a pre-change item names the same address its signature covers.
     if (contentInfo?.author) {
       const author: Record<string, unknown> = {
         '@type': 'Person',
         identifier: {
           '@type': 'PropertyValue',
           propertyID: 'did:ethr',
-          value: contentInfo.author.did,
+          value: identityOf(contentInfo.author.did),
         },
       };
 
@@ -114,7 +124,9 @@ export const addAndSignMetadata = async (
       schema.author = author;
     }
 
-    // Publisher
+    // Publisher. Same rule as the author: the terms are the pinned vocabulary
+    // (`did:ethr` for the signer, `did:ethr:safe` for the publication Safe), the
+    // values are addresses.
     if (contentInfo?.publisher) {
       schema.publisher = {
         '@type': 'Organization',
@@ -122,7 +134,11 @@ export const addAndSignMetadata = async (
           {
             '@type': 'PropertyValue',
             propertyID: 'did:ethr',
-            value: contentInfo.publisher.did,
+            //
+            // `identityOf`, not a blind strip: a value that is not an address is
+            // passed through untouched rather than mangled into something that
+            // looks like one.
+            value: identityOf(contentInfo.publisher.did),
           },
           ...(contentInfo.publisher.safe
             ? [

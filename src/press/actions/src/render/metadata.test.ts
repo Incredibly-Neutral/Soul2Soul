@@ -257,9 +257,36 @@ describe('addAndSignMetadata — author proof nesting', () => {
       signer: authorProof.signer,
       signature: authorProof.signature,
     });
-    expect(schema.author.identifier.value).toBe(
-      'did:ethr:0x1111111111111111111111111111111111111111',
+    // The TERM stays `did:ethr` (pages pinned before the change carry it); the
+    // VALUE is the bare address, whatever form the item was pinned in.
+    expect(schema.author.identifier).toEqual({
+      '@type': 'PropertyValue',
+      propertyID: 'did:ethr',
+      value: '0x1111111111111111111111111111111111111111',
+    });
+  });
+
+  it('writes author and publisher as bare addresses under the retained did:ethr term', async () => {
+    // A pre-change identity arrives prefixed and checksummed; the page value is
+    // the address, not the form it was pinned in.
+    const { schema } = await render(
+      contentInfo({
+        author: {
+          did: 'did:ethr:0xAbCdEf0123456789012345678901234567890123',
+          createdAt: '2025-01-02T03:04:05.000Z',
+        },
+      }),
     );
+    expect(schema.author.identifier).toEqual({
+      '@type': 'PropertyValue',
+      propertyID: 'did:ethr',
+      value: '0xabcdef0123456789012345678901234567890123',
+    });
+    expect(schema.publisher.identifier[0]).toEqual({
+      '@type': 'PropertyValue',
+      propertyID: 'did:ethr',
+      value: '0x2222222222222222222222222222222222222222',
+    });
   });
 
   it('lets the page carry the item digest even without a proof.objectId', async () => {
