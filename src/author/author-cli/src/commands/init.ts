@@ -161,20 +161,30 @@ export const authorInit: CommandSpec = {
     // command's one requirement, and it is deployed by now.
     const contracts = await installContracts(ctx.out, ctx, result.address);
 
-    const headline = result.txHash
+    // A given Safe has no salt and is never deployed by this CLI, so neither
+    // "already deployed" nor a salt line can be claimed for it.
+    const given = result.salt === null;
+    const headline = given
       ? result.deployed
-        ? `author Safe deployed at ${result.address}`
-        : `deployment submitted for ${result.address} — not confirmed yet`
-      : `author Safe already deployed at ${result.address}`;
+        ? `author Safe ${result.address} (given) is deployed`
+        : `author Safe ${result.address} (given) is not deployed — this CLI never deploys a given Safe`
+      : result.txHash
+        ? result.deployed
+          ? `author Safe deployed at ${result.address}`
+          : `deployment submitted for ${result.address} — not confirmed yet`
+        : `author Safe already deployed at ${result.address}`;
     ctx.out.result(
       { action: 'author.init', ...result, contracts, author: ctx.config.author?.name ?? null },
       [
         headline,
         `author safe : ${result.address}`,
         `eoa (owner) : ${result.eoa}`,
-        `salt        : ${result.salt}`,
+        `salt        : ${result.salt ?? '(given Safe — no salt)'}`,
         `chain       : ${result.chain}`,
-        `tx          : ${result.txHash ?? '(none — already deployed)'}`,
+        `tx          : ${
+          result.txHash ??
+          (given ? '(none — a given Safe is deployed by its owners, not here)' : '(none — already deployed)')
+        }`,
         ...contractsLines(contracts),
       ].join('\n'),
     );
