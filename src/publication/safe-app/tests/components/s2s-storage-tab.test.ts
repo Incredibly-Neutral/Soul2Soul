@@ -58,9 +58,14 @@ vi.mock('@/state/index.js', () => ({
 // `S2SIPFSMethods` / `buildPublicationCidView` (safe-app adapter + section).
 // The storage-tab store mock has no protocolInfo, so the section's ctx is
 // empty and buildPublicationCidView simply yields an empty view.
-vi.mock('@s2s/soul2soul-shared', () => ({
-  toBytes32Id: (id: string) => id,
-}));
+vi.mock('@s2s/soul2soul-shared', async () => {
+  // pet-name reads an author through the shared helper; provide the real one
+  // rather than a stub, so the mock does not have to know the form.
+  const { authorAddress } = await import(
+    '../../../../shared/src/manuscript/identity/author-address.js'
+  );
+  return { toBytes32Id: (id: string) => id, authorAddress };
+});
 
 vi.mock('@s2s/soul2soul-shared/safe-app', async () => {
   // The cid-view section now statically imports parsePublicationCidView from

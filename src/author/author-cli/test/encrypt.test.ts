@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   LitService,
+  authorAddress,
   bodyForKey,
   buildSignedContentItem,
   noOpEncrypt,
@@ -49,9 +50,9 @@ import { CliError, UsageError } from '../src/lib/errors';
 
 const PKP = '0x' + '11'.repeat(20);
 const AUTHOR_ADDR = '0x2222222222222222222222222222222222222222';
-// The author the write path signs with: the author Safe's bare address. Items
-// pinned before the change carry `did:ethr:0x…` instead; nothing writes that
-// form now, and only read paths still strip the prefix.
+// The author the write path signs with: the author Safe's bare address. A value
+// pinned before the change is read back through authorAddress(); nothing writes
+// the retired spelling now.
 const AUTHOR = AUTHOR_ADDR;
 
 /** A TypedDataSigner that produces a well-formed dummy signature (no keys). */
@@ -453,18 +454,22 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect('body' in item).toBe(false);
     expect(result.kuboCid).toBe('bafyfake');
     // Frontmatter write-back happened on the temp note: `cid` (renamed from
-    // `kubo_cid`), a creation_date, and a bare author address (no `did:ethr:`).
+    // `kubo_cid`), a creation_date, and an author that is already the bare
+    // address. authorAddress() is the only thing that knows the retired
+    // spelling, and it has nothing to remove here.
     const written = readFileSync(path, 'utf8');
     expect(written).toContain('cid: bafyfake');
     expect(written).toMatch(/creation_date: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     expect(written).toContain('author: "0x');
-    expect(written).not.toContain('did:ethr:');
+    const writtenAuthor = /^author: "([^"]+)"/m.exec(written)?.[1] ?? '';
+    expect(writtenAuthor).toBe(AUTHOR_ADDR);
+    expect(authorAddress(writtenAuthor)).toBe(writtenAuthor);
     expect(written).not.toContain('kubo_cid');
   });
 
-  it('renames a legacy kubo_cid, backfills creation_date and strips the did from the author', async () => {
-    // A note written before the change: the author is stored as `did:ethr:0x…`.
-    // Publishing migrates the spelling and keeps the address.
+  it('renames a legacy kubo_cid, backfills creation_date and rewrites a pre-change author to its bare address', async () => {
+    // A note pinned before the change: `author:` is the retired spelling of the
+    // address, kept here as the input fixture. Publishing rewrites it.
     const path = noteWith([
       'title: Hello',
       'genesis: "0x' + 'cd'.repeat(32) + '"',
@@ -484,9 +489,10 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect(written).not.toContain(
       'creation_date: 2026-01-02T03:04:05\nmodified_date: 2026-01-02T03:04:05',
     );
-    // the author keeps its address, loses only the prefix
-    expect(written).toContain('author: "0x7907cB38776936B90002057d7feF3a9662ED9A55"');
-    expect(written).not.toContain('did:ethr:');
+    // the author keeps its address, loses only the spelling
+    expect(written).toContain('author: "0x7907cb38776936b90002057d7fef3a9662ed9a55"');
+    const migratedAuthor = /^author: "([^"]+)"/m.exec(written)?.[1] ?? '';
+    expect(authorAddress(migratedAuthor)).toBe(migratedAuthor);
   });
 
   it("signs a revision with the note's creation_date and this upload as modifiedDate", async () => {

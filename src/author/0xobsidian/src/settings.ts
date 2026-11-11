@@ -135,7 +135,6 @@ export class OxOAuthorsTab extends PluginSettingTab {
 				);
 
 			// The author Safe's address is the author identity; it is copied bare.
-			// A pre-change item's author reads as `did:ethr:0x…` instead.
 			const safeValue = author.safe ?? '';
 			new Setting(authorEl)
 				.setName('Address')

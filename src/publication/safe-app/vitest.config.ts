@@ -30,6 +30,12 @@ export default mergeConfig(
     // import.meta.env in both node and browser test runs.
     envDir: resolve(appRoot, '../../..'),
 
+    // Mirrors vite.config.ts: shared's root entry assigns `global.ethers`, and
+    // the production build aliases `global` to `globalThis`. Component tests
+    // load the app's own modules (pet-name imports the shared root for the
+    // author helper), so they need the same alias or that module throws.
+    define: { global: 'globalThis' },
+
     resolve: {
       alias: [
         { find: '@', replacement: resolve(appRoot, 'src') },

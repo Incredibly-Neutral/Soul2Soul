@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  authorAddress,
   buildSignedContentItem,
   parseMarkdownNote,
   renderwithLitActions,
@@ -284,9 +285,9 @@ export async function authorWrite(
 
   // Frontmatter write-back: genesis+author+creation_date on first publish;
   // modified_date and the last upload's CID always (the CID is what `offer`
-  // offers on-chain). The author is written as the Safe's bare address. A note
-  // pinned before the change carries `did:ethr:0x…` there instead; the write
-  // below rewrites it to the bare form on its next publish.
+  // offers on-chain). The author is written as the Safe's bare address; a note
+  // pinned before the change is rewritten to the bare address on its next
+  // publish (the migration below).
   const modified = new Date().toISOString().slice(0, 19);
   const updates: Record<string, string | boolean> = {
     modified_date: modified,
@@ -310,14 +311,16 @@ export async function authorWrite(
   if (!nonEmptyString(parsed.frontmatter['creation_date'])) {
     updates.creation_date = new Date(creationDate * 1000).toISOString().slice(0, 19);
   }
-  // Format migration: a `did:ethr:` author is rewritten to its bare address,
-  // whatever address it is (this is a spelling change, not a re-attribution).
-  // Never on the first publish, where the genesis author above is authoritative
-  // and a stale declared one would otherwise win. Read paths strip the same
-  // prefix for the same reason.
+  // Format migration: an author pinned before the change is rewritten to the
+  // bare address it names, whatever that address is (a spelling change, not a
+  // re-attribution). Never on the first publish, where the genesis author above
+  // is authoritative and a stale declared one would otherwise win. The shared
+  // helper is the only code that knows what the retired spelling was, so ask it
+  // whether the value needs rewriting rather than matching the form here.
   const declaredAuthor = nonEmptyString(parsed.frontmatter['author']);
-  if (parsed.genesis && declaredAuthor !== undefined && /^did:ethr:/i.test(declaredAuthor)) {
-    updates.author = declaredAuthor.replace(/^did:ethr:/i, '');
+  if (parsed.genesis && declaredAuthor !== undefined) {
+    const bare = authorAddress(declaredAuthor);
+    if (bare !== declaredAuthor.toLowerCase()) updates.author = bare;
   }
   const frontmatterWritten = writeNoteFrontmatter(notePath, updates, [
     LEGACY_CID_KEY,
@@ -839,11 +842,12 @@ export async function revokeContent(
 // ===========================================================================
 
 /**
- * The frontmatter `author:` is the author Safe's bare address; a pre-change
- * note has it as `did:ethr:0x…`, so the prefix is stripped before comparing.
- * A note whose recorded author is a different address can still be *uploaded*,
- * but the module will only accept the write from its `genesisAuthor`, so say so
- * up front rather than let `OnlySafe()` explain it after a failed send.
+ * The frontmatter `author:` is the author Safe's bare address; a note pinned
+ * before the change records a value only `authorAddress` reads as an address,
+ * so the comparison goes through it. A note whose recorded author is a
+ * different address can still be *uploaded*, but the module will only accept
+ * the write from its `genesisAuthor`, so say so up front rather than let
+ * `OnlySafe()` explain it after a failed send.
  */
 function warnOnAuthorMismatch(
   ctx: CliContext,
@@ -852,9 +856,9 @@ function warnOnAuthorMismatch(
   authorSafe: Address,
 ): void {
   if (typeof declaredAuthor !== 'string') return;
-  const declared = declaredAuthor.replace(/^did:ethr:/i, '');
+  const declared = authorAddress(declaredAuthor);
   if (!/^0x[0-9a-fA-F]{40}$/.test(declared)) return;
-  if (declared.toLowerCase() === authorSafe.toLowerCase()) return;
+  if (declared === authorSafe.toLowerCase()) return;
   ctx.out.warn(
     `note ${notePath} records author ${declared}, but this machine's author Safe is ${authorSafe} — the module only accepts writes from the genesis author`,
   );
