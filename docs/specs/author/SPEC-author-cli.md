@@ -110,7 +110,7 @@ silent no-op:
 |---|---|---|
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
 | `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
-| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and `assertCiphertext` validation still apply. | upload, offer, preview, publish |
+| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
 | `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
 | `--branch <b>` | Default render branch; empty string when omitted. | publication new |
 | `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
@@ -801,11 +801,13 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   `buildSignedContentItem` calls it **after signing, before upload**. That order is safe because the
   signature covers `plaintextHash`, not the body: `plaintextHash` is the keccak of the JCS-canonical
   body — `jcs` over `{title, slug, content, custom}` (`shared/src/identity/sign-content.ts:54`) —
-  fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext `.body` still
+  fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext body still
   satisfies the commitment. The signed item carries `encryption: true`; `encryption: false`/absent
-  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. Four checks at three call
-  sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn` resolves the
-  credentials (`author.ts:109` → `encrypt.ts:240`) and a missing or empty
+  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. The stored body sits under a
+  key holder's name in the item's `bodies` map — `buildSignedContentItem` writes the `s2s` entry for
+  the press — and a reader resolves it with `bodyForKey(item)` rather than by field. Four checks at
+  three call sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn`
+  resolves the credentials (`author.ts:109` → `encrypt.ts:240`) and a missing or empty
   `LIT_USAGE_KEY`/`protocolInfo.pkp` is a `UsageError`; the downgrade guard runs next
   (`author.ts:112`), so on a plaintext note it has already decided before anything is signed; then
   the write signs and encrypts (`author.ts:154` → `encrypt.ts:254`). `assertCiphertext` carries two of

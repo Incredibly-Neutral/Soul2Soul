@@ -2,7 +2,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { LitService, buildSignedContentItem, noOpEncrypt, parseMarkdownNote } from '@s2s/soul2soul-shared';
+import {
+  LitService,
+  bodyForKey,
+  buildSignedContentItem,
+  noOpEncrypt,
+  parseMarkdownNote,
+  type AnyS2SContentItem,
+  type S2SContentItemV3,
+} from '@s2s/soul2soul-shared';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
@@ -217,7 +225,8 @@ describe('buildEncryptFn', () => {
     const item = await buildSignedContentItem(pub, body, fakeSigner, fn, AUTHOR);
 
     expect(item.encryption).toBe(true);
-    expect(item.body).toBe(CIPHER);
+    expect(bodyForKey(item)).toBe(CIPHER);
+    expect(item.bodies).toEqual({ s2s: CIPHER });
     expect(encrypt).toHaveBeenCalledTimes(1);
     expect(encrypt).toHaveBeenCalledWith(
       'lit-key',
@@ -253,7 +262,7 @@ describe('buildEncryptFn', () => {
     });
     const item = await buildSignedContentItem(pub, body, fakeSigner, fn, AUTHOR);
     expect(item.encryption).toBe(false);
-    expect(JSON.parse(item.body)).toMatchObject({ title: 'Hello' });
+    expect(JSON.parse(bodyForKey(item) ?? '')).toMatchObject({ title: 'Hello' });
   });
 });
 
@@ -342,7 +351,7 @@ describe('LitService.encrypt really returns error strings (the reason for the wh
     );
     const item = await buildSignedContentItem(pub, body, fakeSigner, fn, AUTHOR);
     expect(item.encryption).toBe(true);
-    expect(item.body).toBe(cipher);
+    expect(bodyForKey(item)).toBe(cipher);
   });
 });
 
@@ -432,9 +441,13 @@ describe('authorWrite honors frontmatter encryption', () => {
 
     expect(encrypt).toHaveBeenCalledTimes(1);
     const payload = uploaded[0] ?? '';
-    const item = JSON.parse(payload) as { encryption: boolean; body: string };
+    const item = JSON.parse(payload) as S2SContentItemV3;
     expect(item.encryption).toBe(true);
-    expect(item.body).toBe(CIPHER);
+    // The storage layout: one body, under the protocol key's name, and no
+    // single-body `body` key beside it.
+    expect(item.bodies).toEqual({ s2s: CIPHER });
+    expect(bodyForKey(item)).toBe(CIPHER);
+    expect('body' in item).toBe(false);
     expect(result.kuboCid).toBe('bafyfake');
     // Frontmatter write-back happened on the temp note: `cid` (renamed from
     // `kubo_cid`), a creation_date, and a bare author address (no `did:ethr:`).
@@ -543,9 +556,12 @@ describe('authorWrite honors frontmatter encryption', () => {
     await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
 
     const payload = uploaded[0] ?? '';
-    const item = JSON.parse(payload) as { encryption: boolean; body: string };
+    const item = JSON.parse(payload) as S2SContentItemV3;
     expect(item.encryption).toBe(false);
-    expect(JSON.parse(item.body)).toMatchObject({ title: 'Hello', content: '<p>secret body</p>' });
+    expect(JSON.parse(bodyForKey(item) ?? '')).toMatchObject({
+      title: 'Hello',
+      content: '<p>secret body</p>',
+    });
   });
 
   it('an encrypt-time failure publishes nothing and offers nothing', async () => {
@@ -833,8 +849,8 @@ describe('authorWrite honors frontmatter encryption', () => {
     await authorWrite(ctx, legacy, 'test.soul2soul.eth', opts);
 
     const customs = uploaded.map((payload) => {
-      const item = JSON.parse(payload) as { body: string };
-      return (JSON.parse(item.body) as { custom?: Record<string, unknown> }).custom;
+      const item = JSON.parse(payload) as AnyS2SContentItem;
+      return (JSON.parse(bodyForKey(item) ?? '') as { custom?: Record<string, unknown> }).custom;
     });
     for (const custom of customs) {
       expect(custom ?? {}).not.toHaveProperty('encrypted');
@@ -923,12 +939,16 @@ describe('offerContent verifies the stored item', () => {
 
   function fakeCtx(fetchFromKubo: (cid: string) => Promise<unknown>) {
     const spy = vi.fn(fetchFromKubo);
+    const addToKubo = vi.fn(() =>
+      Promise.reject(new Error('offer must not upload: the bytes are already on IPFS')),
+    );
     const ctx = {
       config: { ipfs: { entries: [KUBO], primary: KUBO } },
-      ipfs: { fetchFromKubo: spy },
+      ipfs: { fetchFromKubo: spy, addToKubo },
+      authorRunner: () => Promise.resolve({}),
       out: { log: vi.fn(), warn: vi.fn() },
     } as unknown as CliContext;
-    return { ctx, fetchFromKubo: spy };
+    return { ctx, fetchFromKubo: spy, addToKubo };
   }
 
   it('refuses a plaintext CID for an encrypted note, before any chain call', async () => {
@@ -956,7 +976,7 @@ describe('offerContent verifies the stored item', () => {
     ]);
     const { ctx } = fakeCtx(() => Promise.resolve({ encryption: true, body: 'raw-not-json' }));
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
-      /got non-JSON text/,
+      /not JSON ciphertext/,
     );
     expect(authorSafeState).not.toHaveBeenCalled();
   });
@@ -1096,18 +1116,174 @@ describe('offerContent verifies the stored item', () => {
     // the downgrade guard read the previous revision, and did not refuse
     expect(fetchFromKubo).toHaveBeenCalledWith('bafyplain');
   });
+
+  // -------------------------------------------------------------------------
+  // The bodies layout: one body per key holder, read by the protocol key
+  // -------------------------------------------------------------------------
+
+  it('lets a current-layout item through when `bodies.s2s` is JSON ciphertext', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: true',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafybodies',
+    ]);
+    const cipher = JSON.stringify('gAAAAABok');
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: true, bodies: { s2s: cipher } }),
+    );
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+      /SAFE_REACHED/,
+    );
+  });
+
+  it('refuses a `bodies.s2s` that is raw base64 instead of JSON text', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: true',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafybodies',
+    ]);
+    const raw = 'gAAAAAB' + 'z'.repeat(48);
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: true, bodies: { s2s: raw } }),
+    );
+    // The writer wraps bare base64 (`assertCiphertext`), so an item stored with
+    // the raw string was written by something else: the offer path refuses it,
+    // because the read path's `JSON.parse(body.content)` could not decrypt it.
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+      /not JSON ciphertext/,
+    );
+    expect(authorSafeState).not.toHaveBeenCalled();
+  });
+
+  it('refuses a `bodies.s2s` that is not JSON at all', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: true',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafybodies',
+    ]);
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: true, bodies: { s2s: 'raw-not-json' } }),
+    );
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+      /not JSON ciphertext/,
+    );
+    expect(authorSafeState).not.toHaveBeenCalled();
+  });
+
+  it('refuses a current-layout item with no body for the protocol key', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: true',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafybodies',
+    ]);
+    // A publication key holder's entry is not the protocol's: the reader asks
+    // for `s2s`, so anything else is an item with no body for this key.
+    const { ctx } = fakeCtx(() =>
+      Promise.resolve({ encryption: true, bodies: { 'pub.example': JSON.stringify('gAAAAABok') } }),
+    );
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
+      /has no string body/,
+    );
+    expect(authorSafeState).not.toHaveBeenCalled();
+  });
+
+  it('refuses the downgrade when the previous revision is in the current layout', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: false',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafybodies',
+    ]);
+    const { ctx, fetchFromKubo } = fakeCtx(() =>
+      Promise.resolve({ encryption: true, bodies: { s2s: JSON.stringify('gAAAAABold') } }),
+    );
+    await expect(offerContent(ctx, path, 'test.soul2soul.eth', 'bafy--cid-plain')).rejects.toThrow(
+      /would publish the body in the clear/,
+    );
+    expect(fetchFromKubo).toHaveBeenCalledWith('bafybodies');
+    expect(authorSafeState).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Legacy v2 items stay readable and are anchored verbatim
+  // -------------------------------------------------------------------------
+
+  it('offers a legacy v2 item on its own CID without re-uploading or rewriting it', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: true',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafylegacy',
+    ]);
+    const legacy = { encryption: true, body: JSON.stringify('gAAAAABold') };
+    const { ctx, addToKubo, fetchFromKubo } = fakeCtx(() => Promise.resolve(legacy));
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+
+    const result = await offerContent(ctx, path, 'test.soul2soul.eth', undefined);
+
+    expect(result.kuboCid).toBe('bafylegacy');
+    // the CID is what was read, and it is also the CID anchored on chain
+    expect(fetchFromKubo).toHaveBeenCalledWith('bafylegacy');
+    expect(makeOfferSpy).toHaveBeenCalledWith(genesis, 'bafylegacy');
+    // offer rewrites nothing: no upload, no re-sign
+    expect(addToKubo).not.toHaveBeenCalled();
+  });
+
+  it('reads a legacy v2 plaintext item for the downgrade guard and offers its CID', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encryption: false',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafylegacyplain',
+    ]);
+    const legacy = { encryption: false, body: '{"title":"Hello"}' };
+    const { ctx, addToKubo } = fakeCtx(() => Promise.resolve(legacy));
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+
+    const result = await offerContent(ctx, path, 'test.soul2soul.eth', undefined);
+
+    expect(result.kuboCid).toBe('bafylegacyplain');
+    expect(makeOfferSpy).toHaveBeenCalledWith(genesis, 'bafylegacyplain');
+    expect(addToKubo).not.toHaveBeenCalled();
+  });
 });
 
 describe('fetchStoredItem', () => {
-  it('reports the flag and body, and rejects non-items / bad flags', async () => {
-    const reader = { fetchFromKubo: () => Promise.resolve({ encryption: true, body: 'x' }) };
+  it('reads the protocol-key body from the current layout', async () => {
+    const reader = {
+      fetchFromKubo: () =>
+        Promise.resolve({ encryption: true, bodies: { s2s: 'x', 'pub.example': 'y' } }),
+    };
     await expect(fetchStoredItem(reader, 'bafy1', 'n.md')).resolves.toEqual({
       encryption: true,
-      body: 'x',
+      s2sBody: 'x',
     });
+  });
+
+  it('reads a legacy v2 item out of its single `body`', async () => {
     await expect(
       fetchStoredItem({ fetchFromKubo: () => Promise.resolve({ body: 'x' }) }, 'bafy2', 'n.md'),
-    ).resolves.toEqual({ encryption: false, body: 'x' });
+    ).resolves.toEqual({ encryption: false, s2sBody: 'x' });
+  });
+
+  it('reports no body when only another key holder has one', async () => {
+    await expect(
+      fetchStoredItem(
+        {
+          fetchFromKubo: () =>
+            Promise.resolve({ encryption: true, bodies: { 'pub.example': 'y' } }),
+        },
+        'bafy5',
+        'n.md',
+      ),
+    ).resolves.toEqual({ encryption: true, s2sBody: undefined });
+  });
+
+  it('rejects non-items, bad flags and a non-object bodies field', async () => {
     await expect(
       fetchStoredItem({ fetchFromKubo: () => Promise.resolve('nope') }, 'bafy3', 'n.md'),
     ).rejects.toThrow(/not a JSON object/);
@@ -1118,6 +1294,20 @@ describe('fetchStoredItem', () => {
         'n.md',
       ),
     ).rejects.toThrow(/non-boolean/);
+    await expect(
+      fetchStoredItem(
+        { fetchFromKubo: () => Promise.resolve({ encryption: true, bodies: 'x' }) },
+        'bafy6',
+        'n.md',
+      ),
+    ).rejects.toThrow(/non-object `bodies`/);
+    await expect(
+      fetchStoredItem(
+        { fetchFromKubo: () => Promise.resolve({ encryption: true, bodies: null }) },
+        'bafy7',
+        'n.md',
+      ),
+    ).rejects.toThrow(/non-object `bodies`/);
   });
 });
 

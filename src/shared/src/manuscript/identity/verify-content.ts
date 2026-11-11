@@ -5,11 +5,7 @@
 import { ethersUtils } from './ethers-ambient';
 import { jcs, keccakOfJson, keccakOfString } from './jcs';
 import { signingEnvelope } from './signing-view';
-import {
-  type AnyS2SContentItem,
-  S2S_DOMAIN,
-  eoaOf,
-} from '../types';
+import { type AnyS2SContentItem, S2S_DOMAIN, bodyForKey, eoaOf } from '../types';
 
 // ============================================================================
 // verifyAuthorship — called by decryptors before rendering
@@ -26,6 +22,9 @@ import {
  *   3. Recover the signer from the EIP-712 signature
  *   4. Check the recovered address matches the author's EOA
  *
+ * Reads the protocol's body (`bodyForKey` default). An item that has no body
+ * under the protocol key cannot be checked and verifies false.
+ *
  * Returns true if all checks pass, false otherwise.
  */
 export async function verifyAuthorship(
@@ -38,10 +37,13 @@ export async function verifyAuthorship(
     // Only the signature half needs ethers; the hashes below are viem.
     const utils = ethersUtils();
 
-    // 1. Obtain the canonical body JSON
-    const bodyJson = item.encryption
-      ? await decryptFn(item.body)
-      : item.body;
+    // 1. Obtain the canonical body JSON. The plaintextHash commits the
+    //    protocol's body, so that is the one verified here.
+    const stored = bodyForKey(item);
+    if (stored === undefined) {
+      return false;
+    }
+    const bodyJson = item.encryption ? await decryptFn(stored) : stored;
 
     // 2. Verify plaintextHash
     const computedHash = keccakOfString(bodyJson);
