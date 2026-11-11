@@ -11,6 +11,12 @@
 // it. It is a cache of what the chain already says (the factory index), never a
 // gate — a missing or stale record costs one RPC read, nothing more.
 //
+// `safeSource` is the provenance of the Safe and is OPTIONAL for the same
+// reason: absent means `derived`, the address predicted from the key with the
+// `s2s_${eoa}` salt. `given` means the key was filed as one owner of a Safe
+// that already existed (`s2s signer add`), so the stored address is the only
+// authority for it and nothing here re-derives it.
+//
 // The pet name is the key of an insertion-ordered map, so `author list` and the
 // active-reassignment in `author rm` follow the order authors were added. One
 // private key belongs to exactly one pet name (the same identity under two
@@ -42,11 +48,29 @@ export interface AuthorContractsRecord {
   guard: string | null;
 }
 
-/** One stored author: the signing key and its (predicted) author Safe. */
+/**
+ * Where a record's Safe came from. Absent means `derived`.
+ *
+ * `derived`: the address is predicted from the key, which is the Safe's sole
+ * owner (`s2s_${eoa}` salt). `given`: the address was handed to the store and
+ * is read from the chain — the key is one owner among others.
+ */
+export type AuthorSafeSource = 'derived' | 'given';
+
+/** One stored author: the signing key and its author Safe. */
 export interface AuthorRecord {
   privateKey: string;
-  /** The author id (counterfactual Safe), once predicted; null when never derived. */
+  /**
+   * The author id: a Safe address. Predicted from the key for `derived`, the
+   * stored fact for `given`; null when a derived row has never been predicted.
+   */
   safe: string | null;
+  /**
+   * `given` when the Safe existed before this key was filed into it; absent on
+   * every derived row, so rows written before this field existed read as
+   * `derived` unchanged.
+   */
+  safeSource?: AuthorSafeSource;
   /**
    * The `@s2s/author-contracts` modules installed on that Safe, once installed.
    * Optional and absent on every row written before this field existed — the
@@ -123,11 +147,37 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
   if (typeof privateKey !== 'string' || privateKey.trim().length === 0) return undefined;
   const safe = record.safe;
   const contracts = parseContracts(record.contracts);
+  const safeSource = record.safeSource === 'given' || record.safeSource === 'derived'
+    ? record.safeSource
+    : undefined;
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
+    ...(safeSource === undefined ? {} : { safeSource }),
     ...(contracts === undefined ? {} : { contracts }),
   };
+}
+
+/**
+ * Whether the record's Safe was given to the store rather than derived from the
+ * key. The one place `'given'` is spelled, so no caller compares the string.
+ */
+export function isGivenSafe(record: AuthorRecord | undefined): boolean {
+  return record?.safeSource === 'given';
+}
+
+/**
+ * The stored Safe address of a `given` record, or undefined for a derived one
+ * (including every row written before `safeSource` existed).
+ */
+export function givenSafeOf(record: AuthorRecord | undefined): Address | undefined {
+  if (!isGivenSafe(record) || !record?.safe) return undefined;
+  return record.safe as Address;
+}
+
+/** `givenSafeOf` by pet name, for a caller holding a name rather than a record. */
+export function givenSafeByName(data: AuthorsStore, name: string): Address | undefined {
+  return givenSafeOf(findAuthor(data, name));
 }
 
 /** Read the store tolerantly — missing, unparsable or malformed → empty store. */
@@ -260,6 +310,65 @@ export function addAuthor(
   };
 }
 
+/** What `addSigner` files: a name, the key, and the Safe it gains a share in. */
+export interface AddSignerInput {
+  name: string;
+  privateKey: string;
+  /** The existing Safe. Validated by the command, kept as written here. */
+  safe: string;
+}
+
+/**
+ * File a key as one owner of a Safe that already exists, and make it active.
+ *
+ * This is the `given` counterpart of `addAuthor`: the Safe is not predicted
+ * from the key, so the record carries the address plus `safeSource: 'given'`
+ * and every later read of the author id takes the address from the store. The
+ * key is the one thing added here; the share on chain is the owners' business
+ * (`s2s signer queue` proposes it).
+ *
+ * Uniqueness covers all three collisions a `given` row can make: a pet name
+ * (case-insensitively), a key already filed elsewhere, and a Safe another
+ * record already names — two rows pointing at one Safe would be two active
+ * identities for one address.
+ */
+export function addSigner(
+  input: AddSignerInput,
+  path: string = authorsFilePath(),
+): ActiveAuthor {
+  const { name, privateKey, safe } = input;
+  if (!isValidPetName(name)) {
+    throw new UsageError(`invalid author name '${name}'`);
+  }
+  const store = readAuthors(path);
+  const existing = findAuthorName(store, name);
+  if (existing) {
+    throw new UsageError(
+      `author '${existing}' already exists — pick another name, or \`s2s author rm ${existing}\` first`,
+    );
+  }
+  const keyOwner = findAuthorByKey(store, privateKey);
+  if (keyOwner) {
+    throw new UsageError(`that private key already belongs to author '${keyOwner}' — one key, one author`);
+  }
+  const safeOwner = Object.entries(store.authors).find(
+    ([, record]) => record.safe?.toLowerCase() === safe.trim().toLowerCase(),
+  );
+  if (safeOwner) {
+    throw new UsageError(
+      `safe ${safe} is already filed under author '${safeOwner[0]}' — one Safe, one author`,
+    );
+  }
+
+  const record: AuthorRecord = {
+    privateKey: normalizeKey(privateKey),
+    safe: safe.trim(),
+    safeSource: 'given',
+  };
+  writeAuthors({ active: name, authors: { ...store.authors, [name]: record } }, path);
+  return { name, ...record };
+}
+
 /**
  * Remove an author. When it was the active one, `active` moves to the first
  * remaining author (insertion order), or null when the store is now empty.
@@ -299,6 +408,10 @@ export function writeBackAuthorSafe(
   const store = readAuthors(path);
   const record = store.authors[name];
   if (!record || record.safe === safe) return false;
+  // A given Safe is the fact the record exists to name. A derived address for
+  // the same key is a different Safe, one the key was never an owner of, so a
+  // write-back would replace the identity rather than refresh it.
+  if (isGivenSafe(record)) return false;
   writeAuthors({ ...store, authors: { ...store.authors, [name]: { ...record, safe } } }, path);
   return true;
 }
@@ -306,7 +419,8 @@ export function writeBackAuthorSafe(
 /**
  * Write-back for a command: only when the signing key came from the store, and
  * never fatal — a read-only config dir must not fail an `address`/`init` run
- * that already succeeded.
+ * that already succeeded. A `given` record is left as it is (see
+ * `writeBackAuthorSafe`).
  */
 export function rememberAuthorSafe(
   author: { readonly name: string | undefined; readonly source: AuthorKeySource } | undefined,

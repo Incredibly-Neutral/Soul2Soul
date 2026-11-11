@@ -17,7 +17,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { TxRunner } from '@s2s/soul2soul-shared';
 
 import { createEoaRunner } from '../adapters/tx-runner';
-import { createAuthorWriteRunner } from './author-safe';
+import { createAuthorWriteRunner, givenSafeInUse } from './author-safe';
 import { activeAuthorRecord, readAuthors } from './authors';
 import { createLitService } from '../adapters/lit';
 import { createIpfs } from '../adapters/ipfs';
@@ -115,10 +115,14 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
 
   let authorRunnerPromise: Promise<TxRunner> | undefined;
   const authorRunner = (): Promise<TxRunner> => {
+    // A `given` Safe is the author id instead of a derived one, so the runner
+    // connects to it; undefined keeps the derived path.
+    const given = givenSafeInUse(config);
     authorRunnerPromise ??= createAuthorWriteRunner({
       config,
       eoa: account.address,
       rpcUrl: l2Rpc,
+      ...(given ? { safe: given } : {}),
     });
     return authorRunnerPromise;
   };

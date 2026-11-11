@@ -3,7 +3,9 @@
 //
 // The author id is the Safe (the manuscript owner neutralpress writes), not the
 // EOA. Its address is counterfactual, so it exists before deployment: this
-// prints it (plus the EOA that owns it) without sending anything.
+// prints it (plus the EOA that owns it) without sending anything. A `given`
+// Safe has no salt and is not written back — the stored address is the fact
+// this command reports.
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';
@@ -17,6 +19,8 @@ export const authorAddress: CommandSpec = {
   async run(ctx) {
     const state = await authorSafeState(ctx);
     // Keep the store current: `author list` / `switch` report the Safe offline.
+    // `rememberAuthorSafe` is a no-op for a given record (nothing derived may
+    // replace the stored address), so the call stays unconditional here.
     rememberAuthorSafe(ctx.config.author, state.address, (message) => {
       ctx.out.warn(message);
     });
@@ -25,7 +29,7 @@ export const authorAddress: CommandSpec = {
       [
         `author safe : ${state.address}`,
         `eoa (owner) : ${state.eoa}`,
-        `salt        : ${state.salt}`,
+        `salt        : ${state.salt ?? '(none, the Safe was given, not derived)'}`,
         `chain       : ${state.chain}`,
         `deployed    : ${state.deployed ? 'yes' : 'no — run: s2s author init'}`,
       ].join('\n'),
