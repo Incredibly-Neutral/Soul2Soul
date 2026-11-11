@@ -7,7 +7,7 @@ tags:
 modified_date: 2026-11-02T10:25:01
 kubo_cid: QmR77xBQyhYpr7bwcSXNQbTk6wJYg25goLL956gVKP4kDU
 genesis: "0x0742f92a62f624c4466de0eefe621c2ec84fadb1bfef22db63e8a990bbf0bf9d"
-author: did:ethr:0x7907cB38776936B90002057d7feF3a9662ED9A55
+author: 0x7907cB38776936B90002057d7feF3a9662ED9A55
 ---
 # Monetization and costs
 

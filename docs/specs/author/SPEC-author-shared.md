@@ -57,7 +57,7 @@ the import list, when adding anything here.
   `postToLens`/`updateToLens`, content types, `runFilecoinLeg`, `newPublicationSafe` +
   `buildNewPublicationDeps`, `createL1Runner`/`createL2Runner`.
 - **`author-cli`** — `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`, `noOpEncrypt`,
-  `renderwithLitActions`, `revokedPathFor`, `runFilecoinLeg`, `toDidEthr`, `toPreviewLabel`,
+  `renderwithLitActions`, `revokedPathFor`, `runFilecoinLeg`, `toPreviewLabel`,
   `resolvePublicationSafe`, `resolvePublicationModules`, `subdomainOf`, `newPublicationSafe` +
   `buildNewPublicationDeps`, `S2SPublication`, `TxRunner`, `buildFallbackRpcs`, the generated ABIs,
   `toBytes32Id`. Nothing else — the blank-slate rule forbids importing `neutralpress`/`0xobsidian`

@@ -77,8 +77,8 @@ s2s config path      [--local] [--json]                                         
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
 legs, and writes `genesis`/`author` back — but **never writes to the chain**. `author`
-in that frontmatter is the **author Safe** as a bare `0x…` address (the `did:ethr:` form is the
-signed item's, not the note's), not the signing EOA;
+in that frontmatter is the **author Safe** as a bare `0x…` address, not the signing EOA — the same
+value the signed item carries in `public.author`, so note and item cannot drift;
 `author` sits inside the EIP-712 signing view, so it is part of `genesis`. The on-chain
 `makeOffer` is the separate **`propose`** step, which takes the `cid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
@@ -746,7 +746,7 @@ src/
 ```
 
 Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`,
-`noOpEncrypt`, `renderwithLitActions`, `revokedPathFor`, `runFilecoinLeg`, `toDidEthr`,
+`noOpEncrypt`, `renderwithLitActions`, `revokedPathFor`, `runFilecoinLeg`,
 `toPreviewLabel`, `resolvePublicationSafe`, `resolvePublicationModules`, `subdomainOf`,
 `newPublicationSafe` + `buildNewPublicationDeps`, `S2SPublication`, `TxRunner`, `buildFallbackRpcs`,
 the protocol generated ABIs, and `toBytes32Id`.
@@ -754,7 +754,8 @@ the protocol generated ABIs, and `toBytes32Id`.
 Written fresh (nothing imported from neutralpress/0xobsidian):
 
 - **EOA signer** (`adapters/signer.ts`) — viem `privateKeyToAccount`, EIP-712 typed signing for
-  `buildSignedContentItem` (`proof.signer` = the EOA); DID = `toDidEthr(authorSafe)`.
+  `buildSignedContentItem` (`proof.signer` = the EOA, `public.author` = the author Safe's bare
+  address).
 - **TxRunner ×3** (`adapters/tx-runner.ts`, `core/author-safe.ts`) — a plain EOA runner used for
   **reads** only (genericTx encodes calldata from the protocol ABIs; the EOA runner never sends an
   author write), `createAuthorWriteRunner` (permissionless `toSafeSmartAccount` + Pimlico, pinned
@@ -780,7 +781,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   write from the EOA reverts `OnlySafe()` on a genesis's first version and would permanently
   write `genesisAuthor = EOA`, locking the Safe and 0xobsidian out of that document.
   (`upload`/`preview` are **off-chain** — they never touch the chain at all.)
-- **Identity everywhere else** — `did:ethr:` author, frontmatter `author`, the render action's
+- **Identity everywhere else** — the item's `public.author`, frontmatter `author`, the render action's
   `authorSafeAddress`, and the Filecoin piece attribution (`[publicationSafe, authorSafe]`) all
   carry the author Safe. `s2s author address`/`config` print the EOA only as the Safe's owner.
 - **new** — the Safe is the actor for the deployment sequence: both L1 and L2 Safes are deployed

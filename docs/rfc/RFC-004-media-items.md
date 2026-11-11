@@ -52,6 +52,8 @@ the full correction — the image *becomes* a signed, attributable, deal-able ob
 
 ## The vision — image as a first-class `S2SContentItem`
 
+> **Settled since 2847c81:** the author form is the author Safe's bare `0x` address; the `did:ethr` author this section and the complaint above name is retired, and nothing writes it.
+
 The schema already supports this with **zero structural change** — only the *semantics* of existing
 fields shift:
 

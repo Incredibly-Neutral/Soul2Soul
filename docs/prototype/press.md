@@ -50,7 +50,7 @@ The IPFS node computes the root CID over the directory, and the press pins it th
 
 ## Colophon: the page vouches for itself
 
-Each page carries its colophon inside it, as JSON-LD, outside the part of the page its hash covers. It names the manuscript by its genesis id and the author by their DID, which is their Safe's address, with the author's own signature. It carries the page's SHA-256 and the hash and CID of the manuscript's text. It points to the publication module, where the agreement is kept under that genesis id, and to the render action that built the page, by CID. The press signs it with its key. With the page alone, anyone can check that the press built it, from which manuscript, written by whom, and with which code.
+Each page carries its colophon inside it, as JSON-LD, outside the part of the page its hash covers. It names the manuscript by its genesis id and the author by their Safe's address, with the author's own signature. It carries the page's SHA-256 and the hash and CID of the manuscript's text. It points to the publication module, where the agreement is kept under that genesis id, and to the render action that built the page, by CID. The press signs it with its key. With the page alone, anyone can check that the press built it, from which manuscript, written by whom, and with which code.
 
 ## Name: one transaction
 

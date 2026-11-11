@@ -67,8 +67,7 @@ These types are the **single source of truth** for stored content items. They li
 
 | type | file | shape |
 |---|---|---|
-| `DidEthr` | `protocol/types.ts` | template literal `did:ethr:0x${string}` — canonical author form |
-| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(DidEthr), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
+| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
 | `S2SContentItem` | `protocol/types.ts` | **flat stored object** (no union): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string)` |
 | `S2SSecretBody` | `protocol/types.ts` | what goes inside `.secret`: `title, slug, content, custom?(Record)` |
@@ -79,7 +78,7 @@ Key design decisions (from HANDOFF-content-item):
 - **`specVersion` selects the struct.** A `'2'` envelope verifies under `S2S_TYPES_V2` with `creationDate`/`modifiedDate`; anything else stays under `S2S_TYPES` with `createdAt`, so a v1 digest still reproduces.
 - **`secret` is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
-- **`author` is `DidEthr`**, not bare 0x address.
+- **`author` is the author Safe's bare `0x` address**, not a `did` string. The address is the identity; any prefix around it is decoration, so there is none.
 - **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the secret.
 
 ### Identity modules (NEW)
@@ -87,8 +86,13 @@ Key design decisions (from HANDOFF-content-item):
 | module | file | exports | role |
 |---|---|---|---|
 | `identity/` | `sign-content.ts` | `buildSignedContentItem`, `computeObjectId`, `TypedDataSigner`, `noOpEncrypt` | Produce a signed S2SContentItem from raw inputs + EOA signer |
-| `identity/` | `verify-content.ts` | `verifyAuthorship`, `verifyPlaintextHash`, `resolveLatest`, `getHistory`, `VersionRecord` | Verify authorship + resolve append log |
+| `identity/` | `verify-content.ts` | `verifyAuthorship`, `verifyPlaintextHash`, `resolveLatest`, `getHistory`, `authorAddress`, `VersionRecord` | Verify authorship + resolve append log |
 | `identity/` | `jcs.ts` | `jcs`, `keccakOfJson` | RFC 8785 canonical JSON + keccak256 |
+| `identity/` | `author-address.ts` | `authorAddress` | the bare lowercase address an author value names — the one reader-side tolerance for the retired prefix |
+
+An item pinned before author became the bare address carries `did:ethr:0x…` in `public.author`.
+`authorAddress()` strips that prefix before comparing, so those items still verify and render.
+Nothing writes the prefix; when no readable item carries it, the module goes.
 
 ### Legacy types (DEPRECATED, keep for action compatibility)
 
@@ -117,7 +121,7 @@ Key design decisions (from HANDOFF-content-item):
 
 | module | role | notes |
 |---|---|---|
-| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SPublicContent`, `S2SProof`, `DidEthr`, `S2SSecretBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
+| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SPublicContent`, `S2SProof`, `S2SSecretBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
 | `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers + **action-io schemas** | drives the pipeline; selects Bun (preview) vs Lit (prod). Content-item types now live in `protocol/types.ts`, not rendering. Zod schemas (`s2sContentItemSchema` etc.) remain in action-io.ts. |
 | `lit/` | `LitService` (Chipotle REST client), `actions/encrypt`, `actions/decrypt` (author draft: `DraftsModuleV1.fetch` → `isOwner` on the entry's Safe → blob `public.author` must match), `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). `decrypt(key, DecryptParams)` sends `compactAction(decryptAction)` and throws on an `ok:false` envelope; the author Safe is a parameter of neither. Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side); `bodySchema` mirrors the deprecated `S2SBody` |
@@ -205,7 +209,7 @@ INV-2 (`getProtocolInfo` key set — keep in sync with the in-action copy), INV-
 INV-6/8/11 etc. in the consumers.
 
 **NEW INV-append:** The publication/records contract gates every `append` to the genesis author
-(or permitted publication owners), verified against the `did:ethr` identity recorded in the genesis
+(or permitted publication owners), verified against the author Safe address recorded in the genesis
 entry. This is the existing author/publication gate, extended to guard appends.
 
 ## Local gotchas / gaps

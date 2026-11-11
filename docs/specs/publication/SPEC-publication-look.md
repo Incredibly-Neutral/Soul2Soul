@@ -123,7 +123,8 @@ Handlebars, compiled once per render, with the engine's own limitations:
 ## What a template receives
 
 Per item, a flattened object: `id` (genesis), `cid`, `objectId`, `plaintextHash`, `specVersion`,
-`mediaType`, `proof`, `author` (`did:ethr:0x…`), `locale`, `parent`, `position`, `postType`,
+`mediaType`, `proof`, `author` (the author Safe's bare `0x…` address), `locale`, `parent`,
+`position`, `postType`,
 `publication`, `base`, `creationDate`/`modifiedDate`, `tags[]`, `attributes{}`, `title`, `slug`,
 `content`, `custom`, `encrypted`.
 
