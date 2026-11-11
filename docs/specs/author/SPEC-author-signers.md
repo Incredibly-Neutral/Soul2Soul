@@ -103,8 +103,11 @@ Read-only: nothing is proposed, signed or spent.
    the service may not have indexed it yet. A 32-byte entry is a contract owner's `approveHash`
    approval and cannot be packed, so only 65-byte confirmations count.
 4. **Execute** when the signable confirmations meet the Safe's threshold **and** the proposal's
-   nonce is still the Safe's: `packSignatures` in ascending owner order, `execTransactionArgs`, one
-   plain transaction from the EOA.
+   nonce is still the Safe's: `packVerifiedSignatures` in ascending signer order, then
+   `execTransactionArgs`, then one plain transaction from the EOA. The packer recovers every
+   signature against the digest and refuses one that recovers to nobody (`signature_not_owner`) or
+   that is not a point on the curve (`signature_malformed`), so what gets executed is provably what
+   the signers signed.
 
 Refusals, all before anything is signed:
 
@@ -129,12 +132,33 @@ sends `execTransaction`**, and nothing is refunded to it: the proposal's gas fie
 Safe does not repay the sender. The help text and the human output say so; a failed send surfaces as
 an error after the confirmation is already posted, because the confirmation is worth keeping.
 
+## The transport
+
+What the code relies on, checked against `@safe-global/api-kit` 3.0.2 and `@safe-global/types-kit`
+3.1.0 in this build:
+
+- The Safe-scoped collection is **list-only**: `GET /api/v1/safes/{safe}/multisig-transactions/`,
+  which is where `queue` reads. A single transaction and its confirmations are keyed by hash alone:
+  `GET /api/v1/multisig-transactions/{hash}/` and `POST /api/v1/multisig-transactions/{hash}/confirmations/`.
+  The only Safe-scoped write is the proposal, `POST /api/v1/safes/{safe}/multisig-transactions/`.
+- A record carries the Safe it belongs to. On a hash-keyed read that field is required, and a
+  disagreement with the Safe the caller named is `safe_tx_safe_mismatch` — never relabelled to the
+  caller's address, which would execute another Safe's transaction.
+- A record carries its own `safeTxHash`, and the fields are re-hashed before execution: a
+  disagreement is `safe_tx_hash_mismatch`. That check is what makes the five gas fields safe to
+  carry — an omitted or misread `safeTxGas`, `baseGas`, `gasPrice`, `gasToken` or `refundReceiver`
+  changes the digest and the Safe would answer `GS026` with no field named.
+- The hash is EIP-712 over the `SafeTx` struct with domain `{chainId, verifyingContract}` — the
+  domain shape from Safe v1.3.0 on. The singleton is not in the domain in any version.
+
 ## Guesses and open items
 
 Recorded as guesses, not contracts — each one is a place a live service may disagree:
 
 1. **Registration payload.** `POST /api/v1/safes/` with `{address, owners, threshold, singleton,
-   fallbackHandler, implementationVersion, modules: [], delegate}`. The field names are the service's
+   fallbackHandler, implementationVersion, delegate}`, plus `modules` only when the caller states
+   one — the field is omitted rather than sent empty, because `[]` would assert that an ERC-4337
+   Safe has no module. The field names are the service's
    own and are taken from its documented shape, not from a request this build made.
 2. **API-key header.** `Authorization: Bearer <safeTx.key>`. The public host answers unauthenticated
    requests at a rate a busy queue will hit; a Safe account's key is the remedy if the header is the
