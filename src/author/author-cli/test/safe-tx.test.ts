@@ -26,7 +26,6 @@ import {
   computeSafeTxHash,
   execTransactionArgs,
   makeSafeTxService,
-  packSignatures,
   packVerifiedSignatures,
   SAFE_FALLBACK_HANDLER,
   type SafeTxInput,
@@ -227,7 +226,7 @@ describe('addOwnerWithThresholdData', () => {
   });
 });
 
-describe('packSignatures', () => {
+describe('packVerifiedSignatures', () => {
   /** Replace the trailing v byte. */
   const withV = (signature: Hex, v: number): Hex =>
     `0x${signature.slice(2, -2)}${v.toString(16).padStart(2, '0')}` as Hex;
@@ -240,12 +239,13 @@ describe('packSignatures', () => {
     const sigB = await accountB.signMessage({ message: { raw: SAFE_TX_HASH } });
 
     // Given in the wrong order, and keyed by checksummed address.
-    const packed = packSignatures(
+    const packed = await packVerifiedSignatures(
       [accountB.address, accountA.address],
       new Map([
         [accountB.address, sigB],
         [accountA.address, sigA],
       ]),
+      SAFE_TX_HASH,
     );
 
     const expected = ascending([accountA.address, accountB.address]).map((address) => {
@@ -302,19 +302,18 @@ describe('packSignatures', () => {
     }
   });
 
-  it('refuses an owner it has no signature for', () => {
-    try {
-      packSignatures([accountA.address], new Map());
-      expect.unreachable('should have thrown');
-    } catch (err) {
-      expect((err as CliError).code).toBe('signature_missing');
-    }
+  it('refuses an owner it has no signature for', async () => {
+    await expect(
+      packVerifiedSignatures([accountA.address], new Map(), SAFE_TX_HASH),
+    ).rejects.toMatchObject({ code: 'signature_missing' });
   });
 
   it('keeps a signature that already carries the eth_sign flag', async () => {
     const message = await accountA.signMessage({ message: { raw: SAFE_TX_HASH } });
     const flagged = withV(message, message.endsWith('1b') ? 0x1f : 0x20);
-    expect(packSignatures([accountA.address], new Map([[accountA.address, flagged]]))).toBe(flagged);
+    expect(
+      await packVerifiedSignatures([accountA.address], new Map([[accountA.address, flagged]]), SAFE_TX_HASH),
+    ).toBe(flagged);
   });
 
   it('reports a structurally invalid r/s as a CliError, not a viem throw', async () => {
@@ -332,13 +331,14 @@ describe('packSignatures', () => {
     }
   });
 
-  it('refuses a signature that is not 65 bytes', () => {
-    try {
-      packSignatures([accountA.address], new Map([[accountA.address, '0x1234']]));
-      expect.unreachable('should have thrown');
-    } catch (err) {
-      expect((err as CliError).code).toBe('signature_malformed');
-    }
+  it('refuses a signature that is not 65 bytes', async () => {
+    await expect(
+      packVerifiedSignatures(
+        [accountA.address],
+        new Map([[accountA.address, '0x1234']]),
+        SAFE_TX_HASH,
+      ),
+    ).rejects.toMatchObject({ code: 'signature_malformed' });
   });
 });
 
@@ -601,6 +601,37 @@ describe('makeSafeTxService', () => {
     });
   });
 
+  it('posts the gas fields the hash was computed from', async () => {
+    // A proposal that pays: hashing zeros and posting these would file it under
+    // a hash its own body does not produce.
+    const paying: SafeTxInput = {
+      ...ADD_OWNER_TX,
+      safeTxGas: 21000n,
+      baseGas: 3000n,
+      gasPrice: 1000000000n,
+      gasToken: OWNER_B,
+      refundReceiver: OWNER_A,
+    };
+    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+    const service = makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+      chainId: CHAIN_ID,
+    });
+
+    const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: paying });
+
+    expect(calls[0]?.body).toMatchObject({
+      safeTxGas: '21000',
+      baseGas: '3000',
+      gasPrice: '1000000000',
+      gasToken: OWNER_B,
+      refundReceiver: OWNER_A,
+      contractTransactionHash: safeTxHash,
+    });
+    expect(safeTxHash).toBe(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: paying }));
+  });
+
   it('defaults the hash to Base mainnet', async () => {
     const { fetchImpl } = fakeFetch([{ status: 201, body: {} }]);
     const { safeTxHash } = await makeSafeTxService({
@@ -740,6 +771,43 @@ describe('makeSafeTxService', () => {
     } catch (err) {
       expect((err as CliError).code).toBe('safe_tx_hash_mismatch');
     }
+  });
+
+  it('refuses a record for a different hash than the route named', async () => {
+    // Self-consistent on its own terms — the fields reproduce its hash — but it
+    // is not the proposal the caller asked for.
+    const other = recordFor(8);
+    const { fetchImpl } = fakeFetch([{ body: other }]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
+        SAFE,
+        RECORD_JSON.safeTxHash,
+      );
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_wrong_transaction');
+      expect((err as CliError).message).toContain(RECORD_JSON.safeTxHash);
+      expect((err as CliError).message).toContain(other.safeTxHash);
+    }
+  });
+
+  it('refuses to confirm when the read answers a different proposal', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      { body: recordFor(8) },
+      { status: 201, body: {} },
+    ]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).confirm({
+        safe: SAFE,
+        safeTxHash: RECORD_JSON.safeTxHash,
+        signature: '0xdead',
+      });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_wrong_transaction');
+    }
+    // The POST never happened: no signature was filed against another proposal.
+    expect(calls.map((call) => call.method)).toEqual(['GET']);
   });
 
   it('turns a non-2xx into a CliError carrying the status and the body text', async () => {

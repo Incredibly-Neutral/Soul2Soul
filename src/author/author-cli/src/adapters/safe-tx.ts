@@ -8,10 +8,10 @@
 //
 // Two halves, deliberately separate:
 //
-//   the hashing (computeSafeTxHash, packSignatures, packVerifiedSignatures,
-//   addOwnerWithThresholdData, execTransactionArgs) is pure and offline. A wrong hash or a wrong signature
-//   encoding fails on chain with no explanation, so it is pinned by tests
-//   rather than discovered in production.
+//   the hashing (computeSafeTxHash, packVerifiedSignatures,
+//   addOwnerWithThresholdData, execTransactionArgs) is pure and offline. A wrong
+//   hash or a wrong signature encoding fails on chain with no explanation, so it
+//   is pinned by tests rather than discovered in production.
 //
 //   the transport (makeSafeTxService) is HTTP only. It never reads chain state:
 //   the nonce, the owners and the threshold come from the caller, so a queue
@@ -44,8 +44,12 @@ import { CliError, describeError, UsageError } from '../lib/errors';
 /** Safe v1.4.1 CompatibilityFallbackHandler on Base (paired with the singleton). */
 export const SAFE_FALLBACK_HANDLER: Address = '0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99';
 
-/** Base mainnet. The service is per-chain and the CLI authors on Base only. */
-const SAFE_TX_CHAIN_ID = 8453;
+/**
+ * Base mainnet. The service is per-chain and the CLI authors on Base only, so
+ * this is the one place the id is written: `signer-store` imports it for the
+ * commands' chain reads and every hash this module computes defaults to it.
+ */
+export const SAFE_TX_CHAIN_ID = 8453;
 
 // ===========================================================================
 // The transaction the Safe will execute
@@ -194,31 +198,20 @@ export function addOwnerWithThresholdData(owner: Address, threshold: number): He
  * `keccak256("\x19Ethereum Signed Message:\n32" || safeTxHash)` with `v - 4` —
  * and reads any other `v` as a signature over the digest itself.
  *
- * INVARIANT: every signature passed here is a *message* signature over the
- * safeTxHash, the scheme `s2s signer confirm` produces. Each `v` is therefore
- * emitted as 31/32, and an input that already carries 31/32 keeps it. Both a
- * message signature and a typed-data signature arrive from a wallet as 27/28,
- * so this function cannot tell them apart and cannot prove the invariant. When
- * the signatures come from elsewhere — the service's `confirmations` array —
- * use `packVerifiedSignatures`, which recovers each one against its owner and
- * fails instead of emitting a signature the Safe will reject.
- *
- * Order is by address, not by the order the confirmations arrived: the Safe
- * walks the list and requires each recovered owner to be strictly greater than
- * the previous, so out of order is `GS026`.
- */
-export function packSignatures(signers: Address[], signatures: Map<Address, Hex>): Hex {
-  return pack(signers, signatures, (signer) => (signer.parity === 0 ? 31 : 32));
-}
-
-/**
- * `packSignatures` with the scheme flag proved rather than assumed.
- *
+ * The scheme is proved, not assumed: a `signMessage` signature and a typed-data
+ * signature both arrive from a wallet as 27/28, so the byte alone says nothing.
  * Each signature is recovered over the digest and, failing that, over the
  * prefixed digest, and the `v` byte that made it recover is the one emitted. A
  * signature that recovers to neither is refused: packing it would produce a
  * transaction the Safe rejects with `GS026`, with nothing said about which
  * owner was wrong. Needs a secp256k1 recovery per owner, hence async.
+ *
+ * Order is by address, not by the order the confirmations arrived: the Safe
+ * walks the list and requires each recovered owner to be strictly greater than
+ * the previous, so out of order is `GS026`.
+ *
+ * This is the only packer exported: an unchecked pack has no caller, and the
+ * one caller that packs (`s2s signer confirm`) must prove every signature.
  */
 export async function packVerifiedSignatures(
   signers: Address[],
@@ -456,15 +449,21 @@ function textOf(value: unknown): string | undefined {
  * Safe reverts `GS026` without naming the mistake — so the label is checked
  * here, at the boundary, and a disagreement is refused.
  *
- * `requireSafe` is for the hash-keyed reads: on a list the Safe-scoped URL has
- * already proved the label, on a single read only the field can.
+ * `requireSafe` and `safeTxHash` are for the hash-keyed reads: on a list the
+ * Safe-scoped URL has already proved the label, on a single read only the field
+ * can — and the hash-keyed URL names the transaction, so a record for another
+ * hash must not be handed back as the one that was asked for. The hash is the
+ * only identity `s2s signer confirm` has, and a self-consistent record for a
+ * different proposal would pass every other check: it is refused here, at the
+ * boundary, before it can be signed.
  */
 function toRecord(
   raw: unknown,
   safe: Address,
   chainId: number,
-  requireSafe = false,
+  opts: { requireSafe?: boolean; safeTxHash?: Hex } = {},
 ): SafeTxRecord {
+  const requireSafe = opts.requireSafe === true;
   const source = (raw ?? {}) as Record<string, unknown>;
   const claimed = textOf(source.safe);
   if (claimed !== undefined && claimed.toLowerCase() !== safe.toLowerCase()) {
@@ -527,6 +526,18 @@ function toRecord(
   };
 
   assertRecordHash(record, chainId);
+  const requested = opts.safeTxHash;
+  if (requested !== undefined && record.safeTxHash.toLowerCase() !== requested.toLowerCase()) {
+    const answered =
+      record.safeTxHash.length === 0
+        ? 'a transaction that carries no safeTxHash'
+        : `transaction ${record.safeTxHash}`;
+    throw new CliError(
+      `the service answered a read for ${requested} with ${answered} — signing it would confirm a different proposal`,
+      1,
+      'safe_tx_wrong_transaction',
+    );
+  }
   return record;
 }
 
@@ -660,15 +671,11 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
         singleton: SAFE_L2_SINGLETON,
         fallbackHandler: SAFE_FALLBACK_HANDLER,
         implementationVersion: info.version ?? '1.4.1',
-        // Whatever the caller declares. The service treats this as truth in
-        // `Safe.getInfo` and the UI's module tab, so it is not ours to invent:
-        // an author Safe is an ERC-4337 account with the Safe4337Module
-        // enabled, and a caller that knows the module passes it here rather
-        // than having this function assert an empty set.
         // Omitted, not defaulted: the service serves this list as the Safe's
         // real module set, and an author Safe is an ERC-4337 account with the
         // Safe4337Module enabled. Asserting `[]` would be a claim about someone
-        // else's Safe that this function cannot check.
+        // else's Safe that this function cannot check; a caller that knows the
+        // module set passes it here.
         ...(info.modules === undefined ? {} : { modules: info.modules }),
         delegate: safe,
       });
@@ -678,6 +685,13 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
      * Queue a transaction for the other owners. The signature is the service's
      * placeholder `0x`: the proposer's own signature is a confirmation, sent
      * separately, so a proposal and a confirmation are never the same request.
+     *
+     * The gas fields are the transaction's own, exactly as the hash was
+     * computed from them: the CLI proposes zeros, but a caller that passes a
+     * nonzero `safeTxGas` or a paying `gasToken` gets a body whose
+     * `contractTransactionHash` it still reproduces. Posting zeros here while
+     * hashing the caller's values would file a proposal under a hash its own
+     * fields do not produce.
      */
     propose: async ({ safe, sender, tx }): Promise<{ safeTxHash: Hex }> => {
       const safeTxHash = computeSafeTxHash({ chainId, safe, tx });
@@ -686,11 +700,11 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
         value: tx.value.toString(),
         data: tx.data,
         operation: tx.operation,
-        safeTxGas: '0',
-        baseGas: '0',
-        gasPrice: '0',
-        gasToken: ZERO_ADDRESS,
-        refundReceiver: ZERO_ADDRESS,
+        safeTxGas: (tx.safeTxGas ?? 0n).toString(),
+        baseGas: (tx.baseGas ?? 0n).toString(),
+        gasPrice: (tx.gasPrice ?? 0n).toString(),
+        gasToken: tx.gasToken ?? ZERO_ADDRESS,
+        refundReceiver: tx.refundReceiver ?? ZERO_ADDRESS,
         nonce: tx.nonce,
         contractTransactionHash: safeTxHash,
         sender,
@@ -718,14 +732,16 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
     /**
      * One queued transaction. The route names the hash, not the Safe, so the
      * record's own `safe` is the only thing that ties it to the Safe the caller
-     * asked about: it is required here, and a disagreement is refused.
+     * asked about: it is required here, and a disagreement is refused. The same
+     * goes for the hash: the record that comes back must be the one the URL
+     * names.
      */
     get: async (safe, safeTxHash): Promise<SafeTxRecord> =>
       toRecord(
         await json('GET', `/api/v1/multisig-transactions/${safeTxHash}/`),
         safe,
         chainId,
-        true,
+        { requireSafe: true, safeTxHash },
       ),
 
     /**
@@ -739,7 +755,7 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
         await json('GET', `/api/v1/multisig-transactions/${safeTxHash}/`),
         safe,
         chainId,
-        true,
+        { requireSafe: true, safeTxHash },
       );
       await json('POST', `/api/v1/multisig-transactions/${safeTxHash}/confirmations/`, {
         signature,
