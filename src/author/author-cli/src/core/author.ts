@@ -21,7 +21,6 @@ import {
   revokedPathFor,
   runFilecoinLeg,
   subdomainOf,
-  toDidEthr,
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
 import type { ParsedNote } from '@s2s/soul2soul-shared';
@@ -185,9 +184,9 @@ export async function authorWrite(
   // Refuse a silent downgrade (encrypted genesis → plaintext body).
   await guardEncryptionDowngrade(ctx, parsed, notePath, opts);
 
-  // The author id is the author Safe, not the EOA — that is what the plugin
-  // writes (`did:ethr:${author.safe}`) and what the manuscript's owner is.
-  // The proof.signer inside the item still records the EOA that signed it.
+  // The author id is the author Safe's bare address, not the EOA — that is what
+  // the plugin writes and what the manuscript's owner is. The proof.signer
+  // inside the item still records the EOA that signed it.
   // Resolved before the service so an on-chain append can be sent by the Safe.
   const author = await authorSafeState(ctx);
   if (!author.deployed) {
@@ -265,7 +264,7 @@ export async function authorWrite(
     { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
     ctx.signer,
     encryptFn,
-    toDidEthr(author.address),
+    author.address,
   );
 
   const objectId = parsed.genesis ?? signedItem.objectId;
@@ -285,8 +284,9 @@ export async function authorWrite(
 
   // Frontmatter write-back: genesis+author+creation_date on first publish;
   // modified_date and the last upload's CID always (the CID is what `offer`
-  // offers on-chain). The author is written as a bare address — the DID form
-  // (`did:ethr:0x…`) is the manuscript's, not the note's.
+  // offers on-chain). The author is written as the Safe's bare address. A note
+  // pinned before the change carries `did:ethr:0x…` there instead; the write
+  // below rewrites it to the bare form on its next publish.
   const modified = new Date().toISOString().slice(0, 19);
   const updates: Record<string, string | boolean> = {
     modified_date: modified,
@@ -313,7 +313,8 @@ export async function authorWrite(
   // Format migration: a `did:ethr:` author is rewritten to its bare address,
   // whatever address it is (this is a spelling change, not a re-attribution).
   // Never on the first publish, where the genesis author above is authoritative
-  // and a stale declared one would otherwise win.
+  // and a stale declared one would otherwise win. Read paths strip the same
+  // prefix for the same reason.
   const declaredAuthor = nonEmptyString(parsed.frontmatter['author']);
   if (parsed.genesis && declaredAuthor !== undefined && /^did:ethr:/i.test(declaredAuthor)) {
     updates.author = declaredAuthor.replace(/^did:ethr:/i, '');
@@ -837,10 +838,11 @@ export async function revokeContent(
 // ===========================================================================
 
 /**
- * The frontmatter `author:` is the author Safe (`did:ethr:0x…`). A note whose
- * recorded author is a different address can still be *uploaded*, but the module
- * will only accept the write from its `genesisAuthor`, so say so up front rather
- * than let `OnlySafe()` explain it after a failed send.
+ * The frontmatter `author:` is the author Safe's bare address; a pre-change
+ * note has it as `did:ethr:0x…`, so the prefix is stripped before comparing.
+ * A note whose recorded author is a different address can still be *uploaded*,
+ * but the module will only accept the write from its `genesisAuthor`, so say so
+ * up front rather than let `OnlySafe()` explain it after a failed send.
  */
 function warnOnAuthorMismatch(
   ctx: CliContext,

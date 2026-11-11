@@ -45,7 +45,7 @@ describe('PetNameStore (local-only pet names)', () => {
     expect(s.get('0xABC123')).toBe('casey');
   });
 
-  it('collides did:ethr-prefixed and bare addresses to the same name', () => {
+  it('resolves a pre-change did:ethr-prefixed author to the bare address name', () => {
     const s = new PetNameStore();
     s.set('did:ethr:0xAbC123', 'casey');
     expect(s.get('0xabc123')).toBe('casey');

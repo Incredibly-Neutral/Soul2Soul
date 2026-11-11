@@ -158,7 +158,7 @@ describe('pet-name', () => {
     );
   });
 
-  it('strips the did:ethr prefix from display and title', async () => {
+  it('strips a pre-change did:ethr prefix from display and title', async () => {
     const el = await mountLit<PetName>('pet-name', {
       value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
     });
@@ -167,7 +167,7 @@ describe('pet-name', () => {
     expect(text.title).toBe('0x1234567890abcdef1234567890abcdef12345678');
   });
 
-  it('copies the bare address without the did:ethr prefix', async () => {
+  it('copies the bare address for a pre-change did:ethr author', async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },

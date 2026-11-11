@@ -91,7 +91,8 @@ export class FilecoinStorageView extends ItemView {
         return;
       }
 
-      // Use the author's DID if available, otherwise the EOA
+      // Storage is listed for the active author's EOA, which signs the uploads.
+      // The author Safe is the item's author, not the Filecoin piece's owner.
       const identity = this.ctrlr.user?.eoa || "";
       if (!identity) {
         new Notice("No active 0xObsidian user — cannot load Filecoin storage");

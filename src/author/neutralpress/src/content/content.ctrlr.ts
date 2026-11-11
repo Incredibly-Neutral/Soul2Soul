@@ -9,7 +9,6 @@ import {
 	buildSignedContentItem,
 	type S2SContentItemV2,
 	noOpEncrypt,
-	toDidEthr,
 } from '@s2s/soul2soul-shared';
 
 /**
@@ -276,9 +275,11 @@ export class ContentController implements IContentController {
 				},
 				signer,
 				noOpEncrypt,
-				// Author is the Safe address (on-chain msg.sender).
-				// The EOA that signs is a Safe owner, verified off-chain.
-				toDidEthr(baseAccount.address),
+				// Author is the author Safe's bare address (on-chain msg.sender).
+				// The EOA that signs is a Safe owner, verified off-chain. A note
+				// published before the change has `did:ethr:0x…` in its frontmatter
+				// instead; the address is the identity, the prefix was decoration.
+				baseAccount.address,
 			);
 
 			console.log('publishing:', signedItem);
