@@ -10,7 +10,8 @@ import {
   type ProofCanonicalization,
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { addressOf } from '../libs/address';
+import { ADDRESS_RE } from '../libs/address';
+import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
 // Tree-mutation integrity gate — PKP provenance verification
 // Canonicalisation + HTML extraction are shared with render/metadata.ts
@@ -57,13 +58,14 @@ function extractSchema(html: string): any {
  *                        OUTSIDE the signed bytes.
  *  - `identifier`      — schema.identifier (the genesis the page claims).
  *  - `authorDid`       — the claimed author, as an ADDRESS: read from whichever
- *                        PropertyValue on the author node holds one, through
- *                        shared's `authorAddress()` (via `addressOf`). A page
- *                        pinned before the author became bare names the same
- *                        address under the earlier term, so the reader selects
- *                        by value shape and never by term: the identity is the
- *                        address, not the term or the form the value was pinned
- *                        in. (Unsigned on a LEGACY page.)
+ *                        PropertyValue on the author node names one, through
+ *                        shared's `accountAddress()`. A page rendered today
+ *                        names the address inside a CAIP-10 account id; a page
+ *                        pinned before that names it bare or under a retired
+ *                        prefix. The reader therefore selects by value shape and
+ *                        never by term: the identity is the address, not the
+ *                        term or the form the value was pinned in. (Unsigned on
+ *                        a LEGACY page.)
  *  - `sha256`          — the claimed digest of the hashed body region
  *                        (unsigned on a LEGACY page).
  */
@@ -76,16 +78,19 @@ export interface PageIdentity {
 }
 
 /**
- * The bare address an author node's `identifier` holds, whichever PropertyValue
- * carries it. Selection is by value shape, not by term: a page pinned before the
- * author became bare holds the address under the earlier term.
+ * The address an author node names, whichever PropertyValue carries it. Each
+ * value goes through shared's `accountAddress()`: a CAIP-10 account id names its
+ * address, a bare address names itself, and a retired prefix is stripped. The
+ * node may hold one PropertyValue or a list, and the list may carry values that
+ * name no address at all — those are skipped, never returned.
  */
 const authorAddressOf = (author: any): string | null => {
   const identifiers = Array.isArray(author?.identifier) ? author.identifier : [author?.identifier];
   for (const identifier of identifiers) {
     const value = typeof identifier === 'string' ? identifier : identifier?.value;
-    const address = addressOf(value);
-    if (address !== null) return address;
+    if (typeof value !== 'string') continue;
+    const address = accountAddress(value);
+    if (ADDRESS_RE.test(address)) return address;
   }
   return null;
 };

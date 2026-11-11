@@ -9,10 +9,17 @@ import {
   PROOF_CANONICALIZATION_JCS,
   stripUndefinedDeep,
 } from '@s2s/soul2soul-shared/lit-actions';
-// The one identity normaliser in press: shared's `authorAddress()`. This page
+// The one identity normaliser in press: shared's `accountAddress()`. This page
 // builder is the last place a pre-change identity can leave for the pinned
 // page, so it is normalised here, at the emission point.
-import { authorAddress } from '../../../../shared/dist/manuscript/identity/author-address';
+import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
+
+/**
+ * Base mainnet. The page names the author's account on this chain, and the PKP's
+ * `verificationMethod` is the same chain — one constant so the two cannot name
+ * different chains.
+ */
+const CHAIN_ID = 8453;
 
 /**
  * `S2SContentInfo` plus the v2 signed dates. Shared's interface predates the v2
@@ -84,17 +91,18 @@ export const addAndSignMetadata = async (
     // Author (provenance). The author's EIP-712 proof is nested HERE, not on
     // the top-level proof — the top-level proof is the PKP's DataIntegrityProof.
     //
-    // The `propertyID` names what the value is: the address the page names as
-    // its author. The value is the bare address, whatever form the item was
-    // pinned in, so a page rendered from a pre-change item names the same
-    // address its signature covers.
+    // The identifier is a CAIP-10 account id: the chain, then the author Safe's
+    // address exactly as the item carries it (a checksummed address is emitted
+    // checksummed). `name` says what the account is, so a reader does not have
+    // to infer it from the shape of the value.
     if (contentInfo?.author) {
       const author: Record<string, unknown> = {
         '@type': 'Person',
         identifier: {
           '@type': 'PropertyValue',
-          propertyID: 'address',
-          value: authorAddress(contentInfo.author.address),
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:${CHAIN_ID}:${accountAddress(contentInfo.author.address)}`,
         },
       };
 
@@ -125,7 +133,7 @@ export const addAndSignMetadata = async (
 
     // Publisher. Same rule as the author: the terms name the value (the
     // signer's address, the publication Safe's address), the values are bare
-    // addresses.
+    // addresses. Its shape is not settled yet; the reader does not depend on it.
     if (contentInfo?.publisher) {
       schema.publisher = {
         '@type': 'Organization',
@@ -133,7 +141,7 @@ export const addAndSignMetadata = async (
           {
             '@type': 'PropertyValue',
             propertyID: 'address',
-            value: authorAddress(contentInfo.publisher.address),
+            value: accountAddress(contentInfo.publisher.address),
           },
           ...(contentInfo.publisher.safe
             ? [
@@ -234,7 +242,7 @@ export const addAndSignMetadata = async (
       type: 'DataIntegrityProof',
       cryptosuite: 'ecdsa-secp256k1-2019',
       created: timestamp,
-      verificationMethod: `did:pkh:eip155:8453:${pkpAddress}`,
+      verificationMethod: `did:pkh:eip155:${CHAIN_ID}:${pkpAddress}`,
       proofPurpose: 'assertionMethod',
       canonicalization: PROOF_CANONICALIZATION_JCS,
     };

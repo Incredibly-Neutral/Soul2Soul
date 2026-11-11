@@ -587,9 +587,15 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
   actions (`lens.factory.ts` → `module.factory.ts`). Lens remains only on the authoring side.
 - **Provenance (GAP-1):** `render/main.ts` builds the metadata from real signed data (`author.address`
   from the signed `S2SPublicContent`, `contentCid = body.id`, `isBasedOn.genesis = toBytes32Id(body.parent)`);
-  PKP-signed in `render/metadata.ts`. The identifiers are JSON-LD `PropertyValue` nodes:
-  `propertyID: 'address'` for the author and publisher, `'address:safe'` for the publication Safe.
-  GAP-1's only remaining tail is the `S2SContentInfo` type-rename.
+  PKP-signed in `render/metadata.ts`. The author identifier is a JSON-LD `PropertyValue` node
+  naming a CAIP-10 account id: `propertyID: 'CAIP-10'`, `name: 'Safe smart account'`,
+  `value: 'eip155:8453:<authorSafeAddress>'` — the address exactly as the item carries it, chain
+  id from one constant in `render/metadata.ts` (the same one the PKP `verificationMethod` uses).
+  The publisher identifiers stay `propertyID: 'address'` (the signer's address) and
+  `'address:safe'` (the publication Safe). `update/verify.ts` reads the author identity through
+  shared's `accountAddress()` and selects by value shape, not by term, so a page pinned before
+  either change still reads as the same address. GAP-1's only remaining tail is the
+  `S2SContentInfo` type-rename.
   The A3 trust TODO plans adding the genesis as an explicit signed field (currently implicit via
   `contentUrl`'s `body.cid || body.id` fallback).
 - **Canonicalization (GAP-2):** `render/metadata.ts` sorts only top-level keys.
