@@ -1,0 +1,191 @@
+// ============================================================================
+// The shared half of `s2s signer` — chain reads, the service, the store name,
+// and the seam the three commands take.
+//
+// The three commands are store commands: they run without a `CliContext`, so
+// nothing here may build one. The config is loaded directly (`loadConfig`), the
+// L2 endpoint comes from `buildRpcEndpoints` like `author new` does, and the
+// Safe Transaction Service is built from `config.safeTx` with the default
+// `fetch`.
+//
+// Two facts drive the shape:
+//
+//   a Safe is a fact on chain. `signer add` proposes an owner of a Safe that is
+//   already deployed, so the owners, the threshold and the nonce are read, never
+//   assumed, and a Safe with no bytecode is refused before a key is filed.
+//
+//   the hash depends on the chain id. The service computes it under Base
+//   mainnet's id unless told otherwise, and a hash for another chain is
+//   rejected as a mismatch — so the one id lives here and both the local hash
+//   and the service take it.
+//
+// Every read and every send goes through `SignerDeps`, so a test supplies a
+// fake and opens no socket.
+// ============================================================================
+
+import { createPublicClient, createWalletClient, getAddress, http, type Address, type Hex } from 'viem';
+import { base } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+
+import { safeAbi } from '@s2s/soul2soul-shared';
+
+import { makeSafeTxService, type SafeTxService } from '../adapters/safe-tx';
+import { readSafeOwners } from '../core/author-contracts';
+import { activeAuthorRecord, authorsFilePath, readAuthors } from '../core/authors';
+import { givenSafeInUse } from '../core/author-safe';
+import { loadConfig, type CliConfig } from '../core/config';
+import { UsageError } from '../lib/errors';
+import { buildRpcEndpoints } from '../adapters/rpc';
+import { resolveKeySource, type KeySource } from './author-new';
+
+/**
+ * The chain a safeTxHash is computed for. Base mainnet is the only chain this
+ * CLI authors on (`SAFE_L2_SINGLETON` is pinned to it), and the service indexes
+ * per-chain, so a hash computed under another id is rejected as a mismatch.
+ */
+export const SIGNER_CHAIN_ID = 8453;
+
+/** What the chain says about a Safe, in the form the commands decide on. */
+export interface ChainSafe {
+  deployed: boolean;
+  owners: Address[];
+  threshold: number;
+  /** The Safe's next nonce: the one a new proposal must carry. */
+  nonce: number;
+}
+
+/**
+ * A Safe address from user input: 20 bytes of hex, checksummed. Anything else
+ * is a usage error, because the alternative is a chain read that answers
+ * nothing and an owner proposal against the void.
+ */
+export function asSafeAddress(value: string, source = '<safe>'): Address {
+  const trimmed = value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) {
+    throw new UsageError(`${source} is not an address: '${value}'`);
+  }
+  return getAddress(trimmed.toLowerCase());
+}
+
+/**
+ * A one-line reason for a note or a warning: the message and its code, without
+ * the error class name that `describeError` prefixes.
+ */
+export function reasonOf(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && code ? `${err.message} [${code}]` : err.message;
+}
+
+/** `0x1234…abcd` — for prose about an address, never for a hash to be typed. */
+export function shortAddress(address: string): string {
+  return address.length > 14 ? `${address.slice(0, 10)}…${address.slice(-4)}` : address;
+}
+
+/** The default pet name for a newly filed signer: six hex digits of its EOA. */
+export function defaultSignerName(eoa: Address): string {
+  return `signer-${eoa.slice(2, 8).toLowerCase()}`;
+}
+
+/**
+ * The Safe the queue and confirm commands default to: the stored `given` Safe
+ * this config signs for, else the active record's recorded Safe. Undefined when
+ * the store has none, which is the caller's usage error to report.
+ */
+export function resolveSignerSafe(config: CliConfig): Address | undefined {
+  const inUse = givenSafeInUse(config);
+  if (inUse) return inUse;
+  const stored = activeAuthorRecord(readAuthors())?.safe;
+  if (!stored) return undefined;
+  try {
+    return asSafeAddress(stored);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The L2 endpoint every signer command reads and sends on. */
+export function l2Rpc(config: CliConfig): string {
+  const rpcUrl = buildRpcEndpoints(config).L2[0];
+  if (!rpcUrl) {
+    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+  return rpcUrl;
+}
+
+// ===========================================================================
+// Chain reads
+// ===========================================================================
+
+/** Whether an address carries bytecode — a deployed Safe, or a contract owner. */
+export async function readCode(rpcUrl: string, address: Address): Promise<boolean> {
+  const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  const code = await client.getCode({ address });
+  return code !== undefined && code !== '0x';
+}
+
+/**
+ * Owners, threshold and nonce of a deployed Safe. An address with no bytecode
+ * answers nothing, so it is reported as `deployed: false` with empty fields
+ * rather than as three failed calls.
+ */
+export async function readChainSafe(rpcUrl: string, safe: Address): Promise<ChainSafe> {
+  if (!(await readCode(rpcUrl, safe))) {
+    return { deployed: false, owners: [], threshold: 0, nonce: 0 };
+  }
+  const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  const [{ owners, threshold }, nonce] = await Promise.all([
+    readSafeOwners({ safe, rpcUrl }),
+    client.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' }),
+  ]);
+  return { deployed: true, owners, threshold, nonce: Number(nonce) };
+}
+
+/** `execTransaction` sent as a plain transaction: the EOA pays its own gas. */
+async function sendFromEoa(input: {
+  rpcUrl: string;
+  privateKey: Hex;
+  to: Address;
+  data: Hex;
+}): Promise<Hex> {
+  const account = privateKeyToAccount(input.privateKey);
+  const wallet = createWalletClient({ chain: base, transport: http(input.rpcUrl) });
+  return wallet.sendTransaction({ account, to: input.to, data: input.data });
+}
+
+// ===========================================================================
+// The seam
+// ===========================================================================
+
+/**
+ * Everything the signer commands do outside the process. Tests replace all of
+ * it; production uses `signerDeps()` with no overrides.
+ */
+export interface SignerDeps {
+  config(): CliConfig;
+  service(config: CliConfig): SafeTxService;
+  readSafe(rpcUrl: string, safe: Address): Promise<ChainSafe>;
+  readCode(rpcUrl: string, address: Address): Promise<boolean>;
+  /** Send a plain transaction from the key and return its hash. */
+  send(input: { rpcUrl: string; privateKey: Hex; to: Address; data: Hex }): Promise<Hex>;
+  keySource(flags: Record<string, string | boolean>): KeySource;
+  authorsPath(): string;
+  /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
+  chainId: number;
+}
+
+const DEFAULT_SIGNER_DEPS: SignerDeps = {
+  config: () => loadConfig(),
+  service: (config) => makeSafeTxService({ config, chainId: SIGNER_CHAIN_ID }),
+  readSafe: readChainSafe,
+  readCode,
+  send: sendFromEoa,
+  keySource: (flags) => resolveKeySource(flags),
+  authorsPath: () => authorsFilePath(),
+  chainId: SIGNER_CHAIN_ID,
+};
+
+/** The seam with the given overrides applied — the only constructor callers use. */
+export function signerDeps(overrides: Partial<SignerDeps> = {}): SignerDeps {
+  return { ...DEFAULT_SIGNER_DEPS, ...overrides };
+}
