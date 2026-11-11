@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { decodeFunctionData, size, verifyMessage, type Address, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { safeAbi } from '@s2s/soul2soul-shared';
@@ -29,7 +30,9 @@ const EOA_SIGNER = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 const KEY_STRANGER = `0x${'00'.repeat(31)}05`;
 
 const SAFE: Address = '0x1111111111111111111111111111111111111111';
-const OWNER_B: Address = '0x2222222222222222222222222222222222222222';
+/** A second owner with a key, so its confirmation can actually be recovered. */
+const KEY_B: Hex = `0x${'00'.repeat(31)}02`;
+const OWNER_B: Address = privateKeyToAccount(KEY_B).address;
 const RPC = 'https://rpc.example';
 const HASH: Hex = `0x${'11'.repeat(32)}`;
 /** What the fake `send` answers with — one transaction hash, asserted on. */
@@ -71,8 +74,10 @@ function capture(): Captured {
   return { out, results, human };
 }
 
-/** A 65-byte confirmation from another owner; Safe reads v=28 as eth_sign. */
-const OTHER_SIGNATURE: Hex = `0x${'ab'.repeat(64)}1c`;
+/** Owner B's `signMessage` over the hash — a confirmation the packer can prove. */
+async function signedByB(): Promise<Hex> {
+  return privateKeyToAccount(KEY_B).signMessage({ message: { raw: HASH } });
+}
 
 function baseRecord(overrides: Partial<SafeTxRecord> = {}): SafeTxRecord {
   return {
@@ -174,7 +179,7 @@ function args(argv: string[]): ParsedArgs {
 describe('s2s signer confirm', () => {
   it('signs the hash and executes when the confirmation meets the threshold', async () => {
     const fake = fakeService(
-      baseRecord({ confirmations: [{ owner: OWNER_B, signature: OTHER_SIGNATURE }] }),
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
     const sent: Sent[] = [];
     const captured = capture();
@@ -201,7 +206,8 @@ describe('s2s signer confirm', () => {
     const packed = execArgs[9] ?? '0x';
     // two owners signed: 2 × 65 bytes, ascending address order, v bumped to 31/32
     expect(size(packed)).toBe(130);
-    expect(packed.slice(2, 66)).toBe(OTHER_SIGNATURE.slice(2, 66));
+    // ascending address order, so owner B's signature is the first 65 bytes
+    expect(packed.slice(2, 66)).toBe((await signedByB()).slice(2, 66));
     expect(['1f', '20']).toContain(packed.slice(-2));
 
     expect(captured.results[0]).toMatchObject({
@@ -221,7 +227,7 @@ describe('s2s signer confirm', () => {
 
   it('executes on its own signature when the service has not indexed it yet', async () => {
     const fake = fakeService(
-      baseRecord({ confirmations: [{ owner: OWNER_B, signature: OTHER_SIGNATURE }] }),
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
       { indexConfirmation: false },
     );
     const sent: Sent[] = [];
@@ -237,9 +243,30 @@ describe('s2s signer confirm', () => {
     expect(captured.results[0]).toMatchObject({ confirmations: 2, executed: true });
   });
 
+  it('refuses to execute a confirmation that recovers to nobody, before spending gas', async () => {
+    const fake = fakeService(
+      baseRecord({
+        confirmations: [{ owner: OWNER_B, signature: `0x${'ab'.repeat(64)}1c` }],
+      }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await expect(
+      runSignerConfirm(
+        captured.out,
+        args(['signer', 'confirm', HASH, '--safe', SAFE]),
+        deps(fake, { sent }),
+      ),
+    ).rejects.toMatchObject({ code: 'signature_not_owner' });
+    // the confirmation reached the service; nothing was sent from the EOA
+    expect(fake.confirmed).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+  });
+
   it('posts the confirmation and stops when --no-execute is given', async () => {
     const fake = fakeService(
-      baseRecord({ confirmations: [{ owner: OWNER_B, signature: OTHER_SIGNATURE }] }),
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
     const sent: Sent[] = [];
     const captured = capture();
@@ -275,7 +302,7 @@ describe('s2s signer confirm', () => {
     const fake = fakeService(
       baseRecord({
         nonce: 8,
-        confirmations: [{ owner: OWNER_B, signature: OTHER_SIGNATURE }],
+        confirmations: [{ owner: OWNER_B, signature: await signedByB() }],
       }),
     );
     const sent: Sent[] = [];
@@ -359,7 +386,7 @@ describe('s2s signer confirm', () => {
 
   it('reports a refused script transaction from the EOA without pretending it landed', async () => {
     const fake = fakeService(
-      baseRecord({ confirmations: [{ owner: OWNER_B, signature: OTHER_SIGNATURE }] }),
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
     const captured = capture();
 

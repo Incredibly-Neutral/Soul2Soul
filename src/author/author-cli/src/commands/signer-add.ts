@@ -103,6 +103,11 @@ export async function runSignerAdd(
       const service = deps.service(config);
       // Idempotent: the service is told about a Safe it does not index, and left
       // alone when it already knows it.
+      // No `modules`: this CLI reads a Safe's owners, threshold and nonce, not
+      // its module set, and an author Safe is an ERC-4337 account with the
+      // Safe4337Module enabled — so `modules: []` would be a false claim about
+      // the Safe, not a default. The field stays unstated until something here
+      // can read `isModuleEnabled` for the module address.
       await service.register(safe, { owners: chain.owners, threshold: chain.threshold });
       safeTxHash = (await service.propose({ safe, sender: eoa, tx })).safeTxHash;
       proposed = true;

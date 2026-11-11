@@ -7,9 +7,12 @@
 // still the Safe's own — send `execTransaction` on chain from the EOA.
 //
 // The signature is `signMessage` over the raw 32 bytes, which is the eth_sign
-// scheme the Safe reads from a `v` of 31/32 (`packSignatures` bumps it). A key
-// that signs a different digest produces a signature that recovers to somebody
-// else, and the Safe answers `GS026`.
+// scheme the Safe reads from a `v` of 31/32. Packing is `packVerifiedSignatures`,
+// not `packSignatures`: it recovers every signature in the set against the
+// digest before sending, so a confirmation from another tool that signed a
+// different digest is refused here with `signature_not_owner` instead of
+// arriving at the Safe as `GS026` with no owner named. The packed list is the
+// proof that what is executed is what the owners signed.
 //
 // Everything is refused before anything is signed when it cannot work: a key
 // that is not an owner, a Safe with no bytecode, a proposal already executed, a
@@ -34,7 +37,7 @@ import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { authorEoa } from '../core/authors';
 import { hexKey } from '../core/config';
-import { execTransactionArgs, packSignatures } from '../adapters/safe-tx';
+import { execTransactionArgs, packVerifiedSignatures } from '../adapters/safe-tx';
 import {
   asSafeAddress,
   l2Rpc,
@@ -146,7 +149,7 @@ export async function runSignerConfirm(
   } else if (signing.length < required) {
     note = `${String(required - signing.length)} more confirmation${required - signing.length === 1 ? '' : 's'} needed`;
   } else {
-    const packed = packSignatures(signing, byOwner);
+    const packed = await packVerifiedSignatures(signing, byOwner, safeTxHash);
     const call = execTransactionArgs(after, packed);
     txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
     executed = true;
