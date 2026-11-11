@@ -53,6 +53,8 @@ progress goes to stderr.
 Top-level bin `s2s`; four groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), `config` (CLI settings), and `setup` (the
 guided first-run pass over those settings — see [Config file](#config-file-bring-your-own-infra)).
+The `signer` group is the fifth: a key that joins a Safe it did not create —
+[SPEC-author-signers](SPEC-author-signers.md).
 
 ```
 s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
