@@ -7,16 +7,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   activeAuthorRecord,
   addAuthor,
+  addSigner,
   authorEoa,
   authorsFilePath,
   findAuthor,
   findAuthorByKey,
   findAuthorName,
+  givenSafeOf,
+  isGivenSafe,
   isValidPetName,
   readAuthors,
+  rememberAuthorSafe,
   removeAuthor,
   writeAuthors,
   writeBackAuthorSafe,
+  type AuthorRecord,
   type AuthorsStore,
 } from '../src/core/authors';
 import { loadConfig, type LoadConfigOptions } from '../src/core/config';
@@ -271,6 +276,94 @@ describe('signing-key precedence', () => {
   });
 });
 
+describe('a given Safe', () => {
+  const SAFE = '0xAbCd00000000000000000000000000000000dEf1';
+  const SAFE_DERIVED = '0xAbCd00000000000000000000000000000000dEf2';
+  const KEY_C = `0x${'00'.repeat(31)}03`;
+
+  it('files a key into an existing Safe and records the provenance', () => {
+    const path = localPath('add-signer');
+    writeAuthors(store('zomi', { zomi: { privateKey: KEY_A, safe: null } }), path);
+
+    const filed = addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE }, path);
+    expect(filed).toEqual({ name: 'signer1', privateKey: KEY_B, safe: SAFE, safeSource: 'given' });
+
+    const stored = readAuthors(path);
+    // A new identity is the one you want next, same rule as `author new`.
+    expect(stored.active).toBe('signer1');
+    expect(stored.authors.signer1).toEqual({ privateKey: KEY_B, safe: SAFE, safeSource: 'given' });
+    expect(isGivenSafe(stored.authors.signer1)).toBe(true);
+    expect(givenSafeOf(stored.authors.signer1)).toBe(SAFE);
+    // The derived row is untouched: it has no provenance field at all.
+    expect(stored.authors.zomi).toEqual({ privateKey: KEY_A, safe: null });
+  });
+
+  it('rejects a taken name, a key filed elsewhere and a Safe already filed', () => {
+    const path = localPath('add-signer-collisions');
+    writeAuthors(store('zomi', { zomi: { privateKey: KEY_A, safe: null } }), path);
+    addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE }, path);
+
+    expect(() => addSigner({ name: 'ZOMI', privateKey: KEY_C, safe: SAFE_DERIVED }, path)).toThrow(
+      /author 'zomi' already exists/,
+    );
+    expect(() => addSigner({ name: 'other', privateKey: KEY_A, safe: SAFE_DERIVED }, path)).toThrow(
+      /already belongs to author 'zomi'/,
+    );
+    // One Safe, one author: the address compares case-insensitively.
+    expect(() =>
+      addSigner({ name: 'signer2', privateKey: KEY_C, safe: SAFE.toLowerCase() }, path),
+    ).toThrow(/is already filed under author 'signer1'/);
+    expect(readAuthors(path).authors.signer2).toBeUndefined();
+  });
+
+  it('reads a row without the field as derived', () => {
+    const record: AuthorRecord = { privateKey: KEY_A, safe: SAFE };
+    expect(isGivenSafe(record)).toBe(false);
+    expect(givenSafeOf(record)).toBeUndefined();
+    expect(isGivenSafe(undefined)).toBe(false);
+    expect(givenSafeOf(undefined)).toBeUndefined();
+    // `derived` may be spelled out; it still answers the same.
+    expect(isGivenSafe({ ...record, safeSource: 'derived' })).toBe(false);
+  });
+
+  it('drops a safeSource it does not recognise', () => {
+    const path = localPath('bogus-source');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        active: 'zomi',
+        authors: { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'borrowed' } },
+      }),
+    );
+    const record = readAuthors(path).authors.zomi;
+    expect(record).toEqual({ privateKey: KEY_A, safe: SAFE });
+    expect(isGivenSafe(record)).toBe(false);
+  });
+
+  it('never has its address replaced by a derived one', () => {
+    const path = localPath('given-write-back');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+
+    expect(writeBackAuthorSafe('zomi', SAFE_DERIVED, path)).toBe(false);
+    expect(readAuthors(path).authors.zomi?.safe).toBe(SAFE);
+
+    // The command path (`author address` / `init`) goes through the same guard.
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      storePath(),
+    );
+    rememberAuthorSafe({ name: 'zomi', source: 'store' }, SAFE_DERIVED, () => undefined);
+    expect(readAuthors(storePath()).authors.zomi).toEqual({
+      privateKey: KEY_A,
+      safe: SAFE,
+      safeSource: 'given',
+    });
+  });
+});
+
 describe('store command registry', () => {
   it('is the table cli.ts dispatches before the context is built', () => {
     // cli.ts looks these up by name and runs them without buildContext; the
@@ -428,6 +521,23 @@ describe('author commands', () => {
         { name: 'zomi', eoa: EOA_A, safe: '0xSafe', active: true },
         { name: 'bob', eoa: authorEoa(KEY_B), safe: null, active: false },
       ],
+    });
+  });
+
+  it('lists a given author by the Safe the store holds, with no salt', async () => {
+    const given = '0xAbCd00000000000000000000000000000000dEf9';
+    const path = storePath();
+    writeAuthors(
+      store('signer1', { signer1: { privateKey: KEY_B, safe: given, safeSource: 'given' } }),
+      path,
+    );
+    const sink = capture();
+    await authorList.run(sink.out, parseArgs([]));
+
+    expect(sink.results[0]).toEqual({
+      action: 'author.list',
+      active: 'signer1',
+      authors: [{ name: 'signer1', eoa: authorEoa(KEY_B), safe: given, active: true }],
     });
   });
 

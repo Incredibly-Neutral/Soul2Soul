@@ -14,6 +14,12 @@
 // reproduces exactly that derivation (same Safe version, same canonical
 // singleton/proxy-factory, same unmasked salt-nonce) so a CLI author is the
 // same identity as a plugin author.
+//
+// Not every author Safe is derived, though. `s2s signer add <safe>` files a key
+// as one owner of a Safe that already exists, and that address is a fact read
+// from the chain: there is no salt to predict it from and this CLI never
+// deploys it. Such a record is `given` (`core/authors.ts`), and every path here
+// that would re-derive the address branches on that provenance instead.
 // ============================================================================
 
 import { base } from 'viem/chains';
@@ -24,6 +30,7 @@ import { createSafeRunner, type SafeRunnerHandle } from '../adapters/tx-runner';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { bundlerEndpoints, type CliConfig } from './config';
+import { activeAuthorRecord, givenSafeOf, readAuthors } from './authors';
 import type { CliContext } from './context';
 
 /** Salt prefix 0xobsidian uses for an author's personal Safe. */
@@ -49,12 +56,89 @@ export interface AuthorSafeState {
   address: Address;
   /** The EOA that owns (and signs for) the Safe. */
   eoa: Address;
-  /** Salt the address is derived from (`s2s_0x…`). */
-  salt: string;
+  /**
+   * Salt the address is derived from (`s2s_0x…`); null when the Safe was given
+   * rather than derived, because no salt produces that address.
+   */
+  salt: string | null;
   /** Chain the author Safe is deployed on (0xobsidian deploys Base only). */
   chain: 'base';
   /** Whether bytecode already exists at the address. */
   deployed: boolean;
+}
+
+/** What the chain says about a `given` Safe: everything this CLI cannot derive. */
+export interface GivenSafeState {
+  deployed: boolean;
+  /** Signatures a userOp from this Safe needs. */
+  threshold: bigint;
+  owners: Address[];
+}
+
+/**
+ * Read a `given` Safe. The seam: `authorSafeState`, `createAuthorWriteRunner`
+ * and `ensureAuthorSafe` take one, so a test supplies a fake and touches no
+ * RPC.
+ */
+export type GivenSafeReader = (safe: Address) => Promise<GivenSafeState>;
+
+/** The two reads a given Safe needs; the address itself comes from the store. */
+const GIVEN_SAFE_READS_ABI = [
+  'function threshold() view returns (uint256)',
+  'function getOwners() view returns (address[])',
+].join('\n');
+
+/**
+ * Read a given Safe over the same pinned runner every author write uses, so the
+ * Safe version and EntryPoint cannot drift between reading and writing it. A
+ * read needs no bundler.
+ */
+export async function readGivenSafe(
+  safe: Address,
+  opts: { config: CliConfig; privateKey: `0x${string}`; eoa: Address; rpcUrl: string },
+): Promise<GivenSafeState> {
+  const runner = await createAuthorSafeRunner({
+    config: opts.config,
+    privateKey: opts.privateKey,
+    eoa: opts.eoa,
+    rpcUrl: opts.rpcUrl,
+    requireBundler: false,
+    safe,
+  });
+  const threshold = BigInt(
+    (await runner.genericRead(safe, GIVEN_SAFE_READS_ABI, 'threshold', [])) as bigint,
+  );
+  const owners = (await runner.genericRead(
+    safe,
+    GIVEN_SAFE_READS_ABI,
+    'getOwners',
+    [],
+  )) as Address[];
+  return { deployed: await runner.isDeployed(), threshold, owners };
+}
+
+/**
+ * The stored `given` Safe that this config signs for, or undefined.
+ *
+ * The key that owns a given Safe is part of the fact: when `S2S_PRIVATE_KEY` or
+ * a project config key shadows the store, the run is a different identity and
+ * its Safe is still derived. Only the store's own key gets the stored address.
+ */
+export function givenSafeInUse(config: CliConfig): Address | undefined {
+  const key = config.privateKey;
+  if (!key || config.author?.source !== 'store') return undefined;
+  return givenSafeForKey(key as `0x${string}`);
+}
+
+/**
+ * The `given` Safe stored for `privateKey`, whoever resolved that key. Every
+ * caller that is about to derive a Safe asks this first: a key filed as one
+ * owner of an existing Safe must never be handed a derived one to deploy.
+ */
+function givenSafeForKey(privateKey: `0x${string}`): Address | undefined {
+  const active = activeAuthorRecord(readAuthors());
+  if (!active || active.privateKey.toLowerCase() !== privateKey.toLowerCase()) return undefined;
+  return givenSafeOf(active);
 }
 
 /**
@@ -79,6 +163,11 @@ export interface AuthorSafeRunnerOptions {
    * sent), so the bundler is not required.
    */
   requireBundler: boolean;
+  /**
+   * A Safe the key was filed into. When set the runner connects to it with
+   * `connectToExistingSafe` and the salt never enters the address.
+   */
+  safe?: Address;
 }
 
 /**
@@ -113,7 +202,8 @@ export async function createAuthorSafeRunner(
     safeSingletonAddress: SAFE_L2_SINGLETON,
     safeProxyFactoryAddress: SAFE_PROXY_FACTORY,
   });
-  await runner.connectToFreshSafe(authorSafeSalt(eoa));
+  if (opts.safe) await runner.connectToExistingSafe(opts.safe);
+  else await runner.connectToFreshSafe(authorSafeSalt(eoa));
   return runner;
 }
 
@@ -137,7 +227,37 @@ export async function createAuthorWriteRunner(opts: {
   /** The Safe's owner and sole signer. Never the identity itself. */
   eoa: Address;
   rpcUrl: string;
+  /** A given Safe: connect to it instead of deriving one from the key. */
+  safe?: Address;
+  /** Seam for the threshold/owner read of a given Safe (tests). */
+  readSafe?: GivenSafeReader;
 }): Promise<SafeRunnerHandle> {
+  if (opts.safe) {
+    const safe = opts.safe;
+    const read =
+      opts.readSafe ??
+      ((target: Address) =>
+        readGivenSafe(target, {
+          config: opts.config,
+          privateKey: opts.config.privateKey as `0x${string}`,
+          eoa: opts.eoa,
+          rpcUrl: opts.rpcUrl,
+        }));
+    const state = await read(safe);
+    // A userOp from this runner carries one signature. That is enough only when
+    // the Safe needs one: above that, the write has to be proposed to the other
+    // owners, and guessing would send a userOp that reverts.
+    if (state.threshold > 1n) {
+      throw new UsageError(
+        `author Safe ${safe} needs ${state.threshold.toString()} signatures — a single-key userOp cannot meet that threshold; propose the write to the owners instead (s2s signer queue)`,
+      );
+    }
+    if (!state.owners.some((owner) => owner.toLowerCase() === opts.eoa.toLowerCase())) {
+      throw new UsageError(
+        `the signing key ${opts.eoa} is not an owner of author Safe ${safe} — an owner has to add it first (s2s signer queue)`,
+      );
+    }
+  }
   return createAuthorSafeRunner({
     config: opts.config,
     // The write runner is only built for the key the config resolved; a caller
@@ -146,6 +266,7 @@ export async function createAuthorWriteRunner(opts: {
     eoa: opts.eoa,
     rpcUrl: opts.rpcUrl,
     requireBundler: true,
+    ...(opts.safe ? { safe: opts.safe } : {}),
   });
 }
 
@@ -195,10 +316,35 @@ export async function predictAuthorSafe(target: AuthorSafeTarget): Promise<Autho
  * deployed yet. Reads one RPC (the Safe proxy creation code + bytecode check),
  * so this is not the offline `config get` path.
  */
-export async function authorSafeState(ctx: CliContext): Promise<AuthorSafeState> {
+export async function authorSafeState(
+  ctx: CliContext,
+  readSafe?: GivenSafeReader,
+): Promise<AuthorSafeState> {
   const rpcUrl = ctx.rpcs.L2[0];
   if (!rpcUrl) {
     throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+  // A given Safe is taken as stored: predicting from the key would name a Safe
+  // this key does not own, which is a different author id.
+  const given = givenSafeInUse(ctx.config);
+  if (given) {
+    const read =
+      readSafe ??
+      ((safe: Address) =>
+        readGivenSafe(safe, {
+          config: ctx.config,
+          privateKey: ctx.config.privateKey as `0x${string}`,
+          eoa: ctx.eoaAddress,
+          rpcUrl,
+        }));
+    const state = await read(given);
+    return {
+      address: given,
+      eoa: ctx.eoaAddress,
+      salt: null,
+      chain: 'base',
+      deployed: state.deployed,
+    };
   }
   const prediction = await predictAuthorSafe({
     config: ctx.config,
@@ -226,6 +372,10 @@ export interface EnsureAuthorSafeOptions {
   privateKey: `0x${string}`;
   rpcUrl: string;
   out: CliOut;
+  /** A given Safe: reported from the chain, never deployed by this CLI. */
+  safe?: Address;
+  /** Seam for the given Safe read (tests). */
+  readSafe?: GivenSafeReader;
 }
 
 export interface EnsuredAuthorSafe {
@@ -254,6 +404,28 @@ const DEPLOY_POLL_INTERVAL_MS = 2000;
  */
 export async function ensureAuthorSafe(opts: EnsureAuthorSafeOptions): Promise<EnsuredAuthorSafe> {
   const eoa = privateKeyToAccount(opts.privateKey).address;
+  // A caller that does not name the Safe still cannot deploy a derived one for
+  // a key whose record is `given` (`author init` installs its contracts through
+  // an ensure call that names no address).
+  const safe = opts.safe ?? givenSafeForKey(opts.privateKey);
+
+  // A given Safe is a fact, not something this CLI creates: report what the
+  // chain says and stop. Deploying here would put a Safe at an address nobody
+  // owns, since the key is not its only owner.
+  if (safe) {
+    const read =
+      opts.readSafe ??
+      ((target: Address) =>
+        readGivenSafe(target, {
+          config: opts.config,
+          privateKey: opts.privateKey,
+          eoa,
+          rpcUrl: opts.rpcUrl,
+        }));
+    const state = await read(safe);
+    return { address: safe, eoa, deployed: state.deployed, txHash: undefined };
+  }
+
   const runner = await createAuthorSafeRunner({
     config: opts.config,
     privateKey: opts.privateKey,
@@ -286,22 +458,31 @@ export async function ensureAuthorSafe(opts: EnsureAuthorSafeOptions): Promise<E
  * Idempotent — a second `init` is a no-op that returns `txHash: undefined`.
  * The contracts install (`core/author-contracts.ts`) is the next step; the
  * deployment is the first one only.
+ *
+ * A `given` Safe is the exception: it is reported as read and never deployed,
+ * and its salt is null because no salt produces its address.
  */
-export async function initAuthorSafe(ctx: CliContext): Promise<AuthorSafeInitResult> {
+export async function initAuthorSafe(
+  ctx: CliContext,
+  readSafe?: GivenSafeReader,
+): Promise<AuthorSafeInitResult> {
   const rpcUrl = ctx.rpcs.L2[0];
   if (!rpcUrl) {
     throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
   }
+  const given = givenSafeInUse(ctx.config);
   const ensured = await ensureAuthorSafe({
     config: ctx.config,
     privateKey: ctx.config.privateKey as `0x${string}`,
     rpcUrl,
     out: ctx.out,
+    ...(given ? { safe: given } : {}),
+    ...(readSafe ? { readSafe } : {}),
   });
   return {
     address: ensured.address,
     eoa: ensured.eoa,
-    salt: authorSafeSalt(ensured.eoa),
+    salt: given ? null : authorSafeSalt(ensured.eoa),
     chain: 'base',
     deployed: ensured.deployed,
     txHash: ensured.txHash,
