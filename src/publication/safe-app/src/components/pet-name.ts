@@ -5,8 +5,9 @@
 // sent over the network, so on-chain identities stay pseudonymous: everyone
 // sees the raw address, each viewer sees only the names they chose.
 //
-// Authors arrive as `did:ethr:0x…`; the prefix is stripped so the address is
-// shown/copied as the bare `0x…` form.
+// Authors arrive as a bare `0x…` address. Items pinned before the change carry
+// `did:ethr:0x…` instead, so the prefix is stripped when reading one back and
+// the address is shown/copied in its bare form. Nothing here builds that form.
 //
 // Render modes:
 //   1. display = the pet name, if this address has one (full address in title)
@@ -126,7 +127,8 @@ export class PetName extends LitElement {
     if (this.timeout) clearTimeout(this.timeout);
   }
 
-  /** Bare address — authors arrive as `did:ethr:0x…`, strip the prefix. */
+  /** Bare address. A pre-change item's author reads as `did:ethr:0x…`, so the
+   *  legacy prefix is dropped here; current items carry the bare form already. */
   private get address(): string {
     return this.value.replace(/^did:ethr:/i, '');
   }

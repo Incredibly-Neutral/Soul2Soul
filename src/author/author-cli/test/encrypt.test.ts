@@ -41,7 +41,10 @@ import { CliError, UsageError } from '../src/lib/errors';
 
 const PKP = '0x' + '11'.repeat(20);
 const AUTHOR_ADDR = '0x2222222222222222222222222222222222222222';
-const AUTHOR = `did:ethr:${AUTHOR_ADDR}`;
+// The author the write path signs with: the author Safe's bare address. Items
+// pinned before the change carry `did:ethr:0x…` instead; nothing writes that
+// form now, and only read paths still strip the prefix.
+const AUTHOR = AUTHOR_ADDR;
 
 /** A TypedDataSigner that produces a well-formed dummy signature (no keys). */
 const fakeSigner = {
@@ -447,6 +450,8 @@ describe('authorWrite honors frontmatter encryption', () => {
   });
 
   it('renames a legacy kubo_cid, backfills creation_date and strips the did from the author', async () => {
+    // A note written before the change: the author is stored as `did:ethr:0x…`.
+    // Publishing migrates the spelling and keeps the address.
     const path = noteWith([
       'title: Hello',
       'genesis: "0x' + 'cd'.repeat(32) + '"',
