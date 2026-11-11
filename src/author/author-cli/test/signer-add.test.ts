@@ -256,7 +256,7 @@ describe('s2s signer add', () => {
         args(['signer', 'add', SAFE, '--key', KEY_NEW]),
         deps(fake, { deployed: false, owners: [], threshold: 0, nonce: 0 }),
       ),
-    ).rejects.toThrow(/no Safe at/);
+    ).rejects.toMatchObject({ code: 'safe_not_deployed' });
     expect(readAuthors(join(dir, 'xdg', 's2s', 'authors.json')).authors).toEqual({});
   });
 

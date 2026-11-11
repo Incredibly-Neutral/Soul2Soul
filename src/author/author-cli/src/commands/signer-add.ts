@@ -25,7 +25,7 @@
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { addSigner, authorEoa } from '../core/authors';
 import { hexKey } from '../core/config';
@@ -68,8 +68,13 @@ export async function runSignerAdd(
   const rpcUrl = l2Rpc(config);
   const chain = await deps.readSafe(rpcUrl, safe);
   if (!chain.deployed) {
-    throw new UsageError(
+    // Chain state, not a spelling mistake: the address was well formed and the
+    // answer is that no contract lives there. Same refusal as `signer confirm`,
+    // so one condition has one outcome across the group.
+    throw new CliError(
       `no Safe at ${safe} on Base — \`s2s signer add\` proposes an owner of a Safe that is already deployed`,
+      1,
+      'safe_not_deployed',
     );
   }
   if (chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) {

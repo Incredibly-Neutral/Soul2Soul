@@ -16,8 +16,8 @@
 //
 //   the hash depends on the chain id. The service computes it under Base
 //   mainnet's id unless told otherwise, and a hash for another chain is
-//   rejected as a mismatch — so the one id lives here and both the local hash
-//   and the service take it.
+//   rejected as a mismatch — so the id is written once, in the adapter, and
+//   both the local hash and the service take it from there.
 //
 // Every read and every send goes through `SignerDeps`, so a test supplies a
 // fake and opens no socket.
@@ -29,9 +29,13 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { safeAbi } from '@s2s/soul2soul-shared';
 
-import { makeSafeTxService, type SafeTxService } from '../adapters/safe-tx';
+import {
+  makeSafeTxService,
+  SAFE_TX_CHAIN_ID,
+  type SafeTxService,
+} from '../adapters/safe-tx';
 import { readSafeOwners } from '../core/author-contracts';
-import { activeAuthorRecord, authorsFilePath, readAuthors } from '../core/authors';
+import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
 import { givenSafeInUse } from '../core/author-safe';
 import { loadConfig, type CliConfig } from '../core/config';
 import { UsageError } from '../lib/errors';
@@ -42,8 +46,11 @@ import { resolveKeySource, type KeySource } from './author-new';
  * The chain a safeTxHash is computed for. Base mainnet is the only chain this
  * CLI authors on (`SAFE_L2_SINGLETON` is pinned to it), and the service indexes
  * per-chain, so a hash computed under another id is rejected as a mismatch.
+ *
+ * The id itself is written once, in the adapter, and imported here: a second
+ * literal would be a second chain the hash could be computed for.
  */
-export const SIGNER_CHAIN_ID = 8453;
+export const SIGNER_CHAIN_ID = SAFE_TX_CHAIN_ID;
 
 /** What the chain says about a Safe, in the form the commands decide on. */
 export interface ChainSafe {
@@ -91,11 +98,21 @@ export function defaultSignerName(eoa: Address): string {
  * The Safe the queue and confirm commands default to: the stored `given` Safe
  * this config signs for, else the active record's recorded Safe. Undefined when
  * the store has none, which is the caller's usage error to report.
+ *
+ * Both halves go through the same refusal. `givenSafeInUse` decides for the
+ * row filed under this key; the fallback reads the active row, and a row that
+ * cannot say which Safe it names (an unreadable `safeSource`, a given row with
+ * no address) is refused here rather than passed off as an address — otherwise
+ * these commands alone would act on a row every other command refuses.
  */
 export function resolveSignerSafe(config: CliConfig): Address | undefined {
   const inUse = givenSafeInUse(config);
   if (inUse) return inUse;
-  const stored = activeAuthorRecord(readAuthors())?.safe;
+  const active = activeAuthorRecord(readAuthors());
+  if (!active) return undefined;
+  const problem = safeProblem(active.name, active);
+  if (problem) throw new UsageError(problem);
+  const stored = active.safe;
   if (!stored) return undefined;
   try {
     return asSafeAddress(stored);

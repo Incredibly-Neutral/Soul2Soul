@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
+import { computeSafeTxHash } from '../src/adapters/safe-tx';
 import { loadConfig } from '../src/core/config';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -34,7 +35,24 @@ const SAFE: Address = '0x1111111111111111111111111111111111111111';
 const KEY_B: Hex = `0x${'00'.repeat(31)}02`;
 const OWNER_B: Address = privateKeyToAccount(KEY_B).address;
 const RPC = 'https://rpc.example';
-const HASH: Hex = `0x${'11'.repeat(32)}`;
+const CHAIN_ID = 8453;
+
+/**
+ * The hash `confirm` is given, computed from the same fields the fixture record
+ * carries. A made-up hash would prove nothing: the command hands its record to
+ * `execTransactionArgs` with the chain id, and only a hash the fields reproduce
+ * gets past that check. The fixture that would catch its removal is the one
+ * whose fields and hash disagree, below.
+ */
+function hashFor(nonce: number): Hex {
+  return computeSafeTxHash({
+    chainId: CHAIN_ID,
+    safe: SAFE,
+    tx: { to: SAFE, value: 0n, data: '0xdeadbeef', operation: 0, nonce },
+  });
+}
+
+const HASH: Hex = hashFor(7);
 /** What the fake `send` answers with — one transaction hash, asserted on. */
 const TX_HASH: Hex = `0x${'77'.repeat(32)}`;
 
@@ -301,6 +319,7 @@ describe('s2s signer confirm', () => {
   it('confirms but does not execute a proposal queued behind another nonce', async () => {
     const fake = fakeService(
       baseRecord({
+        safeTxHash: hashFor(8),
         nonce: 8,
         confirmations: [{ owner: OWNER_B, signature: await signedByB() }],
       }),
@@ -342,13 +361,36 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses a stale proposal the Safe has moved past', async () => {
-    const fake = fakeService(baseRecord({ nonce: 6 }));
+    const fake = fakeService(baseRecord({ safeTxHash: hashFor(6), nonce: 6 }));
     const captured = capture();
 
     await expect(
       runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), deps(fake)),
     ).rejects.toMatchObject({ code: 'stale_nonce' });
     expect(fake.confirmed).toHaveLength(0);
+  });
+
+  it('refuses a record whose fields are not the hash it was given, before spending gas', async () => {
+    // The signatures recover over HASH, so packing succeeds; the fields do not
+    // hash to it. Without the chain id handed to `execTransactionArgs` this
+    // would send: the record's own hash check passed when it was read.
+    const fake = fakeService(
+      baseRecord({
+        data: '0xfeedface',
+        confirmations: [{ owner: OWNER_B, signature: await signedByB() }],
+      }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await expect(
+      runSignerConfirm(
+        captured.out,
+        args(['signer', 'confirm', HASH, '--safe', SAFE]),
+        deps(fake, { sent }),
+      ),
+    ).rejects.toMatchObject({ code: 'safe_tx_hash_mismatch' });
+    expect(sent).toHaveLength(0);
   });
 
   it('refuses a Safe with no bytecode', async () => {

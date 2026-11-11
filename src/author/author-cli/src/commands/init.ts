@@ -16,7 +16,7 @@ import type { Address } from 'viem';
 
 import type { CliContext } from '../core/context';
 import type { CommandSpec } from '../lib/command';
-import { initAuthorSafe } from '../core/author-safe';
+import { initAuthorSafe, type AuthorSafeInitResult } from '../core/author-safe';
 import { installAuthorContracts, type InstallState } from '../core/author-contracts';
 import { rememberAuthorContracts, rememberAuthorSafe } from '../core/authors';
 import type { CliOut } from '../lib/out';
@@ -146,6 +146,27 @@ function contractsLines(report: ContractsReport): string[] {
   return lines;
 }
 
+/**
+ * The one-line headline for `author init`.
+ *
+ * The provenance is read from `safeSource`, the field that names it, not
+ * inferred from `salt`: a salt is null exactly when the Safe is given today,
+ * but that is a consequence of the record shape, not its spelling. A given Safe
+ * that is *not* deployed never reaches this line — `initAuthorSafe` refuses it
+ * first — so there is no arm for it here.
+ *
+ * Exported so every arm this can take has a test.
+ */
+export function initHeadline(result: AuthorSafeInitResult): string {
+  if (result.safeSource === 'given') return `author Safe ${result.address} (given) is deployed`;
+  if (result.txHash) {
+    return result.deployed
+      ? `author Safe deployed at ${result.address}`
+      : `deployment submitted for ${result.address} — not confirmed yet`;
+  }
+  return `author Safe already deployed at ${result.address}`;
+}
+
 export const authorInit: CommandSpec = {
   name: 'init',
   summary: 'Deploy the author Safe and install the author contracts (idempotent).',
@@ -163,16 +184,8 @@ export const authorInit: CommandSpec = {
 
     // A given Safe has no salt and is never deployed by this CLI, so neither
     // "already deployed" nor a salt line can be claimed for it.
-    const given = result.salt === null;
-    const headline = given
-      ? result.deployed
-        ? `author Safe ${result.address} (given) is deployed`
-        : `author Safe ${result.address} (given) is not deployed — this CLI never deploys a given Safe`
-      : result.txHash
-        ? result.deployed
-          ? `author Safe deployed at ${result.address}`
-          : `deployment submitted for ${result.address} — not confirmed yet`
-        : `author Safe already deployed at ${result.address}`;
+    const given = result.safeSource === 'given';
+    const headline = initHeadline(result);
     ctx.out.result(
       { action: 'author.init', ...result, contracts, author: ctx.config.author?.name ?? null },
       [

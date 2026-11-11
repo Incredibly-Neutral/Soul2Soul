@@ -5,7 +5,7 @@
 // The service is faked; the chain read is a literal. No socket, no chain.
 // ============================================================================
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -233,6 +233,27 @@ describe('s2s signer queue', () => {
     expect(captured.results[0]?.safe).toBe('0x9999999999999999999999999999999999999999');
   });
 
+  it('refuses to take a default Safe from a row whose safeSource it cannot read', async () => {
+    // The row cannot say whether the address is given or derived, so every
+    // other command refuses it (`safeProblem`). The queue must not be the one
+    // path that acts on it anyway.
+    const captured = capture();
+    vi.stubEnv('S2S_PRIVATE_KEY', '');
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        active: 'zomi',
+        authors: { zomi: { privateKey: KEY_SIGNER, safe: SAFE, safeSource: 'hinted' } },
+      }),
+    );
+
+    await expect(
+      runSignerQueue(captured.out, args(['signer', 'queue']), deps([record({})])),
+    ).rejects.toThrow(/has safeSource/);
+  });
+
   it('reports an empty queue without inventing rows', async () => {
     const captured = capture();
     await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), deps([]));
@@ -263,6 +284,59 @@ describe('s2s signer queue', () => {
     ).rejects.toBeInstanceOf(UsageError);
   });
 
+  it('counts only the confirmations that can be packed', async () => {
+    const captured = capture();
+    // A 32-byte entry is a contract owner's approveHash: `confirm` drops it, and
+    // the queue must count the same set or it promises an execution that is
+    // refused.
+    const records = [
+      record({
+        confirmations: [
+          { owner: OWNER_B, signature: `0x${'ab'.repeat(65)}` },
+          { owner: OWNER_C, signature: `0x${'cd'.repeat(32)}` },
+        ],
+      }),
+    ];
+
+    await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), deps(records));
+
+    const pending = captured.results[0]?.pending as Record<string, unknown>[];
+    expect(pending[0]).toMatchObject({ confirmations: 1, executable: false });
+    expect(captured.human[0]).toContain('1 of 2 confirmed');
+  });
+
+  it('takes k of n and the executable flag from the chain, not the service', async () => {
+    const captured = capture();
+    // The service's copy of the Safe is stale: it asks for 5, the chain says 2.
+    const records = [
+      record({
+        confirmationsRequired: 5,
+        confirmations: [
+          { owner: OWNER_B, signature: `0x${'ab'.repeat(65)}` },
+          { owner: OWNER_C, signature: `0x${'cd'.repeat(65)}` },
+        ],
+      }),
+    ];
+
+    await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), deps(records));
+
+    const pending = captured.results[0]?.pending as Record<string, unknown>[];
+    expect(pending[0]).toMatchObject({ confirmations: 2, confirmationsRequired: 2, executable: true });
+    expect(captured.human[0]).toContain('2 of 2 confirmed');
+  });
+
+  it('says there is no key rather than calling this machine not an owner', async () => {
+    const captured = capture();
+    vi.stubEnv('S2S_PRIVATE_KEY', '');
+
+    await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), deps([record({})]));
+
+    const pending = captured.results[0]?.pending as Record<string, unknown>[];
+    expect(pending[0]).toMatchObject({ keyIsOwner: null, keyConfirmed: false });
+    expect(captured.results[0]?.eoa).toBeNull();
+    expect(captured.human[0]).toContain('yours: no key filed here');
+  });
+
   it('refuses a Safe with no bytecode', async () => {
     const captured = capture();
     await expect(
@@ -271,6 +345,6 @@ describe('s2s signer queue', () => {
         args(['signer', 'queue', SAFE]),
         deps([], { deployed: false, owners: [], threshold: 0, nonce: 0 }),
       ),
-    ).rejects.toThrow(/no Safe at/);
+    ).rejects.toMatchObject({ code: 'safe_not_deployed' });
   });
 });

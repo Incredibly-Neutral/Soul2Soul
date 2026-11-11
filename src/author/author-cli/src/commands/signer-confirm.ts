@@ -150,7 +150,12 @@ export async function runSignerConfirm(
     note = `${String(required - signing.length)} more confirmation${required - signing.length === 1 ? '' : 's'} needed`;
   } else {
     const packed = await packVerifiedSignatures(signing, byOwner, safeTxHash);
-    const call = execTransactionArgs(after, packed);
+    // The record came from the service, but the command is where the hash the
+    // user typed has to be tied to the fields that get sent: the service's own
+    // check proves the fields reproduce *its* hash, not this one. With the
+    // chain id, `execTransactionArgs` re-hashes and refuses a record that is
+    // not the proposal that was signed.
+    const call = execTransactionArgs(after, packed, { chainId: deps.chainId });
     txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
     executed = true;
   }

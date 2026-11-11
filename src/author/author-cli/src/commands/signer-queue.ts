@@ -14,11 +14,11 @@
 // Read-only: no proposal, no signature, no gas. Runs without `buildContext`.
 // ============================================================================
 
-import type { Address } from 'viem';
+import { size, type Address } from 'viem';
 
 import type { ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { authorEoa } from '../core/authors';
 import type { SafeTxRecord } from '../adapters/safe-tx';
@@ -41,11 +41,13 @@ interface QueueRow {
   newOwner: string | undefined;
   to: Address;
   data: string;
+  /** 65-byte confirmations: what `execTransaction` can actually pack. */
   confirmations: number;
+  /** The chain's threshold when the Safe could be read, else the service's. */
   confirmationsRequired: number;
-  /** Enough confirmations to execute, once the nonce comes up. */
+  /** Enough packable confirmations to execute, once the nonce comes up. */
   executable: boolean;
-  /** null when the owners could not be read — not the same as "no". */
+  /** null when there is no key, or the owners could not be read — not "no". */
   keyIsOwner: boolean | null;
   keyConfirmed: boolean;
 }
@@ -61,7 +63,8 @@ function newOwnerOf(record: SafeTxRecord): string | undefined {
 }
 
 /** What this key's relation to a row is, in one phrase for the human line. */
-function keyState(row: QueueRow): string {
+function keyState(row: QueueRow, hasKey: boolean): string {
+  if (!hasKey) return 'no key filed here';
   if (row.keyIsOwner === null) return 'owners unreadable';
   if (!row.keyIsOwner) return 'not an owner';
   return row.keyConfirmed ? 'already confirmed' : 'not yet confirmed';
@@ -95,8 +98,10 @@ export async function runSignerQueue(
     out.warn(`could not read the Safe's owners (${reasonOf(err)}) — the queue is shown without them`);
   }
   if (chain && !chain.deployed) {
-    throw new UsageError(
+    throw new CliError(
       `no Safe at ${safe} on Base — \`s2s signer queue\` lists proposals of a deployed Safe`,
+      1,
+      'safe_not_deployed',
     );
   }
 
@@ -104,9 +109,18 @@ export async function runSignerQueue(
   const threshold = chain?.threshold ?? 0;
 
   const rows: QueueRow[] = pending.map((record) => {
-    const confirmedBy = new Set(record.confirmations.map((entry) => entry.owner.toLowerCase()));
-    const keyIsOwner = chain
-      ? chain.owners.some((owner) => (eoa ? owner.toLowerCase() === eoa.toLowerCase() : false))
+    // Only 65-byte entries can be packed into the signature list
+    // `execTransaction` reads; a 32-byte one is a contract owner's approval by
+    // hash and does not count towards the threshold. `confirm` filters the same
+    // way, so the two commands agree on how many signatures a row has.
+    const signable = record.confirmations.filter((entry) => size(entry.signature) === 65);
+    const confirmedBy = new Set(signable.map((entry) => entry.owner.toLowerCase()));
+    // The chain's threshold is the one a transaction must meet. The service's
+    // count is only a fallback for a row whose Safe could not be read, because
+    // its copy of a Safe it was told about once can be older than the Safe.
+    const required = chain ? chain.threshold : record.confirmationsRequired;
+    const keyIsOwner = eoa && chain
+      ? chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())
       : null;
     return {
       nonce: record.nonce,
@@ -115,9 +129,9 @@ export async function runSignerQueue(
       newOwner: newOwnerOf(record),
       to: record.to,
       data: record.data,
-      confirmations: record.confirmations.length,
-      confirmationsRequired: record.confirmationsRequired,
-      executable: record.confirmations.length >= record.confirmationsRequired,
+      confirmations: signable.length,
+      confirmationsRequired: required,
+      executable: required > 0 && signable.length >= required,
       keyIsOwner,
       keyConfirmed: eoa ? confirmedBy.has(eoa.toLowerCase()) : false,
     };
@@ -148,7 +162,7 @@ export async function runSignerQueue(
             ? `${row.method}(${row.newOwner ? shortAddress(row.newOwner) : '…'})`
             : '(method not decoded)',
           `${String(row.confirmations)} of ${String(row.confirmationsRequired)} confirmed`,
-          `yours: ${keyState(row)}`,
+          `yours: ${keyState(row, eoa !== undefined)}`,
         ].join('  '),
       ),
       ...(rows.some((row) => row.keyIsOwner === true && !row.keyConfirmed)
