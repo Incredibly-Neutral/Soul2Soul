@@ -31,6 +31,7 @@ vi.mock('./evm', () => ({ evmRead: vi.fn() }));
 vi.mock('./ipfs.factory', () => ({ catFile: vi.fn() }));
 
 import { evmRead } from './evm';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
 import { catFile } from './ipfs.factory';
 import {
   ContentIntegrityError,
@@ -48,8 +49,8 @@ import {
 const GENESIS = '0x' + '11'.repeat(32);
 const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const AUTHOR = ('0x' + 'a'.repeat(40)) as `0x${string}`;
-/** The form an item pinned before the author became a bare address carries. */
-const LEGACY_AUTHOR = `did:ethr:${AUTHOR}`;
+/** An item pinned before the author became a bare address: a pre-change artifact. */
+const LEGACY_AUTHOR = `${LEGACY_AUTHOR_PREFIX}${AUTHOR}`;
 const GATEWAY = 'https://ipfs.example';
 const PUBLICATION_MODULE = '0xPubModule';
 

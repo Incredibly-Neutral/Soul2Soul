@@ -1,7 +1,7 @@
 export interface S2SContentInfo {
   author?: {
-    /** The author Safe's 0x address, emitted under the JSON-LD `did` slot. */
-    did: string;
+    /** The author Safe's bare 0x address, emitted as the page's `address` value. */
+    address: string;
     createdAt?: string;
     /**
      * The author's EIP-712 signature over this version's content item.
@@ -21,8 +21,8 @@ export interface S2SContentInfo {
     };
   };
   publisher?: {
-    /** The publisher's 0x address. */
-    did: string;
+    /** The publisher's bare 0x address. */
+    address: string;
     /** The publication Safe's 0x address. */
     safe?: string;
     url: string;
