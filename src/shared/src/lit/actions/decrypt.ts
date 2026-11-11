@@ -76,8 +76,11 @@ async function main({ pkpId, genesis, authorModule, signature, rpcs, gateway }) 
 
     if (item.encryption !== true) return refuse('not an encrypted item');
 
+    /* The address is the last colon-separated segment, so an item pinned with an
+       older scheme-prefixed author still matches; nothing writes that form now. */
     const blobAuthor = String((item.public && item.public.author) || '')
-      .replace(/^did:ethr:/i, '')
+      .split(':')
+      .pop()
       .toLowerCase();
     if (blobAuthor !== author.toLowerCase()) return refuse('item author is not the draft author');
     step('blobAuthor', blobAuthor);

@@ -26,7 +26,7 @@ const schema = {
   identifier: '0x' + '55'.repeat(32),
   author: {
     '@type': 'Person',
-    identifier: { '@type': 'PropertyValue', propertyID: 'did:ethr', value: 'did:ethr:0xabc' },
+    identifier: { '@type': 'PropertyValue', propertyID: 'address', value: '0x' + 'ab'.repeat(20) },
     dateCreated: '2025-01-02T03:04:05.000Z',
   },
   encoding: {
@@ -80,7 +80,7 @@ describe('canonicalizeProofPayloadLegacy — frozen history', () => {
 
     expect(payload).not.toContain('ccc1692567ed20efe79bd75d544ace4a974e5b4396e23e20e392484c1357c807');
     expect(payload).not.toContain(IPFS_CID);
-    expect(payload).not.toContain('did:ethr:0xabc');
+    expect(payload).not.toContain('0x' + 'ab'.repeat(20));
     expect(payload).not.toContain('2025-01-02T03:04:05.000Z');
     expect(payload).not.toContain('text/markdown');
 
@@ -137,7 +137,7 @@ describe('canonicalizeProofPayload — JCS-RFC8785', () => {
     const jcsPayload = canonicalizeProofPayload(schema, proofOptions);
     expect(jcsPayload).toContain('ccc1692567ed20efe79bd75d544ace4a974e5b4396e23e20e392484c1357c807');
     expect(jcsPayload).toContain(`ipfs://${IPFS_CID}`);
-    expect(jcsPayload).toContain('did:ethr:0xabc');
+    expect(jcsPayload).toContain('0x' + 'ab'.repeat(20));
     expect(jcsPayload).toContain('text/markdown');
     expect(jcsPayload).toContain(PROOF_CANONICALIZATION_JCS);
 

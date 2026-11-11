@@ -13,9 +13,8 @@ import {
   type S2SPublicContentV2,
   type S2SProof,
   type S2SContentBody,
-  type DidEthr,
+  type Address,
   S2S_DOMAIN,
-  toDidEthr,
 } from '../types';
 
 /**
@@ -46,9 +45,11 @@ export interface TypedDataSigner {
  * S2SContent exactly as before. The input types pin the literal, so a v1
  * specVersion carrying the two dates does not compile.
  *
- * @param author - explicit did:ethr for the author (e.g. the Safe address).
- *                 When omitted, falls back to signer.getAddress() for compat.
- *                 The proof.signer always records the actual signing key (EOA).
+ * @param author - the author Safe's address. Used exactly as given when supplied:
+ *                 the objectId is the digest of these bytes, so normalising one
+ *                 here would change what the author signed. Omitted, it is
+ *                 signer.getAddress(). The proof.signer always records the actual
+ *                 signing key (EOA).
  */
 export type PublicInputV1 = Omit<S2SPublicContent, 'author' | 'plaintextHash' | 'specVersion'> & {
   specVersion: '1';
@@ -63,21 +64,21 @@ export async function buildSignedContentItem(
   body: S2SContentBody,
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
-  author?: DidEthr,
+  author?: string,
 ): Promise<S2SContentItemV2>;
 export async function buildSignedContentItem(
   pub: PublicInputV1,
   body: S2SContentBody,
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
-  author?: DidEthr,
+  author?: string,
 ): Promise<S2SContentItem>;
 export async function buildSignedContentItem(
   pub: PublicInputV1 | PublicInputV2,
   body: S2SContentBody,
   signer: TypedDataSigner,
   encryptFn: (plaintext: string) => Promise<string> | string,
-  author?: DidEthr,
+  author?: string,
 ): Promise<AnyS2SContentItem> {
   const utils = ethersUtils();
   // 1. Canonicalize the body and compute plaintextHash
@@ -86,7 +87,8 @@ export async function buildSignedContentItem(
 
   // 2. Assemble the public metadata for the envelope version in play.
   //    v1 keeps createdAt and the exact field set it always had.
-  const authorAddr = author ?? toDidEthr(signer.getAddress());
+  // The signed field is a bare address; a caller's string is taken as given.
+  const authorAddr = (author ?? signer.getAddress()) as Address;
   const shared = {
     specVersion: pub.specVersion,
     author: authorAddr,

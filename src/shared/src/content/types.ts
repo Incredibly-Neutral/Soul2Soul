@@ -2,7 +2,7 @@
  * @deprecated Use the new content-item types from shared/src/manuscript/types.ts instead.
  *
  * The new types replace these with:
- * - S2SPublicContent → shared/src/manuscript/types.ts (signed, did:ethr author, specVersion, mediaType, plaintextHash)
+ * - S2SPublicContent → shared/src/manuscript/types.ts (signed, bare author address, specVersion, mediaType, plaintextHash)
  * - S2SToEncrypt → S2SContentBody (shared/src/manuscript/types.ts)
  * - S2SContentItem → shared/src/manuscript/types.ts (flat: public + objectId + proof + encryption + body)
  *

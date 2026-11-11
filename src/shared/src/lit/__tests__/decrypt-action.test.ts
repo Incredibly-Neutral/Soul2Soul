@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { decryptAction } from '../actions/decrypt.js';
+import { LEGACY_AUTHOR_PREFIX } from '../../manuscript/identity/author-address.js';
 
 /**
  * The decrypt action is a string, so it is evaluated here with stubs rather than
@@ -33,7 +34,7 @@ interface Read {
 const item = (over: Record<string, unknown> = {}) => ({
   encryption: true,
   body: 'cipher-blob',
-  public: { author: 'did:ethr:' + AUTHOR, plaintextHash: hashOf(PLAINTEXT) },
+  public: { author: AUTHOR, plaintextHash: hashOf(PLAINTEXT) },
   ...over,
 });
 
@@ -135,7 +136,7 @@ describe('decryptAction', () => {
   });
 
   it('refuses when the blob author is not the draft author', async () => {
-    const { main } = load({ itemJson: item({ public: { author: 'did:ethr:' + OTHER, plaintextHash: hashOf(PLAINTEXT) } }) });
+    const { main } = load({ itemJson: item({ public: { author: OTHER, plaintextHash: hashOf(PLAINTEXT) } }) });
 
     const result = await main(params());
 
@@ -154,7 +155,7 @@ describe('decryptAction', () => {
 
   it('refuses a plaintext that does not match the signed hash, returning no plaintext', async () => {
     const { main } = load({
-      itemJson: item({ public: { author: 'did:ethr:' + AUTHOR, plaintextHash: hashOf('some other body') } }),
+      itemJson: item({ public: { author: AUTHOR, plaintextHash: hashOf('some other body') } }),
     });
 
     const result = await main(params());
@@ -173,6 +174,17 @@ describe('decryptAction', () => {
     expect(result.action).toBe('decrypt');
     expect(result.data).toEqual({ plaintext: PLAINTEXT, author: AUTHOR, cid: CID });
     expect(cats).toEqual([GATEWAY + '/api/v0/cat?arg=' + CID]);
+  });
+
+  it('still accepts a pre-change prefixed author', async () => {
+    const { main } = load({
+      itemJson: item({ public: { author: LEGACY_AUTHOR_PREFIX + AUTHOR, plaintextHash: hashOf(PLAINTEXT) } }),
+    });
+
+    const result = await main(params());
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual({ plaintext: PLAINTEXT, author: AUTHOR, cid: CID });
   });
 
   it('reads isOwner on the entry author, whichever addresses the caller passes', async () => {

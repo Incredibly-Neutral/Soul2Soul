@@ -3,12 +3,12 @@ import { jobSchema } from './schemas';
 import type { EvmUpdateInput, MaintainCacheInput, SingleInput } from '../lit/actions/types';
 
 // ============================================================================
-// Did:ethr schema
+// Author address schema
 // ============================================================================
 
-export const didEthrSchema = z
+export const authorAddressSchema = z
   .string()
-  .regex(/^did:ethr:0x[0-9a-fA-F]{40}$/, 'Author must be a did:ethr');
+  .regex(/^0x[0-9a-fA-F]{40}$/, 'Author must be a 0x address');
 
 // ============================================================================
 // S2SPublicContent (signed public metadata)
@@ -25,7 +25,7 @@ export const s2sPublicContentSchemaV1 = z.object({
     .string()
     .min(1, 'specVersion is required')
     .refine((v) => v !== '2', 'specVersion "2" requires creationDate and modifiedDate'),
-  author: didEthrSchema,
+  author: authorAddressSchema,
   postType: z.string().min(1, 'postType is required'),
   mediaType: z.string().min(1, 'mediaType is required'),
   parent: z.string(),
@@ -41,7 +41,7 @@ export const s2sPublicContentSchemaV1 = z.object({
 
 export const s2sPublicContentSchemaV2 = z.object({
   specVersion: z.literal('2'),
-  author: didEthrSchema,
+  author: authorAddressSchema,
   postType: z.string().min(1, 'postType is required'),
   mediaType: z.string().min(1, 'mediaType is required'),
   parent: z.string(),
