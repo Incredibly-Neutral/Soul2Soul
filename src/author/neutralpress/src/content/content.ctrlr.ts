@@ -7,7 +7,7 @@ import * as crypto from 'crypto';
 import { getAddress } from 'viem';
 import {
 	buildSignedContentItem,
-	type S2SContentItemV2,
+	type S2SContentItemV3,
 	noOpEncrypt,
 } from '@s2s/soul2soul-shared';
 
@@ -101,7 +101,7 @@ function parseDateToUnix(value: unknown): number | undefined {
 export interface IContentController {
 	main: IMainController;
 	/** Build and sign a content item from an Obsidian note, then update frontmatter */
-	publishContent: (file: TFile, subdomain: string) => Promise<S2SContentItemV2 | null>;
+	publishContent: (file: TFile, subdomain: string) => Promise<S2SContentItemV3 | null>;
 }
 
 export class ContentController implements IContentController {
@@ -219,7 +219,7 @@ export class ContentController implements IContentController {
 	 * Signing happens via the 0xobsidian BASE account's EOA (asTypedDataSigner).
 	 * The signed object is stored in frontmatter for later use by the render pipeline.
 	 */
-	async publishContent(file: TFile, subdomain: string): Promise<S2SContentItemV2 | null> {
+	async publishContent(file: TFile, subdomain: string): Promise<S2SContentItemV3 | null> {
 		// One sample for both signed dates: on a first publish `creationDate` and
 		// `modifiedDate` are the same instant, even across a second boundary.
 		const now = Math.floor(Date.now() / 1000);

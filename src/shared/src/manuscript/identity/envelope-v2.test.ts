@@ -16,6 +16,7 @@ import {
   type S2SPublicContent,
   type S2SPublicContentV2,
   type Address,
+  bodyForKey,
 } from '../types';
 import { buildSigningView, buildSigningViewV2, signingEnvelope } from './signing-view';
 import { LEGACY_AUTHOR_PREFIX } from './author-address';
@@ -127,7 +128,9 @@ describe('v1 envelope is unchanged', () => {
     expect(item.public).toMatchObject({ specVersion: '1', createdAt: 1700000000 });
     expect('creationDate' in item.public).toBe(false);
     expect(item.objectId).toBe(computeObjectId(item.public));
-    expect(await verifyAuthorship(item, async () => item.body)).toBe(true);
+    const body = bodyForKey(item);
+    expect(body).toBeDefined();
+    expect(await verifyAuthorship(item, async () => body as string)).toBe(true);
   });
 });
 
@@ -167,7 +170,9 @@ describe('v2 envelope', () => {
   it('signs and verifies a round trip', async () => {
     const item = await signV2();
 
-    expect(await verifyAuthorship(item, async () => item.body)).toBe(true);
+    const body = bodyForKey(item);
+    expect(body).toBeDefined();
+    expect(await verifyAuthorship(item, async () => body as string)).toBe(true);
   });
 
   it('digests through the S2SContentV2 struct', async () => {
@@ -206,7 +211,7 @@ describe('v2 envelope', () => {
     const item = await signV2();
     const tampered = { ...item, public: { ...item.public, modifiedDate: item.public.modifiedDate + 1 } };
 
-    expect(await verifyAuthorship(tampered, async () => tampered.body)).toBe(false);
+    expect(await verifyAuthorship(tampered, async () => bodyForKey(tampered) as string)).toBe(false);
   });
 });
 

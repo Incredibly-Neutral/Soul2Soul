@@ -23,8 +23,8 @@ interface S2SContentItem {
   public: S2SPublicContent;   // signed, readable by anyone
   objectId: string;           // EIP-712 digest of the public part
   proof: { type: 'eip712'; signer: `0x${string}`; signature: `0x${string}` };
-  encryption: boolean;        // true: the body is ciphertext
-  body: string;               // ciphertext, or JSON.stringify({ title, slug, content, custom })
+  encryption: boolean;        // true: each body is ciphertext
+  bodies: Record<string, string>; // key holder name → ciphertext, or JSON.stringify({ title, slug, content, custom })
 }
 
 interface S2SPublicContent {
@@ -43,11 +43,15 @@ interface S2SPublicContent {
 }
 ```
 
+An item written before the body map carries a single `body` string in place of `bodies`. Both layouts stay readable, and a reader asks for the body it can use rather than for a field.
+
 ## Public part and body: split by who needs to read them
 
 The public part holds what a publication needs before it decrypts anything: who wrote the manuscript, for which publication, what kind of post it is, when it was born and when this version was signed, and its tags. A publication can sort and filter what it has been offered without the press, and anyone can see what an author has signed.
 
 The body holds the title, the slug, the text and any custom fields. The author decides per manuscript whether to encrypt it, with a boolean in the note's frontmatter. Encrypted, it can be decrypted only through the press, when a gate passes. The body is stored as a string, so encryption replaces that string and sets `encryption` to true, and the rest of the object is the same either way.
+
+The item carries one body per key holder, keyed by whose key it is. `s2s` is the press's key, and every item has that entry. The layout leaves room for a publication with its own key to add its own ciphertext beside it, and nothing needs signing again when it does: the signature covers the public part and `plaintextHash`, never the body. Only the press's entry is written today, so an item still holds one ciphertext.
 
 ## Signing: EIP-712 over the public part
 

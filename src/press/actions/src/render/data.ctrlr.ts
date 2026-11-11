@@ -9,7 +9,6 @@ import {
   verifyDecryptedBody,
   type Entry,
   type ItemFailureKind,
-  type StoredContentItem,
 } from '../libs/module.factory';
 import { catFile } from '../libs/ipfs.factory';
 import {
@@ -24,9 +23,13 @@ import { inspectItemIntegrity, judgeRefetchedItem, skipReason } from '../libs/it
 import { jcs, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 import { S2SBody, S2STemplateConfig } from '@s2s/soul2soul-shared/lit-actions';
 import type { DataAvailabilityEntry } from '@s2s/soul2soul-shared/lit-actions';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
 import { transformContent } from './content-transforms';
-import { S2SBodyEncrypted, S2SBodyPlain, S2SProof } from '../../../../shared/dist/manuscript/types';
+import {
+  S2SBodyEncrypted,
+  S2SBodyPlain,
+  S2SProof,
+  type AnyS2SContentItem,
+} from '../../../../shared/dist/manuscript/types';
 
 export const createPath = (
   body: S2SBody,
@@ -456,7 +459,7 @@ export const bodiesFromReconcile = (
 export interface CollectionsDrift {
   deals: Entry[];
   needsFetch: Entry[];
-  fetchedItems: Map<string, S2SContentItem>;
+  fetchedItems: Map<string, AnyS2SContentItem>;
 }
 
 /**
@@ -594,7 +597,7 @@ const fetchCollectionsFromArchive = async (
   // Track the FULL canonical items fetched fresh for the drift entries, keyed
   // by genesis — the T4 write-back merges these into the next archive
   // snapshot. The flat bodies below keep the read path byte-identical.
-  const fetchedItems = new Map<string, S2SContentItem>();
+  const fetchedItems = new Map<string, AnyS2SContentItem>();
   const fetched = await Promise.all(
     needsFetch.map(async (entry) => {
       let item: unknown;
@@ -636,8 +639,12 @@ const fetchCollectionsFromArchive = async (
         });
         return null;
       }
-      fetchedItems.set(entry.genesis, item as S2SContentItem);
-      return toBody(entry, item as StoredContentItem);
+      // Cast needed: JSON.parse yields `unknown`, and judgeRefetchedItem
+      // returns a verdict, not a narrowed value. The verdict above is what makes
+      // the claim true — canonical layout, body bound to the author.
+      const canonical = item as AnyS2SContentItem;
+      fetchedItems.set(entry.genesis, canonical);
+      return toBody(entry, canonical);
     }),
   );
   return {
@@ -677,7 +684,7 @@ export const fetchCollections = async (
       // second fetch) and surface a NON-NULL bootstrap CollectionsDrift:
       //   deals       = all deal entries;
       //   needsFetch  = all entries (nothing is cached yet ⇒ everything is a MISS);
-      //   fetchedItems= every freshly-fetched S2SContentItem keyed by genesis.
+      //   fetchedItems= every freshly-fetched content item keyed by genesis.
       //
       // This is what un-deadlocks the cache: shouldWriteBackCache now sees
       // needsFetch > 0 (before, drift was null and the write-back never fired),

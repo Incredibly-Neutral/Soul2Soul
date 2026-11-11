@@ -69,17 +69,18 @@ These types are the **single source of truth** for stored content items. They li
 |---|---|---|
 | `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
-| `S2SContentItem` | `protocol/types.ts` | **flat stored object** (no union): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string)` |
-| `S2SSecretBody` | `protocol/types.ts` | what goes inside `.secret`: `title, slug, content, custom?(Record)` |
+| `S2SContentItem` | `protocol/types.ts` | **flat stored object** (storage layout v3): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), bodies(Record<string,string>)` — `bodies` holds one body per key holder, keyed by the key holder's name; `s2s` is the protocol PKP's and every item has it. A v1/v2 item stores a single `body` string instead. |
+| `S2SContentBody` | `protocol/types.ts` | what goes inside a body: `title, slug, content, custom?(Record)` |
 
 Key design decisions (from HANDOFF-content-item):
-- **No discriminated union.** Both readings of `secret` are `string` (ciphertext when `encryption=true`, stringified JSON when `false`).
+- **No discriminated union.** Both readings of a body are `string` (ciphertext when `encryption=true`, stringified JSON when `false`).
 - **No unsigned public field.** Every field in `S2SPublicContent` is signed via EIP-712.
 - **`specVersion` selects the struct.** A `'2'` envelope verifies under `S2S_TYPES_V2` with `creationDate`/`modifiedDate`; anything else stays under `S2S_TYPES` with `createdAt`, so a v1 digest still reproduces.
-- **`secret` is not signed.** `plaintextHash` commits the plaintext instead.
+- **The body is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
 - **`author` is the author Safe's bare `0x` address**, not a `did` string. The address is the identity; any prefix around it is decoration, so there is none.
-- **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the secret.
+- **One body per key holder.** `bodies` is keyed by whose key it is: `s2s` is the protocol PKP's, and every item carries that entry. The layout leaves room for a publication with its own key to add its own ciphertext beside it, which needs no new signature; only the press's entry is written today. The envelope is unchanged, so `objectId`, `plaintextHash` and the EIP-712 type hash are the same bytes as a single-`body` item's. Read it with `bodyForKey(item)` / `itemBodies(item)` (default key `s2s`), never `item.body`: a body-less item is `malformed-item`.
+- **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the body.
 
 ### Identity modules (NEW)
 
@@ -121,7 +122,7 @@ Nothing writes the prefix; when no readable item carries it, the module goes.
 
 | module | role | notes |
 |---|---|---|
-| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SPublicContent`, `S2SProof`, `S2SSecretBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
+| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SContentItemV2`, `S2SContentItemV3`, `S2SPublicContent`, `S2SProof`, `S2SContentBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
 | `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers + **action-io schemas** | drives the pipeline; selects Bun (preview) vs Lit (prod). Content-item types now live in `protocol/types.ts`, not rendering. Zod schemas (`s2sContentItemSchema` etc.) remain in action-io.ts. |
 | `lit/` | `LitService` (Chipotle REST client), `actions/encrypt`, `actions/decrypt` (author draft: `DraftsModuleV1.fetch` → `isOwner` on the entry's Safe → blob `public.author` must match), `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). `decrypt(key, DecryptParams)` sends `compactAction(decryptAction)` and throws on an `ok:false` envelope; the author Safe is a parameter of neither. Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side); `bodySchema` mirrors the deprecated `S2SBody` |
@@ -190,8 +191,11 @@ comments them out so they never enter the action bundle (INV-7 / the "zod is ove
 decision). 
 
 **NEW:** `rendering/action-io.ts` now also exports zod schemas for the new content-item types:
-`s2sPublicContentSchema`, `s2sProofSchema`, `s2sContentItemSchema`, `s2sSecretBodySchema`,
-`didEthrSchema`. These are the single source of truth for the new flat content-item shape.
+`s2sPublicContentSchema`, `s2sProofSchema`, `s2sContentItemSchema`, `s2sContentItemSchemaV3`,
+`s2sSecretBodySchema`, `didEthrSchema`. These are the single source of truth for the new flat
+content-item shape. `s2sContentItemSchema` is a union over the three storage layouts — the v3
+`bodies` branch first, then the single-`body` branch — so an item written today and an item written
+before the body map both validate.
 
 **2026-08-06:** `EvmUpdateActionInputSchema` (and the `EvmUpdateInput` interface in
 `lit/actions/types.ts`) gained an optional `remove: { path: string; replacedBy?: string }[]` field —

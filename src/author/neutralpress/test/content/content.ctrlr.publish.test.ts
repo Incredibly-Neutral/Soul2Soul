@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
+import { bodyForKey } from '@s2s/soul2soul-shared';
 import { ContentController } from '../../src/content/content.ctrlr';
 import { makeMain, makeVaultFile } from '../helpers/main';
 
@@ -89,8 +90,8 @@ describe('ContentController.publishContent', () => {
 		expect(result!.public.modifiedDate).toBeGreaterThanOrEqual(result!.public.creationDate);
 		expect('createdAt' in result!.public).toBe(false);
 
-		// body is the JSON string of {title, slug, content, custom}
-		const body = JSON.parse(result!.body);
+		// storage layout v3: one body per key holder, and the protocol key has it
+		const body = JSON.parse(bodyForKey(result!) as string);
 		expect(body.title).toBe('My Title');
 		expect(body.slug).toBe('my-title');
 		expect(body.content).toContain('rest');

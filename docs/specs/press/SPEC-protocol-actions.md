@@ -160,7 +160,9 @@ missing — caller must treat falsy `jobs` as failure.
 
 **Slug-change detection (auto `remove`):** for each contentId, prep reads the first (genesis)
 version's CID from the on-chain version log (`getVersion(genesis, 0)`), fetches the content item
-from IPFS, extracts the old slug, and diffs it against the current slug. If they differ, the old
+from IPFS, extracts the old slug, and diffs it against the current slug. The slug is parsed from the
+item's `s2s` body (`storedBody`, i.e. `bodies.s2s` on a v3 item, `body` on a v1/v2 item), and an
+item with no `s2s` body yields no old slug rather than an error. If the slugs differ, the old
 slug path is emitted as a `remove` entry with `replacedBy: contentId`. This replaces the previous
 plan of having neutralpress track slug changes in frontmatter — prep is the single auditable
 location. The `remove` array flows through `renderwithLitActions` unchanged into the update action.

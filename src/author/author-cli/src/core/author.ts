@@ -400,7 +400,8 @@ export async function offerContent(
   // published — the stored item is. Both directions are checked, before any
   // chain call:
   //   - note says encrypted: the anchored item (`--cid` included) must itself
-  //     declare `body.encryption: true` and carry a decryptable body;
+  //     declare `body.encryption: true` and carry a decryptable protocol-key
+  //     body (`bodies.s2s` in the current layout);
   //   - note says plaintext: the previous revision of the same genesis must
   //     not have been encrypted (the same question `upload` asks, same guard —
   //     otherwise `offer --cid <plaintext>` re-opens the downgrade).
@@ -450,8 +451,8 @@ export async function offerContent(
 /**
  * Refuse to offer a CID whose stored item is plaintext when the note asks for
  * encryption. Also refuses an item that cannot be read or whose encrypted body
- * does not meet the read-path contract — offering either would anchor
- * something the render path cannot decrypt.
+ * for the protocol key does not meet the read-path contract — offering either
+ * would anchor something the render path cannot decrypt.
  */
 async function assertStoredItemEncrypted(
   ctx: CliContext,
@@ -464,12 +465,12 @@ async function assertStoredItemEncrypted(
       `refusing to offer ${notePath}: ${kuboCid} declares \`encryption: false\` but the note has \`encryption: true\`. Re-upload the note (\`s2s author upload\`) so the offered CID is encrypted.`,
     );
   }
-  if (stored.body === undefined) {
+  if (stored.s2sBody === undefined) {
     throw new UsageError(
       `refusing to offer ${notePath}: ${kuboCid} says \`encryption: true\` but has no string body`,
     );
   }
-  if (!storedBodyIsDecryptable(stored.body)) {
+  if (!storedBodyIsDecryptable(stored.s2sBody)) {
     throw new UsageError(
       `refusing to offer ${notePath}: ${kuboCid} says \`encryption: true\` but its body is not JSON ciphertext (got non-JSON text or an unusable value), so the render path could not decrypt it. Re-upload the note.`,
     );
@@ -486,8 +487,8 @@ async function assertStoredItemEncrypted(
  * distinguishable from the outside: `plaintextHash` is computed over the
  * canonical plaintext before `encryptFn` runs
  * (`shared/src/identity/sign-content.ts:53-73`), so both revisions share
- * `objectId`, `plaintextHash` and therefore the author's signature — only
- * `body` and `body.encryption` differ. The previous item's flag is the only
+ * `objectId`, `plaintextHash` and therefore the author's signature — only the
+ * body (and its `encryption` flag) differ. The previous item's flag is the only
  * trustworthy record; it is read from the CID the last upload recorded.
  *
  * Everything that prevents the check from happening FAILS CLOSED, and the

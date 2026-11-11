@@ -2,7 +2,10 @@
 
 import type { Entry } from './module.factory';
 import { toBody } from './module.factory';
-import type { S2SContentItem } from '@s2s/soul2soul-shared/lit-actions';
+// The stored item, in whichever layout it was written (`bodies` on v3, `body`
+// on v1/v2). Typed on the union so a reader of an archived item cannot reach
+// for `item.body` and silently get undefined.
+import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 // The integrity verdict (and its shape gate) lives in ONE module shared with the
 // direct read path — see item-integrity.ts. Re-exported below so callers that
 // imported these from the archive module keep working.
@@ -23,7 +26,7 @@ export {
 // ───────────────────────────────────────────────────────────────────────────
 // Per-publication IPFS content archive.
 //
-// Stores the FULL canonical content item (S2SContentItem — signed public
+// Stores the FULL canonical content item (any storage layout — signed public
 // metadata + body + proof + objectId + encryption) for each genesis keyed by
 // genesis, together with the source cid it was built from. This is the
 // "freshness oracle" consumer: a given genesis entry is FRESH when its stored
@@ -31,7 +34,7 @@ export {
 // STALE/MISS and must be re-catted and rebuilt.
 //
 // Items are stored as they were parsed (the raw object, NOT a re-normalised
-// copy), so `item.body` is preserved byte-for-byte and a legacy hash-less item
+// copy), so the item is preserved byte-for-byte and a legacy hash-less item
 // survives a round trip. What IS re-serialised is the archive container itself
 // (a JSON object of items), so the *item's* CID cannot be recomputed from the
 // archive bytes — content-addressing stops at the container boundary, which is
@@ -58,7 +61,7 @@ export const ARCHIVE_FORMAT = 's2s-publication-archive/2';
 
 export interface ArchiveItem {
   cid: string; // latest cid this entry was built from
-  item: S2SContentItem; // full canonical content item (validated against s2sContentItemSchema)
+  item: AnyS2SContentItem; // full canonical content item (validated against s2sContentItemSchema)
 }
 
 export interface Archive {
@@ -247,7 +250,7 @@ export function reconcile(
 export function mergeArchive(
   prev: Archive | null,
   deals: Entry[],
-  refreshed: Map<string, S2SContentItem>,
+  refreshed: Map<string, AnyS2SContentItem>,
   drop: Iterable<string> = [],
 ): Archive {
   const dealSet = new Set(deals.map((d) => d.genesis));
