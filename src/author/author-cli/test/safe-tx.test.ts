@@ -11,7 +11,6 @@ import {
   concatHex,
   decodeFunctionData,
   encodeAbiParameters,
-  hashMessage,
   keccak256,
   stringToHex,
   type Address,
@@ -318,6 +317,21 @@ describe('packSignatures', () => {
     expect(packSignatures([accountA.address], new Map([[accountA.address, flagged]]))).toBe(flagged);
   });
 
+  it('reports a structurally invalid r/s as a CliError, not a viem throw', async () => {
+    const impossible = `0x${'00'.repeat(64)}1b` as Hex;
+    try {
+      await packVerifiedSignatures(
+        [accountA.address],
+        new Map([[accountA.address, impossible]]),
+        SAFE_TX_HASH,
+      );
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).code).toBe('signature_malformed');
+    }
+  });
+
   it('refuses a signature that is not 65 bytes', () => {
     try {
       packSignatures([accountA.address], new Map([[accountA.address, '0x1234']]));
@@ -388,10 +402,20 @@ describe('execTransactionArgs', () => {
     ]);
   });
 
+  it('checks the record against its own hash when it is told the chain', () => {
+    // One field changed, the hash left alone: what a service serving stale
+    // fields would look like, and the reason the check belongs here.
+    const stale: SafeTxRecord = { ...record, value: '5' };
+    try {
+      execTransactionArgs(stale, '0xdead', { chainId: CHAIN_ID });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_hash_mismatch');
+    }
+  });
+
   it('refuses a record with no Safe address to send to', () => {
-    expect(() => execTransactionArgs({ ...record, safe: undefined }, '0xdead')).toThrowError(
-      CliError,
-    );
+    expect(() => execTransactionArgs({ ...record, safe: undefined }, '0xdead')).toThrow(CliError);
   });
 });
 
@@ -414,16 +438,15 @@ interface Reply {
 /** A `fetch` that answers from a script and records every call. */
 function fakeFetch(script: Reply[]): { fetchImpl: typeof fetch; calls: Call[] } {
   const calls: Call[] = [];
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+  const fetchImpl = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const headers = (init?.headers ??
-      {}) as unknown as Record<string, string>;
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     calls.push({ url, method: init?.method ?? 'GET', headers, body });
     const reply = script[calls.length - 1] ?? { status: 200, body: {} };
     const text = reply.body === undefined ? '' : JSON.stringify(reply.body);
-    return new Response(text, { status: reply.status ?? 200 });
-  }) as unknown as typeof fetch;
+    return Promise.resolve(new Response(text, { status: reply.status ?? 200 }));
+  };
   return { fetchImpl, calls };
 }
 
@@ -433,26 +456,40 @@ function configWith(safeTx: { url: string; key?: string }): CliConfig {
 
 const BASE = 'https://safe-tx.example';
 
-const RECORD_JSON = {
-  safeTxHash: '0xabc',
-  nonce: 7,
-  to: TARGET,
-  value: '1000',
-  data: '0x1234',
-  operation: 0,
-  safeTxGas: '0',
-  baseGas: '0',
-  gasPrice: '0',
-  gasToken: ZERO,
-  refundReceiver: ZERO,
-  confirmations: [],
-  confirmationsRequired: 2,
-  isExecuted: false,
-  dataDecoded: {
-    method: 'addOwnerWithThreshold',
-    parameters: [{ name: 'owner', value: OWNER_B, type: 'address' }],
-  },
-};
+/**
+ * A record as the service reports it: the fields, the Safe it belongs to, and
+ * a hash that the fields actually reproduce. The adapter refuses anything else,
+ * so a fixture with an invented hash would test nothing but the refusal.
+ */
+function recordFor(nonce: number, safe: Address = SAFE) {
+  return {
+    safe,
+    safeTxHash: computeSafeTxHash({
+      chainId: CHAIN_ID,
+      safe,
+      tx: { to: TARGET, value: 1000n, data: '0x1234', operation: 0, nonce },
+    }),
+    nonce,
+    to: TARGET,
+    value: '1000',
+    data: '0x1234',
+    operation: 0,
+    safeTxGas: '0',
+    baseGas: '0',
+    gasPrice: '0',
+    gasToken: ZERO,
+    refundReceiver: ZERO,
+    confirmations: [],
+    confirmationsRequired: 2,
+    isExecuted: false,
+    dataDecoded: {
+      method: 'addOwnerWithThreshold',
+      parameters: [{ name: 'owner', value: OWNER_B, type: 'address' }],
+    },
+  };
+}
+
+const RECORD_JSON = recordFor(7);
 
 describe('makeSafeTxService', () => {
   it('sends the key as a Bearer token and strips trailing slashes from the base', async () => {
@@ -505,9 +542,11 @@ describe('makeSafeTxService', () => {
       singleton: SAFE_L2_SINGLETON,
       fallbackHandler: SAFE_FALLBACK_HANDLER,
       implementationVersion: '1.4.1',
-      modules: [],
       delegate: SAFE,
     });
+    // No module claim: this caller did not state one, and the service serves
+    // whatever it is told as the Safe's real module set.
+    expect(calls[1]?.body).not.toHaveProperty('modules');
   });
 
   it('declares the modules the caller names rather than asserting none', async () => {
@@ -576,12 +615,12 @@ describe('makeSafeTxService', () => {
     const { fetchImpl, calls } = fakeFetch([{ body: RECORD_JSON }]);
     const record = await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
       SAFE,
-      '0xabc',
+      RECORD_JSON.safeTxHash,
     );
 
-    expect(calls[0]?.url).toBe(`${BASE}/api/v1/multisig-transactions/0xabc/`);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/multisig-transactions/${RECORD_JSON.safeTxHash}/`);
     expect(record).toEqual({
-      safeTxHash: '0xabc',
+      safeTxHash: RECORD_JSON.safeTxHash,
       safe: SAFE,
       nonce: 7,
       to: TARGET,
@@ -608,11 +647,7 @@ describe('makeSafeTxService', () => {
       {
         body: {
           count: 3,
-          results: [
-            { ...RECORD_JSON, safeTxHash: '0xbbb', nonce: 8 },
-            { ...RECORD_JSON, safeTxHash: '0xaaa', nonce: 7 },
-            { ...RECORD_JSON, safeTxHash: '0xccc', nonce: 9 },
-          ],
+          results: [recordFor(8), recordFor(7), recordFor(9)],
         },
       },
     ]);
@@ -623,23 +658,88 @@ describe('makeSafeTxService', () => {
     }).pending(SAFE);
 
     expect(records.map((record) => [record.nonce, record.safeTxHash])).toEqual([
-      [7, '0xaaa'],
-      [8, '0xbbb'],
-      [9, '0xccc'],
+      [7, recordFor(7).safeTxHash],
+      [8, recordFor(8).safeTxHash],
+      [9, recordFor(9).safeTxHash],
     ]);
     expect(records.map((record) => record.safe)).toEqual([SAFE, SAFE, SAFE]);
   });
 
-  it('posts a confirmation against the hash route', async () => {
-    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+  it('reads the record, then posts the confirmation against the hash route', async () => {
+    const { fetchImpl, calls } = fakeFetch([{ body: RECORD_JSON }, { status: 201, body: {} }]);
     await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).confirm({
       safe: SAFE,
-      safeTxHash: '0xabc',
+      safeTxHash: RECORD_JSON.safeTxHash,
       signature: '0xdead',
     });
 
-    expect(calls[0]?.url).toBe(`${BASE}/api/v1/multisig-transactions/0xabc/confirmations/`);
-    expect(calls[0]?.body).toEqual({ signature: '0xdead' });
+    expect(calls.map((call) => call.method)).toEqual(['GET', 'POST']);
+    expect(calls[1]?.url).toBe(
+      `${BASE}/api/v1/multisig-transactions/${RECORD_JSON.safeTxHash}/confirmations/`,
+    );
+    expect(calls[1]?.body).toEqual({ signature: '0xdead' });
+  });
+
+  it('refuses to confirm a transaction that belongs to another Safe', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      { body: recordFor(7, TARGET) },
+      { status: 201, body: {} },
+    ]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).confirm({
+        safe: SAFE,
+        safeTxHash: recordFor(7, TARGET).safeTxHash,
+        signature: '0xdead',
+      });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_safe_mismatch');
+    }
+    // Nothing was signed into another Safe's queue.
+    expect(calls.map((call) => call.method)).toEqual(['GET']);
+  });
+
+  it('refuses a record the service labels with another Safe', async () => {
+    const { fetchImpl } = fakeFetch([{ body: recordFor(7, TARGET) }]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
+        SAFE,
+        recordFor(7, TARGET).safeTxHash,
+      );
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_safe_mismatch');
+      expect((err as CliError).message).toContain(TARGET);
+    }
+  });
+
+  it('refuses a record with no Safe field when the route cannot prove one', async () => {
+    const anonymous: Record<string, unknown> = { ...RECORD_JSON };
+    delete anonymous.safe;
+    const { fetchImpl } = fakeFetch([{ body: anonymous }]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
+        SAFE,
+        RECORD_JSON.safeTxHash,
+      );
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_bad_response');
+    }
+  });
+
+  it('refuses a record whose fields do not reproduce its own hash', async () => {
+    // Same transaction, one field changed: the hash no longer describes it.
+    const { fetchImpl } = fakeFetch([{ body: { ...RECORD_JSON, value: '2000' } }]);
+    try {
+      await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
+        SAFE,
+        RECORD_JSON.safeTxHash,
+      );
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('safe_tx_hash_mismatch');
+    }
   });
 
   it('turns a non-2xx into a CliError carrying the status and the body text', async () => {
@@ -650,7 +750,7 @@ describe('makeSafeTxService', () => {
 
     await expect(
       makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(SAFE, '0xabc'),
-    ).rejects.toThrowError(/422.*hash mismatch/);
+    ).rejects.toThrow(/422.*hash mismatch/);
 
     try {
       await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(SAFE, '0xabc');
@@ -662,9 +762,7 @@ describe('makeSafeTxService', () => {
   });
 
   it('names the endpoint when the service is unreachable', async () => {
-    const fetchImpl = (async () => {
-      throw new TypeError('fetch failed');
-    }) as unknown as typeof fetch;
+    const fetchImpl = (() => Promise.reject(new TypeError('fetch failed'))) as typeof fetch;
 
     try {
       await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).pending(SAFE);

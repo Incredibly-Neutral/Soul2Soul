@@ -235,13 +235,15 @@ export async function packVerifiedSignatures(
 
   const flags = new Map<string, 'typed' | 'message'>();
   for (const [key, { parsed, owner }] of bySigner) {
-    const digest = typedDigest(parsed);
-    const typed = await recoversTo(digest, safeTxHash, owner);
+    // r || s || v in the bare 27/28 form `recoverAddress` takes. A candidate
+    // signature, not a digest: it is what gets recovered over the digest.
+    const candidate = asRecoverableSignature(parsed);
+    const typed = await recoversTo(candidate, safeTxHash, owner);
     if (typed) {
       flags.set(key, 'typed');
       continue;
     }
-    if (!(await recoversTo(digest, hashMessage({ raw: safeTxHash }), owner))) {
+    if (!(await recoversTo(candidate, hashMessage({ raw: safeTxHash }), owner))) {
       throw new CliError(
         `signature for ${owner} recovers to another address over ${safeTxHash}`,
         1,
@@ -268,7 +270,7 @@ interface ParsedSignature {
 function readSignature(owner: Address, signature: Hex): ParsedSignature {
   if (size(signature) !== 65) {
     throw new CliError(
-      `signature for ${owner} is ${size(signature)} bytes, expected 65`,
+      `signature for ${owner} is ${String(size(signature))} bytes, expected 65`,
       1,
       'signature_malformed',
     );
@@ -279,7 +281,7 @@ function readSignature(owner: Address, signature: Hex): ParsedSignature {
   const v = raw > 30 ? raw - 4 : raw;
   if (v !== 27 && v !== 28) {
     throw new CliError(
-      `signature for ${owner} carries v=${raw}; Safe v1.4.1 reads 27/28 or 31/32`,
+      `signature for ${owner} carries v=${String(raw)}; Safe v1.4.1 reads 27/28 or 31/32`,
       1,
       'signature_malformed',
     );
@@ -321,12 +323,24 @@ function pack(
 }
 
 /** r || s || 27/28, the form `recoverAddress` takes. */
-function typedDigest(parsed: ParsedSignature): Hex {
+function asRecoverableSignature(parsed: ParsedSignature): Hex {
   return concatHex([parsed.r, parsed.s, `0x${(parsed.parity === 0 ? 27 : 28).toString(16)}`]);
 }
 
-async function recoversTo(signature: Hex, digest: Hex, owner: Address): Promise<boolean> {
-  return (await recoverAddress({ hash: digest, signature })).toLowerCase() === owner.toLowerCase();
+/** Whether `candidate` was made by `owner` over `digest`. */
+async function recoversTo(candidate: Hex, digest: Hex, owner: Address): Promise<boolean> {
+  try {
+    return (await recoverAddress({ hash: digest, signature: candidate })).toLowerCase() === owner.toLowerCase();
+  } catch {
+    // A signature whose r/s is not a curve point throws inside viem. It is the
+    // signature's shape that is wrong, not its owner, and a thrown TypeError
+    // would escape the CLI's error envelope with no `code` for `--json`.
+    throw new CliError(
+      `signature for ${owner} is not a valid secp256k1 signature`,
+      1,
+      'signature_malformed',
+    );
+  }
 }
 
 /**
@@ -337,11 +351,19 @@ async function recoversTo(signature: Hex, digest: Hex, owner: Address): Promise<
  * substituting zeros for a nonzero `safeTxGas`, `gasPrice` or `gasToken`
  * changes the transaction hash, and the Safe then treats the signatures as
  * made by strangers. The call goes to the Safe, not to the proposal's `to`.
+ *
+ * Pass `chainId` when the record did not come from this adapter: the fields are
+ * then checked against `record.safeTxHash` and a mismatch is refused before
+ * anything is signed or sent.
  */
 export function execTransactionArgs(
   record: SafeTxRecord,
   signatures: Hex,
+  opts?: { chainId: number },
 ): { to: Address; data: Hex } {
+  // The transport already refuses a record whose fields do not reproduce its
+  // hash; a record built by hand has to say which chain to check against.
+  if (opts?.chainId !== undefined) assertRecordHash(record, opts.chainId);
   if (record.safe === undefined) {
     throw new CliError(
       `record ${record.safeTxHash} carries no Safe address, so there is nowhere to send execTransaction`,
@@ -415,9 +437,51 @@ interface RawResponse {
   text: string;
 }
 
-/** The service's own field names differ from ours in casing and nesting only. */
-function toRecord(raw: unknown, safe: Address): SafeTxRecord {
+/** A string, or the decimal text of a number; nothing else survives the wire. */
+function textOf(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  // An object or an array stringifies to "[object Object]" and would then be
+  // read as an address. Missing is the honest answer.
+  return undefined;
+}
+
+/**
+ * One response from the service, as a record.
+ *
+ * `claimed` is what the service says the Safe is: it returns `safe` on every
+ * transaction, and a hash-keyed route has no other way to tie a record to the
+ * Safe the caller named. A record labelled with another Safe would be executed
+ * against the caller's Safe, where its signatures recover to strangers and the
+ * Safe reverts `GS026` without naming the mistake — so the label is checked
+ * here, at the boundary, and a disagreement is refused.
+ *
+ * `requireSafe` is for the hash-keyed reads: on a list the Safe-scoped URL has
+ * already proved the label, on a single read only the field can.
+ */
+function toRecord(
+  raw: unknown,
+  safe: Address,
+  chainId: number,
+  requireSafe = false,
+): SafeTxRecord {
   const source = (raw ?? {}) as Record<string, unknown>;
+  const claimed = textOf(source.safe);
+  if (claimed !== undefined && claimed.toLowerCase() !== safe.toLowerCase()) {
+    throw new CliError(
+      `this transaction belongs to Safe ${claimed}, not ${safe}`,
+      1,
+      'safe_tx_safe_mismatch',
+    );
+  }
+  if (claimed === undefined && requireSafe) {
+    throw new CliError(
+      'the service returned no Safe address, so this transaction cannot be tied to the Safe it was read for',
+      1,
+      'safe_tx_bad_response',
+    );
+  }
+
   const confirmations = Array.isArray(source.confirmations) ? source.confirmations : [];
   const decoded = source.dataDecoded as
     | { method?: unknown; parameters?: unknown }
@@ -425,24 +489,27 @@ function toRecord(raw: unknown, safe: Address): SafeTxRecord {
     | undefined;
   const parameters = Array.isArray(decoded?.parameters) ? decoded.parameters : [];
 
-  return {
-    safeTxHash: String(source.safeTxHash ?? '') as Hex,
-    safe,
+  const record: SafeTxRecord = {
+    safeTxHash: (textOf(source.safeTxHash) ?? '') as Hex,
+    safe: (claimed ?? safe) as Address,
     nonce: Number(source.nonce ?? 0),
-    to: String(source.to ?? ZERO_ADDRESS) as Address,
-    value: String(source.value ?? '0'),
-    data: String(source.data ?? '0x') as Hex,
+    to: (textOf(source.to) ?? ZERO_ADDRESS) as Address,
+    value: textOf(source.value) ?? '0',
+    data: (textOf(source.data) ?? '0x') as Hex,
     operation: Number(source.operation ?? 0),
     // Kept as the service sends them: they are inside the signed struct, so
     // `execTransactionArgs` has to hand them back byte for byte.
-    safeTxGas: String(source.safeTxGas ?? '0'),
-    baseGas: String(source.baseGas ?? '0'),
-    gasPrice: String(source.gasPrice ?? '0'),
-    gasToken: String(source.gasToken ?? ZERO_ADDRESS) as Address,
-    refundReceiver: String(source.refundReceiver ?? ZERO_ADDRESS) as Address,
+    safeTxGas: textOf(source.safeTxGas) ?? '0',
+    baseGas: textOf(source.baseGas) ?? '0',
+    gasPrice: textOf(source.gasPrice) ?? '0',
+    gasToken: (textOf(source.gasToken) ?? ZERO_ADDRESS) as Address,
+    refundReceiver: (textOf(source.refundReceiver) ?? ZERO_ADDRESS) as Address,
     confirmations: confirmations.map((entry) => {
       const item = (entry ?? {}) as Record<string, unknown>;
-      return { owner: String(item.owner ?? '') as Address, signature: String(item.signature ?? '') as Hex };
+      return {
+        owner: (textOf(item.owner) ?? '') as Address,
+        signature: (textOf(item.signature) ?? '') as Hex,
+      };
     }),
     confirmationsRequired: Number(source.confirmationsRequired ?? 0),
     isExecuted: source.isExecuted === true,
@@ -452,12 +519,60 @@ function toRecord(raw: unknown, safe: Address): SafeTxRecord {
             method: decoded.method,
             parameters: parameters.map((entry) => {
               const item = (entry ?? {}) as Record<string, unknown>;
-              return { name: String(item.name ?? ''), value: item.value };
+              return { name: textOf(item.name) ?? '', value: item.value };
             }),
           },
         }
       : {}),
   };
+
+  assertRecordHash(record, chainId);
+  return record;
+}
+
+/**
+ * Recompute the safeTxHash from the record's own fields and refuse a record
+ * that does not reproduce it.
+ *
+ * The hash is the only thing tying the signatures to this transaction, and
+ * `execTransaction` is built from these fields: a field the service reports
+ * differently from the one that was signed yields a hash the Safe never saw,
+ * which it reports as `GS026` with no hint that the data was the problem. The
+ * cost of checking is one keccak per record.
+ */
+function assertRecordHash(record: SafeTxRecord, chainId: number): void {
+  let recomputed: Hex;
+  try {
+    recomputed = computeSafeTxHash({
+      chainId,
+      safe: record.safe ?? ZERO_ADDRESS,
+      tx: {
+        to: record.to,
+        value: BigInt(record.value),
+        data: record.data,
+        operation: record.operation === 1 ? 1 : 0,
+        safeTxGas: BigInt(record.safeTxGas ?? '0'),
+        baseGas: BigInt(record.baseGas ?? '0'),
+        gasPrice: BigInt(record.gasPrice ?? '0'),
+        gasToken: record.gasToken ?? ZERO_ADDRESS,
+        refundReceiver: record.refundReceiver ?? ZERO_ADDRESS,
+        nonce: record.nonce,
+      },
+    });
+  } catch {
+    throw new CliError(
+      `transaction ${record.safeTxHash} carries a field that is not a number, so its hash cannot be checked`,
+      1,
+      'safe_tx_bad_response',
+    );
+  }
+  if (recomputed.toLowerCase() !== record.safeTxHash.toLowerCase()) {
+    throw new CliError(
+      `the service reports transaction ${record.safeTxHash}, but its fields hash to ${recomputed}; executing it would revert (GS026)`,
+      1,
+      'safe_tx_hash_mismatch',
+    );
+  }
 }
 
 export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
@@ -503,7 +618,7 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
   const fail = (method: string, path: string, response: RawResponse): never => {
     const bodyText = response.text.trim();
     throw new CliError(
-      `Safe Transaction Service ${method} ${path} failed: ${response.status}${
+      `Safe Transaction Service ${method} ${path} failed: ${String(response.status)}${
         bodyText === '' ? '' : ` ${bodyText}`
       }`,
       1,
@@ -550,7 +665,11 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
         // an author Safe is an ERC-4337 account with the Safe4337Module
         // enabled, and a caller that knows the module passes it here rather
         // than having this function assert an empty set.
-        modules: info.modules ?? [],
+        // Omitted, not defaulted: the service serves this list as the Safe's
+        // real module set, and an author Safe is an ERC-4337 account with the
+        // Safe4337Module enabled. Asserting `[]` would be a claim about someone
+        // else's Safe that this function cannot check.
+        ...(info.modules === undefined ? {} : { modules: info.modules }),
         delegate: safe,
       });
     },
@@ -592,20 +711,36 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
       // correctness: the queue is the order the nonces must be executed in, and
       // a page that arrives in another order would be executed out of turn.
       return results
-        .map((entry) => toRecord(entry, safe))
+        .map((entry) => toRecord(entry, safe, chainId))
         .sort((left, right) => left.nonce - right.nonce);
     },
 
     /**
-     * One queued transaction. The route names the hash, not the Safe: the
-     * hash is globally unique, so `safe` is only what the returned record is
-     * labelled with.
+     * One queued transaction. The route names the hash, not the Safe, so the
+     * record's own `safe` is the only thing that ties it to the Safe the caller
+     * asked about: it is required here, and a disagreement is refused.
      */
     get: async (safe, safeTxHash): Promise<SafeTxRecord> =>
-      toRecord(await json('GET', `/api/v1/multisig-transactions/${safeTxHash}/`), safe),
+      toRecord(
+        await json('GET', `/api/v1/multisig-transactions/${safeTxHash}/`),
+        safe,
+        chainId,
+        true,
+      ),
 
-    /** Add one owner's signature to a queued transaction. */
+    /**
+     * Add one owner's signature to a queued transaction. The POST names the
+     * hash only, so the record is read first: a signature filed against another
+     * Safe's transaction confirms nothing, and the hash is the wrong thing to
+     * be wrong about silently.
+     */
     confirm: async ({ safe, safeTxHash, signature }): Promise<void> => {
+      toRecord(
+        await json('GET', `/api/v1/multisig-transactions/${safeTxHash}/`),
+        safe,
+        chainId,
+        true,
+      );
       await json('POST', `/api/v1/multisig-transactions/${safeTxHash}/confirmations/`, {
         signature,
       });
