@@ -85,6 +85,11 @@ export interface FileConfig {
     custom?: { l1?: string[]; l2?: string[] };
   };
   paymaster?: { key?: string; url?: string };
+  /**
+   * Safe Transaction Service. Base URL and an optional API key: the public host
+   * serves unauthenticated requests at a rate the queue commands can exceed.
+   */
+  safeTx?: { url?: string; key?: string };
   filecoin?: { sessionKeyFile?: string; chain?: FilecoinChain; rpcUrl?: string };
   lit?: { accountKey?: string; usageKey?: string };
   ens?: { registry?: string };
@@ -149,6 +154,16 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   // `bundlerEndpoints`), and a paymaster URL never moves the bundler.
   { path: 'bundler.url', env: ['S2S_BUNDLER_URL'], url: true },
   { path: 'paymaster.url', env: ['S2S_PAYMASTER_URL'], url: true },
+  // The Safe Transaction Service, the one place a multisig proposal exists
+  // before it is executed. The key is optional: the public host answers
+  // unauthenticated requests, it just rate-limits them.
+  {
+    path: 'safeTx.url',
+    env: ['S2S_SAFE_TX_URL'],
+    default: 'https://safe-transaction-base.safe.global',
+    url: true,
+  },
+  { path: 'safeTx.key', env: ['S2S_SAFE_TX_API_KEY'], secret: true },
   { path: 'filecoin.sessionKeyFile', env: ['S2S_FILECOIN_SESSION_KEY'] },
   {
     path: 'filecoin.chain',
@@ -218,6 +233,10 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   environment: 'prod',
   ipfs: { kubo: { provider: 'kubo', url: 'ipfs.transport-union.dev' } },
   filecoin: { chain: 'mainnet', rpcUrl: 'https://api.node.glif.io/rpc/v1' },
+  // The public Safe Transaction Service on Base. Typed here as well as in the
+  // field registry: a missing or replaced defaults file must not leave the
+  // signer commands without a transport.
+  safeTx: { url: 'https://safe-transaction-base.safe.global' },
   // The deployed `AuthorContractsFactory` (Base). Typed here as well as in
   // `defaults.json` and the field registry, exactly as the gateway and the
   // Filecoin RPC are: a missing or replaced defaults file must not leave the
@@ -454,6 +473,12 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
 
   const bundler = compact({ url: textValue(objectValue(raw.bundler)?.url) });
   if (bundler) out.bundler = bundler;
+
+  const safeTx = compact({
+    url: textValue(objectValue(raw.safeTx)?.url),
+    key: textValue(objectValue(raw.safeTx)?.key),
+  });
+  if (safeTx) out.safeTx = safeTx;
 
   const filecoinRaw = objectValue(raw.filecoin);
   const filecoin: NonNullable<FileConfig['filecoin']> = {};
