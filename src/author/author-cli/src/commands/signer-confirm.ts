@@ -7,8 +7,8 @@
 // still the Safe's own — send `execTransaction` on chain from the EOA.
 //
 // The signature is `signMessage` over the raw 32 bytes, which is the eth_sign
-// scheme the Safe reads from a `v` of 31/32. Packing is `packVerifiedSignatures`,
-// not `packSignatures`: it recovers every signature in the set against the
+// scheme the Safe reads from a `v` of 31/32. Packing is `packVerifiedSignatures`:
+// it recovers every signature in the set against the
 // digest before sending, so a confirmation from another tool that signed a
 // different digest is refused here with `signature_not_owner` instead of
 // arriving at the Safe as `GS026` with no owner named. The packed list is the

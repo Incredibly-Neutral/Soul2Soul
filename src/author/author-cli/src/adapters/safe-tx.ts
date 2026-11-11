@@ -528,12 +528,8 @@ function toRecord(
   assertRecordHash(record, chainId);
   const requested = opts.safeTxHash;
   if (requested !== undefined && record.safeTxHash.toLowerCase() !== requested.toLowerCase()) {
-    const answered =
-      record.safeTxHash.length === 0
-        ? 'a transaction that carries no safeTxHash'
-        : `transaction ${record.safeTxHash}`;
     throw new CliError(
-      `the service answered a read for ${requested} with ${answered} — signing it would confirm a different proposal`,
+      `the service answered a read for ${requested} with transaction ${record.safeTxHash} — signing it would confirm a different proposal`,
       1,
       'safe_tx_wrong_transaction',
     );
