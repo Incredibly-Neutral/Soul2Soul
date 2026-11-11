@@ -483,18 +483,42 @@ describe('JCS pages — render → verify round-trip', () => {
 describe('pageIdentityOf — reads the address whichever term carries it', () => {
   const AUTHOR_SAFE = `0x${'11'.repeat(20)}`;
 
-  it('reads the address from a page rendered today', () => {
+  it('reads the address out of the CAIP-10 account id a page rendered today carries', () => {
     const identity = pageIdentityOf({
       author: {
         '@type': 'Person',
         identifier: {
           '@type': 'PropertyValue',
-          propertyID: 'address',
-          value: AUTHOR_SAFE,
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:8453:${AUTHOR_SAFE}`,
         },
       },
     });
     expect(identity.authorDid).toBe(AUTHOR_SAFE);
+  });
+
+  it('keeps the case a CAIP-10 account id carries', () => {
+    const checksummed = `0x${'AbCdEf012345678901234567890123456789012'}${'3'}`;
+    const identity = pageIdentityOf({
+      author: {
+        '@type': 'Person',
+        identifier: {
+          '@type': 'PropertyValue',
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:8453:${checksummed}`,
+        },
+      },
+    });
+    expect(identity.authorDid).toBe(checksummed);
+  });
+
+  it('reads the same address from a page rendered today as from a pinned page', async () => {
+    const html = await renderPage(contentInfo());
+    expect(pageIdentityOf(jsonLdOf(html)).authorDid).toBe(
+      pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML)).authorDid,
+    );
   });
 
   it('reads the same address from a pinned page (a pre-change artifact)', () => {
@@ -507,7 +531,12 @@ describe('pageIdentityOf — reads the address whichever term carries it', () =>
         '@type': 'Person',
         identifier: [
           { '@type': 'PropertyValue', propertyID: 'other', value: 'not-an-address' },
-          { '@type': 'PropertyValue', propertyID: 'address', value: AUTHOR_SAFE },
+          {
+            '@type': 'PropertyValue',
+            propertyID: 'CAIP-10',
+            name: 'Safe smart account',
+            value: `eip155:8453:${AUTHOR_SAFE}`,
+          },
         ],
       },
     });

@@ -49,7 +49,9 @@ const PROTOCOL_INFO = {
 const PAGE = `<!DOCTYPE html>
 <html lang="en"><head><title>t</title></head><body><h1>Hello</h1></body></html>`;
 
-const contentInfo = (overrides: Partial<S2SContentInfoWithDates> = {}): S2SContentInfoWithDates => ({
+const contentInfo = (
+  overrides: Partial<S2SContentInfoWithDates> = {},
+): S2SContentInfoWithDates => ({
   author: {
     address: '0x1111111111111111111111111111111111111111',
     createdAt: '2025-01-02T03:04:05.000Z',
@@ -258,15 +260,30 @@ describe('addAndSignMetadata — author proof nesting', () => {
       signer: authorProof.signer,
       signature: authorProof.signature,
     });
-    // The term names what the value is; the value is the bare address.
+    // The author is named as a CAIP-10 account id: the chain, then the address.
     expect(schema.author.identifier).toEqual({
       '@type': 'PropertyValue',
-      propertyID: 'address',
-      value: '0x1111111111111111111111111111111111111111',
+      propertyID: 'CAIP-10',
+      name: 'Safe smart account',
+      value: 'eip155:8453:0x1111111111111111111111111111111111111111',
     });
   });
 
-  it('writes author and publisher as bare addresses under the address terms', async () => {
+  it('emits a checksummed address as the item carries it', async () => {
+    const { schema } = await render(
+      contentInfo({
+        author: {
+          address: '0xAbCdEf0123456789012345678901234567890123',
+          createdAt: '2025-01-02T03:04:05.000Z',
+        },
+      }),
+    );
+    expect(schema.author.identifier.value).toBe(
+      'eip155:8453:0xAbCdEf0123456789012345678901234567890123',
+    );
+  });
+
+  it('reads a pre-change identity to the address it names', async () => {
     // A pre-change identity arrives prefixed and checksummed; the page value is
     // the address, not the form it was pinned in.
     const { schema } = await render(
@@ -277,11 +294,9 @@ describe('addAndSignMetadata — author proof nesting', () => {
         },
       }),
     );
-    expect(schema.author.identifier).toEqual({
-      '@type': 'PropertyValue',
-      propertyID: 'address',
-      value: '0xabcdef0123456789012345678901234567890123',
-    });
+    expect(schema.author.identifier.value).toBe(
+      'eip155:8453:0xabcdef0123456789012345678901234567890123',
+    );
     expect(schema.publisher.identifier[0]).toEqual({
       '@type': 'PropertyValue',
       propertyID: 'address',

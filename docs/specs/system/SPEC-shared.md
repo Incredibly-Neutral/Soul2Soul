@@ -89,7 +89,7 @@ Key design decisions (from HANDOFF-content-item):
 | `identity/` | `sign-content.ts` | `buildSignedContentItem`, `computeObjectId`, `TypedDataSigner`, `noOpEncrypt` | Produce a signed S2SContentItem from raw inputs + EOA signer |
 | `identity/` | `verify-content.ts` | `verifyAuthorship`, `verifyPlaintextHash`, `resolveLatest`, `getHistory`, `authorAddress`, `VersionRecord` | Verify authorship + resolve append log |
 | `identity/` | `jcs.ts` | `jcs`, `keccakOfJson` | RFC 8785 canonical JSON + keccak256 |
-| `identity/` | `author-address.ts` | `authorAddress` | the bare lowercase address an author value names — the one reader-side tolerance for the retired prefix |
+| `identity/` | `author-address.ts` | `authorAddress`, `accountAddress` | `authorAddress`: the bare lowercase address an author value names — the one reader-side tolerance for the retired prefix. `accountAddress`: the address a page identity names — a CAIP-10 account id strips to its address (case kept), a bare address passes through, a pre-change prefixed value goes through `authorAddress()` |
 
 An item pinned before author became the bare address carries `did:ethr:0x…` in `public.author`.
 `authorAddress()` strips that prefix before comparing, so those items still verify and render.
@@ -104,7 +104,7 @@ Nothing writes the prefix; when no readable item carries it, the module goes.
 | `S2SContentItem` | `content/types.ts` | empty extension of Lens-era `S2SPublicContent` | 🔸 Deprecated — no purpose |
 | `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.address`, `author.proof`, `publisher.address`, `publisher.safe`, `contentGenesis`, `objectId`, `contentCid`, `plaintextHash`, `mediaType`, `specVersion`, `licenseContract`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
 
-On the page, the author and publisher identifiers are JSON-LD `PropertyValue` nodes: `propertyID: 'address'` for each bare `0x` address, and `propertyID: 'address:safe'` for the publication Safe. The value is the address itself, so no term carries a prefix.
+On the page, the author identifier is a JSON-LD `PropertyValue` node naming a CAIP-10 account id: `propertyID: 'CAIP-10'`, `name: 'Safe smart account'`, `value: 'eip155:8453:<authorSafeAddress>'`. The address is emitted as the item carries it, case included, and the chain id is Base mainnet (8453). The publisher identifiers are still `propertyID: 'address'` for the bare `0x` address and `propertyID: 'address:safe'` for the publication Safe. A reader takes the identity from whichever PropertyValue on the author node names an address, through `accountAddress()`, so the term is never load-bearing: an old page and a new one read as the same address.
 
 ### Active types (unchanged)
 
