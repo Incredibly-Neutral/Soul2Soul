@@ -70,7 +70,7 @@ const GATEWAY = 'https://ipfs.example';
 
 const mkEntry = (author: string = AUTHOR.address): Entry => ({
   genesis: GENESIS,
-  author, // getDeals()/getLatest() return a plain address, never a did:ethr
+  author, // getDeals()/getLatest() return a plain address
   cid: CID,
   timestamp: 1234,
 });

@@ -469,16 +469,16 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             // pinned before the author became a bare address still carries the
             // old form here, and addAndSignMetadata normalises the value it
             // writes into the page.
-            did: body.author || '',
+            address: body.author || '',
             // Genesis signing time: the author node's dateCreated does not move
             // when the document is republished.
             createdAt: body.creationDate || '',
             ...(authorProof ? { proof: authorProof } : {}),
           },
           publisher: {
-            // The bare signer address; the page builder writes it as the value
-            // of the retained `did:ethr` term.
-            did: signerAddress || '',
+            // The bare signer address; the page builder writes it as the
+            // `address` value.
+            address: signerAddress || '',
             url: body.publication || '',
             ...(authorSafeAddress ? { safe: authorSafeAddress } : {}),
           },

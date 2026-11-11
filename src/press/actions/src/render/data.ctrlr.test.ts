@@ -339,7 +339,7 @@ const ATTACKER = new Wallet('0x' + '22'.repeat(32));
 
 const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address) => ({
   genesis,
-  author, // getDeals() returns a plain address, NOT a did:ethr
+  author, // getDeals() returns a plain address, never a prefixed author form
   cid,
   timestamp: 1,
 });

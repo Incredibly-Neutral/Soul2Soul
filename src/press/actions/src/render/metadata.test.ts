@@ -26,6 +26,7 @@ import {
   type S2SProtocolInfo,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { addAndSignMetadata, type S2SContentInfoWithDates } from './metadata';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
 
 // metadata.ts runs inside a Lit Action: `ethers` and `Lit` are injected globals.
 const PRIV = ethers.utils.keccak256(ethers.utils.toUtf8Bytes('s2s-metadata-test-key'));
@@ -50,11 +51,11 @@ const PAGE = `<!DOCTYPE html>
 
 const contentInfo = (overrides: Partial<S2SContentInfoWithDates> = {}): S2SContentInfoWithDates => ({
   author: {
-    did: 'did:ethr:0x1111111111111111111111111111111111111111',
+    address: '0x1111111111111111111111111111111111111111',
     createdAt: '2025-01-02T03:04:05.000Z',
   },
   publisher: {
-    did: 'did:ethr:0x2222222222222222222222222222222222222222',
+    address: '0x2222222222222222222222222222222222222222',
     url: 'https://example.org',
   },
   contentCid: CID,
@@ -245,7 +246,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
       contentInfo({
         objectId: ITEM_OBJECT_ID,
         author: {
-          did: 'did:ethr:0x1111111111111111111111111111111111111111',
+          address: '0x1111111111111111111111111111111111111111',
           createdAt: '2025-01-02T03:04:05.000Z',
           proof: authorProof,
         },
@@ -257,34 +258,33 @@ describe('addAndSignMetadata — author proof nesting', () => {
       signer: authorProof.signer,
       signature: authorProof.signature,
     });
-    // The TERM stays `did:ethr` (pages pinned before the change carry it); the
-    // VALUE is the bare address, whatever form the item was pinned in.
+    // The term names what the value is; the value is the bare address.
     expect(schema.author.identifier).toEqual({
       '@type': 'PropertyValue',
-      propertyID: 'did:ethr',
+      propertyID: 'address',
       value: '0x1111111111111111111111111111111111111111',
     });
   });
 
-  it('writes author and publisher as bare addresses under the retained did:ethr term', async () => {
+  it('writes author and publisher as bare addresses under the address terms', async () => {
     // A pre-change identity arrives prefixed and checksummed; the page value is
     // the address, not the form it was pinned in.
     const { schema } = await render(
       contentInfo({
         author: {
-          did: 'did:ethr:0xAbCdEf0123456789012345678901234567890123',
+          address: `${LEGACY_AUTHOR_PREFIX}0xAbCdEf0123456789012345678901234567890123`,
           createdAt: '2025-01-02T03:04:05.000Z',
         },
       }),
     );
     expect(schema.author.identifier).toEqual({
       '@type': 'PropertyValue',
-      propertyID: 'did:ethr',
+      propertyID: 'address',
       value: '0xabcdef0123456789012345678901234567890123',
     });
     expect(schema.publisher.identifier[0]).toEqual({
       '@type': 'PropertyValue',
-      propertyID: 'did:ethr',
+      propertyID: 'address',
       value: '0x2222222222222222222222222222222222222222',
     });
   });
@@ -295,7 +295,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
     const { schema } = await render(
       contentInfo({
         objectId: ITEM_OBJECT_ID,
-        author: { did: 'did:ethr:0x1111111111111111111111111111111111111111', proof: authorProof },
+        author: { address: '0x1111111111111111111111111111111111111111', proof: authorProof },
       }),
     );
     expect(schema.author.proof.objectId).toBe(ITEM_OBJECT_ID);
@@ -304,7 +304,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
   it('omits the digest when neither the proof nor the item carries one', async () => {
     const { schema } = await render(
       contentInfo({
-        author: { did: 'did:ethr:0x1111111111111111111111111111111111111111', proof: authorProof },
+        author: { address: '0x1111111111111111111111111111111111111111', proof: authorProof },
       }),
     );
     expect(schema.author.proof).not.toHaveProperty('objectId');
@@ -314,7 +314,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
     const { schema } = await render(
       contentInfo({
         author: {
-          did: 'did:ethr:0x1111111111111111111111111111111111111111',
+          address: '0x1111111111111111111111111111111111111111',
           proof: authorProof,
         },
       }),
@@ -334,7 +334,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
     // One render, then remove the attestation from a copy: the payload must
     // move. (Two renders would differ in proof.created and prove nothing.)
     const { schema } = await render(
-      contentInfo({ author: { did: 'did:ethr:0x1111', proof: authorProof } }),
+      contentInfo({ author: { address: '0x1111', proof: authorProof } }),
     );
     const before = payloadOf(schema);
 

@@ -23,8 +23,8 @@ export const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 /**
  * Normalise an address-shaped string to a lowercase 0x address. Accepts both a
  * plain address (what getDeals() returns for a deal, and what an item minted
- * since the author became bare carries) and the prefixed form an item or page
- * pinned before that still carries.
+ * since the author became bare carries) and the pre-change form shared's
+ * `authorAddress()` strips.
  *
  * Null means "cannot bind": callers fail closed for the item side, since the
  * item is attacker-controlled.
@@ -34,11 +34,3 @@ export const addressOf = (value: unknown): string | null => {
   const raw = authorAddress(value);
   return ADDRESS_RE.test(raw) ? raw : null;
 };
-
-/**
- * The address a value names, or the value itself when it names none. For the
- * places that WRITE an identity (a page's identifier value): a page value must
- * never be rewritten into something it does not say, so a value that is not an
- * address is passed through untouched instead of being stripped into one.
- */
-export const identityOf = (value: string): string => addressOf(value) ?? value;

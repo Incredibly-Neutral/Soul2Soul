@@ -21,6 +21,7 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // The mint and the signing view come from shared (out of scope for edits, so
 // deep-imported exactly like the module under test deep-imports them).
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
 import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
 // ============================================================================
@@ -61,7 +62,7 @@ const ATTACKER = new Wallet('0x' + '22'.repeat(32));
 
 const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address): Entry => ({
   genesis,
-  author, // getDeals() returns a plain address, NOT a did:ethr
+  author, // getDeals() returns a plain address, never a prefixed author form
   cid,
   timestamp: 1234,
 });
@@ -238,11 +239,11 @@ describe('parseArchive', () => {
 
   it('keeps an item pinned in the pre-change author form (the prefix is not a shape defect)', () => {
     // The shared schema accepts the bare address only; an item pinned before the
-    // author became bare carries `did:ethr:0x…` AND its signature covers those
-    // bytes. Both facts must hold at once: the item is well-formed (not dropped)
-    // and its digest still verifies.
-    const legacyForm = mkItem('g1', { author: `did:ethr:${AUTHOR.address}` });
-    expect(legacyForm.public.author).toBe(`did:ethr:${AUTHOR.address}`);
+    // author became bare carries a pre-change prefix AND its signature covers
+    // those bytes. Both facts must hold at once: the item is well-formed (not
+    // dropped) and its digest still verifies.
+    const legacyForm = mkItem('g1', { author: `${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}` });
+    expect(legacyForm.public.author).toBe(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`);
     expect(s2sContentItemSchema.safeParse(legacyForm).success).toBe(false);
     expect(isValidContentItem(legacyForm)).toBe(true);
     expect(inspectItemIntegrity(legacyForm, mkEntry('g1', 'cid1').author)).toMatchObject({
@@ -252,7 +253,7 @@ describe('parseArchive', () => {
     // Served, with the author exactly as it was pinned — the served object is
     // never a normalised copy.
     const { fresh } = reconcile([mkEntry('g1', 'cid1')], mkArchive({ g1: { cid: 'cid1', item: legacyForm } }));
-    expect(fresh.get('g1')?.author).toBe(`did:ethr:${AUTHOR.address}`);
+    expect(fresh.get('g1')?.author).toBe(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`);
   });
 
   it('old-format (v1) archives parse to empty — full refetch after the format bump', () => {
@@ -423,16 +424,16 @@ describe('archive integrity verdict (bound to the on-chain deal author)', () => 
     expect(integrityIssues.map((i) => i.code)).toEqual(['hash-mismatch']);
   });
 
-  it('REFUSES an item whose public.author is not the deal author (did:ethr vs plain address normalised)', () => {
+  it('REFUSES an item whose public.author is not the deal author (pre-change form vs plain address normalised)', () => {
     const deal = mkEntry('g1', 'cid1');
     const item = mkItem('g1', { author: ATTACKER.address });
     expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
       level: 'mismatch',
       code: 'author-mismatch',
     });
-    // sanity: did:ethr and plain forms normalise to the same address
-    expect(addressOf(`did:ethr:${AUTHOR.address}`)).toBe(addressOf(AUTHOR.address));
-    expect(addressOf('did:ethr:0Xnothex')).toBeNull();
+    // sanity: the pre-change and plain forms normalise to the same address
+    expect(addressOf(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`)).toBe(addressOf(AUTHOR.address));
+    expect(addressOf(`${LEGACY_AUTHOR_PREFIX}0Xnothex`)).toBeNull();
   });
 
   it('REFUSES a stripped hash on a specVersion item (the field cannot be deleted to opt out)', () => {
@@ -629,7 +630,7 @@ describe('isValidContentItem (shape gate)', () => {
   it('still rejects a legacy-SHAPED item that is malformed for another reason', () => {
     const broken = {
       ...mkItem('g1', { legacy: true }),
-      public: { ...(mkItem('g1', { legacy: true }).public as any), author: 'not-a-did' },
+      public: { ...(mkItem('g1', { legacy: true }).public as any), author: 'not-an-address' },
     } as unknown as S2SContentItem;
     expect(isValidContentItem(broken)).toBe(false);
     const { fresh, needsFetch } = reconcile(
