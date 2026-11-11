@@ -164,7 +164,7 @@ describe('assertCiphertext', () => {
 });
 
 describe('buildEncryptFn', () => {
-  it('passes a note without the flag straight through with noOpEncrypt', () => {
+  it('passes a note that opts out straight through with noOpEncrypt', () => {
     const fn = buildEncryptFn(
       { config: { lit: {} }, protocolInfo: {}, lit: { encrypt: vi.fn() } },
       { encryption: false },
@@ -467,11 +467,40 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect(written).not.toContain('kubo_cid');
   });
 
+  it('encrypts a note that names no encryption key at all — the default', async () => {
+    // AUTHOR-2: a manuscript is encrypted to the press's key. A note that says
+    // nothing is not a note asking to be published in the clear.
+    const CIPHER = JSON.stringify('gAAAAABdefault');
+    const path = noteWith(['title: Hello']);
+    const encrypt = vi.fn(() => Promise.resolve(CIPHER));
+    const { ctx, uploaded } = fakeCtx({ litUsageKey: 'lit-key', pkp: PKP, encrypt });
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+
+    await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+
+    const item = JSON.parse(uploaded[0] ?? '') as S2SContentItemV3;
+    expect(encrypt).toHaveBeenCalledTimes(1);
+    expect(item.encryption).toBe(true);
+    expect(bodyForKey(item)).toBe(CIPHER);
+    // And the file now says what that publish did, so the next one keeps it.
+    expect(readFileSync(path, 'utf8')).toContain('\nencrypted: true\n');
+  });
+
+  it('fails closed on a note with no key when the Lit credentials are missing', async () => {
+    const path = noteWith(['title: Hello']);
+    const { ctx, addToKubo } = fakeCtx({ pkp: PKP });
+    await expect(authorWrite(ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(
+      /LIT_USAGE_KEY/,
+    );
+    expect(addToKubo).not.toHaveBeenCalled();
+  });
+
   it('renames a legacy kubo_cid, backfills creation_date and rewrites a pre-change author to its bare address', async () => {
     // A note pinned before the change: `author:` is the retired spelling of the
     // address, kept here as the input fixture. Publishing rewrites it.
     const path = noteWith([
       'title: Hello',
+      'encrypted: false',
       'genesis: "0x' + 'cd'.repeat(32) + '"',
       'kubo_cid: bafyplain',
       'modified_date: 2026-01-02T03:04:05',
@@ -498,6 +527,7 @@ describe('authorWrite honors frontmatter encryption', () => {
   it("signs a revision with the note's creation_date and this upload as modifiedDate", async () => {
     const path = noteWith([
       'title: Hello',
+      'encrypted: false',
       'genesis: "0x' + 'ab'.repeat(32) + '"',
       'cid: bafyprevious',
       'creation_date: 2021-03-04T05:06:07',
@@ -519,7 +549,7 @@ describe('authorWrite honors frontmatter encryption', () => {
   });
 
   it('signs one instant as both dates on a first publish', async () => {
-    const path = noteWith(['title: Hello']);
+    const path = noteWith(['title: Hello', 'encrypted: false']);
     const { ctx, uploaded } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
@@ -531,7 +561,7 @@ describe('authorWrite honors frontmatter encryption', () => {
   });
 
   it('signs and writes back the modified_date it inherits, so the next revision does not drift', async () => {
-    const path = noteWith(['title: Hello', 'modified_date: 2026-01-02T03:04:05']);
+    const path = noteWith(['title: Hello', 'encrypted: false', 'modified_date: 2026-01-02T03:04:05']);
     const { ctx, uploaded } = fakeCtx({});
     const declared = Date.UTC(2026, 0, 2, 3, 4, 5) / 1000;
     vi.mocked(authorSafeState).mockResolvedValue(FAKE_SAFE); // both uploads
@@ -553,14 +583,14 @@ describe('authorWrite honors frontmatter encryption', () => {
   });
 
   it('refuses a creation_date that is not a date instead of re-birthing the note', async () => {
-    const path = noteWith(['title: Hello', 'creation_date: last tuesday']);
+    const path = noteWith(['title: Hello', 'encrypted: false', 'creation_date: last tuesday']);
     const { ctx, addToKubo } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await expect(authorWrite(ctx, path, 'test.soul2soul.eth', opts)).rejects.toThrow(/not a date/);
     expect(addToKubo).not.toHaveBeenCalled();
   });
 
-  it('uploads the body unchanged for a note without the flag', async () => {
+  it('uploads the body unchanged for a note that opts out', async () => {
     const path = noteWith(['title: Hello', 'encryption: false']);
     const { ctx, uploaded } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
@@ -792,7 +822,9 @@ describe('authorWrite honors frontmatter encryption', () => {
   }
 
   it('writes `encrypted: false` for a plaintext publish, as an unquoted YAML boolean', async () => {
-    const path = noteWith(['title: Hello']);
+    // A blank key is the opt-out: `Boolean(null)` is false, and the write-back
+    // still has to turn it into the real boolean.
+    const path = noteWith(['title: Hello', 'encrypted:']);
     const { ctx } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
     await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
@@ -850,7 +882,7 @@ describe('authorWrite honors frontmatter encryption', () => {
     // `encrypted` is not in shared's KNOWN_FRONTMATTER_KEYS, so without the
     // delete in `authorWrite` it lands in `custom` and is signed into the body —
     // changing `plaintextHash` and with it the objectId of every encrypted note.
-    const bare = noteWith(['title: Hello']);
+    const bare = noteWith(['title: Hello', 'encrypted:']);
     const flagged = noteWith(['title: Hello', 'encrypted: false']);
     const legacy = noteWith(['title: Hello', 'encryption: false']);
     const { ctx, uploaded } = fakeCtx({});
@@ -911,7 +943,7 @@ describe('authorWrite honors frontmatter encryption', () => {
   });
 
   it('does not duplicate or reformat the key on a second publish', async () => {
-    const path = noteWith(['title: Hello']);
+    const path = noteWith(['title: Hello', 'encrypted:']);
     const { ctx } = fakeCtx({});
     vi.mocked(authorSafeState).mockResolvedValue(FAKE_SAFE); // both publishes
     await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
@@ -1119,7 +1151,12 @@ describe('offerContent verifies the stored item', () => {
   });
 
   it('lets a plaintext note through when the previous revision was plaintext too', async () => {
-    const path = noteWith(['title: Hello', 'genesis: "' + genesis + '"', 'kubo_cid: bafyplain']);
+    const path = noteWith([
+      'title: Hello',
+      'encrypted: false',
+      'genesis: "' + genesis + '"',
+      'kubo_cid: bafyplain',
+    ]);
     const { ctx, fetchFromKubo } = fakeCtx(() => Promise.resolve({ encryption: false }));
     await expect(offerContent(ctx, path, 'test.soul2soul.eth', undefined)).rejects.toThrow(
       /SAFE_REACHED/,

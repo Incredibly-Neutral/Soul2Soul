@@ -46,6 +46,14 @@ publication can sort and organise an offer before decrypting anything. An offer 
 therefore publicly observable: anyone can see that a manuscript was offered, and
 to whom.
 
+Note: an implementation MUST encrypt by default. A manuscript that says nothing
+about encryption MUST be written as ciphertext; plaintext MUST be the author's
+deliberate act, stated (the CLI's `encrypted: false`, or `--allow-plaintext` where
+a downgrade guard would otherwise refuse the write). A missing key MUST NOT be
+read as a request for the clear, and an absent encryption credential MUST fail the
+write rather than fall back to it. Recorded for the CLI in
+[SPEC-author-cli](SPEC-author-cli.md); no `INV-` is minted, this is AUTHOR-2.
+
 ## AUTHOR-3 — ending an agreement, alone
 
 The author MUST be able to end any agreement alone, at any time, with immediate
