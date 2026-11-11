@@ -7,6 +7,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { PetName } from '../../src/components/pet-name';
 import { petNameStore } from '../../src/state/pet-name.store';
+// The retired author spelling lives in one place, shared's author-address module;
+// the fixture borrows it instead of writing the literal here.
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/src/manuscript/identity/author-address.js';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/pet-name';
 
@@ -158,16 +161,16 @@ describe('pet-name', () => {
     );
   });
 
-  it('strips a pre-change did:ethr prefix from display and title', async () => {
+  it('strips a pre-change author spelling from display and title', async () => {
     const el = await mountLit<PetName>('pet-name', {
-      value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
+      value: LEGACY_AUTHOR_PREFIX + ADDR,
     });
     const text = el.shadowRoot?.querySelector('.text') as HTMLSpanElement;
     expect(text.textContent).toBe('0x12...5678');
-    expect(text.title).toBe('0x1234567890abcdef1234567890abcdef12345678');
+    expect(text.title).toBe(ADDR);
   });
 
-  it('copies the bare address for a pre-change did:ethr author', async () => {
+  it('copies the bare address for a pre-change author', async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },
@@ -176,12 +179,10 @@ describe('pet-name', () => {
     });
 
     const el = await mountLit<PetName>('pet-name', {
-      value: 'did:ethr:0x1234567890abcdef1234567890abcdef12345678',
+      value: LEGACY_AUTHOR_PREFIX + ADDR,
     });
     (el.shadowRoot?.querySelector('button.btn-copy') as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith('0x1234567890abcdef1234567890abcdef12345678'),
-    );
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(ADDR));
   });
 
   it('places the pencil before the copy button', async () => {

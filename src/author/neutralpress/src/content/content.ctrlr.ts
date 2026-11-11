@@ -277,8 +277,8 @@ export class ContentController implements IContentController {
 				noOpEncrypt,
 				// Author is the author Safe's bare address (on-chain msg.sender).
 				// The EOA that signs is a Safe owner, verified off-chain. A note
-				// published before the change has `did:ethr:0x…` in its frontmatter
-				// instead; the address is the identity, the prefix was decoration.
+				// published before the change records a different spelling of the
+				// same address; the address is the identity.
 				baseAccount.address,
 			);
 

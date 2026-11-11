@@ -32,3 +32,7 @@ data.json
 dist/main.js
 
 pnpm-lock.yaml
+
+# Stale bundle from before the packages moved under src/; esbuild writes to
+# /home/joera/dist/0xobsidian/main.js now.
+out/
