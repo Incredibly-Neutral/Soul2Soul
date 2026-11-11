@@ -2,17 +2,22 @@
 // Safe Transaction Service adapter — the hashing and the transport.
 //
 // No test here opens a socket: every request goes through the fake `fetch`
-// below, and every hash assertion is either a pinned literal or a second,
-// hand-written EIP-712 computation of the same digest.
+// below. Every hash assertion is either a pinned literal, a hand-written
+// keccak encoding of the EIP-712 digest, or a real signature recovering to the
+// key that made it.
 // ============================================================================
 
 import {
   concatHex,
   decodeFunctionData,
   encodeAbiParameters,
+  hashMessage,
   keccak256,
   stringToHex,
+  type Address,
+  type Hex,
 } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 
 import { safeAbi } from '@s2s/soul2soul-shared';
@@ -23,22 +28,50 @@ import {
   execTransactionArgs,
   makeSafeTxService,
   packSignatures,
+  packVerifiedSignatures,
   SAFE_FALLBACK_HANDLER,
   type SafeTxInput,
   type SafeTxRecord,
 } from '../src/adapters/safe-tx';
 import { SAFE_L2_SINGLETON } from '../src/core/author-safe';
 import { loadConfig, type CliConfig } from '../src/core/config';
-import { CliError } from '../src/lib/errors';
+import { CliError, UsageError } from '../src/lib/errors';
 
 const SAFE = '0x1111111111111111111111111111111111111111' as const;
 const OWNER_A = '0x1111111111111111111111111111111111111111' as const;
 const OWNER_B = '0x2222222222222222222222222222222222222222' as const;
-const ORDER_LOW = '0x1111111111111111111111111111111111111111' as const;
-const ORDER_HIGH = '0x9999999999999999999999999999999999999999' as const;
 const TARGET = '0x3333333333333333333333333333333333333333' as const;
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 const CHAIN_ID = 8453;
+
+/** Two throwaway keys, so signing and recovery are exercised for real. */
+const KEY_A = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as const;
+const KEY_B = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
+const KEY_STRANGER = '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6' as const;
+
+const accountA = privateKeyToAccount(KEY_A);
+const accountB = privateKeyToAccount(KEY_B);
+const stranger = privateKeyToAccount(KEY_STRANGER);
+
+/**
+ * The SafeTx struct as EIP-712. Written out here rather than imported so the
+ * test does not read the implementation's own constant — the pinned digest
+ * below is what guards both copies against a silent rename.
+ */
+const SAFE_TX_TYPES = {
+  SafeTx: [
+    { name: 'to', type: 'address' },
+    { name: 'value', type: 'uint256' },
+    { name: 'data', type: 'bytes' },
+    { name: 'operation', type: 'uint8' },
+    { name: 'safeTxGas', type: 'uint256' },
+    { name: 'baseGas', type: 'uint256' },
+    { name: 'gasPrice', type: 'uint256' },
+    { name: 'gasToken', type: 'address' },
+    { name: 'refundReceiver', type: 'address' },
+    { name: 'nonce', type: 'uint256' },
+  ],
+} as const;
 
 /** The proposal `s2s signer add` makes: add OWNER_B at threshold 2, nonce 7. */
 const ADD_OWNER_TX: SafeTxInput = {
@@ -48,6 +81,8 @@ const ADD_OWNER_TX: SafeTxInput = {
   operation: 0,
   nonce: 7,
 };
+
+const SAFE_TX_HASH = computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX });
 
 const nowhere = {
   userConfigPath: '/nonexistent/s2s/custom.json',
@@ -65,21 +100,21 @@ describe('computeSafeTxHash', () => {
   /**
    * A pinned digest for one fixed proposal.
    *
-   * The fixture is derived from the EIP-712 definition — domain
-   * `{chainId, verifyingContract}`, the ten-field SafeTx struct — and checked
-   * against a second, hand-written encoding in the test below. It has NOT been
-   * compared against a live Safe: the whole point of pinning it is to catch a
-   * silent change to the domain or the struct on the day someone edits them,
-   * not to prove the chain agrees. `Safe.getTransactionHash` is the proof, and
-   * it must return this same value.
+   * Derived from the EIP-712 definition and reproduced independently by
+   * @safe-global/protocol-kit 6.1.2: `hashTypedData` over the type list
+   * `getEip712TxTypes('1.4.1')` exports, domain `{chainId, verifyingContract}`,
+   * gives exactly this value. It is still NOT verified against a live Safe —
+   * `Safe.getTransactionHash` is that proof, and it needs a chain this machine
+   * may not reach. What the literal catches is a silent change to the domain or
+   * the struct on the day someone edits them.
    */
   const EXPECTED = '0xf9224ce364e9091d7c03fa8cae100ef7e729d050233bdf975a91a1fb904a79ed';
 
   it('matches the pinned digest for a fixed proposal', () => {
-    expect(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX })).toBe(EXPECTED);
+    expect(SAFE_TX_HASH).toBe(EXPECTED);
   });
 
-  it('matches a hand-written EIP-712 encoding of the same struct', () => {
+  it('matches a hand-written keccak encoding of the same struct', () => {
     const domainTypehash = keccak256(
       stringToHex('EIP712Domain(uint256 chainId,address verifyingContract)'),
     );
@@ -125,28 +160,56 @@ describe('computeSafeTxHash', () => {
       ),
     );
 
-    expect(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX })).toBe(
-      keccak256(concatHex(['0x1901', domainSeparator, structHash])),
-    );
+    expect(SAFE_TX_HASH).toBe(keccak256(concatHex(['0x1901', domainSeparator, structHash])));
+  });
+
+  it('is the digest a typed-data signer signs', async () => {
+    const signature = await accountA.signTypedData({
+      domain: { chainId: CHAIN_ID, verifyingContract: SAFE },
+      types: SAFE_TX_TYPES,
+      primaryType: 'SafeTx',
+      message: {
+        to: ADD_OWNER_TX.to,
+        value: ADD_OWNER_TX.value,
+        data: ADD_OWNER_TX.data,
+        operation: ADD_OWNER_TX.operation,
+        safeTxGas: 0n,
+        baseGas: 0n,
+        gasPrice: 0n,
+        gasToken: ZERO,
+        refundReceiver: ZERO,
+        nonce: 7n,
+      },
+    });
+    // Recovering over the digest, not over a prefixed one: this is the same
+    // test the Safe performs, and it only passes if the digest is right.
+    expect(
+      await packVerifiedSignatures(
+        [accountA.address],
+        new Map([[accountA.address, signature]]),
+        SAFE_TX_HASH,
+      ),
+    ).toBe(signature);
   });
 
   it('carries the chain id in the domain', () => {
-    const other = computeSafeTxHash({ chainId: 1, safe: SAFE, tx: ADD_OWNER_TX });
-    expect(other).not.toBe(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX }));
+    expect(computeSafeTxHash({ chainId: 1, safe: SAFE, tx: ADD_OWNER_TX })).not.toBe(SAFE_TX_HASH);
   });
 
   it('carries the Safe as verifyingContract and nothing else in the domain', () => {
-    const other = computeSafeTxHash({ chainId: CHAIN_ID, safe: TARGET, tx: ADD_OWNER_TX });
-    expect(other).not.toBe(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX }));
+    expect(computeSafeTxHash({ chainId: CHAIN_ID, safe: TARGET, tx: ADD_OWNER_TX })).not.toBe(
+      SAFE_TX_HASH,
+    );
   });
 
   it('hashes an omitted gas field as zero, not as absent', () => {
-    const explicit = computeSafeTxHash({
-      chainId: CHAIN_ID,
-      safe: SAFE,
-      tx: { ...ADD_OWNER_TX, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n },
-    });
-    expect(explicit).toBe(computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX }));
+    expect(
+      computeSafeTxHash({
+        chainId: CHAIN_ID,
+        safe: SAFE,
+        tx: { ...ADD_OWNER_TX, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n },
+      }),
+    ).toBe(SAFE_TX_HASH);
   });
 });
 
@@ -166,43 +229,98 @@ describe('addOwnerWithThresholdData', () => {
 });
 
 describe('packSignatures', () => {
-  const signature = (r: string, s: string, v: string): `0x${string}` =>
-    `0x${r.repeat(32)}${s.repeat(32)}${v}` as `0x${string}`;
+  /** Replace the trailing v byte. */
+  const withV = (signature: Hex, v: number): Hex =>
+    `0x${signature.slice(2, -2)}${v.toString(16).padStart(2, '0')}` as Hex;
 
-  /** viem hands back v = 27/28 (0x1b/0x1c) for a message signature. */
-  const SIG_LOW = signature('aa', 'bb', '1b');
-  const SIG_HIGH = signature('cc', 'dd', '1c');
+  const ascending = (addresses: Address[]): Address[] =>
+    [...addresses].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : 1));
 
-  it('orders by owner address ascending and bumps v to the eth_sign scheme', () => {
-    // Given high first: the Safe walks the list and requires ascending owners.
+  it('orders by address ascending and bumps a message signature to 31/32', async () => {
+    const sigA = await accountA.signMessage({ message: { raw: SAFE_TX_HASH } });
+    const sigB = await accountB.signMessage({ message: { raw: SAFE_TX_HASH } });
+
+    // Given in the wrong order, and keyed by checksummed address.
     const packed = packSignatures(
-      [ORDER_HIGH, ORDER_LOW],
+      [accountB.address, accountA.address],
       new Map([
-        [ORDER_HIGH, SIG_HIGH],
-        [ORDER_LOW, SIG_LOW],
+        [accountB.address, sigB],
+        [accountA.address, sigA],
       ]),
     );
 
-    expect(packed).toBe(`0x${trimV(SIG_LOW)}1f${trimV(SIG_HIGH)}20`);
+    const expected = ascending([accountA.address, accountB.address]).map((address) => {
+      const signature = address === accountA.address ? sigA : sigB;
+      return withV(signature, signature.endsWith('1b') ? 0x1f : 0x20);
+    });
+
+    expect(packed).toBe(concatHex(expected));
   });
 
-  it('keeps a signature that already carries 31/32', () => {
-    const already = signature('ee', 'ff', '1f');
-    expect(packSignatures([ORDER_LOW], new Map([[ORDER_LOW, already]]))).toBe(already);
+  it('proves the mode when it is given the hash: a typed-data signature keeps v 27/28', async () => {
+    const typed = await accountA.signTypedData({
+      domain: { chainId: CHAIN_ID, verifyingContract: SAFE },
+      types: SAFE_TX_TYPES,
+      primaryType: 'SafeTx',
+      message: {
+        to: ADD_OWNER_TX.to,
+        value: ADD_OWNER_TX.value,
+        data: ADD_OWNER_TX.data,
+        operation: ADD_OWNER_TX.operation,
+        safeTxGas: 0n,
+        baseGas: 0n,
+        gasPrice: 0n,
+        gasToken: ZERO,
+        refundReceiver: ZERO,
+        nonce: 7n,
+      },
+    });
+    const packed = await packVerifiedSignatures(
+      [accountA.address],
+      new Map([[accountA.address, typed]]),
+      SAFE_TX_HASH,
+    );
+    expect(packed).toBe(typed);
+  });
+
+  it('proves the mode when it is given the hash: a message signature becomes 31/32', async () => {
+    const message = await accountA.signMessage({ message: { raw: SAFE_TX_HASH } });
+    const packed = await packVerifiedSignatures(
+      [accountA.address],
+      new Map([[accountA.address, message]]),
+      SAFE_TX_HASH,
+    );
+    expect(packed).toBe(withV(message, message.endsWith('1b') ? 0x1f : 0x20));
+  });
+
+  it('refuses a signature that does not recover to the signer it is filed under', async () => {
+    const wrong = await stranger.signMessage({ message: { raw: SAFE_TX_HASH } });
+    try {
+      await packVerifiedSignatures([accountA.address], new Map([[accountA.address, wrong]]), SAFE_TX_HASH);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as CliError).code).toBe('signature_not_owner');
+    }
   });
 
   it('refuses an owner it has no signature for', () => {
     try {
-      packSignatures([ORDER_LOW], new Map());
+      packSignatures([accountA.address], new Map());
       expect.unreachable('should have thrown');
     } catch (err) {
       expect((err as CliError).code).toBe('signature_missing');
     }
   });
 
+  it('keeps a signature that already carries the eth_sign flag', async () => {
+    const message = await accountA.signMessage({ message: { raw: SAFE_TX_HASH } });
+    const flagged = withV(message, message.endsWith('1b') ? 0x1f : 0x20);
+    expect(packSignatures([accountA.address], new Map([[accountA.address, flagged]]))).toBe(flagged);
+  });
+
   it('refuses a signature that is not 65 bytes', () => {
     try {
-      packSignatures([ORDER_LOW], new Map([[ORDER_LOW, '0x1234']]));
+      packSignatures([accountA.address], new Map([[accountA.address, '0x1234']]));
       expect.unreachable('should have thrown');
     } catch (err) {
       expect((err as CliError).code).toBe('signature_malformed');
@@ -210,18 +328,13 @@ describe('packSignatures', () => {
   });
 });
 
-/** `0x` + 64 bytes, everything but the prefix and the trailing v. */
-function trimV(signature: `0x${string}`): string {
-  return signature.slice(2, -2);
-}
-
 // ===========================================================================
 // execTransaction
 // ===========================================================================
 
 describe('execTransactionArgs', () => {
   const record: SafeTxRecord = {
-    safeTxHash: computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX }),
+    safeTxHash: SAFE_TX_HASH,
     safe: SAFE,
     nonce: 7,
     to: SAFE,
@@ -240,13 +353,45 @@ describe('execTransactionArgs', () => {
   });
 
   it('passes the proposal fields, zero gas and the packed signatures', () => {
-    const decoded = decodeFunctionData({ abi: safeAbi, data: execTransactionArgs(record, '0xdead').data });
+    const decoded = decodeFunctionData({
+      abi: safeAbi,
+      data: execTransactionArgs(record, '0xdead').data,
+    });
     expect(decoded.functionName).toBe('execTransaction');
     expect(decoded.args).toEqual([SAFE, 0n, ADD_OWNER_TX.data, 0, 0n, 0n, 0n, ZERO, ZERO, '0xdead']);
   });
 
+  it("re-encodes the record's own gas fields, or the hash the owners signed changes", () => {
+    const paying: SafeTxRecord = {
+      ...record,
+      safeTxGas: '21000',
+      baseGas: '3000',
+      gasPrice: '1000000000',
+      gasToken: OWNER_B,
+      refundReceiver: OWNER_A,
+    };
+    const decoded = decodeFunctionData({
+      abi: safeAbi,
+      data: execTransactionArgs(paying, '0xdead').data,
+    });
+    expect(decoded.args).toEqual([
+      SAFE,
+      0n,
+      ADD_OWNER_TX.data,
+      0,
+      21000n,
+      3000n,
+      1000000000n,
+      OWNER_B,
+      OWNER_A,
+      '0xdead',
+    ]);
+  });
+
   it('refuses a record with no Safe address to send to', () => {
-    expect(() => execTransactionArgs({ ...record, safe: undefined }, '0xdead')).toThrowError(CliError);
+    expect(() => execTransactionArgs({ ...record, safe: undefined }, '0xdead')).toThrowError(
+      CliError,
+    );
   });
 });
 
@@ -271,7 +416,8 @@ function fakeFetch(script: Reply[]): { fetchImpl: typeof fetch; calls: Call[] } 
   const calls: Call[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const headers = (init?.headers ??
+      {}) as unknown as Record<string, string>;
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     calls.push({ url, method: init?.method ?? 'GET', headers, body });
     const reply = script[calls.length - 1] ?? { status: 200, body: {} };
@@ -294,6 +440,11 @@ const RECORD_JSON = {
   value: '1000',
   data: '0x1234',
   operation: 0,
+  safeTxGas: '0',
+  baseGas: '0',
+  gasPrice: '0',
+  gasToken: ZERO,
+  refundReceiver: ZERO,
   confirmations: [],
   confirmationsRequired: 2,
   isExecuted: false,
@@ -325,6 +476,16 @@ describe('makeSafeTxService', () => {
     expect(calls[0]?.headers.authorization).toBeUndefined();
   });
 
+  it('raises a usage error when safeTx.url is unset, instead of failing at the socket', () => {
+    try {
+      makeSafeTxService({ config: configWith({ url: '' }), fetchImpl: fakeFetch([]).fetchImpl });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(UsageError);
+      expect((err as UsageError).message).toContain('safeTx.url');
+    }
+  });
+
   it('registers a Safe the service does not know', async () => {
     // GET → 404, then POST → 201.
     const { fetchImpl, calls } = fakeFetch([{ status: 404 }, { status: 201, body: {} }]);
@@ -349,6 +510,16 @@ describe('makeSafeTxService', () => {
     });
   });
 
+  it('declares the modules the caller names rather than asserting none', async () => {
+    const { fetchImpl, calls } = fakeFetch([{ status: 404 }, { status: 201, body: {} }]);
+    await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).register(SAFE, {
+      owners: [OWNER_A],
+      threshold: 1,
+      modules: [TARGET],
+    });
+    expect((calls[1]?.body as { modules: string[] }).modules).toEqual([TARGET]);
+  });
+
   it('leaves an already-registered Safe alone', async () => {
     const { fetchImpl, calls } = fakeFetch([{ status: 200, body: { address: SAFE } }]);
     await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).register(SAFE, {
@@ -370,9 +541,7 @@ describe('makeSafeTxService', () => {
 
     const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: ADD_OWNER_TX });
 
-    expect(safeTxHash).toBe(
-      computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: ADD_OWNER_TX }),
-    );
+    expect(safeTxHash).toBe(SAFE_TX_HASH);
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.url).toBe(`${BASE}/api/v1/safes/${SAFE}/multisig-transactions/`);
     expect(calls[0]?.body).toEqual({
@@ -403,14 +572,14 @@ describe('makeSafeTxService', () => {
     expect(safeTxHash).toBe(computeSafeTxHash({ chainId: 8453, safe: SAFE, tx: ADD_OWNER_TX }));
   });
 
-  it('reads a record and names the Safe it came from', async () => {
+  it('reads a record by hash, not through the Safe collection', async () => {
     const { fetchImpl, calls } = fakeFetch([{ body: RECORD_JSON }]);
     const record = await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).get(
       SAFE,
       '0xabc',
     );
 
-    expect(calls[0]?.url).toBe(`${BASE}/api/v1/safes/${SAFE}/multisig-transactions/0xabc/`);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/multisig-transactions/0xabc/`);
     expect(record).toEqual({
       safeTxHash: '0xabc',
       safe: SAFE,
@@ -419,6 +588,11 @@ describe('makeSafeTxService', () => {
       value: '1000',
       data: '0x1234',
       operation: 0,
+      safeTxGas: '0',
+      baseGas: '0',
+      gasPrice: '0',
+      gasToken: ZERO,
+      refundReceiver: ZERO,
       confirmations: [],
       confirmationsRequired: 2,
       isExecuted: false,
@@ -429,14 +603,15 @@ describe('makeSafeTxService', () => {
     });
   });
 
-  it('maps the pending list, keeping the service order', async () => {
+  it('maps the pending list in nonce order, whatever order it arrives in', async () => {
     const { fetchImpl } = fakeFetch([
       {
         body: {
-          count: 2,
+          count: 3,
           results: [
+            { ...RECORD_JSON, safeTxHash: '0xbbb', nonce: 8 },
             { ...RECORD_JSON, safeTxHash: '0xaaa', nonce: 7 },
-            { ...RECORD_JSON, safeTxHash: '0xbbb', nonce: 8, isExecuted: false },
+            { ...RECORD_JSON, safeTxHash: '0xccc', nonce: 9 },
           ],
         },
       },
@@ -447,11 +622,15 @@ describe('makeSafeTxService', () => {
       fetchImpl,
     }).pending(SAFE);
 
-    expect(records.map((record) => record.safeTxHash)).toEqual(['0xaaa', '0xbbb']);
-    expect(records.map((record) => record.safe)).toEqual([SAFE, SAFE]);
+    expect(records.map((record) => [record.nonce, record.safeTxHash])).toEqual([
+      [7, '0xaaa'],
+      [8, '0xbbb'],
+      [9, '0xccc'],
+    ]);
+    expect(records.map((record) => record.safe)).toEqual([SAFE, SAFE, SAFE]);
   });
 
-  it('posts a confirmation as {signature}', async () => {
+  it('posts a confirmation against the hash route', async () => {
     const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
     await makeSafeTxService({ config: configWith({ url: BASE }), fetchImpl }).confirm({
       safe: SAFE,
@@ -459,9 +638,7 @@ describe('makeSafeTxService', () => {
       signature: '0xdead',
     });
 
-    expect(calls[0]?.url).toBe(
-      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/0xabc/confirmations/`,
-    );
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/multisig-transactions/0xabc/confirmations/`);
     expect(calls[0]?.body).toEqual({ signature: '0xdead' });
   });
 
@@ -505,8 +682,7 @@ describe('makeSafeTxService', () => {
 
 describe('safeTx config', () => {
   it('defaults to the public Base host with no key', () => {
-    const config = loadConfig({}, nowhere);
-    expect(config.safeTx).toEqual({
+    expect(loadConfig({}, nowhere).safeTx).toEqual({
       url: 'https://safe-transaction-base.safe.global',
       key: undefined,
     });

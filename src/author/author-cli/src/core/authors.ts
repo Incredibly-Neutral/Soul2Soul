@@ -29,6 +29,10 @@
 // Reads are tolerant (missing/corrupt → empty store) because every command
 // calls them; a broken file must not brick the CLI. Writes are atomic
 // (tmp + rename) and 0600 — the file holds private keys.
+//
+// One exception to that tolerance: a `safeSource` this module cannot
+// interpret. Guessing `derived` there would derive a different Safe and then
+// overwrite the stored address, so the read stops and names the row instead.
 // ============================================================================
 
 import { randomUUID } from 'node:crypto';
@@ -37,9 +41,10 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import type { Address, Hex } from 'viem';
+import { getAddress, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 
 /** The author-contracts addresses installed on an author's Safe. */
 export interface AuthorContractsRecord {
@@ -140,16 +145,33 @@ function parseContracts(value: unknown): AuthorContractsRecord | undefined {
   };
 }
 
-function parseRecord(value: unknown): AuthorRecord | undefined {
+/**
+ * The provenance a row declares, or undefined when it declares none (derived).
+ *
+ * An unrecognised value is not guessed at: a row that says something other than
+ * `derived` or `given` would otherwise read as derived, and the next write-back
+ * would replace its stored address with a Safe the key never owned.
+ */
+function parseSafeSource(name: string, value: unknown, path: string): AuthorSafeSource | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'derived' || value === 'given') return value;
+  throw new CliError(
+    `authors file ${path}: author '${name}' has safeSource ${JSON.stringify(
+      value,
+    )} — the only values are 'derived', 'given', or no safeSource at all; fix or remove that row`,
+    1,
+    'authors_file',
+  );
+}
+
+function parseRecord(name: string, value: unknown, path: string): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const privateKey = record.privateKey;
   if (typeof privateKey !== 'string' || privateKey.trim().length === 0) return undefined;
   const safe = record.safe;
   const contracts = parseContracts(record.contracts);
-  const safeSource = record.safeSource === 'given' || record.safeSource === 'derived'
-    ? record.safeSource
-    : undefined;
+  const safeSource = parseSafeSource(name, record.safeSource, path);
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
@@ -198,9 +220,10 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
   const rawAuthors = raw.authors;
   if (rawAuthors !== null && typeof rawAuthors === 'object' && !Array.isArray(rawAuthors)) {
     for (const [name, value] of Object.entries(rawAuthors as Record<string, unknown>)) {
-      const record = parseRecord(value);
+      const record = parseRecord(name, value, path);
       // A hand-edited file with an unusable name or record is skipped, not
-      // fatal: the rest of the store still works.
+      // fatal: the rest of the store still works. An unusable `safeSource` is
+      // the exception — parseRecord throws rather than invent a provenance.
       if (record !== undefined && isValidPetName(name)) authors[name] = record;
     }
   }
@@ -209,7 +232,9 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
   // hand-edited "ZOMI" still points at the stored `zomi`.
   const rawActive = raw.active;
   const active =
-    typeof rawActive === 'string' ? (findAuthorName({ active: null, authors }, rawActive) ?? null) : null;
+    typeof rawActive === 'string'
+      ? (findAuthorName({ active: null, authors }, rawActive) ?? null)
+      : null;
   return { active, authors };
 }
 
@@ -302,7 +327,9 @@ export function addAuthor(
   }
   const owner = findAuthorByKey(data, privateKey);
   if (owner) {
-    throw new UsageError(`that private key already belongs to author '${owner}' — one key, one author`);
+    throw new UsageError(
+      `that private key already belongs to author '${owner}' — one key, one author`,
+    );
   }
   return {
     active: name,
@@ -314,7 +341,7 @@ export function addAuthor(
 export interface AddSignerInput {
   name: string;
   privateKey: string;
-  /** The existing Safe. Validated by the command, kept as written here. */
+  /** The existing Safe. Checked as an address and stored checksummed. */
   safe: string;
 }
 
@@ -331,15 +358,25 @@ export interface AddSignerInput {
  * (case-insensitively), a key already filed elsewhere, and a Safe another
  * record already names — two rows pointing at one Safe would be two active
  * identities for one address.
+ *
+ * The Safe must be an address, checksummed on the way in: a typo would
+ * otherwise make every later read throw. Whether the key is an owner of it is
+ * a chain fact this file cannot know (the key is usually added to the owners
+ * afterwards, by `s2s signer queue`), so the writes that need it check it there.
  */
-export function addSigner(
-  input: AddSignerInput,
-  path: string = authorsFilePath(),
-): ActiveAuthor {
+export function addSigner(input: AddSignerInput, path: string = authorsFilePath()): ActiveAuthor {
   const { name, privateKey, safe } = input;
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
   }
+  // Strict checksum: a mixed-case address with a broken checksum is a
+  // transcription error, and storing it would put a typo in the record.
+  if (!isAddress(safe.trim())) {
+    throw new UsageError(
+      `'${safe}' is not an address — \`s2s signer add\` needs the Safe's 0x… address`,
+    );
+  }
+  const address = getAddress(safe.trim());
   const store = readAuthors(path);
   const existing = findAuthorName(store, name);
   if (existing) {
@@ -349,20 +386,22 @@ export function addSigner(
   }
   const keyOwner = findAuthorByKey(store, privateKey);
   if (keyOwner) {
-    throw new UsageError(`that private key already belongs to author '${keyOwner}' — one key, one author`);
+    throw new UsageError(
+      `that private key already belongs to author '${keyOwner}' — one key, one author`,
+    );
   }
   const safeOwner = Object.entries(store.authors).find(
-    ([, record]) => record.safe?.toLowerCase() === safe.trim().toLowerCase(),
+    ([, record]) => record.safe?.toLowerCase() === address.toLowerCase(),
   );
   if (safeOwner) {
     throw new UsageError(
-      `safe ${safe} is already filed under author '${safeOwner[0]}' — one Safe, one author`,
+      `safe ${address} is already filed under author '${safeOwner[0]}' — one Safe, one author`,
     );
   }
 
   const record: AuthorRecord = {
     privateKey: normalizeKey(privateKey),
-    safe: safe.trim(),
+    safe: address,
     safeSource: 'given',
   };
   writeAuthors({ active: name, authors: { ...store.authors, [name]: record } }, path);
@@ -464,10 +503,7 @@ export function writeBackAuthorContracts(
       current.guard === contracts.guard;
     if (unchanged) return false;
   }
-  writeAuthors(
-    { ...store, authors: { ...store.authors, [name]: { ...record, contracts } } },
-    path,
-  );
+  writeAuthors({ ...store, authors: { ...store.authors, [name]: { ...record, contracts } } }, path);
   return true;
 }
 

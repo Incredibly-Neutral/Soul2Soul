@@ -5,7 +5,8 @@
 // EOA. Its address is counterfactual, so it exists before deployment: this
 // prints it (plus the EOA that owns it) without sending anything. A `given`
 // Safe has no salt and is not written back — the stored address is the fact
-// this command reports.
+// this command reports — and the EOA line says whether that key is one of its
+// owners, since a shared Safe can outlive any single key.
 // ============================================================================
 
 import type { CommandSpec } from '../lib/command';
@@ -28,7 +29,9 @@ export const authorAddress: CommandSpec = {
       { action: 'author.address', ...state, author: ctx.config.author?.name ?? null },
       [
         `author safe : ${state.address}`,
-        `eoa (owner) : ${state.eoa}`,
+        `eoa (owner) : ${state.eoa}${
+          state.signerIsOwner === false ? '  — not an owner of this Safe (s2s signer queue)' : ''
+        }`,
         `salt        : ${state.salt ?? '(none, the Safe was given, not derived)'}`,
         `chain       : ${state.chain}`,
         `deployed    : ${state.deployed ? 'yes' : 'no — run: s2s author init'}`,
