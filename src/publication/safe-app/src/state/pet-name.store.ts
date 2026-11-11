@@ -1,3 +1,5 @@
+import { authorAddress } from '@s2s/soul2soul-shared';
+
 import { Observable, Listener } from './observable.js';
 import { loadPetNamesFromStorage, savePetNamesToStorage } from './storage.js';
 
@@ -29,11 +31,11 @@ export class PetNameStore {
     this.initialized = true;
   }
 
-  /** Normalised lookup key — addresses are case-insensitive and the
-   *  `did:ethr:` prefix is stripped, so `did:ethr:0xAbC` and `0xabc` collide
-   *  to the same pet name. */
+  /** Normalised lookup key — addresses are case-insensitive, and a value
+   *  pinned before the change resolves to the address it names, because the key
+   *  goes through shared's `authorAddress()`. */
   private static key(address: string): string {
-    return address.trim().replace(/^did:ethr:/i, '').toLowerCase();
+    return authorAddress(address);
   }
 
   get(address: string): string | undefined {

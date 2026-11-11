@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// The retired author spelling lives in one place, shared's author-address module;
+// the fixture borrows it instead of writing the literal here.
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/src/manuscript/identity/author-address.js';
 import { installLS, type LSStub } from './_helpers.js';
 import { PetNameStore } from '../../src/state/pet-name.store.js';
 import { loadPetNamesFromStorage, savePetNamesToStorage } from '../../src/state/storage.js';
@@ -45,11 +48,11 @@ describe('PetNameStore (local-only pet names)', () => {
     expect(s.get('0xABC123')).toBe('casey');
   });
 
-  it('collides did:ethr-prefixed and bare addresses to the same name', () => {
+  it('resolves a pre-change author spelling to the bare address name', () => {
     const s = new PetNameStore();
-    s.set('did:ethr:0xAbC123', 'casey');
+    s.set(LEGACY_AUTHOR_PREFIX + '0xAbC123', 'casey');
     expect(s.get('0xabc123')).toBe('casey');
-    expect(s.get('did:ethr:0xABC123')).toBe('casey');
+    expect(s.get(LEGACY_AUTHOR_PREFIX + '0xABC123')).toBe('casey');
   });
 
   it('setting an empty / whitespace name removes the entry', () => {

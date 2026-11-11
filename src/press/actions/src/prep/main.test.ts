@@ -36,7 +36,7 @@ import type { PrepInput } from '@s2s/soul2soul-shared/lit-actions';
 // MINTED (public → digest = objectId → author signature): a hand-shaped
 // objectId/proof is a forgery the read path refuses.
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
 const FORGED_GENESIS = '0x' + '11'.repeat(32);
 const GOOD_GENESIS = '0x' + '22'.repeat(32);
@@ -44,7 +44,7 @@ const FORGED_CID = 'bafyforged';
 const GOOD_CID = 'bafygood';
 const PUBLICATION = 'test.soul2soul.eth';
 const AUTHOR_WALLET = new ethers.Wallet('0x' + '11'.repeat(32));
-const AUTHOR = toDidEthr(AUTHOR_WALLET.address);
+const AUTHOR = AUTHOR_WALLET.address;
 
 const PLAINTEXT = JSON.stringify({ content: 'Hello', slug: 'hello', title: 'Hello' });
 const PLAINTEXT_HASH = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(PLAINTEXT));

@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
+import { bodyForKey } from '@s2s/soul2soul-shared';
 import { ContentController } from '../../src/content/content.ctrlr';
 import { makeMain, makeVaultFile } from '../helpers/main';
 
@@ -30,7 +31,6 @@ vi.mock('@s2s/soul2soul-shared', async (importOriginal) => {
 });
 
 const ADDR = '0x111122223333444455556666777788889999AaaA';
-const DID = `did:ethr:${ADDR}`;
 
 function setupPublish(frontmatter: Record<string, any>, raw: string) {
 	const main = makeMain();
@@ -77,7 +77,7 @@ describe('ContentController.publishContent', () => {
 		expect(result!.encryption).toBe(false); // noOpEncrypt used → not encrypted
 
 		// public metadata
-		expect(result!.public.author).toBe(DID);
+		expect(result!.public.author).toBe(ADDR);
 		expect(result!.public.publication).toBe('acme.soul2soul.eth');
 		expect(result!.public.mediaType).toBe('text/markdown');
 		expect(result!.public.postType).toBe('post');
@@ -90,8 +90,8 @@ describe('ContentController.publishContent', () => {
 		expect(result!.public.modifiedDate).toBeGreaterThanOrEqual(result!.public.creationDate);
 		expect('createdAt' in result!.public).toBe(false);
 
-		// body is the JSON string of {title, slug, content, custom}
-		const body = JSON.parse(result!.body);
+		// storage layout v3: one body per key holder, and the protocol key has it
+		const body = JSON.parse(bodyForKey(result!) as string);
 		expect(body.title).toBe('My Title');
 		expect(body.slug).toBe('my-title');
 		expect(body.content).toContain('rest');
@@ -99,7 +99,7 @@ describe('ContentController.publishContent', () => {
 
 		// frontmatter genesis round-trip (genesis publish only)
 		expect(sharedFm.genesis).toBe(result!.objectId);
-		expect(sharedFm.author).toBe(DID);
+		expect(sharedFm.author).toBe(ADDR);
 		// modified_date from file.stat.mtime (makeVaultFile → 1700000000000)
 		expect(sharedFm.modified_date).toBe('2023-11-14T22:13:20');
 

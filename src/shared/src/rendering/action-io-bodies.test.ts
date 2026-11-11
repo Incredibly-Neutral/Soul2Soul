@@ -15,7 +15,7 @@ import {
 
 const PUBLIC_V1 = {
   specVersion: '1',
-  author: 'did:ethr:0x1111111111111111111111111111111111111111',
+  author: '0x1111111111111111111111111111111111111111',
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '',
@@ -29,7 +29,7 @@ const PUBLIC_V1 = {
 
 const PUBLIC_V2 = {
   specVersion: '2',
-  author: 'did:ethr:0x1111111111111111111111111111111111111111',
+  author: '0x1111111111111111111111111111111111111111',
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '',

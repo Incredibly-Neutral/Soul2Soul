@@ -49,6 +49,8 @@ substrate. There is **no** protocol-level "force-deal / force-retract" write pat
 
 ## Settled design decisions (committed by the architect)
 
+> **Settled since 2847c81:** the author form is the author Safe's bare `0x` address; the `did:ethr` label in decision 4 is retired, and nothing writes it.
+
 These are locked and must not be silently reversed:
 
 1. **Split — do NOT hoist the whitelist.** `whitelisted_authors`, `whitelisted_devs`, `canPublish`,

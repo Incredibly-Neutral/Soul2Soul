@@ -43,7 +43,7 @@ render-pipeline invocations.
 ## Shared surface consumed (bundled into the esbuild output)
 
 Entry point: **`@s2s/soul2soul-shared`** (full index). Imports: `getProtocolInfo`,
-`S2SProtocolInfo`, `S2SPublication`, `buildSignedContentItem`, `noOpEncrypt`, `toDidEthr`, content
+`S2SProtocolInfo`, `S2SPublication`, `buildSignedContentItem`, `noOpEncrypt`, content
 type `S2SContentItem`, **`renderwithLitActions`** (the orchestrator),
 **`runFilecoinLeg`** (Filecoin durability-leg runner: lifecycle logging + timeout +
 `onFailure` callback — relocated from `publication/filecoin.ts`, see SPEC-shared), and the

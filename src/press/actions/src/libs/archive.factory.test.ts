@@ -21,7 +21,8 @@ import { s2sContentItemSchema } from '@s2s/soul2soul-shared/rendering/action-io'
 // The mint and the signing view come from shared (out of scope for edits, so
 // deep-imported exactly like the module under test deep-imports them).
 import { buildSigningView } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
+import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types';
 
 // ============================================================================
 // archive.factory — per-publication IPFS content archive (pure, deterministic).
@@ -61,7 +62,7 @@ const ATTACKER = new Wallet('0x' + '22'.repeat(32));
 
 const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address): Entry => ({
   genesis,
-  author, // getDeals() returns a plain address, NOT a did:ethr
+  author, // getDeals() returns a plain address, never a prefixed author form
   cid,
   timestamp: 1234,
 });
@@ -118,7 +119,7 @@ const mkItem = (genesis: string, opts?: ItemOpts): S2SContentItem => {
 
   const pub: Record<string, unknown> = {
     specVersion: '1',
-    author: opts?.author ?? toDidEthr(signer.address),
+    author: opts?.author ?? signer.address,
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -215,7 +216,7 @@ describe('parseArchive', () => {
   });
 
   it('validates each item against the existing content-item schema (schema-invalid → dropped)', () => {
-    const badAuthor = { ...mkItem('g1'), public: { ...mkItem('g1').public, author: 'not-a-did' } };
+    const badAuthor = { ...mkItem('g1'), public: { ...mkItem('g1').public, author: 'not-an-address' } };
     const badEncryption = { ...mkItem('g2'), encryption: 'yes' as unknown as boolean };
     const missingProof = { ...mkItem('g3'), proof: undefined };
     const json = JSON.stringify({
@@ -223,7 +224,7 @@ describe('parseArchive', () => {
       publication: 'pub',
       built: '2026-01-01T00:00:00.000Z',
       items: {
-        g1: { cid: 'cid1', item: badAuthor }, // author fails did:ethr regex → dropped
+        g1: { cid: 'cid1', item: badAuthor }, // author is not an address → dropped
         g2: { cid: 'cid2', item: badEncryption }, // encryption not boolean → dropped
         g3: { cid: 'cid3', item: missingProof }, // proof missing → dropped
         g4: { cid: 'cid4', item: mkItem('g4') }, // valid → kept
@@ -234,6 +235,25 @@ describe('parseArchive', () => {
     expect(parsed.items.g2).toBeUndefined();
     expect(parsed.items.g3).toBeUndefined();
     expect(parsed.items.g4).toEqual({ cid: 'cid4', item: mkItem('g4') });
+  });
+
+  it('keeps an item pinned in the pre-change author form (the prefix is not a shape defect)', () => {
+    // The shared schema accepts the bare address only; an item pinned before the
+    // author became bare carries a pre-change prefix AND its signature covers
+    // those bytes. Both facts must hold at once: the item is well-formed (not
+    // dropped) and its digest still verifies.
+    const legacyForm = mkItem('g1', { author: `${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}` });
+    expect(legacyForm.public.author).toBe(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`);
+    expect(s2sContentItemSchema.safeParse(legacyForm).success).toBe(false);
+    expect(isValidContentItem(legacyForm)).toBe(true);
+    expect(inspectItemIntegrity(legacyForm, mkEntry('g1', 'cid1').author)).toMatchObject({
+      level: 'verified',
+    });
+
+    // Served, with the author exactly as it was pinned — the served object is
+    // never a normalised copy.
+    const { fresh } = reconcile([mkEntry('g1', 'cid1')], mkArchive({ g1: { cid: 'cid1', item: legacyForm } }));
+    expect(fresh.get('g1')?.author).toBe(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`);
   });
 
   it('old-format (v1) archives parse to empty — full refetch after the format bump', () => {
@@ -279,7 +299,7 @@ describe('reconcile', () => {
     expect(plain.title).toBe('title-g1');
     expect(plain.slug).toBe('slug-g1');
     expect(plain.content).toBe('content-g1');
-    expect(plain.author).toBe(toDidEthr(AUTHOR.address));
+    expect(plain.author).toBe(AUTHOR.address);
     expect(plain.postType).toBe('post');
     expect(plain.publication).toBe('pub');
 
@@ -404,16 +424,16 @@ describe('archive integrity verdict (bound to the on-chain deal author)', () => 
     expect(integrityIssues.map((i) => i.code)).toEqual(['hash-mismatch']);
   });
 
-  it('REFUSES an item whose public.author is not the deal author (did:ethr vs plain address normalised)', () => {
+  it('REFUSES an item whose public.author is not the deal author (pre-change form vs plain address normalised)', () => {
     const deal = mkEntry('g1', 'cid1');
-    const item = mkItem('g1', { author: toDidEthr(ATTACKER.address) });
+    const item = mkItem('g1', { author: ATTACKER.address });
     expect(inspectItemIntegrity(item, deal.author)).toMatchObject({
       level: 'mismatch',
       code: 'author-mismatch',
     });
-    // sanity: did:ethr and plain forms normalise to the same address
-    expect(addressOf(toDidEthr(AUTHOR.address))).toBe(addressOf(AUTHOR.address));
-    expect(addressOf('did:ethr:0Xnothex')).toBeNull();
+    // sanity: the pre-change and plain forms normalise to the same address
+    expect(addressOf(`${LEGACY_AUTHOR_PREFIX}${AUTHOR.address}`)).toBe(addressOf(AUTHOR.address));
+    expect(addressOf(`${LEGACY_AUTHOR_PREFIX}0Xnothex`)).toBeNull();
   });
 
   it('REFUSES a stripped hash on a specVersion item (the field cannot be deleted to opt out)', () => {
@@ -460,7 +480,7 @@ describe('archive integrity verdict (bound to the on-chain deal author)', () => 
       code: 'legacy-item',
     });
     // a legacy item with the WRONG author is still refused
-    const legacyWrongAuthor = mkItem('g2', { legacy: true, author: toDidEthr(ATTACKER.address) });
+    const legacyWrongAuthor = mkItem('g2', { legacy: true, author: ATTACKER.address });
     expect(inspectItemIntegrity(legacyWrongAuthor, ATTACKER.address)).toMatchObject({
       level: 'unverifiable',
     });
@@ -541,7 +561,7 @@ describe('archive integrity verdict (bound to the on-chain deal author)', () => 
     const deal = mkEntry('g1', 'cid1');
     const impersonation = mkItem('g1', {
       signer: ATTACKER,
-      author: toDidEthr(AUTHOR.address),
+      author: AUTHOR.address,
       bodyObject: { title: 'pwned', slug: 'pwned', content: 'pwned' },
     });
     const verdict = inspectItemIntegrity(impersonation, deal.author);
@@ -610,7 +630,7 @@ describe('isValidContentItem (shape gate)', () => {
   it('still rejects a legacy-SHAPED item that is malformed for another reason', () => {
     const broken = {
       ...mkItem('g1', { legacy: true }),
-      public: { ...(mkItem('g1', { legacy: true }).public as any), author: 'not-a-did' },
+      public: { ...(mkItem('g1', { legacy: true }).public as any), author: 'not-an-address' },
     } as unknown as S2SContentItem;
     expect(isValidContentItem(broken)).toBe(false);
     const { fresh, needsFetch } = reconcile(

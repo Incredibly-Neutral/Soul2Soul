@@ -10,6 +10,8 @@ import {
   type ProofCanonicalization,
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
+import { ADDRESS_RE } from '../libs/address';
+import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
 // Tree-mutation integrity gate — PKP provenance verification
 // Canonicalisation + HTML extraction are shared with render/metadata.ts
@@ -55,7 +57,15 @@ function extractSchema(html: string): any {
  *                        `author.identifier.value` (the claimed author) are
  *                        OUTSIDE the signed bytes.
  *  - `identifier`      — schema.identifier (the genesis the page claims).
- *  - `authorDid`       — the claimed author DID (unsigned on a LEGACY page).
+ *  - `authorDid`       — the claimed author, as an ADDRESS: read from whichever
+ *                        PropertyValue on the author node names one, through
+ *                        shared's `accountAddress()`. A page rendered today
+ *                        names the address inside a CAIP-10 account id; a page
+ *                        pinned before that names it bare or under a retired
+ *                        prefix. The reader therefore selects by value shape and
+ *                        never by term: the identity is the address, not the
+ *                        term or the form the value was pinned in. (Unsigned on
+ *                        a LEGACY page.)
  *  - `sha256`          — the claimed digest of the hashed body region
  *                        (unsigned on a LEGACY page).
  */
@@ -67,11 +77,20 @@ export interface PageIdentity {
   sha256: string | null;
 }
 
-const firstString = (value: unknown): string | null => {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) {
-    const hit = value.find((v) => typeof v === 'string');
-    return typeof hit === 'string' ? hit : null;
+/**
+ * The address an author node names, whichever PropertyValue carries it. Each
+ * value goes through shared's `accountAddress()`: a CAIP-10 account id names its
+ * address, a bare address names itself, and a retired prefix is stripped. The
+ * node may hold one PropertyValue or a list, and the list may carry values that
+ * name no address at all — those are skipped, never returned.
+ */
+const authorAddressOf = (author: any): string | null => {
+  const identifiers = Array.isArray(author?.identifier) ? author.identifier : [author?.identifier];
+  for (const identifier of identifiers) {
+    const value = typeof identifier === 'string' ? identifier : identifier?.value;
+    if (typeof value !== 'string') continue;
+    const address = accountAddress(value);
+    if (ADDRESS_RE.test(address)) return address;
   }
   return null;
 };
@@ -81,7 +100,7 @@ export const pageIdentityOf = (schema: any): PageIdentity => {
   const proof = schema?.proof;
   return {
     identifier: typeof schema?.identifier === 'string' ? schema.identifier : null,
-    authorDid: firstString(schema?.author?.identifier?.value),
+    authorDid: authorAddressOf(schema?.author),
     canonicalization: proofCanonicalizationOf(proof ?? {}),
     signed: typeof proof?.proofValue === 'string' && proof.proofValue !== '',
     sha256: typeof schema?.encoding?.sha256 === 'string' ? schema.encoding.sha256 : null,
@@ -335,7 +354,7 @@ export async function readPageIdentity(
  *    body) and `author.identifier.value` (the claimed author) are outside the
  *    signed bytes: such a page is indistinguishable from arbitrary content
  *    wearing a valid PKP signature. Rewriting the body, recomputing sha256 and
- *    pointing the author DID at a victim still verifies — so the update gate
+ *    pointing the author address at a victim still verifies — so the update gate
  *    must not be the thing that puts one on the tree.
  * 2. A LEGACY-signed page already AT the destination is an immutable carrier:
  *    its signature can be reused over changed content. Only a replacement that
@@ -366,7 +385,7 @@ export async function verifyPathAvailable(
     if (incoming?.canonicalization === 'LEGACY') {
       throw (
         `Refusing to write a legacy-signed page to ${destPath}: its signature covers ` +
-        `only a skeleton of the document (not the body, not the author DID), so it ` +
+        `only a skeleton of the document (not the body, not the author address), so it ` +
         `cannot vouch for the content it would publish. Re-render the content under ` +
         `specVersion 1 (JCS) and publish that instead.`
       );
@@ -388,7 +407,7 @@ export async function verifyPathAvailable(
     if (incoming && incoming.canonicalization === 'LEGACY') {
       throw (
         `Refusing to replace the legacy-signed page at ${destPath} with another ` +
-        `legacy-signed page: neither signature covers the body or the author DID, so the ` +
+        `legacy-signed page: neither signature covers the body or the author address, so the ` +
         `write would only graft content that no signature binds. Re-render it under ` +
         `specVersion 1 (JCS) first.`
       );

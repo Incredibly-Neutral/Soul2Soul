@@ -42,9 +42,9 @@ driving the same pure orchestration out of `shared`, with its own thin adapters.
 - `plaintextHash` (keccak over the canonical body) lives **inside** the signed public metadata,
   while the body itself does not — that is what lets an offer commit to a document nobody can read
   yet.
-- `proof.signer` is the **EOA** (the key that signed); `author` is `did:ethr:<authorSafe>` (the
-  identity that may publish). These are deliberately different fields — see the actor invariant
-  below.
+- `proof.signer` is the **EOA** (the key that signed); `author` is the **author Safe's bare `0x`
+  address** (the identity that may publish). These are deliberately different fields — see the actor
+  invariant below.
 - Frontmatter is the note's memory of that object: `genesis` (stable bytes32 identity), `author`
   (the Safe), `cid` (the CID of the last upload — ephemeral, overwritten by the next upload),
   `slug` (moves the rendered path), and the legacy `content_id` (the Lens-era name for `genesis`,

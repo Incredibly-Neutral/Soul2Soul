@@ -56,10 +56,27 @@ export type GateRead = (
   args: unknown[],
 ) => Promise<boolean>;
 
+/**
+ * A read whose answer is an address rather than a boolean, as the caller
+ * implements it against the same EVM. Gates that must resolve *whose* record
+ * they are testing (the author's drafts module) use this; everything a gate then
+ * decides with it goes through {@link GateRead}.
+ */
+export type GateValueRead = (
+  target: string,
+  abi: string[],
+  fn: string,
+  args: unknown[],
+) => Promise<string>;
+
 const CAN_PUBLISH_ABI = ['function canPublish(address _author) view returns (bool)'];
 const IS_OWNER_ABI = ['function isOwner(address owner) view returns (bool)'];
 const CAN_READ_ABI = ['function canRead(bytes32 genesis, address reader) view returns (bool)'];
 const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view returns (bool)'];
+/** DraftsModuleV1 — the author's own version log, installed on the author Safe. */
+const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
+
+const ZERO_ADDRESS = /^0x0{40}$/i;
 
 /**
  * Can this author Safe write to this publication, on behalf of this signer?
@@ -125,6 +142,44 @@ export const canReview = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
   return read(publicationModule, CAN_REVIEW_ABI, 'canReview', [genesis, signerAddress]);
+};
+
+/**
+ * May this signer open this manuscript because it is theirs?
+ *
+ * The author branch of GATES-1, read from the author's own contract: the
+ * genesis is looked up in the drafts module, the module names the Safe that
+ * appended it, and that Safe answers `isOwner` for the signer. No publication
+ * is involved, so a draft that was never offered to anyone still opens, and the
+ * fact survives the publication de-listing its author — which is what
+ * `canPublish` cannot answer.
+ *
+ * `authorModule` is a DraftsModuleV1 instance; the Safe is NOT a parameter, so a
+ * caller cannot name whose ownership is being tested. `genesis` is normalised
+ * the same way the writes normalise it.
+ *
+ * A caller MUST also check the item it decrypted: `authorOf` is written by
+ * whoever owns that module instance (`append` is `onlySafe`), so an unknown
+ * genesis is refused here (zero address) but a *known* one only says "this Safe
+ * kept this document here" — see docs/specs/author/SPEC-author-drafts.md. Bind
+ * the blob by requiring `public.author` to equal this gate's answer before
+ * treating the ciphertext as that author's.
+ */
+export const owns = async (
+  read: GateRead,
+  readValue: GateValueRead,
+  genesis: string,
+  authorModule: string,
+  signerAddress: string,
+  toId: IdNormaliser = toBytes32Id,
+): Promise<boolean> => {
+  const author = await readValue(authorModule, AUTHOR_OF_ABI, 'authorOf', [toId(genesis)]);
+
+  // Unknown genesis: DraftsModuleV1 returns a zeroed Entry rather than
+  // reverting, so this is the "no such draft" case, not a broken read.
+  if (typeof author !== 'string' || author === '' || ZERO_ADDRESS.test(author)) return false;
+
+  return read(author, IS_OWNER_ABI, 'isOwner', [signerAddress]);
 };
 
 /**

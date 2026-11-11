@@ -190,7 +190,7 @@ describe('ContentController.parseNote — custom bag', () => {
 			position: '1',
 			encryption: false,
 			genesis: '0x2',
-			author: 'did:ethr:0x3',
+			author: '0x3',
 			modified_date: '2026-01-01T00:00:00',
 			creation_date: '2026-01-01T00:00:00',
 			tags: ['a'],

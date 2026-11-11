@@ -67,8 +67,7 @@ These types are the **single source of truth** for stored content items. They li
 
 | type | file | shape |
 |---|---|---|
-| `DidEthr` | `protocol/types.ts` | template literal `did:ethr:0x${string}` — canonical author form |
-| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(DidEthr), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
+| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
 | `S2SContentItem` | `protocol/types.ts` | **flat stored object** (storage layout v3): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), bodies(Record<string,string>)` — `bodies` holds one body per key holder, keyed by the key holder's name; `s2s` is the protocol PKP's and every item has it. A v1/v2 item stores a single `body` string instead. |
 | `S2SContentBody` | `protocol/types.ts` | what goes inside a body: `title, slug, content, custom?(Record)` |
@@ -79,7 +78,7 @@ Key design decisions (from HANDOFF-content-item):
 - **`specVersion` selects the struct.** A `'2'` envelope verifies under `S2S_TYPES_V2` with `creationDate`/`modifiedDate`; anything else stays under `S2S_TYPES` with `createdAt`, so a v1 digest still reproduces.
 - **The body is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
-- **`author` is `DidEthr`**, not bare 0x address.
+- **`author` is the author Safe's bare `0x` address**, not a `did` string. The address is the identity; any prefix around it is decoration, so there is none.
 - **One body per key holder.** `bodies` is keyed by whose key it is: `s2s` is the protocol PKP's, and every item carries that entry. The layout leaves room for a publication with its own key to add its own ciphertext beside it, which needs no new signature; only the press's entry is written today. The envelope is unchanged, so `objectId`, `plaintextHash` and the EIP-712 type hash are the same bytes as a single-`body` item's. Read it with `bodyForKey(item)` / `itemBodies(item)` (default key `s2s`), never `item.body`: a body-less item is `malformed-item`.
 - **`tags`/`attributes`** live in the signed public part. **`title`/`slug`/`content`/`custom`** live in the body.
 
@@ -88,8 +87,13 @@ Key design decisions (from HANDOFF-content-item):
 | module | file | exports | role |
 |---|---|---|---|
 | `identity/` | `sign-content.ts` | `buildSignedContentItem`, `computeObjectId`, `TypedDataSigner`, `noOpEncrypt` | Produce a signed S2SContentItem from raw inputs + EOA signer |
-| `identity/` | `verify-content.ts` | `verifyAuthorship`, `verifyPlaintextHash`, `resolveLatest`, `getHistory`, `VersionRecord` | Verify authorship + resolve append log |
+| `identity/` | `verify-content.ts` | `verifyAuthorship`, `verifyPlaintextHash`, `resolveLatest`, `getHistory`, `authorAddress`, `VersionRecord` | Verify authorship + resolve append log |
 | `identity/` | `jcs.ts` | `jcs`, `keccakOfJson` | RFC 8785 canonical JSON + keccak256 |
+| `identity/` | `author-address.ts` | `authorAddress`, `accountAddress` | `authorAddress`: the bare lowercase address an author value names — the one reader-side tolerance for the retired prefix. `accountAddress`: the address a page identity names — a CAIP-10 account id strips to its address (case kept), a bare address passes through, a pre-change prefixed value goes through `authorAddress()` |
+
+An item pinned before author became the bare address carries `did:ethr:0x…` in `public.author`.
+`authorAddress()` strips that prefix before comparing, so those items still verify and render.
+Nothing writes the prefix; when no readable item carries it, the module goes.
 
 ### Legacy types (DEPRECATED, keep for action compatibility)
 
@@ -98,7 +102,9 @@ Key design decisions (from HANDOFF-content-item):
 | `S2SBody` | `protocol/types.ts` | **discriminated union**: `S2SBodyBase` + `S2SBodyPlain` (`encryption: false`, `content`, `title`, `slug`, `custom?`) / `S2SBodyEncrypted` (`encryption: true`, no plaintext fields) | 🔸 Lens-era — superseded by `S2SContentItem` (`protocol/types.ts`). Actions still use it. |
 | `S2SPublicContent` | `content/types.ts` | Lens-era shape (`creationDate`, `modifiedDate`, `language`, ...) | 🔸 Deprecated — replaced by `protocol/types.ts` version |
 | `S2SContentItem` | `content/types.ts` | empty extension of Lens-era `S2SPublicContent` | 🔸 Deprecated — no purpose |
-| `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.lens`, `publisher`, `contentCid`, `license`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
+| `S2SContentInfo` | `metadata/types.ts` | provenance metadata for rendered HTML (`author.address`, `author.proof`, `publisher.address`, `publisher.safe`, `contentGenesis`, `objectId`, `contentCid`, `plaintextHash`, `mediaType`, `specVersion`, `licenseContract`, `isBasedOn`) | 🟢 Still active — rendered provenance is separate from stored content item |
+
+On the page, the author identifier is a JSON-LD `PropertyValue` node naming a CAIP-10 account id: `propertyID: 'CAIP-10'`, `name: 'Safe smart account'`, `value: 'eip155:8453:<authorSafeAddress>'`. The address is emitted as the item carries it, case included, and the chain id is Base mainnet (8453). The publisher identifiers are still `propertyID: 'address'` for the bare `0x` address and `propertyID: 'address:safe'` for the publication Safe. A reader takes the identity from whichever PropertyValue on the author node names an address, through `accountAddress()`, so the term is never load-bearing: an old page and a new one read as the same address.
 
 ### Active types (unchanged)
 
@@ -118,9 +124,9 @@ Key design decisions (from HANDOFF-content-item):
 
 | module | role | notes |
 |---|---|---|
-| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SPublicContent`, `S2SProof`, `DidEthr`, `S2SContentBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
+| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, constants + **content-item types** | **mirror of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers); has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Content-item types (`S2SContentItem`, `S2SContentItemV2`, `S2SContentItemV3`, `S2SPublicContent`, `S2SProof`, `S2SContentBody`, `S2S_DOMAIN`, `S2S_TYPES`) are the canonical identity/provenance types, replacing the old S2SBody. |
 | `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers + **action-io schemas** | drives the pipeline; selects Bun (preview) vs Lit (prod). Content-item types now live in `protocol/types.ts`, not rendering. Zod schemas (`s2sContentItemSchema` etc.) remain in action-io.ts. |
-| `lit/` | `LitService` (Chipotle REST client), `actions/encrypt`, `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). Backs `swap-action`/`deploy-group`/`update-protocol` |
+| `lit/` | `LitService` (Chipotle REST client), `actions/encrypt`, `actions/decrypt` (author draft: `DraftsModuleV1.fetch` → `isOwner` on the entry's Safe → blob `public.author` must match), `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). `decrypt(key, DecryptParams)` sends `compactAction(decryptAction)` and throws on an `ok:false` envelope; the author Safe is a parameter of neither. Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side); `bodySchema` mirrors the deprecated `S2SBody` |
 | `lens/` | Lens GraphQL client (`fetchById`, queries) | mirrors in-action `lens.factory`; Lens testnet (GAP-10) |
 | `contracts/` | ABIs: `ens`, `records_module`, `safe_factory`, `safe_implementation` | the ABI source of truth |
@@ -209,7 +215,7 @@ INV-2 (`getProtocolInfo` key set — keep in sync with the in-action copy), INV-
 INV-6/8/11 etc. in the consumers.
 
 **NEW INV-append:** The publication/records contract gates every `append` to the genesis author
-(or permitted publication owners), verified against the `did:ethr` identity recorded in the genesis
+(or permitted publication owners), verified against the author Safe address recorded in the genesis
 entry. This is the existing author/publication gate, extended to guard appends.
 
 ## Local gotchas / gaps

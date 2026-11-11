@@ -132,7 +132,7 @@ function setupHappyDeps() {
   vi.mocked(decodeArchiveCid).mockReturnValue('');
   vi.mocked(fetchById).mockResolvedValue({
     id: sampleJob.id,
-    author: 'did:ethr:0xaaaa',
+    author: '0xaaaa',
     locale: 'en',
     postType: 'post',
     creationDate: '2026-01-01',
@@ -268,7 +268,7 @@ describe('render action — availability classification', () => {
             cid: 'QmEncryptedCid',
             encryption: true,
             content: 'ciphertext',
-            author: 'did:ethr:0xaaaa',
+            author: '0xaaaa',
             locale: 'en',
             postType: 'post',
             creationDate: '2026-01-01',

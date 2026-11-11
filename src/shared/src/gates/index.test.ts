@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { canPublish, canRead, canReset, canReview, type GateRead } from './index';
+import { canPublish, canRead, canReset, canReview, owns, type GateRead } from './index';
 
 // The gates are pure decision logic over an injected read, so they can be
 // tested without a chain: record every question asked, answer from a table.
@@ -138,6 +138,90 @@ describe('canReview', () => {
     };
     await canReview(read, 'bafyrawwcid', PUBLICATION, SIGNER, (ref) => `hashed:${ref}`);
     expect(seen).toEqual(['hashed:bafyrawwcid', SIGNER]);
+  });
+});
+
+describe('owns', () => {
+  const AUTHOR_MODULE = '0xdddd';
+
+  // An address-shaped chain read, recorded in its own list so a test can see
+  // the order across both reads: authorOf first, isOwner second.
+  const makeValueRead = (answers: Record<string, string>) => {
+    const valueAsked: { target: string; fn: string; args: unknown[] }[] = [];
+    const readValue = async (
+      target: string,
+      _abi: string[],
+      fn: string,
+      args: unknown[],
+    ): Promise<string> => {
+      valueAsked.push({ target, fn, args });
+      const key = `${fn}:${target}`;
+      if (!(key in answers)) throw new Error(`unexpected read ${key}`);
+      return answers[key];
+    };
+    return { readValue, valueAsked };
+  };
+
+  it('resolves the author from the drafts module, then asks that Safe who owns it', async () => {
+    const { readValue, valueAsked } = makeValueRead({ [`authorOf:${AUTHOR_MODULE}`]: AUTHOR_SAFE });
+    const { read, asked } = makeRead({ [`isOwner:${AUTHOR_SAFE}`]: true });
+
+    expect(await owns(read, readValue, HEX32, AUTHOR_MODULE, SIGNER)).toBe(true);
+    expect(valueAsked.map((a) => `${a.fn}:${a.target}`)).toEqual([`authorOf:${AUTHOR_MODULE}`]);
+    expect(valueAsked[0].args).toEqual([HEX32]);
+    expect(asked.map((a) => `${a.fn}:${a.target}`)).toEqual([`isOwner:${AUTHOR_SAFE}`]);
+    expect(asked[0].args).toEqual([SIGNER]);
+  });
+
+  it('asks isOwner once, on the Safe the module named, and refuses its non-owner', async () => {
+    const { readValue } = makeValueRead({ [`authorOf:${AUTHOR_MODULE}`]: AUTHOR_SAFE });
+    const { read, asked } = makeRead({ [`isOwner:${AUTHOR_SAFE}`]: false });
+
+    expect(await owns(read, readValue, HEX32, AUTHOR_MODULE, SIGNER)).toBe(false);
+    expect(asked).toHaveLength(1);
+    expect(asked[0].target).toBe(AUTHOR_SAFE);
+  });
+
+  it('never reads isOwner on any Safe the module did not name', async () => {
+    const OTHER_SAFE = '0xeeee';
+    const { readValue } = makeValueRead({ [`authorOf:${AUTHOR_MODULE}`]: AUTHOR_SAFE });
+    // makeRead throws on an unexpected isOwner target, so a read of the wrong
+    // Safe fails the test rather than answering.
+    const { read } = makeRead({ [`isOwner:${OTHER_SAFE}`]: true });
+
+    await expect(owns(read, readValue, HEX32, AUTHOR_MODULE, SIGNER)).rejects.toThrow(
+      `unexpected read isOwner:${AUTHOR_SAFE}`,
+    );
+  });
+
+  it('refuses an unknown genesis — DraftsModuleV1 answers zero rather than reverting', async () => {
+    const { readValue, valueAsked } = makeValueRead({
+      [`authorOf:${AUTHOR_MODULE}`]: `0x${'0'.repeat(40)}`,
+    });
+    const { read, asked } = makeRead({});
+
+    expect(await owns(read, readValue, HEX32, AUTHOR_MODULE, SIGNER)).toBe(false);
+    expect(valueAsked).toHaveLength(1);
+    expect(asked).toHaveLength(0);
+  });
+
+  it('holds for a draft no publication knows — the case canPublish cannot answer', async () => {
+    const { readValue } = makeValueRead({ [`authorOf:${AUTHOR_MODULE}`]: AUTHOR_SAFE });
+    const { read } = makeRead({
+      [`canPublish:${PUBLICATION}`]: false,
+      [`isOwner:${AUTHOR_SAFE}`]: true,
+    });
+
+    expect(await canPublish(read, AUTHOR_SAFE, PUBLICATION, SIGNER)).toBe(false);
+    expect(await owns(read, readValue, HEX32, AUTHOR_MODULE, SIGNER)).toBe(true);
+  });
+
+  it('normalises a raw reference before the authorOf read', async () => {
+    const { readValue, valueAsked } = makeValueRead({ [`authorOf:${AUTHOR_MODULE}`]: AUTHOR_SAFE });
+    const { read } = makeRead({ [`isOwner:${AUTHOR_SAFE}`]: true });
+
+    await owns(read, readValue, 'bafyrawwcid', AUTHOR_MODULE, SIGNER, (r) => `hashed:${r}`);
+    expect(valueAsked[0].args).toEqual(['hashed:bafyrawwcid']);
   });
 });
 

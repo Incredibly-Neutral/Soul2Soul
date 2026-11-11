@@ -9,12 +9,13 @@ export type {
   S2SContentItem,
   S2SPublicContent,
   S2SProof,
-  DidEthr,
   S2SContentBody,
 } from './manuscript';
 export type {
   ActionResult,
   DataAvailabilityEntry,
+  DecryptData,
+  DecryptParams,
   EvmUpdateData,
   EvmUpdateInput,
   MaintainCacheData,

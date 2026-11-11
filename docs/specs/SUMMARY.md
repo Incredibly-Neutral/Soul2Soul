@@ -30,7 +30,7 @@ matter (who may publish, whose content decrypts, what the site's code is, what t
 are gated by a Safe multisig and enforced by the neutral generator. Frontends are swappable; the
 guarantees are not.
 
-Identity, in one paragraph: the author is a **`did:ethr` whose address is a Safe (multisig), not an
+Identity, in one paragraph: the author is a **Safe (multisig), named by its bare `0x` address, not an
 EOA** — the publication contract records the author by Safe address, and with ERC-4337 + a paymaster
 the on-chain `msg.sender` *is* the Safe. Key rotation = swap the Safe's signers.
 
@@ -135,7 +135,7 @@ chooses transport (Bun fetch vs Lit `executeAction`), nothing else.
 
 **New canonical content-item (identity/provenance) — flat, no union:**
 `S2SContentItem = { public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string) }`
-- `S2SPublicContent` (signed, EIP-712): `specVersion, author(DidEthr), postType, mediaType, parent,
+- `S2SPublicContent` (signed, EIP-712): `specVersion, author(0x Safe address), postType, mediaType, parent,
   position, publication, locale, creationDate(unixts, genesis signing time), modifiedDate(unixts, this
   version), base?, tags[], attributes?, plaintextHash`; a v1 item carries a single `createdAt` instead
 - `secret` = stringified JSON `{ title, slug, content, custom? }` when `encryption:false`, ciphertext

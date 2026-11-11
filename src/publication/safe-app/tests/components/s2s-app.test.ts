@@ -171,9 +171,14 @@ vi.mock('@/lib/protocol-integration.js', () => ({
   },
 }));
 
-vi.mock('@s2s/soul2soul-shared', () => ({
-  LitService: class {},
-}));
+vi.mock('@s2s/soul2soul-shared', async () => {
+  // pet-name reads an author through the shared helper; provide the real one
+  // rather than a stub, so the mock does not have to know the form.
+  const { authorAddress } = await import(
+    '../../../../shared/src/manuscript/identity/author-address.js'
+  );
+  return { LitService: class {}, authorAddress };
+});
 
 vi.mock('@s2s/soul2soul-shared/filecoin', () => ({
   FilecoinStorage: class {

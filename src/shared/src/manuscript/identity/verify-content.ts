@@ -3,9 +3,10 @@
 // ============================================================================
 
 import { ethersUtils } from './ethers-ambient';
+import { authorAddress } from './author-address';
 import { jcs, keccakOfJson, keccakOfString } from './jcs';
 import { signingEnvelope } from './signing-view';
-import { type AnyS2SContentItem, S2S_DOMAIN, bodyForKey, eoaOf } from '../types';
+import { type AnyS2SContentItem, S2S_DOMAIN, bodyForKey } from '../types';
 
 // ============================================================================
 // verifyAuthorship — called by decryptors before rendering
@@ -68,10 +69,10 @@ export async function verifyAuthorship(
     );
     const recovered = utils.recoverAddress(digest, item.proof.signature);
 
-    // 5. Check recovered address matches the author's EOA
-    const expectedEoa = eoaOf(item.public.author);
+    // 5. Check recovered address matches the author Safe (or the pre-change form
+    //    an older item was pinned with)
+    const expectedAddress = authorAddress(item.public.author);
     const recoveredAddress = recovered.toLowerCase();
-    const expectedAddress = expectedEoa.toLowerCase();
 
     if (recoveredAddress !== expectedAddress) {
       return false;
@@ -144,7 +145,7 @@ export interface VersionRecord {
   genesis: string;     // the document's persistent identity (first objectId)
   objectId: string;    // this version's objectId (= EIP-712 digest)
   cid: string;         // the IPFS CID of this version's content
-  author: string;      // did:ethr author
+  author: string;      // the author Safe's address
   timestamp: number;   // when this version was appended
   tombstone: boolean;  // true if this is a retraction
 }

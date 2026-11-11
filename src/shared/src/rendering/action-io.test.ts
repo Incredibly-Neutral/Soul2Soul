@@ -428,7 +428,7 @@ describe('validateSingleOutput — maintainCache drift signal', () => {
 describe('s2sPublicContentSchema', () => {
   const v1 = {
     specVersion: '1',
-    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    author: '0x1111111111111111111111111111111111111111',
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -442,7 +442,7 @@ describe('s2sPublicContentSchema', () => {
 
   const v2 = {
     specVersion: '2',
-    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    author: '0x1111111111111111111111111111111111111111',
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',

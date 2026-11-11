@@ -18,7 +18,6 @@ import {
   type S2SContentItemV2,
   type S2SContentItemV3,
   type S2SProof,
-  toDidEthr,
 } from './types';
 import { buildSignedContentItem, noOpEncrypt, type TypedDataSigner } from './identity/sign-content';
 import { verifyAuthorship } from './identity/verify-content';
@@ -37,7 +36,7 @@ const PROOF: S2SProof = {
 const V1_ITEM: S2SContentItem = {
   public: {
     specVersion: '1',
-    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    author: '0x1111111111111111111111111111111111111111',
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -57,7 +56,7 @@ const V1_ITEM: S2SContentItem = {
 const V2_ITEM: S2SContentItemV2 = {
   public: {
     specVersion: '2',
-    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    author: '0x1111111111111111111111111111111111111111',
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -239,7 +238,7 @@ describe('buildSignedContentItem storage layout', () => {
       BODY,
       signerOf(wallet),
       noOpEncrypt,
-      toDidEthr(wallet.address),
+      wallet.address,
     );
 
     // The absence of `.body` is a compile error on the v3 return, not a
@@ -270,7 +269,7 @@ describe('buildSignedContentItem storage layout', () => {
       BODY,
       signerOf(wallet),
       noOpEncrypt,
-      toDidEthr(wallet.address),
+      wallet.address,
     );
 
     // v3 storage is pinned to the v2 envelope: a v1 item is never rewritten,

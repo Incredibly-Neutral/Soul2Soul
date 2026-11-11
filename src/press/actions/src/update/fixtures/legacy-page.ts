@@ -10,6 +10,11 @@
  *
  * Generated with a throwaway key (derived from a fixed string — NOT a secret).
  * The `created` timestamp and signature are frozen as part of the page.
+ *
+ * The identity values are the pre-change spelling: the retired prefix, under
+ * the term of the same name. A page pinned then carries both, and verify.ts
+ * reads them through shared's accountAddress, so this file must keep them byte
+ * for byte: it is the evidence that an old page still reads as an address.
  */
 
 /** EOA (test PKP) that signed the frozen page. */

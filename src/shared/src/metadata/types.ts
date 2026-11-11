@@ -1,6 +1,7 @@
 export interface S2SContentInfo {
   author?: {
-    did: string; // did:ethr:0x... or did:ethr:safe:0x...
+    /** The author Safe's bare 0x address, emitted as the page's `address` value. */
+    address: string;
     createdAt?: string;
     /**
      * The author's EIP-712 signature over this version's content item.
@@ -20,8 +21,10 @@ export interface S2SContentInfo {
     };
   };
   publisher?: {
-    did: string; // did:ethr:0x...
-    safe?: string; // did:ethr:safe:0x...
+    /** The publisher's bare 0x address. */
+    address: string;
+    /** The publication Safe's 0x address. */
+    safe?: string;
     url: string;
   };
   /** bytes32 genesis / objectId of the document — the stable document identity. */

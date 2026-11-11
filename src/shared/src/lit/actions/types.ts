@@ -147,3 +147,32 @@ export interface RepointArchiveData {
   cid: string;
   wrote: boolean;
 }
+
+// Decrypt (author draft) — opens a draft in its own module and refuses unless
+// the signer owns the Safe the module names for that genesis. The author Safe is
+// deliberately absent from the params: it is read from the drafts module, so a
+// caller cannot name whose ownership is being tested. Only then is the blob
+// cat'd, and the plaintext is released only if it hashes to the signed
+// `public.plaintextHash`. See lit/actions/decrypt.ts.
+export interface DecryptParams {
+  /** Lit PKP id that holds the decryption key. */
+  pkpId: string;
+  /** The draft: a raw CID/objectId (keccak256-normalised) or a bytes32 0x+64hex id. */
+  genesis: string;
+  /** The author's DraftsModuleV1 instance — the contract the author Safe owns. */
+  authorModule: string;
+  /** Signature over `hashMessage('lit actions auth')` from the caller's wallet. */
+  signature: string;
+  rpcs: { L2: string[] };
+  /** IPFS gateway base URL, e.g. `https://ipfs.io`. */
+  gateway: string;
+}
+
+export interface DecryptData {
+  /** The string the author signed, exactly as decrypted — the hash input. */
+  plaintext: string;
+  /** The Safe the drafts module names as this genesis's author. */
+  author: string;
+  /** CID of the version `fetch` returned (the latest append). */
+  cid: string;
+}

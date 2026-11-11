@@ -1,7 +1,9 @@
 import { keccak256, toBytes } from "viem";
 import { callWithTimeout, isAbortError, withRetry } from "../helpers/index.js";
+import { decryptAction } from "./actions/decrypt.js";
 import { encryptAction } from "./actions/encrypt.js";
 import { compactAction } from "./actions/index.js";
+import type { ActionResult, DecryptData, DecryptParams } from "./actions/types.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Log hygiene — nothing in this module may put a Lit usage key, a plaintext
@@ -420,24 +422,40 @@ export class LitService {
     }
   }
 
-  async decrypt(key: string, pkpId: string, ciphertext: string, userAddress: string, signature: string, action: string): Promise<string> {
-      const result = await this.call<{ response: { plaintext?: string; error?: string } }>(
+  /**
+   * Decrypt a draft for its author. `params` carries no author Safe — the action
+   * reads it from the drafts module and refuses unless the signer owns it.
+   * Returns the plaintext; throws on a refusal envelope.
+   */
+  async decrypt(key: string, params: DecryptParams): Promise<string> {
+      const code = compactAction(decryptAction);
+
+      const result: any = await this.call<{ response: ActionResult<DecryptData>; logs?: string[]; has_error?: boolean }>(
           '/lit_action', {
               method: 'POST',
-              body: { code: action, js_params: { pkpId, ciphertext, userAddress, signature } },
+              body: { code, js_params: params },
               key,
           }
       );
 
-      if (result.response.error) {
-          throw new Error(`Lit decrypt error: ${redact(result.response.error)}`);
+      const envelope = result?.response as ActionResult<DecryptData> | undefined;
+
+      if (result?.has_error || !envelope || envelope.ok !== true) {
+          // Reason only, redacted: a refusal's `error` is the action's own words,
+          // and the fallback (action logs) can carry js_params, i.e. the
+          // ciphertext.
+          const reason = envelope && envelope.ok === false
+              ? envelope.error
+              : describeActionLogs(result?.logs);
+          throw new Error(`Decrypt failed: ${redact(reason)}`);
       }
 
-      if (!result.response.plaintext) {
-          // Shape only: JSON.stringify(result.response) is a response body print.
-          throw new Error(`Lit decrypt returned no plaintext (response ${bodyShape(result.response)})`);
+      const plaintext = envelope.data?.plaintext;
+      if (typeof plaintext !== 'string') {
+          // Shape only: the response body can be the plaintext itself.
+          throw new Error(`Decrypt returned no plaintext (response ${bodyShape(envelope)})`);
       }
 
-      return result.response.plaintext!;
+      return plaintext;
   }
 }

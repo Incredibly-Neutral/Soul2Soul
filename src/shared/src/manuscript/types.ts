@@ -3,8 +3,9 @@
 //
 // A manuscript is what an author signs: the public metadata (S2SPublicContent),
 // the body (S2SContentBody, possibly encrypted), the digest that names it
-// (objectId), and the signature over it (S2SProof). Identity is did:ethr;
-// the signature is EIP-712 over the canonical form in ./identity.
+// (objectId), and the signature over it (S2SProof). The author is the author
+// Safe's bare address; the signature is EIP-712 over the canonical form in
+// ./identity.
 //
 // Everything here is dependency-free — no zod, no viem, no ethers import — so
 // the types can travel into a Lit Action bundle (INV-7) and into a browser
@@ -14,16 +15,16 @@
 // ============================================================================
 // Content-Item types (canonical — identity/provenance)
 // Replaces the old Lens-era S2SBody/S2SPublicContent/S2SContentItem.
-// Author identity: did:ethr. Signed via EIP-712.
+// Author identity: the author Safe's bare address. Signed via EIP-712.
 // ============================================================================
 
-/** Canonical author identity form: did:ethr:0x<address> */
-export type DidEthr = `did:ethr:0x${string}`;
+/** An author address: the Safe that signs, as a bare 0x address. */
+export type Address = `0x${string}`;
 
 /** The PUBLIC, queryable, SIGNED metadata. Every field here is signed via EIP-712. */
 export interface S2SPublicContent {
   specVersion: string; // envelope/format version, e.g. "1" — pins canonicalization + algos
-  author: DidEthr; // was: bare 0x address
+  author: Address; // the author Safe
   postType: string; // S2S kind (post/page); NOT how to parse the body
   mediaType: string; // how to parse the body, e.g. "text/markdown" | "text/html"
   parent: string;
@@ -47,7 +48,7 @@ export interface S2SPublicContent {
  */
 export interface S2SPublicContentV2 {
   specVersion: string;
-  author: DidEthr;
+  author: Address;
   postType: string;
   mediaType: string;
   parent: string;
@@ -220,15 +221,6 @@ export function bodyForKey(
   if (!Object.hasOwn(bodies, key)) return undefined;
   const body = bodies[key];
   return typeof body === 'string' ? body : undefined;
-}
-
-export function toDidEthr(address: string): DidEthr {
-  const addr = address.startsWith('0x') ? address : `0x${address}`;
-  return `did:ethr:${addr}` as DidEthr;
-}
-
-export function eoaOf(did: DidEthr): `0x${string}` {
-  return did.replace('did:ethr:', '') as `0x${string}`;
 }
 
 // ============================================================================

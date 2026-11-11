@@ -5,8 +5,10 @@
 // sent over the network, so on-chain identities stay pseudonymous: everyone
 // sees the raw address, each viewer sees only the names they chose.
 //
-// Authors arrive as `did:ethr:0x…`; the prefix is stripped so the address is
-// shown/copied as the bare `0x…` form.
+// Authors arrive as a bare `0x…` address. An item pinned before the change
+// records a value that only shared's `authorAddress()` reads as an address, so
+// every read goes through it and the address is shown/copied bare. Nothing here
+// knows how the retired spelling looked.
 //
 // Render modes:
 //   1. display = the pet name, if this address has one (full address in title)
@@ -16,6 +18,7 @@
 // the label (no buttons) — used inside chip pills and other compact spots.
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { authorAddress } from '@s2s/soul2soul-shared';
 import { typograhyStyles } from '@/styles/typography-styles.js';
 import { petNameStore } from '@/state/pet-name.store.js';
 import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
@@ -126,9 +129,13 @@ export class PetName extends LitElement {
     if (this.timeout) clearTimeout(this.timeout);
   }
 
-  /** Bare address — authors arrive as `did:ethr:0x…`, strip the prefix. */
+  /** Bare address. A value pinned before the change is read through shared's
+   *  `authorAddress()`, the one place that knows the retired spelling. */
   private get address(): string {
-    return this.value.replace(/^did:ethr:/i, '');
+    const text = this.value.trim();
+    const bare = authorAddress(text);
+    // A current item is already bare: keep the case the caller gave it.
+    return bare === text.toLowerCase() ? text : bare;
   }
 
   private truncate(str: string): string {

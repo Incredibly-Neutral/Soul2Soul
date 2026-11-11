@@ -119,8 +119,8 @@ export function parseArchive(json: string): Archive {
       typeof (entry as ArchiveItem).cid === 'string' &&
       (entry as ArchiveItem).cid !== ''
     ) {
-      // Schema enforces the shape at runtime; the branded literals (DidEthr,
-      // `0x${string}`) are compile-time refinements the schema can't infer, so
+      // Schema enforces the shape at runtime; the branded literal
+      // (`0x${string}`) is a compile-time refinement the schema can't infer, so
       // the validated item is kept as the canonical type. The raw item is kept
       // (not a normalised copy) so a legacy hash-less item survives round-trip.
       if (isValidContentItem((entry as ArchiveItem).item)) {

@@ -22,6 +22,7 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import { extractHashableHtml } from '@s2s/soul2soul-shared/lit-actions';
 import { pageIdentityOf, verifyPathAvailable, verifyProvenance } from './verify';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
 import { addAndSignMetadata } from '../render/metadata';
 import {
   LEGACY_FIXTURE_HTML,
@@ -208,7 +209,7 @@ describe('legacy pages — byte-identical verification', () => {
 // ── The legacy page as a reusable CARRIER — the update gate ─────────────────
 //
 // The blind spot above is not merely "a nested field goes unchecked": because
-// the body and the author DID are outside the legacy signed bytes, a legacy page
+// the body and the author address are outside the legacy signed bytes, a legacy page
 // is a reusable carrier. An attacker takes the already-signed page, rewrites the
 // body inside the hashed region, recomputes encoding.sha256, repoints
 // author.identifier.value at a victim, and verifyProvenance still passes (the
@@ -262,9 +263,9 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
     ).rejects.toThrow(/legacy-signed page/);
   });
 
-  it('PROBE 2 — verifyProvenance still passes an author-DID swap', async () => {
+  it('PROBE 2 — verifyProvenance still passes an author-address swap', async () => {
     const swappedAuthor = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
-      schema.author.identifier.value = 'did:ethr:0x9999999999999999999999999999999999999999';
+      schema.author.identifier.value = `${LEGACY_AUTHOR_PREFIX}0x9999999999999999999999999999999999999999`;
     });
     // author.identifier.value is not in the legacy signed bytes either.
     await expect(
@@ -272,9 +273,9 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
     ).resolves.toMatchObject({ signed: true, canonicalization: 'LEGACY' });
   });
 
-  it('PROBE 2 — the gate refuses that author-DID swap', async () => {
+  it('PROBE 2 — the gate refuses that author-address swap', async () => {
     const swappedAuthor = rewriteJsonLd(LEGACY_FIXTURE_HTML, (schema) => {
-      schema.author.identifier.value = 'did:ethr:0x9999999999999999999999999999999999999999';
+      schema.author.identifier.value = `${LEGACY_AUTHOR_PREFIX}0x9999999999999999999999999999999999999999`;
     });
     const incoming = pageIdentityOf(jsonLdOf(swappedAuthor));
     await expect(
@@ -311,6 +312,13 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
     const html = await addAndSignMetadata(LEGACY_GENESIS, PAGE, PROTOCOL_INFO, contentInfo());
     const incoming = pageIdentityOf(jsonLdOf(html));
     expect(incoming.canonicalization).toBe('JCS-RFC8785');
+    // The pinned page names the author in the pre-change form (a pre-change
+    // artifact); the re-render names it as a bare address. Both are read as the
+    // SAME address: the identity is the address, not the term or the form.
+    expect(incoming.authorDid).toBe('0x1111111111111111111111111111111111111111');
+    expect(pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML)).authorDid).toBe(
+      '0x1111111111111111111111111111111111111111',
+    );
     await expect(
       verifyPathAvailable(gateway, DEST, LEGACY_GENESIS, PUB_MODULE, [], incoming),
     ).resolves.toBeUndefined();
@@ -346,7 +354,7 @@ const PROTOCOL_INFO = {
 
 const contentInfo = (overrides: Partial<S2SContentInfo> = {}): S2SContentInfo => ({
   author: {
-    did: 'did:ethr:0x1111111111111111111111111111111111111111',
+    address: '0x1111111111111111111111111111111111111111',
     createdAt: '2025-01-02T03:04:05.000Z',
     proof: {
       type: 'eip712',
@@ -356,7 +364,7 @@ const contentInfo = (overrides: Partial<S2SContentInfo> = {}): S2SContentInfo =>
     },
   },
   publisher: {
-    did: 'did:ethr:0x2222222222222222222222222222222222222222',
+    address: '0x2222222222222222222222222222222222222222',
     url: 'https://example.org',
   },
   contentCid: 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
@@ -467,5 +475,71 @@ describe('JCS pages — render → verify round-trip', () => {
     await expect(
       verifyProvenance(publish(htmlTampered), '0x' + '77'.repeat(32), PKP, gateway),
     ).rejects.toThrow(/Provenance sig mismatch|Sha256 mismatch/);
+  });
+});
+
+// ── Page identity — the address is read, not the term ───────────────────────
+
+describe('pageIdentityOf — reads the address whichever term carries it', () => {
+  const AUTHOR_SAFE = `0x${'11'.repeat(20)}`;
+
+  it('reads the address out of the CAIP-10 account id a page rendered today carries', () => {
+    const identity = pageIdentityOf({
+      author: {
+        '@type': 'Person',
+        identifier: {
+          '@type': 'PropertyValue',
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:8453:${AUTHOR_SAFE}`,
+        },
+      },
+    });
+    expect(identity.authorDid).toBe(AUTHOR_SAFE);
+  });
+
+  it('keeps the case a CAIP-10 account id carries', () => {
+    const checksummed = `0x${'AbCdEf012345678901234567890123456789012'}${'3'}`;
+    const identity = pageIdentityOf({
+      author: {
+        '@type': 'Person',
+        identifier: {
+          '@type': 'PropertyValue',
+          propertyID: 'CAIP-10',
+          name: 'Safe smart account',
+          value: `eip155:8453:${checksummed}`,
+        },
+      },
+    });
+    expect(identity.authorDid).toBe(checksummed);
+  });
+
+  it('reads the same address from a page rendered today as from a pinned page', async () => {
+    const html = await renderPage(contentInfo());
+    expect(pageIdentityOf(jsonLdOf(html)).authorDid).toBe(
+      pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML)).authorDid,
+    );
+  });
+
+  it('reads the same address from a pinned page (a pre-change artifact)', () => {
+    expect(pageIdentityOf(jsonLdOf(LEGACY_FIXTURE_HTML)).authorDid).toBe(AUTHOR_SAFE);
+  });
+
+  it('selects the PropertyValue that holds an address, never a sibling holding something else', () => {
+    const identity = pageIdentityOf({
+      author: {
+        '@type': 'Person',
+        identifier: [
+          { '@type': 'PropertyValue', propertyID: 'other', value: 'not-an-address' },
+          {
+            '@type': 'PropertyValue',
+            propertyID: 'CAIP-10',
+            name: 'Safe smart account',
+            value: `eip155:8453:${AUTHOR_SAFE}`,
+          },
+        ],
+      },
+    });
+    expect(identity.authorDid).toBe(AUTHOR_SAFE);
   });
 });

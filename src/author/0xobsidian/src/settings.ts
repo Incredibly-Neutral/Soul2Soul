@@ -134,13 +134,14 @@ export class OxOAuthorsTab extends PluginSettingTab {
 					}),
 				);
 
-			const didValue = `did:ethr:${author.safe}`;
+			// The author Safe's address is the author identity; it is copied bare.
+			const safeValue = author.safe ?? '';
 			new Setting(authorEl)
-				.setName('DID')
-				.setDesc(didValue)
+				.setName('Address')
+				.setDesc(safeValue)
 				.addButton((button) =>
 					button.setButtonText('Copy').onClick(() => {
-						navigator.clipboard.writeText(didValue);
+						navigator.clipboard.writeText(safeValue);
 					}),
 				);
 

@@ -15,10 +15,11 @@ import {
   type S2SContentBody,
   type S2SPublicContent,
   type S2SPublicContentV2,
+  type Address,
   bodyForKey,
-  toDidEthr,
 } from '../types';
 import { buildSigningView, buildSigningViewV2, signingEnvelope } from './signing-view';
+import { LEGACY_AUTHOR_PREFIX } from './author-address';
 import {
   buildSignedContentItem,
   computeObjectId,
@@ -44,10 +45,14 @@ function signerOf(wallet: Wallet): TypedDataSigner {
 
 const BODY: S2SContentBody = { title: 'Hello', slug: 'hello', content: '# Hello' };
 
-/** The pristine v1 public metadata the goldens were captured from. */
+/** The pristine v1 public metadata the goldens were captured from.
+ *  `author` is the pre-change form on purpose: the type hash and objectId below
+ *  were taken over these exact bytes, and an item that was pinned then must keep
+ *  resolving the same way. */
+const V1_AUTHOR = '0x1111111111111111111111111111111111111111';
 const V1_PINNED: S2SPublicContent = {
   specVersion: '1',
-  author: 'did:ethr:0x1111111111111111111111111111111111111111',
+  author: (LEGACY_AUTHOR_PREFIX + V1_AUTHOR) as Address,
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '',
@@ -67,7 +72,7 @@ const V1_OBJECT_ID = '0x811026fd17adcceb932968b9da14bcbf2877d514e8c57a0b4b0d5179
 function v2Public(over: Partial<S2SPublicContentV2> = {}): S2SPublicContentV2 {
   return {
     specVersion: '2',
-    author: 'did:ethr:0x1111111111111111111111111111111111111111',
+    author: V1_AUTHOR,
     postType: 'post',
     mediaType: 'text/markdown',
     parent: '',
@@ -117,7 +122,7 @@ describe('v1 envelope is unchanged', () => {
       BODY,
       signerOf(wallet),
       noOpEncrypt,
-      toDidEthr(wallet.address),
+      wallet.address,
     );
 
     expect(item.public).toMatchObject({ specVersion: '1', createdAt: 1700000000 });
@@ -151,7 +156,7 @@ describe('v2 envelope', () => {
       BODY,
       signerOf(wallet),
       noOpEncrypt,
-      toDidEthr(wallet.address),
+      wallet.address,
     );
   }
 
@@ -207,5 +212,33 @@ describe('v2 envelope', () => {
     const tampered = { ...item, public: { ...item.public, modifiedDate: item.public.modifiedDate + 1 } };
 
     expect(await verifyAuthorship(tampered, async () => bodyForKey(tampered) as string)).toBe(false);
+  });
+});
+
+describe('items pinned in the pre-change author form', () => {
+  it('still verifies, because the comparison strips the prefix', async () => {
+    const wallet = new Wallet('0x' + '11'.repeat(32));
+    const item = await buildSignedContentItem(
+      {
+        specVersion: '1',
+        postType: 'post',
+        mediaType: 'text/markdown',
+        parent: '',
+        position: '',
+        publication: 'example.eth',
+        locale: 'en',
+        createdAt: 1700000000,
+        tags: ['a', 'b'],
+        attributes: { x: 1 },
+      },
+      BODY,
+      signerOf(wallet),
+      noOpEncrypt,
+      LEGACY_AUTHOR_PREFIX + wallet.address,
+    );
+
+    // The signed bytes really do carry the prefixed form, so the digest covers it.
+    expect(item.public.author).toBe(LEGACY_AUTHOR_PREFIX + wallet.address);
+    expect(await verifyAuthorship(item, async () => item.body)).toBe(true);
   });
 });

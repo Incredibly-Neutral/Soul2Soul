@@ -31,6 +31,7 @@ vi.mock('./evm', () => ({ evmRead: vi.fn() }));
 vi.mock('./ipfs.factory', () => ({ catFile: vi.fn() }));
 
 import { evmRead } from './evm';
+import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
 import { catFile } from './ipfs.factory';
 import {
   ContentIntegrityError,
@@ -47,7 +48,9 @@ import {
 
 const GENESIS = '0x' + '11'.repeat(32);
 const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
-const AUTHOR = ('did:ethr:0x' + 'a'.repeat(40)) as `did:ethr:0x${string}`;
+const AUTHOR = ('0x' + 'a'.repeat(40)) as `0x${string}`;
+/** An item pinned before the author became a bare address: a pre-change artifact. */
+const LEGACY_AUTHOR = `${LEGACY_AUTHOR_PREFIX}${AUTHOR}`;
 const GATEWAY = 'https://ipfs.example';
 const PUBLICATION_MODULE = '0xPubModule';
 
@@ -286,6 +289,24 @@ describe('fetchById', () => {
     expect(vi.mocked(catFile)).toHaveBeenCalledTimes(1);
     expect(body).toEqual(toBody(ENTRY, mkItem()));
     expect(body.cid).toBe(CID);
+  });
+
+  it('serves an item pinned in the pre-change author form, author exactly as signed', async () => {
+    // The shared schema accepts the bare address only, so a pre-change item
+    // fails it. That is not a shape defect: the item was signed over those
+    // bytes and must still be read. The deal author is compared as an address.
+    vi.mocked(evmRead).mockResolvedValue({ ...ENTRY, author: AUTHOR });
+    // The old form is not representable in today's types (that is the point);
+    // what goes on the wire is just JSON, so build it as a stored blob.
+    const legacyBlob = {
+      ...mkItem(),
+      public: { ...mkItem().public, author: LEGACY_AUTHOR },
+    } as unknown as StoredContentItem;
+    vi.mocked(catFile).mockResolvedValue(JSON.stringify(legacyBlob));
+
+    const body = await fetchById(GENESIS, PUBLICATION_MODULE, undefined, GATEWAY);
+
+    expect(body.author).toBe(LEGACY_AUTHOR); // served, not normalised
   });
 
   it('propagates the integrity failure — no flat body is produced for a forged body', async () => {

@@ -39,7 +39,7 @@ import {
 } from './item-integrity';
 import { jcs } from '@s2s/soul2soul-shared/lit-actions';
 import { buildSigningViewV2 } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES_V2, toDidEthr } from '../../../../shared/dist/manuscript/types';
+import { S2S_DOMAIN, S2S_TYPES_V2, type Address } from '../../../../shared/dist/manuscript/types';
 
 beforeAll(() => {
   vi.stubGlobal('ethers', {
@@ -81,7 +81,7 @@ const serve = (item: unknown): void => {
 /** The signed public block shared by the v2 and v3 fixtures (same envelope). */
 const publicV2 = {
   specVersion: '2',
-  author: toDidEthr(AUTHOR.address),
+  author: AUTHOR.address as Address,
   postType: 'post',
   mediaType: 'text/markdown',
   parent: '',
