@@ -137,6 +137,7 @@ describe('a given author Safe', () => {
       address: SAFE,
       eoa: authorEoa(KEY),
       salt: null,
+      safeSource: 'given',
       chain: 'base',
       deployed: true,
       signerIsOwner: true,
@@ -168,6 +169,52 @@ describe('a given author Safe', () => {
       Promise.resolve({ deployed: true, threshold: 2n, owners: [OTHER_EOA] }),
     );
     expect(state.signerIsOwner).toBe(false);
+  });
+
+  it('is found by key even when its row is not the active one', async () => {
+    // The failure this prevents: file signer1 into a shared Safe, switch to
+    // zomi, export signer1's key, run `author init`. Reading the active row
+    // would derive a fresh 1-of-1 Safe for signer1 and deploy it.
+    writeAuthors(
+      {
+        active: 'zomi',
+        authors: {
+          zomi: { privateKey: `0x${'00'.repeat(31)}02`, safe: null },
+          signer1: { privateKey: KEY, safe: SAFE, safeSource: 'given' },
+        },
+      },
+      storePath(),
+    );
+    const state = await authorSafeState(ctx(), oneOfOne());
+
+    expect(state.address).toBe(SAFE);
+    expect(state.safeSource).toBe('given');
+    // The key's own row answers, not the active one.
+    expect(givenSafeInUse(config())).toBe(SAFE);
+  });
+
+  it('refuses a row it cannot interpret instead of deriving one', () => {
+    // Reading the file still works (`author list` / `rm` repair it); using the
+    // row to name a Safe does not.
+    writeAuthors(
+      {
+        active: 'zomi',
+        authors: { zomi: { privateKey: KEY, safe: SAFE, safeSource: 'Given' as never } },
+      },
+      storePath(),
+    );
+    expect(() => givenSafeInUse(config())).toThrow(/'zomi' has safeSource "Given"/);
+  });
+
+  it('refuses a given row whose stored address is not an address', () => {
+    writeAuthors(
+      {
+        active: 'zomi',
+        authors: { zomi: { privateKey: KEY, safe: 'nope', safeSource: 'given' } },
+      },
+      storePath(),
+    );
+    expect(() => givenSafeInUse(config())).toThrow(/has safe nope — that is not an address/);
   });
 
   it('is not a derived row', () => {
@@ -224,6 +271,7 @@ describe('a given author Safe', () => {
       address: SAFE,
       eoa: authorEoa(KEY),
       salt: null,
+      safeSource: 'given',
       chain: 'base',
       deployed: true,
       txHash: undefined,
@@ -298,7 +346,7 @@ describe('author writes through a given Safe', () => {
         safe: SAFE,
         readSafe: () => Promise.resolve({ deployed: false }),
       }),
-    ).rejects.toThrow(/is not deployed[\s\S]*never deploys a Safe it did not derive/);
+    ).rejects.toMatchObject({ exitCode: 1, code: 'author_safe' });
   });
 
   it('refuses a Safe the stored key is not an owner of', async () => {

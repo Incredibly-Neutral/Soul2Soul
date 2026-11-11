@@ -30,9 +30,11 @@
 // calls them; a broken file must not brick the CLI. Writes are atomic
 // (tmp + rename) and 0600 — the file holds private keys.
 //
-// One exception to that tolerance: a `safeSource` this module cannot
-// interpret. Guessing `derived` there would derive a different Safe and then
-// overwrite the stored address, so the read stops and names the row instead.
+// A row whose provenance this build cannot read (`safeSource: "Given"`, a
+// typo) is kept with that value recorded, never guessed at: it is neither
+// derived nor written back. Reading still works — `author list`, `rm` and
+// `switch` must repair a broken file, not be blocked by it — and the refusal
+// happens where the row would be used to name a Safe.
 // ============================================================================
 
 import { randomUUID } from 'node:crypto';
@@ -44,7 +46,7 @@ import type { Address, Hex } from 'viem';
 import { getAddress, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { CliError, UsageError } from '../lib/errors';
+import { UsageError } from '../lib/errors';
 
 /** The author-contracts addresses installed on an author's Safe. */
 export interface AuthorContractsRecord {
@@ -76,6 +78,14 @@ export interface AuthorRecord {
    * `derived` unchanged.
    */
   safeSource?: AuthorSafeSource;
+  /**
+   * The `safeSource` the file holds when it is neither of the above, verbatim.
+   * Such a row is never derived and never written back: the only honest answer
+   * to "where did this address come from" is to ask the user, and guessing
+   * `derived` would derive a different Safe and then overwrite this address.
+   * A store write puts the value back under `safeSource`.
+   */
+  unreadableSafeSource?: unknown;
   /**
    * The `@s2s/author-contracts` modules installed on that Safe, once installed.
    * Optional and absent on every row written before this field existed — the
@@ -145,37 +155,26 @@ function parseContracts(value: unknown): AuthorContractsRecord | undefined {
   };
 }
 
-/**
- * The provenance a row declares, or undefined when it declares none (derived).
- *
- * An unrecognised value is not guessed at: a row that says something other than
- * `derived` or `given` would otherwise read as derived, and the next write-back
- * would replace its stored address with a Safe the key never owned.
- */
-function parseSafeSource(name: string, value: unknown, path: string): AuthorSafeSource | undefined {
-  if (value === undefined) return undefined;
-  if (value === 'derived' || value === 'given') return value;
-  throw new CliError(
-    `authors file ${path}: author '${name}' has safeSource ${JSON.stringify(
-      value,
-    )} — the only values are 'derived', 'given', or no safeSource at all; fix or remove that row`,
-    1,
-    'authors_file',
-  );
+/** The provenance a row declares, when it is one this build understands. */
+function parseSafeSource(value: unknown): AuthorSafeSource | undefined {
+  return value === 'derived' || value === 'given' ? value : undefined;
 }
 
-function parseRecord(name: string, value: unknown, path: string): AuthorRecord | undefined {
+function parseRecord(value: unknown): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const privateKey = record.privateKey;
   if (typeof privateKey !== 'string' || privateKey.trim().length === 0) return undefined;
   const safe = record.safe;
   const contracts = parseContracts(record.contracts);
-  const safeSource = parseSafeSource(name, record.safeSource, path);
+  const declared = record.safeSource;
+  const safeSource = parseSafeSource(declared);
+  const unreadable = declared !== undefined && safeSource === undefined ? declared : undefined;
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
     ...(safeSource === undefined ? {} : { safeSource }),
+    ...(unreadable === undefined ? {} : { unreadableSafeSource: unreadable }),
     ...(contracts === undefined ? {} : { contracts }),
   };
 }
@@ -202,6 +201,53 @@ export function givenSafeByName(data: AuthorsStore, name: string): Address | und
   return givenSafeOf(findAuthor(data, name));
 }
 
+/**
+ * The row a private key is filed under, by key rather than by active slot.
+ *
+ * A `given` Safe belongs to the key, not to the pet name that happens to be
+ * selected: filing `signer1` into an existing Safe and then switching to
+ * `zomi` must not hand `signer1`'s key a derived Safe to deploy. Keys are
+ * unique (`addAuthor` / `addSigner` enforce it), so the first match is the one.
+ */
+export function authorRowForKey(data: AuthorsStore, privateKey: string): ActiveAuthor | undefined {
+  const needle = normalizeKey(privateKey).toLowerCase();
+  for (const [name, record] of Object.entries(data.authors)) {
+    if (record.privateKey.toLowerCase() === needle) return { name, ...record };
+  }
+  return undefined;
+}
+
+/**
+ * Why this row cannot name a Safe, or undefined when it can.
+ *
+ * Reading stays tolerant; this is the loud half, called where the row is about
+ * to decide an author id. An unreadable provenance always refuses, and a
+ * `given` row always refuses without a usable address: both would otherwise
+ * fall through to the derivation and deploy a Safe the key was never filed
+ * into. A derived row's cached address is not checked — it is a prediction,
+ * and re-deriving it is the repair.
+ */
+export function safeProblem(
+  name: string,
+  record: AuthorRecord,
+  path: string = authorsFilePath(),
+): string | undefined {
+  const where = `authors file ${path}: author '${name}'`;
+  if (record.unreadableSafeSource !== undefined) {
+    const shown =
+      JSON.stringify(record.unreadableSafeSource) ?? String(record.unreadableSafeSource);
+    return `${where} has safeSource ${shown} — the only values are 'derived', 'given', or no safeSource at all; fix or remove that row`;
+  }
+  if (!isGivenSafe(record)) return undefined;
+  if (record.safe === null) {
+    return `${where} is marked as given but carries no Safe address — put the Safe's address in that row`;
+  }
+  if (!isAddress(record.safe)) {
+    return `${where} has safe ${record.safe} — that is not an address; fix or remove that row`;
+  }
+  return undefined;
+}
+
 /** Read the store tolerantly — missing, unparsable or malformed → empty store. */
 export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
   const empty: AuthorsStore = { active: null, authors: {} };
@@ -220,10 +266,9 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
   const rawAuthors = raw.authors;
   if (rawAuthors !== null && typeof rawAuthors === 'object' && !Array.isArray(rawAuthors)) {
     for (const [name, value] of Object.entries(rawAuthors as Record<string, unknown>)) {
-      const record = parseRecord(name, value, path);
+      const record = parseRecord(value);
       // A hand-edited file with an unusable name or record is skipped, not
-      // fatal: the rest of the store still works. An unusable `safeSource` is
-      // the exception — parseRecord throws rather than invent a provenance.
+      // fatal: the rest of the store still works, and so does `author rm`.
       if (record !== undefined && isValidPetName(name)) authors[name] = record;
     }
   }
@@ -248,7 +293,21 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
 export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath()): string {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${String(process.pid)}.${randomUUID()}.tmp`;
-  const next = { active: data.active, authors: data.authors };
+  // `unreadableSafeSource` is a reading of the file, not part of the format:
+  // the value goes back under `safeSource` so a row the user must repair reads
+  // the same after any write. Dropping it would turn the row into `derived`.
+  const authors = Object.fromEntries(
+    Object.entries(data.authors).map(([name, record]) => {
+      const { unreadableSafeSource, ...stored } = record;
+      return [
+        name,
+        unreadableSafeSource === undefined
+          ? stored
+          : { ...stored, safeSource: unreadableSafeSource as AuthorSafeSource },
+      ];
+    }),
+  );
+  const next = { active: data.active, authors };
   try {
     writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, path);
@@ -449,8 +508,9 @@ export function writeBackAuthorSafe(
   if (!record || record.safe === safe) return false;
   // A given Safe is the fact the record exists to name. A derived address for
   // the same key is a different Safe, one the key was never an owner of, so a
-  // write-back would replace the identity rather than refresh it.
-  if (isGivenSafe(record)) return false;
+  // write-back would replace the identity rather than refresh it. A row whose
+  // provenance cannot be read gets the same treatment for the same reason.
+  if (isGivenSafe(record) || record.unreadableSafeSource !== undefined) return false;
   writeAuthors({ ...store, authors: { ...store.authors, [name]: { ...record, safe } } }, path);
   return true;
 }

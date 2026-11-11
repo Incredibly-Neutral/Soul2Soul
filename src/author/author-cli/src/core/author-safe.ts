@@ -27,10 +27,16 @@ import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { createSafeRunner, type SafeRunnerHandle } from '../adapters/tx-runner';
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { bundlerEndpoints, type CliConfig } from './config';
-import { activeAuthorRecord, givenSafeOf, readAuthors } from './authors';
+import {
+  authorRowForKey,
+  givenSafeOf,
+  readAuthors,
+  safeProblem,
+  type AuthorSafeSource,
+} from './authors';
 import type { CliContext } from './context';
 
 /** Salt prefix 0xobsidian uses for an author's personal Safe. */
@@ -63,6 +69,8 @@ export interface AuthorSafeState {
   salt: string | null;
   /** Chain the author Safe is deployed on (0xobsidian deploys Base only). */
   chain: 'base';
+  /** Where the address came from: predicted from the key, or stored. */
+  safeSource: AuthorSafeSource;
   /** Whether bytecode already exists at the address. */
   deployed: boolean;
   /**
@@ -147,11 +155,11 @@ export async function readGivenSafe(
  * The stored `given` Safe that this run is about, or undefined when the author
  * id must be derived from the key.
  *
- * One function decides this for every command. The deciding fact is the key,
- * not the layer it came from: a record names the key that owns its given Safe,
- * so an `S2S_PRIVATE_KEY` (or a config-file key) holding that same key still
- * names that Safe. `s2s author address` and `s2s author init` therefore agree
- * in every shell.
+ * One function decides this for every command. Two things are deliberately not
+ * part of the decision: the layer the key came from (an exported
+ * `S2S_PRIVATE_KEY` holding a stored key is still that author) and the active
+ * slot (a row is found by key, so filing `signer1` into an existing Safe and
+ * then switching to `zomi` does not hand `signer1`'s key a Safe to deploy).
  */
 export function givenSafeInUse(config: CliConfig): Address | undefined {
   const key = config.privateKey;
@@ -163,11 +171,16 @@ export function givenSafeInUse(config: CliConfig): Address | undefined {
  * The `given` Safe stored for `privateKey`, whoever resolved that key. Every
  * caller that is about to derive a Safe asks this first: a key filed as one
  * owner of an existing Safe must never be handed a derived one to deploy.
+ *
+ * A row that cannot say which Safe it names is refused here, not guessed at —
+ * this is the point where the answer decides an author id.
  */
 function givenSafeForKey(privateKey: `0x${string}`): Address | undefined {
-  const active = activeAuthorRecord(readAuthors());
-  if (!active || active.privateKey.toLowerCase() !== privateKey.toLowerCase()) return undefined;
-  return givenSafeOf(active);
+  const row = authorRowForKey(readAuthors(), privateKey);
+  if (!row) return undefined;
+  const problem = safeProblem(row.name, row);
+  if (problem) throw new UsageError(problem);
+  return givenSafeOf(row);
 }
 
 /**
@@ -276,8 +289,10 @@ export async function createAuthorWriteRunner(opts: {
     // No code at the address: every userOp would be sent to nothing, and this
     // CLI does not deploy a Safe it did not derive.
     if (!state.deployed) {
-      throw new UsageError(
+      throw new CliError(
         `author Safe ${safe} is not deployed — this CLI never deploys a Safe it did not derive; its owners have to deploy it first`,
+        1,
+        'author_safe',
       );
     }
     // A userOp from this runner carries one signature. That is enough only when
@@ -285,13 +300,17 @@ export async function createAuthorWriteRunner(opts: {
     // owners, and guessing would send a userOp that reverts.
     const threshold = state.threshold ?? 1n;
     if (threshold > 1n) {
-      throw new UsageError(
+      throw new CliError(
         `author Safe ${safe} needs ${threshold.toString()} signatures — a single-key userOp cannot meet that threshold; propose the write to the owners instead (s2s signer queue)`,
+        1,
+        'author_safe',
       );
     }
     if (!state.owners?.some((owner) => owner.toLowerCase() === opts.eoa.toLowerCase())) {
-      throw new UsageError(
+      throw new CliError(
         `the signing key ${opts.eoa} is not an owner of author Safe ${safe} — an owner has to add it first (s2s signer queue)`,
+        1,
+        'author_safe',
       );
     }
   }
@@ -379,6 +398,7 @@ export async function authorSafeState(
       address: given,
       eoa: ctx.eoaAddress,
       salt: null,
+      safeSource: 'given',
       chain: 'base',
       deployed: state.deployed,
       signerIsOwner: state.owners?.some(
@@ -395,6 +415,7 @@ export async function authorSafeState(
     address: prediction.address,
     eoa: ctx.eoaAddress,
     salt: prediction.salt,
+    safeSource: 'derived',
     chain: 'base',
     deployed: prediction.deployed,
   };
@@ -529,14 +550,18 @@ export async function initAuthorSafe(
     ...(readSafe ? { readSafe } : {}),
   });
   if (given && !ensured.deployed) {
-    throw new UsageError(
-      `author Safe ${given} is not deployed — this CLI never deploys a Safe it did not derive; its owners have to deploy it, then run \`s2s author init\` again`,
+    // Chain state, not a usage error: the command was spelled correctly.
+    throw new CliError(
+      `author Safe ${given} is not deployed — this CLI never deploys a Safe it did not derive; its owners have to deploy it on Base first`,
+      1,
+      'author_safe',
     );
   }
   return {
     address: ensured.address,
     eoa: ensured.eoa,
     salt: given ? null : authorSafeSalt(ensured.eoa),
+    safeSource: given ? 'given' : 'derived',
     chain: 'base',
     deployed: ensured.deployed,
     txHash: ensured.txHash,
