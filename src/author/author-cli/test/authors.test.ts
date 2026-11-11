@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getAddress } from 'viem';
 
 import {
   activeAuthorRecord,
@@ -130,7 +131,9 @@ describe('author store file', () => {
     );
     // an unknown active name, an invalid pet name and a record without a key
     // are dropped; the usable author survives
-    expect(readAuthors(malformed)).toEqual(store(null, { good: { privateKey: KEY_A, safe: null } }));
+    expect(readAuthors(malformed)).toEqual(
+      store(null, { good: { privateKey: KEY_A, safe: null } }),
+    );
   });
 
   it('writes a predicted Safe back only when it changed', () => {
@@ -191,9 +194,9 @@ describe('pet names', () => {
       store('zomi', { zomi: { privateKey: KEY_A, safe: null } }),
     );
     // the last one out leaves no active author
-    expect(removeAuthor(store('zomi', { zomi: { privateKey: KEY_A, safe: null } }), 'zomi')).toEqual(
-      store(null, {}),
-    );
+    expect(
+      removeAuthor(store('zomi', { zomi: { privateKey: KEY_A, safe: null } }), 'zomi'),
+    ).toEqual(store(null, {}));
   });
 
   it('resolves the active record and the EOA of a stored key', () => {
@@ -277,8 +280,10 @@ describe('signing-key precedence', () => {
 });
 
 describe('a given Safe', () => {
-  const SAFE = '0xAbCd00000000000000000000000000000000dEf1';
-  const SAFE_DERIVED = '0xAbCd00000000000000000000000000000000dEf2';
+  // Lower case in, checksummed on the way into the store.
+  const SAFE_ADDRESS = '0xabcd00000000000000000000000000000000def1';
+  const SAFE = getAddress(SAFE_ADDRESS);
+  const SAFE_DERIVED = getAddress('0xabcd00000000000000000000000000000000def2');
   const KEY_C = `0x${'00'.repeat(31)}03`;
 
   it('files a key into an existing Safe and records the provenance', () => {
@@ -326,18 +331,43 @@ describe('a given Safe', () => {
     expect(isGivenSafe({ ...record, safeSource: 'derived' })).toBe(false);
   });
 
-  it('drops a safeSource it does not recognise', () => {
+  it('refuses a safeSource it does not recognise, and keeps the address', () => {
+    // Reading it as `derived` would derive a different Safe and then overwrite
+    // this address on the next write-back, so the read stops instead.
     const path = localPath('bogus-source');
-    writeFileSync(
-      path,
-      JSON.stringify({
-        active: 'zomi',
-        authors: { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'borrowed' } },
-      }),
+    const file = JSON.stringify({
+      active: 'zomi',
+      authors: { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'Given' } },
+    });
+    writeFileSync(path, file);
+
+    expect(() => readAuthors(path)).toThrow(/'zomi' has safeSource "Given"/);
+    expect(() => readAuthors(path)).toThrow(/only values are 'derived', 'given'/);
+    // Nothing was written: the row is still there for the user to fix.
+    expect(readFileSync(path, 'utf8')).toBe(file);
+  });
+
+  it('rejects a Safe that is not an address, or a broken checksum', () => {
+    const path = localPath('add-signer-address');
+    writeAuthors(store('zomi', { zomi: { privateKey: KEY_A, safe: null } }), path);
+
+    expect(() => addSigner({ name: 'signer1', privateKey: KEY_B, safe: 'safe.eth' }, path)).toThrow(
+      /'safe\.eth' is not an address/,
     );
-    const record = readAuthors(path).authors.zomi;
-    expect(record).toEqual({ privateKey: KEY_A, safe: SAFE });
-    expect(isGivenSafe(record)).toBe(false);
+    expect(() => addSigner({ name: 'signer1', privateKey: KEY_B, safe: '0xnothex' }, path)).toThrow(
+      /is not an address/,
+    );
+    // Mixed case with the wrong checksum is a transcription error, not an address.
+    const mistyped = `0xAbCd00000000000000000000000000000000dEf1`;
+    expect(() => addSigner({ name: 'signer1', privateKey: KEY_B, safe: mistyped }, path)).toThrow(
+      /is not an address/,
+    );
+    expect(readAuthors(path).authors.signer1).toBeUndefined();
+
+    // A lower-case address is filed in its checksummed form.
+    const filed = addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE_ADDRESS }, path);
+    expect(filed.safe).toBe(SAFE);
+    expect(readAuthors(path).authors.signer1?.safe).toBe(SAFE);
   });
 
   it('never has its address replaced by a derived one', () => {
@@ -386,7 +416,8 @@ describe('store command registry', () => {
 
 describe('which key `author new` files', () => {
   // A phrase nobody should ever use on a real chain.
-  const PHRASE = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const PHRASE =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
   it('prefers --key, then --mnemonic, then stdin, then a generated phrase', () => {
     const stdin = (): string => KEY_B;
@@ -400,7 +431,10 @@ describe('which key `author new` files', () => {
       mnemonic: PHRASE,
       generated: false,
     });
-    expect(resolveKeySource({}, { stdin, phrase })).toEqual({ privateKey: KEY_B, generated: false });
+    expect(resolveKeySource({}, { stdin, phrase })).toEqual({
+      privateKey: KEY_B,
+      generated: false,
+    });
     expect(resolveKeySource({}, { stdin: () => undefined, phrase })).toEqual({
       privateKey: resolveKeySource({ mnemonic: PHRASE }).privateKey,
       mnemonic: PHRASE,
@@ -414,7 +448,7 @@ describe('which key `author new` files', () => {
     expect(resolveKeySource({}, { stdin })).toEqual({ ...fromKey, generated: false });
   });
 
-  it('derives the published "abandon … about" key at m/44\'/60\'/0\'/0/0', () => {
+  it("derives the published \"abandon … about\" key at m/44'/60'/0'/0/0", () => {
     // The well-known vector for this phrase, so this pins the BIP39 seed + BIP44
     // path rather than "some key came out".
     expect(resolveKeySource({ mnemonic: PHRASE }).privateKey).toBe(
@@ -474,9 +508,9 @@ describe('author commands', () => {
 
   it('new rejects a duplicate pet name (case-insensitive) and a duplicate key', async () => {
     seed();
-    await expect(
-      authorNew.run(capture().out, parseArgs(['ZOMI', '--key', KEY_B])),
-    ).rejects.toThrow(/author 'zomi' already exists/);
+    await expect(authorNew.run(capture().out, parseArgs(['ZOMI', '--key', KEY_B]))).rejects.toThrow(
+      /author 'zomi' already exists/,
+    );
     await expect(
       authorNew.run(capture().out, parseArgs(['carol', '--key', KEY_A])),
     ).rejects.toThrow(/already belongs to author 'zomi'/);

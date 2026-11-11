@@ -23,6 +23,7 @@ import {
   ensureAuthorSafe,
   givenSafeInUse,
   initAuthorSafe,
+  readGivenSafeState,
   type GivenSafeReader,
 } from '../src/core/author-safe';
 import { saltNonceFor } from '../src/adapters/tx-runner';
@@ -138,21 +139,35 @@ describe('a given author Safe', () => {
       salt: null,
       chain: 'base',
       deployed: true,
+      signerIsOwner: true,
     });
     expect(read).toHaveBeenCalledWith(SAFE);
     // `predictAuthorSafe` never ran: prediction would have hit the factory RPC.
     expect(fetchStub).not.toHaveBeenCalled();
   });
 
-  it('is not the author id when the run signs with another key', async () => {
+  it('is the author id whatever layer supplied the same key', async () => {
     seed({ privateKey: KEY, safe: SAFE, safeSource: 'given' });
-    // An env key outranks the store, so this run is a different identity.
-    expect(
-      givenSafeInUse(config({ author: { name: undefined, safe: undefined, source: 'env' } })),
-    ).toBeUndefined();
+    // The layer that resolved the key does not change which Safe it owns: an
+    // exported S2S_PRIVATE_KEY naming the stored key is still this author.
+    const fromEnv = config({ author: { name: undefined, safe: undefined, source: 'env' } });
+    expect(givenSafeInUse(fromEnv)).toBe(SAFE);
+    const fromProject = config({ author: { name: undefined, safe: undefined, source: 'project' } });
+    expect(givenSafeInUse(fromProject)).toBe(SAFE);
+    // A different key is a different identity, and its Safe is derived.
     expect(
       givenSafeInUse(config({ privateKey: `0x${'00'.repeat(31)}02` as `0x${string}` })),
     ).toBeUndefined();
+  });
+
+  it('reports the signing key as not an owner when the owners omit it', async () => {
+    // A shared Safe can outlive a key: reporting the EOA as its owner without
+    // asking would present a key that cannot sign as one that can.
+    seed({ privateKey: KEY, safe: SAFE, safeSource: 'given' });
+    const state = await authorSafeState(ctx(), () =>
+      Promise.resolve({ deployed: true, threshold: 2n, owners: [OTHER_EOA] }),
+    );
+    expect(state.signerIsOwner).toBe(false);
   });
 
   it('is not a derived row', () => {
@@ -169,7 +184,7 @@ describe('a given author Safe', () => {
       rpcUrl: RPC,
       out: { log: () => undefined } as unknown as CliOut,
       safe: SAFE,
-      readSafe: () => Promise.resolve({ deployed: false, threshold: 1n, owners: [] }),
+      readSafe: () => Promise.resolve({ deployed: false }),
     });
 
     expect(ensured).toEqual({
@@ -180,7 +195,7 @@ describe('a given author Safe', () => {
     });
   });
 
-  it('is still not deployed when a caller names no Safe', async () => {
+  it('never deploys when a caller names no Safe', async () => {
     // `author init` installs the contracts through an ensure call that carries
     // no address; the store is the only place that knows this key has one.
     seed({ privateKey: KEY, safe: SAFE, safeSource: 'given' });
@@ -189,7 +204,7 @@ describe('a given author Safe', () => {
       privateKey: KEY,
       rpcUrl: RPC,
       out: { log: () => undefined } as unknown as CliOut,
-      readSafe: () => Promise.resolve({ deployed: true, threshold: 1n, owners: [] }),
+      readSafe: () => Promise.resolve({ deployed: true, threshold: 1n, owners: [EOA] }),
     });
 
     expect(ensured).toEqual({
@@ -197,6 +212,7 @@ describe('a given author Safe', () => {
       eoa: authorEoa(KEY),
       deployed: true,
       txHash: undefined,
+      owners: [EOA],
     });
   });
 
@@ -211,7 +227,47 @@ describe('a given author Safe', () => {
       chain: 'base',
       deployed: true,
       txHash: undefined,
+      // Read off the Safe, so `author init` can say the key is an owner only
+      // when it is one.
+      signerIsOwner: true,
     });
+  });
+
+  it('refuses init for a given Safe that is not deployed', async () => {
+    // There is no txHash to report and no deployment to do: saying "already
+    // deployed" would be a lie, and installing contracts has nothing to talk to.
+    seed({ privateKey: KEY, safe: SAFE, safeSource: 'given' });
+    await expect(initAuthorSafe(ctx(), () => Promise.resolve({ deployed: false }))).rejects.toThrow(
+      /is not deployed[\s\S]*never deploys a Safe it did not derive/,
+    );
+  });
+
+  it('asks the chain for bytecode before it asks the Safe anything', async () => {
+    // threshold() on an address with no code reverts, so the deployment check
+    // has to come first. A handle that records the calls proves the order.
+    const calls: string[] = [];
+    const undeployed = await readGivenSafeState(
+      {
+        isDeployed: async () => false,
+        genericRead: async (_address, _abi, method) => {
+          calls.push(method);
+          return 1n;
+        },
+      },
+      SAFE,
+    );
+    expect(undeployed).toEqual({ deployed: false });
+    expect(calls).toEqual([]);
+
+    const live = await readGivenSafeState(
+      {
+        isDeployed: async () => true,
+        genericRead: async (_address, _abi, method) =>
+          method === 'threshold' ? 1n : [authorEoa(KEY)],
+      },
+      SAFE,
+    );
+    expect(live).toEqual({ deployed: true, threshold: 1n, owners: [authorEoa(KEY)] });
   });
 });
 
@@ -231,6 +287,18 @@ describe('author writes through a given Safe', () => {
           }),
       }),
     ).rejects.toThrow(/needs 2 signatures[\s\S]*s2s signer queue/);
+  });
+
+  it('refuses a given Safe that is not deployed', async () => {
+    await expect(
+      createAuthorWriteRunner({
+        config: config(),
+        eoa: authorEoa(KEY) as `0x${string}`,
+        rpcUrl: RPC,
+        safe: SAFE,
+        readSafe: () => Promise.resolve({ deployed: false }),
+      }),
+    ).rejects.toThrow(/is not deployed[\s\S]*never deploys a Safe it did not derive/);
   });
 
   it('refuses a Safe the stored key is not an owner of', async () => {
