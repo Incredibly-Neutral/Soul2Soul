@@ -11,10 +11,10 @@
  * Generated with a throwaway key (derived from a fixed string — NOT a secret).
  * The `created` timestamp and signature are frozen as part of the page.
  *
- * The identity values are the pre-change `did:ethr:0x…` form. A page pinned
- * then carries that form under the same `did:ethr` term, and verify.ts reads it
- * through shared's authorAddress, so this file must keep them: it is the
- * evidence that the old value shape is still read as an address.
+ * The identity values are the pre-change spelling: the retired prefix, under
+ * the term of the same name. A page pinned then carries both, and verify.ts
+ * reads them through shared's accountAddress, so this file must keep them byte
+ * for byte: it is the evidence that an old page still reads as an address.
  */
 
 /** EOA (test PKP) that signed the frozen page. */
