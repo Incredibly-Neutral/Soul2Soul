@@ -54,7 +54,14 @@ export const LEGACY_ENCRYPTED_KEY = 'encryption';
 
 /**
  * The encryption flag the frontmatter requests: `encrypted` first, then the
- * legacy `encryption` spelling. Absent means plaintext.
+ * legacy `encryption` spelling. Neither key means encrypted — the default write
+ * is ciphertext, and plaintext is the deliberate act (`encrypted: false`).
+ *
+ * AUTHOR-2: a manuscript is encrypted to the press's key. A first upload of a
+ * note that says nothing is therefore encrypted, not published in the clear
+ * because a flag was missing. Encryption fails closed: a default-encrypted note
+ * with no `LIT_USAGE_KEY` or `protocolInfo.pkp` is a usage error, never a
+ * silent plaintext upload.
  *
  * `Boolean` on purpose — it is exactly what `shared/src/authoring/note.ts`
  * applies to the legacy key, so a note carrying `encrypted: "false"` (quoted)
@@ -62,15 +69,15 @@ export const LEGACY_ENCRYPTED_KEY = 'encryption';
  * the boolean the publish used, which is what makes the file truthful.
  *
  * A key that is present but empty (`encrypted:`) is an explicit `false`, not a
- * fallback to the legacy spelling: refusing to guess is what the downgrade guard
- * is for.
+ * fallback to the default: `Boolean(null)` is false, so the author who blanked
+ * the key publishes in the clear on purpose. The downgrade guard is what stops
+ * that from happening silently against a previously encrypted revision.
  */
 export function resolveEncryption(frontmatter: Record<string, unknown>): boolean {
-  const declared =
-    frontmatter[ENCRYPTED_KEY] !== undefined
-      ? frontmatter[ENCRYPTED_KEY]
-      : frontmatter[LEGACY_ENCRYPTED_KEY];
-  return Boolean(declared);
+  const modern = frontmatter[ENCRYPTED_KEY];
+  const legacy = frontmatter[LEGACY_ENCRYPTED_KEY];
+  if (modern === undefined && legacy === undefined) return true;
+  return Boolean(modern !== undefined ? modern : legacy);
 }
 
 /**

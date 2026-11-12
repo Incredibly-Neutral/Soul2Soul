@@ -122,10 +122,15 @@ describe('resolveEncryption', () => {
     expect(resolveEncryption({ encryption: 'false' })).toBe(true);
   });
 
-  it('treats absent, empty and null as plaintext', () => {
-    expect(resolveEncryption({})).toBe(false);
+  it('defaults to encrypted when neither key is present', () => {
+    expect(resolveEncryption({})).toBe(true);
+    expect(resolveEncryption({ title: 'Hi' })).toBe(true);
+  });
+
+  it('reads a blank key as the author opting out, not as the default', () => {
     expect(resolveEncryption({ encrypted: null })).toBe(false);
     expect(resolveEncryption({ encrypted: '' })).toBe(false);
+    expect(resolveEncryption({ encryption: null })).toBe(false);
   });
 });
 
