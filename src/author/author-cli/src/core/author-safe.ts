@@ -23,11 +23,12 @@
 // ============================================================================
 
 import { base } from 'viem/chains';
+import { createPublicClient, http } from 'viem';
 import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { createSafeRunner, type SafeRunnerHandle } from '../adapters/tx-runner';
-import { CliError, UsageError } from '../lib/errors';
+import { createSafeRunner, parseAbi, type SafeRunnerHandle } from '../adapters/tx-runner';
+import { CliError, UsageError, errorText } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { bundlerEndpoints, type CliConfig } from './config';
 import {
@@ -158,7 +159,82 @@ export async function readGivenSafe(
     requireBundler: false,
     safe,
   });
-  return readGivenSafeState(runner, safe);
+  try {
+    return await readGivenSafeState(runner, safe);
+  } catch (err) {
+    throw new CliError(
+      explainGivenSafeRead({
+        safe,
+        rpcUrl: opts.rpcUrl,
+        error: err,
+        probe: await probeSafeEndpoint(safe, opts.rpcUrl),
+      }),
+      1,
+      'safe_read_failed',
+    );
+  }
+}
+
+/**
+ * What the endpoint is, for a read of a given Safe that failed.
+ *
+ * `threshold()` reverted is not a diagnosis: it is either an endpoint on another
+ * chain, an address that is not a Safe there, or a call that failed for its own
+ * reason. `eth_chainId` separates the first, and `VERSION()` the second — every
+ * Safe answers it, and nothing else does. Both reads are best-effort: their
+ * failure is part of the answer, never a second throw.
+ */
+async function probeSafeEndpoint(
+  safe: Address,
+  rpcUrl: string,
+): Promise<{ chainId: string; version: string }> {
+  const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  const chainId = await client.getChainId().then(
+    (id) => String(id),
+    (err: unknown) => `unreadable (${errorText(err)})`,
+  );
+  const version = await client
+    .readContract({
+      address: safe,
+      abi: parseAbi('function VERSION() view returns (string)'),
+      functionName: 'VERSION',
+      args: [],
+    })
+    .then(
+      (value) => String(value),
+      (err: unknown) => `no answer (${errorText(err)})`,
+    );
+  return { chainId, version };
+}
+
+/**
+ * The sentence `s2s author address` prints when a given Safe cannot be read.
+ * Pure, so every branch is testable without an RPC.
+ */
+export function explainGivenSafeRead(input: {
+  safe: Address;
+  rpcUrl: string;
+  error: unknown;
+  probe: { chainId: string; version: string };
+}): string {
+  const where = `${input.safe} through ${hostOf(input.rpcUrl)} (chain ${input.probe.chainId})`;
+  const failed = errorText(input.error);
+  if (input.probe.chainId !== 'unreadable' && input.probe.chainId !== String(base.id)) {
+    return `${where}: the read failed (${failed}) and that endpoint is not Base (${String(base.id)}), so the address it answered for is not this Safe — point S2S_RPC_L2 at a Base endpoint`;
+  }
+  if (input.probe.version.startsWith('no answer')) {
+    return `${where}: the read failed (${failed}), and VERSION() on the address ${input.probe.version} — an address that answers as no Safe at all is not one, so check the Safe recorded for this key`;
+  }
+  return `${where}: the read failed (${failed}) although the address answers VERSION() ${input.probe.version} — the Safe is there and the call is what failed, so retry, and if it repeats point S2S_RPC_L2 at another Base endpoint`;
+}
+
+/** The host of an endpoint, or the whole thing when it is not a URL. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 /**
