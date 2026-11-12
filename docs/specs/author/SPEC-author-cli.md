@@ -4,8 +4,8 @@
 > [SPEC-author-nvim](SPEC-author-nvim.md) and [SPEC-author-vscode](SPEC-author-vscode.md) (the
 > editor wrappers built against this spec's Binary API reference).
 >
-> **Type:** host specification — describes the `@s2s/author-cli` workspace package, the *headless
-> binary* host from [SPEC-author-hosts](SPEC-author-hosts.md) AD-1/AD-4. Implemented 2026-10-18.
+> **Type:** host specification — describes the `@s2s/author-cli` workspace package, the _headless
+> binary_ host from [SPEC-author-hosts](SPEC-author-hosts.md) AD-1/AD-4. Implemented 2026-10-18.
 >
 > **Status:** IMPLEMENTED (scaffold + compile-clean + pure-part tests). Live-chain paths are
 > exercised by hand only — see [Live execution notes](#live-execution-notes).
@@ -14,7 +14,7 @@
 > `s2s author <action>` with `--json` machine output for the Neovim plugin.
 >
 > **Multiple authors (2026-11-05, joera direction):** "cli should hold multiple authors — `author
-> new` / `author switch`, store pk + safe + pet name, switch by pet name". One install used to mean
+new` / `author switch`, store pk + safe + pet name, switch by pet name". One install used to mean
 > one identity (`S2S_PRIVATE_KEY` / config `privateKey`); the store below makes identities
 > addressable and switches them with one command.
 >
@@ -104,29 +104,29 @@ publication it cannot resolve degrades to a warning rather than failing the uplo
 Flags parse anywhere in the argv, and each action declares its own (see
 `src/commands/*.ts`; shared ones in `src/commands/flags.ts`). Only these three are global:
 
-| Flag | Meaning |
-|---|---|
-| `--json` | Emit the final result as JSON on stdout (Neovim contract). Always boolean — never consumes a value token. `--json=false` / `--no-json` mean human output. |
-| `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). The action level is rendered from that action's flag declaration. |
-| `--version` | Print `s2s v<version>` and exit 0. |
+| Flag           | Meaning                                                                                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--json`       | Emit the final result as JSON on stdout (Neovim contract). Always boolean — never consumes a value token. `--json=false` / `--no-json` mean human output. |
+| `-h`, `--help` | Help for the current level (`s2s`, `s2s author`, `s2s author <action>`). The action level is rendered from that action's flag declaration.                |
+| `--version`    | Print `s2s v<version>` and exit 0.                                                                                                                        |
 
 Everything else is per-action, and an undeclared flag is a **usage error (exit 2)**, not a
 silent no-op:
 
-| Flag | Meaning | Declared by |
-|---|---|---|
-| `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
-| `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
-| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
-| `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
-| `--branch <b>` | Default render branch; empty string when omitted. | publication new |
-| `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
-| `--owner <addr>,...` | Publication Safe owner; repeatable (or comma-separated). | publication new |
-| `--local` | Target the project config file (`.s2sconfig.json`) instead of the custom one (`~/.config/s2s/custom.json`). | config set, unset, path |
-| `--accept-defaults` | `setup`: ask nothing, write nothing, keep every provided default (the no-TTY path). | setup |
-| `--owner <addr>,...` | (new) Initial Safe owners; defaults to empty (single initial signer). |
-| `--key <0x…>` | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); with neither, a fresh phrase is generated (see below). |
-| `--mnemonic <words>` | (author new) BIP39 phrase to restore from — the key is derived at `m/44'/60'/0'/0/0`. A piped line that is not a single `0x…` word is read as a phrase too. |
+| Flag                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Declared by                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter.                                                                                                                                                                                                                                                                                                                                                         | upload, offer, preview, publish, revoke |
+| `--cid <cid>`         | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present.                                                                                                                                                                                                                                                                                                                                             | offer                                   |
+| `--allow-plaintext`   | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish         |
+| `--repo <owner/repo>` | Dev repository of the publication — required.                                                                                                                                                                                                                                                                                                                                                                                                                                   | publication new                         |
+| `--branch <b>`        | Default render branch; empty string when omitted.                                                                                                                                                                                                                                                                                                                                                                                                                               | publication new                         |
+| `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated).                                                                                                                                                                                                                                                                                                                                              | publication new                         |
+| `--owner <addr>,...`  | Publication Safe owner; repeatable (or comma-separated).                                                                                                                                                                                                                                                                                                                                                                                                                        | publication new                         |
+| `--local`             | Target the project config file (`.s2sconfig.json`) instead of the custom one (`~/.config/s2s/custom.json`).                                                                                                                                                                                                                                                                                                                                                                     | config set, unset, path                 |
+| `--accept-defaults`   | `setup`: ask nothing, write nothing, keep every provided default (the no-TTY path).                                                                                                                                                                                                                                                                                                                                                                                             | setup                                   |
+| `--owner <addr>,...`  | (new) Initial Safe owners; defaults to empty (single initial signer).                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--key <0x…>`         | (author new) Private key to store. Without it the key is read from stdin when stdin is not a TTY (`echo 0x… \| s2s author new zomi`); with neither, a fresh phrase is generated (see below).                                                                                                                                                                                                                                                                                    |
+| `--mnemonic <words>`  | (author new) BIP39 phrase to restore from — the key is derived at `m/44'/60'/0'/0/0`. A piped line that is not a single `0x…` word is read as a phrase too.                                                                                                                                                                                                                                                                                                                     |
 
 ### Config file (bring-your-own infra)
 
@@ -138,14 +138,14 @@ No private key or RPC endpoint is required to run it: it is dispatched by `cli.t
 **The same nested shape in every layer**, differing only in precedence. A layer carries only what
 it sets; nothing is ever copied down into a file:
 
-| Layer | Location | Written by |
-|---|---|---|
-| env | process env + `~/.config/s2s/.env`, `./.env` (`lib/env.ts`, mode `0600` for the user one) | by hand |
-| project | `./.s2sconfig.json` (cwd) | `s2s config set --local` |
-| custom | `~/.config/s2s/custom.json` (`XDG_CONFIG_HOME` honored, mode `0600`) | `s2s setup`, `s2s config set` (default) |
-| legacy | `~/.config/s2s/config.json` (`XDG_CONFIG_HOME` honored) | **nothing** — read-only fallback |
-| defaults | `defaults.json`, shipped next to the binary; `S2S_DEFAULTS_FILE` overrides the path | the package |
-| builtin | `BUILTIN_FILE_CONFIG` in `core/configschema.ts` | the source |
+| Layer    | Location                                                                                  | Written by                              |
+| -------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
+| env      | process env + `~/.config/s2s/.env`, `./.env` (`lib/env.ts`, mode `0600` for the user one) | by hand                                 |
+| project  | `./.s2sconfig.json` (cwd)                                                                 | `s2s config set --local`                |
+| custom   | `~/.config/s2s/custom.json` (`XDG_CONFIG_HOME` honored, mode `0600`)                      | `s2s setup`, `s2s config set` (default) |
+| legacy   | `~/.config/s2s/config.json` (`XDG_CONFIG_HOME` honored)                                   | **nothing** — read-only fallback        |
+| defaults | `defaults.json`, shipped next to the binary; `S2S_DEFAULTS_FILE` overrides the path       | the package                             |
+| builtin  | `BUILTIN_FILE_CONFIG` in `core/configschema.ts`                                           | the source                              |
 
 The order is **env > project > custom > legacy > defaults > builtin**, and `core/config.ts` is the
 only merger — every command reads its settings through one `loadConfig()`. The builtin floor is
@@ -156,16 +156,19 @@ usable config.
 The nested shape, one section per service:
 
 ```json
-{ "environment": "prod",
+{
+  "environment": "prod",
   "pinning": { "pinata": { "provider": "pinata", "key": "…", "url": "gateway.example" } },
-  "ipfs":    { "kubo":   { "provider": "kubo",   "url": "gw.example", "key": "…" } },
-  "rpc":     { "drpc": { "key": "…" }, "custom": { "l1": ["…"], "l2": ["…"] } },
+  "ipfs": { "kubo": { "provider": "kubo", "url": "gw.example", "key": "…" } },
+  "rpc": { "drpc": { "key": "…" }, "custom": { "l1": ["…"], "l2": ["…"] } },
   "bundler": { "url": "…" },
   "paymaster": { "key": "…", "url": "…" },
-  "filecoin":  { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
+  "filecoin": { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
   "safeTx": { "url": "https://safe-transaction-base.safe.global", "key": "…" },
-  "lit": { "accountKey": "…", "usageKey": "…" }, "ens": { "registry": "0x…" },
-  "github": { "token": "…" } }
+  "lit": { "accountKey": "…", "usageKey": "…" },
+  "ens": { "registry": "0x…" },
+  "github": { "token": "…" }
+}
 ```
 
 - **Sections are services**, not flat keys, because a machine owner is asked one question per
@@ -180,7 +183,7 @@ The nested shape, one section per service:
   `pinning.<label>`: an absent field is **omitted**, never blanked, so
   `config set pinning.pinata.url …` keeps the JWT the layer below supplies. Naming a **different**
   provider replaces the entry whole (a Kubo token means nothing to a pinning service); provider
-  identity is the *only* isolation rule, and a credential is inherited within a provider, never
+  identity is the _only_ isolation rule, and a credential is inherited within a provider, never
   across one. A singleton merges field by field (a custom `paymaster.key` keeps the default
   `paymaster.url`); a list is **replaced**, never concatenated. Entries are copied, never aliased,
   so one `loadConfig` call's env can never leak into the next.
@@ -217,7 +220,7 @@ The nested shape, one section per service:
   from a layer the user cannot edit (the legacy file, `defaults.json`, the compiled-in floor) the
   write is an explicit `null` instead, which the merge reads as "unset" and applies above every file
   layer and below the env (a file cannot silence an env var). The result says so:
-  `tombstone: true`. A marker is per leaf and per layer: a real value in a *higher* file beats a
+  `tombstone: true`. A marker is per leaf and per layer: a real value in a _higher_ file beats a
   marker below it, and a marker on a label does not wipe a sibling the higher layer sets.
 - **A tombstone only suppresses layers BELOW it, so `unset` refuses to write one when a HIGHER
   layer wins.** If the winning source is the env, or the project file while the target is the
@@ -247,7 +250,7 @@ The nested shape, one section per service:
   key from the target file (custom, or the project file with `--local`), writes nothing when the key
   is not there (an unset never creates an empty file), and reports a copy in the read-only legacy
   file by path rather than pretending the install is clean. Result shape: `{ action: 'config.unset',
-  key: 'privateKey', file, local }`.
+key: 'privateKey', file, local }`.
 - **Read-only derived keys** are accepted by `get`/`list` but never stored: `eoa` (the signing
   account, derived from the key locally — no RPC), `author` (the active stored author's pet name,
   `null` when the key came from env or a file) and `safe` (that author's recorded Safe, `null` when
@@ -259,7 +262,7 @@ The nested shape, one section per service:
 `config set` is the durable, scriptable way to set one value; `setup` is the guided pass for
 someone who does not know which keys exist yet. It walks the services in a fixed order — **pinning,
 ipfs, rpc, paymaster, filecoin** — and for each asks one question showing the value that is in
-effect *and where it comes from* (`custom: pi…abcd`, `legacy: …`, `defaults: …`, `builtin: …`,
+effect _and where it comes from_ (`custom: pi…abcd`, `legacy: …`, `defaults: …`, `builtin: …`,
 `unset`). Enter keeps it; pasting replaces it.
 
 - **It asks about pinning, ipfs, rpc, paymaster and filecoin only.** Never `lit` or `ens` (fixed
@@ -321,8 +324,8 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   for a swap that can no longer execute, and warns that the chain is then the only record of who
   owns what. See [SPEC-author-signers](SPEC-author-signers.md).
 - **Precedence for the signing key:** `S2S_PRIVATE_KEY` env > project config `privateKey` > active
-  author's key > `privateKey` in a config file > undefined. The store therefore sits *above* the
-  custom file (a deliberate `author switch` must beat a leftover default) and *below* the env and
+  author's key > `privateKey` in a config file > undefined. The store therefore sits _above_ the
+  custom file (a deliberate `author switch` must beat a leftover default) and _below_ the env and
   project layers. The two file layers still resolve but are **deprecated** — see
   [Config file](#config-file-bring-your-own-infra) for the one-time warning and removal.
   `CliConfig.author` reports which layer won, with the pet name and the stored Safe only for the
@@ -333,14 +336,14 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   See [SPEC-author-signers](SPEC-author-signers.md).
 - **The env shadows the store, loudly.** When `S2S_PRIVATE_KEY` is set and the active stored author
   holds a different key, `buildContext` warns on stderr — `S2S_PRIVATE_KEY overrides active author
-  'zomi'` — because a shell export silently overriding `author switch` is invisible in every
+'zomi'` — because a shell export silently overriding `author switch` is invisible in every
   result otherwise. stderr only: stdout still carries exactly one document.
 - **Safe derivation and write-back.** `author new` writes the record first, with `safe: null`, then
   predicts the author Safe for the key it was given (same `s2s_${eoa}` salt as `author address`) and
   writes that back. The order is deliberate: prediction is a network read, and an interrupted or
   slow one must not cost the key the user just pasted. The endpoint comes from
   `buildRpcEndpoints(config).L2[0]` — the same DRPC → public → Alchemy → Infura chain every other
-  author path uses, *not* the explicit `rpc.custom.l2` list, which is usually empty. A failed read (or the
+  author path uses, _not_ the explicit `rpc.custom.l2` list, which is usually empty. A failed read (or the
   genuinely empty list) leaves `safe: null` and warns instead of failing: the key is the
   irreplaceable part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
   signing key came from the store and the stored value is missing or different, so `author list`
@@ -350,7 +353,7 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   `s2s author init` fills it. It records what was installed, it does not prove adoption — adoption
   is the Safe's enabled-module list and guard slot, see
   [Installing the author contracts](#installing-the-author-contracts).
-- **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
+- **No context needed.** The four store actions are dispatched by `cli.ts` _before_ `buildContext`
   (the `config` group's contract): no private key, no RPC, no bundler, no Lit keys. Every other
   `author` action still builds a context.
 
@@ -437,11 +440,11 @@ new` runs it after the key is filed (always after, so no network failure can los
 `author init` is the recovery and idempotent path for an author that already exists, e.g. a key
 filed before the contracts were deployed.
 
-| contract | address (Base, `prod`) |
-|---|---|
-| `DraftsModuleV1` (implementation) | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
+| contract                                | address (Base, `prod`)                       |
+| --------------------------------------- | -------------------------------------------- |
+| `DraftsModuleV1` (implementation)       | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
 | `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
-| `AuthorContractsFactory` | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
+| `AuthorContractsFactory`                | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
 That table is a record of the deploy, not the authority: the factory is selected by the
 `contracts.authorFactory` config key (`S2S_AUTHOR_CONTRACTS_FACTORY`), so an environment can point
@@ -478,8 +481,8 @@ Both commands run the same sequence, in order:
 reverted (`setGuard` reverts `GS300` on a guard that does not answer ERC-165, and a re-sent
 `enableModule` reverts `GS102`), so every send is
 followed by a re-read of the state it was supposed to change, and only a changed read counts.
-`installed` and `already` therefore both mean *both modules are enabled and the guard is in the
-slot*, read back; `pending-safe` means the Safe has not executed the batch yet.
+`installed` and `already` therefore both mean _both modules are enabled and the guard is in the
+slot_, read back; `pending-safe` means the Safe has not executed the batch yet.
 
 Only the batch needs a Safe transaction. The proxies are deployed by the factory, and nothing else
 in the install writes to the Safe.
@@ -555,11 +558,11 @@ enabled has no log for `migrate` to find, and the run does not guess one.
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Success. |
-| `1` | Runtime failure (missing env, RPC/render failure, …). |
-| `2` | Usage error (unknown group/action, unknown flag, missing argument, missing required flag, missing flag value). |
+| Code | Meaning                                                                                                        |
+| ---- | -------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success.                                                                                                       |
+| `1`  | Runtime failure (missing env, RPC/render failure, …).                                                          |
+| `2`  | Usage error (unknown group/action, unknown flag, missing argument, missing required flag, missing flag value). |
 
 ## Neovim JSON contract (the stdout/stderr split)
 
@@ -584,11 +587,11 @@ Help/version in `--json` mode are also JSON documents in that envelope
 Every `--json` document is an envelope, added in one place (`lib/out.ts` for successes,
 `cli.ts` for failures) — no command sets these keys itself:
 
-| Key | Type | Meaning |
-|---|---|---|
-| `schemaVersion` | `1` | Bumped when the shape of a document changes. Hosts refuse a version they do not know. |
-| `ok` | `boolean` | `true` for a result, `false` for a failure. The one field a host can branch on without guessing from `action`. |
-| `code` | `string` | Failures only: `usage` (exit 2), `action_failed` (a Lit action ran and failed), `error` (other CLI failure), `internal` (uncaught throw). |
+| Key             | Type      | Meaning                                                                                                                                   |
+| --------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | `1`       | Bumped when the shape of a document changes. Hosts refuse a version they do not know.                                                     |
+| `ok`            | `boolean` | `true` for a result, `false` for a failure. The one field a host can branch on without guessing from `action`.                            |
+| `code`          | `string`  | Failures only: `usage` (exit 2), `action_failed` (a Lit action ran and failed), `error` (other CLI failure), `internal` (uncaught throw). |
 
 A host must not depend on `error` prose — it is human-readable and changes freely. Branch on
 `ok`, `code`, and the action's typed fields.
@@ -618,7 +621,7 @@ s2s <group> <action> [positionals…] [flags…]
   the same as passing a comma-separated list.
 - `--help` for an action is **derived from that flag declaration**, so it cannot disagree with
   what the parser accepts; there is no hand-written usage string to fall out of date. An action
-  may add one `detail` paragraph under its summary — the *why* of its shape, which the flag list
+  may add one `detail` paragraph under its summary — the _why_ of its shape, which the flag list
   cannot carry (e.g. `signer rotate`'s Safe default). A detail that restates a flag is a bug.
 - **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
   carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
@@ -633,13 +636,13 @@ s2s <group> <action> [positionals…] [flags…]
 
 ### Global documents
 
-| Invocation | stdout (`--json`) | exit |
-|---|---|---|
-| `s2s --version` | `{ "schemaVersion": 1, "ok": true, "name": "s2s", "version": "0.1.0" }` | 0 |
-| `s2s` / `s2s --help` | `{ "schemaVersion": 1, "ok": true, "help": "<top help>" }` | 0 |
-| `s2s <group> --help` | `{ "schemaVersion": 1, "ok": true, "help": "<group help>" }` | 0 |
-| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + detail? + flags>" }` | 0 |
-| any failure (`--json`) | `{ "schemaVersion": 1, "ok": false, "code": "<code>", "error": "<msg>" }` | 1 or 2 |
+| Invocation                    | stdout (`--json`)                                                         | exit   |
+| ----------------------------- | ------------------------------------------------------------------------- | ------ |
+| `s2s --version`               | `{ "schemaVersion": 1, "ok": true, "name": "s2s", "version": "0.1.0" }`   | 0      |
+| `s2s` / `s2s --help`          | `{ "schemaVersion": 1, "ok": true, "help": "<top help>" }`                | 0      |
+| `s2s <group> --help`          | `{ "schemaVersion": 1, "ok": true, "help": "<group help>" }`              | 0      |
+| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + detail? + flags>" }`        | 0      |
+| any failure (`--json`)        | `{ "schemaVersion": 1, "ok": false, "code": "<code>", "error": "<msg>" }` | 1 or 2 |
 
 ### `author` group — result types
 
@@ -712,17 +715,17 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 
 Shared field meanings:
 
-| Field | Meaning |
-|---|---|
-| `note` | Path to the note (frontmatter + body). |
-| `publication` | Resolved publication ENS (flag, else first `--s2s` frontmatter tag). |
-| `subdomain` | Publication subdomain (bytes32 → string via shared `subdomainOf`). |
-| `objectId` | Stable on-chain content identity (frontmatter `genesis`, else signed item id). |
-| `cid` | Content-addressed CID from Kubo (2-space `JSON.stringify` parity). |
-| `ipfsUrl` | (upload only) `ipfs://<cid>` — gateway-agnostic URI, from `ipfsUri` in `lib/ipfs-link.ts`. |
-| `gatewayUrl` | (upload only) `https://ipfs.io/ipfs/<cid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `cid`. |
-| `txHash` | L2 transaction hash of the on-chain action. |
-| `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
+| Field                | Meaning                                                                                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `note`               | Path to the note (frontmatter + body).                                                                                                                |
+| `publication`        | Resolved publication ENS (flag, else first `--s2s` frontmatter tag).                                                                                  |
+| `subdomain`          | Publication subdomain (bytes32 → string via shared `subdomainOf`).                                                                                    |
+| `objectId`           | Stable on-chain content identity (frontmatter `genesis`, else signed item id).                                                                        |
+| `cid`                | Content-addressed CID from Kubo (2-space `JSON.stringify` parity).                                                                                    |
+| `ipfsUrl`            | (upload only) `ipfs://<cid>` — gateway-agnostic URI, from `ipfsUri` in `lib/ipfs-link.ts`.                                                            |
+| `gatewayUrl`         | (upload only) `https://ipfs.io/ipfs/<cid>` — browser-openable, from `ipfsGatewayUrl`; also the human-mode `link` line under `cid`.                    |
+| `txHash`             | L2 transaction hash of the on-chain action.                                                                                                           |
+| `render`             | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`.                                                                               |
 | `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author`/`creation_date` on first publish, `cid`, `modified_date` and `encrypted` always). |
 
 `ipfsUrl`/`gatewayUrl` are **additive scalars** on `upload` alone — existing keys are unchanged, so
@@ -789,31 +792,31 @@ merges the env layer over the file layers (see **Config file** above). The table
 lists the env names; every one is also settable in a config file as a dotted path
 (`s2s config set <path>`), listed by `s2s config list`.
 
-| Env var | Required | Default | Purpose |
-|---|---|---|---|
-| `S2S_PRIVATE_KEY` | authoring | — | EOA signer key. Signs (EIP-712 content items, `lit actions auth`) and **owns the author Safe** — it is never the on-chain author identity (that is the Safe, INV-10). |
-| `LIT_ACCOUNT_KEY` | authoring | — | Lit master/network key (LitService account). |
-| `LIT_USAGE_KEY` | render paths; `encryption: true` notes | — | Lit usage key passed to the action runs, and the key the encrypt seam (`core/encrypt.ts`) passes to `LitService.encrypt`. |
-| `GITHUB_TOKEN` / `S2S_GITHUB_TOKEN` | `new` | — | GitHub token for the assets/config build (`ConfigBuilder`). |
-| `S2S_KUBO_GATEWAY` | uploads | `ipfs.transport-union.dev` | Kubo RPC gateway. |
-| `S2S_KUBO_TOKEN` | token-gated | — | Kubo bearer token (renders use it as `_ipfsGatewayAuth`). |
-| `S2S_PINATA_JWT` / `S2S_PINATA_GATEWAY` | backups | — | Pinata pinning leg. |
-| `S2S_FILEBASE_TOKEN` | backups | — | Filebase pinning leg. |
-| `S2S_RUNNER_URL` | preview | `https://run.transport-union.dev/run` | Lit-action runner (preview renders use the Bun runner). |
-| `S2S_RPC_L1` / `S2S_RPC_L2` | — | fallback chain | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it. |
-| `MAINNET_RPC_URL` / `BASE_RPC_URL` | — | fallback chain | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks. |
-| `S2S_ENS_REGISTRY` | — | protocolInfo | Override the ENS OpenSubdomainRegistry address. |
-| `S2S_FILECOIN_CHAIN` | filecoin | `mainnet` | `mainnet` or `calibration`. |
-| `S2S_FILECOIN_RPC` | filecoin | `https://api.node.glif.io/rpc/v1` | Filecoin JSON-RPC. |
-| `S2S_FILECOIN_SESSION_KEY` | filecoin (protocol-payer) | — | Path to a `session-key.json`. Mutually exclusive with private key. |
-| `S2S_FILECOIN_PRIVATE_KEY` | filecoin (direct) | — | Direct Filecoin signer key. Mutually exclusive with session key. |
-| `S2S_PIMLICO_KEY` | `new`, `author init` | — | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler *and* paymaster. |
-| `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
-| `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler. |
-| `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
-| `S2S_SAFE_TX_URL` | `signer add`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
-| `S2S_SAFE_TX_API_KEY` | — (optional) | — | Service API key (`safeTx.key`, secret, masked on read), sent as `Authorization: Bearer`. The public host answers unauthenticated and rate-limits instead. |
-| `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
+| Env var                                 | Required                                | Default                                     | Purpose                                                                                                                                                                                                                                           |
+| --------------------------------------- | --------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `S2S_PRIVATE_KEY`                       | authoring                               | —                                           | EOA signer key. Signs (EIP-712 content items, `lit actions auth`) and **owns the author Safe** — it is never the on-chain author identity (that is the Safe, INV-10).                                                                             |
+| `LIT_ACCOUNT_KEY`                       | authoring                               | —                                           | Lit master/network key (LitService account).                                                                                                                                                                                                      |
+| `LIT_USAGE_KEY`                         | render paths; `encryption: true` notes  | —                                           | Lit usage key passed to the action runs, and the key the encrypt seam (`core/encrypt.ts`) passes to `LitService.encrypt`.                                                                                                                         |
+| `GITHUB_TOKEN` / `S2S_GITHUB_TOKEN`     | `new`                                   | —                                           | GitHub token for the assets/config build (`ConfigBuilder`).                                                                                                                                                                                       |
+| `S2S_KUBO_GATEWAY`                      | uploads                                 | `ipfs.transport-union.dev`                  | Kubo RPC gateway.                                                                                                                                                                                                                                 |
+| `S2S_KUBO_TOKEN`                        | token-gated                             | —                                           | Kubo bearer token (renders use it as `_ipfsGatewayAuth`).                                                                                                                                                                                         |
+| `S2S_PINATA_JWT` / `S2S_PINATA_GATEWAY` | backups                                 | —                                           | Pinata pinning leg.                                                                                                                                                                                                                               |
+| `S2S_FILEBASE_TOKEN`                    | backups                                 | —                                           | Filebase pinning leg.                                                                                                                                                                                                                             |
+| `S2S_RUNNER_URL`                        | preview                                 | `https://run.transport-union.dev/run`       | Lit-action runner (preview renders use the Bun runner).                                                                                                                                                                                           |
+| `S2S_RPC_L1` / `S2S_RPC_L2`             | —                                       | fallback chain                              | Explicit comma-separated L1/L2 RPC lists. Set **both** ⇒ they replace the derived chains; one alone heads its own chain and keeps the failover behind it.                                                                                         |
+| `MAINNET_RPC_URL` / `BASE_RPC_URL`      | —                                       | fallback chain                              | Not aliases of the two above: they take the head of their own chain (the DRPC slot of shared `buildFallbackRpcs`), so an explicit endpoint never costs the Alchemy/Infura/public fallbacks.                                                       |
+| `S2S_ENS_REGISTRY`                      | —                                       | protocolInfo                                | Override the ENS OpenSubdomainRegistry address.                                                                                                                                                                                                   |
+| `S2S_FILECOIN_CHAIN`                    | filecoin                                | `mainnet`                                   | `mainnet` or `calibration`.                                                                                                                                                                                                                       |
+| `S2S_FILECOIN_RPC`                      | filecoin                                | `https://api.node.glif.io/rpc/v1`           | Filecoin JSON-RPC.                                                                                                                                                                                                                                |
+| `S2S_FILECOIN_SESSION_KEY`              | filecoin (protocol-payer)               | —                                           | Path to a `session-key.json`. Mutually exclusive with private key.                                                                                                                                                                                |
+| `S2S_FILECOIN_PRIVATE_KEY`              | filecoin (direct)                       | —                                           | Direct Filecoin signer key. Mutually exclusive with session key.                                                                                                                                                                                  |
+| `S2S_PIMLICO_KEY`                       | `new`, `author init`                    | —                                           | Pimlico API key — the only value stored. Endpoints are derived per chain: `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<key>`, serving bundler _and_ paymaster.                                                                                |
+| `S2S_BUNDLER_URL`                       | `new`, `author init` (optional)         | —                                           | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
+| `S2S_PAYMASTER_URL`                     | (optional)                              | —                                           | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler.                                                                                                                                      |
+| `S2S_ENTRY_POINT`                       | `new` (override)                        | `0.7`                                       | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden.                        |
+| `S2S_SAFE_TX_URL`                       | `signer add`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL.                                                                                 |
+| `S2S_SAFE_TX_API_KEY`                   | — (optional)                            | —                                           | Service API key (`safeTx.key`, secret, masked on read), sent as `Authorization: Bearer`. The public host answers unauthenticated and rate-limits instead.                                                                                         |
+| `S2S_ENV`                               | —                                       | `prod`                                      | `dev` → dev protocol gateways/factories + dev Lit.                                                                                                                                                                                                |
 
 ## Architecture (blank-slate host)
 
@@ -1005,7 +1008,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   package installs `@s2s/author-cli` (nothing depends on it yet).
 - **The build resolves its own paths**: `esbuild.config.mjs` takes entry, outfile and the
   `defaults.json` copy from `buildPaths(dirname(import.meta.url))` (`esbuild.paths.mjs`), because
-  esbuild resolves relative paths against the *process cwd* — `pnpm --filter … build` and a build
+  esbuild resolves relative paths against the _process cwd_ — `pnpm --filter … build` and a build
   started from the repo root must land in the same `dist/`, not in `./dist` of whatever directory
   the caller happened to be in.
 
@@ -1037,7 +1040,7 @@ The store commands are tested at two levels: their `run(out, args)` functions di
 the `authorStoreCommands` / `findAuthorStoreCommand` table that `cli.ts` dispatches from — it is
 imported from `commands/author-store.ts` precisely so a test can reach it without the content
 command graph (which drags in the ESM-only Filecoin adapter and will not load under vitest). What
-is *not* unit-tested is the dispatch itself: `cli.ts` running a store action before `buildContext`,
+is _not_ unit-tested is the dispatch itself: `cli.ts` running a store action before `buildContext`,
 per-action `--help`, and the one-document `--json` envelope at that level are covered by the hand
 smoke-tests below, because importing `cli.ts` pulls the same graph.
 
