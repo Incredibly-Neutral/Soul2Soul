@@ -296,9 +296,11 @@ describe('ContentController.publishContent', () => {
 	});
 
 	it('does not write `label` back to frontmatter', async () => {
-		const { sharedFm } = await publishAt({ label: 'Field notes' });
+		// A note without the key is the case that fails if a writer ever invents it:
+		// asserting on a seeded label would pass even when nothing writes.
+		const { sharedFm } = await publishAt({});
 
-		expect(sharedFm.label).toBe('Field notes');
+		expect('label' in sharedFm).toBe(false);
 	});
 
 	it('writes no `label` key for a note without it, and the objectId is identical', async () => {
