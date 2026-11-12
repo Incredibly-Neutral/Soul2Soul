@@ -147,14 +147,14 @@ absent from the public docs.
 
 ## The name a listing shows
 
-A manuscript's public part may carry `label`, a short name its author wrote and no signature
-covers (ADR-003). It is the only public name an encrypted manuscript has, because the title is in
-the body. The press does not read it: `toBody` flattens the public part without a label, so a
-collection item reaches a template with `id` — the genesis — and no title until the body is
-decrypted. A displayer that wants a name resolves `label ?? genesis` itself; the archive collector
-in shared's `cid-view/tree.ts` does that for an archive entry, falling back to a legacy public
-title and then the entry's own title. Nothing in the press may key a decision on a label: it is
-unsigned, so any relayer can rewrite it.
+A v2 manuscript may carry `label`, a short name its author wrote that no signature covers
+(ADR-003). `toBody` carries it into template data through `publicLabel(specVersion, label)`: v2
+only, a non-blank string, trimmed, and no key at all when there is none. That gives a template a
+name for an item whose title is inside the ciphertext; a plaintext item carries both, its `label`
+and its real `title`. A v1 public part yields no label, because those bytes are frozen. The press
+does not substitute a genesis id for a missing label — the template data always has `id`, and a
+displayer that wants the fallback resolves `label ?? genesis` itself. No press decision may key on
+a label: it is unsigned, so any relayer can rewrite it.
 
 ## Gaps without a proposal
 

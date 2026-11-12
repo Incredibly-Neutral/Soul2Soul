@@ -11,10 +11,11 @@ The public part already carries what a publication sorts by — tags, dates, the
 it was offered to — and it carries no name.
 
 The obvious fix is a signed `title` on the public part. It costs more than it looks. The
-EIP-712 type is a fixed field list, so a new field changes the type hash, and the type hash
-is the objectId. Every item would need a new struct name and a new `specVersion`, which
-means a new branch in every signer and verifier, and every manuscript that wants a name in
-a listing would have to be signed again under the author's key.
+EIP-712 type is a fixed field list, so a new field changes the type hash, and with it the
+struct hash inside the digest that names the item. That digest — domain separator and struct
+hash under the EIP-712 prefix — is the objectId. Every item would need a new struct name and a
+new `specVersion`, which means a new branch in every signer and verifier, and every manuscript
+that wants a name in a listing would have to be signed again under the author's key.
 
 ## Decision
 
