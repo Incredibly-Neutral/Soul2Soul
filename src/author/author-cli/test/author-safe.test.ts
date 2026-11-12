@@ -21,6 +21,7 @@ import {
   authorSafeState,
   createAuthorWriteRunner,
   ensureAuthorSafe,
+  explainGivenSafeRead,
   givenSafeInUse,
   initAuthorSafe,
   readGivenSafeState,
@@ -373,5 +374,46 @@ describe('author writes through a given Safe', () => {
         readSafe: oneOfOne(),
       }),
     ).rejects.toThrow(/S2S_PIMLICO_KEY|S2S_BUNDLER_URL/);
+  });
+});
+
+describe('a given Safe that cannot be read says why', () => {
+  const SAFE = '0x8507CDa436d39D433acC9c88A813dd052C828dfB' as const;
+  const RPC = 'https://lb.drpc.live/base/key';
+  const revert = new Error('The contract function "threshold" reverted.');
+
+  it('names the endpoint when it is not Base', () => {
+    const text = explainGivenSafeRead({
+      safe: SAFE,
+      rpcUrl: RPC,
+      error: revert,
+      probe: { chainId: '1', version: 'no answer (execution reverted)' },
+    });
+    expect(text).toContain('lb.drpc.live');
+    expect(text).toContain('chain 1');
+    expect(text).toContain('not Base (8453)');
+    expect(text).toContain('S2S_RPC_L2');
+  });
+
+  it('says the address is not a Safe when VERSION() does not answer', () => {
+    const text = explainGivenSafeRead({
+      safe: SAFE,
+      rpcUrl: RPC,
+      error: revert,
+      probe: { chainId: '8453', version: 'no answer (execution reverted)' },
+    });
+    expect(text).toContain('not one');
+    expect(text).toContain('Safe recorded for this key');
+  });
+
+  it('separates a call that failed from a Safe that is missing', () => {
+    const text = explainGivenSafeRead({
+      safe: SAFE,
+      rpcUrl: RPC,
+      error: revert,
+      probe: { chainId: '8453', version: '1.4.1' },
+    });
+    expect(text).toContain('VERSION() 1.4.1');
+    expect(text).toContain('the call is what failed');
   });
 });
