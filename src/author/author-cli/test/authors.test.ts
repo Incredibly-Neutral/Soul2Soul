@@ -29,6 +29,7 @@ import {
   pendingReplacementIn,
   setPendingProposal,
   settleReplacement,
+  settledAuthorName,
   writeBackAuthorSafe,
   type AuthorRecord,
   type AuthorsStore,
@@ -658,6 +659,52 @@ describe('a pending replacement', () => {
     const stored = readAuthors(path);
     expect(rows.map((row) => row.ownership)).toEqual(['owner', 'pending']);
     expect(stored.authors.zomi?.replaces).toBeUndefined();
+  });
+
+  it('renames a settled row to the name it replaces', () => {
+    // A rotation files the newcomer as `<replaces>-next` because two rows cannot
+    // share a name. The suffix is this CLI's, not the author's: once the old row
+    // is gone there is one key again and it carries the name the author had.
+    const path = localPath('chase-rename');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+    addSigner({ name: 'zomi-next', privateKey: KEY_B, safe: SAFE, replaces: 'zomi' }, path);
+
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('settled');
+    expect(readAuthors(path)).toEqual({
+      active: 'zomi',
+      authors: { zomi: { privateKey: KEY_B, safe: SAFE, safeSource: 'given' } },
+    });
+  });
+
+  it('keeps the name an operator chose in --name', () => {
+    // `--name zomi2` is a name the operator picked, not a suffix this CLI added,
+    // so settlement must not rewrite it. The row still replaces `zomi`: the old
+    // row goes and the new one keeps its own name.
+    const path = localPath('chase-named');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+    addSigner({ name: 'zomi2', privateKey: KEY_B, safe: SAFE, replaces: 'zomi' }, path);
+
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('settled');
+    expect(readAuthors(path)).toEqual({
+      active: 'zomi2',
+      authors: { zomi2: { privateKey: KEY_B, safe: SAFE, safeSource: 'given' } },
+    });
+  });
+
+  it('reads the settled name from `settledAuthorName`, one rule for the row and the report', () => {
+    // The row name and the name `reconcileReplacement` prints come from the same
+    // function, so the message cannot name a row the store does not hold.
+    expect(settledAuthorName('harry-next', 'harry')).toBe('harry');
+    expect(settledAuthorName('harry2', 'harry')).toBe('harry2');
+    // A filed name that only looks like the suffix is the operator's.
+    expect(settledAuthorName('harry-next-next', 'harry')).toBe('harry-next-next');
+    expect(settledAuthorName('zomi-next', 'ghost')).toBe('zomi-next');
   });
 
   it('settles on ownership alone when the replaced row is missing', () => {
