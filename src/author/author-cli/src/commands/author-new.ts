@@ -185,8 +185,10 @@ export interface ContractsReport {
   txs: string[];
   /** Why the install is `skipped` or `pending-safe`, as core reported it. */
   note?: string;
-  /** The Safe call the owners must propose (`pending-safe`). */
+  /** The last Safe call the owners must propose (`pending-safe`). */
   safeTx?: { to: string; data: string };
+  /** Every Safe call the owners must propose, in order; `safeTx` is the last. */
+  safeTxs?: { to: string; data: string }[];
 }
 
 /** The contracts block for a run that never reached the chain. */
@@ -272,7 +274,8 @@ async function installContracts(
       // must be the thing we print. Only the multisig case carries a call to
       // propose; the others carry none, so promise none.
       const note = result.note ?? 'the Safe owners must install the guard';
-      out.log(result.safeTx ? `${note} — the call to propose is below` : note);
+      const calls = result.safeTxs?.length ?? (result.safeTx ? 1 : 0);
+      out.log(calls > 0 ? `${note} — the calls to propose are below` : note);
     }
 
     return {
@@ -284,12 +287,19 @@ async function installContracts(
       txs: result.txs,
       ...(result.note ? { note: result.note } : {}),
       ...(result.safeTx ? { safeTx: result.safeTx } : {}),
+      ...(result.safeTxs ? { safeTxs: result.safeTxs } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     out.warn(`author contracts not installed: ${message} — run \`s2s author init\` to finish`);
     return notInstalled(config, 'skipped', message);
   }
+}
+
+/** Every call a multisig's owners must propose, in order. */
+function proposedCalls(report: ContractsReport): { to: string; data: string }[] {
+  if (report.safeTxs && report.safeTxs.length > 0) return report.safeTxs;
+  return report.safeTx ? [report.safeTx] : [];
 }
 
 /** The human block for `contracts` — the state, then what it installed. */
@@ -309,11 +319,14 @@ function contractsLines(report: ContractsReport): string[] {
   lines.push(`drafts      : ${report.drafts ?? '(none)'}`);
   lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
-  if (report.state === 'pending-safe' && report.safeTx) {
-    lines.push('              the drafts module needs no install — the Safe calls append');
-    lines.push('              on the drafts proxy directly. Propose this call instead:');
-    lines.push(`              to   ${report.safeTx.to}`);
-    lines.push(`              data ${report.safeTx.data}`);
+  if (report.txs.length > 0) lines.push(`contract txs: ${report.txs.join(', ')}`);
+  const calls = proposedCalls(report);
+  if (report.state === 'pending-safe' && calls.length > 0) {
+    lines.push('              propose these Safe calls, in this order:');
+    for (const [index, call] of calls.entries()) {
+      lines.push(`              ${String(index + 1)}. to   ${call.to}`);
+      lines.push(`                 data ${call.data}`);
+    }
   }
   return lines;
 }
