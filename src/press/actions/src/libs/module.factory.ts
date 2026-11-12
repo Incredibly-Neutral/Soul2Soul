@@ -118,6 +118,14 @@ export type StoredContentItem = Omit<
        */
       creationDate?: number;
       modifiedDate?: number;
+      /**
+       * A short public name for the manuscript (v2 envelope only), UNSIGNED and
+       * absent from the EIP-712 struct. Declared here because this module reads
+       * the item as it was stored (never through the zod parse that normalises
+       * it): a blank or non-string value is no label, and an absent one means
+       * the genesis id, resolved by whoever displays it.
+       */
+      label?: string;
     };
 };
 
@@ -376,6 +384,11 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
   // Entry.timestamp: the chain says when the deal was recorded, the envelope
   // says when the author signed (and v2 signs two different instants).
   const v2 = p.specVersion === '2';
+  // The public label, passed through as stored and only when it names something:
+  // a template needs it for an encrypted item, whose title is inside the
+  // ciphertext. Absent stays absent — never an empty string, which would read as
+  // a name of its own and override the genesis-id default.
+  const label = typeof p.label === 'string' && p.label.trim() !== '' ? p.label : undefined;
   const base = {
     id: entry.genesis, // job identity is the genesis
     // Pass through from IPFS exactly as signed: a pre-change item carries the
@@ -391,6 +404,7 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     attributes: p.attributes,
     publication: p.publication,
     base: p.base,
+    ...(label !== undefined ? { label } : {}),
     ...identity,
   };
 
