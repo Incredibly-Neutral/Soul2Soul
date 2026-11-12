@@ -55,6 +55,10 @@ export const s2sPublicContentSchemaV2 = z.object({
   tags: z.array(z.string()),
   attributes: z.record(z.unknown()).optional(),
   plaintextHash: z.string().min(1, 'plaintextHash is required'),
+  // Public but UNSIGNED: it is not a field of the S2SContentV2 struct, so it is
+  // not committed by the signature and the objectId is the same without it.
+  // Absent means the genesis id, resolved by whoever displays it.
+  label: z.string().optional(),
 });
 
 export const s2sPublicContentSchema = z.union([

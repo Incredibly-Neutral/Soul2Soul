@@ -61,6 +61,17 @@ export interface S2SPublicContentV2 {
   tags: string[];
   attributes?: Record<string, unknown>;
   plaintextHash: string;
+  /**
+   * A short name/title for the manuscript, public but UNSIGNED.
+   *
+   * The real title sits inside the ciphertext, where a reader needs a key to
+   * reach it. The label is what a listing shows instead: it rides on the stored
+   * public part and is deliberately absent from S2S_TYPES_V2, so it is not
+   * committed by the signature and an item's objectId is the same bytes with it
+   * and without it. Absent means the genesis id, resolved by whoever displays
+   * it and never stored here.
+   */
+  label?: string;
 }
 
 /** EIP-712 author signature over S2SPublicContent */
@@ -241,6 +252,14 @@ export interface S2SBodyBase {
   attributes?: any;
   publication?: string;
   base?: string;
+  /**
+   * A short name/title for the manuscript, public but UNSIGNED.
+   *
+   * Same meaning as on `S2SPublicContentV2`: the real title is inside the
+   * ciphertext, the label is what a listing shows, and the envelope never signs
+   * it. Absent means the genesis id, resolved by whoever displays it.
+   */
+  label?: string;
 }
 
 export interface S2SBodyPlain extends S2SBodyBase {

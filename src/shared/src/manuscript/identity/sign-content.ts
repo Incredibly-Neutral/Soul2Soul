@@ -116,7 +116,17 @@ export async function buildSignedContentItem(
   };
   const publicPart: S2SPublicContent | S2SPublicContentV2 =
     pub.specVersion === '2'
-      ? { ...shared, creationDate: pub.creationDate, modifiedDate: pub.modifiedDate }
+      ? {
+          ...shared,
+          creationDate: pub.creationDate,
+          modifiedDate: pub.modifiedDate,
+          // Public but UNSIGNED: it rides on the stored public part and is
+          // deliberately absent from S2S_TYPES_V2, so the signing view below is
+          // built without it and the objectId is identical with and without a
+          // label. Spreading it only when it is set keeps an unlabelled part
+          // byte-identical to one written before the field existed.
+          ...(pub.label === undefined ? {} : { label: pub.label }),
+        }
       : { ...shared, createdAt: pub.createdAt };
   const { types, view: signingView } = signingEnvelope(publicPart);
 
