@@ -179,6 +179,14 @@ export interface SafeRunnerHandle extends TxRunner {
    * factory runs in the userOp's initCode. Returns the userOp/transaction hash.
    */
   deploy(): Promise<string>;
+  /**
+   * Send one raw call as a userOp and resolve with the **on-chain transaction
+   * hash** once the userOp's receipt is in (permissionless' `sendTransaction`
+   * waits for it; the userOp hash is not returned). `genericTx` encodes from an
+   * ABI; this takes calldata the caller already has, such as a Safe's
+   * `execTransaction`, and can address the Safe itself.
+   */
+  sendCall(to: Address, data: Hex): Promise<Hex>;
 }
 
 export async function createSafeRunner<
@@ -267,6 +275,10 @@ export async function createSafeRunner<
         value: 0n,
         ...(await feeOverrides()),
       } as never);
+    },
+    sendCall: async (to: Address, data: Hex): Promise<Hex> => {
+      if (!client) throw new Error('SafeRunner not initialised — call connect first');
+      return client.sendTransaction({ to, data, ...(await feeOverrides()) } as never);
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);

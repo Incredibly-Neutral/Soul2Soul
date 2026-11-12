@@ -197,7 +197,7 @@ export async function runSignerQueue(
         ].join('  '),
       ),
       ...(rows.some((row) => row.keyIsOwner === true && !row.keyConfirmed)
-        ? ['', 'confirm one with `s2s signer confirm <safeTxHash>` — execution costs gas from this key']
+        ? ['', 'confirm one with `s2s signer confirm <safeTxHash>`: execution is sponsored when a paymaster is configured, otherwise this key pays']
         : []),
       ...(unread === undefined
         ? []

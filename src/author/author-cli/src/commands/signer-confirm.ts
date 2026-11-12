@@ -4,7 +4,7 @@
 // Two steps, and the second one is not optional in the usual case: sign the
 // safeTxHash as a message with this key, POST the confirmation to the service,
 // then — when the confirmations now meet the Safe's threshold and the nonce is
-// still the Safe's own — send `execTransaction` on chain from the EOA.
+// still the Safe's own — send `execTransaction` on chain.
 //
 // The POST is conditional. `s2s signer rotate` proposes with the old key's
 // `sign` signature, and the service files a proposal's signature as its
@@ -30,11 +30,17 @@
 // the Safe is fine — it is queued behind other transactions — so it is
 // confirmed and left alone.
 //
-// Execution costs gas, paid by the EOA that sends it: the Safe transaction has
-// zero gas fields, so nothing is refunded to the sender. `--no-execute` stops
-// after the confirmation, for a key that should not spend.
+// Who pays for the execution is decided before the send, never after it. With a
+// paymaster configured, the Safe4337Module enabled on the Safe, and no
+// `--self-paid`, the same `execTransaction` goes out as a userOp through the
+// author Safe runner and the paymaster fronts the gas — the EOA needs no ETH.
+// `--self-paid`, no paymaster, or no 4337 module falls back to a plain EOA
+// transaction, whose gas the EOA does pay. A sponsored send that fails is
+// reported as `sponsored_send_failed` and is never retried on the EOA: whether
+// to pay instead is the user's decision, not a silent fallback.
 //
-// Runs without `buildContext`: no bundler, no userOp.
+// Runs without `buildContext`: the sponsored rail is the author Safe runner
+// (`createAuthorSafeRunner`), not the CLI context.
 // ============================================================================
 
 import { getAddress, hashMessage, recoverAddress, size, type Address, type Hex } from 'viem';
@@ -46,7 +52,8 @@ import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { authorEoa } from '../core/authors';
-import { hexKey } from '../core/config';
+import { SAFE_4337_MODULE } from '../core/author-safe';
+import { bundlerEndpoints, hexKey } from '../core/config';
 import { execTransactionArgs, packVerifiedSignatures } from '../adapters/safe-tx';
 import {
   asSafeAddress,
@@ -240,6 +247,8 @@ export async function runSignerConfirm(
   const signing = [...byOwner.keys()];
   let executed = false;
   let txHash: Hex | undefined;
+  let paidBy: 'paymaster' | 'eoa' | undefined;
+  let payerNote: string | undefined;
   let note: string | undefined;
 
   // Every note leads with what this run actually did to the service: "confirmed,
@@ -261,9 +270,36 @@ export async function runSignerConfirm(
     // chain id, `execTransactionArgs` re-hashes and refuses a record that is
     // not the proposal that was signed.
     const call = execTransactionArgs(after, packed, { chainId: deps.chainId });
+
+    // Who pays, decided before the send. The paymaster sponsors a userOp when
+    // one is configured, the Safe can take a userOp at all (the 4337 module is
+    // enabled, and its fallback handler is how the module validates the
+    // signature), and the user did not ask for a self-paid send. Otherwise the
+    // EOA sends the same `execTransaction` and pays its own gas.
+    const paymasterUrl = bundlerEndpoints(config, deps.chainId)?.paymasterUrl;
+    const selfPaid = flagBool(args.flags, 'self-paid');
+    let eoaReason: string | undefined;
+    if (selfPaid) eoaReason = '--self-paid';
+    else if (!paymasterUrl) eoaReason = 'no paymaster configured';
+    else if (!(await deps.readModuleEnabled(rpcUrl, safe, SAFE_4337_MODULE))) {
+      eoaReason = `the Safe4337Module (${SAFE_4337_MODULE}) is not enabled on the Safe`;
+    }
+    const sponsored = eoaReason === undefined;
     try {
-      txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
+      txHash = sponsored
+        ? await deps.sendSponsored({ rpcUrl, privateKey, to: call.to, data: call.data, safe })
+        : await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
     } catch (err) {
+      // A sponsorship refusal leaves the queued proposal and the posted
+      // confirmation exactly as they are, so it names both ways to finish: pay
+      // from a funded EOA, or fund this one. It never retries on the EOA.
+      if (sponsored) {
+        throw new CliError(
+          `the paymaster did not sponsor executing ${safeTxHash} on ${safe} (${reasonOf(err)}) — the confirmation is posted and the proposal is queued, so either run this again with --self-paid from an EOA that holds Base ETH, or fund ${eoa} with a little Base ETH and run it again`,
+          1,
+          'sponsored_send_failed',
+        );
+      }
       // A CliError from the seam already says what it is; a node's rejection is
       // where the gas-money case hides, and it is the one worth naming.
       if (err instanceof CliError) throw err;
@@ -272,6 +308,10 @@ export async function runSignerConfirm(
       throw new CliError(funds, 1, 'insufficient_gas');
     }
     executed = true;
+    paidBy = sponsored ? 'paymaster' : 'eoa';
+    payerNote = sponsored
+      ? 'sponsored by the paymaster'
+      : `paid by ${eoa} (${eoaReason ?? 'no paymaster configured'})`;
     // The swap has landed: settle again against the owners the chain now
     // reports, so the new row becomes the active one and the old row goes. A
     // failure here is a warning — the chain work is done, the store can catch
@@ -300,6 +340,7 @@ export async function runSignerConfirm(
       posted,
       executed,
       ...(txHash ? { txHash } : {}),
+      ...(paidBy ? { paidBy } : {}),
       ...(settledName ? { settled: settledName } : {}),
       ...(note ? { note } : {}),
     },
@@ -312,7 +353,7 @@ export async function runSignerConfirm(
       ...(txHash
         ? [
             `executed      : ${txHash}`,
-            `                gas for this transaction was paid from ${eoa}`,
+            `                gas for this transaction was ${payerNote ?? 'paid by an unknown party'}`,
           ]
         : [`not executed  : ${note ?? 'unknown reason'}`]),
       ...(settledName ? [`settled: ${settledName} is now the key for ${safe}`] : []),
@@ -323,7 +364,7 @@ export async function runSignerConfirm(
 export const signerConfirm: StoreCommandSpec = {
   name: 'confirm',
   summary:
-    'Sign a queued proposal with this key, then execute it when the threshold is met (execution costs gas from the EOA).',
+    'Sign a queued proposal with this key, then execute it when the threshold is met; the paymaster pays the gas when one is configured, otherwise the EOA does.',
   params: '<safeTxHash>',
   flags: {
     safe: {
@@ -335,6 +376,11 @@ export const signerConfirm: StoreCommandSpec = {
       type: 'boolean',
       summary:
         'send execTransaction when the confirmations meet the threshold (default); --no-execute stops after the confirmation',
+    },
+    'self-paid': {
+      type: 'boolean',
+      summary:
+        'send execTransaction as a plain transaction from the EOA and pay its gas, even when a paymaster is configured',
     },
   },
   async run(out: CliOut, args: ParsedArgs) {

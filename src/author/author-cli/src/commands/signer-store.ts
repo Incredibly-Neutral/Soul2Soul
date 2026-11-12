@@ -36,7 +36,7 @@ import {
 } from '../adapters/safe-tx';
 import { readSafeOwners } from '../core/author-contracts';
 import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
-import { givenSafeInUse } from '../core/author-safe';
+import { givenSafeInUse, createAuthorSafeRunner } from '../core/author-safe';
 import { loadConfig, type CliConfig } from '../core/config';
 import { UsageError } from '../lib/errors';
 import { buildRpcEndpoints } from '../adapters/rpc';
@@ -170,6 +170,59 @@ async function sendFromEoa(input: {
   return wallet.sendTransaction({ account, to: input.to, data: input.data });
 }
 
+/** Whether the Safe itself reports `module` enabled — Safe 1.4.1's own getter. */
+export async function readModuleEnabled(
+  rpcUrl: string,
+  safe: Address,
+  module: Address,
+): Promise<boolean> {
+  const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  // The shared ABI is not a `const` literal, so viem types this as `unknown`;
+  // the answer is the Safe's own bool.
+  const enabled = await client.readContract({
+    address: safe,
+    abi: safeAbi,
+    functionName: 'isModuleEnabled',
+    args: [module],
+  });
+  return enabled === true;
+}
+
+/**
+ * `execTransaction` sent as a userOp from `safe`, sponsored by the configured
+ * paymaster. No ETH is needed on the EOA: the paymaster fronts the gas and the
+ * bundler submits.
+ *
+ * This is deliberately not a fallback for `sendFromEoa`. It makes one attempt
+ * and throws; choosing the EOA instead is the caller's decision, taken before
+ * the send, so a sponsorship refusal can never turn into an EOA transaction the
+ * user did not ask for.
+ *
+ * Returns the **on-chain transaction hash** (the transaction that carried the
+ * userOp, hence the one that carried the Safe's `execTransaction`), waiting for
+ * the userOp receipt first — permissionless' `sendTransaction` does both.
+ */
+async function sendSponsoredFromSafe(input: {
+  rpcUrl: string;
+  privateKey: Hex;
+  to: Address;
+  data: Hex;
+  safe: Address;
+}): Promise<Hex> {
+  const config = loadConfig();
+  const runner = await createAuthorSafeRunner({
+    config,
+    privateKey: input.privateKey,
+    eoa: privateKeyToAccount(input.privateKey).address,
+    rpcUrl: input.rpcUrl,
+    // The command only reaches this after finding a paymaster URL, and a
+    // paymaster URL never exists without a bundler URL (`bundlerEndpoints`).
+    requireBundler: true,
+    safe: input.safe,
+  });
+  return runner.sendCall(input.to, input.data);
+}
+
 // ===========================================================================
 // The seam
 // ===========================================================================
@@ -185,6 +238,19 @@ export interface SignerDeps {
   readCode(rpcUrl: string, address: Address): Promise<boolean>;
   /** Send a plain transaction from the key and return its hash. */
   send(input: { rpcUrl: string; privateKey: Hex; to: Address; data: Hex }): Promise<Hex>;
+  /**
+   * Send the same call as a userOp from `safe`, sponsored by the paymaster, and
+   * return the on-chain transaction hash. Throws on refusal; never falls back.
+   */
+  sendSponsored(input: {
+    rpcUrl: string;
+    privateKey: Hex;
+    to: Address;
+    data: Hex;
+    safe: Address;
+  }): Promise<Hex>;
+  /** `isModuleEnabled(module)` read from the Safe. */
+  readModuleEnabled(rpcUrl: string, safe: Address, module: Address): Promise<boolean>;
   keySource(flags: Record<string, string | boolean>): KeySource;
   authorsPath(): string;
   /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
@@ -197,6 +263,8 @@ const DEFAULT_SIGNER_DEPS: SignerDeps = {
   readSafe: readChainSafe,
   readCode,
   send: sendFromEoa,
+  sendSponsored: sendSponsoredFromSafe,
+  readModuleEnabled,
   keySource: (flags) => resolveKeySource(flags),
   authorsPath: () => authorsFilePath(),
   chainId: SIGNER_CHAIN_ID,

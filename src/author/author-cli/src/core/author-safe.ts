@@ -52,6 +52,16 @@ export const SAFE_PROXY_FACTORY: Address = '0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f8
 export const AUTHOR_SAFE_VERSION = '1.4.1' as const;
 export const AUTHOR_SAFE_ENTRY_POINT = '0.7' as const;
 
+/**
+ * The Safe4337Module the pinned pair above installs: permissionless'
+ * `getDefaultAddresses('1.4.1', '0.7')` answer, enabled as a module and set as
+ * the Safe's fallback handler by its initializer. Part of that initializer and
+ * therefore of the address, so it is pinned with the rest rather than
+ * configured — the same address `src/press/actions/src/libs/ens.factory.ts`
+ * lists as the canonical one for this module version.
+ */
+export const SAFE_4337_MODULE: Address = '0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226';
+
 /** The salt an author Safe's counterfactual address is derived from. */
 export function authorSafeSalt(eoa: Address | string): string {
   return `${AUTHOR_SAFE_SALT_PREFIX}${eoa}`;

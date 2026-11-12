@@ -3,7 +3,8 @@
 //
 // The signature is checked by recovering it (`verifyMessage`) against the raw
 // safeTxHash, and the packed list is decoded back out of the `execTransaction`
-// calldata. No socket: `send` is a fake that records its call.
+// calldata. No socket: `send` and `sendSponsored` are fakes that record their
+// call, and `readModuleEnabled` answers from the test.
 // ============================================================================
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
@@ -73,6 +74,12 @@ beforeEach(() => {
   vi.stubEnv('S2S_RPC_L2', RPC);
   vi.stubEnv('BASE_RPC_URL', '');
   vi.stubEnv('S2S_PRIVATE_KEY', KEY_SIGNER);
+  // No sponsorship unless a test asks for it: the paymaster lookup reads env.
+  vi.stubEnv('S2S_PIMLICO_KEY', '');
+  vi.stubEnv('PIMLICO_KEY', '');
+  vi.stubEnv('PIMLICO_API_KEY', '');
+  vi.stubEnv('S2S_PAYMASTER_URL', '');
+  vi.stubEnv('S2S_BUNDLER_URL', '');
 });
 
 afterEach(() => {
@@ -179,11 +186,25 @@ interface Sent {
   data: Hex;
 }
 
+/** A sponsored send: the same call, but addressed through the Safe. */
+interface Sponsored extends Sent {
+  safe: Address;
+}
+
 function deps(
   fake: FakeService,
-  options: { chain?: ChainSafe; code?: boolean; sent?: Sent[]; ownersAfter?: Address[] } = {},
+  options: {
+    chain?: ChainSafe;
+    code?: boolean;
+    sent?: Sent[];
+    ownersAfter?: Address[];
+    sponsored?: Sponsored[];
+    sponsoredFails?: unknown;
+    moduleEnabled?: boolean;
+  } = {},
 ): Partial<SignerDeps> {
   const sent = options.sent ?? [];
+  const sponsored = options.sponsored ?? [];
   let reads = 0;
   return {
     config: () => loadConfig(),
@@ -204,6 +225,17 @@ function deps(
       sent.push(input);
       return Promise.resolve(TX_HASH);
     },
+    sendSponsored: (input) => {
+      const failure = options.sponsoredFails;
+      if (failure !== undefined) {
+        return Promise.reject(failure instanceof Error ? failure : new Error('sponsored send failed'));
+      }
+      sponsored.push(input);
+      return Promise.resolve(TX_HASH);
+    },
+    // Not enabled: the default answer that keeps every test on the EOA rail
+    // unless sponsorship is what the test is about.
+    readModuleEnabled: () => Promise.resolve(options.moduleEnabled ?? false),
   };
 }
 
@@ -762,5 +794,157 @@ describe('s2s signer confirm', () => {
     expect(fake.gets).toBe(0);
     expect(readAuthors(path).active).toBe('zomi-next');
     expect(readAuthors(path).authors.zomi).toBeUndefined();
+  });
+});
+
+/**
+ * Who pays for the execution. The decision is made before the send, from three
+ * facts: a paymaster URL, the Safe's own `isModuleEnabled(SAFE_4337_MODULE)`,
+ * and the `--self-paid` flag. The EOA rail is a fallback the command chooses,
+ * never a retry after a sponsorship refusal.
+ */
+describe('s2s signer confirm — who pays', () => {
+  const PIMLICO_KEY = 'pim_test_key';
+
+  /** A proposal one signature short, which this run's confirmation executes. */
+  async function executable(overrides: Partial<SafeTxRecord> = {}): Promise<FakeService> {
+    return fakeService(
+      baseRecord({
+        confirmations: [{ owner: OWNER_B, signature: await signedByB() }],
+        ...overrides,
+      }),
+    );
+  }
+
+  it('sponsors the execution when a paymaster is configured and the 4337 module is enabled', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, sponsored, moduleEnabled: true }),
+    });
+
+    // The sponsored rail, and only it: no plain transaction was sent, so the
+    // EOA never had to hold ETH.
+    expect(sponsored).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+    const call = first(sponsored);
+    expect(call.safe).toBe(SAFE);
+    expect(call.privateKey).toBe(KEY_SIGNER);
+    expect(call.to).toBe(SAFE);
+    expect(decodeFunctionData({ abi: safeAbi, data: call.data }).functionName).toBe('execTransaction');
+
+    expect(captured.results[0]).toMatchObject({
+      executed: true,
+      txHash: TX_HASH,
+      paidBy: 'paymaster',
+    });
+    expect(captured.human[0]).toContain('sponsored by the paymaster');
+  });
+
+  it('sends from the EOA under --self-paid, even with the paymaster configured', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE, '--self-paid']),
+      deps(fake, { sent, sponsored, moduleEnabled: true }),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sponsored).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
+    expect(captured.human[0]).toContain(`paid by ${EOA_SIGNER}`);
+    expect(captured.human[0]).toContain('--self-paid');
+  });
+
+  it('sends from the EOA when no paymaster is configured, and says so', async () => {
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      // The module is enabled: the missing paymaster alone has to decide it.
+      ...deps(fake, { sent, sponsored, moduleEnabled: true }),
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sponsored).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
+    expect(captured.human[0]).toContain('no paymaster configured');
+  });
+
+  it('sends from the EOA when the Safe has no 4337 module, and names the module', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, sponsored, moduleEnabled: false }),
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sponsored).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
+    expect(captured.human[0]).toContain('Safe4337Module');
+    expect(captured.human[0]).toContain('not enabled');
+  });
+
+  it('reports a sponsorship refusal as sponsored_send_failed and never retries on the EOA', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await expect(
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, {
+          sent,
+          moduleEnabled: true,
+          sponsoredFails: new Error('paymaster refused: policy denied'),
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'sponsored_send_failed' });
+
+    // No silent fallback, and the work already done stands: the proposal is
+    // queued and this key's confirmation is on the service.
+    expect(sent).toHaveLength(0);
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results).toHaveLength(0);
+  });
+
+  it('names both ways forward when the paymaster refuses the call', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const captured = capture();
+    const refusal = new Error('paymaster refused: policy denied');
+
+    const err = await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      deps(fake, { moduleEnabled: true, sponsoredFails: refusal }),
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(err).toBeInstanceOf(CliError);
+    const message = (err as Error).message;
+    // The refusal is named, not swallowed...
+    expect(message).toContain('policy denied');
+    // ...and both recoveries are on the same line: pay yourself, or fund this
+    // address and let the paymaster try again.
+    expect(message).toContain('--self-paid');
+    expect(message).toContain(`fund ${EOA_SIGNER}`);
   });
 });
