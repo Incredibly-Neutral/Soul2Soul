@@ -309,16 +309,53 @@ describe('s2s signer rotate', () => {
     expect(store.authors['zomi-next-next']?.replaces).toBe('zomi-next');
   });
 
-  it('refuses a filed key that is not an owner, calling it by name', async () => {
+  it('calls a row the chain does not own stale, names it, and files no swap against it', async () => {
     const fake = fakeService();
     const captured = capture();
     addSigner({ name: 'zomi', privateKey: KEY_OTHER, safe: SAFE }, storePath());
 
+    const run = (): Promise<void> =>
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake));
+
+    await expect(run()).rejects.toMatchObject({ code: 'not_owner' });
+    await expect(run()).rejects.toThrow(
+      /a key the chain does not list as an owner of 0x1111[\s\S]*'zomi' \(0x[0-9a-fA-F]{40}\)[\s\S]*s2s signer queue/,
+    );
+    expect(fake.proposed).toHaveLength(0);
+    expect(fake.asked).toHaveLength(0);
+    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
+  });
+
+  it('refuses when the effective key owns the Safe but the store files it under another one', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    const otherSafe: Address = '0x2222222222222222222222222222222222222222';
+    // No row for this Safe, so rule 2 would file the environment key here — but
+    // one key keeps one row, and this one already names another Safe.
+    addSigner({ name: 'elsewhere', privateKey: KEY_OLD, safe: otherSafe }, storePath());
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+
     await expect(
       runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toMatchObject({ code: 'not_owner' });
+    ).rejects.toThrow(/is filed as 'elsewhere', a row for 0x2222[\s\S]*one key under one row/);
     expect(fake.proposed).toHaveLength(0);
-    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
+    expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['elsewhere']);
+  });
+
+  it('keeps the Safe slot for its stale row even when the environment key owns the Safe', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    addSigner({ name: 'zomi', privateKey: KEY_OTHER, safe: SAFE }, storePath());
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+
+    // Rule 2 cannot file the effective key here: this store holds one key per
+    // Safe, and the stale row holds that slot. Refusing is the only honest
+    // answer, and it does not quietly retire a key the chain never accepted.
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/a key the chain does not list as an owner/);
+    expect(readAuthors(storePath()).authors['signer-7e5f45']).toBeUndefined();
+    expect(fake.proposed).toHaveLength(0);
   });
 
   it('refuses a Safe with no key filed for it, naming `signer add`', async () => {
@@ -782,21 +819,40 @@ describe('s2s signer rotate', () => {
     expect(captured.warnings.join('\n')).toContain('was not running');
   });
 
-  it('refuses a lock that names no pid, rather than guessing that its writer is gone', async () => {
+  it('waits out an empty lock and then refuses it as a live writer, keeping the file', async () => {
     const fake = fakeService();
     const captured = capture();
     seedOld();
     const lock = storeLockPath(storePath());
     mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    // What a writer looks like between `open(..., 'wx')` and writing its pid.
     writeFileSync(lock, '');
 
     await expect(
       runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
     ).rejects.toMatchObject({ code: 'store_locked' });
+    // Empty is not stale: the file was read again for long enough that a holder
+    // writing its pid would have finished, and the answer is still "held".
     await expect(
       runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toThrow(/holds no pid this build can read/);
+    ).rejects.toThrow(/names no pid/);
     expect(existsSync(lock)).toBe(true);
+    expect(captured.warnings.join('\n')).not.toContain('cleared the author store lock');
+  });
+
+  it('refuses a lock whose contents are not a pid, and leaves it for its owner', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    writeFileSync(lock, 'not a pid\n');
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/names no pid/);
+    expect(existsSync(lock)).toBe(true);
+    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
   });
 
   it('removes the store lock after a run that succeeded and after one that refused', async () => {
@@ -852,6 +908,24 @@ describe('s2s signer rotate', () => {
     expect(captured.human[0]).toContain("filed first : the owner key from S2S_PRIVATE_KEY as 'signer-7e5f45'");
     // The proposal is still signed by the old key.
     expect(fake.proposed[0]?.sender).toBe(EOA_OLD);
+  });
+
+  it('files the old key row only once the run goes ahead, never on a refusal', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    // Rule 2 would file this environment key for the Safe, and then the run
+    // refuses because the key it would install is already an owner. A refused
+    // command leaves the store as it found it.
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_B]), {
+        ...deps(fake, { owners: [EOA_OLD, OWNER_B] }),
+      }),
+    ).rejects.toMatchObject({ code: 'already_owner' });
+
+    expect(readAuthors(storePath()).authors).toEqual({});
+    expect(fake.proposed).toHaveLength(0);
   });
 
   it('retires the Safe row\'s key and signs the swap with the environment key when both own the Safe', async () => {

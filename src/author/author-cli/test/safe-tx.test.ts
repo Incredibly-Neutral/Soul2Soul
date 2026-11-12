@@ -593,30 +593,30 @@ describe('makeSafeTxService', () => {
     );
   });
 
-  it('stops walking once the nonce it was asked about is covered', async () => {
+  it('walks every page it may read, even when the wanted nonce is on the first', async () => {
     const { fetchImpl, calls } = fakeFetch([
       {
         body: {
           next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?offset=1`,
-          results: [recordFor(7), recordFor(8)],
+          results: [recordFor(7)],
         },
       },
-      { body: { next: null, results: [recordFor(9)] } },
+      { body: { next: null, results: [recordFor(8)] } },
     ]);
 
     const { records, complete } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
-    }).pending(SAFE, { untilNonce: 7 });
+    }).pending(SAFE);
 
+    // Nothing about the walk depends on the order the pages arrive in: it reads
+    // to the end of what it may read, and only then says the queue is exhausted.
     expect(complete).toBe(true);
+    expect(calls).toHaveLength(2);
     expect(records.map((record) => record.nonce)).toEqual([7, 8]);
-    // One request: nonce 7 was on the first page, so the rest of the queue
-    // cannot change the answer.
-    expect(calls).toHaveLength(1);
   });
 
-  it('says the walk stopped early rather than claiming the queue is exhausted', async () => {
+  it('says the walk stopped at the cap rather than claiming the queue is exhausted', async () => {
     // Every page advertises another one: the cap is what ends the walk.
     const { fetchImpl, calls } = fakeFetch(
       Array.from({ length: 6 }, () => ({
@@ -630,7 +630,7 @@ describe('makeSafeTxService', () => {
     const { complete } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
-    }).pending(SAFE, { untilNonce: 9 });
+    }).pending(SAFE);
 
     expect(complete).toBe(false);
     expect(calls).toHaveLength(5);

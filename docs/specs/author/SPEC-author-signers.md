@@ -59,9 +59,10 @@ required.
    it was, or `null` when the store was empty, and the result says so with `activated: false`. The
    row is also marked `unconfirmed: true`: nothing else records that the chain has never accepted
    this key, and `author list` would otherwise print a joining key as an owner of a Safe that does
-   not list it. The mark clears itself the first time a signer command reads the owner list and
-   finds the key on it (`settleReplacement` sweeps these rows on every `rotate` and `confirm`), so
-   it is never removed by hand and never outlives the fact it records. The default name is
+   not list it. The mark clears itself the first time a chain read shows the key on the owner list:
+   `settleReplacement` sweeps these rows on `rotate` and `confirm`, and `signer queue` sweeps them
+   on the owner list it reads for its own columns. It is never removed by hand, and it never
+   outlives the fact it records. The default name is
    `signer-<first 6 hex of the new EOA>`; a taken name, a key filed under another author, or a Safe
    already filed under another author is a usage error from `addSigner`, thrown before the store is
    written.
@@ -127,27 +128,34 @@ accusation. The positional stays as the override for a machine holding rows for 
    newcomer is an owner and reports the collision before that — the marker has no other way to
    clear.
 
-   **Which key is the old one is the key this Safe's row holds**, when that key is one of its
-   owners: the active row first, then any other row filed for this Safe. `rotate` replaces what the
-   store says this machine has on that Safe, so a row's own key is the answer even when the
-   effective key — `S2S_PRIVATE_KEY`, the project config, a config file — derives to a *different*
-   owner of the same Safe. That second key does not become the old key; it signs the swap (step 3),
-   and the result reports it as `signedBy` with `signedBySource`.
+   **The old key is a row name, always**, and it is resolved in one order:
 
-   Only when no row for this Safe holds an owner is the effective key considered, because a key that
-   owns the Safe and lives nowhere but the environment is still a key this machine can retire. It is
-   filed first, under `signer-<first 6 hex>`, because a swap is recorded against the row it retires
-   and `addSigner` refuses a key that already owns the Safe; the result reports `oldKeySource` and
-   `filedOldRow`, and the human line names where the key came from. When such a machine already has a
-   row for this Safe — one whose key is not an owner — that row is what the swap retires, so the old
-   key is still the effective key and `settleReplacement` settles the row the moment the newcomer is
-   an owner. The store keeps one row per key, so an environment key that owns this Safe while filed
-   under another Safe's row is `not_owner`, naming the row it lives in: this build cannot file one
-   key twice, and the fix is to run rotate where that key is not filed.
+   - **A row that owns the Safe.** The row for this Safe whose key the chain lists as an owner — the
+     active row first, then any other row filed for this Safe. This is the ordinary case, and it
+     writes nothing. It is also why an effective key that happens to own the same Safe changes
+     nothing about *which* key is retired: `rotate` replaces what the store says this machine holds
+     on that Safe. That second key signs the swap (step 3) and is reported as `signedBy` /
+     `signedBySource`, unless no row names it at all, in which case it is the key being retired.
+   - **No owning row, but the effective key owns the Safe.** The effective key (`S2S_PRIVATE_KEY` >
+     project config) is filed for this Safe, under `signer-<first 6 hex>`, and the row just filed is
+     the old key. The result reports `oldKeySource` and `filedOldRow`, and the human line names where
+     the key came from. Filing is what makes `replaces` defined on every path: a swap is recorded
+     against a row, so an owner key that lives only in the environment gets one before the swap is
+     built.
+   - **Otherwise, refusal.**
 
-   No row and no owner key on this machine is a usage error naming `s2s signer add <safe>`; rows
-   whose keys this build cannot derive are `not_owner` and are named (`'broken' (unreadable)`), not
-   reported as "no key filed"; rows that derive but own nothing are `not_owner` too, listing them.
+   A row for this Safe whose key is **not** an owner is a stale row: the chain does not list it, so
+   there is no owner in it to swap out and no swap is ever filed against it. It is `not_owner`,
+   named with its EOA, saying the chain does not list it and that `s2s signer queue` shows what the
+   Safe actually holds. Because this store keeps one key per Safe, a stale row also holds the slot
+   rule 2 would use, so rule 2 cannot fire past one; the message says so, and `s2s author rm
+   '<name>'` frees the slot once the key is no longer wanted.
+
+   No row and no owner key on this machine is a usage error naming `s2s signer add <safe>`. Rows
+   whose keys this build cannot derive are `not_owner` and are named (`'broken' (unreadable)`),
+   never reported as "no key filed". A key that owns this Safe and is filed under another Safe's
+   row cannot be given a row here — one key, one row — and that is `not_owner` naming the row it
+   lives in, with the fix being to run rotate where that key is not filed.
 2. **Take the new key and file it inactive** — or finish the key a failed run already filed (see
    below). Everything from here to the write-back runs under the store lock (below), so two rotates
    cannot both pass the name check and leave one key unrecorded. A fresh key comes from `resolveKeySource`, the same resolver `author new` and `signer add`
@@ -177,8 +185,8 @@ Refusals, all before anything is filed:
 | state | outcome |
 |---|---|
 | no row filed for the Safe on this machine | usage error naming `s2s signer add <safe>` |
-| no row for the Safe holds an owner, and the effective key owns it while filed under another Safe's row | `not_owner`, naming that row — one key cannot be filed twice |
-| no row for the Safe holds an owner, the effective key owns it, and a row for this Safe holds a non-owner | not a refusal: that row is what the swap retires, and `settleReplacement` settles it once the newcomer is an owner |
+| a row for the Safe holds a key the chain does not list as an owner | `not_owner`, naming the row and its EOA — a stale row is not an owner to swap out, no swap is filed against it, and it holds the Safe's slot; the message points at `s2s signer queue` for what the Safe actually holds |
+| no row for the Safe holds an owner, the effective key owns it, and that key is filed under another Safe's row | `not_owner`, naming that row — one key cannot be filed twice, so rotate has to run where the key is not filed |
 | Safe has no bytecode | `safe_not_deployed` |
 | the new key _is_ the old key | `same_key` |
 | the new EOA is already an owner | `already_owner` — a swap brings in a key that is not on the list |
@@ -198,7 +206,7 @@ failed run`. This is why `--key`, `--mnemonic` and a different `--name` are refu
 them would abandon the one copy of a key that may already be the Safe's next owner.
 
 **"Never queued" is checked against the service, not believed from the store.** Before reusing the
-row, `rotate` calls `service.pending(safe, {untilNonce})` and compares the queued records with the
+row, `rotate` calls `service.pending(safe)` and compares the queued records with the
 call it would post — nonce, `to`, `operation`, `data`, `value`. The same call means the earlier
 run's POST landed and only its reply was lost: the row adopts that `safeTxHash` (printed,
 `alreadyQueued: true`, `proposed: true`) and nothing is posted again. A different call at that nonce
@@ -206,13 +214,17 @@ is `nonce_taken`, and the run refuses rather than posting a swap the Safe will r
 executes in the wrong order. Nothing at that nonce, or a service that cannot be read, means the POST
 goes out; a read failure is a warning, because the store's row is still the right thing to propose.
 The queue is paged, so "nothing at that nonce" is only concluded from a walk that says it finished:
-`pending` returns `{records, complete}` and reports `complete: false` when it stopped at its page cap
-(five pages of 100, or as soon as the wanted nonce was covered). An unfinished walk is neither "not
-queued" nor a refusal — `proposed` is `false` and `note` says the queue could not be read that far
-and points at `s2s signer queue`, because a second proposal at a used nonce is refused and a swap
-queued twice is worse than one queued late.
+`pending` returns `{records, complete}` and reports `complete: false` only when it stopped at its
+page cap — five pages of 100, every page read, no early stop at a nonce. Stopping early would make
+the completeness claim rest on `ordering=nonce`, which the same read does not verify, so the walk is
+bounded by page count alone. An unfinished walk is neither "not queued" nor a refusal — `proposed`
+is `false` and `note` says the queue could not be read that far and points at `s2s signer queue`,
+because a second proposal at a used nonce is refused and a swap queued twice is worse than one
+queued late.
 
 The record a rotation files carries `replaces`: the pet name of the row it is meant to replace.
+It is present on every path, because the old key is always a row — either one the store already
+held or one this run filed for the effective key.
 
 ```json
 { "privateKey": "0x…", "safe": "0x…", "safeSource": "given", "replaces": "zomi" }
@@ -308,7 +320,9 @@ A pending replacement row is **not** an owner: it is filed inactive and waits fo
 execute, so until then this machine's key for the Safe is the old row, and `keyIsOwner` answers for
 that one.
 
-Read-only: nothing is proposed, signed or spent.
+Nothing is proposed, signed or spent. The one write is the store: a row `signer add` filed
+`unconfirmed` is marked confirmed here when the owner list this command already read contains its
+key, so the mark never outlives the fact it records, whatever command noticed it first.
 
 JSON:
 
@@ -318,11 +332,15 @@ JSON:
   "pending": [{ "nonce": 7, "safeTxHash": "0x…", "method": "addOwnerWithThreshold",
     "newOwner": "0x…", "to": "0x…", "data": "0x…", "confirmations": 1,
     "confirmationsRequired": 2, "executable": false, "keyIsOwner": true,
-    "keyConfirmed": false }] }
+    "keyConfirmed": false }], "complete": true }
 ```
 
 `eoa` is `null` with no key; `method` and `newOwner` are absent when the service decoded nothing;
-`confirmationsRequired` is the chain's threshold whenever the Safe could be read.
+`confirmationsRequired` is the chain's threshold whenever the Safe could be read. `complete` is
+`false` when the walk stopped at its page cap: `pending` is then the first pages of the queue, not
+the queue, and a reader that ignored the flag would take a truncated list for an exhaustive one. The
+same fact is said in the human block (`unread      : …`) and as a warning, in both output modes,
+because a short list that looks whole is how an owner misses the transaction they were waiting for.
 
 ## `signer confirm <safeTxHash> [--safe <safe>] [--no-execute]`
 
@@ -411,15 +429,25 @@ exclusive lock.
 The lock is a file beside the store, `<authors.json>.lock`, created with `wx` and mode `0600`,
 holding the writer's pid, and removed in a `finally` — on success, on a refusal, and on a throw. On
 `EEXIST` the pid is read and `process.kill(pid, 0)` asked: `ESRCH` (no such process) means the
-writer is gone, so the file is a leftover rather than a claim — it is removed, the caller is told
-whose it was, and the write proceeds. A running pid — or `EPERM`, which means it exists — is
-`store_locked` naming the path and the pid, and a lock whose contents name no pid this build can
-read is `store_locked` too: there is nothing to check, and guessing that an unreadable lock is old
-is how a live writer's file gets overwritten. Age is never the test. Within one process the lock is
+writer is gone, so the file is a leftover rather than a claim. Before removing it the file is read
+again, and the unlink happens only if it still names the pid that was judged dead: two commands that
+met the same leftover would otherwise each delete the other's fresh lock and both write. A running
+pid — or `EPERM`, which means it exists — is `store_locked` naming the path and the pid.
+
+A lock that exists and names no pid is read again for about a quarter of a second (ten reads, 25 ms
+apart). The
+window it covers is real: a holder creates the file with `wx` and writes its pid in the next
+statement, so a reader can catch it empty and a live writer's lock must not be treated as a claim to
+the file. A lock still empty after the wait is `store_locked` too — as a holder, never as a leftover.
+An empty file is therefore never removed, and one whose contents are not a pid is never removed
+either: guessing that an unreadable lock is old is how a live writer's file gets overwritten. Age is
+never the test. Within one process the lock is
 re-entrant (the module counts holders), so a command can file two rows without deadlocking against
 itself, and `signer add` / `signer confirm` / `author` writes take it by the same seam. `rotate`
 passes the same `onStaleLock` handler to both store transactions it makes — the settle and the
-decide-and-file — because either may be the first to meet a leftover.
+decide-and-file — because either may be the first to meet a leftover, and `signer confirm` passes
+one to both of its reconciles (before signing, and after executing) for the same reason: a cleared
+lock is always reported.
 
 ## Gas
 

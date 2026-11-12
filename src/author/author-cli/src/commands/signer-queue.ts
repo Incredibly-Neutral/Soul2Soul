@@ -11,7 +11,10 @@
 // row: whether this machine's key is an owner, and whether it has confirmed
 // already. An owner that has not confirmed is the row to run `confirm` on.
 //
-// Read-only: no proposal, no signature, no gas. Runs without `buildContext`.
+// Nothing is signed and nothing is sent: no proposal, no signature, no gas. Runs
+// without `buildContext`. The one store write is the `unconfirmed` marker coming
+// off a row the owner list has just accepted, which is a chain fact this command
+// happens to hold first.
 // ============================================================================
 
 import { size, type Address } from 'viem';
@@ -20,7 +23,7 @@ import type { ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
-import { authorEoa } from '../core/authors';
+import { authorEoa, sweepConfirmedSigners } from '../core/authors';
 import type { SafeTxRecord } from '../adapters/safe-tx';
 import {
   asSafeAddress,
@@ -105,15 +108,32 @@ export async function runSignerQueue(
     );
   }
 
+  // The owner list this command already read is the one fact that turns a
+  // `signer add` row from "filed, not an owner yet" into an owner. Sweeping it
+  // here means the row reads as what the chain says wherever it is listed, not
+  // only after a rotation settles. A store that cannot be written costs the
+  // listing a warning, never the rows.
+  if (chain?.owners !== undefined) {
+    try {
+      sweepConfirmedSigners(safe, chain.owners, deps.authorsPath());
+    } catch (err) {
+      out.warn(
+        `could not update the store against the owner list (${reasonOf(err)}) — a row filed by \`s2s signer add\` may still read 'filed, not an owner yet'`,
+      );
+    }
+  }
+
   const listed = await deps.service(config).pending(safe);
   const pending = listed.records.sort((a, b) => a.nonce - b.nonce);
-  if (!listed.complete) {
-    // The walk stopped at the page cap. Saying so is the difference between a
-    // short list and a list that claims the Safe has nothing else queued.
-    out.warn(
-      `the service returned more queued transactions than this command reads in one go — the rows below are the first pages of ${safe}, oldest nonce first; a row after them is not missing, it is unread`,
-    );
-  }
+  // The walk stopped at the page cap. Saying so is the difference between a
+  // short list and a list that claims the Safe has nothing else queued, and it
+  // is said in both modes: `--json` readers see `complete: false`, and the human
+  // block ends with the sentence, because a truncated list that looks whole is
+  // how an owner misses the transaction they were waiting for.
+  const unread = !listed.complete
+    ? `the service returned more queued transactions than this command reads in one go — the rows above are the first pages of ${safe}, oldest nonce first; a row after them is not missing, it is unread`
+    : undefined;
+  if (unread !== undefined) out.warn(unread);
   const threshold = chain?.threshold ?? 0;
 
   const rows: QueueRow[] = pending.map((record) => {
@@ -158,6 +178,9 @@ export async function runSignerQueue(
       threshold,
       owners: chain?.owners ?? [],
       pending: rows,
+      // False when the page cap cut the walk: `pending` is then the first pages,
+      // not the queue, and no reader may treat the list as exhaustive.
+      complete: listed.complete,
     },
     [
       headline,
@@ -176,6 +199,9 @@ export async function runSignerQueue(
       ...(rows.some((row) => row.keyIsOwner === true && !row.keyConfirmed)
         ? ['', 'confirm one with `s2s signer confirm <safeTxHash>` — execution costs gas from this key']
         : []),
+      ...(unread === undefined
+        ? []
+        : ['', 'unread      : the page cap cut this list short — rows after these were not read']),
     ].join('\n'),
   );
 }

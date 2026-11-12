@@ -135,7 +135,16 @@ export async function runSignerConfirm(
   // Before anything is read from the service: a rotation whose swap already
   // executed is settled here, so a run that died after executing still moves
   // the store on, and this run decides with the key that is actually active.
-  let settledName = reconcileReplacement(safe, chain.owners, out, deps.authorsPath());
+  // The same notice `signer rotate` gives: a lock cleared here was left by a
+  // killed command, and the store may be missing the key that command printed.
+  const lock = {
+    onStaleLock: (pid: number): void => {
+      out.warn(
+        `cleared the author store lock left by pid ${String(pid)}, which was not running — that command was killed before it could release the lock or finish, so if it printed a key, check the store holds it`,
+      );
+    },
+  };
+  let settledName = reconcileReplacement(safe, chain.owners, out, deps.authorsPath(), lock);
   if (!chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) {
     throw new CliError(
       `${eoa} is not an owner of ${safe} — an owner has to add it first (\`s2s signer add ${safe}\`)`,
@@ -238,7 +247,7 @@ export async function runSignerConfirm(
     try {
       const ownersAfter = (await deps.readSafe(rpcUrl, safe)).owners;
       settledName =
-        reconcileReplacement(safe, ownersAfter, out, deps.authorsPath()) ?? settledName;
+        reconcileReplacement(safe, ownersAfter, out, deps.authorsPath(), lock) ?? settledName;
     } catch (err) {
       out.warn(
         `the transaction executed but the store was not reconciled (${reasonOf(err)}) — the next \`s2s signer\` run settles it`,

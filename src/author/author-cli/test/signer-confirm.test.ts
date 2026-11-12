@@ -6,7 +6,7 @@
 // calldata. No socket: `send` is a fake that records its call.
 // ============================================================================
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,7 +18,12 @@ import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
 import { computeSafeTxHash } from '../src/adapters/safe-tx';
-import { addSigner, pendingReplacement, readAuthors } from '../src/core/authors';
+import {
+  addSigner,
+  pendingReplacement,
+  readAuthors,
+  storeLockPath,
+} from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -674,6 +679,41 @@ describe('s2s signer confirm', () => {
     const untouched = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
     expect(untouched.active).toBe('zomi');
     expect(untouched.authors['zomi-next']?.replaces).toBe('zomi');
+  });
+
+  it('reports the dead writer whose lock it cleared, the way rotate does', async () => {
+    const fake = fakeService(baseRecord());
+    const warnings: string[] = [];
+    const out: CliOut = {
+      json: true,
+      log: () => undefined,
+      warn: (message: string) => warnings.push(message),
+      result: () => undefined,
+    };
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+      path,
+    );
+    // A command killed mid-write: the store lock it left names a pid that is not
+    // running. Clearing it is right; clearing it silently is not, because the
+    // killed command may have printed a key it never recorded.
+    const lock = storeLockPath(path);
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    const pid = 2 ** 22 + 11;
+    writeFileSync(lock, `${String(pid)}\n`);
+
+    await expect(
+      runSignerConfirm(out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, { chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 } }),
+      }),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+
+    expect(warnings.join('\n')).toContain(`pid ${String(pid)}`);
+    expect(warnings.join('\n')).toContain('was not running');
+    expect(existsSync(lock)).toBe(false);
+    expect(readAuthors(path).active).toBe('zomi-next');
   });
 
   it('settles before the record read, so a run that died after executing still reconciles', async () => {

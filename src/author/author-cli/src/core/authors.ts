@@ -55,6 +55,7 @@ import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -455,15 +456,53 @@ function processAlive(pid: number): boolean | undefined {
   }
 }
 
-/** The pid a lock file names, or undefined when it names none this build can read. */
-function lockHolder(lock: string): number | undefined {
+/** What a lock file says right now. */
+type LockRead =
+  /** It names a pid. */
+  | { state: 'pid'; pid: number }
+  /** It exists but names no pid: a holder that has created it and not written yet. */
+  | { state: 'empty' }
+  /** It was released between our open and our read. */
+  | { state: 'gone' };
+
+function readLock(lock: string): LockRead {
   let text: string;
   try {
     text = readFileSync(lock, 'utf8').trim();
-  } catch {
-    return undefined;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { state: 'gone' }
+      : { state: 'empty' };
   }
-  return /^[0-9]+$/.test(text) ? Number.parseInt(text, 10) : undefined;
+  return /^[0-9]+$/.test(text) ? { state: 'pid', pid: Number.parseInt(text, 10) } : { state: 'empty' };
+}
+
+/** A sleep that works inside a synchronous function: the lock cannot await. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** How long to wait for a lock that exists but names no pid yet, and how often. */
+const LOCK_READ_ATTEMPTS = 10;
+const LOCK_READ_WAIT_MS = 25;
+
+/**
+ * The pid a lock names, waiting out the window between `open(..., 'wx')` and the
+ * holder's `write` of its pid.
+ *
+ * An empty file is a live holder mid-write, not a leftover: `open` creates it and
+ * the pid goes in the next statement, so a reader can catch it empty for a
+ * moment. Concluding "no pid, therefore stale" from that moment is how a live
+ * writer's lock gets deleted. A lock that is *still* empty after the retry is
+ * therefore treated as held, never as stolen.
+ */
+function lockPid(lock: string): LockRead {
+  for (let attempt = 0; attempt < LOCK_READ_ATTEMPTS; attempt += 1) {
+    const read = readLock(lock);
+    if (read.state !== 'empty') return read;
+    if (attempt + 1 < LOCK_READ_ATTEMPTS) sleepSync(LOCK_READ_WAIT_MS);
+  }
+  return { state: 'empty' };
 }
 
 export interface StoreLockOptions {
@@ -495,21 +534,27 @@ export function withStoreLock<T>(path: string, fn: () => T, options: StoreLockOp
       fd = openSync(lock, 'wx', 0o600);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const holder = lockHolder(lock);
-      if (holder !== undefined && processAlive(holder) === false) {
-        // The writer is gone: its lock is a leftover, not a claim.
+      const holder = lockPid(lock);
+      if (holder.state === 'gone') continue;
+      if (holder.state === 'pid' && processAlive(holder.pid) === false) {
+        // The writer is gone: its lock is a leftover, not a claim. Re-read before
+        // removing it, because another process may have taken the same leftover
+        // over in between and be writing under a fresh lock that is not ours to
+        // delete. Only the exact pid we judged dead may be removed.
+        const again = readLock(lock);
+        if (again.state !== 'pid' || again.pid !== holder.pid) continue;
         try {
           rmSync(lock, { force: true });
-          options.onStaleLock?.(holder);
+          options.onStaleLock?.(holder.pid);
         } catch {
           // someone else moved it first; the next open decides
         }
         continue;
       }
       throw new CliError(
-        holder === undefined
-          ? `another s2s command is writing the author store at ${path} — the lock ${lock} exists and holds no pid this build can read; delete it only once no s2s command is running`
-          : `another s2s command (pid ${String(holder)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`,
+        holder.state === 'pid'
+          ? `another s2s command (pid ${String(holder.pid)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`
+          : `another s2s command is writing the author store at ${path} — the lock ${lock} exists and names no pid, which is what a writer looks like for the moment between creating the lock and writing its pid; if no s2s command is running, the lock is a leftover and can be deleted`,
         1,
         'store_locked',
       );
@@ -961,6 +1006,57 @@ export function settleReplacement(
   return withStoreLock(path, () => settleReplacementLocked(safe, owners, path), options);
 }
 
+/**
+ * Clear the `unconfirmed` marker from every row for `safe` whose key the owner
+ * list now holds, and return the store as it stands afterwards.
+ *
+ * `signer add` files a joining key unconfirmed because no chain read has agreed
+ * with it yet. The marker is a fact about the chain, so it is dropped wherever
+ * the owner list is in hand — settle, queue and confirm all reach this. A marker
+ * cleared by hand would be a claim nobody checked; a marker that outlives the
+ * owner list would call a key a stranger after it joined.
+ *
+ * Caller holds the store lock.
+ */
+function sweepConfirmedLocked(
+  safe: Address,
+  owners: readonly Address[],
+  path: string,
+): AuthorsStore {
+  const store = readAuthors(path);
+  const cleared: Record<string, AuthorRecord> = {};
+  for (const [name, record] of Object.entries(store.authors)) {
+    if (record.unconfirmed !== true) continue;
+    if (recordSafe(record)?.toLowerCase() !== safe.toLowerCase()) continue;
+    const eoa = authorEoa(record.privateKey);
+    if (!eoa || !owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) continue;
+    const rest: AuthorRecord = { ...record };
+    delete rest.unconfirmed;
+    cleared[name] = rest;
+  }
+  if (Object.keys(cleared).length === 0) return store;
+  const swept: AuthorsStore = { active: store.active, authors: { ...store.authors, ...cleared } };
+  writeAuthors(swept, path);
+  return swept;
+}
+
+/**
+ * Clear `unconfirmed` from the rows for `safe` the chain now lists as owners.
+ * For a command that read the owner list but is not settling a replacement, so
+ * a key that joined is reported as an owner the moment that is true.
+ */
+export function sweepConfirmedSigners(
+  safe: Address,
+  owners: readonly Address[],
+  path: string = authorsFilePath(),
+  options: StoreLockOptions = {},
+): void {
+  // A command that only listed the queue must not create a store to report that
+  // there is nothing in it.
+  if (!existsSync(path)) return;
+  withStoreLock(path, () => sweepConfirmedLocked(safe, owners, path), options);
+}
+
 function settleReplacementLocked(
   safe: Address,
   owners: readonly Address[],
@@ -969,25 +1065,7 @@ function settleReplacementLocked(
   const isOwnerOf = (eoa: Address): boolean =>
     owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
 
-  const stored = readAuthors(path);
-  // A joining key (`signer add`) is filed unconfirmed and becomes an owner only
-  // when an owner posts its proposal. This is the chain read that can tell, so
-  // the marker goes here — the row then reads as what the chain says it is.
-  let store = stored;
-  const cleared: Record<string, AuthorRecord> = {};
-  for (const [name, record] of Object.entries(store.authors)) {
-    if (record.unconfirmed !== true) continue;
-    if (recordSafe(record)?.toLowerCase() !== safe.toLowerCase()) continue;
-    const eoa = authorEoa(record.privateKey);
-    if (!eoa || !isOwnerOf(eoa)) continue;
-    const rest: AuthorRecord = { ...record };
-    delete rest.unconfirmed;
-    cleared[name] = rest;
-  }
-  if (Object.keys(cleared).length > 0) {
-    store = { active: store.active, authors: { ...store.authors, ...cleared } };
-    writeAuthors(store, path);
-  }
+  const store = sweepConfirmedLocked(safe, owners, path);
 
   const chasing = pendingRowsIn(store, safe)[0];
   if (!chasing?.replaces) return 'none';

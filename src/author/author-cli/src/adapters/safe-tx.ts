@@ -505,14 +505,11 @@ export interface SafeTxService {
   }): Promise<{ safeTxHash: Hex }>;
   /**
    * The Safe's unexecuted transactions, oldest nonce first. `complete` is
-   * false when the page walk stopped before the queue was exhausted (the
-   * page cap), so a caller looking for one nonce knows the absence of an
+   * false when the page walk stopped at the page cap before the queue was
+   * exhausted, so a caller looking for one nonce knows the absence of an
    * answer is not an answer.
    */
-  pending(
-    safe: Address,
-    options?: { untilNonce?: number },
-  ): Promise<{ records: SafeTxRecord[]; complete: boolean }>;
+  pending(safe: Address): Promise<{ records: SafeTxRecord[]; complete: boolean }>;
   get(safe: Address, safeTxHash: Hex): Promise<SafeTxRecord>;
   confirm(input: { safe: Address; safeTxHash: Hex; signature: Hex }): Promise<void>;
 }
@@ -855,16 +852,19 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
      * The collection is paged, and one page is not the queue: a Safe with more
      * queued transactions than a page fits would hide the record a caller is
      * looking for, and "not there" would then be a wrong answer about a
-     * transaction that exists. The walk follows `next` up to `PENDING_MAX_PAGES`
-     * pages, or stops as soon as `untilNonce` is covered — nothing past that
-     * nonce can be the record being looked for. `complete` says whether the walk
-     * reached the end, so the caller can tell "nothing at that nonce" from
-     * "stopped looking".
+     * transaction that exists. The walk follows `next` for up to
+     * `PENDING_MAX_PAGES` pages and claims `complete` only when `next` runs out,
+     * so the caller can tell "nothing at that nonce" from "stopped looking".
+     *
+     * No page is skipped and no walk stops early at a nonce: `ordering=nonce` is
+     * the service's promise, not something this function checks, and stopping
+     * once a record at or past the wanted nonce appeared would make completeness
+     * rest on the ordering it does not verify. A bounded walk answers for the
+     * pages it read without assuming anything about the order they came in.
      */
-    pending: async (safe, options = {}) => {
+    pending: async (safe) => {
       const records: SafeTxRecord[] = [];
       let next: string | undefined = `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce&limit=100`;
-      let complete = false;
       let page = 0;
       while (next !== undefined && page < PENDING_MAX_PAGES) {
         page += 1;
@@ -873,20 +873,12 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
           | undefined;
         const results = Array.isArray(payload?.results) ? payload.results : [];
         records.push(...results.map((entry) => toRecord(entry, safe, chainId)));
-        const covered =
-          options.untilNonce !== undefined &&
-          records.some((record) => record.nonce >= (options.untilNonce ?? 0));
-        if (covered) {
-          complete = true;
-          break;
-        }
         next = pagePath(payload?.next);
-        if (next === undefined) complete = true;
       }
-      // `ordering=nonce` is the service's promise, not something to rely on for
-      // correctness: the queue is the order the nonces must be executed in, and
-      // a page that arrives in another order would be executed out of turn.
-      return { records: records.sort((left, right) => left.nonce - right.nonce), complete };
+      return {
+        records: records.sort((left, right) => left.nonce - right.nonce),
+        complete: next === undefined,
+      };
     },
 
     /**
