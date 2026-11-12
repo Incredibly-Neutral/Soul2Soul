@@ -245,7 +245,9 @@ export function flagRows(specs: FlagSpecs, globals: FlagSpecs = {}): string {
 
 /**
  * Full help for one action, derived from its spec. `params` is the positional
- * signature (`<note>`), so the usage line cannot disagree with the parser.
+ * signature (`<note>`), so the usage line cannot disagree with the parser, and
+ * `detail` is the optional second paragraph: the reason the command is shaped
+ * this way, which would make a one-line group listing unreadable.
  */
 export function commandHelp(
   group: string,
@@ -253,6 +255,7 @@ export function commandHelp(
   summary: string,
   flags: FlagSpecs,
   params?: string,
+  detail?: string,
 ): string {
   const usage = `s2s ${group} ${name}${params ? ` ${params}` : ''} [flags]`;
   const own = flagRows(flags);
@@ -260,7 +263,7 @@ export function commandHelp(
   return [
     usage,
     '',
-    summary,
+    detail ? `${summary}\n${detail}` : summary,
     '',
     own ? `Flags:\n${own}` : 'Flags: (none)',
     '',

@@ -29,7 +29,7 @@ import { addSigner, pendingReplacement, readAuthors } from '../src/core/authors'
 import { loadConfig } from '../src/core/config';
 import { runSignerRotate, signerRotate } from '../src/commands/signer-rotate';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
-import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
+import { commandHelp, parseCommandArgs, type ParsedArgs } from '../src/lib/args';
 import type { CliOut } from '../src/lib/out';
 
 /** Valid keys nobody can use: privkey 1, 2, 3 and 4. */
@@ -43,6 +43,8 @@ const KEY_B: Hex = `0x${'00'.repeat(31)}03`;
 const OWNER_B: Address = privateKeyToAccount(KEY_B).address;
 
 const SAFE: Address = '0x1111111111111111111111111111111111111111';
+/** A well-formed safeTxHash for a queued swap: 32 bytes, nothing else. */
+const QUEUED_HASH: Hex = `0x${'ab'.repeat(32)}`;
 const RPC = 'https://rpc.example';
 const CHAIN_ID = 8453;
 
@@ -161,6 +163,21 @@ function args(argv: string[]): ParsedArgs {
 }
 
 describe('s2s signer rotate', () => {
+  it('shows the optional argument and the reason for it in --help', () => {
+    const help = commandHelp(
+      'signer',
+      signerRotate.name,
+      signerRotate.summary,
+      signerRotate.flags,
+      signerRotate.params,
+      signerRotate.detail,
+    );
+    expect(help.startsWith('s2s signer rotate [<safe>] [flags]')).toBe(true);
+    // The reason the argument is optional: the store already names the Safe.
+    expect(help).toContain('this machine files when it signs');
+    expect(help).toContain('pass <safe> only to pick another one');
+  });
+
   it('files the new key inactive and proposes swapOwner(prev, old, new)', async () => {
     const fake = fakeService();
     const captured = capture();
@@ -315,19 +332,137 @@ describe('s2s signer rotate', () => {
     expect(fake.proposed).toHaveLength(0);
   });
 
-  it('refuses a second replacement while one is pending, naming the row', async () => {
+  it('refuses a second replacement when one is already queued, naming `signer confirm`', async () => {
     const fake = fakeService();
     const captured = capture();
     seedOld();
-    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi', proposal: QUEUED_HASH },
+      storePath(),
+    );
+
+    // A row WITH a proposal is a queued swap: only executing it moves the store
+    // on, so the message names the command that executes it and nothing that
+    // would drop the row.
+    const err = await runSignerRotate(
+      captured.out,
+      args(['signer', 'rotate', SAFE, '--key', KEY_OTHER]),
+      deps(fake),
+    ).catch((thrown: unknown) => thrown);
+    expect(err).toMatchObject({ code: 'replacement_pending' });
+    const message = err instanceof Error ? err.message : '';
+    expect(message).toContain(`s2s signer confirm ${QUEUED_HASH}`);
+    expect(message).not.toContain('author rm');
+    expect(fake.proposed).toHaveLength(0);
+    expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['zomi', 'zomi-next']);
+  });
+
+  it('takes the Safe from the active row when no argument names one', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
+      ...deps(fake),
+    });
+
+    // The row that signs already names its Safe; the command line need not.
+    expect(captured.results[0]).toMatchObject({ safe: SAFE, name: 'zomi-next', proposed: true });
+    expect(fake.proposed).toHaveLength(1);
+  });
+
+  it('refuses without an argument when no filed key owns a Safe, naming <safe>', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    // Filed for SAFE, but not on its owner list, and nothing is chasing a swap.
+    addSigner({ name: 'zomi', privateKey: KEY_OTHER, safe: SAFE }, storePath());
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OTHER]), deps(fake)),
-    ).rejects.toThrow(/'zomi-next' is filed/);
-    await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OTHER]), deps(fake)),
-    ).rejects.toMatchObject({ code: 'replacement_pending' });
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/pass <safe>/);
     expect(fake.proposed).toHaveLength(0);
+    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
+  });
+
+  it('reuses the key a failed run filed instead of minting another', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    // `replaces` and no `proposal`: the key was printed once and the swap never
+    // queued. Re-running must finish that swap with that key.
+    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate']), {
+      ...deps(fake),
+      keySource: () => {
+        throw new Error('a retry must not resolve a new key');
+      },
+    });
+
+    const expectedTx: SafeTxInput = {
+      to: SAFE,
+      value: 0n,
+      data: swapOwnerData(SENTINEL_OWNERS, EOA_OLD, EOA_NEW),
+      operation: 0,
+      nonce: 7,
+    };
+    const expectedHash = computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: expectedTx });
+
+    expect(captured.results[0]).toMatchObject({
+      name: 'zomi-next',
+      eoa: EOA_NEW,
+      reused: true,
+      proposed: true,
+      safeTxHash: expectedHash,
+    });
+    // Nothing was generated, so no phrase is printed and no key is echoed.
+    expect(captured.results[0]?.mnemonic).toBeUndefined();
+    expect(captured.human[0]).not.toContain('mnemonic');
+
+    // One key, one row: the store was reused, not extended.
+    const store = readAuthors(storePath());
+    expect(Object.keys(store.authors)).toEqual(['zomi', 'zomi-next']);
+    expect(store.authors['zomi-next']?.privateKey).toBe(KEY_NEW);
+    // The successful queue is recorded, which is what stops the next run from
+    // treating the row as stranded again.
+    expect(store.authors['zomi-next']?.proposal).toBe(expectedHash);
+
+    // Posted with the old key's signature, as the service requires.
+    const posted = fake.proposed[0];
+    if (posted === undefined) throw new Error('the retry posted no proposal');
+    expect(posted.sender).toBe(EOA_OLD);
+    expect(await recoverAddress({ hash: expectedHash, signature: posted.signature })).toBe(EOA_OLD);
+    expect(captured.human[0]).toContain('reusing the key filed by the failed run');
+  });
+
+  it('leaves a failed proposal retryable: the {to, data} is printed and the next run finishes it', async () => {
+    seedOld();
+    const failing = fakeService(new Error('safe transaction service said 422'));
+    const first = capture();
+
+    await runSignerRotate(first.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(failing),
+    });
+
+    const data = swapOwnerData(SENTINEL_OWNERS, EOA_OLD, EOA_NEW);
+    expect(first.results[0]).toMatchObject({ proposed: false, safeTx: { to: SAFE, data } });
+    // No hash recorded: the row is stranded, which is exactly what a retry reads.
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeUndefined();
+
+    const retry = fakeService();
+    const second = capture();
+    await runSignerRotate(second.out, args(['signer', 'rotate']), {
+      ...deps(retry),
+      keySource: () => {
+        throw new Error('a retry must not resolve a new key');
+      },
+    });
+
+    expect(second.results[0]).toMatchObject({ reused: true, proposed: true });
+    expect(retry.proposed).toHaveLength(1);
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBe(
+      second.results[0]?.safeTxHash,
+    );
   });
 
   it('keeps the key and reports the raw call when the service refuses the proposal', async () => {

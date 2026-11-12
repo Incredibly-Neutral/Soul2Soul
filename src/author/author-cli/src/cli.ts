@@ -169,6 +169,7 @@ async function main(argv: string[]): Promise<number> {
       signerCommand.summary,
       signerCommand.flags,
       signerCommand.params,
+      signerCommand.detail,
     );
     if (wantHelp) {
       out.result({ help: text }, text);
@@ -208,6 +209,7 @@ async function main(argv: string[]): Promise<number> {
         storeCommand.summary,
         storeCommand.flags,
         storeCommand.params,
+        storeCommand.detail,
       );
       if (wantHelp) {
         out.result({ help: text }, text);
@@ -228,7 +230,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (wantHelp) {
-    const text = commandHelp(group, command.name, command.summary, command.flags, command.params);
+    const text = commandHelp(
+      group,
+      command.name,
+      command.summary,
+      command.flags,
+      command.params,
+      command.detail,
+    );
     out.result({ help: text }, text);
     return 0;
   }

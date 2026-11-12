@@ -243,6 +243,28 @@ describe('s2s signer add', () => {
     expect(captured.logs.join('\n')).toContain('signed it (1 of 2 confirmations)');
   });
 
+  it('says the threshold is met by the owner signature alone when the Safe needs one', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OWNER);
+
+    await runSignerAdd(
+      captured.out,
+      args(['signer', 'add', SAFE, '--key', KEY_NEW]),
+      deps(fake, { deployed: true, owners: [EOA_OWNER], threshold: 1, nonce: 7 }),
+    );
+
+    // The proposal carries the owner's signature, so at threshold 1 there is
+    // nothing left for anyone to add: `confirm` sends it.
+    expect(captured.results[0]).toMatchObject({ proposed: true, threshold: 1 });
+    const human = captured.logs.join('\n');
+    expect(human).toContain('signed it (1 of 1 confirmations)');
+    expect(human).toContain('the threshold is met');
+    expect(human).toContain('executes it');
+    expect(fake.proposed).toHaveLength(1);
+    expect(fake.proposed[0]?.sender).toBe(EOA_OWNER);
+  });
+
   it('honours --name and the default name is six hex of the new EOA', async () => {
     const fake = fakeService();
     const captured = capture();

@@ -68,6 +68,10 @@ s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plainte
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
+s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]      # file a key and propose it as one owner of a deployed Safe
+s2s signer rotate    [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]    # swap this machine's key on a Safe, threshold untouched (the Safe defaults to the one it files)
+s2s signer queue     [<safe>] [--json]                                                           # unexecuted proposals, oldest nonce first, and what this key owes
+s2s signer confirm   <safeTxHash> [--safe <safe>] [--no-execute] [--json]                        # sign a queued proposal, then execute it at the threshold
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
 s2s setup            [--accept-defaults] [--json]                                               # guided first-run config: keep the defaults or paste your own
 s2s config set       <key> <value> [--local] [--json]                                             # write a config value
@@ -554,7 +558,9 @@ s2s <group> <action> [positionals…] [flags…]
 - A `repeatable` flag (`--author`, `--owner` on `publication new`) accumulates; repeating it is
   the same as passing a comma-separated list.
 - `--help` for an action is **derived from that flag declaration**, so it cannot disagree with
-  what the parser accepts; there is no hand-written usage string to fall out of date.
+  what the parser accepts; there is no hand-written usage string to fall out of date. An action
+  may add one `detail` paragraph under its summary — the *why* of its shape, which the flag list
+  cannot carry (e.g. `signer rotate`'s Safe default). A detail that restates a flag is a bug.
 - **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
   carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
 - Failure in `--json` mode puts a single envelope on stdout and nothing else:
@@ -573,7 +579,7 @@ s2s <group> <action> [positionals…] [flags…]
 | `s2s --version` | `{ "schemaVersion": 1, "ok": true, "name": "s2s", "version": "0.1.0" }` | 0 |
 | `s2s` / `s2s --help` | `{ "schemaVersion": 1, "ok": true, "help": "<top help>" }` | 0 |
 | `s2s <group> --help` | `{ "schemaVersion": 1, "ok": true, "help": "<group help>" }` | 0 |
-| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + flags>" }` | 0 |
+| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + detail? + flags>" }` | 0 |
 | any failure (`--json`) | `{ "schemaVersion": 1, "ok": false, "code": "<code>", "error": "<msg>" }` | 1 or 2 |
 
 ### `author` group — result types

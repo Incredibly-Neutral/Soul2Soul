@@ -825,7 +825,7 @@ export function removalHoldIn(data: AuthorsStore, name: string): string | undefi
   const row = findAuthor(data, name);
   if (!row) return undefined;
   const settle =
-    'finish the queued swap with `s2s signer confirm`, or run `s2s signer rotate` on that Safe to settle it';
+    'finish it with `s2s signer confirm <hash>` when the swap is queued, or re-run `s2s signer rotate` on that Safe when it never reached the service';
   if (row.replaces !== undefined) {
     return `author '${row.name}' is the pending replacement for '${row.replaces}' and holds the only copy of the key that swap puts on the Safe — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
   }
