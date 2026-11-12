@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getAddress } from 'viem';
+import { getAddress, type Address } from 'viem';
 
 import {
   activeAuthorRecord,
@@ -11,6 +11,7 @@ import {
   addSigner,
   authorEoa,
   authorRowForKey,
+  authorRows,
   authorsFilePath,
   findAuthor,
   findAuthorByKey,
@@ -21,8 +22,12 @@ import {
   readAuthors,
   rememberAuthorSafe,
   removeAuthor,
+  removalHoldIn,
   safeProblem,
   writeAuthors,
+  pendingReplacement,
+  pendingReplacementIn,
+  settleReplacement,
   writeBackAuthorSafe,
   type AuthorRecord,
   type AuthorsStore,
@@ -76,23 +81,27 @@ interface CapturedOut {
   out: CliOut;
   results: unknown[];
   warnings: string[];
+  /** The human render of each result, for the lines a table has to carry. */
+  human: string[];
 }
 
 /** Capture the typed output sink a command writes to (no mocks, no `any`). */
 function capture(): CapturedOut {
   const results: unknown[] = [];
   const warnings: string[] = [];
+  const human: string[] = [];
   const out: CliOut = {
     json: true,
     log: () => undefined,
     warn: (message: string) => {
       warnings.push(message);
     },
-    result: (data: unknown) => {
+    result: (data: unknown, text?: string) => {
       results.push(data);
+      human.push(text ?? '');
     },
   };
-  return { out, results, warnings };
+  return { out, results, warnings, human };
 }
 
 describe('author store file', () => {
@@ -455,6 +464,287 @@ describe('a given Safe', () => {
   });
 });
 
+describe('a pending replacement', () => {
+  const SAFE = getAddress('0xabcd00000000000000000000000000000000def1');
+  const OTHER_SAFE = getAddress('0xabcd00000000000000000000000000000000def2');
+  const EOA_B = '0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF';
+  const KEY_C = `0x${'00'.repeat(31)}03`;
+
+  /** `zomi` owns SAFE; `signer1` is filed to replace it, not yet an owner. */
+  function chase(): string {
+    const path = localPath('chase');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+    addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'zomi' }, path);
+    return path;
+  }
+
+  it('files the new row inactive and leaves the old row untouched', () => {
+    const path = localPath('file-replacement');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+
+    const before = JSON.parse(readFileSync(path, 'utf8')) as { authors: Record<string, unknown> };
+    const filed = addSigner(
+      { name: 'signer1', privateKey: KEY_B, safe: SAFE.toLowerCase(), replaces: 'ZOMI' },
+      path,
+    );
+    // The marker carries the stored spelling, not the one the user typed.
+    expect(filed).toEqual({
+      name: 'signer1',
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+      replaces: 'zomi',
+    });
+
+    const stored = readAuthors(path);
+    // The old key still signs `signer confirm`, so it stays the active one.
+    expect(stored.active).toBe('zomi');
+    // Two rows for one Safe, which no other path in this store allows.
+    expect(stored.authors.signer1).toEqual({
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+      replaces: 'zomi',
+    });
+    expect(stored.authors.zomi).toEqual({ privateKey: KEY_A, safe: SAFE, safeSource: 'given' });
+    // Byte-for-byte: the row being replaced is not touched by filing the chase.
+    expect(JSON.stringify(stored.authors.zomi)).toBe(JSON.stringify(before.authors.zomi));
+    expect(pendingReplacement(SAFE, path)).toEqual({ name: 'signer1', replaces: 'zomi' });
+    expect(pendingReplacementIn(stored, SAFE)).toEqual({ name: 'signer1', replaces: 'zomi' });
+    expect(pendingReplacement(OTHER_SAFE, path)).toBeUndefined();
+  });
+
+  it('settles across all four outcomes', () => {
+    const path = chase();
+
+    // none: a Safe nothing is chasing.
+    expect(settleReplacement(OTHER_SAFE, [], path)).toBe('none');
+
+    // pending: the old key still owns the Safe, the newcomer does not.
+    expect(settleReplacement(SAFE, [EOA_A], path)).toBe('pending');
+    // collision: neither key is an owner — the old one left the list without
+    // the swap putting the new one there, so waiting cannot move it on.
+    expect(settleReplacement(SAFE, [], path)).toBe('collision');
+    // Nothing moved: both rows, the marker and the active slot are as filed.
+    expect(readAuthors(path)).toEqual({
+      active: 'zomi',
+      authors: {
+        zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' },
+        signer1: { privateKey: KEY_B, safe: SAFE, safeSource: 'given', replaces: 'zomi' },
+      },
+    });
+
+    // collision: both keys are owners — the caller warns, the store is untouched.
+    expect(settleReplacement(SAFE, [EOA_A, EOA_B], path)).toBe('collision');
+    expect(readAuthors(path).authors.zomi).toBeDefined();
+    expect(readAuthors(path).authors.signer1?.replaces).toBe('zomi');
+    expect(readAuthors(path).active).toBe('zomi');
+
+    // settled: the new key owns it, the old one does not.
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('settled');
+    const settled = readAuthors(path);
+    expect(settled.authors.zomi).toBeUndefined();
+    expect(settled.authors.signer1).toEqual({
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+    });
+    expect(settled.active).toBe('signer1');
+    // Settled is a state, not a step: a second call finds nothing to settle.
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('none');
+  });
+
+  it('decides on the keys, not on the addresses the rows hold', () => {
+    const path = chase();
+    // These are the two EOAs of the stored keys; a row's `safe` says nothing
+    // about which of them the Safe knows.
+    expect(authorEoa(KEY_B)).toBe(EOA_B);
+    // Owner lists arrive in whatever case the call site used.
+    const shouted = EOA_A.toUpperCase().replace('0X', '0x') as Address;
+    expect(settleReplacement(SAFE, [shouted, EOA_B], path)).toBe('collision');
+    // An unreadable key is no evidence: the row stays pending.
+    writeAuthors(
+      {
+        active: 'zomi',
+        authors: {
+          zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' },
+          signer1: { privateKey: '0xnot-a-key', safe: SAFE, safeSource: 'given', replaces: 'zomi' },
+        },
+      },
+      path,
+    );
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('pending');
+  });
+
+  it('refuses a second chase for one Safe', () => {
+    const path = chase();
+    expect(() =>
+      addSigner({ name: 'signer2', privateKey: KEY_C, safe: SAFE, replaces: 'zomi' }, path),
+    ).toThrow(/already has a pending replacement under author 'signer1'/);
+    // Not even without naming the row it would replace: one Safe, one chase.
+    expect(() => addSigner({ name: 'signer2', privateKey: KEY_C, safe: SAFE }, path)).toThrow(
+      /already has a pending replacement/,
+    );
+    expect(readAuthors(path).authors.signer2).toBeUndefined();
+  });
+
+  it('refuses a replacement of a row that is missing or holds another Safe', () => {
+    const path = localPath('bad-replacement');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+
+    expect(() =>
+      addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'ghost' }, path),
+    ).toThrow(/no author 'ghost' to replace/);
+    expect(() =>
+      addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'signer0' }, path),
+    ).toThrow(/no author 'signer0' to replace/);
+
+    // A derived row holds no Safe, so it cannot be the row this Safe is taken from.
+    writeAuthors(store('bob', { bob: { privateKey: KEY_C, safe: null } }), path);
+    expect(() =>
+      addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'bob' }, path),
+    ).toThrow(/filed for safe \(none\), not/);
+
+    // A row filed for another Safe is a different author id, not this one.
+    writeAuthors(
+      store('signer0', {
+        signer0: { privateKey: KEY_A, safe: OTHER_SAFE, safeSource: 'given' },
+      }),
+      path,
+    );
+    expect(() =>
+      addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'signer0' }, path),
+    ).toThrow(/filed for safe 0x.*, not 0x/);
+
+    // And a chase cannot replace a chase: the head of the chain must be an owner.
+    const chased = chase();
+    expect(() =>
+      addSigner({ name: 'signer3', privateKey: KEY_C, safe: SAFE, replaces: 'signer1' }, chased),
+    ).toThrow(/is itself a pending replacement/);
+    expect(readAuthors(path).authors.signer1).toBeUndefined();
+  });
+
+  it('prints a pending row as pending, never as an owner', () => {
+    const path = chase();
+    const rows = authorRows(readAuthors(path));
+    expect(rows).toEqual([
+      {
+        name: 'zomi',
+        eoa: EOA_A,
+        safe: SAFE,
+        active: true,
+        ownership: 'owner',
+      },
+      {
+        name: 'signer1',
+        eoa: EOA_B,
+        safe: SAFE,
+        active: false,
+        ownership: 'pending',
+        replaces: 'zomi',
+      },
+    ]);
+    const stored = readAuthors(path);
+    expect(rows.map((row) => row.ownership)).toEqual(['owner', 'pending']);
+    expect(stored.authors.zomi?.replaces).toBeUndefined();
+  });
+
+  it('settles on ownership alone when the replaced row is missing', () => {
+    // `author rm` of the old row used to be allowed, so a store in the wild can
+    // hold a chase whose target is gone: the marker has to clear on the chain
+    // fact, or it never clears at all.
+    const path = localPath('chase-missing');
+    writeAuthors(
+      {
+        active: 'zomi-next',
+        authors: {
+          'zomi-next': { privateKey: KEY_B, safe: SAFE, safeSource: 'given', replaces: 'ghost' },
+        },
+      },
+      path,
+    );
+
+    // Nobody listed as an owner: the chase cannot settle, and it is not pending
+    // (there is no old key left to move), so the caller warns.
+    expect(settleReplacement(SAFE, [EOA_A], path)).toBe('collision');
+    // The newcomer owns the Safe and there is no old row to retire: settled.
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('settled');
+    expect(readAuthors(path)).toEqual({
+      active: 'zomi-next',
+      authors: { 'zomi-next': { privateKey: KEY_B, safe: SAFE, safeSource: 'given' } },
+    });
+  });
+
+  it('holds both rows of a rotation against `author rm`', () => {
+    const path = chase();
+    const stored = readAuthors(path);
+
+    // The row being replaced may be the last stored copy of the key that owns
+    // the Safe, and the pending row the last copy of the key the swap adds.
+    expect(removalHoldIn(stored, 'zomi')).toMatch(/being replaced|still holds a key/);
+    expect(removalHoldIn(stored, 'zomi')).toContain('s2s signer rotate');
+    expect(removalHoldIn(stored, 'signer1')).toContain('pending replacement');
+    expect(removalHoldIn(stored, 'signer1')).toContain('s2s signer confirm');
+    // A row outside the rotation is removable, and an unknown name is not a hold.
+    expect(removalHoldIn(stored, 'ghost')).toBeUndefined();
+    writeAuthors(
+      { active: 'zomi', authors: { ...stored.authors, bob: { privateKey: KEY_C, safe: null } } },
+      path,
+    );
+    expect(removalHoldIn(readAuthors(path), 'bob')).toBeUndefined();
+    // Settled, the row is an ordinary one again.
+    settleReplacement(SAFE, [EOA_B], path);
+    expect(removalHoldIn(readAuthors(path), 'signer1')).toBeUndefined();
+  });
+});
+
+describe('a rotation refuses `author rm`', () => {
+  const SAFE = getAddress('0xabcd00000000000000000000000000000000def1');
+
+  const rmStore = (): string => {
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      storePath(),
+    );
+    addSigner({ name: 'zomi-next', privateKey: KEY_B, safe: SAFE, replaces: 'zomi' }, storePath());
+    return storePath();
+  };
+
+  it('refuses the chased row and the pending row, by code', async () => {
+    rmStore();
+    const codes: (string | undefined)[] = [];
+    for (const name of ['zomi', 'zomi-next']) {
+      try {
+        await authorRm.run(capture().out, parseArgs([name]));
+        codes.push('no refusal');
+      } catch (err) {
+        codes.push((err as { code?: string }).code);
+      }
+    }
+    expect(codes).toEqual(['rotation_pending', 'rotation_pending']);
+    expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['zomi', 'zomi-next']);
+  });
+
+  it('removes either row with --force, and warns what that costs', async () => {
+    rmStore();
+    const sink = capture();
+    await authorRm.run(sink.out, parseArgs(['zomi-next', '--force']));
+
+    expect(sink.results[0]).toMatchObject({ action: 'author.rm', name: 'zomi-next' });
+    expect(sink.warnings[0]).toContain('rotation in flight');
+    expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['zomi']);
+  });
+});
+
 describe('store command registry', () => {
   it('is the table cli.ts dispatches before the context is built', () => {
     // cli.ts looks these up by name and runs them without buildContext; the
@@ -613,8 +903,8 @@ describe('author commands', () => {
       action: 'author.list',
       active: 'zomi',
       authors: [
-        { name: 'zomi', eoa: EOA_A, safe: '0xSafe', active: true },
-        { name: 'bob', eoa: authorEoa(KEY_B), safe: null, active: false },
+        { name: 'zomi', eoa: EOA_A, safe: '0xSafe', active: true, ownership: 'owner' },
+        { name: 'bob', eoa: authorEoa(KEY_B), safe: null, active: false, ownership: 'owner' },
       ],
     });
   });
@@ -632,7 +922,9 @@ describe('author commands', () => {
     expect(sink.results[0]).toEqual({
       action: 'author.list',
       active: 'signer1',
-      authors: [{ name: 'signer1', eoa: authorEoa(KEY_B), safe: given, active: true }],
+      authors: [
+        { name: 'signer1', eoa: authorEoa(KEY_B), safe: given, active: true, ownership: 'owner' },
+      ],
     });
   });
 
@@ -648,5 +940,34 @@ describe('author commands', () => {
       active: 'bob',
     });
     expect(Object.keys(readAuthors(path).authors)).toEqual(['bob']);
+  });
+
+  it('lists the rows of a rotation as pending, with the row each one replaces', async () => {
+    const path = storePath();
+    const safe = getAddress('0xabcd00000000000000000000000000000000def1');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe, safeSource: 'given' } }),
+      path,
+    );
+    addSigner({ name: 'zomi-next', privateKey: KEY_B, safe, replaces: 'zomi' }, path);
+    const sink = capture();
+    await authorList.run(sink.out, parseArgs([]));
+
+    expect(sink.results[0]).toMatchObject({
+      active: 'zomi',
+      authors: [
+        { name: 'zomi', eoa: EOA_A, active: true, ownership: 'owner' },
+        {
+          name: 'zomi-next',
+          eoa: authorEoa(KEY_B),
+          active: false,
+          ownership: 'pending',
+          replaces: 'zomi',
+        },
+      ],
+    });
+    // The table has to distinguish the two rows for one Safe: `signer rotate`
+    // sends the user here to choose between them.
+    expect(sink.human[0]).toContain('(pending)  → replaces zomi');
   });
 });

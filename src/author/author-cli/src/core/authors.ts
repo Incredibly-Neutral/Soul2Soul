@@ -22,6 +22,14 @@
 // private key belongs to exactly one pet name (the same identity under two
 // names would be two rows that can never diverge).
 //
+// `replaces` is OPTIONAL and marks a row as FILED BUT NOT YET AN OWNER: the key
+// is waiting to take over a Safe from the row it names (`s2s signer rotate`).
+// Such a row shares the Safe address with the row it replaces for as long as the
+// swap is unconfirmed, so the "one Safe, one author" rule has exactly this one
+// exception. The marker is cleared by `settleReplacement` once the chain says
+// the new key is an owner and the old one is not; until then the row is printed
+// as pending, never as an owner.
+//
 // The store sits in the key-precedence chain between the project config and the
 // user config (see core/config.ts), which is what makes `author switch` a
 // one-command identity switch: no env var, no file edit.
@@ -92,6 +100,12 @@ export interface AuthorRecord {
    * record reads the same with or without it, so no migration is needed.
    */
   contracts?: AuthorContractsRecord;
+  /**
+   * The pet name of the row this key is meant to replace: a rotation that has
+   * been proposed but not yet executed. Present only on a row that is filed but
+   * is not an owner yet; `settleReplacement` clears it the moment it is one.
+   */
+  replaces?: string;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -170,12 +184,16 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
   const declared = record.safeSource;
   const safeSource = parseSafeSource(declared);
   const unreadable = declared !== undefined && safeSource === undefined ? declared : undefined;
+  const replaces = record.replaces;
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
     ...(safeSource === undefined ? {} : { safeSource }),
     ...(unreadable === undefined ? {} : { unreadableSafeSource: unreadable }),
     ...(contracts === undefined ? {} : { contracts }),
+    ...(typeof replaces === 'string' && replaces.trim().length > 0
+      ? { replaces: replaces.trim() }
+      : {}),
   };
 }
 
@@ -327,6 +345,52 @@ export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath(
   return path;
 }
 
+/**
+ * Whether this row is filed but not yet an owner: it is waiting on a rotation.
+ * A pending row is never described as an owner, and never holds the active slot
+ * on the strength of the Safe it shares with the row it replaces.
+ */
+export function isPendingReplacement(record: AuthorRecord | undefined): boolean {
+  return record?.replaces !== undefined;
+}
+
+/**
+ * What a row is, for a caller printing it: `pending` until the chain moves the
+ * share across, `owner` once it has (or for a row that never chased one).
+ */
+export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' {
+  return isPendingReplacement(record) ? 'pending' : 'owner';
+}
+
+/** One row of `author list`, with the pending marker taken into account. */
+export interface AuthorRow {
+  name: string;
+  eoa: string | null;
+  safe: string | null;
+  active: boolean;
+  /** `pending` for a row filed by `replaces`; `owner` for every other row. */
+  ownership: 'owner' | 'pending';
+  /** The row it intends to replace; absent on an owner row. */
+  replaces?: string;
+}
+
+/**
+ * Every stored author as `author list` prints it. A row carrying `replaces` is
+ * marked `pending` and keeps its marker: printing it as an owner would tell the
+ * user a key signs for a Safe it is not an owner of, and `s2s signer confirm …`
+ * on that belief cannot work.
+ */
+export function authorRows(store: AuthorsStore): AuthorRow[] {
+  return Object.entries(store.authors).map(([name, record]) => ({
+    name,
+    eoa: authorEoa(record.privateKey) ?? null,
+    safe: record.safe,
+    active: name === store.active,
+    ownership: ownershipOf(record),
+    ...(record.replaces === undefined ? {} : { replaces: record.replaces }),
+  }));
+}
+
 /** The active author's record, or undefined when there is no usable active entry. */
 export function activeAuthorRecord(data: AuthorsStore): ActiveAuthor | undefined {
   const name = data.active;
@@ -402,6 +466,65 @@ export interface AddSignerInput {
   privateKey: string;
   /** The existing Safe. Checked as an address and stored checksummed. */
   safe: string;
+  /**
+   * The pet name of the row this key is meant to replace (`s2s signer rotate`).
+   * The row is filed WITHOUT the active slot and WITHOUT being an owner: it is
+   * a chase, not a membership, until `settleReplacement` sees the swap land.
+   */
+  replaces?: string;
+}
+
+/** A row filed for a Safe that is waiting to become one of its owners. */
+export interface PendingReplacement {
+  name: string;
+  replaces: string;
+}
+
+/**
+ * Every row of `data` filed for `safe` that still carries `replaces`. More than
+ * one is refused by `addSigner` (one chase at a time); a hand-edited file can
+ * hold two, and then the first in file order is the one that settles.
+ */
+function pendingRowsIn(data: AuthorsStore, safe: Address): ActiveAuthor[] {
+  const needle = safe.toLowerCase();
+  return Object.entries(data.authors)
+    .filter(([, record]) => record.replaces !== undefined && record.safe?.toLowerCase() === needle)
+    .map(([name, record]) => ({ name, ...record }));
+}
+
+/** The row filed to replace `name`, while its swap is still queued. */
+function chaserOf(data: AuthorsStore, name: string): ActiveAuthor | undefined {
+  const needle = name.toLowerCase();
+  for (const [candidate, record] of Object.entries(data.authors)) {
+    if (record.replaces?.toLowerCase() === needle) {
+      return { name: candidate, ...record };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The row filed for `safe` that is waiting to become an owner of it, read from
+ * `data`: the pet name plus the row it intends to replace.
+ */
+export function pendingReplacementIn(
+  data: AuthorsStore,
+  safe: Address,
+): PendingReplacement | undefined {
+  const row = pendingRowsIn(data, safe)[0];
+  if (!row?.replaces) return undefined;
+  return { name: row.name, replaces: row.replaces };
+}
+
+/**
+ * `pendingReplacementIn` against the store on disk: the pending row for `safe`,
+ * or undefined when nothing is chasing it.
+ */
+export function pendingReplacement(
+  safe: Address,
+  path: string = authorsFilePath(),
+): PendingReplacement | undefined {
+  return pendingReplacementIn(readAuthors(path), safe);
 }
 
 /**
@@ -424,7 +547,7 @@ export interface AddSignerInput {
  * afterwards, by `s2s signer queue`), so the writes that need it check it there.
  */
 export function addSigner(input: AddSignerInput, path: string = authorsFilePath()): ActiveAuthor {
-  const { name, privateKey, safe } = input;
+  const { name, privateKey, safe, replaces } = input;
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
   }
@@ -449,10 +572,42 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
       `that private key already belongs to author '${keyOwner}' — one key, one author`,
     );
   }
+  // The row this key is meant to replace: it has to exist, it has to be filed
+  // for this Safe, and it cannot itself be a chase (a chain of pending rows has
+  // no owner at its head for `settleReplacement` to test against).
+  const target = replaces === undefined ? undefined : findAuthor(store, replaces);
+  if (replaces !== undefined && !target) {
+    throw new UsageError(
+      `no author '${replaces}' to replace — \`s2s author list\` shows the rows that exist`,
+    );
+  }
+  if (target && target.safe?.toLowerCase() !== address.toLowerCase()) {
+    throw new UsageError(
+      `author '${target.name}' is filed for safe ${target.safe ?? '(none)'}, not ${address} — a replacement names the row that holds the Safe it is taking over`,
+    );
+  }
+  if (target?.replaces !== undefined) {
+    throw new UsageError(
+      `author '${target.name}' is itself a pending replacement (→ replaces '${target.replaces}') — name the row that holds the Safe`,
+    );
+  }
+
+  // One chase at a time: a second pending row for this Safe would mean two keys
+  // being swapped in at once, and `settleReplacement` could not say which one
+  // the chain landed.
+  const chasing = pendingReplacementIn(store, address);
+  if (chasing) {
+    throw new UsageError(
+      `safe ${address} already has a pending replacement under author '${chasing.name}' (→ replaces '${chasing.replaces}') — one chase at a time; \`s2s author rm ${chasing.name}\` drops it`,
+    );
+  }
+
   const safeOwner = Object.entries(store.authors).find(
     ([, record]) => record.safe?.toLowerCase() === address.toLowerCase(),
   );
-  if (safeOwner) {
+  // A rotation files a SECOND row for one Safe on purpose: the row being
+  // replaced is the only row allowed to hold that address alongside this one.
+  if (safeOwner && safeOwner[0] !== target?.name) {
     throw new UsageError(
       `safe ${address} is already filed under author '${safeOwner[0]}' — one Safe, one author`,
     );
@@ -462,9 +617,110 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
     privateKey: normalizeKey(privateKey),
     safe: address,
     safeSource: 'given',
+    ...(target ? { replaces: target.name } : {}),
   };
-  writeAuthors({ active: name, authors: { ...store.authors, [name]: record } }, path);
+  // A replacement row is filed WITHOUT the active slot. The old key is still the
+  // Safe's owner, and `s2s signer confirm` runs with whatever key is active —
+  // so activating the newcomer here would hand the confirm to a key the chain
+  // does not yet recognise as an owner, and the queue would wait on a signature
+  // that cannot count. The slot moves in `settleReplacement`, on the evidence.
+  const active = target ? store.active : name;
+  writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
   return { name, ...record };
+}
+
+/** What `settleReplacement` found, and therefore what the caller may say. */
+export type ReplacementOutcome = 'none' | 'pending' | 'settled' | 'collision';
+
+/**
+ * The moment a filed replacement becomes an owner, decided from the on-chain
+ * owner list and nothing else.
+ *
+ * `none` — no row is chasing this Safe. `pending` — the old key is still an
+ * owner and the new one is not: the swap has not landed, both rows stay and the
+ * chase goes on. `settled` — the new key is an owner and the old one is not: the
+ * old row is removed, the marker cleared and the newcomer made active, in one
+ * write. `collision` — both keys are owners, or neither is: nothing is touched
+ * and the caller warns, because no amount of waiting moves either state on.
+ *
+ * Ownership is the whole test, and a replaced row that is missing from the file
+ * is no old key at all: the chase settles as soon as the newcomer is an owner,
+ * and is a collision until then. (A missing row used to pin the marker at
+ * `pending` for ever — nothing else can clear it.) Both EOAs are derived from
+ * the stored private keys; a row whose key cannot be derived is no evidence at
+ * all, so it stays `pending` rather than resolving on a name alone.
+ */
+export function settleReplacement(
+  safe: Address,
+  owners: readonly Address[],
+  path: string = authorsFilePath(),
+): ReplacementOutcome {
+  const store = readAuthors(path);
+  const chasing = pendingRowsIn(store, safe)[0];
+  if (!chasing?.replaces) return 'none';
+
+  const newEoa = authorEoa(chasing.privateKey);
+  if (!newEoa) return 'pending';
+  // The row being replaced may be gone from the file (`author rm` under an
+  // older build, a hand edit). Then there is no old key in this store, so the
+  // old half of the test is answered `no` and the newcomer decides alone.
+  const oldRow = findAuthor(store, chasing.replaces);
+  const oldEoa = oldRow ? authorEoa(oldRow.privateKey) : undefined;
+  if (oldRow && !oldEoa) return 'pending';
+
+  const isOwner = (eoa: Address): boolean =>
+    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
+  const newIsOwner = isOwner(newEoa);
+  const oldIsOwner = oldEoa !== undefined && isOwner(oldEoa);
+
+  if (newIsOwner && oldIsOwner) return 'collision';
+  // Neither key is an owner: the old one left the list without the swap
+  // putting the new one there, so waiting is not a plan — the caller says so.
+  if (!newIsOwner && !oldIsOwner) return 'collision';
+  if (oldIsOwner) return 'pending';
+
+  // The row becomes an ordinary owned row: marker gone, everything else kept.
+  const settled: AuthorRecord = {
+    privateKey: chasing.privateKey,
+    safe: chasing.safe,
+    ...(chasing.safeSource === undefined ? {} : { safeSource: chasing.safeSource }),
+    ...(chasing.unreadableSafeSource === undefined
+      ? {}
+      : { unreadableSafeSource: chasing.unreadableSafeSource }),
+    ...(chasing.contracts === undefined ? {} : { contracts: chasing.contracts }),
+  };
+  const authors: Record<string, AuthorRecord> = {};
+  for (const [author, record] of Object.entries(store.authors)) {
+    if (author !== oldRow?.name) authors[author] = record;
+  }
+  authors[chasing.name] = settled;
+  writeAuthors({ active: chasing.name, authors }, path);
+  return 'settled';
+}
+
+/**
+ * Why `name` must not leave the store yet, or undefined when it may.
+ *
+ * A rotation puts two rows in the file and only one of them is a key for the
+ * Safe at a time: the row being replaced still holds the key that owns the Safe
+ * until the swap executes, and the pending row holds the only copy of the key
+ * that swap puts there. Removing either before the chain answers cannot be
+ * undone — and nothing in the store can say whether the swap executed — so
+ * `author rm` refuses both and names where the answer comes from.
+ */
+export function removalHoldIn(data: AuthorsStore, name: string): string | undefined {
+  const row = findAuthor(data, name);
+  if (!row) return undefined;
+  const settle =
+    'finish the queued swap with `s2s signer confirm`, or run `s2s signer rotate` on that Safe to settle it';
+  if (row.replaces !== undefined) {
+    return `author '${row.name}' is the pending replacement for '${row.replaces}' and holds the only copy of the key that swap puts on the Safe — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
+  }
+  const chaser = chaserOf(data, row.name);
+  if (chaser) {
+    return `author '${row.name}' still holds a key that owns that Safe, and '${chaser.name}' is filed to replace it — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
+  }
+  return undefined;
 }
 
 /**

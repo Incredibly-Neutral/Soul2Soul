@@ -9,7 +9,8 @@
 // Two halves, deliberately separate:
 //
 //   the hashing (computeSafeTxHash, packVerifiedSignatures,
-//   addOwnerWithThresholdData, execTransactionArgs) is pure and offline. A wrong
+//   addOwnerWithThresholdData, swapOwnerData, predecessorOf,
+//   execTransactionArgs) is pure and offline. A wrong
 //   hash or a wrong signature encoding fails on chain with no explanation, so it
 //   is pinned by tests rather than discovered in production.
 //
@@ -27,6 +28,7 @@
 import {
   concatHex,
   encodeFunctionData,
+  getAddress,
   hashMessage,
   hashTypedData,
   recoverAddress,
@@ -184,6 +186,57 @@ export function addOwnerWithThresholdData(owner: Address, threshold: number): He
     abi: safeAbi,
     functionName: 'addOwnerWithThreshold',
     args: [owner, BigInt(threshold)],
+  });
+}
+
+// ===========================================================================
+// The owner list
+// ===========================================================================
+
+/**
+ * The Safe's owner list is a linked list keyed by owner, and it is closed by a
+ * sentinel rather than by a null: the first owner's `prev` points here, and the
+ * last owner's `next` points back here. `swapOwner` and `removeOwner` take a
+ * predecessor because a mapping has no reverse lookup, and this is the
+ * predecessor of the first owner.
+ */
+export const SENTINEL_OWNERS: Address = '0x0000000000000000000000000000000000000001';
+
+/**
+ * The owner that precedes `owner` in the Safe's linked list — the one argument
+ * `swapOwner` needs and the chain will not hand back.
+ *
+ * `owners` must be in list order, which is the order `getOwners()` returns: the
+ * successor of `owners[i]` holds `owners[i]` as its `prev`. The first entry has
+ * no predecessor inside the list, so its predecessor is `SENTINEL_OWNERS`.
+ * Matching is case-insensitive, so a checksum-less address finds its own entry,
+ * and the answer is checksummed because it goes straight into calldata. An
+ * owner the list does not hold is a usage error, named: swapping it would
+ * revert `GS005`, which says nothing about which address was wrong.
+ */
+export function predecessorOf(owners: readonly Address[], owner: Address): Address {
+  const index = owners.findIndex((candidate) => candidate.toLowerCase() === owner.toLowerCase());
+  if (index < 0) {
+    throw new UsageError(`${owner} is not an owner of this Safe, so there is nothing to swap`);
+  }
+  if (index === 0) return SENTINEL_OWNERS;
+  const previous = owners[index - 1];
+  if (previous === undefined) {
+    throw new UsageError(`no owner precedes ${owner} in the Safe's owner list`);
+  }
+  return getAddress(previous);
+}
+
+/**
+ * `swapOwner(prevOwner, oldOwner, newOwner)` — the calldata `signer rotate`
+ * proposes. The threshold is not a parameter: the Safe keeps it, which is why a
+ * rotation is a swap and not a remove followed by an add.
+ */
+export function swapOwnerData(prevOwner: Address, oldOwner: Address, newOwner: Address): Hex {
+  return encodeFunctionData({
+    abi: safeAbi,
+    functionName: 'swapOwner',
+    args: [prevOwner, oldOwner, newOwner],
   });
 }
 
