@@ -325,7 +325,9 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   project layers. The two file layers still resolve but are **deprecated** — see
   [Config file](#config-file-bring-your-own-infra) for the one-time warning and removal.
   `CliConfig.author` reports which layer won, with the pet name and the stored Safe only for the
-  store layer.
+  store layer. The `signer` group resolves the key it retires by this same order — an owner key
+  that lives only in `S2S_PRIVATE_KEY` or the project file can rotate — and reaches the store's
+  rows for that Safe last, never instead. See [SPEC-author-signers](SPEC-author-signers.md).
 - **The env shadows the store, loudly.** When `S2S_PRIVATE_KEY` is set and the active stored author
   holds a different key, `buildContext` warns on stderr — `S2S_PRIVATE_KEY overrides active author
   'zomi'` — because a shell export silently overriding `author switch` is invisible in every
@@ -604,6 +606,7 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 { action: 'author.list'; active: string | null;
   authors: { name: string; eoa: string | null; safe: string | null; active: boolean;
              ownership: 'owner' | 'pending';   // 'pending' = filed by `signer rotate`
+                                               // (a `signer add` row is 'owner' but inactive)
              replaces?: string }[] }           // the row it intends to replace
 
 // s2s author rm <pet-name> [--json] — forget an author

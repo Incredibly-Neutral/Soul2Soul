@@ -52,7 +52,17 @@
 // ============================================================================
 
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -60,7 +70,7 @@ import type { Address, Hex } from 'viem';
 import { getAddress, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 
 /** The author-contracts addresses installed on an author's Safe. */
 export interface AuthorContractsRecord {
@@ -391,6 +401,69 @@ export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath(
 }
 
 /**
+ * The store's exclusive lock: `<store>.lock`, created with `wx`.
+ *
+ * `writeAuthors` is atomic per write, but every mutation is a read-modify-write
+ * of the whole file, so two commands racing lose one of the two updates — the
+ * duplicate-name check passes in both, both file a row, and one printed key is
+ * gone with the overwritten copy of the file. The lock covers the read and the
+ * write together. There is no timeout: a lock left by a killed process is
+ * reported with its path, and the operator deletes it, because guessing how long
+ * another command may legitimately take is how a live writer gets its file
+ * overwritten.
+ */
+export function storeLockPath(path: string): string {
+  return `${path}.lock`;
+}
+
+/** Paths this process already holds, so a nested call re-enters instead of
+ * deadlocking against its own lock. */
+const heldLocks = new Set<string>();
+
+/**
+ * Run `fn` holding the store lock at `path`.
+ *
+ * The lock is created beside the store and removed on every exit, including a
+ * throw, so a refusal leaves nothing behind. Re-entrant within the process:
+ * a command may file two rows in one run.
+ */
+export function withStoreLock<T>(path: string, fn: () => T): T {
+  if (heldLocks.has(path)) return fn();
+  mkdirSync(dirname(path), { recursive: true });
+  const lock = storeLockPath(path);
+  let fd: number;
+  try {
+    fd = openSync(lock, 'wx', 0o600);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new CliError(
+        `another s2s command is writing the author store at ${path} — the lock ${lock} exists; let that command finish, and delete the lock only once no s2s command is running`,
+        1,
+        'store_locked',
+      );
+    }
+    throw err;
+  }
+  heldLocks.add(path);
+  try {
+    writeSync(fd, `${String(process.pid)}\n`);
+    return fn();
+  } finally {
+    heldLocks.delete(path);
+    try {
+      closeSync(fd);
+    } catch {
+      // already closed
+    }
+    try {
+      rmSync(lock, { force: true });
+    } catch {
+      // the lock is advisory; a leftover file is reported by the next run
+    }
+  }
+}
+
+/**
  * Whether this row is filed but not yet an owner: it is waiting on a rotation.
  * A pending row is never described as an owner, and never holds the active slot
  * on the strength of the Safe it shares with the row it replaces.
@@ -523,6 +596,18 @@ export interface AddSignerInput {
    * filed only: a swap that has to be proposed later, by `setPendingProposal`.
    */
   proposal?: Hex;
+  /**
+   * Whether the row takes the active slot. Defaults to true, which is right for
+   * a key that is already an owner: the store's active row is what every command
+   * signs with, and the key that just proved ownership should be it.
+   *
+   * `s2s signer add` on a *joining* key passes false: that key is not an owner
+   * until an owner posts the proposal and the swap… (there is no swap for an
+   * add) executes. Making it active would point every later command at a key the
+   * chain does not recognise, and `signer confirm` would refuse it `not_owner`
+   * with no hint that the active slot is the reason.
+   */
+  activate?: boolean;
 }
 
 /** A row filed for a Safe that is waiting to become one of its owners. */
@@ -610,6 +695,12 @@ export function pendingReplacement(
  * afterwards, by `s2s signer queue`), so the writes that need it check it there.
  */
 export function addSigner(input: AddSignerInput, path: string = authorsFilePath()): ActiveAuthor {
+  // Read-modify-write of the whole file: the uniqueness checks below are only
+  // checks if no other process writes between them and the write.
+  return withStoreLock(path, () => addSignerLocked(input, path));
+}
+
+function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
   const { name, privateKey, safe, replaces } = input;
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
@@ -691,12 +782,12 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
     ...(target ? { replaces: target.name } : {}),
     ...(proposal === undefined ? {} : { proposal }),
   };
-  // A replacement row is filed WITHOUT the active slot. The old key is still the
-  // Safe's owner, and `s2s signer confirm` runs with whatever key is active —
-  // so activating the newcomer here would hand the confirm to a key the chain
-  // does not yet recognise as an owner, and the queue would wait on a signature
-  // that cannot count. The slot moves in `settleReplacement`, on the evidence.
-  const active = target ? store.active : name;
+  // A replacement row is filed WITHOUT the active slot, and so is a joining key
+  // the caller marked `activate: false`. The active row is what every command
+  // signs with, so activating a key that is not an owner yet would hand
+  // `s2s signer confirm` a key the chain does not recognise. The slot moves in
+  // `settleReplacement`, on the evidence, or stays where it was.
+  const active = target !== undefined || input.activate === false ? store.active : name;
   writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
   return { name, ...record };
 }
@@ -720,6 +811,10 @@ export function setPendingProposal(
   safeTxHash: Hex,
   path: string = authorsFilePath(),
 ): ActiveAuthor {
+  return withStoreLock(path, () => setPendingProposalLocked(name, safeTxHash, path));
+}
+
+function setPendingProposalLocked(name: string, safeTxHash: Hex, path: string): ActiveAuthor {
   const store = readAuthors(path);
   const key = findAuthorName(store, name);
   const current = key === undefined ? undefined : store.authors[key];
@@ -767,6 +862,16 @@ export function settleReplacement(
   safe: Address,
   owners: readonly Address[],
   path: string = authorsFilePath(),
+): ReplacementOutcome {
+  // The settle path removes a row and activates another in one write; a second
+  // command holding a copy of the store would write that removal back.
+  return withStoreLock(path, () => settleReplacementLocked(safe, owners, path));
+}
+
+function settleReplacementLocked(
+  safe: Address,
+  owners: readonly Address[],
+  path: string,
 ): ReplacementOutcome {
   const store = readAuthors(path);
   const chasing = pendingRowsIn(store, safe)[0];

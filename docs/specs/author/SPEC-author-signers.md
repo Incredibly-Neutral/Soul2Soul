@@ -52,16 +52,22 @@ required.
    there is simply no Safe there. This command proposes an owner of a Safe that is already deployed,
    and it never deploys one.
 3. An EOA that is already an owner is a usage error, and nothing is filed.
-4. The key is filed with `addSigner({name, privateKey, safe})`, which marks the record
-   `safeSource: 'given'` and activates it. The default name is `signer-<first 6 hex of the new
-   EOA>`; a taken name, a key filed under another author, or a Safe already filed under another
-   author is a usage error from `addSigner`, thrown before the store is written.
+4. The key is filed with `addSigner({name, privateKey, safe, activate: false})`, which marks the
+   record `safeSource: 'given'` and leaves it **inactive**: until an owner posts the proposal and
+   the Safe executes it, the joining key is not an owner, and an active slot pointing at it would
+   make every later `signer confirm` sign with a key the chain rejects. The active row is whatever
+   it was, or `null` when the store was empty, and the result says so with `activated: false`. The
+   default name is `signer-<first 6 hex of the new EOA>`; a taken name, a key filed under another
+   author, or a Safe already filed under another author is a usage error from `addSigner`, thrown
+   before the store is written.
 5. The proposal is `addOwnerWithThreshold(newEoa, threshold)` where the threshold is the Safe's
    **current** one, read from the chain and never raised: one more owner must not change how many
    signatures a transaction needs. The nonce is the Safe's, and the proposal is signed by an owner
    key this machine already signs with (the config/env key on the owner list), never by the key
    being added — the service files a proposal's signature as its sender's confirmation and refuses
-   a sender that is not an owner. A machine with no such key posts nothing and reports the call.
+   a sender that is not an owner. A machine with no such key posts nothing and reports the call —
+   its `{to, data}`, its nonce, and the fact that an owner has to post it from their own machine:
+   nothing in this build queues or retries it.
 6. The service is told about the Safe when it 404s (`register`), then given the proposal.
 
 **The key survives a failed proposal.** Filing happens before the service is touched. When
@@ -75,12 +81,13 @@ JSON:
 ```json
 { "action": "signer.add", "name": "signer-2b5ad5", "eoa": "0x…", "safe": "0x…",
   "threshold": 2, "owners": ["0x…"], "nonce": 7, "safeTxHash": "0x…", "proposed": true,
-  "safeTx": { "to": "0x…", "data": "0x…" }, "file": "…/authors.json",
+  "safeTx": { "to": "0x…", "data": "0x…" }, "file": "…/authors.json", "activated": false,
   "note": "…", "mnemonic": "…", "privateKey": "0x…" }
 ```
 
 `note` is present only on failure; `mnemonic` whenever a phrase was resolved or made;
-`privateKey` only when the run generated one, as `author new` does.
+`privateKey` only when the run generated one, as `author new` does. `activated` is always `false`:
+the field exists so a caller can tell "filed" from "in use", and it never becomes `true` here.
 
 ## `signer rotate [<safe>]`
 
@@ -93,8 +100,10 @@ for a signature stay as they are.
 again on the command line would be a third copy of one fact. With no argument the target is the
 active row's `safe` when that row's key is on the Safe's owner list; failing that, the Safe a pending
 replacement row is filed for (which is where a retry lands); failing that, a usage error naming
-`<safe>`. The positional stays as the override for a machine holding rows for several Safes, and
-`--help` says so.
+`<safe>`. An active row whose Safe has no bytecode is `safe_not_deployed`, naming that Safe and the
+row that selected it — the address is chosen for the user here, so "does not own" would be a false
+accusation. The positional stays as the override for a machine holding rows for several Safes, and
+`--help` says so. More than one positional is a usage error: `rotate` swaps one key on one Safe.
 
 1. **Settle, then find the old key.** The Safe's owners are read first, and `settleReplacement` is
    called before anything is decided: a rotation that already executed moves the store on here,
@@ -102,12 +111,24 @@ replacement row is filed for (which is where a retry lands); failing that, a usa
    Ownership is the whole test: a replaced row that is no longer in the file (removed by a build
    that allowed it, or hand-edited out) is no old key at all, so the chase settles the moment the
    newcomer is an owner and reports the collision before that — the marker has no other way to
-   clear. The old key is the row filed for this Safe whose stored key derives to one of its
-   owners, preferring the active row; when the active row is not one of them, the row that is wins
-   and the output names `s2s author switch <name>` (see below). No row for the Safe is a usage
-   error naming `s2s signer add <safe>`; a row whose key is not an owner is `not_owner`.
+   clear.
+
+   **Which key is the old one** follows the config precedence, not the store alone: the effective
+   key is the one `S2S_PRIVATE_KEY` or the project config supplies when it derives to an owner, and
+   only then the active row, and only then any row filed for this Safe. A key that owns the Safe and
+   lives nowhere but the environment can therefore still rotate — it is filed first, under
+   `signer-<first 6 hex>`, because a swap is recorded against the row it retires and `addSigner`
+   refuses a key that already owns the Safe. The result reports `oldKeySource` and `filedOldRow`, and
+   the human line names where the key came from. The store keeps one row per Safe, so an environment
+   key that owns the Safe while another owner's row holds it is `not_owner`, with a message naming
+   both the source and the row: this build has no way to file two owner keys against one Safe.
+
+   No row and no owner key on this machine is a usage error naming `s2s signer add <safe>`; rows
+   whose keys this build cannot derive are `not_owner` and are named (`'broken' (unreadable)`), not
+   reported as "no key filed"; rows that derive but own nothing are `not_owner` too, listing them.
 2. **Take the new key and file it inactive** — or finish the key a failed run already filed (see
-   below). A fresh key comes from `resolveKeySource`, the same resolver `author new` and `signer add`
+   below). Everything from here to the write-back runs under the store lock (below), so two rotates
+   cannot both pass the name check and leave one key unrecorded. A fresh key comes from `resolveKeySource`, the same resolver `author new` and `signer add`
    use: `--key`, `--mnemonic`, a line on stdin, else a generated BIP39 phrase printed **once**, in
    both output modes. The row is filed with `addSigner({name, privateKey, safe, replaces:
    oldName})`, which never moves the active slot: a rotation is not a `author switch` and does not
@@ -122,7 +143,9 @@ replacement row is filed for (which is where a retry lands); failing that, a usa
    executes. The old row signs whether or not it is the active one — the active slot only decides
    which key `signer confirm` signs with. The service is told about the Safe when it 404s
    (`register`), then given the proposal, and the hash it answers with is written back to the row with
-   `setPendingProposal`.
+   `setPendingProposal`. A proposal is only posted once the service has been asked what it already
+   holds at that nonce (see the retry paragraph): the store alone cannot tell a swap that never
+   left this machine from one whose reply was lost.
 
 Refusals, all before anything is filed:
 
@@ -135,6 +158,9 @@ Refusals, all before anything is filed:
 | the new EOA is already an owner | `already_owner` — a swap brings in a key that is not on the list |
 | a replacement is already **queued** | `replacement_pending`, naming the pending row and its hash, and sending the user to `s2s signer confirm <hash>` — which executes it — never to a command that drops the row: the row holds the only stored copy of the key its swap adds. A pending row with **no** `proposal` is not refused; it is finished (below) |
 | a retry is given `--key`, `--mnemonic` or a different `--name` | usage error — the filed row's key is the only copy of what that swap adds, so a retry keeps it |
+| more than one positional | usage error — one Safe at a time |
+| another process holds the store lock | `store_locked`, naming the lock file |
+| the service holds a **different** transaction at the Safe's nonce | `nonce_taken`, naming that hash and `s2s signer queue` — the swap cannot queue behind it, and adopting it would execute something else |
 | name taken, key filed elsewhere, Safe filed elsewhere | usage error from `addSigner` |
 
 **A failed proposal is finished, not re-filed.** A row with `replaces` set and no `proposal` means the
@@ -144,6 +170,15 @@ the only copy of it. A run against that Safe reuses the row — same name, same 
 `setPendingProposal`. It generates no key, prints no phrase, and says `reusing the key filed by the
 failed run`. This is why `--key`, `--mnemonic` and a different `--name` are refused there: accepting
 them would abandon the one copy of a key that may already be the Safe's next owner.
+
+**"Never queued" is checked against the service, not believed from the store.** Before reusing the
+row, `rotate` calls `service.pending(safe)` and compares the oldest queued record with the call it
+would post — nonce, `to`, `operation`, `data`, `value`. The same call means the earlier run's POST
+landed and only its reply was lost: the row adopts that `safeTxHash` (printed, `alreadyQueued: true`,
+`proposed: true`) and nothing is posted again. A different call at that nonce is `nonce_taken`, and
+the run refuses rather than posting a swap the Safe will reject or that executes in the wrong
+order. Nothing at that nonce, or a service that cannot be read, means the POST goes out; a read
+failure is a warning, because the store's row is still the right thing to propose.
 
 The record a rotation files carries `replaces`: the pet name of the row it is meant to replace.
 
@@ -184,20 +219,30 @@ JSON:
 { "action": "signer.rotate", "name": "zomi-next", "replaces": "zomi", "eoa": "0x…",
   "oldEoa": "0x…", "safe": "0x…", "threshold": 2, "owners": ["0x…"], "nonce": 7,
   "safeTxHash": "0x…", "proposed": true, "safeTx": { "to": "0x…", "data": "0x…" },
-  "reused": true, "switchTo": "zomi", "note": "…", "mnemonic": "…", "privateKey": "0x…" }
+  "oldKeySource": "env|project|store|user", "filedOldRow": "signer-7e5f45",
+  "reused": true, "alreadyQueued": true, "switchTo": "zomi", "confirmFix": "…",
+  "note": "…", "mnemonic": "…", "privateKey": "0x…" }
 ```
 
 In human output the command says what the proposal now is: the phrase, when this run made one, is
 printed once and is the only copy; the **old** key signed the proposal, so its signature is already
-in it — at threshold 1 the swap is executable as soon as the service holds it, and `s2s signer
-confirm <safeTxHash>` sends it without adding a signature; above 1 the remaining owners confirm. It
-says which command signs, and when the store's active author is not the old key (a second Safe
-rotated while another author is selected) it names `s2s author switch <oldName>` first, because
-`signer confirm` signs with the active key and nothing else. And the old key stops being an owner
-only when the swap executes, not when the proposal is filed. A retry says `reusing the key filed by
-the failed run` instead of printing a phrase. `switchTo` carries that name in the JSON, and is
-absent when the old key is already the active one; `reused` is present only on a retry. `note`,
-`mnemonic` and `privateKey` follow the rules of `signer add`.
+in it — at threshold 1 the swap is executable as soon as the service holds it, so `s2s signer
+confirm <safeTxHash>` sends it without adding a signature and there is nothing left for another
+machine to sign; above 1 the remaining owners confirm. And the old key stops being an owner only
+when the swap executes, not when the proposal is filed. A retry says `reusing the key filed by the
+failed run` instead of printing a phrase; an adopted hash says `already queued`; a key filed for an
+environment-only owner says `filed first : the owner key from S2S_PRIVATE_KEY as '<row>'`.
+
+**The advice for `confirm` names the layer that supplies its key.** `confirm` signs with the
+effective key, and the store's active row is only one of four possible sources. When the old key is
+not the active row *and* the active row is what supplies the key, the output names `s2s author switch
+<oldName>` first. When the effective key comes from `S2S_PRIVATE_KEY`, from the project config file
+or from a user config file, switching authors changes nothing — the output says which layer holds
+the key and how to remove it (`unset it`, `s2s config unset privateKey --local`, `s2s config unset
+privateKey`). `switchTo` carries the name only in the first case, and `confirmFix` only in the
+others; both are absent when `confirm` would sign with the old key already. `reused` is present only
+on a retry, `alreadyQueued` only when the hash came from the service, `filedOldRow` only when this
+run filed the old key. `note`, `mnemonic` and `privateKey` follow the rules of `signer add`.
 
 ## `signer queue [<safe>]`
 
@@ -251,10 +296,19 @@ Before anything is read from the service, the store is reconciled against the ow
 `settleReplacement` is called here too, so a run that died after executing its swap still settles
 on the next confirmation attempt instead of leaving the old key filed.
 
-1. **Sign.** `signMessage` over the raw 32-byte `safeTxHash` — the eth_sign scheme, `v` 27/28.
-   Signing a different digest produces a signature that recovers to another owner and the Safe
-   answers `GS026`.
-2. **Post.** The signature goes to the service as a confirmation.
+1. **Read, then sign if it is needed.** The record is fetched first and its confirmations are
+   checked for one that **recovers to this key** over the digest. Recovery is the test, not the
+   `owner` label and not a string compare: a signature over the wrong digest recovers to some other
+   valid address rather than failing, so only "it recovers to *this* owner" is evidence that this key
+   already signed. Both schemes count — a bare signature over the digest (`sign({hash})`, `v` 27/28,
+   which is what `signer rotate` and `signer add` attach to their proposals) and an `eth_sign`
+   signature (`signMessage` over the raw 32 bytes, `v` 31/32) — and each is tried against both the
+   record's hash and `hashMessage` of it. On a hit nothing is signed and nothing is posted: the swap
+   was proposed *by* this key, so this key's signature is already the quorum it was going to add.
+2. **Post, unless the record already carries it.** The signature goes to the service as a
+   confirmation, which files it as the sender's. When step 1 found it already there, the POST is
+   skipped and the result says `posted: false`; at threshold 1 that is the difference between a run
+   that executes the swap and one that posts a signature to a transaction it could have sent.
 3. **Re-read.** The confirmations are read back and this key's own signature is merged in, because
    the service may not have indexed it yet. A 32-byte entry is a contract owner's `approveHash`
    approval and cannot be packed, so only 65-byte confirmations count.
@@ -277,6 +331,7 @@ Refusals, all before anything is signed:
 | proposal already executed | `already_executed` |
 | proposal nonce below the Safe's | `stale_nonce` — it can never execute; propose it again |
 | the hash-keyed read answers a different proposal | `safe_tx_wrong_transaction` — the record is not the hash that was passed, whatever its own fields say |
+| the record already carries this key's signature | not a refusal: the POST is skipped and the run goes straight to execute (`posted: false`) |
 | owner entry is a contract (the EOA has code) | `contract_owner` — it confirms by calling `approveHash` from its own code |
 
 A proposal with a nonce **ahead** of the Safe is not a refusal: its confirmation is posted and the
@@ -294,13 +349,30 @@ JSON:
 
 ```json
 { "action": "signer.confirm", "safe": "0x…", "safeTxHash": "0x…", "eoa": "0x…",
-  "nonce": 7, "confirmations": 2, "required": 2, "confirmed": true, "executed": true,
-  "txHash": "0x…", "settled": "zomi-next", "note": "…" }
+  "nonce": 7, "confirmations": 2, "required": 2, "confirmed": true, "posted": false,
+  "executed": true, "txHash": "0x…", "settled": "zomi-next", "note": "…" }
 ```
 
-`txHash` is present only when `execTransaction` was sent; `settled` only when a pending replacement
+`posted` is `false` when the confirmation was already on the record and no POST was made; `txHash` is
+present only when `execTransaction` was sent; `settled` only when a pending replacement
 was reconciled by this run; `note` only when `executed` is false, and carries why (queued behind the
 front nonce, threshold short, `--no-execute`).
+
+## The store lock
+
+`authors.json` is read-modify-written by every command that files a key, and `rotate` does it twice
+in one run (the old row when an environment key has to be filed, then the new one). Two rotates
+started at once would both read the same file, both pass the duplicate-name check, and the second
+write would drop the first key: a printed phrase with no row behind it. So the writes hold an
+exclusive lock.
+
+The lock is a file beside the store, `<authors.json>.lock`, created with `wx` and mode `0600`, and
+removed in a `finally` — on success, on a refusal, and on a throw. `EEXIST` is `store_locked`
+naming the lock path, and nothing else: no waiting, no timeout, no stale-lock heuristic. A lock file
+left behind by a `kill -9` is a file the operator deletes; guessing its age is how a lock is stolen
+from a live writer. Within one process the lock is re-entrant (the module counts holders), so a
+command can file two rows without deadlocking against itself, and `signer add` / `signer confirm` /
+`author` writes take it by the same seam.
 
 ## Gas
 

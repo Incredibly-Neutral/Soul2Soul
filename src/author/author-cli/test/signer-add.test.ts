@@ -17,7 +17,7 @@ import { safeAbi } from '@s2s/soul2soul-shared';
 
 import { addOwnerWithThresholdData, computeSafeTxHash, type SafeTxInput } from '../src/adapters/safe-tx';
 import type { SafeTxService } from '../src/adapters/safe-tx';
-import { activeAuthorRecord, addSigner, authorEoa, readAuthors } from '../src/core/authors';
+import { addSigner, authorEoa, readAuthors } from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerAdd, signerAdd } from '../src/commands/signer-add';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -146,6 +146,10 @@ function deps(fake: FakeService, chain: ChainSafe = CHAIN): Partial<SignerDeps> 
   };
 }
 
+function storePath(): string {
+  return join(dir, 'xdg', 's2s', 'authors.json');
+}
+
 function args(argv: string[]): ParsedArgs {
   const parsed = parseCommandArgs(argv, signerAdd.flags);
   return { flags: parsed.flags, positionals: parsed.positionals.slice(2) };
@@ -182,7 +186,9 @@ describe('s2s signer add', () => {
       safeTxHash: computeSafeTxHash({ chainId: 8453, safe: SAFE, tx: expectedTx }),
       safeTx: { to: SAFE, data: expectedTx.data },
     });
+    expect(result).toMatchObject({ activated: false });
     expect(result?.note).toContain('accepts a proposal only from an owner');
+    expect(result?.note).toContain('an owner machine has to post it');
     expect(fake.proposed).toHaveLength(0);
     expect(fake.registered).toHaveLength(0);
 
@@ -191,19 +197,40 @@ describe('s2s signer add', () => {
     expect(decoded.functionName).toBe('addOwnerWithThreshold');
     expect(decoded.args).toEqual([EOA_NEW, 2n]);
 
-    // The human output still carries the call an owner machine has to make.
-    expect(captured.logs.join('\n')).toContain('the service accepts a proposal only from an owner');
-    expect(captured.logs.join('\n')).toContain(expectedTx.data);
+    // The human output still carries the call an owner machine has to make, and
+    // says plainly that nothing here retries it.
+    const human = captured.logs.join('\n');
+    expect(human).toContain('the service accepts a proposal only from an owner');
+    expect(human).toContain('nothing here retries it');
+    expect(human).toContain(expectedTx.data);
+    expect(human).toContain(`nonce ${String(expectedTx.nonce)}`);
+    expect(human).toContain('filed, not activated');
 
-    // The key is on disk, active, and marked as a given Safe.
+    // The key is on disk and marked as a given Safe — and NOT active: it is not
+    // an owner yet, and the active row is the key every command signs with.
     const store = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
-    expect(store.active).toBe('signer-2b5ad5');
-    expect(activeAuthorRecord(store)).toEqual({
-      name: 'signer-2b5ad5',
+    expect(store.active).toBeNull();
+    expect(store.authors['signer-2b5ad5']).toEqual({
       privateKey: KEY_NEW,
       safe: SAFE,
       safeSource: 'given',
     });
+  });
+
+  it('leaves the active slot on the row that was active, because the joining key is not an owner', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    // A store with an active row already: an author on another Safe, a key that
+    // is not an owner of the Safe being joined.
+    const otherSafe: Address = '0x3333333333333333333333333333333333333333';
+    addSigner({ name: 'other', privateKey: KEY_OTHER, safe: otherSafe }, storePath());
+
+    await runSignerAdd(captured.out, args(['signer', 'add', SAFE, '--key', KEY_NEW]), deps(fake));
+
+    const store = readAuthors(storePath());
+    expect(store.active).toBe('other');
+    expect(store.authors['signer-2b5ad5']?.safe).toBe(SAFE);
+    expect(captured.logs.join('\n')).toContain('active      : other (unchanged');
   });
 
   it('proposes from the owner key this machine already signs with, and signs as it', async () => {
@@ -276,7 +303,9 @@ describe('s2s signer add', () => {
     );
 
     expect(captured.results[0]?.name).toBe('zomi');
-    expect(readAuthors(join(dir, 'xdg', 's2s', 'authors.json')).active).toBe('zomi');
+    const store = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
+    expect(store.authors.zomi?.privateKey).toBe(KEY_NEW);
+    expect(store.active).toBeNull();
   });
 
   it('keeps the key and reports the raw call when the service refuses it', async () => {
@@ -307,7 +336,9 @@ describe('s2s signer add', () => {
     expect(captured.warnings).toHaveLength(1);
     expect(captured.warnings[0]).toContain('not queued');
     // the key survives the failure — it is the part that cannot be recovered
-    expect(readAuthors(join(dir, 'xdg', 's2s', 'authors.json')).active).toBe('signer-2b5ad5');
+    const store = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
+    expect(store.authors['signer-2b5ad5']?.privateKey).toBe(KEY_NEW);
+    expect(store.active).toBeNull();
   });
 
   it('reports the call by hand and queues nothing when no service is configured', async () => {

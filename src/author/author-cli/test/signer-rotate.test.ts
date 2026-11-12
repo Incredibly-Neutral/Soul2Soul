@@ -8,7 +8,7 @@
 // calldata is decoded back to the three addresses `swapOwner` takes, in order.
 // ============================================================================
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { safeAbi } from '@s2s/soul2soul-shared';
 
-import type { SafeTxService } from '../src/adapters/safe-tx';
+import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
 import {
   SENTINEL_OWNERS,
   computeSafeTxHash,
@@ -26,6 +26,7 @@ import {
   type SafeTxInput,
 } from '../src/adapters/safe-tx';
 import { addSigner, pendingReplacement, readAuthors } from '../src/core/authors';
+import { storeLockPath } from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerRotate, signerRotate } from '../src/commands/signer-rotate';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -104,12 +105,20 @@ interface FakeService {
   service: SafeTxService;
   registered: Registered[];
   proposed: Proposed[];
+  /** Every `pending(safe)` the command made — the store-alone decision cannot
+   * be tested without knowing whether the service was asked at all. */
+  asked: Address[];
 }
 
-/** The two methods `rotate` uses; `fail` models an unreachable service. */
-function fakeService(fail?: Error): FakeService {
+/**
+ * The three methods `rotate` uses. `fail` models an unreachable service, and
+ * `queued` is what `pending(safe)` answers with — the swaps the service already
+ * holds, which is how a POST whose reply was lost becomes visible.
+ */
+function fakeService(fail?: Error, queued: SafeTxRecord[] = []): FakeService {
   const registered: Registered[] = [];
   const proposed: Proposed[] = [];
+  const asked: Address[] = [];
   const service: SafeTxService = {
     register(safe, info) {
       registered.push({ safe, owners: info.owners, threshold: info.threshold });
@@ -127,8 +136,9 @@ function fakeService(fail?: Error): FakeService {
         safeTxHash: computeSafeTxHash({ chainId: CHAIN_ID, safe: input.safe, tx: input.tx }),
       });
     },
-    pending() {
-      return Promise.reject(new Error('not used by signer rotate'));
+    pending(safe) {
+      asked.push(safe);
+      return Promise.resolve(queued);
     },
     get() {
       return Promise.reject(new Error('not used by signer rotate'));
@@ -137,7 +147,7 @@ function fakeService(fail?: Error): FakeService {
       return Promise.reject(new Error('not used by signer rotate'));
     },
   };
-  return { service, registered, proposed };
+  return { service, registered, proposed, asked };
 }
 
 function deps(fake: FakeService, chain: Partial<ChainSafe> = {}): Partial<SignerDeps> {
@@ -579,6 +589,285 @@ describe('s2s signer rotate', () => {
     expect(untouched.authors['zomi-next']).toBeUndefined();
   });
 
+  it('says the swap is executable as soon as the service holds it when one signature is enough', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake, { threshold: 1 }),
+    });
+
+    // At threshold 1 the proposer's own signature is the whole quorum: there is
+    // nothing left for a later `confirm` to add, only something left to send.
+    const human = captured.human[0] ?? '';
+    expect(human).toContain("'zomi' signed it (1 of 1 confirmations)");
+    expect(human).toContain('the threshold is met');
+    expect(human).toContain('executable as soon as the service holds it');
+    expect(human).toContain('nothing left to sign');
+    expect(human).not.toContain('the remaining owners run');
+  });
+
+  it('adopts a swap the service already holds when the reply never arrived', async () => {
+    const captured = capture();
+    seedOld();
+    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    // The store says "never queued"; the service says otherwise. That is exactly
+    // the state a POST leaves when it lands and its reply is lost.
+    const tx: SafeTxInput = {
+      to: SAFE,
+      value: 0n,
+      data: swapOwnerData(SENTINEL_OWNERS, EOA_OLD, EOA_NEW),
+      operation: 0,
+      nonce: 7,
+    };
+    const fake = fakeService(undefined, [
+      {
+        safeTxHash: QUEUED_HASH,
+        safe: SAFE,
+        nonce: 7,
+        to: SAFE,
+        value: '0',
+        data: tx.data,
+        operation: 0,
+        confirmations: [{ owner: EOA_OLD, signature: `0x${'11'.repeat(65)}` }],
+        confirmationsRequired: 2,
+        isExecuted: false,
+      },
+    ]);
+
+    // No argument and no --key: the stranded row's key is reused.
+    await runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake));
+
+    expect(fake.asked).toEqual([SAFE]);
+    // Nothing was posted a second time, and the hash the service holds is the
+    // one the store now records.
+    expect(fake.proposed).toHaveLength(0);
+    expect(fake.registered).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({
+      name: 'zomi-next',
+      reused: true,
+      proposed: true,
+      alreadyQueued: true,
+      safeTxHash: QUEUED_HASH,
+    });
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBe(QUEUED_HASH);
+    const human = captured.human[0] ?? '';
+    expect(human).toContain('already queued');
+    expect(human).toContain(QUEUED_HASH);
+    expect(human).toContain(`s2s signer confirm ${QUEUED_HASH}`);
+  });
+
+  it('refuses when the service holds a different transaction at that nonce', async () => {
+    const captured = capture();
+    seedOld();
+    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    const other: Address = '0x9999999999999999999999999999999999999999';
+    const fake = fakeService(undefined, [
+      {
+        safeTxHash: QUEUED_HASH,
+        safe: SAFE,
+        nonce: 7,
+        to: other,
+        value: '0',
+        data: '0xdeadbeef',
+        operation: 0,
+        confirmations: [],
+        confirmationsRequired: 2,
+        isExecuted: false,
+      },
+    ]);
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake)),
+    ).rejects.toMatchObject({ code: 'nonce_taken' });
+    // The refusal names the hash that holds the nonce and the command that shows
+    // the queue, and it posts nothing.
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake)),
+    ).rejects.toThrow(/different transaction[\s\S]*nonce 7[\s\S]*0xabab/);
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake)),
+    ).rejects.toThrow(/s2s signer queue/);
+    expect(fake.proposed).toHaveLength(0);
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeUndefined();
+  });
+
+  it('proposes the stranded swap again when the service holds nothing at that nonce', async () => {
+    const captured = capture();
+    seedOld();
+    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    const fake = fakeService(undefined, []);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake));
+
+    expect(fake.asked).toEqual([SAFE]);
+    expect(fake.proposed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ reused: true, proposed: true });
+    expect(captured.results[0]?.alreadyQueued).toBeUndefined();
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeTruthy();
+  });
+
+  it('refuses while another command holds the store lock, and does not remove it', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    writeFileSync(lock, '424242\n');
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toMatchObject({ code: 'store_locked' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(lock);
+    // Nothing was filed behind the other writer's back, and its lock is its own
+    // to release.
+    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
+    expect(existsSync(lock)).toBe(true);
+    expect(fake.proposed).toHaveLength(0);
+  });
+
+  it('removes the store lock after a run that succeeded and after one that refused', async () => {
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+
+    // A refusal thrown inside the lock (the key is already this machine's)
+    // leaves no lock behind.
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OLD]), {
+        ...deps(fakeService()),
+      }),
+    ).rejects.toMatchObject({ code: 'same_key' });
+    expect(existsSync(lock)).toBe(false);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fakeService()),
+    });
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it('rotates a key that only the environment holds, filing it first', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    // No store row at all: the owner key arrives from the environment, which is
+    // where a key that owns a Safe is most often kept.
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake),
+    });
+
+    // The store needs a row to record what the swap retires, so one is filed for
+    // the old key, and the new row replaces it.
+    const store = readAuthors(storePath());
+    expect(store.authors['signer-7e5f45']).toMatchObject({
+      privateKey: KEY_OLD,
+      safe: SAFE,
+      safeSource: 'given',
+    });
+    expect(store.authors['signer-7e5f45-next']).toMatchObject({
+      privateKey: KEY_NEW,
+      replaces: 'signer-7e5f45',
+    });
+    expect(captured.results[0]).toMatchObject({
+      oldKeySource: 'env',
+      oldEoa: EOA_OLD,
+      replaces: 'signer-7e5f45',
+      filedOldRow: 'signer-7e5f45',
+      proposed: true,
+    });
+    expect(captured.human[0]).toContain("filed first : the owner key from S2S_PRIVATE_KEY as 'signer-7e5f45'");
+    // The proposal is still signed by the old key.
+    expect(fake.proposed[0]?.sender).toBe(EOA_OLD);
+  });
+
+  it('takes the environment key over the store row when both own the Safe, and refuses truthfully', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    // Both keys are owners. Precedence says the environment key is the one this
+    // process signs with, so it is the one a rotation would retire — and this
+    // store cannot file it, because it keeps one row per Safe.
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_B);
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/comes from S2S_PRIVATE_KEY[\s\S]*'zomi'/);
+    expect(fake.proposed).toHaveLength(0);
+  });
+
+  it('tells an environment key to be unset rather than telling the user to switch authors', async () => {
+    const captured = capture();
+    seedOld();
+    // The env key is not an owner, so `signer confirm` would refuse it. The fix
+    // is not `author switch` — the environment wins over the stored row whatever
+    // the active slot says.
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OTHER);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fakeService()),
+    });
+
+    const human = captured.human[0] ?? '';
+    expect(captured.results[0]?.switchTo).toBeUndefined();
+    expect(human).not.toContain('s2s author switch');
+    expect(human).toContain('`S2S_PRIVATE_KEY` holds');
+    expect(human).toContain("unset it so 'zomi' signs");
+  });
+
+  it('refuses more than one positional argument', async () => {
+    const captured = capture();
+    const other: Address = '0x3333333333333333333333333333333333333333';
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, other]), deps(fakeService())),
+    ).rejects.toMatchObject({ code: 'usage' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, other]), deps(fakeService())),
+    ).rejects.toThrow(/one Safe at a time[\s\S]*two|one Safe at a time[\s\S]*2/);
+  });
+
+  it('says the Safe is not deployed instead of blaming the key', async () => {
+    const captured = capture();
+    seedOld();
+
+    // The active row names SAFE; nothing is deployed there.
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate']), {
+        ...deps(fakeService(), { deployed: false, owners: [], threshold: 0, nonce: 0 }),
+      }),
+    ).rejects.toMatchObject({ code: 'safe_not_deployed' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate']), {
+        ...deps(fakeService(), { deployed: false, owners: [], threshold: 0, nonce: 0 }),
+      }),
+    ).rejects.toThrow(/no Safe at 0x1111[\s\S]*'zomi'/);
+  });
+
+  it('says the filed rows hold no readable key, naming them', async () => {
+    const captured = capture();
+    // A hand-edited row whose key this build cannot derive: "no key filed" would
+    // be false, and so would "not an owner".
+    addSigner({ name: 'broken', privateKey: '0xnot-a-key', safe: SAFE }, storePath());
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+        ...deps(fakeService()),
+      }),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+        ...deps(fakeService()),
+      }),
+    ).rejects.toThrow(/no key this build can read: 'broken'/);
+  });
+
   it('names `author switch` when the active author does not own the Safe', async () => {
     const fake = fakeService();
     const captured = capture();
@@ -588,7 +877,9 @@ describe('s2s signer rotate', () => {
     // swap under a row that is not active leaves it unconfirmable until the
     // slot moves. The output has to say which command moves it.
     seedOld();
-    addSigner({ name: 'other', privateKey: KEY_B, safe: otherSafe }, storePath());
+    // A key that is NOT an owner of SAFE: the active slot is on a row that cannot
+    // sign this swap, which is the state this test is about.
+    addSigner({ name: 'other', privateKey: KEY_OTHER, safe: otherSafe }, storePath());
     expect(readAuthors(storePath()).active).toBe('other');
 
     await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {

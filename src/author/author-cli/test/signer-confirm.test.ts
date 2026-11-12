@@ -225,6 +225,7 @@ describe('s2s signer confirm', () => {
 
     // One confirmation, over the raw hash, from this key.
     expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
     const signature = first(fake.confirmed).signature;
     expect(await verifyMessage({ address: EOA_SIGNER, message: { raw: HASH }, signature })).toBe(true);
 
@@ -296,6 +297,88 @@ describe('s2s signer confirm', () => {
     // the confirmation reached the service; nothing was sent from the EOA
     expect(fake.confirmed).toHaveLength(1);
     expect(sent).toHaveLength(0);
+  });
+
+  it('executes a proposal this key already signed instead of posting the signature again', async () => {
+    // Both schemes a confirmation arrives in: a bare 27/28 signature over the
+    // digest (`sign({hash})`, which is what `s2s signer rotate` posts with the
+    // old key) and a 31/32 eth_sign signature (`signMessage`). Either is this
+    // owner's confirmation, and the service already holds it.
+    const account = privateKeyToAccount(KEY_SIGNER as Hex);
+    const schemes: { name: string; signature: Hex }[] = [
+      { name: 'sign({hash})', signature: await account.sign({ hash: HASH }) },
+      {
+        name: 'signMessage({raw})',
+        signature: await account.signMessage({ message: { raw: HASH } }),
+      },
+    ];
+
+    for (const scheme of schemes) {
+      const fake = fakeService(
+        baseRecord({
+          confirmations: [{ owner: EOA_SIGNER, signature: scheme.signature }],
+          confirmationsRequired: 1,
+        }),
+      );
+      const sent: Sent[] = [];
+      const captured = capture();
+
+      await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, {
+          sent,
+          chain: { deployed: true, owners: [EOA_SIGNER], threshold: 1, nonce: 7 },
+        }),
+      });
+
+      // No POST: the confirmation is already in the record, and a second one
+      // would only replace the same entry.
+      expect(fake.confirmed, scheme.name).toHaveLength(0);
+      expect(sent, scheme.name).toHaveLength(1);
+      expect(captured.results[0]).toMatchObject({
+        posted: false,
+        confirmed: true,
+        executed: true,
+        confirmations: 1,
+        required: 1,
+      });
+      expect(captured.human[0]).toContain('had already signed');
+      // The signature that was already on the record is the one that was packed.
+      const call = decodeFunctionData({ abi: safeAbi, data: first(sent).data });
+      const execArgs = call.args as readonly Hex[];
+      expect((execArgs[9] ?? '0x').slice(2, 66)).toBe(scheme.signature.slice(2, 66));
+    }
+  });
+
+  it('posts its own confirmation when the record carries only other owners', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
+    );
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake),
+    });
+
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
+  });
+
+  it('does not read a signature over another digest as this owner\'s confirmation', async () => {
+    // Owner B's signature, labelled as this key. Recovery over the wrong digest
+    // yields some other valid address rather than an error, so "it recovered"
+    // is not the test — "it recovered to this owner" is. Here it does not, so
+    // the POST happens even though the label says otherwise.
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: EOA_SIGNER, signature: await signedByB() }] }),
+    );
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake),
+    });
+
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
   });
 
   it('posts the confirmation and stops when --no-execute is given', async () => {
