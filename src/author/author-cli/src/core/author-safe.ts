@@ -112,8 +112,12 @@ export interface GivenSafeState {
 export type GivenSafeReader = (safe: Address) => Promise<GivenSafeState>;
 
 /** The two reads a given Safe needs; the address itself comes from the store. */
-const GIVEN_SAFE_READS_ABI = [
-  'function threshold() view returns (uint256)',
+export const GIVEN_SAFE_READS_ABI = [
+  // `getThreshold`, not `threshold`: the Safe 1.4.1 ABI (`safeAbi`, taken from
+  // the deployed singleton) has no `threshold` entry at all, so the proxy
+  // dispatches it into the fallback and reverts. Nothing caught it because the
+  // tests fake the handle.
+  'function getThreshold() view returns (uint256)',
   'function getOwners() view returns (address[])',
 ].join('\n');
 
@@ -130,7 +134,7 @@ export async function readGivenSafeState(
 ): Promise<GivenSafeState> {
   if (!(await handle.isDeployed())) return { deployed: false };
   const threshold = BigInt(
-    (await handle.genericRead(safe, GIVEN_SAFE_READS_ABI, 'threshold', [])) as bigint,
+    (await handle.genericRead(safe, GIVEN_SAFE_READS_ABI, 'getThreshold', [])) as bigint,
   );
   const owners = (await handle.genericRead(
     safe,
@@ -178,7 +182,7 @@ export async function readGivenSafe(
 /**
  * What the endpoint is, for a read of a given Safe that failed.
  *
- * `threshold()` reverted is not a diagnosis: it is either an endpoint on another
+ * A read that reverted is not a diagnosis: it is either an endpoint on another
  * chain, an address that is not a Safe there, or a call that failed for its own
  * reason. `eth_chainId` separates the first, and `VERSION()` the second — every
  * Safe answers it, and nothing else does. Both reads are best-effort: their
