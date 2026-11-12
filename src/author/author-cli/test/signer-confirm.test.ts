@@ -15,6 +15,7 @@ import { decodeFunctionData, size, verifyMessage, type Address, type Hex } from 
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { OwnerHistoryModuleV1 } from '@s2s/author-contracts';
 import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
@@ -29,6 +30,7 @@ import { loadConfig, type CliConfig } from '../src/core/config';
 import { SAFE_4337_MODULE } from '../src/core/author-safe';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
 import type { ChainSafe, Safe4337Reads, SignerDeps } from '../src/commands/signer-store';
+import type { OwnerHistoryRead } from '../src/core/author-contracts';
 import { read4337From } from '../src/commands/signer-store';
 import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
 import {
@@ -80,6 +82,47 @@ function hashFor(nonce: number): Hex {
 const HASH: Hex = hashFor(7);
 /** What the fake `send` answers with — one transaction hash, asserted on. */
 const TX_HASH: Hex = `0x${'77'.repeat(32)}`;
+/** The OwnerHistory module the confirmation syncs once the swap has landed. */
+const HISTORY_MODULE: Address = '0x2222222222222222222222222222222222222222';
+/** The owner the swap adds: the era opened by the sync, not the one it replaced. */
+const OWNER_NEW: Address = '0xEF5cB7c22605ABF0CdE475fc4d8fB6bf3643dF3B';
+
+/**
+ * The module as the sponsored rail leaves it: the swap executed, and era 0 still
+ * names the owner it replaced — the failure guard 0x4a28…f44a swallowed on Safe
+ * 0x8507…8dfB.
+ */
+function laggingHistory(): OwnerHistoryRead {
+  return {
+    module: HISTORY_MODULE,
+    moduleSource: 'enabled',
+    guard: null,
+    guardModule: null,
+    eraCount: 1,
+    eras: [{ index: 0, startBlock: 100, endBlock: null, owners: [EOA_SIGNER] }],
+    ownersEver: [EOA_SIGNER],
+    lastSyncedBlock: 100,
+    lags: true,
+  };
+}
+
+/** The module after the sync: era 0 closed, era 1 open with the new owner. */
+function syncedHistory(): OwnerHistoryRead {
+  return {
+    module: HISTORY_MODULE,
+    moduleSource: 'enabled',
+    guard: null,
+    guardModule: null,
+    eraCount: 2,
+    eras: [
+      { index: 0, startBlock: 100, endBlock: 640, owners: [EOA_SIGNER] },
+      { index: 1, startBlock: 640, endBlock: null, owners: [OWNER_NEW] },
+    ],
+    ownersEver: [EOA_SIGNER, OWNER_NEW],
+    lastSyncedBlock: 640,
+    lags: false,
+  };
+}
 
 let dir: string;
 
@@ -230,11 +273,26 @@ function deps(
     read4337Fails?: unknown;
     /** A send that resolves with no transaction hash — not a success. */
     noHash?: boolean;
+    /** The module read before the sync (default: the era the guard missed). */
+    history?: OwnerHistoryRead;
+    /** The re-read after the sync (default: the era the sync opened). */
+    historyAfter?: OwnerHistoryRead;
+    /** A module read that cannot answer: the history is unknown, not absent. */
+    historyFails?: unknown;
+    /** A sync send that throws, on either rail. */
+    syncFails?: unknown;
+    /** Receipt waits the sync made, and a receipt that says it reverted. */
+    receipts?: { rpcUrl: string; hash: Hex }[];
+    receiptFails?: unknown;
   } = {},
 ): Partial<SignerDeps> {
   const sent = options.sent ?? [];
   const sponsored = options.sponsored ?? [];
+  const receipts = options.receipts ?? [];
+  const before = options.history ?? laggingHistory();
+  const after = options.historyAfter ?? syncedHistory();
   let reads = 0;
+  let historyReads = 0;
   return {
     config: () => loadConfig(),
     service: () => fake.service,
@@ -251,10 +309,20 @@ function deps(
     },
     readCode: () => Promise.resolve(options.code ?? false),
     send: (input) => {
+      if (input.to === HISTORY_MODULE && options.syncFails !== undefined) {
+        return Promise.reject(
+          options.syncFails instanceof Error ? options.syncFails : new Error('sync send failed'),
+        );
+      }
       sent.push(input);
       return Promise.resolve(options.noHash === true ? (undefined as unknown as Hex) : TX_HASH);
     },
     sendSponsored: (input) => {
+      if (input.to === HISTORY_MODULE && options.syncFails !== undefined) {
+        return Promise.reject(
+          options.syncFails instanceof Error ? options.syncFails : new Error('sync send failed'),
+        );
+      }
       const failure = options.sponsoredFails;
       if (failure !== undefined) {
         return Promise.reject(failure instanceof Error ? failure : new Error('sponsored send failed'));
@@ -287,7 +355,40 @@ function deps(
       };
       return read4337From(reads);
     },
+    // The first read is what the confirmation finds; the second is what the sync
+    // produced. A test that only installs one shape gets it twice.
+    readHistory: () => {
+      const failure = options.historyFails;
+      if (failure !== undefined) {
+        return Promise.reject(failure instanceof Error ? failure : new Error('module read failed'));
+      }
+      historyReads += 1;
+      if (before.module === null) return Promise.resolve(before);
+      return Promise.resolve(historyReads === 1 ? before : after);
+    },
+    waitForReceipt: (input) => {
+      const failure = options.receiptFails;
+      if (failure !== undefined) {
+        return Promise.reject(failure instanceof Error ? failure : new Error('receipt reverted'));
+      }
+      receipts.push(input);
+      return Promise.resolve();
+    },
   };
+}
+
+/**
+ * The sends that carried `execTransaction`, on either rail. A confirmation now
+ * also sends the owner-history `sync()`, so a bare count of sends is no longer
+ * the swap's: they are told apart by what they are addressed to.
+ */
+function swapSends<T extends { to: Address }>(sends: readonly T[]): T[] {
+  return sends.filter((entry) => entry.to === SAFE);
+}
+
+/** The sends that carried `sync()` to the module. */
+function syncSends<T extends { to: Address }>(sends: readonly T[]): T[] {
+  return sends.filter((entry) => entry.to === HISTORY_MODULE);
 }
 
 /** The only element of a list the test has already asserted is length 1. */
@@ -323,8 +424,8 @@ describe('s2s signer confirm', () => {
     expect(await verifyMessage({ address: EOA_SIGNER, message: { raw: HASH }, signature })).toBe(true);
 
     // One transaction, to the Safe, carrying the proposal's own fields.
-    expect(sent).toHaveLength(1);
-    const sentOnce = first(sent);
+    expect(swapSends(sent)).toHaveLength(1);
+    const sentOnce = first(swapSends(sent));
     expect(sentOnce.to).toBe(SAFE);
     expect(sentOnce.privateKey).toBe(KEY_SIGNER);
     const call = decodeFunctionData({ abi: safeAbi, data: sentOnce.data });
@@ -367,7 +468,7 @@ describe('s2s signer confirm', () => {
       deps(fake, { sent }),
     );
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(captured.results[0]).toMatchObject({ confirmations: 2, executed: true });
   });
 
@@ -426,7 +527,7 @@ describe('s2s signer confirm', () => {
       // No POST: the confirmation is already in the record, and a second one
       // would only replace the same entry.
       expect(fake.confirmed, scheme.name).toHaveLength(0);
-      expect(sent, scheme.name).toHaveLength(1);
+      expect(swapSends(sent), scheme.name).toHaveLength(1);
       expect(captured.results[0]).toMatchObject({
         posted: false,
         confirmed: true,
@@ -436,7 +537,7 @@ describe('s2s signer confirm', () => {
       });
       expect(captured.human[0]).toContain('had already signed');
       // The signature that was already on the record is the one that was packed.
-      const call = decodeFunctionData({ abi: safeAbi, data: first(sent).data });
+      const call = decodeFunctionData({ abi: safeAbi, data: first(swapSends(sent)).data });
       const execArgs = call.args as readonly Hex[];
       expect((execArgs[9] ?? '0x').slice(2, 66)).toBe(scheme.signature.slice(2, 66));
     }
@@ -743,7 +844,7 @@ describe('s2s signer confirm', () => {
       ...deps(fake, { sent, ownersAfter: [EOA_REPLACEMENT, OWNER_B] }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(captured.results[0]).toMatchObject({ executed: true, settled: 'zomi-next' });
     expect(captured.human[0]).toContain(`settled: zomi-next is now the key for ${SAFE}`);
     // the new row is the active one and the old row is gone
@@ -906,9 +1007,9 @@ describe('s2s signer confirm — who pays', () => {
 
     // The sponsored rail, and only it: no plain transaction was sent, so the
     // EOA never had to hold ETH.
-    expect(sponsored).toHaveLength(1);
+    expect(swapSends(sponsored)).toHaveLength(1);
     expect(sent).toHaveLength(0);
-    const call = first(sponsored);
+    const call = first(swapSends(sponsored));
     expect(call.safe).toBe(SAFE);
     expect(call.privateKey).toBe(KEY_SIGNER);
     expect(call.to).toBe(SAFE);
@@ -939,7 +1040,7 @@ describe('s2s signer confirm — who pays', () => {
       deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     );
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
     expect(captured.human[0]).toContain(`paid by ${EOA_SIGNER}`);
@@ -957,7 +1058,7 @@ describe('s2s signer confirm — who pays', () => {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
     // The setting that is actually missing, not the one the pair is named after.
@@ -975,7 +1076,7 @@ describe('s2s signer confirm — who pays', () => {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.human[0]).toContain('no bundler configured');
     expect(captured.human[0]).toContain('S2S_BUNDLER_URL');
@@ -992,7 +1093,7 @@ describe('s2s signer confirm — who pays', () => {
       ...deps(fake, { sent, sponsored, moduleEnabled: true }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
     // The threshold is a condition, not a formality: the module checks the
@@ -1013,7 +1114,7 @@ describe('s2s signer confirm — who pays', () => {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: false }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
     expect(captured.human[0]).toContain('Safe4337Module');
@@ -1037,7 +1138,7 @@ describe('s2s signer confirm — who pays', () => {
       }),
     });
 
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     // Enabled is not enough: the module is reached through the fallback, so a
     // different handler validates nothing.
@@ -1057,7 +1158,7 @@ describe('s2s signer confirm — who pays', () => {
     });
 
     expect(sponsored).toHaveLength(0);
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(captured.human[0]).toContain('no fallback handler');
   });
 
@@ -1079,7 +1180,7 @@ describe('s2s signer confirm — who pays', () => {
 
     // The confirmation is already posted by now: an unreadable RPC must not
     // turn into a throw that leaves the user without the execution.
-    expect(sent).toHaveLength(1);
+    expect(swapSends(sent)).toHaveLength(1);
     expect(sponsored).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ executed: true, paidBy: 'eoa' });
     expect(captured.warnings.join('\n')).toContain("the Safe's 4337 state");
@@ -1339,5 +1440,182 @@ describe('s2s signer confirm — who pays', () => {
     // `executed` and `paidBy` are statements about the chain, so a run with no
     // chain answer prints no result at all.
     expect(captured.results).toHaveLength(0);
+  });
+});
+
+/**
+ * The era is not the swap. Under the sponsored rail the guard's hook is starved
+ * — the gas limit is the bundler's estimate from a simulation in which the
+ * hook's failure is swallowed — so the confirmation sends `sync()` itself, on
+ * the payer the swap used, and reports what became of the era.
+ */
+describe('s2s signer confirm — the owner-history era', () => {
+  /** A Safe whose userOp one signature can validate, so sponsorship is offered. */
+  const ONE_OF_ONE: ChainSafe = {
+    deployed: true,
+    owners: [EOA_SIGNER, OWNER_B],
+    threshold: 1,
+    nonce: 7,
+  };
+
+  async function executable(): Promise<FakeService> {
+    return fakeService(
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
+    );
+  }
+
+  it('sends sync() to the module after the swap, and names the era it opened', async () => {
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const receipts: { rpcUrl: string; hash: Hex }[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, receipts }),
+    });
+
+    // Two sends: the swap, then the module's own function. The sync is not
+    // guessed at — it is the `sync()` selector addressed to the module — and its
+    // receipt was waited for before the eras were read back.
+    expect(sent).toHaveLength(2);
+    const sync = first(syncSends(sent));
+    expect(sync.privateKey).toBe(KEY_SIGNER);
+    expect(decodeFunctionData({ abi: OwnerHistoryModuleV1, data: sync.data }).functionName).toBe(
+      'sync',
+    );
+    expect(receipts).toHaveLength(1);
+
+    expect(captured.results[0]).toMatchObject({
+      executed: true,
+      history: {
+        module: HISTORY_MODULE,
+        recorded: true,
+        txHash: TX_HASH,
+        era: 1,
+        owners: [OWNER_NEW],
+      },
+    });
+    expect(captured.human[0]).toContain(
+      `history: era 1 open with 0xEF5cB7c2…dF3B, recorded in ${TX_HASH}`,
+    );
+  });
+
+  it('sponsors the sync when the swap was sponsored, and never crosses rails', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', 'pim_test_key');
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
+    });
+
+    expect(syncSends(sponsored)).toHaveLength(1);
+    expect(first(syncSends(sponsored)).safe).toBe(SAFE);
+    // The EOA sent nothing: a sponsored rotation earns a sponsored sync.
+    expect(sent).toHaveLength(0);
+  });
+
+  it('sends the sync from the EOA under --self-paid, on the rail the swap used', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', 'pim_test_key');
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE, '--self-paid']),
+      deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
+    );
+
+    expect(swapSends(sent)).toHaveLength(1);
+    expect(syncSends(sent)).toHaveLength(1);
+    expect(sponsored).toHaveLength(0);
+  });
+
+  it('reports a sync that could not be sent, keeps the swap, and still settles the store', async () => {
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+      path,
+    );
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, {
+        sent,
+        ownersAfter: [EOA_REPLACEMENT, OWNER_B],
+        syncFails: new Error('insufficient funds for gas'),
+      }),
+    });
+
+    // The command does not fail: the swap landed and the only thing missing is
+    // the era — which is reported, because a silent failure is how the bug in
+    // production got there.
+    expect(captured.results[0]).toMatchObject({
+      executed: true,
+      history: {
+        module: HISTORY_MODULE,
+        recorded: false,
+        reason: 'insufficient funds for gas',
+      },
+    });
+    expect(captured.human[0]).toContain('history: not recorded (insufficient funds for gas)');
+    expect(captured.human[0]).toContain('`s2s signer history --sync` repairs it');
+    // The store still moved on to the owner the chain reports.
+    expect(readAuthors(path).active).toBe('zomi-next');
+  });
+
+  it('reports a sync whose receipt says it reverted as not recorded', async () => {
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, receiptFails: new Error('transaction reverted') }),
+    });
+
+    // It was sent — a hash came back — and it did not record anything.
+    expect(syncSends(sent)).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({
+      executed: true,
+      history: { recorded: false, reason: 'transaction reverted' },
+    });
+    expect(captured.human[0]).toContain('history: not recorded (transaction reverted)');
+  });
+
+  it('says no module is installed, in one line, and sends nothing after the swap', async () => {
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+    const empty: OwnerHistoryRead = {
+      module: null,
+      moduleSource: null,
+      guard: null,
+      guardModule: null,
+      eraCount: 0,
+      eras: [],
+      ownersEver: [],
+      lastSyncedBlock: null,
+      lags: false,
+    };
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, history: empty }),
+    });
+
+    expect(syncSends(sent)).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({
+      executed: true,
+      history: { module: null, recorded: false, absent: true },
+    });
+    expect(captured.human[0]).toContain(
+      'history: no owner-history module is installed on the Safe, so this rotation is not recorded',
+    );
   });
 });

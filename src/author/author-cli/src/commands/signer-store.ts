@@ -185,6 +185,21 @@ async function sendFromEoa(input: {
 }
 
 /**
+ * Wait for `hash` to be mined, and throw when the receipt says it reverted.
+ *
+ * `sendFromEoa` returns at broadcast, so "the transaction hash came back" is not
+ * "the transaction landed". The owner-history sync reads the module back to say
+ * which era is open, and a read taken before the sync is mined answers the era
+ * before it — the right answer to the wrong question. `waitForTransactionReceipt`
+ * throws on a reverted status, which is the one failure a swallowed sync must
+ * not report as success.
+ */
+async function waitForReceipt(input: { rpcUrl: string; hash: Hex }): Promise<void> {
+  const client = createPublicClient({ chain: base, transport: http(input.rpcUrl) });
+  await client.waitForTransactionReceipt({ hash: input.hash });
+}
+
+/**
  * The two facts a sponsored send needs from the Safe itself: the 4337 module is
  * enabled, and the module is what the Safe falls back to. Enabled does not imply
  * installed as the handler, because a Safe can enable a module and still route
@@ -328,6 +343,8 @@ export interface SignerDeps {
    * service: a rotation is recorded on chain or it is not.
    */
   readHistory(rpcUrl: string, safe: Address): Promise<OwnerHistoryRead>;
+  /** Wait for `hash` to be mined; throws when its receipt says it reverted. */
+  waitForReceipt(input: { rpcUrl: string; hash: Hex }): Promise<void>;
   keySource(flags: Record<string, string | boolean>): KeySource;
   authorsPath(): string;
   /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
@@ -343,6 +360,7 @@ const DEFAULT_SIGNER_DEPS: SignerDeps = {
   sendSponsored: sendSponsoredFromSafe,
   read4337,
   readHistory: (rpcUrl, safe) => readOwnerHistory({ safe, rpcUrl }),
+  waitForReceipt,
   keySource: (flags) => resolveKeySource(flags),
   authorsPath: () => authorsFilePath(),
   chainId: SIGNER_CHAIN_ID,

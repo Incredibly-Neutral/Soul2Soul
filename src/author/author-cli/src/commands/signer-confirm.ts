@@ -46,12 +46,32 @@
 // checks the queue before retrying). Collapsing those two is how a retry becomes
 // a double execution.
 //
+// The swap is not the whole rotation. The era the OwnerHistory module records is
+// what lets an earlier signature still verify, and the guard's hook does not
+// reliably stamp it: under the sponsored rail the gas limit is the bundler's
+// estimate from a simulation in which the hook's failure is swallowed by
+// design, so the estimate never includes the ~29k the sync needs, and the hook
+// is starved on every sponsored rotation. That is how Safe 0x8507…8dfB rotated
+// at block 56582189 with era 0 still holding the old owner. So this command
+// sends `sync()` itself, on the payer the swap used, and reports the outcome
+// instead of leaving the era to a hook that has no gas to stamp it.
+//
 // Runs without `buildContext`: the sponsored rail is the author Safe runner
 // (`createAuthorSafeRunner`), not the CLI context.
 // ============================================================================
 
-import { getAddress, hashMessage, recoverAddress, size, type Address, type Hex } from 'viem';
+import {
+  encodeFunctionData,
+  getAddress,
+  hashMessage,
+  recoverAddress,
+  size,
+  type Address,
+  type Hex,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+
+import { OwnerHistoryModuleV1 } from '@s2s/author-contracts';
 
 import type { ParsedArgs } from '../lib/args';
 import { flagBool, flagString } from '../lib/args';
@@ -60,7 +80,7 @@ import { CliError, errorText, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { authorEoa } from '../core/authors';
 import { SAFE_4337_MODULE } from '../core/author-safe';
-import { bundlerEndpoints, hexKey } from '../core/config';
+import { bundlerEndpoints, hexKey, type CliConfig } from '../core/config';
 import { execTransactionArgs, packVerifiedSignatures } from '../adapters/safe-tx';
 import {
   SponsoredSendRefused,
@@ -72,6 +92,7 @@ import {
   l2Rpc,
   reasonOf,
   resolveSignerSafe,
+  shortAddress,
   signerDeps,
   type Safe4337State,
   type SignerDeps,
@@ -243,6 +264,113 @@ function missingHash(hash: unknown): boolean {
   return hash === undefined || hash === null || hash === '';
 }
 
+/** `sync()` on the OwnerHistory module: permissionless, and it reads the Safe's own owners. */
+const SYNC_DATA: Hex = encodeFunctionData({ abi: OwnerHistoryModuleV1, functionName: 'sync' });
+
+/**
+ * What became of the era the rotation should have opened.
+ *
+ * `absent` is not a failure: a Safe with no owner-history module installed has
+ * nowhere to record a rotation, and nothing to repair. `recorded: false` always
+ * means the era the swap created is not on chain, and `reason` says why, so the
+ * one state this command must never produce — a rotation whose era is silently
+ * missing — is impossible to read out of it.
+ */
+interface HistorySync {
+  module: Address | null;
+  recorded: boolean;
+  /** No module installed: nothing to sync, and nothing broken. */
+  absent?: boolean;
+  txHash?: Hex;
+  /** The era the module reports open after the sync, and its owners. */
+  era?: number;
+  owners?: Address[];
+  /** Why the era is not recorded, or why it could not be read back. */
+  reason?: string;
+}
+
+/** The one human line a sync earns, in the three shapes it can take. */
+function historyLine(sync: HistorySync): string {
+  if (sync.absent === true) {
+    return 'history: no owner-history module is installed on the Safe, so this rotation is not recorded';
+  }
+  if (!sync.recorded) {
+    return `history: not recorded (${sync.reason ?? 'no reason given'}) — \`s2s signer history --sync\` repairs it`;
+  }
+  if (sync.era === undefined) {
+    return `history: recorded in ${sync.txHash ?? ''}, and the eras could not be read back (${sync.reason ?? 'no reason given'}) — \`s2s signer history\` reads them`;
+  }
+  const owners = (sync.owners ?? []).map(shortAddress).join(', ');
+  return `history: era ${String(sync.era)} open with ${owners}, recorded in ${sync.txHash ?? ''}`;
+}
+
+/**
+ * The `sync()` the swap earns, sent on the payer the swap used.
+ *
+ * Sponsored to sponsored, EOA to EOA, and no crossing over: a rotation the
+ * paymaster fronted is followed by a sync the paymaster fronts, and one the EOA
+ * paid for is followed by one the EOA pays for. The alternative — falling back
+ * to the other rail — is a sync that reports success for a transaction the user
+ * never agreed to send.
+ *
+ * Nothing here throws. The swap has landed by the time this runs, so a failed
+ * sync is a fact to report, never an exit code: the proposal is executed and the
+ * only thing left undone is the era, which `signer history --sync` repairs.
+ */
+async function sendHistorySync(input: {
+  deps: SignerDeps;
+  config: CliConfig;
+  rpcUrl: string;
+  privateKey: Hex;
+  safe: Address;
+  sponsored: boolean;
+}): Promise<HistorySync> {
+  const { deps, rpcUrl, safe } = input;
+  let module: Address | null;
+  try {
+    module = (await deps.readHistory(rpcUrl, safe)).module;
+  } catch (err) {
+    return { module: null, recorded: false, reason: `the module could not be read (${reasonOf(err)})` };
+  }
+  if (module === null) return { module: null, recorded: false, absent: true };
+
+  let txHash: Hex;
+  try {
+    txHash = input.sponsored
+      ? await deps.sendSponsored({
+          config: input.config,
+          rpcUrl,
+          privateKey: input.privateKey,
+          to: module,
+          data: SYNC_DATA,
+          safe,
+        })
+      : await deps.send({ rpcUrl, privateKey: input.privateKey, to: module, data: SYNC_DATA });
+    if (missingHash(txHash)) throw new Error('the send resolved with no transaction hash');
+    await deps.waitForReceipt({ rpcUrl, hash: txHash });
+  } catch (err) {
+    return { module, recorded: false, reason: reasonOf(err) };
+  }
+
+  // Read back rather than assumed: `sync()` is idempotent and writes nothing when
+  // the set already matched, so only the module can say which era is open.
+  try {
+    const after = await deps.readHistory(rpcUrl, safe);
+    const current = after.eras[after.eras.length - 1];
+    if (after.lags || current === undefined) {
+      return {
+        module,
+        recorded: true,
+        txHash,
+        reason: "the history still lags the Safe's owners after the sync",
+      };
+    }
+    return { module, recorded: true, txHash, era: current.index, owners: current.owners };
+  } catch (err) {
+    return { module, recorded: true, txHash, reason: reasonOf(err) };
+  }
+}
+
 /** The AMBIGUOUS state, said plainly: it may have executed, so check first. */
 function unknownOutcomeMessage(input: {
   rail: 'sponsored' | 'eoa';
@@ -388,6 +516,7 @@ export async function runSignerConfirm(
   let paidBy: 'paymaster' | 'eoa' | undefined;
   let payerNote: string | undefined;
   let note: string | undefined;
+  let history: HistorySync | undefined;
 
   // Every note leads with what this run actually did to the service: "confirmed,
   // not executed" was printed even when nothing was posted, which reads as a
@@ -497,6 +626,10 @@ export async function runSignerConfirm(
     executed = true;
     paidBy = sponsored ? 'paymaster' : 'eoa';
     payerNote = sponsored ? 'sponsored by the paymaster' : `paid by ${eoa} (${eoaReason})`;
+    // The swap landed, so the era it created is owed to the module. Sent before
+    // the store is reconciled: the reconcile reads the owners, and a rotation
+    // with an era and an owner list that disagree is the state this fixes.
+    history = await sendHistorySync({ deps, config, rpcUrl, privateKey, safe, sponsored });
     // The swap has landed: settle again against the owners the chain now
     // reports, so the new row becomes the active one and the old row goes. A
     // failure here is a warning — the chain work is done, the store can catch
@@ -526,6 +659,7 @@ export async function runSignerConfirm(
       executed,
       ...(txHash ? { txHash } : {}),
       ...(paidBy ? { paidBy } : {}),
+      ...(history ? { history } : {}),
       ...(settledName ? { settled: settledName } : {}),
       ...(note ? { note } : {}),
     },
@@ -541,6 +675,7 @@ export async function runSignerConfirm(
             `                gas for this transaction was ${payerNote ?? 'paid by an unknown party'}`,
           ]
         : [`not executed  : ${note ?? 'unknown reason'}`]),
+      ...(history ? [historyLine(history)] : []),
       ...(settledName ? [`settled: ${settledName} is now the key for ${safe}`] : []),
     ].join('\n'),
   );
