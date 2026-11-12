@@ -115,7 +115,11 @@ interface FakeService {
  * `queued` is what `pending(safe)` answers with — the swaps the service already
  * holds, which is how a POST whose reply was lost becomes visible.
  */
-function fakeService(fail?: Error, queued: SafeTxRecord[] = []): FakeService {
+function fakeService(
+  fail?: Error,
+  queued: SafeTxRecord[] = [],
+  queuedComplete = true,
+): FakeService {
   const registered: Registered[] = [];
   const proposed: Proposed[] = [];
   const asked: Address[] = [];
@@ -138,7 +142,7 @@ function fakeService(fail?: Error, queued: SafeTxRecord[] = []): FakeService {
     },
     pending(safe) {
       asked.push(safe);
-      return Promise.resolve(queued);
+      return Promise.resolve({ records: queued, complete: queuedComplete });
     },
     get() {
       return Promise.reject(new Error('not used by signer rotate'));
@@ -160,6 +164,14 @@ function deps(fake: FakeService, chain: Partial<ChainSafe> = {}): Partial<Signer
     authorsPath: storePath,
     chainId: CHAIN_ID,
   };
+}
+
+/**
+ * A pid that is certainly not running: one past the system's maximum, which
+ * `kill(pid, 0)` answers with `ESRCH` exactly as it does for a dead process.
+ */
+function deadPid(): number {
+  return 2 ** 22 + 11;
 }
 
 /** File the old key the way `signer add` does: a given Safe, active. */
@@ -693,6 +705,24 @@ describe('s2s signer rotate', () => {
     expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeUndefined();
   });
 
+  it('refuses to call the swap unqueued when the queue could not be read that far', async () => {
+    const captured = capture();
+    seedOld();
+    addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    // The walk hit the page cap: nonce 7 may be on a page nobody read, so a POST
+    // would either be refused by the service or queue a second swap.
+    const fake = fakeService(undefined, [], false);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate']), deps(fake));
+
+    expect(fake.asked).toEqual([SAFE]);
+    expect(fake.proposed).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ reused: true, proposed: false });
+    expect(String(captured.results[0]?.note)).toContain('more queued transactions');
+    expect(String(captured.results[0]?.note)).toContain('nonce 7');
+    expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeUndefined();
+  });
+
   it('proposes the stranded swap again when the service holds nothing at that nonce', async () => {
     const captured = capture();
     seedOld();
@@ -708,25 +738,65 @@ describe('s2s signer rotate', () => {
     expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeTruthy();
   });
 
-  it('refuses while another command holds the store lock, and does not remove it', async () => {
+  it('refuses while a live command holds the store lock, names its pid, and leaves the lock', async () => {
     const fake = fakeService();
     const captured = capture();
     seedOld();
     const lock = storeLockPath(storePath());
     mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
-    writeFileSync(lock, '424242\n');
+    // This process is alive by definition, so the holder is a live writer.
+    writeFileSync(lock, `${String(process.pid)}\n`);
 
     await expect(
       runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
     ).rejects.toMatchObject({ code: 'store_locked' });
     await expect(
       runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toThrow(lock);
+    ).rejects.toThrow(`pid ${String(process.pid)}`);
     // Nothing was filed behind the other writer's back, and its lock is its own
     // to release.
     expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
     expect(existsSync(lock)).toBe(true);
     expect(fake.proposed).toHaveLength(0);
+  });
+
+  it('takes over a lock left by a dead process, and says whose it was', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    // A pid that is not running: the command that wrote this lock was killed
+    // before its `finally` could release it.
+    const pid = deadPid();
+    writeFileSync(lock, `${String(pid)}\n`);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake));
+
+    expect(captured.results[0]).toMatchObject({ proposed: true, replaces: 'zomi' });
+    expect(readAuthors(storePath()).authors['zomi-next']).toBeTruthy();
+    // The leftover is gone, and the recovery was reported rather than silent: a
+    // killed command is evidence of a write that may have been cut short.
+    expect(existsSync(lock)).toBe(false);
+    expect(captured.warnings.join('\n')).toContain(`pid ${String(pid)}`);
+    expect(captured.warnings.join('\n')).toContain('was not running');
+  });
+
+  it('refuses a lock that names no pid, rather than guessing that its writer is gone', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    writeFileSync(lock, '');
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toMatchObject({ code: 'store_locked' });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/holds no pid this build can read/);
+    expect(existsSync(lock)).toBe(true);
   });
 
   it('removes the store lock after a run that succeeded and after one that refused', async () => {
@@ -784,22 +854,39 @@ describe('s2s signer rotate', () => {
     expect(fake.proposed[0]?.sender).toBe(EOA_OLD);
   });
 
-  it('takes the environment key over the store row when both own the Safe, and refuses truthfully', async () => {
+  it('retires the Safe row\'s key and signs the swap with the environment key when both own the Safe', async () => {
     const fake = fakeService();
     const captured = capture();
     seedOld();
-    // Both keys are owners. Precedence says the environment key is the one this
-    // process signs with, so it is the one a rotation would retire — and this
-    // store cannot file it, because it keeps one row per Safe.
+    // Both keys are owners. The row for this Safe holds the key a rotation
+    // replaces; the environment key is this machine's and an owner, so the Safe
+    // accepts its signature on the swap. Neither fact makes the other a refusal.
     vi.stubEnv('S2S_PRIVATE_KEY', KEY_B);
 
-    await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toMatchObject({ code: 'not_owner' });
-    await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toThrow(/comes from S2S_PRIVATE_KEY[\s\S]*'zomi'/);
-    expect(fake.proposed).toHaveLength(0);
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake, { owners: [OWNER_B, EOA_OLD] }),
+    });
+
+    expect(captured.results[0]).toMatchObject({
+      name: 'zomi-next',
+      replaces: 'zomi',
+      oldEoa: EOA_OLD,
+      eoa: EOA_NEW,
+      signedBy: OWNER_B,
+      signedBySource: 'env',
+      proposed: true,
+    });
+    // The swap removes the row's key, not the environment's, and the proposal
+    // is signed by the environment key.
+    expect(fake.proposed).toHaveLength(1);
+    expect(fake.proposed[0]?.sender).toBe(OWNER_B);
+    const decoded = decodeFunctionData({ abi: safeAbi, data: fake.proposed[0]?.tx.data ?? '0x' });
+    expect(decoded.functionName).toBe('swapOwner');
+    expect(decoded.args).toEqual([OWNER_B, EOA_OLD, EOA_NEW]);
+    // Nothing tells the user to switch authors or remove a row.
+    expect(captured.human[0]).toContain(`signs it    : ${OWNER_B}`);
+    expect(captured.human[0]).not.toContain('s2s author rm');
+    expect(captured.results[0]?.switchTo).toBeUndefined();
   });
 
   it('tells an environment key to be unset rather than telling the user to switch authors', async () => {

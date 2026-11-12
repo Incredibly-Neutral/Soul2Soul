@@ -210,14 +210,17 @@ export async function runSignerConfirm(
   let txHash: Hex | undefined;
   let note: string | undefined;
 
+  // Every note leads with what this run actually did to the service: "confirmed,
+  // not executed" was printed even when nothing was posted, which reads as a
+  // confirmation that does not exist.
+  const did = posted ? 'confirmation posted' : 'already signed by this key, nothing posted';
   if (!execute) {
-    note = posted
-      ? '--no-execute: confirmation posted, nothing sent on chain'
-      : '--no-execute: this key had already signed the proposal, nothing sent on chain';
+    note = `${did}; not executed (--no-execute)`;
   } else if (record.nonce !== chain.nonce) {
-    note = `queued behind the Safe's current nonce ${String(chain.nonce)} — confirmed, not executed; run confirm again on the proposal at the front`;
+    note = `${did}; not executed — the Safe is at nonce ${String(chain.nonce)}, so this proposal waits behind the transaction at the front; run confirm again on that one`;
   } else if (signing.length < required) {
-    note = `${String(required - signing.length)} more confirmation${required - signing.length === 1 ? '' : 's'} needed`;
+    const short = required - signing.length;
+    note = `${did}; not executed — ${String(short)} more confirmation${short === 1 ? '' : 's'} needed`;
   } else {
     const packed = await packVerifiedSignatures(signing, byOwner, safeTxHash);
     // The record came from the service, but the command is where the hash the

@@ -105,7 +105,15 @@ export async function runSignerQueue(
     );
   }
 
-  const pending = [...(await deps.service(config).pending(safe))].sort((a, b) => a.nonce - b.nonce);
+  const listed = await deps.service(config).pending(safe);
+  const pending = listed.records.sort((a, b) => a.nonce - b.nonce);
+  if (!listed.complete) {
+    // The walk stopped at the page cap. Saying so is the difference between a
+    // short list and a list that claims the Safe has nothing else queued.
+    out.warn(
+      `the service returned more queued transactions than this command reads in one go — the rows below are the first pages of ${safe}, oldest nonce first; a row after them is not missing, it is unread`,
+    );
+  }
   const threshold = chain?.threshold ?? 0;
 
   const rows: QueueRow[] = pending.map((record) => {

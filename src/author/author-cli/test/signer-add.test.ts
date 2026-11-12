@@ -210,10 +210,13 @@ describe('s2s signer add', () => {
     // an owner yet, and the active row is the key every command signs with.
     const store = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
     expect(store.active).toBeNull();
+    // `unconfirmed` is the marker that keeps `author list` from printing a key
+    // the chain has never heard of as a share of the Safe.
     expect(store.authors['signer-2b5ad5']).toEqual({
       privateKey: KEY_NEW,
       safe: SAFE,
       safeSource: 'given',
+      unconfirmed: true,
     });
   });
 

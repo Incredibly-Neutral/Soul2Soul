@@ -43,9 +43,10 @@ import { authorStoreCommands, findAuthorStoreCommand } from '../src/commands/aut
 import { parseArgs } from '../src/lib/args';
 import type { CliOut } from '../src/lib/out';
 
-/** Valid keys nobody can use: privkey 1 and 2. */
+/** Valid keys nobody can use: privkey 1, 2 and 3. */
 const KEY_A = `0x${'00'.repeat(31)}01`;
 const KEY_B = `0x${'00'.repeat(31)}02`;
+const KEY_C = `0x${'00'.repeat(31)}03`;
 const EOA_A = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 
 let dir: string;
@@ -1107,6 +1108,44 @@ describe('author commands', () => {
       active: 'bob',
     });
     expect(Object.keys(readAuthors(path).authors)).toEqual(['bob']);
+  });
+
+  it('lists a joining key as unconfirmed until a chain read shows it is an owner', async () => {
+    const path = storePath();
+    const safe = getAddress('0xabcd00000000000000000000000000000000def2');
+    // What `s2s signer add` files on a joining machine: a row for a key the
+    // chain has not been asked about yet.
+    addSigner({ name: 'zomi-join', privateKey: KEY_B, safe, activate: false }, path);
+
+    const before = authorRows(readAuthors(path));
+    expect(before.map((row) => [row.name, row.ownership])).toEqual([['zomi-join', 'unconfirmed']]);
+
+    const sink = capture();
+    await authorList.run(sink.out, parseArgs([]));
+    const listed = (sink.results[0] as { authors?: { name: string; ownership: string }[] })
+      .authors;
+    expect(listed?.find((row) => row.name === 'zomi-join')?.ownership).toBe('unconfirmed');
+    // The table says it in words, so a key with no share of the Safe is not read
+    // as one that signs.
+    expect(sink.human[0]).toContain('(filed, not an owner yet)');
+    expect(sink.human[0]).toContain('filed, not an owner yet: the key joins the Safe only when');
+
+    // The chain is the only thing that can clear the marker, and the swap it
+    // belongs to is the one `settleReplacement` is handed the owners of.
+    expect(settleReplacement(safe, [EOA_A, authorEoa(KEY_B) as Address], path)).toBe('none');
+    expect(authorRows(readAuthors(path)).map((row) => row.ownership)).toEqual(['owner']);
+    expect(readAuthors(path).authors['zomi-join']?.unconfirmed).toBeUndefined();
+  });
+
+  it('keeps the marker on a joining key the chain does not list, and prints it as unconfirmed', () => {
+    const path = storePath();
+    const safe = getAddress('0xabcd00000000000000000000000000000000def3');
+    addSigner({ name: 'zomi-join', privateKey: KEY_B, safe, activate: false }, path);
+
+    // A different key is the Safe's only owner: the joining key was never added.
+    expect(settleReplacement(safe, [authorEoa(KEY_C) as Address], path)).toBe('none');
+    expect(readAuthors(path).authors['zomi-join']?.unconfirmed).toBe(true);
+    expect(readAuthors(path).authors['zomi-join']?.replaces).toBeUndefined();
   });
 
   it('lists the rows of a rotation as pending, with the row each one replaces', async () => {

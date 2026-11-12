@@ -129,6 +129,15 @@ export interface AuthorRecord {
    * Cleared with the marker when the swap settles.
    */
   proposal?: Hex;
+  /**
+   * Filed by `s2s signer add` and not yet accepted by the chain: the key is on
+   * the owner list only once an owner posts the `addOwnerWithThreshold` proposal
+   * and it executes. Such a row is not an owner, so `author list` prints it as
+   * unconfirmed rather than claiming a share it does not have. A signer command
+   * clears the marker the first time a chain read shows the key as an owner;
+   * it is never set by hand.
+   */
+  unconfirmed?: true;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -249,6 +258,7 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
       ? { replaces: replaces.trim() }
       : {}),
     ...(proposal === undefined ? {} : { proposal }),
+    ...(record.unconfirmed === true ? { unconfirmed: true as const } : {}),
   };
 }
 
@@ -267,6 +277,12 @@ export function isGivenSafe(record: AuthorRecord | undefined): boolean {
 export function givenSafeOf(record: AuthorRecord | undefined): Address | undefined {
   if (!isGivenSafe(record) || !record?.safe) return undefined;
   return record.safe as Address;
+}
+
+/** The address a record names, when it holds one this build can read. */
+function recordSafe(record: AuthorRecord): string | undefined {
+  const value = record.safe;
+  return typeof value === 'string' && isAddress(value) ? value : undefined;
 }
 
 /** `givenSafeOf` by pet name, for a caller holding a name rather than a record. */
@@ -401,16 +417,21 @@ export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath(
 }
 
 /**
- * The store's exclusive lock: `<store>.lock`, created with `wx`.
+ * The store's exclusive lock: `<store>.lock`, created with `wx`, holding the
+ * writer's pid.
  *
  * `writeAuthors` is atomic per write, but every mutation is a read-modify-write
  * of the whole file, so two commands racing lose one of the two updates — the
  * duplicate-name check passes in both, both file a row, and one printed key is
  * gone with the overwritten copy of the file. The lock covers the read and the
- * write together. There is no timeout: a lock left by a killed process is
- * reported with its path, and the operator deletes it, because guessing how long
- * another command may legitimately take is how a live writer gets its file
- * overwritten.
+ * write together.
+ *
+ * The pid is what makes a leftover lock recoverable without guessing: `kill(pid,
+ * 0)` says whether the writer that made it still exists. A dead writer's lock is
+ * taken over (the holder cannot still be mid-write — it is gone), and the caller
+ * is told. A live writer, or a lock whose pid cannot be read, is refused with
+ * the pid it holds. There is no timeout: "old enough to steal" is how a live
+ * writer's file gets overwritten.
  */
 export function storeLockPath(path: string): string {
   return `${path}.lock`;
@@ -420,6 +441,40 @@ export function storeLockPath(path: string): string {
  * deadlocking against its own lock. */
 const heldLocks = new Set<string>();
 
+/** Whether a pid is running: `true`, `false` for a process that is gone, and
+ * `undefined` when this process may not ask (`EPERM` means alive). */
+function processAlive(pid: number): boolean | undefined {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    return undefined;
+  }
+}
+
+/** The pid a lock file names, or undefined when it names none this build can read. */
+function lockHolder(lock: string): number | undefined {
+  let text: string;
+  try {
+    text = readFileSync(lock, 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+  return /^[0-9]+$/.test(text) ? Number.parseInt(text, 10) : undefined;
+}
+
+export interface StoreLockOptions {
+  /**
+   * Called when a lock left by a dead process is taken over, with that pid. The
+   * write still happens; the user is told whose leftover was cleared, because a
+   * recovered lock is evidence that an earlier command was killed mid-write.
+   */
+  onStaleLock?: (pid: number) => void;
+}
+
 /**
  * Run `fn` holding the store lock at `path`.
  *
@@ -427,22 +482,45 @@ const heldLocks = new Set<string>();
  * throw, so a refusal leaves nothing behind. Re-entrant within the process:
  * a command may file two rows in one run.
  */
-export function withStoreLock<T>(path: string, fn: () => T): T {
+export function withStoreLock<T>(path: string, fn: () => T, options: StoreLockOptions = {}): T {
   if (heldLocks.has(path)) return fn();
   mkdirSync(dirname(path), { recursive: true });
   const lock = storeLockPath(path);
-  let fd: number;
-  try {
-    fd = openSync(lock, 'wx', 0o600);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+  let fd: number | undefined;
+  // A few attempts, not a spin: the first may clear a dead writer's lock, the
+  // next can lose the race to another process doing the same thing, and that
+  // process is then alive and refused by pid.
+  for (let attempt = 0; fd === undefined && attempt < 3; attempt += 1) {
+    try {
+      fd = openSync(lock, 'wx', 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const holder = lockHolder(lock);
+      if (holder !== undefined && processAlive(holder) === false) {
+        // The writer is gone: its lock is a leftover, not a claim.
+        try {
+          rmSync(lock, { force: true });
+          options.onStaleLock?.(holder);
+        } catch {
+          // someone else moved it first; the next open decides
+        }
+        continue;
+      }
       throw new CliError(
-        `another s2s command is writing the author store at ${path} — the lock ${lock} exists; let that command finish, and delete the lock only once no s2s command is running`,
+        holder === undefined
+          ? `another s2s command is writing the author store at ${path} — the lock ${lock} exists and holds no pid this build can read; delete it only once no s2s command is running`
+          : `another s2s command (pid ${String(holder)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`,
         1,
         'store_locked',
       );
     }
-    throw err;
+  }
+  if (fd === undefined) {
+    throw new CliError(
+      `could not take the author store lock ${lock} — another process kept re-creating it; try again`,
+      1,
+      'store_locked',
+    );
   }
   heldLocks.add(path);
   try {
@@ -474,10 +552,12 @@ export function isPendingReplacement(record: AuthorRecord | undefined): boolean 
 
 /**
  * What a row is, for a caller printing it: `pending` until the chain moves the
- * share across, `owner` once it has (or for a row that never chased one).
+ * share across, `unconfirmed` for a joining key the chain has not accepted yet,
+ * `owner` once it has (or for a row that never chased one).
  */
-export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' {
-  return isPendingReplacement(record) ? 'pending' : 'owner';
+export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' | 'unconfirmed' {
+  if (isPendingReplacement(record)) return 'pending';
+  return record.unconfirmed === true ? 'unconfirmed' : 'owner';
 }
 
 /** One row of `author list`, with the pending marker taken into account. */
@@ -486,8 +566,13 @@ export interface AuthorRow {
   eoa: string | null;
   safe: string | null;
   active: boolean;
-  /** `pending` for a row filed by `replaces`; `owner` for every other row. */
-  ownership: 'owner' | 'pending';
+  /**
+   * `pending` for a row filed by `replaces`, `unconfirmed` for a joining key
+   * `signer add` filed and no owner has added yet, `owner` otherwise.
+   */
+  ownership: 'owner' | 'pending' | 'unconfirmed';
+  /** True on a `pending` row only: the row it intends to replace. */
+  unconfirmed?: true;
   /** The row it intends to replace; absent on an owner row. */
   replaces?: string;
 }
@@ -506,6 +591,7 @@ export function authorRows(store: AuthorsStore): AuthorRow[] {
     active: name === store.active,
     ownership: ownershipOf(record),
     ...(record.replaces === undefined ? {} : { replaces: record.replaces }),
+    ...(record.unconfirmed === true ? { unconfirmed: true as const } : {}),
   }));
 }
 
@@ -775,12 +861,18 @@ function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
     );
   }
 
+  // A row filed for a key the chain has not accepted is marked as such: nothing
+  // else in the store records it, and `author list` would otherwise print a
+  // joining key as an owner of a Safe that never heard of it. A replacement row
+  // needs no marker of its own — `replaces` is already one.
+  const unconfirmed = target === undefined && input.activate === false;
   const record: AuthorRecord = {
     privateKey: normalizeKey(privateKey),
     safe: address,
     safeSource: 'given',
     ...(target ? { replaces: target.name } : {}),
     ...(proposal === undefined ? {} : { proposal }),
+    ...(unconfirmed ? { unconfirmed: true as const } : {}),
   };
   // A replacement row is filed WITHOUT the active slot, and so is a joining key
   // the caller marked `activate: false`. The active row is what every command
@@ -862,10 +954,11 @@ export function settleReplacement(
   safe: Address,
   owners: readonly Address[],
   path: string = authorsFilePath(),
+  options: StoreLockOptions = {},
 ): ReplacementOutcome {
   // The settle path removes a row and activates another in one write; a second
   // command holding a copy of the store would write that removal back.
-  return withStoreLock(path, () => settleReplacementLocked(safe, owners, path));
+  return withStoreLock(path, () => settleReplacementLocked(safe, owners, path), options);
 }
 
 function settleReplacementLocked(
@@ -873,7 +966,29 @@ function settleReplacementLocked(
   owners: readonly Address[],
   path: string,
 ): ReplacementOutcome {
-  const store = readAuthors(path);
+  const isOwnerOf = (eoa: Address): boolean =>
+    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
+
+  const stored = readAuthors(path);
+  // A joining key (`signer add`) is filed unconfirmed and becomes an owner only
+  // when an owner posts its proposal. This is the chain read that can tell, so
+  // the marker goes here — the row then reads as what the chain says it is.
+  let store = stored;
+  const cleared: Record<string, AuthorRecord> = {};
+  for (const [name, record] of Object.entries(store.authors)) {
+    if (record.unconfirmed !== true) continue;
+    if (recordSafe(record)?.toLowerCase() !== safe.toLowerCase()) continue;
+    const eoa = authorEoa(record.privateKey);
+    if (!eoa || !isOwnerOf(eoa)) continue;
+    const rest: AuthorRecord = { ...record };
+    delete rest.unconfirmed;
+    cleared[name] = rest;
+  }
+  if (Object.keys(cleared).length > 0) {
+    store = { active: store.active, authors: { ...store.authors, ...cleared } };
+    writeAuthors(store, path);
+  }
+
   const chasing = pendingRowsIn(store, safe)[0];
   if (!chasing?.replaces) return 'none';
 
@@ -886,10 +1001,8 @@ function settleReplacementLocked(
   const oldEoa = oldRow ? authorEoa(oldRow.privateKey) : undefined;
   if (oldRow && !oldEoa) return 'pending';
 
-  const isOwner = (eoa: Address): boolean =>
-    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
-  const newIsOwner = isOwner(newEoa);
-  const oldIsOwner = oldEoa !== undefined && isOwner(oldEoa);
+  const newIsOwner = isOwnerOf(newEoa);
+  const oldIsOwner = oldEoa !== undefined && isOwnerOf(oldEoa);
 
   if (newIsOwner && oldIsOwner) return 'collision';
   // Neither key is an owner: the old one left the list without the swap

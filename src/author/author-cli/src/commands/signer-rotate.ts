@@ -85,6 +85,7 @@ import {
   settleReplacement,
   withStoreLock,
   type AuthorsStore,
+  type StoreLockOptions,
 } from '../core/authors';
 import { hexKey } from '../core/config';
 import {
@@ -135,6 +136,8 @@ interface OldKey {
   source: string;
   /** The `s2s` layer the effective key came from. */
   from: 'env' | 'project' | 'store' | 'user';
+  /** The row this key is filed under, when that row belongs to another Safe. */
+  filedElsewhere?: string;
 }
 
 /** How a key's provenance is named in output: the thing to change, not a code. */
@@ -152,14 +155,20 @@ function sourceLabel(from: OldKey['from']): string {
 }
 
 /**
- * The key to swap out, by the precedence `signer confirm` signs by.
+ * The key to swap out: **the key this Safe's row holds**, when that key is one
+ * of its owners.
  *
- * A key that owns the Safe is the answer whether or not a row files it: the
- * environment is where a key that owns a Safe is most often kept, and sending
- * that user to `s2s signer add` for a key that already owns the Safe is advice
- * that cannot be followed. Rows come second, the active one first, and each
- * refusal names the state that is actually true — no rows, rows whose keys this
- * build cannot read, rows none of whose keys owns the Safe.
+ * The store's row for a Safe is what a rotation replaces, so it is the first
+ * answer, active row before the others. The effective key — `S2S_PRIVATE_KEY`,
+ * the project config, a config file — comes second: it is how a machine that
+ * signs with an unfiled key rotates at all, and `rowsForSafe`'s absence of a
+ * row for the Safe (an environment-only owner) is a state `s2s signer rotate`
+ * handles by filing the key it retires. A key filed under another Safe's row is
+ * not a row for this Safe: it is named (`filedElsewhere`) so the caller can say
+ * where it lives, and it does not become `replaces`.
+ *
+ * Every refusal names the state that is actually true — no rows, rows whose
+ * keys this build cannot read, rows none of whose keys owns the Safe.
  */
 function resolveOldKey(
   store: AuthorsStore,
@@ -170,18 +179,6 @@ function resolveOldKey(
 ): OldKey {
   const isOwner = (eoa: Address | undefined): boolean =>
     eoa !== undefined && owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
-
-  const effectiveEoa = privateKey === undefined ? undefined : authorEoa(privateKey);
-  if (privateKey !== undefined && effectiveEoa !== undefined && isOwner(effectiveEoa)) {
-    const row = authorRowForKey(store, privateKey);
-    return {
-      privateKey,
-      eoa: effectiveEoa,
-      name: row?.name,
-      source: sourceLabel(from),
-      from,
-    };
-  }
 
   const rows = rowsForSafe(store, safe);
   const owned = rows.filter((row) => isOwner(row.eoa));
@@ -195,6 +192,26 @@ function resolveOldKey(
       from: 'store',
     };
   }
+
+  const effectiveEoa = privateKey === undefined ? undefined : authorEoa(privateKey);
+  if (privateKey !== undefined && effectiveEoa !== undefined && isOwner(effectiveEoa)) {
+    // The row this key is filed under, when it is a row for THIS Safe; a row
+    // naming another Safe cannot record this swap, so it is reported, not used.
+    const filedRow = authorRowForKey(store, privateKey);
+    const filed = filedRow?.name;
+    const filedSafe = filedRow?.safe ?? null;
+    const sameSafe =
+      typeof filedSafe === 'string' && filedSafe.toLowerCase() === safe.toLowerCase();
+    return {
+      privateKey,
+      eoa: effectiveEoa,
+      ...(sameSafe && filed !== undefined ? { name: filed } : {}),
+      ...(filed !== undefined && !sameSafe ? { filedElsewhere: filed } : {}),
+      source: sourceLabel(from),
+      from,
+    };
+  }
+
   if (rows.length === 0) {
     throw new UsageError(
       `no key filed for ${safe} on this machine — file the key that is already an owner first: \`s2s signer add ${safe}\``,
@@ -300,11 +317,12 @@ export function reconcileReplacement(
   owners: readonly Address[],
   out: CliOut,
   path: string = authorsFilePath(),
+  lock: StoreLockOptions = {},
 ): string | undefined {
   const before = pendingReplacement(safe, path);
   let outcome: ReturnType<typeof settleReplacement>;
   try {
-    outcome = settleReplacement(safe, owners, path);
+    outcome = settleReplacement(safe, owners, path, lock);
   } catch (err) {
     out.warn(`could not reconcile the pending replacement for ${safe} (${reasonOf(err)})`);
     return undefined;
@@ -390,9 +408,21 @@ export async function runSignerRotate(
     );
   }
 
+  // A lock left by a killed command is cleared, because a process that is gone
+  // cannot still be mid-write. The user is told: that command may have died
+  // between writing the file and printing a key, and the key it printed is worth
+  // looking for. Both store transactions pass the same handler, because either
+  // one may be the first to meet the leftover.
+  const onStaleLock = (pid: number): void => {
+    out.warn(
+      `cleared the author store lock left by pid ${String(pid)}, which was not running — that command was killed before it could release the lock or finish, so if it printed a key, check the store holds it`,
+    );
+  };
+  const lock = { onStaleLock };
+
   // 1. Settle first: a rotation already executed is a fact the store has to
   // catch up with before this run decides anything.
-  const settled = reconcileReplacement(safe, chain.owners, out, path);
+  const settled = reconcileReplacement(safe, chain.owners, out, path, lock);
 
   // The key this process signs with, and the layer it came from. `signer
   // confirm` resolves its key the same way, so this is also the key a confirm
@@ -407,22 +437,6 @@ export async function runSignerRotate(
   const plan = withStoreLock(path, (): RotationPlan => {
     const store = readAuthors(path);
     const oldKey = resolveOldKey(store, safe, chain.owners, effectiveKey, effectiveFrom);
-
-    // A row that holds the old key must be filed for THIS Safe: a swap is
-    // recorded against the row it retires, and `addSigner` will not file the same
-    // key twice. So a key that owns this Safe while its row names another one is
-    // a rotation this store cannot describe, and saying so beats a refusal from
-    // `addSigner` that talks about the row's Safe as if it were a typo.
-    if (oldKey.name !== undefined) {
-      const row = store.authors[oldKey.name];
-      if (row?.safe?.toLowerCase() !== safe.toLowerCase()) {
-        throw new CliError(
-          `the key that owns ${safe} (${oldKey.eoa}) is filed as '${oldKey.name}', and that row names ${row?.safe ?? 'no Safe'} — this store keeps one key under one row, so it cannot also file it for ${safe}; rotate from a machine where that key comes from the environment and no row holds it`,
-          1,
-          'not_owner',
-        );
-      }
-    }
 
     // 3. A row that carries `proposal` is a queued swap: only executing it moves
     // the store on, so nothing about it may be re-proposed or replaced.
@@ -521,18 +535,29 @@ export async function runSignerRotate(
     // Set only when this run filed the old key, so the output can say it did.
     let filedOldRow: string | undefined;
     if (replacesThis === undefined) {
+      // The store's row for this Safe is what a rotation retires, even when its
+      // key is not one of the owners: the key being swapped out comes from
+      // somewhere else (the environment), and this row is the only thing the
+      // store can name as what the new key takes over from. Its key not being an
+      // owner is what makes `settleReplacement` settle the moment the new key is.
       const holder = rowsForSafe(store, safe)[0];
       if (holder) {
+        replacesThis = holder.name;
+      } else if (oldKey.filedElsewhere !== undefined) {
+        // One key, one row: `addSigner` refuses to file this key twice, so a key
+        // that owns the Safe but is filed under another Safe's row cannot be
+        // given the row this swap needs. The store's own limit, said plainly.
         throw new CliError(
-          `the key that owns ${safe} comes from ${oldKey.source}, and the row '${holder.name}' filed for that Safe holds ${holder.eoa ?? 'a key this build cannot read'}, which is not one of its owners — \`s2s author rm ${holder.name}\` clears the way, or make that row's key the one you sign with`,
+          `the key that owns ${safe} (${oldKey.eoa}) is filed as '${oldKey.filedElsewhere}', and that row names another Safe — this store keeps one key under one row, so it cannot file that key for ${safe} too; set that key as S2S_PRIVATE_KEY on a machine whose store does not file it, and rotate there`,
           1,
           'not_owner',
         );
+      } else {
+        const filed = defaultSignerName(oldKey.eoa);
+        addSigner({ name: filed, privateKey: oldKey.privateKey, safe }, path);
+        replacesThis = filed;
+        filedOldRow = filed;
       }
-      const filed = defaultSignerName(oldKey.eoa);
-      addSigner({ name: filed, privateKey: oldKey.privateKey, safe }, path);
-      replacesThis = filed;
-      filedOldRow = filed;
     }
 
     if (!reused) {
@@ -566,7 +591,7 @@ export async function runSignerRotate(
       ...(filedOldRow === undefined ? {} : { filedOldRow }),
       replaces: replacesThis,
     };
-  });
+  }, lock);
 
   const {
     oldKey,
@@ -589,20 +614,30 @@ export async function runSignerRotate(
   // is adopted (the hash is written and printed, which is the fact the earlier
   // run never got); a different transaction is a collision this row cannot pass.
   let alreadyQueued: Hex | undefined;
+  // Set when the queue could not be read far enough to answer. It outranks
+  // "not queued": the POST is skipped, because a second proposal at a nonce
+  // already used is refused by the service and a swap that is queued twice is
+  // worse than one that is queued late.
+  let queueUnread: string | undefined;
   if (reused && config.safeTx.url.trim() !== '') {
     try {
-      const queued = await deps.service(config).pending(safe);
-      const same = queued.find((record) => sameCall(record, tx));
+      const listed = await deps.service(config).pending(safe, { untilNonce: tx.nonce });
+      const same = listed.records.find((record) => sameCall(record, tx));
       if (same) {
         alreadyQueued = same.safeTxHash;
       } else {
-        const atNonce = queued.find((record) => record.nonce === tx.nonce);
+        const atNonce = listed.records.find((record) => record.nonce === tx.nonce);
         if (atNonce) {
           throw new CliError(
             `the service already holds a different transaction for ${safe} at nonce ${String(tx.nonce)}: ${atNonce.safeTxHash} (to ${atNonce.to}) — '${name}' cannot be queued behind it, and proposing it again would be refused; \`s2s signer queue ${safe}\` shows what is pending, and that hash has to execute or be cancelled first`,
             1,
             'nonce_taken',
           );
+        }
+        if (!listed.complete) {
+          // The walk stopped at its page cap without reaching this nonce. That is
+          // not "nothing is queued": the record may be on a page nobody read.
+          queueUnread = `the service holds more queued transactions for ${safe} than this command reads in one go, so it cannot say whether nonce ${String(tx.nonce)} is already taken — \`s2s signer queue ${safe}\` lists the first pages; execute or cancel what is there, then run this again`;
         }
       }
     } catch (err) {
@@ -613,12 +648,32 @@ export async function runSignerRotate(
     }
   }
 
+  // Who posts the swap. Any owner of the Safe may, and the run already trusts
+  // the effective key enough to be the one every later command signs with — so
+  // when it owns the Safe it signs the swap, even if the key being retired is a
+  // different row's. Otherwise the key being retired signs it: it is an owner by
+  // construction, and the new key is not one until the swap executes.
+  const effectiveEoa = effectiveKey === undefined ? undefined : authorEoa(effectiveKey);
+  const effectiveOwns =
+    effectiveEoa !== undefined &&
+    chain.owners.some((owner) => owner.toLowerCase() === effectiveEoa.toLowerCase());
+  let swapSigner: { privateKey: string; eoa: Address; from: OldKey['from'] } = {
+    privateKey: oldKey.privateKey,
+    eoa: oldKey.eoa,
+    from: oldKey.from,
+  };
+  if (effectiveOwns && effectiveKey !== undefined) {
+    swapSigner = { privateKey: effectiveKey, eoa: effectiveEoa, from: effectiveFrom };
+  }
+
   let proposed = false;
   let safeTxHash = localHash;
   let note: string | undefined;
   if (alreadyQueued !== undefined) {
     safeTxHash = alreadyQueued;
     proposed = true;
+  } else if (queueUnread !== undefined) {
+    note = queueUnread;
   } else if (config.safeTx.url.trim() === '') {
     note = 'no Safe Transaction Service URL configured (safeTx.url)';
   } else {
@@ -630,10 +685,11 @@ export async function runSignerRotate(
       // Signed by the key this run retires, not by the key it installs: the new
       // key is on the owner list only after this transaction executes, and the
       // service refuses a proposal from a sender that is not an owner.
-      const signature = await privateKeyToAccount(oldKey.privateKey as Hex).sign({
+      const signature = await privateKeyToAccount(swapSigner.privateKey as Hex).sign({
         hash: localHash,
       });
-      safeTxHash = (await service.propose({ safe, sender: oldKey.eoa, tx, signature })).safeTxHash;
+      safeTxHash = (await service.propose({ safe, sender: swapSigner.eoa, tx, signature }))
+        .safeTxHash;
       proposed = true;
     } catch (err) {
       note = reasonOf(err);
@@ -667,10 +723,13 @@ export async function runSignerRotate(
   const confirmKey = effectiveKey === undefined ? undefined : authorEoa(effectiveKey);
   const confirmKeyDiffers =
     effectiveKey?.toLowerCase() !== oldKey.privateKey.toLowerCase();
+  // No advice when the effective key is itself an owner: `confirm` signs with it
+  // and the Safe accepts it, whatever row it came from. The gap the advice closes
+  // is a confirm key the chain refuses.
   let switchTo: string | undefined;
-  if (effectiveFrom === 'store' && confirmKeyDiffers) switchTo = oldKey.name;
+  if (!effectiveOwns && effectiveFrom === 'store' && confirmKeyDiffers) switchTo = oldKey.name;
   const confirmFix =
-    confirmKeyDiffers && effectiveKey !== undefined && effectiveFrom !== 'store'
+    !effectiveOwns && confirmKeyDiffers && effectiveKey !== undefined && effectiveFrom !== 'store'
       ? effectiveFrom === 'env'
         ? `\`S2S_PRIVATE_KEY\` holds ${confirmKey ?? 'a key this build cannot derive'}, which does not own ${safe} — unset it so '${oldKey.name ?? 'the store row'}' signs, or run confirm where that key is the one in the environment`
         : effectiveFrom === 'project'
@@ -687,6 +746,14 @@ export async function runSignerRotate(
       : oldKey.from === 'store'
         ? `'${oldKey.name}'`
         : `'${oldKey.name}', key from ${oldKey.source}`;
+
+  const sameSigner = swapSigner.eoa.toLowerCase() === oldKey.eoa.toLowerCase();
+  const signerLabel = sameSigner ? `'${oldKey.name ?? oldKey.eoa}'` : swapSigner.eoa;
+  const signerLine = sameSigner
+    ? []
+    : [
+        `signs it    : ${swapSigner.eoa} (${swapSigner.from === 'store' ? 'the active author' : sourceLabel(swapSigner.from)}) — an owner of ${safe}; the key this swap removes is ${oldKey.eoa}, so that one is retired and this one stays`,
+      ];
 
   out.result(
     {
@@ -709,6 +776,9 @@ export async function runSignerRotate(
       ...(reused ? { reused: true } : {}),
       ...(alreadyQueued === undefined ? {} : { alreadyQueued: true }),
       ...(filedOldRow === undefined ? {} : { filedOldRow }),
+      ...(swapSigner.eoa.toLowerCase() === oldKey.eoa.toLowerCase()
+        ? {}
+        : { signedBy: swapSigner.eoa, signedBySource: swapSigner.from }),
       ...(switchTo ? { switchTo } : {}),
       ...(note ? { note } : {}),
       ...(mnemonic ? { mnemonic } : {}),
@@ -725,6 +795,7 @@ export async function runSignerRotate(
           ]),
       `eoa         : ${eoa}`,
       `old eoa     : ${oldKey.eoa} (${oldKeyLabel}, still the key that owns the swap)`,
+      ...signerLine,
       `safe        : ${safe}`,
       `threshold   : ${String(chain.threshold)} (unchanged — a swap keeps it)`,
       `nonce       : ${String(chain.nonce)}`,
@@ -741,8 +812,8 @@ export async function runSignerRotate(
       ...(proposed
         ? [
             alreadyQueued === undefined
-              ? `proposal    : queued — '${oldKey.name ?? oldKey.eoa}' signed it (1 of ${String(chain.threshold)} confirmations)`
-              : `proposal    : already queued — ${safeTxHash} was on the service from an earlier run whose reply never arrived, and '${oldKey.name ?? oldKey.eoa}' signed it`,
+              ? `proposal    : queued — ${signerLabel} signed it (1 of ${String(chain.threshold)} confirmations)`
+              : `proposal    : already queued — ${safeTxHash} was on the service from an earlier run whose reply never arrived, and ${signerLabel} signed it`,
             ...(thresholdMet
               ? [
                   `              that signature is in the proposal and the threshold is met: the swap is executable as soon as the service holds it`,

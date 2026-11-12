@@ -101,6 +101,11 @@ async function signedByB(): Promise<Hex> {
   return privateKeyToAccount(KEY_B).signMessage({ message: { raw: HASH } });
 }
 
+/** This machine's own signature over the hash, in the same scheme. */
+async function signedByMine(): Promise<Hex> {
+  return privateKeyToAccount(KEY_SIGNER as Hex).signMessage({ message: { raw: HASH } });
+}
+
 function baseRecord(overrides: Partial<SafeTxRecord> = {}): SafeTxRecord {
   return {
     safeTxHash: HASH,
@@ -347,6 +352,72 @@ describe('s2s signer confirm', () => {
       const execArgs = call.args as readonly Hex[];
       expect((execArgs[9] ?? '0x').slice(2, 66)).toBe(scheme.signature.slice(2, 66));
     }
+  });
+
+  it('says nothing was posted when this key had already signed a proposal that cannot execute yet', async () => {
+    // The combination that used to lie: nothing was posted (the signature was
+    // already there) and nothing was executed (the Safe is not at this nonce).
+    const fake = fakeService(
+      baseRecord({
+        safeTxHash: hashFor(9),
+        nonce: 9,
+        confirmations: [{ owner: EOA_SIGNER, signature: await signedByMine() }],
+      }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, {
+        sent,
+        chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 },
+      }),
+    });
+
+    expect(fake.confirmed).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ posted: false, confirmed: true, executed: false });
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('already signed by this key, nothing posted');
+    expect(note).toContain('nonce 7');
+    // The old wording claimed a confirmation that never happened.
+    expect(note).not.toContain('confirmed, not executed');
+  });
+
+  it('says the confirmation was posted when it was, and what is still missing', async () => {
+    const fake = fakeService(baseRecord({ confirmations: [], confirmationsRequired: 3 }));
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, {
+        chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 3, nonce: 7 },
+      }),
+    });
+
+    expect(captured.results[0]).toMatchObject({ posted: true, executed: false });
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('confirmation posted');
+    expect(note).toContain('2 more confirmations needed');
+  });
+
+  it('says nothing was posted under --no-execute when the signature was already there', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: EOA_SIGNER, signature: await signedByMine() }] }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE, '--no-execute']),
+      deps(fake, { sent, chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 } }),
+    );
+
+    expect(fake.confirmed).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('already signed by this key, nothing posted');
+    expect(note).toContain('--no-execute');
   });
 
   it('posts its own confirmation when the record carries only other owners', async () => {

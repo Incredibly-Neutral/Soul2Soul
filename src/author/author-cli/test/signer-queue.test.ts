@@ -98,7 +98,7 @@ function service(records: SafeTxRecord[]): SafeTxService {
       return Promise.reject(new Error('not used by signer queue'));
     },
     pending() {
-      return Promise.resolve(records);
+      return Promise.resolve({ records, complete: true });
     },
     get() {
       return Promise.reject(new Error('not used by signer queue'));

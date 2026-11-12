@@ -503,7 +503,16 @@ export interface SafeTxService {
      */
     signature: Hex;
   }): Promise<{ safeTxHash: Hex }>;
-  pending(safe: Address): Promise<SafeTxRecord[]>;
+  /**
+   * The Safe's unexecuted transactions, oldest nonce first. `complete` is
+   * false when the page walk stopped before the queue was exhausted (the
+   * page cap), so a caller looking for one nonce knows the absence of an
+   * answer is not an answer.
+   */
+  pending(
+    safe: Address,
+    options?: { untilNonce?: number },
+  ): Promise<{ records: SafeTxRecord[]; complete: boolean }>;
   get(safe: Address, safeTxHash: Hex): Promise<SafeTxRecord>;
   confirm(input: { safe: Address; safeTxHash: Hex; signature: Hex }): Promise<void>;
 }
@@ -680,6 +689,28 @@ function assertRecordHash(record: SafeTxRecord, chainId: number): void {
   }
 }
 
+/**
+ * How many pages of the queue one read walks. Five pages of 100 is more queued
+ * transactions than a Safe can execute in a month; past that the honest answer
+ * is "stopped looking", not a longer walk.
+ */
+const PENDING_MAX_PAGES = 5;
+
+/**
+ * The path part of a service `next` link. The link is usually absolute, and
+ * every request goes to the configured base, so the origin is dropped: fetching
+ * `base` + an absolute URL would produce `https://hosthttps://host/…`.
+ */
+function pagePath(next: unknown): string | undefined {
+  if (typeof next !== 'string' || next.trim() === '') return undefined;
+  try {
+    const url = new URL(next);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return next.startsWith('/') ? next : `/${next}`;
+  }
+}
+
 export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
   const base = opts.config.safeTx.url.trim().replace(/\/+$/, '');
   if (base === '') {
@@ -818,19 +849,44 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
       return { safeTxHash };
     },
 
-    /** Everything queued and not yet executed, in nonce order — the queue. */
-    pending: async (safe): Promise<SafeTxRecord[]> => {
-      const payload = (await json(
-        'GET',
-        `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce`,
-      )) as { results?: unknown[] } | undefined;
-      const results = Array.isArray(payload?.results) ? payload.results : [];
+    /**
+     * Everything queued and not yet executed, in nonce order — the queue.
+     *
+     * The collection is paged, and one page is not the queue: a Safe with more
+     * queued transactions than a page fits would hide the record a caller is
+     * looking for, and "not there" would then be a wrong answer about a
+     * transaction that exists. The walk follows `next` up to `PENDING_MAX_PAGES`
+     * pages, or stops as soon as `untilNonce` is covered — nothing past that
+     * nonce can be the record being looked for. `complete` says whether the walk
+     * reached the end, so the caller can tell "nothing at that nonce" from
+     * "stopped looking".
+     */
+    pending: async (safe, options = {}) => {
+      const records: SafeTxRecord[] = [];
+      let next: string | undefined = `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce&limit=100`;
+      let complete = false;
+      let page = 0;
+      while (next !== undefined && page < PENDING_MAX_PAGES) {
+        page += 1;
+        const payload = (await json('GET', next)) as
+          | { results?: unknown[]; next?: unknown }
+          | undefined;
+        const results = Array.isArray(payload?.results) ? payload.results : [];
+        records.push(...results.map((entry) => toRecord(entry, safe, chainId)));
+        const covered =
+          options.untilNonce !== undefined &&
+          records.some((record) => record.nonce >= (options.untilNonce ?? 0));
+        if (covered) {
+          complete = true;
+          break;
+        }
+        next = pagePath(payload?.next);
+        if (next === undefined) complete = true;
+      }
       // `ordering=nonce` is the service's promise, not something to rely on for
       // correctness: the queue is the order the nonces must be executed in, and
       // a page that arrives in another order would be executed out of turn.
-      return results
-        .map((entry) => toRecord(entry, safe, chainId))
-        .sort((left, right) => left.nonce - right.nonce);
+      return { records: records.sort((left, right) => left.nonce - right.nonce), complete };
     },
 
     /**
