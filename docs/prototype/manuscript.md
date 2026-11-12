@@ -40,6 +40,7 @@ interface S2SPublicContent {
   modifiedDate: number;       // unix seconds, when this version was signed
   tags: string[];
   plaintextHash: string;      // keccak256 of the body before encryption
+  label?: string;             // a short public name; unsigned, so no signature covers it
 }
 ```
 
@@ -52,6 +53,8 @@ The public part holds what a publication needs before it decrypts anything: who 
 The body holds the title, the slug, the text and any custom fields. The author decides per manuscript whether to encrypt it, with a boolean in the note's frontmatter. Encrypted, it can be decrypted only through the press, when a gate passes. The body is stored as a string, so encryption replaces that string and sets `encryption` to true, and the rest of the object is the same either way.
 
 The item carries one body per key holder, keyed by whose key it is. `s2s` is the press's key, and every item has that entry. The layout leaves room for a publication with its own key to add its own ciphertext beside it, and nothing needs signing again when it does: the signature covers the public part and `plaintextHash`, never the body. Only the press's entry is written today, so an item still holds one ciphertext.
+
+A manuscript may also carry a label: a short name its author wrote, public and unsigned. The title is inside the body, so an encrypted manuscript has no public name, and a listing would show only a genesis id. The label is that name. It is left out of the signing types on purpose, so an item's objectId and signature are the same bytes with a label and without one, and a blank or missing label writes no key at all. Anyone who relays the item can change the label, so no gate, index, cache key or identity depends on it. When the label is absent, whoever displays the manuscript shows the genesis id instead.
 
 ## Signing: EIP-712 over the public part
 

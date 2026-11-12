@@ -269,6 +269,7 @@ describe('collectTreeCids', () => {
 describe('collectArchiveCids', () => {
   const GEN_A = '0x1111111111111111111111111111111111111111111111111111111111111111';
   const GEN_B = '0x2222222222222222222222222222222222222222222222222222222222222222';
+  const GEN_C = '0x3333333333333333333333333333333333333333333333333333333333333333';
 
   it('decodes content_cache_<pub> → archive + parses Archive → archive-item entries keyed by genesis', async () => {
     const archive = {
@@ -279,7 +280,9 @@ describe('collectArchiveCids', () => {
         [GEN_A]: {
           cid: ROOT_CID,
           item: {
-            public: { title: 'Hello world' },
+            // A labelled encrypted manuscript: the label is the only public name
+            // it has, so it is the role, ahead of the public title beside it.
+            public: { label: 'Field notes', title: 'Hello world' },
             objectId: 'a',
             proof: {
               type: 'eip712',
@@ -292,6 +295,8 @@ describe('collectArchiveCids', () => {
         },
         // item without any title → role must be best-effort undefined
         [GEN_B]: { cid: DIR_CID, item: { objectId: 'b' } },
+        // pre-label item: a public title is all it has, and it is still used
+        [GEN_C]: { cid: FILE_B, item: { public: { title: 'Hello world' }, objectId: 'c' } },
       },
     };
     const cat = vi.fn((cid: string) =>
@@ -313,7 +318,7 @@ describe('collectArchiveCids', () => {
       category: 'archive-item',
       source: 'archive',
       genesis: GEN_A,
-      role: 'Hello world',
+      role: 'Field notes',
     });
     const genB = entries.find((e) => e.genesis === GEN_B);
     expect(genB).toMatchObject({
@@ -323,8 +328,10 @@ describe('collectArchiveCids', () => {
       genesis: GEN_B,
     });
     expect(genB?.role).toBeUndefined();
+    const genC = entries.find((e) => e.genesis === GEN_C);
+    expect(genC?.role).toBe('Hello world');
     expect(entries.filter((e) => e.category === 'archive')).toHaveLength(1);
-    expect(entries.filter((e) => e.category === 'archive-item')).toHaveLength(2);
+    expect(entries.filter((e) => e.category === 'archive-item')).toHaveLength(3);
   });
 
   it('archive cat is invalid JSON → only the archive entry, no throw', async () => {

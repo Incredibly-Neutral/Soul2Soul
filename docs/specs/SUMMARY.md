@@ -137,11 +137,16 @@ chooses transport (Bun fetch vs Lit `executeAction`), nothing else.
 `S2SContentItem = { public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string) }`
 - `S2SPublicContent` (signed, EIP-712): `specVersion, author(0x Safe address), postType, mediaType, parent,
   position, publication, locale, creationDate(unixts, genesis signing time), modifiedDate(unixts, this
-  version), base?, tags[], attributes?, plaintextHash`; a v1 item carries a single `createdAt` instead
+  version), base?, tags[], attributes?, plaintextHash` and, on v2 only, `label?` (public and
+  unsigned — ADR-003); a v1 item carries a single `createdAt` instead
 - `secret` = stringified JSON `{ title, slug, content, custom? }` when `encryption:false`, ciphertext
   when `true`. **`secret` is not signed** — `plaintextHash` commits the plaintext instead.
 - `objectId` = EIP-712 digest of `public`, available pre-upload/pre-CID.
-- Every field in `S2SPublicContent` is signed; there is no unsigned public field.
+- Every field in `S2SPublicContent` is signed, with one named exception: the v2 `label`, a short
+  display name that is absent from `S2S_TYPES_V2`, so it enters neither the signing view nor the
+  digest and `objectId` is the same bytes with it and without it. A displayer resolves
+  `label ?? genesis`; nothing may depend on it (no gate, index, cache key or identity), because
+  a relayer can rewrite it. [ADR-003](../adr/ADR-003-label-is-unsigned.md).
 
 **Legacy `S2SBody` (deprecated, actions still use it):** discriminated union —
 `S2SBodyBase` + `S2SBodyPlain` (`encryption:false`, `content, title, slug, custom?`) /
