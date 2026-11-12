@@ -11,6 +11,14 @@
 // how many signatures a transaction needs. The proposal is `to: safe`, so the
 // Safe calls itself; the service carries it until the owners have confirmed.
 //
+// The proposal is signed by a key that already owns the Safe, never by the key
+// being added: the service stores a proposal's signature as its sender's
+// confirmation and refuses a sender that is not on the owner list, and the key
+// this run files joins the list only when the transaction executes. A machine
+// that holds no owner key for the Safe — the usual case for a machine that is
+// joining — posts nothing and reports the same `{to, data}` call for an owner
+// machine to make.
+//
 // The key comes from the same resolver `author new` uses (`--key`, `--mnemonic`,
 // a piped line, else a generated BIP39 phrase printed once). It is filed BEFORE
 // the service is touched, and a failed proposal is reported, never thrown: the
@@ -21,6 +29,9 @@
 // POST, and execution is some owner's later business (`s2s signer confirm`).
 // Runs without `buildContext`.
 // ============================================================================
+
+import type { Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
@@ -39,6 +50,7 @@ import {
   defaultSignerName,
   l2Rpc,
   reasonOf,
+  shortAddress,
   signerDeps,
   type SignerDeps,
 } from './signer-store';
@@ -98,11 +110,29 @@ export async function runSignerAdd(
   };
   const localHash = computeSafeTxHash({ chainId: deps.chainId, safe, tx });
 
+  // The key this process can sign for, read from the config BEFORE the new row
+  // is filed: `addSigner` makes the joining key the active one, and that key is
+  // not an owner. What is wanted is the key this machine already had — an env
+  // or project key that is on the Safe's owner list — because the service files
+  // a proposal's signature as its sender's confirmation and refuses a sender
+  // that is not an owner. `signer add` refuses a key that is already an owner,
+  // and the store holds one row per Safe, so the joining machine has none.
+  const configKey = hexKey(config.privateKey);
+  const configEoa = configKey ? authorEoa(configKey) : undefined;
+  const proposer =
+    configKey && configEoa && chain.owners.some((o) => o.toLowerCase() === configEoa.toLowerCase())
+      ? { privateKey: configKey, eoa: configEoa }
+      : undefined;
+
   let proposed = false;
   let safeTxHash = localHash;
   let note: string | undefined;
   if (config.safeTx.url.trim() === '') {
     note = 'no Safe Transaction Service URL configured (safeTx.url)';
+  } else if (!proposer) {
+    // Decided offline: the service answers "Sender is not an owner" to every
+    // POST this machine could make, and no round trip is spent learning it.
+    note = `no key this machine can sign with is an owner of ${safe}, and the service accepts a proposal only from an owner — an owner machine has to post it [not_owner_key]`;
   } else {
     try {
       const service = deps.service(config);
@@ -114,7 +144,13 @@ export async function runSignerAdd(
       // the Safe, not a default. The field stays unstated until something here
       // can read `isModuleEnabled` for the module address.
       await service.register(safe, { owners: chain.owners, threshold: chain.threshold });
-      safeTxHash = (await service.propose({ safe, sender: eoa, tx })).safeTxHash;
+      // Signed by the owner, because the service files the signature as that
+      // owner's confirmation. Not by `eoa`: the key this run adds is not on the
+      // owner list yet, and a proposal from it is refused.
+      const signature = await privateKeyToAccount(proposer.privateKey as Hex).sign({
+        hash: localHash,
+      });
+      safeTxHash = (await service.propose({ safe, sender: proposer.eoa, tx, signature })).safeTxHash;
       proposed = true;
     } catch (err) {
       note = reasonOf(err);
@@ -155,13 +191,19 @@ export async function runSignerAdd(
       `safeTxHash  : ${safeTxHash}`,
       ...(proposed
         ? [
-            `proposal    : queued — 0 of ${String(chain.threshold)} confirmations`,
-            `              the other owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
+            `proposal    : queued — ${shortAddress(proposer?.eoa ?? '')} signed it (1 of ${String(chain.threshold)} confirmations)`,
+            ...(chain.threshold > 1
+              ? [
+                  `              the other owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
+                ]
+              : [
+                  `              the threshold is met: \`s2s signer confirm ${safeTxHash}\` executes it`,
+                ]),
             `              proposing costs no gas; execution costs gas from whichever EOA sends it`,
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            '              propose this call by hand from an owner wallet:',
+            `              the service accepts a proposal only from an owner of ${safe}: post this call from an owner machine`,
             `              to   ${safe}`,
             `              data ${tx.data}`,
           ]),

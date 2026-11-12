@@ -23,7 +23,9 @@ holding **no key and no server**. It reads chain state directly over RPC and **p
 as a Safe transaction. It renders nothing, signs nothing on the publication's behalf, and never writes
 the site root.
 
-Five tabs: **Deals · Whitelists · Records · Storage · Website Tree**.
+Five tabs: **Agreements · Whitelists · Records · Storage · Website Tree**. The tab is named
+Agreements; its ids keep the older word (`deals-tab`, `s2s-deals-tab`, `currentTab: 'deals'`) because
+links, tests and the e2e helper key off them.
 
 ## Runtime context
 

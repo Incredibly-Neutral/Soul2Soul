@@ -1,9 +1,9 @@
 // s2s-check.ts — generic single-action check control.
 //
-// Ports the crude inline check forms (whitelist "can publish", deals "genesis
-// has a deal") into a reusable LitElement: a border-only pill that blends in,
-// holding a mono value input and a check icon button. Clicking the button (or
-// pressing Enter in the input) trims the value
+// Ports the crude inline check forms (whitelist "can publish", agreements
+// "genesis has an agreement") into a reusable LitElement: a border-only pill
+// that blends in, holding a mono value input and a check icon button. Clicking
+// the button (or pressing Enter in the input) trims the value
 // and dispatches a composed bubbling CustomEvent `s2s-check` with
 // detail { value }. 100% presentational + input handling — no store/contract/
 // Safe knowledge lives here. The consumer runs the async verification and
