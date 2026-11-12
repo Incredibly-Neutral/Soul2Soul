@@ -18,6 +18,7 @@ import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
 import { computeSafeTxHash } from '../src/adapters/safe-tx';
+import { addSigner, pendingReplacement, readAuthors } from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -29,6 +30,9 @@ import type { CliOut } from '../src/lib/out';
 const KEY_SIGNER = `0x${'00'.repeat(31)}01`;
 const EOA_SIGNER = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 const KEY_STRANGER = `0x${'00'.repeat(31)}05`;
+/** The key a pending rotation would file: not an owner yet. */
+const KEY_REPLACEMENT: Hex = `0x${'00'.repeat(31)}03`;
+const EOA_REPLACEMENT: Address = privateKeyToAccount(KEY_REPLACEMENT).address;
 
 const SAFE: Address = '0x1111111111111111111111111111111111111111';
 /** A second owner with a key, so its confirmation can actually be recovered. */
@@ -116,6 +120,7 @@ function baseRecord(overrides: Partial<SafeTxRecord> = {}): SafeTxRecord {
 interface FakeService {
   service: SafeTxService;
   confirmed: { safe: Address; safeTxHash: Hex; signature: Hex }[];
+  gets: number;
 }
 
 /**
@@ -140,6 +145,7 @@ function fakeService(
       return Promise.reject(new Error('not used by signer confirm'));
     },
     get() {
+      fake.gets += 1;
       return Promise.resolve(current);
     },
     confirm(input) {
@@ -152,7 +158,8 @@ function fakeService(
       return Promise.resolve();
     },
   };
-  return { service, confirmed };
+  const fake: FakeService = { service, confirmed, gets: 0 };
+  return fake;
 }
 
 interface Sent {
@@ -164,16 +171,24 @@ interface Sent {
 
 function deps(
   fake: FakeService,
-  options: { chain?: ChainSafe; code?: boolean; sent?: Sent[] } = {},
+  options: { chain?: ChainSafe; code?: boolean; sent?: Sent[]; ownersAfter?: Address[] } = {},
 ): Partial<SignerDeps> {
   const sent = options.sent ?? [];
+  let reads = 0;
   return {
     config: () => loadConfig(),
     service: () => fake.service,
-    readSafe: () =>
-      Promise.resolve(
+    readSafe: () => {
+      reads += 1;
+      const after = options.ownersAfter;
+      if (after && reads > 1) {
+        // Post-execution read: the owners the chain reports once the swap ran.
+        return Promise.resolve({ deployed: true, owners: after, threshold: 2, nonce: 8 });
+      }
+      return Promise.resolve(
         options.chain ?? { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 },
-      ),
+      );
+    },
     readCode: () => Promise.resolve(options.code ?? false),
     send: (input) => {
       sent.push(input);
@@ -240,6 +255,7 @@ describe('s2s signer confirm', () => {
       executed: true,
       txHash: TX_HASH,
     });
+    expect(captured.results[0]?.settled).toBeUndefined();
     expect(captured.human[0]).toContain('gas');
   });
 
@@ -441,5 +457,55 @@ describe('s2s signer confirm', () => {
     // the confirmation is on the service; only the execution failed
     expect(fake.confirmed).toHaveLength(1);
     expect(captured.results).toHaveLength(0);
+  });
+
+  it('settles a pending replacement once the swap has executed', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+      path,
+    );
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { sent, ownersAfter: [EOA_REPLACEMENT, OWNER_B] }),
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ executed: true, settled: 'zomi-next' });
+    expect(captured.human[0]).toContain(`settled: zomi-next is now the key for ${SAFE}`);
+    // the new row is the active one and the old row is gone
+    const store = readAuthors(path);
+    expect(store.active).toBe('zomi-next');
+    expect(store.authors.zomi).toBeUndefined();
+    expect(pendingReplacement(SAFE)).toBeUndefined();
+  });
+
+  it('settles before the record read, so a run that died after executing still reconciles', async () => {
+    const fake = fakeService(baseRecord());
+    const captured = capture();
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+      path,
+    );
+
+    // The chain says the swap already landed, so this key is no longer an
+    // owner: the confirmation is refused, but the store is reconciled first.
+    await expect(
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, { chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 } }),
+      }),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+
+    expect(fake.gets).toBe(0);
+    expect(readAuthors(path).active).toBe('zomi-next');
+    expect(readAuthors(path).authors.zomi).toBeUndefined();
   });
 });

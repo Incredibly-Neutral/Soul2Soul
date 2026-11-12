@@ -8,9 +8,9 @@
 // content actions (upload, publish, …) need the full context.
 //
 // `signer` is a group of its own, for a key that is one owner of a Safe it did
-// not create. All three actions are store commands (no context, no bundler):
-// they file a key, read a queue, sign a hash and — at most — send one plain
-// transaction from the EOA.
+// not create. Every action is a store command (no context, no bundler): they
+// file a key, swap it for another, read a queue, sign a hash and — at most —
+// send one plain transaction from the EOA.
 // ============================================================================
 
 import type { CommandSpec, StoreCommandSpec } from '../lib/command';
@@ -27,6 +27,7 @@ import { authorInit } from './init';
 export { authorStoreCommands, findAuthorStoreCommand } from './author-store';
 import { authorStoreCommands } from './author-store';
 import { signerAdd } from './signer-add';
+import { signerRotate } from './signer-rotate';
 import { signerQueue } from './signer-queue';
 import { signerConfirm } from './signer-confirm';
 
@@ -47,6 +48,7 @@ export const publicationCommands: CommandSpec[] = [newPublication];
 /** `s2s signer` — keys filed as owners of a Safe that already exists. */
 export const signerCommands: readonly StoreCommandSpec[] = [
   signerAdd,
+  signerRotate,
   signerQueue,
   signerConfirm,
 ];

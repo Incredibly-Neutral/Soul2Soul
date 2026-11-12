@@ -41,10 +41,12 @@ import { execTransactionArgs, packVerifiedSignatures } from '../adapters/safe-tx
 import {
   asSafeAddress,
   l2Rpc,
+  reasonOf,
   resolveSignerSafe,
   signerDeps,
   type SignerDeps,
 } from './signer-store';
+import { reconcileReplacement } from './signer-rotate';
 
 export async function runSignerConfirm(
   out: CliOut,
@@ -88,6 +90,10 @@ export async function runSignerConfirm(
   if (!chain.deployed) {
     throw new CliError(`no Safe at ${safe} on Base — nothing to confirm`, 1, 'safe_not_deployed');
   }
+  // Before anything is read from the service: a rotation whose swap already
+  // executed is settled here, so a run that died after executing still moves
+  // the store on, and this run decides with the key that is actually active.
+  let settledName = reconcileReplacement(safe, chain.owners, out);
   if (!chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) {
     throw new CliError(
       `${eoa} is not an owner of ${safe} — an owner has to add it first (\`s2s signer add ${safe}\`)`,
@@ -158,6 +164,18 @@ export async function runSignerConfirm(
     const call = execTransactionArgs(after, packed, { chainId: deps.chainId });
     txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
     executed = true;
+    // The swap has landed: settle again against the owners the chain now
+    // reports, so the new row becomes the active one and the old row goes. A
+    // failure here is a warning — the chain work is done, the store can catch
+    // up on the next run.
+    try {
+      const ownersAfter = (await deps.readSafe(rpcUrl, safe)).owners;
+      settledName = reconcileReplacement(safe, ownersAfter, out) ?? settledName;
+    } catch (err) {
+      out.warn(
+        `the transaction executed but the store was not reconciled (${reasonOf(err)}) — the next \`s2s signer\` run settles it`,
+      );
+    }
   }
 
   out.result(
@@ -172,6 +190,7 @@ export async function runSignerConfirm(
       confirmed: true,
       executed,
       ...(txHash ? { txHash } : {}),
+      ...(settledName ? { settled: settledName } : {}),
       ...(note ? { note } : {}),
     },
     [
@@ -184,6 +203,7 @@ export async function runSignerConfirm(
             `                gas for this transaction was paid from ${eoa}`,
           ]
         : [`not executed  : ${note ?? 'unknown reason'}`]),
+      ...(settledName ? [`settled: ${settledName} is now the key for ${safe}`] : []),
     ].join('\n'),
   );
 }
