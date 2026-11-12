@@ -14,8 +14,8 @@
 > module) and deployed on Base — implementation `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6`, via
 > `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`. The **per-Safe proxy is
 > installed by the CLI** (`s2s author new`, or `s2s author init` for an author that already exists),
-> which calls `createDraftsModule(safe)` and needs no Safe transaction for it — see
-> [SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The interface below is
+> which calls `createDraftsModule(safe)`, and the Safe enables the proxy in the same transaction that
+> installs the owner-history guard — see [SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The interface below is
 > frozen; anything under [open questions](#open-questions) is not
 > decided and must not be treated as a guarantee.
 
@@ -52,7 +52,8 @@ one ERC-1967 proxy per Safe, the factory tracking which proxy belongs to which S
 |---|---|
 | `genesis` (`bytes32`) | the document's permanent identity — same convention as the publication module, `toBytes32Id(ref)` from `shared`: keccak256 of anything that is not `0x` + 64 hex, passthrough otherwise. Stable across revisions. |
 | `cid` (`string`) | *this version's* bytes. Not stable. |
-| `timestamp` (`uint256`) | block time at append. |
+| `timestamp` (`uint64` stored, `uint256` on the read) | block time at append. |
+| `blockNumber` (`uint64` on the read) | block at append. `0` means the version was written before this implementation, or carried in by `absorb()`, and the log holds no block for it. Never block zero of a chain. |
 
 The genesis is **the same value** the note's frontmatter carries and the value `makeOffer` would use.
 Nothing converts between the draft log and the publication log, because there is nothing to convert: it
@@ -66,13 +67,17 @@ function append(bytes32 genesis, string calldata cid) external onlySafe
 
 - `genesis == bytes32(0)` → `ZeroHash()`; `cid.length == 0` → `EmptyCid()`.
 - `initialize(address(0))` → `ZeroAddress()`. A zero `safe` passes no caller check ever, so the module
-  would be born dead — writes and upgrades both unreachable and nothing able to repair it. The guard is
-  what stops `createDraftsModule(address(0))` from producing a proxy nobody can use.
+  would be born dead — writes and upgrades both unreachable and nothing able to repair it. The
+  initializer runs inside the proxy's constructor, so `createDraftsModule(address(0))` reverts with
+  `ZeroAddress()` and no proxy is left behind.
 - **First append of a genesis** — `genesisAuthor[genesis] = safe` and the genesis is pushed onto
   `genesisList`. Nothing else is written: `isDraft` and `authorOf` derive from that one map, so there is
   no second flag to keep in step.
-- **Every append** — push `Version { cid, timestamp }`, emit
+- **Every append** — push `Version { cid, timestamp, blockNumber }`, emit
   `Appended(bytes32 indexed genesis, string cid, uint256 versionIndex, address indexed author)`.
+- **Both numbers come from the block, never from a parameter.** A caller-supplied block would let
+  an author stamp a version into any block, and the log's whole value is that its ordering is the
+  chain's.
 
 The gate is `msg.sender == safe` and nothing else. There is no `canPublish`, no whitelist, no developer
 list, no author EOA. Read that against `makeOffer`
@@ -92,18 +97,28 @@ governance act. That is the price of putting the index on-chain at all; see AUTH
 | `fetchAllPaged(uint256 offset, uint256 limit) -> Entry[]` | a window of the same list |
 | `fetch(bytes32 genesis) -> Entry` | one draft; **unknown genesis returns a zeroed `Entry` with `versionCount == 0` and never reverts** |
 | `history(bytes32 genesis) -> (uint256[] timestamps, string[] cids)` | parallel arrays, insertion order |
+| `blocksOf(bytes32 genesis) -> uint64[]` | the block behind each entry of `history`, index for index; `0` where none was recorded |
 | `versionCount(bytes32 genesis) -> uint256` | versions logged for one genesis |
 | `count() -> uint256` | number of drafts (the list length) |
 | `isDraft(bytes32 genesis) -> bool` | bound to this Safe |
 | `authorOf(bytes32 genesis) -> address` | the Safe that bound it, or `address(0)` |
 
 ```solidity
-struct Version { string cid; uint256 timestamp; }
+struct Version { string cid; uint64 timestamp; uint64 blockNumber; }
 struct Entry   { bytes32 genesis; address author; string cid; uint256 timestamp; uint256 versionCount; }
 ```
 
 `Entry` is assembled on read and never stored — as on the publication side. Its `cid` and `timestamp` are
 the **latest** version's; `versionCount` is how many there are.
+
+`Version` is two words per element: `cid` is a string and always starts with its length word, and
+the two `uint64`s pack into the second word. That is why recording the block moved no stored entry
+and renumbered no declaration. A version written before this implementation reads back as one
+`uint256` timestamp, which the two-`uint64` layout reads as that timestamp in the low word and
+zero above it — so `blockNumber == 0` is the pre-upgrade form, and `timestamp` is unchanged.
+
+`blocksOf` is a separate call rather than a third return value of `history`, so the read existing
+callers use keeps its shape and a reader that does not need blocks pays nothing for them.
 
 **Call `fetchAllPaged`, not `fetchAll`.** The paged read is what a UI should use: an unpaged `fetchAll`
 builds and returns the whole log in one `eth_call` and fails once the log is big enough to matter. The
@@ -132,8 +147,16 @@ delegatecall (`forceCall = true`) and this module has no fallback, so `upgradeTo
 reverts with `Address: low-level delegate call failed` even from the Safe. The empty-calldata upgrade is
 `upgradeTo`.
 
-`NAME()` returns `"S2S Drafts Module V1"`. It is the discovery string, as on the publication module:
-never reuse it for a V2 that changes storage layout.
+**Discovery is ERC-165, not the name.** The module answers
+`supportsInterface(0xefb74036)` — the id of `IDraftsModule`, which is `append`, `isDraft`,
+`authorOf` and `count` — and `0x01ffc9a7`, and nothing else. The id is a compile-time constant of
+the deployed contract and may never change after publication: a reader that already holds an id
+cannot be reached by an upgrade, so a changed id makes every published module undiscoverable for
+good. `blocksOf` and `history` sit outside the id, so a reader that needs them cannot discover
+them by role.
+
+`NAME()` returns `"S2S Drafts Module V1"` and is a human-readable diagnostic. Nothing discovers a
+module by it, and copying the string proves nothing.
 
 ## The factory
 
@@ -142,7 +165,8 @@ shared with [owner history](SPEC-author-owner-history.md). The drafts half:
 
 | member | behaviour |
 |---|---|
-| `createDraftsModule(address safe) -> address` | deploy an ERC-1967 proxy over `draftsImplementation()`, initialised with `safe`; push the proxy onto `getDraftsModulesForSafe(safe)` |
+| `createDraftsModule(address safe) -> address` | CREATE2-deploy an ERC-1967 proxy over `draftsImplementation()`, initialised with `safe`; push the proxy onto `getDraftsModulesForSafe(safe)` |
+| `draftsModuleAddress(address safe) -> address` | the address the next `createDraftsModule(safe)` would land on, for the current implementation and nonce |
 | `setDraftsImplementation(address)` | **`onlyDeployer`** — set `draftsImplementation()`, push onto the drafts implementation history |
 | `getDraftsModulesForSafe(address) -> address[]` | every proxy anyone told this factory about for that Safe |
 | `draftsImplementationCount() -> uint256` | history length |
@@ -159,9 +183,22 @@ the other.
 **`createDraftsModule` stays permissionless, deliberately.** Deploying a proxy costs the caller gas and
 installs nothing on any Safe — the Safe must still call the module in its own transaction. Gating it would
 buy nothing and would put a trusted party between an author and their own module. That is why the CLI can
-run it for any author Safe (`s2s author new` / `s2s author init`, which check
-`getDraftsModulesForSafe` first so a second run deploys nothing): the drafts side has **no** Safe step at
-all, because the proxy's only gate is `msg.sender == safe` and the Safe sends `append` to it directly.
+run it for any author Safe (`s2s author new` / `s2s author init`, which check the Safe's enabled list
+first so a second run deploys nothing): the drafts side needs a Safe call only to be enabled, because
+the proxy's gate is `msg.sender == safe` and the Safe sends `append` to it directly.
+
+**The address is predictable, and a prediction is a hint.** The salt is
+`keccak256(abi.encode(role, safe, nonce))` — the role keeps the two module kinds apart, the Safe and
+a per-role counter keep every create apart, and no caller can choose a salt. The initializer is part
+of the init code, so two Safes cannot collide. `draftsModuleAddress` returns the CREATE2 result for
+the next create, exactly, until something intervenes: another caller creates for the same Safe first
+and takes the nonce, or `setDraftsImplementation` lands and changes the code hash. Neither is a
+branch the view can see. Creation is permissionless, so the prediction is never a reservation: read
+it, then let the Safe check what it was actually handed.
+
+The prediction is a fast path, never proof. The implementation pointer is settable, so the address a
+view answers is the address the factory would deploy *now*, not the module a Safe adopted. Only the
+enabled list answers that.
 
 One consequence of that openness, which readers get wrong:
 
@@ -191,6 +228,30 @@ other. What follows:
 - **Being a draft is not a step in a state machine.** Nothing transitions; a genesis may be a draft
   forever, a draft and a deal at once, or a deal with no draft entry ever having existed.
 
+## Adoption
+
+An author keeps their Safe and adopts new modules on it. The Safe address is the byline and the
+publisher of the log, so it must not move; what changes is which proxy answers for the log, and
+the enabled-module list says which one.
+
+`absorb()` carries the log across. It is a Safe call that copies the previous module's whole log —
+every genesis, in order, with its binding and every version — into the new instance. The imported
+versions answer `blockNumber` 0: they were written at a block this instance cannot see, and nothing
+in the copy records which block it was. A gate treats 0 as no block and falls back to the Safe's
+live `isOwner`, which is weaker than judging ownership at the append block and is the price of
+keeping the history rather than dropping it.
+
+What does not survive is the log's source. Nothing records which module a version came from, so an
+absorbed log cannot be checked against the old proxy except by reading it. Only the log is carried:
+owner-history eras recorded before the migration stay in the old proxy and are not part of the new
+one.
+
+Adoption is one Safe transaction: `enableModule(new)`, `setGuard(newGuard)`, `disableModule(old)`.
+The guard is bound to the module it was minted with, so it moves too, and `disableModule` needs the
+old module's linked-list predecessor. A module the Safe cannot disable is a call surface it has given
+away for good; the module never asks to be enabled, and nothing in this package writes the Safe's
+storage.
+
 ## Invariants
 
 - **Append-only.** No function removes a version, a draft, or a binding. `onlySafe` cannot delete either.
@@ -207,8 +268,13 @@ other. What follows:
   CID; a public gateway serves the bytes. A draft is not private — it is a document whose address is
   public and whose index is public. This is the exact opposite of AUTHOR-2's encrypt-to-the-press rule,
   and it is a consequence of a draft having no press to encrypt to.
-- **Reads never revert on unknown input.** `fetch`, `history`, `versionCount`, `isDraft`, `authorOf` all
-  answer for a genesis that was never appended.
+- **The block is the chain's.** `timestamp` and `blockNumber` are read from the block at append, never
+  taken as arguments, and never rewritten. `blockNumber == 0` marks a version this instance did not
+  write, or wrote before the field existed.
+- **The role id is fixed.** `supportsInterface(0xefb74036)` answers true on every published drafts
+  module, from a compile-time constant that no upgrade and no storage can move.
+- **Reads never revert on unknown input.** `fetch`, `history`, `blocksOf`, `versionCount`, `isDraft`,
+  `authorOf` all answer for a genesis that was never appended.
 - **AUTHOR-1 holds by not being implemented.** Writing is local; `append` is a separate, deliberate,
   signed act by the Safe. The log is an index of what was uploaded, never the act of writing — so a host
   must not make saving a note depend on it.
@@ -225,10 +291,10 @@ other. What follows:
 - **No publication side.** No offer, no deal, no accept, no whitelist, no `publication` field anywhere.
 - **No cross-log verification.** Nothing checks that a CID offered to a publication matches a CID in the
   draft log.
-- **No metadata beyond `cid` and `timestamp`.** No title, slug, tags, or locale — those stay in the note
-  and in the signed content item.
-- **No host writes.** No CLI or plugin command appends to this module. The CLI installs a proxy for an
-  author Safe and stops there; the package's own surface is contracts only.
+- **No metadata beyond `cid`, `timestamp` and `blockNumber`.** No title, slug, tags, or locale — those
+  stay in the note and in the signed content item.
+- **No host writes.** No CLI or plugin command appends to this module, and none calls `absorb()`. The
+  CLI deploys the proxy and the Safe enables it; the package's own surface is contracts only.
 
 ## Open questions
 
@@ -262,8 +328,9 @@ genesis returns the zeroed `Entry` rather than reverting.
   struct `Version` changes its element stride, so every existing `versions[genesis][i]` decodes shifted
   and every stored version is corrupted. `Entry` is a return type and may grow; `Version` may not.
   Nothing in the storage declarations may be reordered; the `onlySafe` gate; the `Entry` tuple order once
-  an ABI is generated and consumed; the `NAME()` string; the plaintext statement in V1 (it is a claim the
-  code has to keep true).
+  an ABI is generated and consumed; the role id `0xefb74036` (a reader that holds it cannot be told
+  about a new one); the plaintext statement in V1 (it is a claim the code has to keep true).
+  `NAME()` is a diagnostic and may change.
 
 ## Test seams
 
@@ -273,7 +340,12 @@ genesis returns the zeroed `Entry` rather than reverting.
   `versionCount == 2` and `history` returns both cids in insertion order.
 - `fetch(unknown)` → zeroed `Entry`, `versionCount == 0`, no revert; `fetchAll` order equals append
   order; paged windows tile `fetchAll` exactly.
-- `history` returns arrays of equal length, same order, non-decreasing timestamps.
+- `history` returns arrays of equal length, same order, non-decreasing timestamps; `blocksOf` returns
+  one block per version, `0` only where the entry predates the field.
+- A version appended now carries the block it landed in, and `blocksOf` widens to `uint64` in the same
+  order as `history`.
+- `supportsInterface` answers `0xefb74036` and `0x01ffc9a7`, and `0xffffffff` is false; the id differs
+  from the owner-history id and the guard's.
 - Factory: two `createDraftsModule` calls for one Safe → two proxies, `getDraftsModulesForSafe`
   length 2; `setDraftsImplementation` then `createDraftsModule` → new proxy on the new implementation,
   old one untouched; `getDraftsImplementationByVersion(0)` and `(count + 1)` revert `InvalidVersion()`.
