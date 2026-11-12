@@ -30,6 +30,7 @@ import { authorStoreCommands } from './author-store';
 import { signerAdd } from './signer-add';
 import { signerRotate } from './signer-rotate';
 import { signerQueue } from './signer-queue';
+import { signerHistory } from './signer-history';
 import { signerConfirm } from './signer-confirm';
 
 /** `s2s author` — content actions on an existing publication. */
@@ -52,6 +53,7 @@ export const signerCommands: readonly StoreCommandSpec[] = [
   signerAdd,
   signerRotate,
   signerQueue,
+  signerHistory,
   signerConfirm,
 ];
 
