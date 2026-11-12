@@ -76,7 +76,7 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   add owners + **remove temp creation signer**. Long async background job.
 - **Publish** (`proposeContent` = upload intent, `publishContent` = publish intent → `runIntent` →
   `publication/publish.ts publishToPublication`): `parseNote` → `{contentId, encryption, title, slug,
-  content, summary, custom}` → **no encryption step**: `buildSignedContentItem` is passed
+  label, content, summary, custom}` → **no encryption step**: `buildSignedContentItem` is passed
   `noOpEncrypt` (`content.ctrlr.ts:174`), so the body is signed as a plain JSON string and
   `S2SContentItem.encryption` comes out `false` — `shared/src/identity/sign-content.ts:104` derives
   the flag from the encrypt function's identity, not from the frontmatter (which `parseNote`
@@ -129,6 +129,15 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   next one. `parseNote` reads `encrypted` first, then the pre-rename `encryption`, so an old note
   keeps its state; only the new key is written, and the write-back deletes `encryption`. The
   published item's own field stays `encryption` on `S2SContentItem`.
+- **`label` and the two hosts' digests.** neutralpress's `parseNote` keeps its own `knownKeys`
+  set instead of importing shared's `KNOWN_FRONTMATTER_KEYS`, and both list `label`, so the key
+  stays out of the `custom` bag and `publishContent` passes `label: parsed.label ?? undefined`:
+  a labelled note signs the same body it would without one. In shared the label is a public,
+  unsigned display name: trimmed, blank or non-string resolving to none, absent from
+  `S2S_TYPES_V2` so nothing signs it (ADR-003). Do not read the two hosts as agreeing on an
+  objectId, though — they already sign different public parts. The CLI passes `base: parsed.slug`;
+  neutralpress passes no `base` at all and the signing view fills `''`, so the same note has a
+  different objectId through each host, `label` or no label.
 - **Slug override:** `content/content.ctrlr.ts:parseNote` reads `frontmatter?.slug` and uses it
   in preference to `slug(title)`. The chosen slug propagates as `body.slug` through the pipeline
   into the Lit render action's `createPath` (which interpolates `{slug}`). A changed `slug`
@@ -160,8 +169,8 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
 
 ## Test seams
 
-- `parseNote`: note (`.md`/`.base`) → `{contentId, encryption, title, slug, content, summary,
-  custom}` is the cleanest unit test (pure-ish) — fixture notes, assert the split.
+- `parseNote`: note (`.md`/`.base`) → `{contentId, encryption, title, slug, label, content,
+  summary, custom}` is the cleanest unit test (pure-ish) — fixture notes, assert the split.
 - **No encrypt↔decrypt round-trip to test here:** nothing in this package encrypts (`noOpEncrypt`
   at `content.ctrlr.ts:174`), so a PKP-encrypted blob has no producer — the action's gated `decrypt`
   is covered from SPEC-protocol-actions. Revisit if encryption is wired (see

@@ -5,6 +5,7 @@ import {
   fetchByPublicationDetailed,
   getDeals,
   getLatestEntry,
+  publicLabel,
   toBody,
   verifyDecryptedBody,
   type Entry,
@@ -69,8 +70,26 @@ export interface S2SBodyIdentity {
   proof?: S2SProof;
 }
 
-export type S2SBodyPlainWithIdentity = S2SBodyPlain & S2SBodyIdentity;
-export type S2SBodyEncryptedWithIdentity = S2SBodyEncrypted & S2SBodyIdentity;
+/**
+ * The public, UNSIGNED label a manuscript carries (see S2SPublicContentV2).
+ *
+ * Declared LOCALLY for the same reason as {@link S2SBodyIdentity}: the shared
+ * body types are out of scope here. It is NOT identity — it is absent from the
+ * EIP-712 struct, so it never changes an item's objectId or signature — but it
+ * does belong to the signed item's public part, which is the only place the
+ * name of an encrypted manuscript can be read before decryption. Absent means
+ * the genesis id, resolved by whoever displays it.
+ *
+ * The VALUE is normalised in one place, module.factory's `publicLabel` — v2
+ * envelope, non-blank, trimmed — so `mergeDecrypted` below re-applies the rule
+ * `toBody` used instead of trusting a hand-built body.
+ */
+export interface S2SBodyLabel {
+  label?: string;
+}
+
+export type S2SBodyPlainWithIdentity = S2SBodyPlain & S2SBodyIdentity & S2SBodyLabel;
+export type S2SBodyEncryptedWithIdentity = S2SBodyEncrypted & S2SBodyIdentity & S2SBodyLabel;
 
 /** Copy only the identity fields that are actually present (never fabricate). */
 const copyIdentity = (body: S2SBodyIdentity): S2SBodyIdentity => {
@@ -88,6 +107,11 @@ export const mergeDecrypted = (
   body: S2SBodyEncryptedWithIdentity,
   decrypted: any,
 ): S2SBodyPlainWithIdentity => {
+  // Carried over from the encrypted body, never from the plaintext: the label is
+  // public metadata, and the body map that decrypts into `title` knows nothing
+  // about it. Public wins if the decrypted object claims one too. Exactly the
+  // rule toBody applied (publicLabel), so the value cannot change form here.
+  const label = publicLabel(body.specVersion, body.label);
   return {
     id: body.id,
     author: body.author,
@@ -101,6 +125,7 @@ export const mergeDecrypted = (
     attributes: body.attributes,
     publication: body.publication,
     ...copyIdentity(body),
+    ...(label !== undefined ? { label } : {}),
     base: decrypted.base || undefined,
     encryption: false as const,
     content: decrypted.content,

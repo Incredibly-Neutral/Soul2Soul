@@ -118,6 +118,14 @@ export type StoredContentItem = Omit<
        */
       creationDate?: number;
       modifiedDate?: number;
+      /**
+       * A short public name for the manuscript (v2 envelope only), UNSIGNED and
+       * absent from the EIP-712 struct. Declared here because this module reads
+       * the item as it was stored (never through the zod parse that normalises
+       * it): a blank or non-string value is no label, and an absent one means
+       * the genesis id, resolved by whoever displays it.
+       */
+      label?: string;
     };
 };
 
@@ -187,6 +195,24 @@ export type ItemSkip = Pick<DataAvailabilityEntry, 'genesis' | 'cid' | 'reason'>
  * two predicates is how a body gets flattened as plaintext yet never checked.
  */
 export const isPlaintextItem = (item: { encryption?: unknown }): boolean => !item.encryption;
+
+/**
+ * The public label an item names, or undefined. ONE rule, shared by {@link toBody}
+ * (reading the stored item) and `mergeDecrypted` (carrying it across
+ * decryption): the v2 envelope only, a non-blank string, trimmed.
+ *
+ * That is the rule the writer (shared/manuscript/identity/sign-content.ts) and
+ * the reader's schema (shared/rendering/action-io.ts) already apply, so a label
+ * never changes form at a boundary. A v1 public part has no such field and v1
+ * bytes are frozen, so a stray label there is unsigned noise with nothing to
+ * attach it to; a blank is no label at all, because an empty string would read
+ * as a name of its own and override the genesis-id default instead of deferring
+ * to it.
+ */
+export const publicLabel = (specVersion: unknown, label: unknown): string | undefined =>
+  specVersion === '2' && typeof label === 'string' && label.trim() !== ''
+    ? label.trim()
+    : undefined;
 
 /**
  * Items the direct path serves WITHOUT a full proof — one log line per verdict
@@ -376,6 +402,11 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
   // Entry.timestamp: the chain says when the deal was recorded, the envelope
   // says when the author signed (and v2 signs two different instants).
   const v2 = p.specVersion === '2';
+  // The public label — a template needs it for an encrypted item, whose title is
+  // inside the ciphertext. Same rule as the writer and the shared schema (see
+  // publicLabel); a blank or a stray field on a v1 public part yields NO key,
+  // never an empty string.
+  const label = publicLabel(p.specVersion, p.label);
   const base = {
     id: entry.genesis, // job identity is the genesis
     // Pass through from IPFS exactly as signed: a pre-change item carries the
@@ -391,6 +422,7 @@ export const toBody = (entry: Entry, item: StoredContentItem): any => {
     attributes: p.attributes,
     publication: p.publication,
     base: p.base,
+    ...(label !== undefined ? { label } : {}),
     ...identity,
   };
 

@@ -220,6 +220,19 @@ export async function collectTreeCids(
 }
 
 /**
+ * The first candidate that is a non-blank string, trimmed; undefined when none
+ * is. Archive entries are untrusted JSON, so a role is picked rather than
+ * assumed: an encrypted item's title is not public, and neither part may be
+ * present.
+ */
+function firstNonBlank(...candidates: unknown[]): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  return undefined;
+}
+
+/**
  * Collect every CID referenced by the publication archive/cache.
  *
  * 1. Reads `content_cache_<publication>` on the L2 ENS records contract;
@@ -261,16 +274,23 @@ export async function collectArchiveCids(
 
   for (const [genesis, entry] of Object.entries(items as Record<string, unknown>)) {
     const item = entry as
-      | { cid?: unknown; item?: { public?: { title?: unknown }; title?: unknown } }
+      | {
+          cid?: unknown;
+          item?: { public?: { label?: unknown; title?: unknown }; title?: unknown };
+          title?: unknown;
+        }
       | null
       | undefined;
     if (!item || typeof item !== 'object' || typeof item.cid !== 'string' || item.cid === '') {
       continue; // malformed entry → omit
     }
-    // role is best-effort: the title actually lives in the secret body, so it
-    // may be absent — never fail on missing fields.
-    const title = item.item?.public?.title ?? item.item?.title;
-    const role = typeof title === 'string' && title !== '' ? title : undefined;
+    // role is best-effort. The public label is the name a manuscript carries for
+    // display, and it is the only public name an encrypted item has: the title
+    // lives in the secret body, where a pocket of items predating the label
+    // still carry one on the public part, and older archives put it on the
+    // entry. Prefer them in that order, and never fail on a missing field.
+    const publicPart = item.item?.public;
+    const role = firstNonBlank(publicPart?.label, publicPart?.title, item.item?.title, item.title);
     entries.push({
       cid: item.cid,
       category: 'archive-item',

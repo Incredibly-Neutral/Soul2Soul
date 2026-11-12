@@ -185,3 +185,19 @@ describe('render-dev: output shape', () => {
     expect(r.signature).toBeUndefined();
   });
 });
+
+describe('render-dev: the public label', () => {
+  it('passes an injected public label through to the template unchanged', async () => {
+    // The dev input schema is a passthrough over the dev-shaped body, so a label
+    // an editor carries (a listing name for an encrypted manuscript, whose title
+    // is inside the ciphertext) is not stripped on the preview path. Blank is no
+    // label; these fixtures are well-formed, so the value arrives verbatim.
+    const res = await main({
+      ...baseInput,
+      body: { ...baseInput.body, label: 'Field notes', title: undefined },
+      templateSource: `<h1>{{label}}</h1>`,
+    });
+    expect(res.ok).toBe(true);
+    expect((res as any).html).toContain('<h1>Field notes</h1>');
+  });
+});
