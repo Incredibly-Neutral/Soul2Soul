@@ -11,10 +11,13 @@
  * Usage:
  *   cd src/author/contracts && pnpm deploy:authorcontracts
  *
- * Set in .env afterwards:
- *   AUTHOR_CONTRACTS_FACTORY_ADDRESS=<factory>
- *   AUTHOR_DRAFTS_IMPLEMENTATION_ADDRESS=<drafts impl>
- *   AUTHOR_OWNER_HISTORY_IMPLEMENTATION_ADDRESS=<history impl>
+ * Write the factory address into the two places the CLI reads, afterwards:
+ *   src/author/author-cli/src/core/author-contracts.ts  DEFAULT_AUTHOR_CONTRACTS_FACTORY
+ *   src/author/author-cli/src/core/configschema.ts      contracts.authorFactory (env + default)
+ * or override per environment with S2S_AUTHOR_CONTRACTS_FACTORY, or
+ * `contracts.authorFactory` in the config file. The two implementation
+ * addresses are read from the factory, not from the environment: nothing
+ * carries them.
  *
  * ── What this script does not do ─────────────────────────────────────────────
  *
@@ -235,9 +238,13 @@ async function main() {
   console.log(`   ✅ Factory at ${factory}\n`);
 
   console.log('Deployed:\n');
-  console.log(`  AUTHOR_CONTRACTS_FACTORY_ADDRESS=${factory}`);
-  console.log(`  AUTHOR_DRAFTS_IMPLEMENTATION_ADDRESS=${draftsImplementation}`);
-  console.log(`  AUTHOR_OWNER_HISTORY_IMPLEMENTATION_ADDRESS=${ownerHistoryImplementation}\n`);
+  console.log(`  AuthorContractsFactory          ${factory}`);
+  console.log(`  DraftsModuleV1 (implementation) ${draftsImplementation}`);
+  console.log(`  OwnerHistoryModuleV1 (implementation) ${ownerHistoryImplementation}\n`);
+  console.log('The CLI reads two things: the factory address, and nothing else.');
+  console.log('  DEFAULT_AUTHOR_CONTRACTS_FACTORY  src/author/author-cli/src/core/author-contracts.ts');
+  console.log('  contracts.authorFactory          src/author/author-cli/src/core/configschema.ts');
+  console.log('  or S2S_AUTHOR_CONTRACTS_FACTORY in the environment (overrides both)\n');
   console.log('Next, per author Safe (nothing is installed by the deploys above):');
   console.log('  s2s author init                   → drafts proxy, history proxy + guard,');
   console.log('                                      enableModule for both, setGuard');
