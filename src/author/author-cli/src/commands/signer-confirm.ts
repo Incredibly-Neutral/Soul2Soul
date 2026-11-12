@@ -131,31 +131,31 @@ async function recoversAs(safeTxHash: Hex, signature: Hex, owner: Address): Prom
 }
 
 /**
- * The message for a send that failed because the EOA has no ETH, or undefined
- * when the failure was something else.
+ * Whether a send failed because the EOA has no ETH for gas.
  *
  * A node reports this as a reverted execution ("gas required exceeds allowance
  * (0)", geth's wording) or as "insufficient funds", not as an error type, so it
- * is matched rather than classified. It is worth its own message because it is
- * the one execution failure that leaves nothing to be redone: the proposal is
- * queued and the confirmation is posted, so the whole recovery is funding the
- * address and running the same command again.
+ * is matched rather than classified. Exported because `signer history --sync`
+ * sends from the same EOA and owes the same plain message instead of a viem
+ * dump; `fundsMessage` below is the confirm-specific wording.
  */
-function fundsMessage(err: unknown, eoa: Address, safe: Address, safeTxHash: Hex): string | undefined {
+export function isFundsFailure(err: unknown): boolean {
   const parts: string[] = [];
   for (const field of ['message', 'shortMessage', 'details'] as const) {
     const value = (err as Record<string, unknown> | null)?.[field];
     if (typeof value === 'string') parts.push(value);
   }
-  if (!/insufficient funds|gas required exceeds allowance|exceeds the balance/i.test(parts.join(' '))) {
-    return undefined;
-  }
+  return /insufficient funds|gas required exceeds allowance|exceeds the balance/i.test(parts.join(' '));
+}
+
+function fundsMessage(err: unknown, eoa: Address, safe: Address, safeTxHash: Hex): string | undefined {
+  if (!isFundsFailure(err)) return undefined;
   return `${eoa} has no ETH on base to pay for executing ${safeTxHash} on ${safe}: the proposal is queued and signed, so fund ${eoa} with a little Base ETH and run this command again — nothing needs re-signing and nothing is lost`;
 }
 
 
 /** A Safe's 4337 facts plus, when a read failed, why. */
-interface PayerInput {
+export interface PayerInput {
   selfPaid: boolean;
   bundlerUrl: string | undefined;
   paymasterUrl: string | undefined;
@@ -185,7 +185,7 @@ interface PayerInput {
  * so it is a warning plus a fallback, never a throw after the confirmation is
  * already posted.
  */
-async function eoaPayerReason(input: PayerInput): Promise<string | undefined> {
+export async function eoaPayerReason(input: PayerInput): Promise<string | undefined> {
   if (input.selfPaid) return '--self-paid';
   if (input.bundlerUrl === undefined) {
     return 'no bundler configured — set S2S_PIMLICO_KEY or S2S_BUNDLER_URL';
