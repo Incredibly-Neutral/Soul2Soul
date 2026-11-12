@@ -5,6 +5,34 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
+ * @title IDraftsModule — the drafts role, as an EIP-165 interface id
+ * @notice The functions that make a contract a drafts module, and nothing else.
+ *         No `initialize`, no `upgradeTo`: those are how a module is deployed,
+ *         not what role it plays, and an id that moved with the deployment shape
+ *         would stop identifying the role.
+ *
+ * @dev The id computed from this interface is `0xefb74036`, and it is a constant
+ *      of the deployed contract: `supportsInterface` answers a compile-time
+ *      literal, so the answer cannot drift from the deployed bytecode. Once a
+ *      module is published that id may never change. A reader discovers the role
+ *      by asking a module for that exact id — it has no other way in, because the
+ *      role is not stored anywhere and there is no registry to consult — so
+ *      changing the id silently makes every already-published module
+ *      undiscoverable, permanently, since an upgrade cannot reach a reader that
+ *      has already decided.
+ *
+ *      EIP-165 excludes inherited functions from an interface id, so
+ *      `supportsInterface(bytes4)` itself is deliberately not part of it: it is
+ *      how the question is asked, not part of the answer.
+ */
+interface IDraftsModule {
+    function append(bytes32 genesis, string calldata cid) external;
+    function isDraft(bytes32 genesis) external view returns (bool);
+    function authorOf(bytes32 genesis) external view returns (address);
+    function count() external view returns (uint256);
+}
+
+/**
  * @title DraftsModuleV1
  * @notice One append-only version log per manuscript, installed as a Safe module
  *         on an AUTHOR Safe. A draft is a genesis that has versions but was never
@@ -28,16 +56,37 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * Storage layout is append-only across upgrades (INV-3 in the publication
  * spec): `safe`, `versions`, `genesisAuthor`, `genesisList`. `Entry` is a return
  * type, never storage.
+ *
+ * Role discovery is EIP-165: `supportsInterface(type(IDraftsModule).interfaceId)`
+ * answers true on every published drafts module, and the id is a constant of this
+ * contract (see `IDraftsModule` above for why it may never change).
  */
-contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
+contract DraftsModuleV1 is IDraftsModule, Initializable, UUPSUpgradeable {
 
     address public safe;
 
     // ── The one append log ─────────────────────────────────────────
 
+    /**
+     * @dev Two words per element, same as before the block was recorded. `cid` is
+     *      a string, i.e. exactly one word for its length slot and a separate
+     *      region for its bytes, whether the CID is short or long — so the length
+     *      word is the first word of the element regardless. The two `uint64`s
+     *      then pack into the second word, which is why adding `blockNumber` does
+     *      not move a single stored entry or renumber the storage declarations
+     *      (INV-3).
+     *
+     *      Reading an entry written before this implementation: its second word is
+     *      a plain `uint256` timestamp. Read as two `uint64`s it yields that same
+     *      timestamp in the low 64 bits and zero in the next 64, so
+     *      `blockNumber == 0` means "written before this implementation, no block
+     *      recorded" — not block 0 of a chain, which no chain has a use for here.
+     *      `timestamp` is unaffected, so old history reads back identically.
+     */
     struct Version {
         string cid;         // IPFS CID of this version's plaintext content
-        uint256 timestamp;
+        uint64 timestamp;   // block.timestamp of the append
+        uint64 blockNumber; // block.number of the append; 0 = pre-upgrade entry
     }
 
     /// A resolved entry (genesis + its latest version), for reads only.
@@ -91,6 +140,19 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
         return "S2S Drafts Module V1";
     }
 
+    /**
+     * @dev EIP-165 role signalling. The id is a compile-time constant of the
+     *      deployed contract: it is the answer a reader discovers the role by, so
+     *      once published it may never change — a silent change makes every
+     *      already-published module undiscoverable, because no registry exists to
+     *      correct. `pure` and no storage read, so it cannot fail and cannot be
+     *      made to answer differently by an upgrade's storage.
+     */
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IDraftsModule).interfaceId
+            || interfaceId == 0x01ffc9a7; // type(IERC165).interfaceId
+    }
+
     // ── The single write ───────────────────────────────────────────
 
     /**
@@ -108,9 +170,19 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
         }
 
         uint256 idx = versions[genesis].length;
+        // The block is read from `block.number`, never taken as a parameter: a
+        // caller-supplied block would let an author stamp a version into any
+        // block, and the log's whole value is that its ordering is the chain's.
+        //
+        // Both casts are safe for any chain this can run on: `block.timestamp`
+        // fits in 64 bits until roughly the year 584 billion, and `block.number`
+        // likewise at any plausible block time — so neither can wrap in a period
+        // anyone is storing a CID for. The narrow types are what keep the element
+        // at two words.
         versions[genesis].push(Version({
             cid: cid,
-            timestamp: block.timestamp
+            timestamp: uint64(block.timestamp),
+            blockNumber: uint64(block.number)
         }));
 
         emit Appended(genesis, cid, idx, msg.sender);
@@ -135,7 +207,9 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
 
     // ── Reads: one genesis ─────────────────────────────────────────
 
-    /// @dev All versions of `genesis`, oldest first.
+    /// @dev All versions of `genesis`, oldest first. `timestamps` stays
+    ///      `uint256[]` because that is the ABI callers already read; the
+    ///      narrower stored value is widened on the way out.
     function history(bytes32 genesis) external view returns (uint256[] memory timestamps, string[] memory cids) {
         Version[] storage vs = versions[genesis];
         uint256 n = vs.length;
@@ -143,8 +217,26 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
         timestamps = new uint256[](n);
         cids = new string[](n);
         for (uint256 i = 0; i < n; i++) {
-            timestamps[i] = vs[i].timestamp;
+            timestamps[i] = uint256(vs[i].timestamp);
             cids[i] = vs[i].cid;
+        }
+    }
+
+    /// @dev The block numbers behind `history`'s timestamps, index for index:
+    ///      `blocksOf(g)[i]` is the block that wrote `history(g).timestamps[i]`.
+    ///      A separate call rather than a third return value of `history`, so the
+    ///      existing read keeps its shape, and a reader that does not care about
+    ///      blocks pays nothing for them.
+    ///
+    ///      `0` is a pre-upgrade entry: no block was recorded, and the timestamp
+    ///      is still authoritative. Never reverts on an unknown genesis.
+    function blocksOf(bytes32 genesis) external view returns (uint64[] memory blocks) {
+        Version[] storage vs = versions[genesis];
+        uint256 n = vs.length;
+
+        blocks = new uint64[](n);
+        for (uint256 i = 0; i < n; i++) {
+            blocks[i] = vs[i].blockNumber;
         }
     }
 
@@ -191,11 +283,13 @@ contract DraftsModuleV1 is Initializable, UUPSUpgradeable {
         if (n == 0) return e;   // all-zero Entry: unknown genesis, versionCount 0
 
         Version storage v = vs[n - 1];
+        // `Entry.timestamp` stays `uint256`: the struct is a return type consumed
+        // by ABIs, and narrowing it would break every existing reader.
         e = Entry({
             genesis: genesis,
             author: genesisAuthor[genesis],
             cid: v.cid,
-            timestamp: v.timestamp,
+            timestamp: uint256(v.timestamp),
             versionCount: n
         });
     }

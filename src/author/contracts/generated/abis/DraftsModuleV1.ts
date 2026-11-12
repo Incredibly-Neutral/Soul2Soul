@@ -177,6 +177,25 @@ export type Abi_DraftsModuleV1 = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "blocksOf",
+    "outputs": [
+      {
+        "internalType": "uint64[]",
+        "name": "blocks",
+        "type": "uint64[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "count",
     "outputs": [
@@ -406,6 +425,25 @@ export type Abi_DraftsModuleV1 = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes4",
+        "name": "interfaceId",
+        "type": "bytes4"
+      }
+    ],
+    "name": "supportsInterface",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -638,6 +676,25 @@ export const Abi_DraftsModuleV1: Abi_DraftsModuleV1 = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "genesis",
+        "type": "bytes32"
+      }
+    ],
+    "name": "blocksOf",
+    "outputs": [
+      {
+        "internalType": "uint64[]",
+        "name": "blocks",
+        "type": "uint64[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "count",
     "outputs": [
@@ -867,6 +924,25 @@ export const Abi_DraftsModuleV1: Abi_DraftsModuleV1 = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes4",
+        "name": "interfaceId",
+        "type": "bytes4"
+      }
+    ],
+    "name": "supportsInterface",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {
