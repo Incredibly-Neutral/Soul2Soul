@@ -93,7 +93,7 @@ export async function runSignerConfirm(
   // Before anything is read from the service: a rotation whose swap already
   // executed is settled here, so a run that died after executing still moves
   // the store on, and this run decides with the key that is actually active.
-  let settledName = reconcileReplacement(safe, chain.owners, out);
+  let settledName = reconcileReplacement(safe, chain.owners, out, deps.authorsPath());
   if (!chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) {
     throw new CliError(
       `${eoa} is not an owner of ${safe} — an owner has to add it first (\`s2s signer add ${safe}\`)`,
@@ -170,7 +170,8 @@ export async function runSignerConfirm(
     // up on the next run.
     try {
       const ownersAfter = (await deps.readSafe(rpcUrl, safe)).owners;
-      settledName = reconcileReplacement(safe, ownersAfter, out) ?? settledName;
+      settledName =
+        reconcileReplacement(safe, ownersAfter, out, deps.authorsPath()) ?? settledName;
     } catch (err) {
       out.warn(
         `the transaction executed but the store was not reconciled (${reasonOf(err)}) — the next \`s2s signer\` run settles it`,

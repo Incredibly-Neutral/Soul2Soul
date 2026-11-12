@@ -88,14 +88,18 @@ for a signature stay as they are.
 1. **Settle, then find the old key.** The Safe's owners are read first, and `settleReplacement` is
    called before anything is decided: a rotation that already executed moves the store on here,
    and a `collision` — the owners name both filed keys, or neither — is a warning, not a refusal.
-   The old key is the row filed for this Safe whose stored key derives to one of its owners,
-   preferring the active row. No row for the Safe is a usage error naming `s2s signer add <safe>`;
-   a row whose key is not an owner is `not_owner`.
+   Ownership is the whole test: a replaced row that is no longer in the file (removed by a build
+   that allowed it, or hand-edited out) is no old key at all, so the chase settles the moment the
+   newcomer is an owner and reports the collision before that — the marker has no other way to
+   clear. The old key is the row filed for this Safe whose stored key derives to one of its
+   owners, preferring the active row; when the active row is not one of them, the row that is wins
+   and the output names `s2s author switch <name>` (see below). No row for the Safe is a usage
+   error naming `s2s signer add <safe>`; a row whose key is not an owner is `not_owner`.
 2. **Take the new key and file it inactive.** It comes from `resolveKeySource`, the same resolver
    `author new` and `signer add` use: `--key`, `--mnemonic`, a line on stdin, else a generated BIP39
    phrase printed **once**, in both output modes. The row is filed with
-   `addSigner({name, privateKey, safe, replaces: oldName})`, which leaves the old row active — the
-   old key is still the key this machine signs with, which is what lets it confirm the swap. The
+   `addSigner({name, privateKey, safe, replaces: oldName})`, which never moves the active slot: a
+   rotation is not a `author switch` and does not re-point every other command at another key. The
    default name is `<oldName>-next`; `--name` overrides; a taken name is the store's usage error.
 3. **Propose the swap.** `prevOwner` comes from `predecessorOf(owners, oldEoa)` — the owner before
    the old key in the Safe's linked list, the sentinel when it is first — and never from the user:
@@ -113,7 +117,7 @@ Refusals, all before anything is filed:
 | Safe has no bytecode | `safe_not_deployed` |
 | the new key _is_ the old key | `same_key` |
 | the new EOA is already an owner | `already_owner` — a swap brings in a key that is not on the list |
-| a replacement is already pending | `replacement_pending`, naming the pending row — one chase at a time |
+| a replacement is already pending | `replacement_pending`, naming the pending row — one chase at a time; the message sends the user to `signer confirm` (or `signer queue`), never to `author rm`, because that row is the only stored copy of the key its swap adds |
 | name taken, key filed elsewhere, Safe filed elsewhere | usage error from `addSigner` |
 
 The record a rotation files carries `replaces`: the pet name of the row it is meant to replace.
@@ -124,7 +128,15 @@ The record a rotation files carries `replaces`: the pet name of the row it is me
 
 It is present only while the replacement is pending, and it is what tells `settleReplacement` which
 row to retire. The row is inactive until the swap executes, so `authors.json`'s `active` still names
-the old key.
+the old key — or whatever was active before, which is why `s2s author switch` is part of the flow
+when the two differ.
+
+**A rotation is two rows and neither is removable until the chain answers.** `author rm` refuses a
+row that a pending replacement names and a row that carries `replaces` (`rotation_pending`), naming
+`s2s signer rotate` to settle it: the old row may be the last stored copy of the key that owns the
+Safe, and the pending row is the last copy of the key the swap adds. `author rm --force` drops
+either anyway — the way out of a swap that can no longer execute — and warns that no stored key is
+guaranteed to own that Safe afterwards.
 
 **The key survives a failed proposal**, exactly as in `signer add`: the row is filed before the
 service is touched, and a `register` or `propose` failure is reported as `proposed: false` with the
@@ -137,13 +149,17 @@ JSON:
 { "action": "signer.rotate", "name": "zomi-next", "replaces": "zomi", "eoa": "0x…",
   "oldEoa": "0x…", "safe": "0x…", "threshold": 2, "owners": ["0x…"], "nonce": 7,
   "safeTxHash": "0x…", "proposed": true, "safeTx": { "to": "0x…", "data": "0x…" },
-  "note": "…", "mnemonic": "…", "privateKey": "0x…" }
+  "switchTo": "zomi", "note": "…", "mnemonic": "…", "privateKey": "0x…" }
 ```
 
 In human output the command says three things plainly: the phrase, when this run made one, is
-printed once and is the only copy; the **old** key confirms this proposal, so `s2s signer confirm <safeTxHash>` runs with that
-key still active; and the old key stops being an owner only when the swap executes, not when the
-proposal is filed. `note`, `mnemonic` and `privateKey` follow the rules of `signer add`.
+printed once and is the only copy; the **old** key confirms this proposal, so `s2s signer confirm
+<safeTxHash>` runs with that key active — and when the store's active author is not that key (a
+second Safe rotated while another author is selected), the output says so and names `s2s author
+switch <oldName>` first, because `signer confirm` signs with the active key and nothing else; and
+the old key stops being an owner only when the swap executes, not when the proposal is filed.
+`switchTo` carries that name in the JSON, and is absent when the old key is already the active one.
+`note`, `mnemonic` and `privateKey` follow the rules of `signer add`.
 
 ## `signer queue [<safe>]`
 

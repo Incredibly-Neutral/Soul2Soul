@@ -59,8 +59,8 @@ The `signer` group is the fifth: a key that joins a Safe it did not create —
 ```
 s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
-s2s author list      [--json]                                                                     # stored authors, active one marked
-s2s author rm        <pet-name> [--json]                                                          # forget a stored author
+s2s author list      [--json]                                                                     # stored authors, active one marked, pending swaps flagged
+s2s author rm        <pet-name> [--force] [--json]                                                  # forget a stored author
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
 s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
@@ -309,7 +309,12 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   back — it is already theirs.
 - **`author rm`** of the active author moves `active` to the first remaining author (file order), or
   to `null` when the store empties. Removing a non-active author leaves `active` alone. An unknown
-  name is a usage error listing the known ones.
+  name is a usage error listing the known ones. A row a pending `signer rotate` depends on — the row
+  such a replacement names, and the pending row itself — is refused with `rotation_pending` and a
+  message naming `signer rotate`, because either row may be the only stored copy of a key that owns
+  the Safe (the old one) or that the queued swap adds (the new one); `--force` removes it anyway,
+  for a swap that can no longer execute, and warns that the chain is then the only record of who
+  owns what. See [SPEC-author-signers](SPEC-author-signers.md).
 - **Precedence for the signing key:** `S2S_PRIVATE_KEY` env > project config `privateKey` > active
   author's key > `privateKey` in a config file > undefined. The store therefore sits *above* the
   custom file (a deliberate `author switch` must beat a leftover default) and *below* the env and
@@ -591,7 +596,9 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 
 // s2s author list [--json] — stored authors, active one marked
 { action: 'author.list'; active: string | null;
-  authors: { name: string; eoa: string | null; safe: string | null; active: boolean }[] }
+  authors: { name: string; eoa: string | null; safe: string | null; active: boolean;
+             ownership: 'owner' | 'pending';   // 'pending' = filed by `signer rotate`
+             replaces?: string }[] }           // the row it intends to replace
 
 // s2s author rm <pet-name> [--json] — forget an author
 { action: 'author.rm'; name: string; file: string; active: string | null }

@@ -397,4 +397,59 @@ describe('s2s signer rotate', () => {
     expect(readAuthors(storePath()).authors.cold?.replaces).toBe('zomi');
     expect(pendingReplacement(SAFE)?.name).toBe('cold');
   });
+
+  it('reads and writes the store the seam names, never the default one', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    const seam = join(dir, 'seam', 'authors.json');
+
+    // The default path holds a pending row for the same Safe. A reconcile that
+    // went through `authorsFilePath()` rather than the seam would find it and
+    // refuse this run as `replacement_pending`.
+    seedOld();
+    addSigner({ name: 'decoy', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
+    addSigner({ name: 'zomi', privateKey: KEY_OLD, safe: SAFE }, seam);
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake),
+      authorsPath: () => seam,
+    });
+
+    // The rotation landed in the store the run was given…
+    const written = readAuthors(seam);
+    expect(written.active).toBe('zomi');
+    expect(written.authors.zomi?.privateKey).toBe(KEY_OLD);
+    expect(written.authors['zomi-next']?.replaces).toBe('zomi');
+    expect(captured.results[0]).toMatchObject({ name: 'zomi-next', proposed: true });
+    // …and the default store is exactly as it was, marker and all.
+    const untouched = readAuthors(storePath());
+    expect(untouched.authors.decoy?.replaces).toBe('zomi');
+    expect(untouched.authors['zomi-next']).toBeUndefined();
+  });
+
+  it('names `author switch` when the active author does not own the Safe', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    const otherSafe: Address = '0x2222222222222222222222222222222222222222';
+
+    // `signer confirm` signs with the active key and nothing else, so filing a
+    // swap under a row that is not active leaves it unconfirmable until the
+    // slot moves. The output has to say which command moves it.
+    seedOld();
+    addSigner({ name: 'other', privateKey: KEY_B, safe: otherSafe }, storePath());
+    expect(readAuthors(storePath()).active).toBe('other');
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake),
+    });
+
+    expect(captured.results[0]).toMatchObject({ replaces: 'zomi', switchTo: 'zomi' });
+    const human = captured.human[0] ?? '';
+    expect(human).toContain('s2s author switch zomi');
+    expect(human).toContain('s2s signer confirm 0x');
+    // The claim that would be false here: the old key is not the active one.
+    expect(human).not.toContain("while 'zomi' is still the active key");
+    // And the store is left as it was: a rotation does not move the slot.
+    expect(readAuthors(storePath()).active).toBe('other');
+  });
 });

@@ -486,6 +486,42 @@ describe('s2s signer confirm', () => {
     expect(pendingReplacement(SAFE)).toBeUndefined();
   });
 
+  it('settles the store the seam names, not the default one', async () => {
+    // No execution here: the only reconcile this run does is the one before the
+    // owner check, which is the call that has to hit the seam path.
+    const fake = fakeService(baseRecord());
+    const captured = capture();
+    const seam = join(dir, 'seam', 'authors.json');
+
+    // The same two rows in both files. Only the one the seam names may move.
+    for (const path of [seam, join(dir, 'xdg', 's2s', 'authors.json')]) {
+      addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+      addSigner(
+        { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+        path,
+      );
+    }
+
+    // The chain says the swap landed, so this key is no longer an owner: the
+    // run stops at the owner check, after the reconcile has moved the store.
+    await expect(
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, {
+          chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 },
+        }),
+        authorsPath: () => seam,
+      }),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+
+    expect(fake.gets).toBe(0);
+    expect(readAuthors(seam).active).toBe('zomi-next');
+    expect(readAuthors(seam).authors.zomi).toBeUndefined();
+    // The default store is untouched: its chase is still pending.
+    const untouched = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
+    expect(untouched.active).toBe('zomi');
+    expect(untouched.authors['zomi-next']?.replaces).toBe('zomi');
+  });
+
   it('settles before the record read, so a run that died after executing still reconciles', async () => {
     const fake = fakeService(baseRecord());
     const captured = capture();

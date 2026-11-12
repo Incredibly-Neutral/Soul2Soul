@@ -11,16 +11,21 @@
 // read out of the Safe's own owner list (`predecessorOf`), never asked for.
 //
 // The old key is the row filed for this Safe whose stored key derives to one of
-// its owners, preferring the active row. The new key comes from the same
-// resolver `author new` and `signer add` use, so `--key`, `--mnemonic`, a piped
-// line and a generated phrase all work the same way. The new row is filed
-// inactive, with `replaces` naming the old one: the old key is still the active
-// key on this machine, which is what lets it confirm the swap.
+// its owners, preferring the active row — and when the active row is not an
+// owner of this Safe, the row that is wins, so the run says `s2s author switch`
+// plainly: `signer confirm` signs with the active key and nothing else. The new
+// key comes from the same resolver `author new` and `signer add` use, so
+// `--key`, `--mnemonic`, a piped line and a generated phrase all work the same
+// way. The new row is filed inactive, with `replaces` naming the old one: the
+// old key is still the owner of the Safe, which is what lets it confirm the
+// swap.
 //
 // Step 1 is a reconcile, not a read: if a previous rotation already executed,
 // `settleReplacement` moves the store on before anything is decided. A
-// `collision` — the owners name neither key, or both — is a warning, because
-// the store is not the authority here and refusing would leave no way forward.
+// `collision` — the owners name both filed keys, or neither — is a warning,
+// because the store is not the authority here and refusing would leave no way
+// forward; in the `neither` case the run then refuses `not_owner` and names
+// every key it holds for the Safe.
 //
 // The key is filed BEFORE the service is touched, and a failed proposal is
 // reported, never thrown: the old key is still an owner and the `{to, data}`
@@ -42,6 +47,7 @@ import {
   activeAuthorRecord,
   addSigner,
   authorEoa,
+  authorsFilePath,
   pendingReplacement,
   readAuthors,
   settleReplacement,
@@ -86,8 +92,12 @@ function keysForSafe(store: AuthorsStore, safe: Address): FiledKey[] {
  * Returns the pet name that became the Safe's key, or undefined when nothing
  * settled. Never throws: a reconcile is bookkeeping after the fact, and a store
  * that cannot be written must not fail a run whose chain work already landed.
- * `collision` is warned about, not refused — the owners name neither filed key
- * or both, and the user is the one who can say which row to keep.
+ * `collision` is warned about, not refused — the owners name both filed keys or
+ * neither, and the user is the one who can say which row to keep.
+ *
+ * `path` is the store the caller is working on, the same one it reads and writes
+ * everywhere else in the run: the reconcile must move that file, not whatever
+ * sits at the default location.
  *
  * Shared with `signer confirm`, which calls it before reading the record (so a
  * run that died after executing still reconciles) and again after executing.
@@ -96,11 +106,12 @@ export function reconcileReplacement(
   safe: Address,
   owners: readonly Address[],
   out: CliOut,
+  path: string = authorsFilePath(),
 ): string | undefined {
-  const before = pendingReplacement(safe);
+  const before = pendingReplacement(safe, path);
   let outcome: ReturnType<typeof settleReplacement>;
   try {
-    outcome = settleReplacement(safe, owners);
+    outcome = settleReplacement(safe, owners, path);
   } catch (err) {
     out.warn(`could not reconcile the pending replacement for ${safe} (${reasonOf(err)})`);
     return undefined;
@@ -112,7 +123,7 @@ export function reconcileReplacement(
     return undefined;
   }
   if (outcome !== 'settled') return undefined;
-  return before?.name ?? activeAuthorRecord(readAuthors())?.name;
+  return before?.name ?? activeAuthorRecord(readAuthors(path))?.name;
 }
 
 export async function runSignerRotate(
@@ -140,7 +151,7 @@ export async function runSignerRotate(
 
   // 1. Settle first: a rotation already executed is a fact the store has to
   // catch up with before this run decides anything.
-  const settled = reconcileReplacement(safe, chain.owners, out);
+  const settled = reconcileReplacement(safe, chain.owners, out, deps.authorsPath());
 
   // 2. The old key: the row for this Safe that derives to one of its owners.
   const store = readAuthors(deps.authorsPath());
@@ -188,10 +199,10 @@ export async function runSignerRotate(
       'already_owner',
     );
   }
-  const pending = pendingReplacement(safe);
+  const pending = pendingReplacement(safe, deps.authorsPath());
   if (pending) {
     throw new CliError(
-      `a replacement is already in flight on ${safe}: '${pending.name}' is filed and waits for its swap to execute — confirm that one, or remove it with \`s2s author rm ${pending.name}\`, before starting another`,
+      `a replacement is already in flight on ${safe}: '${pending.name}' is filed and waits for its swap to execute — finish that swap with \`s2s signer confirm\` (\`s2s signer queue ${safe}\` shows it) or wait for an owner to send it; '${pending.name}' holds the only copy of the key that swap puts on the Safe, so it is removed only after the swap settles`,
       1,
       'replacement_pending',
     );
@@ -242,6 +253,12 @@ export async function runSignerRotate(
     );
   }
 
+  // The key that signs this swap is not always the active author: a store can
+  // hold a row for this Safe that is not the one selected, and `signer confirm`
+  // signs with the active key only. Say which command closes that gap rather
+  // than telling the user to confirm with a key that is not the active one.
+  const switchTo = oldKey.name === store.active ? undefined : oldKey.name;
+
   out.result(
     {
       action: 'signer.rotate',
@@ -258,6 +275,7 @@ export async function runSignerRotate(
       // Always present: the same call the service was given, so a proposal that
       // never reached it can still be made from an owner's wallet.
       safeTx: { to: safe, data: tx.data },
+      ...(switchTo ? { switchTo } : {}),
       ...(note ? { note } : {}),
       ...(source.mnemonic ? { mnemonic: source.mnemonic } : {}),
       ...(source.generated ? { privateKey } : {}),
@@ -265,16 +283,26 @@ export async function runSignerRotate(
     [
       `signer '${filedRow.name}' filed, inactive until the swap executes (replaces '${oldKey.name}')`,
       `eoa         : ${eoa}`,
-      `old eoa     : ${oldKey.eoa} ('${oldKey.name}', still the key this machine signs with)`,
+      `old eoa     : ${oldKey.eoa} ('${oldKey.name}', still the key that owns the swap)`,
       `safe        : ${safe}`,
       `threshold   : ${String(chain.threshold)} (unchanged — a swap keeps it)`,
       `nonce       : ${String(chain.nonce)}`,
       `safeTxHash  : ${safeTxHash}`,
+      ...(switchTo
+        ? [
+            `switch first: '${store.active ?? '(none)'}' is the active author, so \`s2s signer confirm\` would sign with a key that does not own ${safe}`,
+            `              run \`s2s author switch ${switchTo}\`, then \`s2s signer confirm ${safeTxHash}\``,
+          ]
+        : []),
       ...(settled ? [`settled     : ${settled} is now the key for ${safe}`] : []),
       ...(proposed
         ? [
             `proposal    : queued — 0 of ${String(chain.threshold)} confirmations`,
-            `              the OLD key confirms this one: run \`s2s signer confirm ${safeTxHash}\` while '${oldKey.name}' is still the active key`,
+            ...(switchTo
+              ? []
+              : [
+                  `              the OLD key confirms this one: run \`s2s signer confirm ${safeTxHash}\` while '${oldKey.name}' is still the active key`,
+                ]),
             `              '${oldKey.name}' stops being an owner only when the swap executes, not when this proposal is filed`,
             `              proposing costs no gas; executing the swap costs gas from whichever owner sends it`,
           ]
