@@ -267,6 +267,10 @@ export async function authorWrite(
       base: parsed.slug,
       tags: parsed.tags,
       attributes: undefined,
+      // Public but unsigned: it rides on the stored public part, never the body,
+      // so a label does not move the objectId. `null` is no label, and the
+      // builder writes nothing for it.
+      label: parsed.label ?? undefined,
     },
     { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
     ctx.signer,

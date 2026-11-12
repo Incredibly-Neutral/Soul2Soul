@@ -57,6 +57,10 @@ export const KNOWN_FRONTMATTER_KEYS = new Set([
   'encrypted',
   'encryption',
   'title',
+  // The label is a short public name for the manuscript, carried on the stored
+  // public part and never signed. In the custom bag it would be signed into the
+  // body and change the objectId of every note that sets one.
+  'label',
   'modified_date',
   'creation_date',
   // The CID of the last upload is written back by the CLI for `offer`; it is
@@ -79,6 +83,14 @@ export interface ParsedNote {
   position: number;
   encryption: boolean;
   title: string;
+  /**
+   * A short public name for the manuscript (frontmatter `label`), trimmed.
+   *
+   * Public but unsigned: it travels on the stored public part, not in the body.
+   * A blank or non-string value is no label at all, so it resolves to null and
+   * whoever displays it falls back to the genesis id.
+   */
+  label: string | null;
   slug: string;
   /** Markdown body rendered to HTML, summary markers stripped. */
   content: string;
@@ -219,6 +231,11 @@ export async function parseMarkdownNote(raw: string, filename: string): Promise<
   const mdContent = await marked(body);
   const { summary, content } = deriveSummary(mdContent);
 
+  // Only a string is a label: a number or a blank is treated as none, so a
+  // displayer falls back to the genesis id instead of showing an empty name.
+  const rawLabel = frontmatter.label;
+  const label = typeof rawLabel === 'string' && rawLabel.trim() !== '' ? rawLabel.trim() : null;
+
   return {
     contentId: frontmatter.content_id ? asString(frontmatter.content_id) : null,
     postType: (frontmatter.post_type as string) || 'post',
@@ -234,6 +251,7 @@ export async function parseMarkdownNote(raw: string, filename: string): Promise<
         ? Boolean(frontmatter.encrypted)
         : Boolean(frontmatter.encryption),
     title: resolvedTitle,
+    label,
     slug,
     content,
     summary,

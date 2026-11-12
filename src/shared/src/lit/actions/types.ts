@@ -148,19 +148,21 @@ export interface RepointArchiveData {
   wrote: boolean;
 }
 
-// Decrypt (author draft) — opens a draft in its own module and refuses unless
-// the signer owns the Safe the module names for that genesis. The author Safe is
-// deliberately absent from the params: it is read from the drafts module, so a
-// caller cannot name whose ownership is being tested. Only then is the blob
-// cat'd, and the plaintext is released only if it hashes to the signed
-// `public.plaintextHash`. See lit/actions/decrypt.ts.
+// Decrypt (author draft) — opens a draft the author Safe keeps, and refuses
+// unless the signer was an owner of that Safe when the version was appended. The
+// caller names the Safe, never a module: the action resolves the Safe's drafts
+// log and owner-history module from the Safe's own enabled-module list, requires
+// the drafts log to name that Safe for the genesis, and reads `isOwnerAt` at the
+// genesis's append block (live `isOwner` when a pre-upgrade version records block
+// 0). Only then is the blob cat'd, and the plaintext is released only if it
+// hashes to the signed `public.plaintextHash`. See lit/actions/decrypt.ts.
 export interface DecryptParams {
   /** Lit PKP id that holds the decryption key. */
   pkpId: string;
   /** The draft: a raw CID/objectId (keccak256-normalised) or a bytes32 0x+64hex id. */
   genesis: string;
-  /** The author's DraftsModuleV1 instance — the contract the author Safe owns. */
-  authorModule: string;
+  /** The author Safe whose drafts log holds the genesis, and whose ownership is tested. */
+  authorSafe: string;
   /** Signature over `hashMessage('lit actions auth')` from the caller's wallet. */
   signature: string;
   rpcs: { L2: string[] };
@@ -171,7 +173,7 @@ export interface DecryptParams {
 export interface DecryptData {
   /** The string the author signed, exactly as decrypted — the hash input. */
   plaintext: string;
-  /** The Safe the drafts module names as this genesis's author. */
+  /** The Safe the drafts log names as this genesis's author (the Safe the caller passed). */
   author: string;
   /** CID of the version `fetch` returned (the latest append). */
   cid: string;

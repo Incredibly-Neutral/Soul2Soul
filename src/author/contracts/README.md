@@ -4,20 +4,20 @@ The author-side Safe contracts for Polyphony, on Base.
 
 One factory, `AuthorContractsFactory`, deploys every per-author proxy in this package:
 
-| contract | what it is |
-|---|---|
-| `AuthorContractsFactory` | the deploy path: one UUPS proxy per author Safe for the drafts log, one for the owner history **plus the guard wired to it**, and the two implementation pointers everything proxies onto |
-| `DraftsModuleV1` | the author's draft log |
-| `OwnerHistoryModuleV1` | who was an owner of the author Safe, and from which block |
-| `OwnerHistoryGuard` | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
+| contract                 | what it is                                                                                                                                                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AuthorContractsFactory` | the deploy path: one UUPS proxy per author Safe for the drafts log, one for the owner history **plus the guard wired to it**, and the two implementation pointers everything proxies onto                       |
+| `DraftsModuleV1`         | the author's draft log                                                                                                                                                                                          |
+| `OwnerHistoryModuleV1`   | who was an owner of the author Safe, and from which block                                                                                                                                                       |
+| `OwnerHistoryGuard`      | a Safe transaction guard that keeps the owner history current; installed with `setGuard`, which checks ERC-165 first — a guard that does not answer `0xe6d7a83a` reverts `GS300` and cannot be installed at all |
 
 ## Deployed on Base
 
-| contract | address |
-|---|---|
-| `DraftsModuleV1` (implementation) | `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6` |
-| `OwnerHistoryModuleV1` (implementation) | `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` |
-| `AuthorContractsFactory` | `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A` |
+| contract                                | address                                      |
+| --------------------------------------- | -------------------------------------------- |
+| `DraftsModuleV1` (implementation)       | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
+| `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
+| `AuthorContractsFactory`                | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
 These are the `prod` defaults the CLI carries. `contracts.authorFactory`
 (`S2S_AUTHOR_CONTRACTS_FACTORY`) overrides the factory per environment, and the two
@@ -28,13 +28,16 @@ neither installs anything: deploying a proxy (and, for the history, a guard) spe
 caller's gas and writes nothing to any Safe. Adoption is the Safe's own transaction —
 `setGuard(guard)`, one transaction, `onlySelf`. The factory cannot do it and does not try.
 
-`enableModule` is **not** part of the install and is not recommended: an enabled module can
-call `execTransactionFromModule`, i.e. execute anything as the author Safe, and these modules
-need no module powers. What proves adoption instead is the guard slot:
-`Safe.getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)`
-→ guard → `guard.module()` → module. The factory's `getDraftsModulesForSafe`,
-`getOwnerHistoryModulesForSafe` and `guardFor` are **indexes, not proof** — creation is open,
-so anyone can append an entry for any Safe.
+Adoption is three things, not one: the two proxies exist, the guard is in the slot, and both
+modules are enabled. A gate finds a role by asking `supportsInterface(roleId)` of each address on
+the Safe's `getModulesPaginated` list — `0xefb74036` for drafts, `0xee855023` for owner history —
+so an unenabled module has no role to find. Enabling costs the Safe no authority: neither module
+calls `execTransactionFromModule`, both write only their own storage and answer views. The guard
+still matters separately, because a guard is what sees writes. The factory's
+`getDraftsModulesForSafe`, `getOwnerHistoryModulesForSafe` and `guardFor` are **indexes, not
+proof** — creation is open, so anyone can append an entry for any Safe — and so are the CREATE2
+prediction views `draftsModuleAddress` / `ownerHistoryModuleAddress`, which order the probes and
+prove nothing.
 
 Source in `src/`, tests in `test/`, deploy script in `scripts/`.
 `pnpm compile && pnpm test`; `pnpm deploy:authorcontracts` deploys both implementations then
@@ -56,25 +59,27 @@ The same three steps by hand, when the CLI is not the tool in hand:
 1. `createDraftsModule(safe)` on the factory → the drafts proxy. Nothing else to do: its gate is
    `msg.sender == safe`, so the Safe sends `append` to the proxy directly.
 2. `createOwnerHistoryModule(safe)` on the factory → `(module, guard)`.
-3. One transaction **from the Safe**: `setGuard(guard)` (`to = safe`, `data = setGuard(guard)`
-   calldata, proposed in the Safe app or any Safe client). `setGuard` checks ERC-165 first and
-   reverts `GS300` for anything that does not answer `Guard`'s interface id.
+3. One transaction **from the Safe** carrying the batch: `setGuard(guard)` and
+   `enableModule(drafts)`, `enableModule(history)` (`to = safe`, the three calls in one `multiSend`
+   or one Safe transaction). `setGuard` checks ERC-165 first and reverts `GS300` for anything that
+   does not answer `Guard`'s interface id; `enableModule` is `onlySelf` and reverts `GS102` when
+   the module is already enabled, so send only what is missing.
 
-Do **not** `enableModule` on the author Safe on top of that: an enabled module can
-`execTransactionFromModule`, i.e. execute anything as the Safe, and nothing here needs it —
-`setGuard` is `onlySelf`, `sync()` is permissionless, and every read is a `view` call.
+`enableModule` is part of the install. What it does not give the modules is the ability to execute
+as the Safe: neither calls `execTransactionFromModule`, `setGuard` is `onlySelf`, `sync()` is
+permissionless, and every read is a `view` call.
 
 ## The owner-history hook is best-effort. Read this before proposing a rotation.
 
 Safe 1.4.1 has no owner-rotation callback. The only tap is a transaction guard:
 `execTransaction` calls `checkAfterExecution` after every execution, and every
-owner mutation is `onlySelf`, so a guard *sees* every rotation. Seeing is not the
+owner mutation is `onlySelf`, so a guard _sees_ every rotation. Seeing is not the
 same as recording.
 
 `OwnerHistoryGuard` forwards at most 600k of gas to `sync()` and keeps 20k back so
 the Safe's own transaction can never fail because of it — a guard that reverts is
 a permanent brick, so the guard is written to swallow everything. The consequence
-is that a Safe transaction whose gas limit is the *estimated* cost starves the
+is that a Safe transaction whose gas limit is the _estimated_ cost starves the
 hook: the sync is skipped, `SyncFailed(blockNumber)` is emitted, the era is
 stamped at the next successful `sync()` instead of at the rotation block, and the
 gap is legible as `lastSyncedBlock()` lagging behind the rotation.

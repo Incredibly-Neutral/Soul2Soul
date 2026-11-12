@@ -8,7 +8,7 @@ bug) that no build error surfaces and that can't be seen outside a Safe iframe.
 ## What it checks (functional only)
 
 - the app boots and renders `s2s-app`
-- all 5 nav tabs render **enabled** (Deals / Whitelists / Records / Storage / Website-Tree)
+- all 5 nav tabs render **enabled** (Agreements / Whitelists / Records / Storage / Website-Tree)
 - clicking each tab switches the **active tab** AND swaps the rendered component
 - no uncaught page errors
 

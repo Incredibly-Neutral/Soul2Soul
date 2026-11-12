@@ -63,14 +63,14 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**
 - **`DraftsModuleV1`** (author side, in `src/author/contracts`, deployed on Base behind
-  `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-author proxy is
+  `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-author proxy is
   installed by `s2s author new` / `s2s author init`) — per author Safe, the append-only log of
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
 - **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, in `src/author/contracts`, deployed on
 Base behind the same factory; the per-Safe proxy and guard are installed by the CLI, and the Safe's
-`setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per
+batch of `enableModule`×2 and `setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per
 author Safe, mirroring the Safe's owner set and keeping every past set with the block and timestamp it
 held, plus a storage-free, non-upgradeable guard whose `checkAfterExecution` calls the module's
 permissionless `sync()`. It exists because Safe 1.4.1 has no hook on owner rotation: every rotation is
@@ -137,11 +137,16 @@ chooses transport (Bun fetch vs Lit `executeAction`), nothing else.
 `S2SContentItem = { public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), secret(string) }`
 - `S2SPublicContent` (signed, EIP-712): `specVersion, author(0x Safe address), postType, mediaType, parent,
   position, publication, locale, creationDate(unixts, genesis signing time), modifiedDate(unixts, this
-  version), base?, tags[], attributes?, plaintextHash`; a v1 item carries a single `createdAt` instead
+  version), base?, tags[], attributes?, plaintextHash` and, on v2 only, `label?` (public and
+  unsigned — ADR-003); a v1 item carries a single `createdAt` instead
 - `secret` = stringified JSON `{ title, slug, content, custom? }` when `encryption:false`, ciphertext
   when `true`. **`secret` is not signed** — `plaintextHash` commits the plaintext instead.
 - `objectId` = EIP-712 digest of `public`, available pre-upload/pre-CID.
-- Every field in `S2SPublicContent` is signed; there is no unsigned public field.
+- Every field in `S2SPublicContent` is signed, with one named exception: the v2 `label`, a short
+  display name that is absent from `S2S_TYPES_V2`, so it enters neither the signing view nor the
+  digest and `objectId` is the same bytes with it and without it. A displayer resolves
+  `label ?? genesis`; nothing may depend on it (no gate, index, cache key or identity), because
+  a relayer can rewrite it. [ADR-003](../adr/ADR-003-label-is-unsigned.md).
 
 **Legacy `S2SBody` (deprecated, actions still use it):** discriminated union —
 `S2SBodyBase` + `S2SBodyPlain` (`encryption:false`, `content, title, slug, custom?`) /
@@ -228,5 +233,8 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 - Owner history (who was an owner, and when): `specs/author/SPEC-author-owner-history.md` —
   `OwnerHistoryModuleV1` and `OwnerHistoryGuard`, the era model and its boundary rule, and why the Safe
   offers no hook on owner rotation.
+- Modules and the Safe (ADR-004): `adr/ADR-004-modules-are-enabled-and-found-by-interface.md` — why an
+  enabled module costs the Safe no authority here, and why a reader finds the author-side roles and the
+  records module by interface id, with publication's `NAME()` fallback recorded as debt.
 - Clone-local skills: `skills/template-design/SKILL.md` + `skills/s2s-protocol/SKILL.md` (in
   `~/code/website-starter/skills/`, mirrored into each clone).

@@ -266,10 +266,10 @@ describe('author new installs the author contracts', () => {
     expect(sink.human).toContain(`pending — ${note}`);
     expect(sink.human).not.toContain('not deployed yet');
     expect(sink.logs.join('\n')).toContain(note);
-    expect(sink.human).toContain(`to   ${DRAFTS}`);
+    expect(sink.human).toContain(`1. to   ${DRAFTS}`);
     expect(sink.human).toContain('data 0xdeadbeef');
-    // The drafts module is appended through the proxy: nothing to install.
-    expect(sink.human).toContain('needs no install');
+    // A pending install hands the owners a list: they propose each call in order.
+    expect(sink.human).toContain('propose these Safe calls, in this order');
     // Still not an error: the author was created.
     expect(sink.data.active).toBe(true);
   });
@@ -288,7 +288,7 @@ describe('author new installs the author contracts', () => {
     // A reverted setGuard, a submitted-but-invisible userOp, a foreign guard:
     // core has no call to hand over, so the output must not promise one.
     const note =
-      'the setGuard transaction did not install the guard (the Safe\'s guard slot is empty) — it may have reverted; run again';
+      "the setGuard transaction did not install the guard (the Safe's guard slot is empty) — it may have reverted; run again";
     installState.answer = () => installResult('pending-safe', { note });
     const sink = recorder();
     await authorNew.run(sink.out, { flags: { key: KEY }, positionals: ['zomi'] });

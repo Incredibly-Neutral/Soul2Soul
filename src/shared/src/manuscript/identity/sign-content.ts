@@ -116,7 +116,17 @@ export async function buildSignedContentItem(
   };
   const publicPart: S2SPublicContent | S2SPublicContentV2 =
     pub.specVersion === '2'
-      ? { ...shared, creationDate: pub.creationDate, modifiedDate: pub.modifiedDate }
+      ? {
+          ...shared,
+          creationDate: pub.creationDate,
+          modifiedDate: pub.modifiedDate,
+          // Public but UNSIGNED: it rides on the stored public part and is
+          // deliberately absent from S2S_TYPES_V2, so the signing view below is
+          // built without it and the objectId is identical with and without a
+          // label. Written only when there is one, which keeps an unlabelled
+          // part byte-identical to one written before the field existed.
+          ...labelField(pub.label),
+        }
       : { ...shared, createdAt: pub.createdAt };
   const { types, view: signingView } = signingEnvelope(publicPart);
 
@@ -167,6 +177,17 @@ export async function buildSignedContentItem(
     encryption,
     body: bodyContent,
   } as AnyS2SContentItem;
+}
+
+/**
+ * The label to store: a non-blank string, trimmed. Absent, null and blank are
+ * all no label, so the field is not written at all — a caller handing over
+ * `ParsedNote.label` (a `string | null`) cannot store a null that the reader's
+ * schema would refuse, and a cosmetic unsigned field never invalidates a
+ * signed manuscript.
+ */
+function labelField(value: unknown): { label?: string } {
+  return typeof value === 'string' && value.trim() !== '' ? { label: value.trim() } : {};
 }
 
 /** Pass-through encrypt function — for non-encrypted content */

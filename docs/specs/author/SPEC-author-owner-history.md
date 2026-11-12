@@ -10,8 +10,8 @@
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Deployed on
-> Base: `OwnerHistoryModuleV1` implementation `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` behind
-> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-Safe proxy and
+> Base: `OwnerHistoryModuleV1` implementation `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` behind
+> `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-Safe proxy and
 > guard are installed by `s2s author new` / `s2s author init` (see *The install*).
 
 ## Responsibility
@@ -68,25 +68,33 @@ a claim to re-verify against Safe 1.5.x, and see *Test seams* for what that cost
 
 The normal path is the CLI: `s2s author new` installs on the author it just created, and
 `s2s author init` does the same for an author that already exists (a key filed before these
-contracts were deployed). What is installed is decided by the Safe's own guard slot, not by the
-factory index: `guardFor` says what a module was *minted* with and only answers for one factory, and
-only the Safe can write the slot. So a re-run reads `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then
-`G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — three immutables, no factory in the
-proof — reports `already` for a proven install, and only calls
-`createOwnerHistoryModule(safe)` when nothing is proven — checking the index first so it deploys
-nothing that already exists. It then sends the Safe transaction below, re-reads the slot, and calls
-itself `installed` only when the slot carries the guard it sent. On a multisig Safe, where one key
-cannot execute that transaction, it stops at `pending-safe` and prints the `to`/`data` for the
-owners to propose. A guard someone else already installed is never overwritten, and no `safeTx` is
-offered to replace it. The same two steps by hand are the manual path.
+contracts were deployed). Adoption is read from the two records only the Safe can write. The
+module is found by role: every address on the Safe's enabled-module list is asked
+`supportsInterface(0xee855023)`, and the one that answers true is the module this Safe adopted.
+The guard is found in its slot, because a guard is not an enabled module: `getStorageAt(safe,
+0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — three
+immutables, no factory in the proof. A re-run that finds both reports `already`, and only calls
+`createOwnerHistoryModule(safe)` when one is missing. It then sends the Safe transaction below,
+re-reads the list and the slot, and calls itself `installed` only when the Safe carries the module
+and guard it sent. On a multisig Safe, where one key cannot execute that transaction, it stops at
+`pending-safe` and prints the `to`/`data` for the owners to propose. A guard someone else already
+installed is never overwritten, and no `safeTx` is offered to replace it: replacing a guard is
+allowed only for this package's own guard, proven the same way — `guard.module()` and `guard.safe()`
+name the module and the Safe. Any other guard is the Safe's policy, and the owners remove it
+themselves. The same steps by hand are the manual path.
 
-Two steps, and only the second one is a Safe transaction:
+Three steps, and only the last one is a Safe transaction:
 
 1. `createOwnerHistoryModule(safe)` on the factory — **permissionless**, deploys the proxy *and*
    the guard bound to it, returns `(moduleProxy, guard)`, and installs nothing. The factory
-   cannot install: `setGuard` is `onlySelf`, and nothing in this package writes the Safe's
-   storage.
-2. One Safe transaction: `setGuard(guard)`.
+   cannot install: `setGuard` and `enableModule` are `onlySelf`, and nothing in this package
+   writes the Safe's storage.
+2. Read the address the factory would deploy to, if a preview is wanted:
+   `ownerHistoryModuleAddress(safe)`. The factory deploys with CREATE2 from
+   `keccak256(abi.encode(role, safe, nonce))`, so the answer is exact until another caller takes the
+   nonce or `setOwnerHistoryImplementation` moves the pointer. The guard is a plain CREATE and has
+   no predicted address.
+3. One Safe transaction carrying the batch: `enableModule(moduleProxy)`, `setGuard(guard)`.
 
 That transaction has one precondition that is easy to miss and fatal to skip: `setGuard` is
 `authorized` — a self-call, the Safe's own `execTransaction` or an enabled module's
@@ -96,19 +104,23 @@ does not answer the guard interface id (`0xe6d7a83a`) cannot be installed at all
 transaction reverts `GS300` and the previous guard stays. `OwnerHistoryGuard.supportsInterface`
 answers `0xe6d7a83a` and `0x01ffc9a7`, so the transaction lands.
 
-**`enableModule` is not part of the install, and is not recommended.** An enabled module can
-call `execTransactionFromModule`, i.e. execute anything as the author Safe — including
-`setGuard(address(0))` — and this module needs no module powers: the guard calls `sync()`,
-`sync()` is permissionless, and every read is a plain `view` call. Adoption is instead proven
-by the guard slot, which only the Safe can write:
+**`enableModule` is part of the install, and it is safe because the module has no powers to
+use.** Enabling a module lets it call `execTransactionFromModule`, i.e. execute anything as the
+author Safe, so the question is whether this module ever would. It does not: it writes its own
+storage and answers views, and nothing in it calls `execTransactionFromModule`. Enabling grants
+no execution power, and it buys the one thing the guard slot cannot give — the Safe's own
+enabled-module list, which is the authoritative index a gate reads a role from. The proxy's
+implementation pointer is fixed at creation and moves only through the Safe's own `upgradeTo`, so
+an enabled proxy cannot be repointed behind the Safe's back.
 
-```
-Safe.getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)
-  → guard → guard.module() → module
-```
+The guard stays in the slot regardless, because a guard is what sees writes: it is called inside
+every `execTransaction`, and an owner rotation is an ordinary `execTransaction` with a self-call
+in it. The two records answer different questions — the enabled list says which module is adopted,
+the slot says what watches the Safe.
 
 Nothing else in the install is required: there is no registry to join and no name to claim,
-the proxy answers only to the Safe, and the factory is a deployer with an index.
+the proxy answers only to the Safe, and the factory is a deployer with an index. `NAME()`
+(`"S2S Owner History Module V1"`) is a diagnostic, not a way to find anything.
 
 A rotation proposed by this project's tooling carries its own `sync()` in the batch; the guard
 is the safety net for rotations that arrive through other clients — the Safe app, a hardware
@@ -202,7 +214,8 @@ and an out-of-range index.
 | ABI | Answers |
 |---|---|
 | `safe() → address` | the Safe this proxy mirrors; the module's only link to it |
-| `NAME() → string` | `"S2S Owner History Module V1"` (pure; not a trust signal — see *What the gate does with it*) |
+| `NAME() → string` | `"S2S Owner History Module V1"` (pure; a diagnostic, not a trust signal) |
+| `supportsInterface(bytes4) → bool` | `true` for `0xee855023` (`IOwnerHistoryModule`: `sync`, `isOwner`, `isOwnerAt`, `wasOwnerAt`, `eraCount`) and `0x01ffc9a7`; false for everything else. In the source; the deployment at `0xD830…` predates it and answers nothing |
 | `isOwner(address) → bool` | **live**: staticcalls the Safe's `isOwner`, `false` if the call fails or returns fewer than 32 bytes, and compares the raw word to `1` rather than `abi.decode(…, (bool))` — decoding reverts on a word that is neither 0 nor 1, and the Safe must not be able to make this read revert |
 | `isOwnerAt(address,uint256 blockNumber) → bool` | `blockNumber >= block.number` → the live `isOwner` answer. Otherwise the tenure scan below |
 | `wasOwnerAt(address,uint256 timestamp) → bool` | same, on the timestamp axis (`timestamp >= block.timestamp` → live) |
@@ -323,7 +336,12 @@ below is a documented limit, not a defect, and every one of them is **visible on
    before the module existed are absent, and `isOwnerAt(who, b)` for a block before era 0
    answers `false` for everyone — including people who were owners. The honest reading of
    `false` is “not known to have been an owner”, not “was not one”.
-2. **A missed rotation stretches a tenure.** `sync()` records the boundary at the block it
+2. **A migration starts a new history.** Adopting a new module keeps the Safe and gives it a
+   fresh proxy, whose era 0 is the block of that proxy. The eras the old proxy recorded stay in
+   the old proxy; nothing in the new one points at them, so the Safe's history begins again.
+   Content written before the migration therefore has no block this module can check, and the
+   drafts log answers `blockNumber` 0 for the versions it imported for the same reason.
+3. **A missed rotation stretches a tenure.** `sync()` records the boundary at the block it
    runs in. If a rotation happened at block `N` and the repair runs at `M > N`, the era
    boundary is `M`: the removed owner keeps a `true` answer for `[N, M)` and the added owner
    gets a `false` answer for `[N, M)`. That gap is the cost, and it is why the guard exists.
@@ -334,7 +352,7 @@ below is a documented limit, not a defect, and every one of them is **visible on
 4. **The guard can be starved**, by the default proposal path (measured in *The guard*) or
    by design on a large era: `sync()` costs `≈ 239k + 33.5k × owners`, the guard forwards a
    fixed budget, and past that ceiling the hook misses every time until the set shrinks.
-   This is indistinguishable from (2) except that it leaves `SyncFailed(blockNumber)` in the
+   This is indistinguishable from (3) except that it leaves `SyncFailed(blockNumber)` in the
    very transaction that missed — the only on-chain signal that the history has a hole, and
    it names the block.
 5. **A missed sync is not a lost sync.** Any address may call `sync()` at any time. Nothing
@@ -442,8 +460,8 @@ at 13, i.e. about 6.2k more per owner, paid on every proposal, deal and upgrade.
 This package supplies the read; using it is a change to the gates package, described below.
 
 ```ts
-// `history` is pinned out of band (config), never resolved by a name or a factory index.
-const history = ownerHistoryFor(authorSafe)
+// The module is found by role on the Safe's own enabled-module list.
+const history = await moduleWithRole(authorSafe, '0xee855023')
 
 const wasOwner = await read(history, HISTORY_ABI, 'isOwnerAt', [signer, blockOfTheArtifact])
 return (
@@ -453,9 +471,18 @@ return (
 )
 ```
 
-`isOwnerAt(signer, blockOfTheArtifact)` is *the* call. `isOwnerAt(signer, block.number)`
-is “is an owner now” — the same function, answered live — and is not what a gate wants for
-content older than the current block. The three reads are independent: none feeds another.
+`isOwnerAt(signer, blockOfTheArtifact)` is *the* call. The block is the one the version was
+recorded in — for a manuscript, the block its draft version was appended at, read from the drafts
+log's `blocksOf`. It is not the block of the query and not the block of the signature.
+`isOwnerAt(signer, block.number)` is “is an owner now” — the same function, answered live — and is
+not what a gate wants for content older than the current block. The three reads are independent:
+none feeds another.
+
+One block value is special: `blockNumber == 0` means the version predates the field, or was carried
+in by `absorb()`. There is no block to judge, so the gate falls back to the Safe's live `isOwner`.
+That answer is present tense and therefore weaker — a signer rotated out after the write no longer
+passes — and the gate should say which of the two it used rather than present them as the same
+result.
 
 One consequence the gate cannot dodge: `canPublish()` in `src/shared/src/gates` reads
 `isOwner` **live** as its second half, so a historical check has to *replace* that half, not
@@ -464,25 +491,24 @@ module buys nothing. That is the sketch above (`canPublish` split back into its 
 half), and it is a change to the gates package, not to this one. Until it lands, this package
 is the store and the read; it is not yet a retrofit for old content.
 
-**The trust anchor is the gate's job, not the module's.** `createModule` is permissionless:
-anyone can create a history proxy *claiming* any Safe, and `NAME()` (“S2S Owner History
-Module V1”) is a string anyone can copy. `history.safe()` alone therefore proves only that
+**The trust anchor is the Safe's enabled-module list, not the factory.** `createModule` is
+permissionless: anyone can create a history proxy *claiming* any Safe, and `NAME()` (“S2S Owner
+History Module V1”) is a string anyone can copy. `history.safe()` alone therefore proves only that
 whoever made the proxy named that Safe. The rules:
 
-1. The gate must use an address supplied out of band (config / a registry the caller
-   already trusts) and check `history.safe() == theSafeYouAlreadyTrust`. Never resolve a
-   history module from a name, an event, or a factory index (`getModulesForSafe` is an index,
-   not proof).
-2. The stronger check is the **guard slot**, because only the Safe can write it and it names the
-   module: read the guard-manager word
-   (`getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)`, low
-   20 bytes) → `guard` → `guard.module()` → `history`, and require that last address to be the
-   one checked in step 1. Do **not** prefer `isModuleEnabled(history)`: `enableModule` is not
-   part of the install — an enabled module can `execTransactionFromModule`, i.e. execute
-   anything as the Safe, and this module needs no module powers — so its absence proves
-   nothing and its presence is a hazard, not evidence.
-3. Whichever is checked, a failed comparison is `false` for the gate, never a fallback to a
-   live `isOwner`.
+1. A module is adopted when it is on the Safe's enabled-module list — a list only the Safe writes,
+   because `enableModule` is `onlySelf` — and answers `supportsInterface(0xee855023)`. That pair is
+   the proof: the factory index is a lead, an event is a lead, and a name is nothing. When more
+   than one module answers, the reader either takes the one it was given out of band or reads both
+   and keeps the log that holds the record; the list says adoption, not which instance holds a
+   given era.
+2. For the guard, the slot is the check, and it is a separate question: read the guard-manager
+   word (`getStorageAt(0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8, 32)`,
+   low 20 bytes) → `guard` → `guard.module() → the module`, and require that address to be the one
+   the enabled list gave. Two records that must agree are stronger than either alone. Neither is
+   required to find the other.
+3. A failed comparison is `false` for the gate, never a fallback to a live `isOwner` — except where
+   `blockNumber` is 0, where the live read is the only answer there is.
 
 ## Invariants
 
@@ -508,6 +534,10 @@ whoever made the proxy named that Safe. The rules:
   transaction has got, and a missed sync makes the same `(who, b)` answer differently before
   and after `b` becomes past.
 - **INV-8** `sync()` writes nothing and returns `false` when the set has not changed.
+- **The role id does not move.** `supportsInterface(0xee855023)` answers true from a compile-time
+  constant; no upgrade and no stored value can change it, because a reader that already holds the
+  id would never see a new one. The id differs from the drafts module's and the guard's, which is
+  what makes it tell the roles apart.
 
 ## What V1 does not do
 
@@ -575,6 +605,8 @@ whoever made the proxy named that Safe. The rules:
   difference between a best-effort hook and a bricked Safe.
 - **Permissionless `sync()`.** Any gate on it makes the repair path unreachable exactly when
   it is needed.
+- **The role id `0xee855023`.** A reader that already holds it cannot be told about a new one,
+  so a change makes every published module undiscoverable for good.
 - **`_authorizeUpgrade` gated on `msg.sender == safe`.**
 
 ## Test seams
@@ -602,6 +634,7 @@ whoever made the proxy named that Safe. The rules:
 | `the guard ABI is Safe 1.4.1 IGuard: the enum encodes as uint8` | the guard's selectors against a hardcoded 1.4.1 string |
 | `setGuard enforces the ERC-165 gate: our guard installs, a plain contract reverts GS300` | the real installation gate: the guard answers ERC-165, `NotAGuard` does not, and the Safe keeps what it had |
 | `supportsInterface answers the guard id derived from our own selectors, and nothing else` | `0xe6d7a83a` = `checkTransaction ^ checkAfterExecution` computed from the compiled selectors, plus `0x01ffc9a7`; `0xffffffff` is false |
+| `supportsInterface answers the history role id and no other` | `0xee855023` from `IOwnerHistoryModule`'s functions; the drafts id and the guard id answer false |
 | `sync() on a proxy that was never initialized fails cleanly, not with a panic` | `SafeCallFailed` on no era 0 |
 | `initialize refuses a Safe that has no owners yet` | `ZeroOwners`, and no proxy left in the index |
 | `isOwner answers false when the Safe returns a word that is not 0 or 1` | the raw-word compare, not `abi.decode` |

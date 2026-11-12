@@ -27,7 +27,7 @@ same note/tag/revoke logic.
 
 | file | role | consumers |
 |---|---|---|
-| `note.ts` | `parseMarkdownNote` — frontmatter + body → `{ title, slug, objectId, publicContent, toEncrypt }` | neutralpress, author-cli |
+| `note.ts` | `parseMarkdownNote` — frontmatter + body → `ParsedNote`: `contentId, postType, locale, tags, parent, position, encryption, title, label, slug, content, summary, custom, publications, genesis, frontmatter`. `label` is the manuscript's short public name, trimmed, with a blank or non-string value resolving to `null`; it is public but unsigned, so it is kept out of `custom` by `KNOWN_FRONTMATTER_KEYS` (in the bag it would be signed into the body), and it rides on the public part instead | author-cli (neutralpress still keeps its own `parseNote`) |
 | `tags.ts` | `--s2s` publication tags in frontmatter → target publication | neutralpress, author-cli |
 | `links.ts` | publication/site link derivation from resolved config | author-cli (lint/validate paths) |
 | `revoke.ts` | `revokedPathFor` + the locale-prefix fallback | neutralpress (revoke), author-cli |

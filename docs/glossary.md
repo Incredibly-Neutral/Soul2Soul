@@ -13,7 +13,7 @@ The function of the [press](#press) that builds a publication's pages: it decryp
 *Decided 28 October 2026 (narrowed from the 24 October sense).*
 
 ## manuscript
-What the author writes and keeps: everything the author produces, for themselves and for publications, before it is rendered. A manuscript is stored encrypted, and readers never see it directly. It replaces "source material", and "work" wherever "work" means the stored, encrypted thing.
+What the author writes and keeps: everything the author produces, for themselves and for publications, before it is rendered. A manuscript's body is stored encrypted, and readers never see it directly; its public part is readable, and carries what a publication sorts by plus an optional short label its author chose. It replaces "source material", and "work" wherever "work" means the stored, encrypted thing.
 
 *Decided 24 October 2026.*
 

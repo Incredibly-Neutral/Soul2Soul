@@ -187,7 +187,7 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   {
     path: 'contracts.authorFactory',
     env: ['S2S_AUTHOR_CONTRACTS_FACTORY'],
-    default: '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A',
+    default: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E',
   },
 ];
 
@@ -241,7 +241,7 @@ export const BUILTIN_FILE_CONFIG: FileConfig = {
   // `defaults.json` and the field registry, exactly as the gateway and the
   // Filecoin RPC are: a missing or replaced defaults file must not leave the
   // author contracts uninstallable.
-  contracts: { authorFactory: '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A' },
+  contracts: { authorFactory: '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E' },
 };
 
 // ===========================================================================
