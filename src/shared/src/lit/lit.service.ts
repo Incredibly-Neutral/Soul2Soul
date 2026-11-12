@@ -423,8 +423,10 @@ export class LitService {
   }
 
   /**
-   * Decrypt a draft for its author. `params` carries no author Safe — the action
-   * reads it from the drafts module and refuses unless the signer owns it.
+   * Decrypt a draft for its author. `params` names the author Safe, not a module:
+   * the action resolves the Safe's drafts log and owner-history module itself and
+   * refuses unless the genesis is in that log and the signer was an owner when the
+   * version was appended.
    * Returns the plaintext; throws on a refusal envelope.
    */
   async decrypt(key: string, params: DecryptParams): Promise<string> {
