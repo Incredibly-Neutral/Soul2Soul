@@ -6,7 +6,7 @@
 // Safe by CREATE2, so the new modules belong to this Safe whether or not they
 // have been deployed yet: create them, carry the old drafts log over
 // (`absorb`, in pages), swap the guard, enable the new modules, and leave the
-// old ones disabled and abandoned on chain.
+// old ones abandoned on chain, and disabled when they were enabled.
 //
 // The guard swap is the one step that can do damage, so it is the one step with
 // a gate: a guard in the slot is replaced only when it is this package's
@@ -141,9 +141,9 @@ function contractsLines(report: ContractsReport): string[] {
   lines.push(`drafts      : ${report.drafts ?? '(none)'}`);
   lines.push(`ownerHistory: ${report.ownerHistory ?? '(none)'}`);
   lines.push(`guard       : ${report.guard ?? '(none)'}`);
-  if (report.oldDrafts) lines.push(`old drafts  : ${report.oldDrafts} (disabled, abandoned)`);
+  if (report.oldDrafts) lines.push(`old drafts  : ${report.oldDrafts} (abandoned)`);
   if (report.oldOwnerHistory) {
-    lines.push(`old history : ${report.oldOwnerHistory} (disabled, abandoned)`);
+    lines.push(`old history : ${report.oldOwnerHistory} (abandoned)`);
   }
   if (report.pages > 0) lines.push(`absorbed    : ${String(report.pages)} page(s)`);
   if (report.txs.length > 0) lines.push(`txs         : ${report.txs.join(', ')}`);

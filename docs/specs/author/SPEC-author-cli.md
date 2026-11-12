@@ -63,6 +63,7 @@ s2s author list      [--json]                                                   
 s2s author rm        <pet-name> [--force] [--json]                                                  # forget a stored author
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
 s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
+s2s author migrate   [--json]                                                                     # move an installed Safe onto the modules the current factory predicts
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
 s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]  # on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
@@ -516,6 +517,41 @@ it. A Safe with no code yet after the deploy attempt is `skipped`, and nothing i
 addresses are recorded in the author row's `contracts` field when — and only when — the run ends
 `installed` or `already`, i.e. when both modules are enabled and the guard is really in the slot;
 the chain stays the truth and the row is only what saves a read.
+
+### Migrating an installed Safe onto current modules
+
+`author migrate` moves a Safe that already carries an install onto the modules the current
+factory predicts, and keeps the Safe. It is how a module generation is replaced: modules are
+never upgraded in place, and the old ones stay on chain.
+
+The order is fixed, and the first write only happens once the slot guard is proved:
+
+1. **Read and prove the slot guard.** A guard in the slot that is not this package's own for this
+   Safe stops the run before anything is sent. This is also where the old owner-history module's
+   address comes from.
+2. **Create whichever predicted module has no code.** A create is permissionless and CREATE2, so
+   the address is known before the transaction and unchanged by it; the read-back is the code
+   itself. `guardFor(newHistory)` is read after this step, because `createOwnerHistoryModule` is
+   what writes it.
+3. **Absorb the old drafts log, one page per Safe call.** `absorb` is `onlySafe` and
+   `ABSORB_PAGE_SIZE` versions per page, so a long log is several Safe transactions. The source is
+   the previous-generation drafts module on the Safe's enabled list, and only on the run that
+   moves the guard, so a repeat cannot copy the log twice. A module the Safe never enabled is not
+   a source: the enabled list is what names it. Versions carried in this way hold block `0`, which
+   no gate can place in a block, so ownership for them falls back to `isOwner` — see
+   [SPEC-author-drafts](SPEC-author-drafts.md).
+4. **Move the guard, enable both modules, disable the old ones, in that order.** A Safe that is
+   not solely owned by this key stops at `pending-safe` with the whole sequence in `safeTxs`: the
+   absorb pages, `setGuard`, the enables, the disables. Absorb runs before `setGuard`, so the old
+   drafts module is still a source while it is being read.
+
+The old modules are left on chain and abandoned. An old module that was on the enabled list is
+disabled, because two enabled modules of one role make the role ambiguous for every gate; one the
+Safe never enabled has nothing to disable.
+
+The result carries `pages`, `oldDrafts` and `oldOwnerHistory`, so a run says what it copied and
+what it left behind. `pages` is `0` when there was no source: a Safe whose drafts module was never
+enabled has no log for `migrate` to find, and the run does not guess one.
 
 ### Exit codes
 
