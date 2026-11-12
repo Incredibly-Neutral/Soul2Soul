@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { evmRead, evmWrite, toHexString } from './evm';
-import { mapWithLimit } from './ens.factory';
 import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
@@ -371,42 +370,5 @@ describe('toHexString (EIP-1577 contenthash encode)', () => {
     // digest (64) = 78 hex chars.
     expect(toHexString(TEST_V1).length).toBe(78);
     expect(toHexString(TEST_V0).length).toBe(78);
-  });
-});
-
-// ============================================================================
-// mapWithLimit — the concurrency cap used for the NAME() fan-out preserves
-// Promise.allSettled semantics (order + fulfilled/rejected per index) while
-// never running more than `limit` promises at once.
-// ============================================================================
-
-describe('mapWithLimit (NAME() fan-out concurrency cap)', () => {
-  it('returns per-index PromiseSettledResult in input order, preserving fulfilled + rejected', async () => {
-    const results = await mapWithLimit([1, 2, 3], 3, async (n) => {
-      if (n === 2) throw new Error('no NAME');
-      return `ok-${n}`;
-    });
-    expect(results[0]).toEqual({ status: 'fulfilled', value: 'ok-1' });
-    expect(results[1].status).toBe('rejected');
-    expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
-    expect(results[2]).toEqual({ status: 'fulfilled', value: 'ok-3' });
-  });
-
-  it('never runs more than `limit` promises concurrently', async () => {
-    let inFlight = 0;
-    let maxInFlight = 0;
-    await mapWithLimit([0, 1, 2, 3, 4, 5, 6], 3, async () => {
-      inFlight++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 5));
-      inFlight--;
-      return true;
-    });
-    expect(maxInFlight).toBeLessThanOrEqual(3);
-    expect(maxInFlight).toBe(3);
-  });
-
-  it('handles an empty input array', async () => {
-    await expect(mapWithLimit([], 3, async () => 1)).resolves.toEqual([]);
   });
 });

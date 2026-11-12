@@ -1,71 +1,85 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getProtocolControllerAndModules, getDomainOwnerAndModules } from './ens.factory';
+import {
+  getProtocolControllerAndModules,
+  getDomainOwnerAndModules,
+  findModuleWithRole,
+  RECORDS_ROLE_ID,
+  PUBLICATION_ROLE_ID,
+} from './ens.factory';
 
 // ============================================================================
-// Known non-S2S module NAME() probe skip.
+// Role discovery is ERC-165: every S2S module answers
+// `supportsInterface(roleId)`, so a module is found by what it implements and
+// not by a NAME() string it could copy.
 //
-// Regression context (see brain/reviews/trace-rpc-0xa3f4df7e-2026-08-31.md for
-// the read-only RPC trace): every protocol action issues NAME() eth_call probes
-// (selector 0xa3f4df7e) against EVERY module returned by getModulesPaginated on
-// the publication Safe, to discover which are the S2S Records / Publication
-// modules. One enabled module is the canonical Safe 4337 Module at
-// 0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226 (SAFE_4337_MODULE_ADDRESS, Safe
-// 1.4.1 + EntryPoint 0.7 on Base 8453). It never implements NAME(), so every
-// probe reverts and the evmRead failover logs it once per RPC URL (drpc +
-// alchemy = 2 extra lines), burning 2 RPC requests against Lit's hard
-// 50-requests-per-session cap. We KNOW this address can never be an S2S module,
-// so we must never issue a NAME() evmRead for it — while still probing every
-// other module exactly as before.
+// What these tests hold down:
 //
-// We mock ./evm's evmRead and record every NAME()-targeted contract address so
-// we can assert the 4337 module is never probed and every other module is.
+//   1. The canonical Safe — the Safe 4337 module plus the records and the
+//      publication module — resolves both roles in three probes or fewer. Each
+//      probe is an eth_call and every eth_call spends one of Lit's 50 requests
+//      per session, so the count is part of the contract, not an incidental.
+//   2. A module whose supportsInterface reverts (an address that is a module
+//      but answers no ERC-165 at all) is skipped, not treated as ours.
+//   3. A module that answers the wrong role id is not accepted: answering the
+//      records id does not make a module the publication module.
+//
+// The 4337 skip survives as an optimisation: that module answers no S2S role,
+// so the probe could only ever come back empty.
 // ============================================================================
 
-// Canonical SAFE_4337_MODULE_ADDRESS (the constant under test).
+// Canonical SAFE_4337_MODULE_ADDRESS.
 const SAFE_4337 = '0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226';
 const SAFE_4337_LOWER = SAFE_4337.toLowerCase();
 
 const RECORDS = '0x' + '11'.repeat(20);
 const PUBLICATION = '0x' + '22'.repeat(20);
-const NO_NAME = '0x' + '33'.repeat(20); // a genuine module lacking NAME() — must STILL be probed
+const STRANGER = '0x' + '33'.repeat(20); // a module that answers neither role
+const REVERTER = '0x' + '44'.repeat(20); // a module whose supportsInterface reverts
 
-// vi.hoisted so the mocked module factory and tests share the same mutable
-// state (module list to return + NAME-probe target log).
+// answers[address.toLowerCase()][roleId] === true → the module claims that role.
+// A missing entry, or the string 'revert', makes the eth_call fail.
+type Answer = boolean | 'revert';
+
 const state = vi.hoisted(() => ({
   MODULES: [] as string[],
-  nameProbes: [] as string[],
-  recordsAddr: '0x' + '11'.repeat(20),
-  // What the publication module answers for NAME(). The live V3 answers
-  // 'S2S Publication Module V3'; tests below vary it to prove every version is
-  // discovered (V1 bare name, V2, V3).
-  publicationName: 'S2S Publication Module V2',
+  answers: {} as Record<string, Record<string, Answer>>,
+  probes: [] as { address: string; roleId: string }[],
 }));
 
+const setAnswers = (address: string, answers: Record<string, Answer>) => {
+  state.answers[address.toLowerCase()] = answers;
+};
+
+const probesFor = (roleId: string) =>
+  state.probes.filter((probe) => probe.roleId === roleId).map((probe) => probe.address);
+
 vi.mock('./evm', () => ({
-  evmRead: vi.fn(async (_chain: string, contractAddress: string, _abi: any, method: string) => {
-    switch (method) {
-      case 'nameWrapper':
-        return '0x' + 'aa'.repeat(20);
-      case 'ownerOf':
-        return '0x' + 'bb'.repeat(20);
-      case 'parentDomainController':
-        return '0x' + 'cc'.repeat(20);
-      case 'getModulesPaginated':
-        return [state.MODULES, '0x' + '00'.repeat(20)];
-      case 'NAME':
-        // Record every module we issue a NAME() probe against (canonical lower).
-        state.nameProbes.push(contractAddress.toLowerCase());
-        if (contractAddress.toLowerCase() === state.recordsAddr) {
-          return 'S2S Records Module';
+  evmRead: vi.fn(
+    async (_chain: string, contractAddress: string, _abi: any, method: string, args: any[]) => {
+      switch (method) {
+        case 'nameWrapper':
+          return '0x' + 'aa'.repeat(20);
+        case 'ownerOf':
+          return '0x' + 'bb'.repeat(20);
+        case 'parentDomainController':
+          return '0x' + 'cc'.repeat(20);
+        case 'getModulesPaginated':
+          return [state.MODULES, '0x' + '00'.repeat(20)];
+        case 'supportsInterface': {
+          const roleId = args[0] as string;
+          const address = contractAddress.toLowerCase();
+          state.probes.push({ address, roleId });
+          const answer = state.answers[address]?.[roleId];
+          if (answer === undefined || answer === 'revert') {
+            throw new Error('execution reverted: no supportsInterface');
+          }
+          return answer;
         }
-        if (contractAddress === PUBLICATION) {
-          return state.publicationName;
-        }
-        throw new Error('no NAME function');
-      default:
-        throw new Error('unexpected method ' + method);
-    }
-  }),
+        default:
+          throw new Error('unexpected method ' + method);
+      }
+    },
+  ),
 }));
 
 beforeEach(() => {
@@ -74,76 +88,145 @@ beforeEach(() => {
     utils: { namehash: () => '0x' + 'ab'.repeat(32) },
   };
   state.MODULES = [];
-  state.nameProbes = [];
-  state.publicationName = 'S2S Publication Module V2';
+  state.answers = {};
+  state.probes = [];
+  setAnswers(RECORDS, { [RECORDS_ROLE_ID]: true });
+  setAnswers(PUBLICATION, { [PUBLICATION_ROLE_ID]: true });
+  setAnswers(SAFE_4337, {}); // would revert, but it must never be asked
+  setAnswers(STRANGER, { [RECORDS_ROLE_ID]: false, [PUBLICATION_ROLE_ID]: false });
+  setAnswers(REVERTER, { [RECORDS_ROLE_ID]: 'revert', [PUBLICATION_ROLE_ID]: 'revert' });
 });
 
-describe('getProtocolControllerAndModules — skips NAME() probe for the Safe 4337 module', () => {
-  it('never probes the 4337 module while still probing other modules', async () => {
-    state.MODULES = [SAFE_4337, RECORDS];
-
-    const result = await getProtocolControllerAndModules();
-
-    // It still finds the S2S Records module.
-    expect(result.configModule).toBe(RECORDS);
-    // Only RECORDS was NAME()-probed — the 4337 module was never probed.
-    expect(state.nameProbes).toEqual([RECORDS.toLowerCase()]);
-    expect(state.nameProbes).not.toContain(SAFE_4337_LOWER);
-  });
-
-  it('skips a lowercased 4337 address too (canonical comparison)', async () => {
-    state.MODULES = [SAFE_4337_LOWER, RECORDS];
-
-    const result = await getProtocolControllerAndModules();
-
-    expect(result.configModule).toBe(RECORDS);
-    expect(state.nameProbes).toEqual([RECORDS.toLowerCase()]);
-    expect(state.nameProbes).not.toContain(SAFE_4337_LOWER);
+describe('role ids', () => {
+  it('are distinct bytes4 constants, so one probe cannot answer for both roles', () => {
+    expect(RECORDS_ROLE_ID).toMatch(/^0x[0-9a-f]{8}$/);
+    expect(PUBLICATION_ROLE_ID).toMatch(/^0x[0-9a-f]{8}$/);
+    expect(PUBLICATION_ROLE_ID).not.toBe(RECORDS_ROLE_ID);
+    expect(PUBLICATION_ROLE_ID).not.toBe('0x01ffc9a7');
   });
 });
 
-describe('getDomainOwnerAndModules — skips NAME() probe for the Safe 4337 module', () => {
-  it('never probes the 4337 module while still probing records, publication and no-NAME modules', async () => {
-    state.MODULES = [RECORDS, SAFE_4337, PUBLICATION, NO_NAME];
+describe('getDomainOwnerAndModules — resolves both roles by interface', () => {
+  it('resolves records and publication on a Safe that carries the 4337 module in three probes or fewer', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
 
     const result = await getDomainOwnerAndModules('example.eth');
 
-    // Still finds both S2S modules.
     expect(result.configModule).toBe(RECORDS);
     expect(result.publicationModule).toBe(PUBLICATION);
-    // Exactly ONE NAME() probe per non-4337 module (records, publication,
-    // no-NAME) — the 4337 module in the middle was never probed.
-    expect(state.nameProbes).toEqual([RECORDS, PUBLICATION, NO_NAME].map((a) => a.toLowerCase()));
-    expect(state.nameProbes).not.toContain(SAFE_4337_LOWER);
+    expect(state.probes.length).toBeLessThanOrEqual(3);
+    // The 4337 module answers no S2S interface and is skipped outright.
+    expect(state.probes.map((probe) => probe.address)).not.toContain(SAFE_4337_LOWER);
   });
 
-  it('finds the publication module whatever version its NAME() reports', async () => {
-    for (const name of [
-      'S2S Publication Module', // V1
-      'S2S Publication Module V2',
-      'S2S Publication Module V3', // the name the live V3 answers
-      'S2S Publication Module V4', // a version this build has never seen
-    ]) {
-      state.MODULES = [RECORDS, PUBLICATION];
-      state.publicationName = name;
+  it('keeps the three-probe ceiling when the module list is the other way round', async () => {
+    state.MODULES = [PUBLICATION, SAFE_4337, RECORDS];
 
-      const result = await getDomainOwnerAndModules('example.eth');
+    const result = await getDomainOwnerAndModules('example.eth');
 
-      expect(result.configModule, name).toBe(RECORDS);
-      expect(result.publicationModule, name).toBe(PUBLICATION);
-    }
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(PUBLICATION);
+    expect(state.probes.length).toBeLessThanOrEqual(3);
   });
 
-  it('skips the 4337 module when it is the only module (empty name probe set)', async () => {
-    // getModulesPaginated would never return a page containing ONLY the 4337
-    // module alongside nothing relevant, but guard the degenerate case anyway:
-    // the 4337 module must not be probed, and no records/publication is found.
+  it('asks records first, so a records-only Safe costs one probe', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, STRANGER];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.configModule).toBe(RECORDS);
+    // STRANGER answers false to both ids; one probe each, never more.
+    expect(probesFor(RECORDS_ROLE_ID).length).toBeLessThanOrEqual(2);
+  });
+
+  it('skips a module whose supportsInterface reverts', async () => {
+    state.MODULES = [REVERTER, RECORDS, PUBLICATION];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(PUBLICATION);
+    expect(result.configModule).not.toBe(REVERTER);
+    expect(result.publicationModule).not.toBe(REVERTER);
+  });
+
+  it('does not accept a module that answers the records id as the publication module', async () => {
+    // STRANGER claims nothing; give it a wrong-id answer instead.
+    setAnswers(STRANGER, { [RECORDS_ROLE_ID]: true });
+
+    state.MODULES = [RECORDS, PUBLICATION, STRANGER];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(PUBLICATION);
+  });
+
+  it('returns null for a role no module answers', async () => {
+    setAnswers(PUBLICATION, {}); // answers neither id
+
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION, STRANGER];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBeNull();
+  });
+
+  it('never probes the 4337 module, lowercased address included', async () => {
+    state.MODULES = [SAFE_4337_LOWER, RECORDS];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(state.probes.map((probe) => probe.address)).not.toContain(SAFE_4337_LOWER);
+  });
+
+  it('finds nothing and probes nothing when the 4337 module is the only module', async () => {
     state.MODULES = [SAFE_4337];
 
     const result = await getDomainOwnerAndModules('example.eth');
 
     expect(result.configModule).toBeNull();
     expect(result.publicationModule).toBeNull();
-    expect(state.nameProbes).toEqual([]);
+    expect(state.probes).toEqual([]);
+  });
+});
+
+describe('getProtocolControllerAndModules — the records module only', () => {
+  it('resolves the records module and never asks for the publication role', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
+
+    const result = await getProtocolControllerAndModules();
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(state.probes.length).toBeLessThanOrEqual(2);
+    expect(probesFor(PUBLICATION_ROLE_ID)).toEqual([]);
+  });
+
+  it('skips modules answering false or reverting', async () => {
+    state.MODULES = [SAFE_4337, STRANGER, REVERTER, RECORDS];
+
+    const result = await getProtocolControllerAndModules();
+
+    expect(result.configModule).toBe(RECORDS);
+  });
+
+  it('returns a null config module when no module answers the records id', async () => {
+    state.MODULES = [SAFE_4337, PUBLICATION];
+
+    const result = await getProtocolControllerAndModules();
+
+    expect(result.configModule).toBeNull();
+  });
+});
+
+describe('findModuleWithRole', () => {
+  it('returns the first module that answers and null when none does', async () => {
+    await expect(findModuleWithRole([STRANGER, REVERTER, RECORDS], RECORDS_ROLE_ID)).resolves.toBe(
+      RECORDS,
+    );
+    await expect(findModuleWithRole([STRANGER, REVERTER], PUBLICATION_ROLE_ID)).resolves.toBeNull();
+    await expect(findModuleWithRole([], RECORDS_ROLE_ID)).resolves.toBeNull();
   });
 });
