@@ -38,7 +38,7 @@ import {
   resolveKuboCid,
   upsertFrontmatter,
 } from '../lib/frontmatter';
-import { UsageError, ActionError } from '../lib/errors';
+import { CliError, UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
@@ -191,8 +191,14 @@ export async function authorWrite(
   // Resolved before the service so an on-chain append can be sent by the Safe.
   const author = await authorSafeState(ctx);
   if (!author.deployed) {
+    // A given Safe is deployed by its owners, not by this CLI: `author init`
+    // would refuse it, so pointing there would be a dead end.
     ctx.out.warn(
-      `author Safe ${author.address} is not deployed — run \`s2s author init\` (the id is still valid, but nothing can verify ownership yet)`,
+      `author Safe ${author.address} is not deployed — ${
+        author.safeSource === 'given'
+          ? 'its owners have to deploy it on Base'
+          : 'run `s2s author init`'
+      } (the id is still valid, but nothing can verify ownership yet)`,
     );
   }
 
@@ -417,8 +423,16 @@ export async function offerContent(
   // whitelist on it, and the plugin does the same (`user.safe`).
   const author = await authorSafeState(ctx);
   if (!author.deployed) {
-    throw new UsageError(
-      `cannot offer ${notePath}: the author Safe ${author.address} is not deployed — run \`s2s author init\` first`,
+    // Chain state, not a usage error, and for a given Safe the fix belongs to
+    // its owners: `author init` refuses to deploy a Safe it did not derive.
+    throw new CliError(
+      `cannot offer ${notePath}: the author Safe ${author.address} is not deployed — ${
+        author.safeSource === 'given'
+          ? 'its owners have to deploy it on Base'
+          : 'run `s2s author init` first'
+      }`,
+      1,
+      'author_safe',
     );
   }
   warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);

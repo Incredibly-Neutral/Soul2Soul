@@ -116,6 +116,12 @@ export interface CliConfig {
    * escape hatch, and an explicit bundler URL with no key means NO sponsorship. */
   bundler: { url: string | undefined };
   paymaster: { key: string | undefined; url: string | undefined };
+  /**
+   * Safe Transaction Service endpoint and optional API key. `url` always
+   * resolves: the public Base host is the builtin, and an empty string only
+   * when the user unset it deliberately.
+   */
+  safeTx: { url: string; key: string | undefined };
   filecoin: {
     chain: FilecoinChain;
     rpcUrl: string;
@@ -278,6 +284,9 @@ function mergeLayers(layers: readonly FileConfig[]): FileConfig {
 
   const bundler = mergeFields(layers.map((layer) => layer.bundler));
   if (bundler) out.bundler = bundler;
+
+  const safeTx = mergeFields(layers.map((layer) => layer.safeTx));
+  if (safeTx) out.safeTx = safeTx;
 
   const filecoin = mergeFields(layers.map((layer) => layer.filecoin));
   if (filecoin) out.filecoin = filecoin;
@@ -622,6 +631,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
     rpc: resolveRpcs(env, file),
     paymaster: { key: file.paymaster?.key, url: file.paymaster?.url },
     bundler: { url: file.bundler?.url },
+    safeTx: {
+      // Same shape as `filecoin.rpcUrl`: the registry default fills an unset
+      // leaf, but an explicit `config unset` must not be undone by it.
+      url: unset.has('safeTx.url')
+        ? ''
+        : (file.safeTx?.url ?? defaultForPath('safeTx.url') ?? ''),
+      key: file.safeTx?.key,
+    },
     filecoin: {
       chain: file.filecoin?.chain ?? 'mainnet',
       // `unset` wins over the registry default, or `config unset filecoin.rpcUrl`

@@ -11,10 +11,24 @@
 // it. It is a cache of what the chain already says (the factory index), never a
 // gate — a missing or stale record costs one RPC read, nothing more.
 //
+// `safeSource` is the provenance of the Safe and is OPTIONAL for the same
+// reason: absent means `derived`, the address predicted from the key with the
+// `s2s_${eoa}` salt. `given` means the key was filed as one owner of a Safe
+// that already existed (`s2s signer add`), so the stored address is the only
+// authority for it and nothing here re-derives it.
+//
 // The pet name is the key of an insertion-ordered map, so `author list` and the
 // active-reassignment in `author rm` follow the order authors were added. One
 // private key belongs to exactly one pet name (the same identity under two
 // names would be two rows that can never diverge).
+//
+// `replaces` is OPTIONAL and marks a row as FILED BUT NOT YET AN OWNER: the key
+// is waiting to take over a Safe from the row it names (`s2s signer rotate`).
+// Such a row shares the Safe address with the row it replaces for as long as the
+// swap is unconfirmed, so the "one Safe, one author" rule has exactly this one
+// exception. The marker is cleared by `settleReplacement` once the chain says
+// the new key is an owner and the old one is not; until then the row is printed
+// as pending, never as an owner.
 //
 // The store sits in the key-precedence chain between the project config and the
 // user config (see core/config.ts), which is what makes `author switch` a
@@ -23,6 +37,12 @@
 // Reads are tolerant (missing/corrupt → empty store) because every command
 // calls them; a broken file must not brick the CLI. Writes are atomic
 // (tmp + rename) and 0600 — the file holds private keys.
+//
+// A row whose provenance this build cannot read (`safeSource: "Given"`, a
+// typo) is kept with that value recorded, never guessed at: it is neither
+// derived nor written back. Reading still works — `author list`, `rm` and
+// `switch` must repair a broken file, not be blocked by it — and the refusal
+// happens where the row would be used to name a Safe.
 // ============================================================================
 
 import { randomUUID } from 'node:crypto';
@@ -31,6 +51,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import type { Address, Hex } from 'viem';
+import { getAddress, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { UsageError } from '../lib/errors';
@@ -42,17 +63,49 @@ export interface AuthorContractsRecord {
   guard: string | null;
 }
 
-/** One stored author: the signing key and its (predicted) author Safe. */
+/**
+ * Where a record's Safe came from. Absent means `derived`.
+ *
+ * `derived`: the address is predicted from the key, which is the Safe's sole
+ * owner (`s2s_${eoa}` salt). `given`: the address was handed to the store and
+ * is read from the chain — the key is one owner among others.
+ */
+export type AuthorSafeSource = 'derived' | 'given';
+
+/** One stored author: the signing key and its author Safe. */
 export interface AuthorRecord {
   privateKey: string;
-  /** The author id (counterfactual Safe), once predicted; null when never derived. */
+  /**
+   * The author id: a Safe address. Predicted from the key for `derived`, the
+   * stored fact for `given`; null when a derived row has never been predicted.
+   */
   safe: string | null;
+  /**
+   * `given` when the Safe existed before this key was filed into it; absent on
+   * every derived row, so rows written before this field existed read as
+   * `derived` unchanged.
+   */
+  safeSource?: AuthorSafeSource;
+  /**
+   * The `safeSource` the file holds when it is neither of the above, verbatim.
+   * Such a row is never derived and never written back: the only honest answer
+   * to "where did this address come from" is to ask the user, and guessing
+   * `derived` would derive a different Safe and then overwrite this address.
+   * A store write puts the value back under `safeSource`.
+   */
+  unreadableSafeSource?: unknown;
   /**
    * The `@s2s/author-contracts` modules installed on that Safe, once installed.
    * Optional and absent on every row written before this field existed — the
    * record reads the same with or without it, so no migration is needed.
    */
   contracts?: AuthorContractsRecord;
+  /**
+   * The pet name of the row this key is meant to replace: a rotation that has
+   * been proposed but not yet executed. Present only on a row that is filed but
+   * is not an owner yet; `settleReplacement` clears it the moment it is one.
+   */
+  replaces?: string;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -116,6 +169,11 @@ function parseContracts(value: unknown): AuthorContractsRecord | undefined {
   };
 }
 
+/** The provenance a row declares, when it is one this build understands. */
+function parseSafeSource(value: unknown): AuthorSafeSource | undefined {
+  return value === 'derived' || value === 'given' ? value : undefined;
+}
+
 function parseRecord(value: unknown): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -123,11 +181,89 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
   if (typeof privateKey !== 'string' || privateKey.trim().length === 0) return undefined;
   const safe = record.safe;
   const contracts = parseContracts(record.contracts);
+  const declared = record.safeSource;
+  const safeSource = parseSafeSource(declared);
+  const unreadable = declared !== undefined && safeSource === undefined ? declared : undefined;
+  const replaces = record.replaces;
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
+    ...(safeSource === undefined ? {} : { safeSource }),
+    ...(unreadable === undefined ? {} : { unreadableSafeSource: unreadable }),
     ...(contracts === undefined ? {} : { contracts }),
+    ...(typeof replaces === 'string' && replaces.trim().length > 0
+      ? { replaces: replaces.trim() }
+      : {}),
   };
+}
+
+/**
+ * Whether the record's Safe was given to the store rather than derived from the
+ * key. The one place `'given'` is spelled, so no caller compares the string.
+ */
+export function isGivenSafe(record: AuthorRecord | undefined): boolean {
+  return record?.safeSource === 'given';
+}
+
+/**
+ * The stored Safe address of a `given` record, or undefined for a derived one
+ * (including every row written before `safeSource` existed).
+ */
+export function givenSafeOf(record: AuthorRecord | undefined): Address | undefined {
+  if (!isGivenSafe(record) || !record?.safe) return undefined;
+  return record.safe as Address;
+}
+
+/** `givenSafeOf` by pet name, for a caller holding a name rather than a record. */
+export function givenSafeByName(data: AuthorsStore, name: string): Address | undefined {
+  return givenSafeOf(findAuthor(data, name));
+}
+
+/**
+ * The row a private key is filed under, by key rather than by active slot.
+ *
+ * A `given` Safe belongs to the key, not to the pet name that happens to be
+ * selected: filing `signer1` into an existing Safe and then switching to
+ * `zomi` must not hand `signer1`'s key a derived Safe to deploy. Keys are
+ * unique (`addAuthor` / `addSigner` enforce it), so the first match is the one.
+ */
+export function authorRowForKey(data: AuthorsStore, privateKey: string): ActiveAuthor | undefined {
+  const needle = normalizeKey(privateKey).toLowerCase();
+  for (const [name, record] of Object.entries(data.authors)) {
+    if (record.privateKey.toLowerCase() === needle) return { name, ...record };
+  }
+  return undefined;
+}
+
+/**
+ * Why this row cannot name a Safe, or undefined when it can.
+ *
+ * Reading stays tolerant; this is the loud half, called where the row is about
+ * to decide an author id. An unreadable provenance always refuses, and a
+ * `given` row always refuses without a usable address: both would otherwise
+ * fall through to the derivation and deploy a Safe the key was never filed
+ * into. A derived row's cached address is not checked — it is a prediction,
+ * and re-deriving it is the repair.
+ */
+export function safeProblem(
+  name: string,
+  record: AuthorRecord,
+  path: string = authorsFilePath(),
+): string | undefined {
+  const where = `authors file ${path}: author '${name}'`;
+  if (record.unreadableSafeSource !== undefined) {
+    const shown =
+      JSON.stringify(record.unreadableSafeSource) ?? String(record.unreadableSafeSource);
+    return `${where} has safeSource ${shown} — the only values are 'derived', 'given', or no safeSource at all; fix or remove that row`;
+  }
+  if (!isGivenSafe(record)) return undefined;
+  if (record.safe === null) {
+    return `${where} is marked as given but carries no Safe address — put the Safe's address in that row`;
+  }
+  if (!isAddress(record.safe)) {
+    return `${where} has safe ${record.safe} — that is not an address; fix or remove that row`;
+  }
+  return undefined;
 }
 
 /** Read the store tolerantly — missing, unparsable or malformed → empty store. */
@@ -150,7 +286,7 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
     for (const [name, value] of Object.entries(rawAuthors as Record<string, unknown>)) {
       const record = parseRecord(value);
       // A hand-edited file with an unusable name or record is skipped, not
-      // fatal: the rest of the store still works.
+      // fatal: the rest of the store still works, and so does `author rm`.
       if (record !== undefined && isValidPetName(name)) authors[name] = record;
     }
   }
@@ -159,7 +295,9 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
   // hand-edited "ZOMI" still points at the stored `zomi`.
   const rawActive = raw.active;
   const active =
-    typeof rawActive === 'string' ? (findAuthorName({ active: null, authors }, rawActive) ?? null) : null;
+    typeof rawActive === 'string'
+      ? (findAuthorName({ active: null, authors }, rawActive) ?? null)
+      : null;
   return { active, authors };
 }
 
@@ -173,7 +311,21 @@ export function readAuthors(path: string = authorsFilePath()): AuthorsStore {
 export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath()): string {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${String(process.pid)}.${randomUUID()}.tmp`;
-  const next = { active: data.active, authors: data.authors };
+  // `unreadableSafeSource` is a reading of the file, not part of the format:
+  // the value goes back under `safeSource` so a row the user must repair reads
+  // the same after any write. Dropping it would turn the row into `derived`.
+  const authors = Object.fromEntries(
+    Object.entries(data.authors).map(([name, record]) => {
+      const { unreadableSafeSource, ...stored } = record;
+      return [
+        name,
+        unreadableSafeSource === undefined
+          ? stored
+          : { ...stored, safeSource: unreadableSafeSource as AuthorSafeSource },
+      ];
+    }),
+  );
+  const next = { active: data.active, authors };
   try {
     writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, path);
@@ -191,6 +343,52 @@ export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath(
     // perms are best-effort (e.g. some filesystems)
   }
   return path;
+}
+
+/**
+ * Whether this row is filed but not yet an owner: it is waiting on a rotation.
+ * A pending row is never described as an owner, and never holds the active slot
+ * on the strength of the Safe it shares with the row it replaces.
+ */
+export function isPendingReplacement(record: AuthorRecord | undefined): boolean {
+  return record?.replaces !== undefined;
+}
+
+/**
+ * What a row is, for a caller printing it: `pending` until the chain moves the
+ * share across, `owner` once it has (or for a row that never chased one).
+ */
+export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' {
+  return isPendingReplacement(record) ? 'pending' : 'owner';
+}
+
+/** One row of `author list`, with the pending marker taken into account. */
+export interface AuthorRow {
+  name: string;
+  eoa: string | null;
+  safe: string | null;
+  active: boolean;
+  /** `pending` for a row filed by `replaces`; `owner` for every other row. */
+  ownership: 'owner' | 'pending';
+  /** The row it intends to replace; absent on an owner row. */
+  replaces?: string;
+}
+
+/**
+ * Every stored author as `author list` prints it. A row carrying `replaces` is
+ * marked `pending` and keeps its marker: printing it as an owner would tell the
+ * user a key signs for a Safe it is not an owner of, and `s2s signer confirm …`
+ * on that belief cannot work.
+ */
+export function authorRows(store: AuthorsStore): AuthorRow[] {
+  return Object.entries(store.authors).map(([name, record]) => ({
+    name,
+    eoa: authorEoa(record.privateKey) ?? null,
+    safe: record.safe,
+    active: name === store.active,
+    ownership: ownershipOf(record),
+    ...(record.replaces === undefined ? {} : { replaces: record.replaces }),
+  }));
 }
 
 /** The active author's record, or undefined when there is no usable active entry. */
@@ -252,12 +450,277 @@ export function addAuthor(
   }
   const owner = findAuthorByKey(data, privateKey);
   if (owner) {
-    throw new UsageError(`that private key already belongs to author '${owner}' — one key, one author`);
+    throw new UsageError(
+      `that private key already belongs to author '${owner}' — one key, one author`,
+    );
   }
   return {
     active: name,
     authors: { ...data.authors, [name]: { privateKey: normalizeKey(privateKey), safe } },
   };
+}
+
+/** What `addSigner` files: a name, the key, and the Safe it gains a share in. */
+export interface AddSignerInput {
+  name: string;
+  privateKey: string;
+  /** The existing Safe. Checked as an address and stored checksummed. */
+  safe: string;
+  /**
+   * The pet name of the row this key is meant to replace (`s2s signer rotate`).
+   * The row is filed WITHOUT the active slot and WITHOUT being an owner: it is
+   * a chase, not a membership, until `settleReplacement` sees the swap land.
+   */
+  replaces?: string;
+}
+
+/** A row filed for a Safe that is waiting to become one of its owners. */
+export interface PendingReplacement {
+  name: string;
+  replaces: string;
+}
+
+/**
+ * Every row of `data` filed for `safe` that still carries `replaces`. More than
+ * one is refused by `addSigner` (one chase at a time); a hand-edited file can
+ * hold two, and then the first in file order is the one that settles.
+ */
+function pendingRowsIn(data: AuthorsStore, safe: Address): ActiveAuthor[] {
+  const needle = safe.toLowerCase();
+  return Object.entries(data.authors)
+    .filter(([, record]) => record.replaces !== undefined && record.safe?.toLowerCase() === needle)
+    .map(([name, record]) => ({ name, ...record }));
+}
+
+/** The row filed to replace `name`, while its swap is still queued. */
+function chaserOf(data: AuthorsStore, name: string): ActiveAuthor | undefined {
+  const needle = name.toLowerCase();
+  for (const [candidate, record] of Object.entries(data.authors)) {
+    if (record.replaces?.toLowerCase() === needle) {
+      return { name: candidate, ...record };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The row filed for `safe` that is waiting to become an owner of it, read from
+ * `data`: the pet name plus the row it intends to replace.
+ */
+export function pendingReplacementIn(
+  data: AuthorsStore,
+  safe: Address,
+): PendingReplacement | undefined {
+  const row = pendingRowsIn(data, safe)[0];
+  if (!row?.replaces) return undefined;
+  return { name: row.name, replaces: row.replaces };
+}
+
+/**
+ * `pendingReplacementIn` against the store on disk: the pending row for `safe`,
+ * or undefined when nothing is chasing it.
+ */
+export function pendingReplacement(
+  safe: Address,
+  path: string = authorsFilePath(),
+): PendingReplacement | undefined {
+  return pendingReplacementIn(readAuthors(path), safe);
+}
+
+/**
+ * File a key as one owner of a Safe that already exists, and make it active.
+ *
+ * This is the `given` counterpart of `addAuthor`: the Safe is not predicted
+ * from the key, so the record carries the address plus `safeSource: 'given'`
+ * and every later read of the author id takes the address from the store. The
+ * key is the one thing added here; the share on chain is the owners' business
+ * (`s2s signer queue` proposes it).
+ *
+ * Uniqueness covers all three collisions a `given` row can make: a pet name
+ * (case-insensitively), a key already filed elsewhere, and a Safe another
+ * record already names — two rows pointing at one Safe would be two active
+ * identities for one address.
+ *
+ * The Safe must be an address, checksummed on the way in: a typo would
+ * otherwise make every later read throw. Whether the key is an owner of it is
+ * a chain fact this file cannot know (the key is usually added to the owners
+ * afterwards, by `s2s signer queue`), so the writes that need it check it there.
+ */
+export function addSigner(input: AddSignerInput, path: string = authorsFilePath()): ActiveAuthor {
+  const { name, privateKey, safe, replaces } = input;
+  if (!isValidPetName(name)) {
+    throw new UsageError(`invalid author name '${name}'`);
+  }
+  // Strict checksum: a mixed-case address with a broken checksum is a
+  // transcription error, and storing it would put a typo in the record.
+  if (!isAddress(safe.trim())) {
+    throw new UsageError(
+      `'${safe}' is not an address — \`s2s signer add\` needs the Safe's 0x… address`,
+    );
+  }
+  const address = getAddress(safe.trim());
+  const store = readAuthors(path);
+  const existing = findAuthorName(store, name);
+  if (existing) {
+    throw new UsageError(
+      `author '${existing}' already exists — pick another name, or \`s2s author rm ${existing}\` first`,
+    );
+  }
+  const keyOwner = findAuthorByKey(store, privateKey);
+  if (keyOwner) {
+    throw new UsageError(
+      `that private key already belongs to author '${keyOwner}' — one key, one author`,
+    );
+  }
+  // The row this key is meant to replace: it has to exist, it has to be filed
+  // for this Safe, and it cannot itself be a chase (a chain of pending rows has
+  // no owner at its head for `settleReplacement` to test against).
+  const target = replaces === undefined ? undefined : findAuthor(store, replaces);
+  if (replaces !== undefined && !target) {
+    throw new UsageError(
+      `no author '${replaces}' to replace — \`s2s author list\` shows the rows that exist`,
+    );
+  }
+  if (target && target.safe?.toLowerCase() !== address.toLowerCase()) {
+    throw new UsageError(
+      `author '${target.name}' is filed for safe ${target.safe ?? '(none)'}, not ${address} — a replacement names the row that holds the Safe it is taking over`,
+    );
+  }
+  if (target?.replaces !== undefined) {
+    throw new UsageError(
+      `author '${target.name}' is itself a pending replacement (→ replaces '${target.replaces}') — name the row that holds the Safe`,
+    );
+  }
+
+  // One chase at a time: a second pending row for this Safe would mean two keys
+  // being swapped in at once, and `settleReplacement` could not say which one
+  // the chain landed.
+  const chasing = pendingReplacementIn(store, address);
+  if (chasing) {
+    throw new UsageError(
+      `safe ${address} already has a pending replacement under author '${chasing.name}' (→ replaces '${chasing.replaces}') — one chase at a time; \`s2s author rm ${chasing.name}\` drops it`,
+    );
+  }
+
+  const safeOwner = Object.entries(store.authors).find(
+    ([, record]) => record.safe?.toLowerCase() === address.toLowerCase(),
+  );
+  // A rotation files a SECOND row for one Safe on purpose: the row being
+  // replaced is the only row allowed to hold that address alongside this one.
+  if (safeOwner && safeOwner[0] !== target?.name) {
+    throw new UsageError(
+      `safe ${address} is already filed under author '${safeOwner[0]}' — one Safe, one author`,
+    );
+  }
+
+  const record: AuthorRecord = {
+    privateKey: normalizeKey(privateKey),
+    safe: address,
+    safeSource: 'given',
+    ...(target ? { replaces: target.name } : {}),
+  };
+  // A replacement row is filed WITHOUT the active slot. The old key is still the
+  // Safe's owner, and `s2s signer confirm` runs with whatever key is active —
+  // so activating the newcomer here would hand the confirm to a key the chain
+  // does not yet recognise as an owner, and the queue would wait on a signature
+  // that cannot count. The slot moves in `settleReplacement`, on the evidence.
+  const active = target ? store.active : name;
+  writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
+  return { name, ...record };
+}
+
+/** What `settleReplacement` found, and therefore what the caller may say. */
+export type ReplacementOutcome = 'none' | 'pending' | 'settled' | 'collision';
+
+/**
+ * The moment a filed replacement becomes an owner, decided from the on-chain
+ * owner list and nothing else.
+ *
+ * `none` — no row is chasing this Safe. `pending` — the old key is still an
+ * owner and the new one is not: the swap has not landed, both rows stay and the
+ * chase goes on. `settled` — the new key is an owner and the old one is not: the
+ * old row is removed, the marker cleared and the newcomer made active, in one
+ * write. `collision` — both keys are owners, or neither is: nothing is touched
+ * and the caller warns, because no amount of waiting moves either state on.
+ *
+ * Ownership is the whole test, and a replaced row that is missing from the file
+ * is no old key at all: the chase settles as soon as the newcomer is an owner,
+ * and is a collision until then. (A missing row used to pin the marker at
+ * `pending` for ever — nothing else can clear it.) Both EOAs are derived from
+ * the stored private keys; a row whose key cannot be derived is no evidence at
+ * all, so it stays `pending` rather than resolving on a name alone.
+ */
+export function settleReplacement(
+  safe: Address,
+  owners: readonly Address[],
+  path: string = authorsFilePath(),
+): ReplacementOutcome {
+  const store = readAuthors(path);
+  const chasing = pendingRowsIn(store, safe)[0];
+  if (!chasing?.replaces) return 'none';
+
+  const newEoa = authorEoa(chasing.privateKey);
+  if (!newEoa) return 'pending';
+  // The row being replaced may be gone from the file (`author rm` under an
+  // older build, a hand edit). Then there is no old key in this store, so the
+  // old half of the test is answered `no` and the newcomer decides alone.
+  const oldRow = findAuthor(store, chasing.replaces);
+  const oldEoa = oldRow ? authorEoa(oldRow.privateKey) : undefined;
+  if (oldRow && !oldEoa) return 'pending';
+
+  const isOwner = (eoa: Address): boolean =>
+    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
+  const newIsOwner = isOwner(newEoa);
+  const oldIsOwner = oldEoa !== undefined && isOwner(oldEoa);
+
+  if (newIsOwner && oldIsOwner) return 'collision';
+  // Neither key is an owner: the old one left the list without the swap
+  // putting the new one there, so waiting is not a plan — the caller says so.
+  if (!newIsOwner && !oldIsOwner) return 'collision';
+  if (oldIsOwner) return 'pending';
+
+  // The row becomes an ordinary owned row: marker gone, everything else kept.
+  const settled: AuthorRecord = {
+    privateKey: chasing.privateKey,
+    safe: chasing.safe,
+    ...(chasing.safeSource === undefined ? {} : { safeSource: chasing.safeSource }),
+    ...(chasing.unreadableSafeSource === undefined
+      ? {}
+      : { unreadableSafeSource: chasing.unreadableSafeSource }),
+    ...(chasing.contracts === undefined ? {} : { contracts: chasing.contracts }),
+  };
+  const authors: Record<string, AuthorRecord> = {};
+  for (const [author, record] of Object.entries(store.authors)) {
+    if (author !== oldRow?.name) authors[author] = record;
+  }
+  authors[chasing.name] = settled;
+  writeAuthors({ active: chasing.name, authors }, path);
+  return 'settled';
+}
+
+/**
+ * Why `name` must not leave the store yet, or undefined when it may.
+ *
+ * A rotation puts two rows in the file and only one of them is a key for the
+ * Safe at a time: the row being replaced still holds the key that owns the Safe
+ * until the swap executes, and the pending row holds the only copy of the key
+ * that swap puts there. Removing either before the chain answers cannot be
+ * undone — and nothing in the store can say whether the swap executed — so
+ * `author rm` refuses both and names where the answer comes from.
+ */
+export function removalHoldIn(data: AuthorsStore, name: string): string | undefined {
+  const row = findAuthor(data, name);
+  if (!row) return undefined;
+  const settle =
+    'finish the queued swap with `s2s signer confirm`, or run `s2s signer rotate` on that Safe to settle it';
+  if (row.replaces !== undefined) {
+    return `author '${row.name}' is the pending replacement for '${row.replaces}' and holds the only copy of the key that swap puts on the Safe — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
+  }
+  const chaser = chaserOf(data, row.name);
+  if (chaser) {
+    return `author '${row.name}' still holds a key that owns that Safe, and '${chaser.name}' is filed to replace it — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
+  }
+  return undefined;
 }
 
 /**
@@ -299,6 +762,11 @@ export function writeBackAuthorSafe(
   const store = readAuthors(path);
   const record = store.authors[name];
   if (!record || record.safe === safe) return false;
+  // A given Safe is the fact the record exists to name. A derived address for
+  // the same key is a different Safe, one the key was never an owner of, so a
+  // write-back would replace the identity rather than refresh it. A row whose
+  // provenance cannot be read gets the same treatment for the same reason.
+  if (isGivenSafe(record) || record.unreadableSafeSource !== undefined) return false;
   writeAuthors({ ...store, authors: { ...store.authors, [name]: { ...record, safe } } }, path);
   return true;
 }
@@ -306,7 +774,8 @@ export function writeBackAuthorSafe(
 /**
  * Write-back for a command: only when the signing key came from the store, and
  * never fatal — a read-only config dir must not fail an `address`/`init` run
- * that already succeeded.
+ * that already succeeded. A `given` record is left as it is (see
+ * `writeBackAuthorSafe`).
  */
 export function rememberAuthorSafe(
   author: { readonly name: string | undefined; readonly source: AuthorKeySource } | undefined,
@@ -350,10 +819,7 @@ export function writeBackAuthorContracts(
       current.guard === contracts.guard;
     if (unchanged) return false;
   }
-  writeAuthors(
-    { ...store, authors: { ...store.authors, [name]: { ...record, contracts } } },
-    path,
-  );
+  writeAuthors({ ...store, authors: { ...store.authors, [name]: { ...record, contracts } } }, path);
   return true;
 }
 

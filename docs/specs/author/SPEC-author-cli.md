@@ -53,12 +53,14 @@ progress goes to stderr.
 Top-level bin `s2s`; four groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), `config` (CLI settings), and `setup` (the
 guided first-run pass over those settings — see [Config file](#config-file-bring-your-own-infra)).
+The `signer` group is the fifth: a key that joins a Safe it did not create —
+[SPEC-author-signers](SPEC-author-signers.md).
 
 ```
 s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
-s2s author list      [--json]                                                                     # stored authors, active one marked
-s2s author rm        <pet-name> [--json]                                                          # forget a stored author
+s2s author list      [--json]                                                                     # stored authors, active one marked, pending swaps flagged
+s2s author rm        <pet-name> [--force] [--json]                                                  # forget a stored author
 s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
 s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
@@ -156,6 +158,7 @@ The nested shape, one section per service:
   "bundler": { "url": "…" },
   "paymaster": { "key": "…", "url": "…" },
   "filecoin":  { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
+  "safeTx": { "url": "https://safe-transaction-base.safe.global", "key": "…" },
   "lit": { "accountKey": "…", "usageKey": "…" }, "ens": { "registry": "0x…" },
   "github": { "token": "…" } }
 ```
@@ -306,7 +309,12 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   back — it is already theirs.
 - **`author rm`** of the active author moves `active` to the first remaining author (file order), or
   to `null` when the store empties. Removing a non-active author leaves `active` alone. An unknown
-  name is a usage error listing the known ones.
+  name is a usage error listing the known ones. A row a pending `signer rotate` depends on — the row
+  such a replacement names, and the pending row itself — is refused with `rotation_pending` and a
+  message naming `signer rotate`, because either row may be the only stored copy of a key that owns
+  the Safe (the old one) or that the queued swap adds (the new one); `--force` removes it anyway,
+  for a swap that can no longer execute, and warns that the chain is then the only record of who
+  owns what. See [SPEC-author-signers](SPEC-author-signers.md).
 - **Precedence for the signing key:** `S2S_PRIVATE_KEY` env > project config `privateKey` > active
   author's key > `privateKey` in a config file > undefined. The store therefore sits *above* the
   custom file (a deliberate `author switch` must beat a leftover default) and *below* the env and
@@ -588,7 +596,9 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 
 // s2s author list [--json] — stored authors, active one marked
 { action: 'author.list'; active: string | null;
-  authors: { name: string; eoa: string | null; safe: string | null; active: boolean }[] }
+  authors: { name: string; eoa: string | null; safe: string | null; active: boolean;
+             ownership: 'owner' | 'pending';   // 'pending' = filed by `signer rotate`
+             replaces?: string }[] }           // the row it intends to replace
 
 // s2s author rm <pet-name> [--json] — forget an author
 { action: 'author.rm'; name: string; file: string; active: string | null }
@@ -732,6 +742,8 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
 | `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler. |
 | `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
+| `S2S_SAFE_TX_URL` | `signer add`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
+| `S2S_SAFE_TX_API_KEY` | — (optional) | — | Service API key (`safeTx.key`, secret, masked on read), sent as `Authorization: Bearer`. The public host answers unauthenticated and rate-limits instead. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 
 ## Architecture (blank-slate host)
@@ -741,7 +753,7 @@ src/
   cli.ts            top-level dispatch (s2s <group> <action>), json/help/version, error envelope
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
   core/             configschema (the nested shape + field registry), config (the merger), configfile (config-file IO), defaults (the shipped layer — S2S_DEFAULTS_FILE seam), authors (the multi-identity store), context (clients), service, author write/revoke, encrypt seam
-  adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), ipfs, lit, rpc, filecoin
+  adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), safe-tx (Safe Transaction Service + the signed struct), ipfs, lit, rpc, filecoin
   commands/         upload / propose / preview / publish / revoke (author), new / switch / list / rm (author store), new (publication), config set/get/unset/list/path, setup
 ```
 

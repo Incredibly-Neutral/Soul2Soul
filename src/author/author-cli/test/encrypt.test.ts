@@ -65,6 +65,7 @@ const FAKE_SAFE = {
   address: AUTHOR_ADDR as `0x${string}`,
   eoa: AUTHOR_ADDR as `0x${string}`,
   salt: 's2s_' + AUTHOR_ADDR,
+  safeSource: 'derived' as const,
   chain: 'base' as const,
   deployed: true,
 };

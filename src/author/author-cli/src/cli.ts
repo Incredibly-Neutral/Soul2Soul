@@ -24,7 +24,9 @@ import {
   findAuthorCommand,
   findAuthorStoreCommand,
   findPublicationCommand,
+  findSignerCommand,
   publicationCommands,
+  signerHelpEntries,
 } from './commands';
 import { findConfigCommand, runConfigGroup } from './commands/config';
 import { setup, setupHelp } from './commands/setup';
@@ -39,6 +41,7 @@ Usage:
 
 Groups:
   author        Author identities + content actions (new/switch/list/rm, upload, publish)
+  signer        Add or rotate a key on a Safe, list the queue, confirm a proposal
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
@@ -50,7 +53,7 @@ Global flags:
   -h, --help    show help for the current level
   --version     print the CLI version
 
-Run "s2s author --help" or "s2s publication --help" for the actions.`;
+Run "s2s author --help", "s2s signer --help" or "s2s publication --help" for the actions.`;
 
 /** Set in `main`; the failure handler prints in the same mode the run chose. */
 let jsonMode = false;
@@ -81,6 +84,12 @@ Run "s2s ${group} <action> --help" for details on an action.`;
 
 const authorHelp = (): string =>
   groupHelp(authorHelpEntries, 'author', 'author identities and content actions');
+const signerHelp = (): string =>
+  groupHelp(
+    signerHelpEntries,
+    'signer',
+    'a key as one owner of a Safe that already exists',
+  );
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
@@ -139,9 +148,43 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // `signer` is a group of store commands: adding or rotating a key on an
+  // existing Safe, reading its queue and signing a hash need no context, no
+  // bundler and no userOp. Dispatched before buildContext for the same reason
+  // `author new` is: it files the key that every later command would otherwise
+  // require.
+  if (group === 'signer') {
+    const help = signerHelp();
+    if (!action) {
+      out.result({ help }, help);
+      return 0;
+    }
+    const signerCommand = findSignerCommand(action);
+    if (!signerCommand) {
+      throw new UsageError(`unknown signer action '${action}'`);
+    }
+    const text = commandHelp(
+      'signer',
+      signerCommand.name,
+      signerCommand.summary,
+      signerCommand.flags,
+      signerCommand.params,
+    );
+    if (wantHelp) {
+      out.result({ help: text }, text);
+      return 0;
+    }
+    const parsed = parseCommandArgs(argv, signerCommand.flags);
+    await signerCommand.run(out, {
+      flags: parsed.flags,
+      positionals: parsed.positionals.slice(2),
+    });
+    return 0;
+  }
+
   if (group !== 'author' && group !== 'publication') {
     throw new UsageError(
-      `unknown command group '${group}' — expected 'author', 'publication', 'config', or 'setup'`,
+      `unknown command group '${group}' — expected 'author', 'signer', 'publication', 'config', or 'setup'`,
     );
   }
 
