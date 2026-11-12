@@ -27,7 +27,10 @@ import {
   execTransactionArgs,
   makeSafeTxService,
   packVerifiedSignatures,
+  predecessorOf,
   SAFE_FALLBACK_HANDLER,
+  SENTINEL_OWNERS,
+  swapOwnerData,
   type SafeTxInput,
   type SafeTxRecord,
 } from '../src/adapters/safe-tx';
@@ -223,6 +226,56 @@ describe('addOwnerWithThresholdData', () => {
     const decoded = decodeFunctionData({ abi: safeAbi, data });
     expect(decoded.functionName).toBe('addOwnerWithThreshold');
     expect(decoded.args).toEqual([OWNER_B, 2n]);
+  });
+});
+
+describe('predecessorOf', () => {
+  // Three real keys, so the checksummed form differs from the lowercase one.
+  const first = accountA.address;
+  const middle = accountB.address;
+  const last = stranger.address;
+  const owners = [first, middle, last] as const;
+
+  it('finds the owner before a middle entry', () => {
+    expect(predecessorOf(owners, last)).toBe(middle);
+    expect(predecessorOf(owners, middle)).toBe(first);
+  });
+
+  it('answers the sentinel for the first owner', () => {
+    expect(SENTINEL_OWNERS).toBe('0x0000000000000000000000000000000000000001');
+    expect(predecessorOf(owners, first)).toBe(SENTINEL_OWNERS);
+  });
+
+  it('refuses an owner the list does not hold, naming it', () => {
+    expect(() => predecessorOf(owners, TARGET)).toThrow(UsageError);
+    expect(() => predecessorOf(owners, TARGET)).toThrow(TARGET);
+  });
+
+  it('compares a checksum-less address equal to its checksummed form', () => {
+    const lowered = last.toLowerCase() as Address;
+    // The list holds the checksummed form and the answer is the predecessor of
+    // it, not of some other entry.
+    expect(predecessorOf(owners, lowered)).toBe(middle);
+    // Reversed: the list holds lowercase, the caller passes checksummed.
+    expect(predecessorOf([first, middle, lowered], last)).toBe(middle);
+    // The predecessor comes back checksummed, ready for calldata.
+    expect(predecessorOf(owners, last)).not.toBe(middle.toLowerCase());
+  });
+});
+
+describe('swapOwnerData', () => {
+  it('encodes the v1.4.1 selector and the three arguments in order', () => {
+    const data = swapOwnerData(SENTINEL_OWNERS, OWNER_B, TARGET);
+    expect(data.startsWith('0xe318b52b')).toBe(true);
+
+    const decoded = decodeFunctionData({ abi: safeAbi, data });
+    expect(decoded.functionName).toBe('swapOwner');
+    expect(decoded.args).toEqual([SENTINEL_OWNERS, OWNER_B, TARGET]);
+  });
+
+  it('carries no threshold, so the swap cannot move it', () => {
+    const decoded = decodeFunctionData({ abi: safeAbi, data: swapOwnerData(OWNER_A, OWNER_B, TARGET) });
+    expect(decoded.args).toHaveLength(3);
   });
 });
 
