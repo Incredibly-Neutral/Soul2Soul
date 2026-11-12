@@ -36,7 +36,7 @@ import type { CliOut } from '../src/lib/out';
 import { readAuthors, writeAuthors, writeBackAuthorContracts } from '../src/core/authors';
 import type { CliConfig } from '../src/core/config';
 
-const FACTORY = '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A' as Address;
+const FACTORY = '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E' as Address;
 const SAFE = '0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387' as Address;
 const OTHER_SAFE = '0x1111111111111111111111111111111111111111' as Address;
 const DRAFTS = '0x0000000000000000000000000000000000000d01' as Address;

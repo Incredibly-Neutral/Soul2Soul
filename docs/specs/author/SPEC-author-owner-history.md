@@ -10,8 +10,8 @@
 > `scripts/deploy-author-contracts.ts` is the deploy path and `src/author/contracts/README.md`
 > carries the guard's gas-headroom rule. The ABI under `generated/abis/` is the frozen
 > surface: a signature change there is a breaking change for every gate and reader. Deployed on
-> Base: `OwnerHistoryModuleV1` implementation `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` behind
-> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-Safe proxy and
+> Base: `OwnerHistoryModuleV1` implementation `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` behind
+> `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-Safe proxy and
 > guard are installed by `s2s author new` / `s2s author init` (see *The install*).
 
 ## Responsibility

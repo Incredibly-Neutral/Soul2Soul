@@ -11,8 +11,8 @@
 > `DraftsModuleV1` and its side of `AuthorContractsFactory` — and the meaning of the log it keeps.
 >
 > **Status:** the package is written and tested (`src/author/contracts`, 15 node-test cases for this
-> module) and deployed on Base — implementation `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6`, via
-> `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`. The **per-Safe proxy is
+> module) and deployed on Base — implementation `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C`, via
+> `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`. The **per-Safe proxy is
 > installed by the CLI** (`s2s author new`, or `s2s author init` for an author that already exists),
 > which calls `createDraftsModule(safe)`, and the Safe enables the proxy in the same transaction that
 > installs the owner-history guard — see [SPEC-author-cli](SPEC-author-cli.md#installing-the-author-contracts). The interface below is

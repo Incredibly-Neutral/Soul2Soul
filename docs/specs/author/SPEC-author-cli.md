@@ -430,9 +430,9 @@ filed before the contracts were deployed.
 
 | contract | address (Base, `prod`) |
 |---|---|
-| `DraftsModuleV1` (implementation) | `0x6e8fCDc4a229E55bf76Ec3A73F0fAbFBe0ce7aE6` |
-| `OwnerHistoryModuleV1` (implementation) | `0xD8303A7Ca8637794279865bf74723cD0fCEE4112` |
-| `AuthorContractsFactory` | `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A` |
+| `DraftsModuleV1` (implementation) | `0x4Af56578974F04AF041CDE6CFB2676f9Ce96905C` |
+| `OwnerHistoryModuleV1` (implementation) | `0x72AEa9722fe3d615F36c2b28dd77117459078Bd0` |
+| `AuthorContractsFactory` | `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E` |
 
 That table is a record of the deploy, not the authority: the factory is selected by the
 `contracts.authorFactory` config key (`S2S_AUTHOR_CONTRACTS_FACTORY`), so an environment can point

@@ -170,7 +170,7 @@ const SUPPORTS_INTERFACE_ABI = [
  * default and is overridable (`contracts.authorFactory` / `S2S_AUTHOR_CONTRACTS_FACTORY`).
  */
 export const DEFAULT_AUTHOR_CONTRACTS_FACTORY: Address =
-  '0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A';
+  '0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E';
 
 /** What is installed on one author Safe today. Every member is an address. */
 export interface AuthorContracts {

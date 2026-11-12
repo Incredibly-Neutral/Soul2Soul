@@ -63,7 +63,7 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**
 - **`DraftsModuleV1`** (author side, in `src/author/contracts`, deployed on Base behind
-  `AuthorContractsFactory` `0xbf394ea4e984D473cAFE094a27B88aeaeD788d6A`; the per-author proxy is
+  `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-author proxy is
   installed by `s2s author new` / `s2s author init`) — per author Safe, the append-only log of
   manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
