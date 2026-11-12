@@ -25,6 +25,11 @@
 // key is the thing that cannot be recovered, and the `{to, data}` pair to
 // propose by hand goes into the result.
 //
+// The row is filed INACTIVE (`activate: false`). The active author is the key
+// every command signs with, and this key is not on the owner list until the add
+// executes — activating it would leave a store whose selected author the chain
+// rejects, with `signer confirm` refusing its own machine's key as `not_owner`.
+//
 // Nothing here needs a bundler and nothing sends a userOp: proposing is an HTTP
 // POST, and execution is some owner's later business (`s2s signer confirm`).
 // Runs without `buildContext`.
@@ -38,7 +43,7 @@ import { flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
-import { addSigner, authorEoa } from '../core/authors';
+import { addSigner, authorEoa, readAuthors } from '../core/authors';
 import { hexKey } from '../core/config';
 import {
   addOwnerWithThresholdData,
@@ -96,9 +101,20 @@ export async function runSignerAdd(
   }
 
   const name = flagString(args.flags, 'name') ?? defaultSignerName(eoa);
+  // Read before filing: the point of `activate: false` is that filing a joining
+  // key does not move this, and saying so needs the value it kept.
+  const keptActive = readAuthors(deps.authorsPath()).active;
   // A taken name or a key filed elsewhere is a UsageError from `addSigner`, and
   // it is thrown before anything is written — including this Safe's record.
-  const filed = addSigner({ name, privateKey, safe }, deps.authorsPath());
+  // `activate: false`: the key being filed is NOT an owner of the Safe yet. The
+  // store's active row is the key every command signs with, and pointing it at a
+  // key the chain does not recognise is how `signer confirm` comes to refuse its
+  // own machine's key. The active slot stays where it was; the join is completed
+  // by whoever posts the add, not by filing it here.
+  const filed = addSigner(
+    { name, privateKey, safe, activate: false },
+    deps.authorsPath(),
+  );
 
   const tx: SafeTxInput = {
     to: safe,
@@ -110,13 +126,11 @@ export async function runSignerAdd(
   };
   const localHash = computeSafeTxHash({ chainId: deps.chainId, safe, tx });
 
-  // The key this process can sign for, read from the config BEFORE the new row
-  // is filed: `addSigner` makes the joining key the active one, and that key is
-  // not an owner. What is wanted is the key this machine already had — an env
-  // or project key that is on the Safe's owner list — because the service files
-  // a proposal's signature as its sender's confirmation and refuses a sender
-  // that is not an owner. `signer add` refuses a key that is already an owner,
-  // and the store holds one row per Safe, so the joining machine has none.
+  // The key this process can sign for: an env or project key that is on the
+  // Safe's owner list, because the service files a proposal's signature as its
+  // sender's confirmation and refuses a sender that is not an owner. `signer add`
+  // refuses a key that is already an owner, so a machine joining a Safe it does
+  // not own has no such key — that is the ordinary case for this command.
   const configKey = hexKey(config.privateKey);
   const configEoa = configKey ? authorEoa(configKey) : undefined;
   const proposer =
@@ -177,13 +191,14 @@ export async function runSignerAdd(
       // Always present: the same call the service was given, so a proposal that
       // never reached it can still be made from an owner's wallet.
       safeTx: { to: safe, data: tx.data },
+      activated: false,
       file: deps.authorsPath(),
       ...(note ? { note } : {}),
       ...(source.mnemonic ? { mnemonic: source.mnemonic } : {}),
       ...(source.generated ? { privateKey } : {}),
     },
     [
-      `signer '${filed.name}' filed and activated`,
+      `signer '${filed.name}' filed, not activated — the key is not an owner until an owner posts the proposal`,
       `eoa         : ${eoa}`,
       `safe        : ${safe}`,
       `threshold   : ${String(chain.threshold)} (unchanged — the owner list grows, the bar does not)`,
@@ -203,11 +218,18 @@ export async function runSignerAdd(
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            `              the service accepts a proposal only from an owner of ${safe}: post this call from an owner machine`,
-            `              to   ${safe}`,
-            `              data ${tx.data}`,
+            ...(proposer
+              ? []
+              : [
+                  `              this machine cannot queue it: the service accepts a proposal only from an owner of ${safe}, and no key it can sign with is one`,
+                  `              an owner has to post this call from their own machine — nothing here retries it`,
+                ]),
+            `              to    ${safe}`,
+            `              data  ${tx.data}`,
+            `              nonce ${String(chain.nonce)}`,
           ]),
       `store       : ${deps.authorsPath()}`,
+      `active      : ${keptActive ?? '(none)'} (unchanged — a joined key is not an owner yet, so it does not take the slot)`,
       ...(source.mnemonic
         ? [
             `mnemonic    : ${source.mnemonic}`,

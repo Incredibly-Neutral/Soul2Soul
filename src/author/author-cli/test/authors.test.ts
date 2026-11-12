@@ -27,6 +27,7 @@ import {
   writeAuthors,
   pendingReplacement,
   pendingReplacementIn,
+  setPendingProposal,
   settleReplacement,
   writeBackAuthorSafe,
   type AuthorRecord,
@@ -42,9 +43,10 @@ import { authorStoreCommands, findAuthorStoreCommand } from '../src/commands/aut
 import { parseArgs } from '../src/lib/args';
 import type { CliOut } from '../src/lib/out';
 
-/** Valid keys nobody can use: privkey 1 and 2. */
+/** Valid keys nobody can use: privkey 1, 2 and 3. */
 const KEY_A = `0x${'00'.repeat(31)}01`;
 const KEY_B = `0x${'00'.repeat(31)}02`;
+const KEY_C = `0x${'00'.repeat(31)}03`;
 const EOA_A = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 
 let dir: string;
@@ -705,6 +707,172 @@ describe('a pending replacement', () => {
     settleReplacement(SAFE, [EOA_B], path);
     expect(removalHoldIn(readAuthors(path), 'signer1')).toBeUndefined();
   });
+
+  /** Two safeTxHashes, neither of which any chain has ever seen. */
+  const HASH = `0x${'ab'.repeat(32)}` as const;
+  const OTHER_HASH = `0x${'cd'.repeat(32)}` as const;
+
+  /** `zomi` owns SAFE; `signer1` is filed to replace it with its swap queued. */
+  function queuedChase(): string {
+    const path = localPath('chase-queued');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+    addSigner(
+      { name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'zomi', proposal: HASH },
+      path,
+    );
+    return path;
+  }
+
+  it('reads a proposal back with the row it was filed on', () => {
+    const path = localPath('filed-with-proposal');
+    writeAuthors(
+      store('zomi', { zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' } }),
+      path,
+    );
+    const filed = addSigner(
+      { name: 'signer1', privateKey: KEY_B, safe: SAFE, replaces: 'zomi', proposal: HASH },
+      path,
+    );
+    // `addSigner` hands back what it wrote, so a caller can print the hash.
+    expect(filed.proposal).toBe(HASH);
+    expect(readAuthors(path).authors.signer1).toEqual({
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+      replaces: 'zomi',
+      proposal: HASH,
+    });
+    expect(pendingReplacement(SAFE, path)).toEqual({
+      name: 'signer1',
+      replaces: 'zomi',
+      proposal: HASH,
+    });
+    expect(pendingReplacementIn(readAuthors(path), SAFE)?.proposal).toBe(HASH);
+  });
+
+  it('has no proposal on a row that was filed but never queued', () => {
+    const path = chase();
+    expect(pendingReplacement(SAFE, path)).toEqual({ name: 'signer1', replaces: 'zomi' });
+    expect(pendingReplacement(SAFE, path)?.proposal).toBeUndefined();
+    expect(readAuthors(path).authors.signer1?.proposal).toBeUndefined();
+
+    // A hand-edited non-hash reads the same: filed, never proposed. Reading is
+    // tolerant, and "never proposed" is the safe reading — it re-proposes.
+    writeAuthors(
+      {
+        active: 'zomi',
+        authors: {
+          zomi: { privateKey: KEY_A, safe: SAFE, safeSource: 'given' },
+          signer1: {
+            privateKey: KEY_B,
+            safe: SAFE,
+            safeSource: 'given',
+            replaces: 'zomi',
+            proposal: '0xdeadbeef' as const,
+          },
+        },
+      },
+      path,
+    );
+    expect(pendingReplacement(SAFE, path)).toEqual({ name: 'signer1', replaces: 'zomi' });
+  });
+
+  it('records and replaces the hash after the queue', () => {
+    const path = chase();
+    const row = setPendingProposal('SIGNER1', HASH, path);
+    expect(row).toEqual({
+      name: 'signer1',
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+      replaces: 'zomi',
+      proposal: HASH,
+    });
+    expect(readAuthors(path).authors.signer1?.proposal).toBe(HASH);
+    // Nothing else about the rotation moves: same marker, same active slot.
+    expect(readAuthors(path).active).toBe('zomi');
+    expect(readAuthors(path).authors.signer1?.replaces).toBe('zomi');
+
+    // A second queue (the first proposal dropped) replaces, never appends.
+    setPendingProposal('signer1', OTHER_HASH, path);
+    expect(pendingReplacement(SAFE, path)?.proposal).toBe(OTHER_HASH);
+  });
+
+  it('refuses a proposal for a row that is not a pending replacement', () => {
+    const path = chase();
+    expect(() => setPendingProposal('zomi', HASH, path)).toThrow(
+      /author 'zomi' is not a pending replacement/,
+    );
+    expect(() => setPendingProposal('ghost', HASH, path)).toThrow(/no author 'ghost'/);
+    // A settled row is an ordinary row, so it holds no swap either.
+    settleReplacement(SAFE, [EOA_B], path);
+    expect(() => setPendingProposal('signer1', HASH, path)).toThrow(
+      /author 'signer1' is not a pending replacement/,
+    );
+  });
+
+  it('refuses a hash that is not 32 bytes, naming the row', () => {
+    const path = chase();
+    // A cut-off hash is a transcription error, not a proposal.
+    const truncated = `0x${'ab'.repeat(31)}` as const;
+    expect(() => setPendingProposal('signer1', truncated, path)).toThrow(
+      /author 'signer1' proposal '0xab+/,
+    );
+    expect(() => setPendingProposal('signer1', `0x${'ab'.repeat(33)}` as const, path)).toThrow(
+      /is not a safeTxHash/,
+    );
+    expect(() =>
+      addSigner(
+        {
+          name: 'signer2',
+          privateKey: KEY_C,
+          safe: SAFE,
+          replaces: 'zomi',
+          proposal: '0xnothex' as const,
+        },
+        path,
+      ),
+    ).toThrow(/author 'signer2' proposal '0xnothex' is not a safeTxHash/);
+    // Refused writes leave the store as it was.
+    expect(pendingReplacement(SAFE, path)).toEqual({ name: 'signer1', replaces: 'zomi' });
+    expect(readAuthors(path).authors.signer2).toBeUndefined();
+  });
+
+  it('refuses a proposal on a row that replaces nothing', () => {
+    const path = localPath('proposal-alone');
+    expect(() =>
+      addSigner({ name: 'signer1', privateKey: KEY_B, safe: SAFE, proposal: HASH }, path),
+    ).toThrow(/cannot carry a proposal without `replaces`/);
+    expect(readAuthors(path).authors.signer1).toBeUndefined();
+  });
+
+  it('drops the proposal when the swap settles, and keeps it on a collision', () => {
+    const path = queuedChase();
+
+    // A collision writes nothing, and nothing has landed: the hash is how the
+    // queued swap gets executed rather than proposed again, so it stays.
+    expect(settleReplacement(SAFE, [], path)).toBe('collision');
+    expect(readAuthors(path).authors.signer1).toEqual({
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+      replaces: 'zomi',
+      proposal: HASH,
+    });
+
+    // Settled on ownership alone: the hash said the swap was queued, and that
+    // is not evidence it landed. It goes with the marker in the same write.
+    expect(settleReplacement(SAFE, [EOA_B], path)).toBe('settled');
+    expect(readAuthors(path).authors.signer1).toEqual({
+      privateKey: KEY_B,
+      safe: SAFE,
+      safeSource: 'given',
+    });
+    expect(pendingReplacement(SAFE, path)).toBeUndefined();
+  });
 });
 
 describe('a rotation refuses `author rm`', () => {
@@ -940,6 +1108,44 @@ describe('author commands', () => {
       active: 'bob',
     });
     expect(Object.keys(readAuthors(path).authors)).toEqual(['bob']);
+  });
+
+  it('lists a joining key as unconfirmed until a chain read shows it is an owner', async () => {
+    const path = storePath();
+    const safe = getAddress('0xabcd00000000000000000000000000000000def2');
+    // What `s2s signer add` files on a joining machine: a row for a key the
+    // chain has not been asked about yet.
+    addSigner({ name: 'zomi-join', privateKey: KEY_B, safe, activate: false }, path);
+
+    const before = authorRows(readAuthors(path));
+    expect(before.map((row) => [row.name, row.ownership])).toEqual([['zomi-join', 'unconfirmed']]);
+
+    const sink = capture();
+    await authorList.run(sink.out, parseArgs([]));
+    const listed = (sink.results[0] as { authors?: { name: string; ownership: string }[] })
+      .authors;
+    expect(listed?.find((row) => row.name === 'zomi-join')?.ownership).toBe('unconfirmed');
+    // The table says it in words, so a key with no share of the Safe is not read
+    // as one that signs.
+    expect(sink.human[0]).toContain('(filed, not an owner yet)');
+    expect(sink.human[0]).toContain('filed, not an owner yet: the key joins the Safe only when');
+
+    // The chain is the only thing that can clear the marker, and the swap it
+    // belongs to is the one `settleReplacement` is handed the owners of.
+    expect(settleReplacement(safe, [EOA_A, authorEoa(KEY_B) as Address], path)).toBe('none');
+    expect(authorRows(readAuthors(path)).map((row) => row.ownership)).toEqual(['owner']);
+    expect(readAuthors(path).authors['zomi-join']?.unconfirmed).toBeUndefined();
+  });
+
+  it('keeps the marker on a joining key the chain does not list, and prints it as unconfirmed', () => {
+    const path = storePath();
+    const safe = getAddress('0xabcd00000000000000000000000000000000def3');
+    addSigner({ name: 'zomi-join', privateKey: KEY_B, safe, activate: false }, path);
+
+    // A different key is the Safe's only owner: the joining key was never added.
+    expect(settleReplacement(safe, [authorEoa(KEY_C) as Address], path)).toBe('none');
+    expect(readAuthors(path).authors['zomi-join']?.unconfirmed).toBe(true);
+    expect(readAuthors(path).authors['zomi-join']?.replaces).toBeUndefined();
   });
 
   it('lists the rows of a rotation as pending, with the row each one replaces', async () => {

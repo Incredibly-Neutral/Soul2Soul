@@ -556,9 +556,112 @@ describe('makeSafeTxService', () => {
     await service.pending(SAFE);
 
     expect(calls[0]?.url).toBe(
-      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce`,
+      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=100`,
     );
     expect(calls[0]?.headers.authorization).toBe('Bearer secret');
+  });
+
+  it('follows `next` to reach a nonce on a later page, and reports the walk complete', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      {
+        body: {
+          count: 3,
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=1`,
+          results: [recordFor(7)],
+        },
+      },
+      {
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=2`,
+          results: [recordFor(8)],
+        },
+      },
+      { body: { count: 3, next: null, results: [recordFor(9)] } },
+    ]);
+
+    const { records, complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(true);
+    expect(records.map((record) => record.nonce)).toEqual([7, 8, 9]);
+    // The second request goes to the configured base, not to `base` + the
+    // absolute link the service returned.
+    expect(calls[1]?.url).toBe(
+      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=1`,
+    );
+  });
+
+  it('walks every page it may read, even when the wanted nonce is on the first', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      {
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?offset=1`,
+          results: [recordFor(7)],
+        },
+      },
+      { body: { next: null, results: [recordFor(8)] } },
+    ]);
+
+    const { records, complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    // Nothing about the walk depends on the order the pages arrive in: it reads
+    // to the end of what it may read, and only then says the queue is exhausted.
+    expect(complete).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(records.map((record) => record.nonce)).toEqual([7, 8]);
+  });
+
+  it('does not call a full last page the end of the queue', async () => {
+    // A page of exactly the size it asked for, with no `next`: the service may
+    // have truncated it, so "nothing at that nonce" is not an answer yet.
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 100, next: null, results: Array.from({ length: 100 }, () => recordFor(7)) } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
+  it('does not call the walk complete when the declared count is larger than what arrived', async () => {
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 4, next: null, results: [recordFor(7), recordFor(8)] } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
+  it('says the walk stopped at the cap rather than claiming the queue is exhausted', async () => {
+    // Every page advertises another one: the cap is what ends the walk.
+    const { fetchImpl, calls } = fakeFetch(
+      Array.from({ length: 6 }, () => ({
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?offset=1`,
+          results: [recordFor(7)],
+        },
+      })),
+    );
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+    expect(calls).toHaveLength(5);
   });
 
   it('sends no Authorization header without a key', async () => {
@@ -810,11 +913,12 @@ describe('makeSafeTxService', () => {
       },
     ]);
 
-    const records = await makeSafeTxService({
+    const { records, complete } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
     }).pending(SAFE);
 
+    expect(complete).toBe(true);
     expect(records.map((record) => [record.nonce, record.safeTxHash])).toEqual([
       [7, recordFor(7).safeTxHash],
       [8, recordFor(8).safeTxHash],

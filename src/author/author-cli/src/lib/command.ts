@@ -5,6 +5,9 @@
 // `flags` is the single declaration: cli.ts parses argv against it (strictly)
 // and renders `--help` from it, so neither can drift from the other.
 // `params` is the positional signature shown in the usage line (`<note>`).
+// `detail` is an optional second line for `--help` only: the reason a command
+// is shaped as it is, kept out of `summary` so the group listing stays one line
+// per action.
 // ============================================================================
 
 import type { FlagSpecs, ParsedArgs } from './args';
@@ -16,6 +19,8 @@ export interface CommandSpec {
   summary: string;
   /** Positional signature for usage/help, e.g. `<note>`. Omit when there are none. */
   params?: string;
+  /** A second `--help` line, for the reason behind the command's shape. */
+  detail?: string;
   flags: FlagSpecs;
   run(ctx: CliContext, args: ParsedArgs): Promise<void>;
 }
@@ -34,6 +39,8 @@ export interface StoreCommandSpec {
   summary: string;
   /** Positional signature for usage/help, e.g. `<pet-name>`. */
   params?: string;
+  /** A second `--help` line, for the reason behind the command's shape. */
+  detail?: string;
   flags: FlagSpecs;
   run(out: CliOut, args: ParsedArgs): Promise<void> | void;
 }

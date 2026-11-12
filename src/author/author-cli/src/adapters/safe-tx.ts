@@ -503,7 +503,13 @@ export interface SafeTxService {
      */
     signature: Hex;
   }): Promise<{ safeTxHash: Hex }>;
-  pending(safe: Address): Promise<SafeTxRecord[]>;
+  /**
+   * The Safe's unexecuted transactions, oldest nonce first. `complete` is
+   * false when the page walk stopped at the page cap before the queue was
+   * exhausted, so a caller looking for one nonce knows the absence of an
+   * answer is not an answer.
+   */
+  pending(safe: Address): Promise<{ records: SafeTxRecord[]; complete: boolean }>;
   get(safe: Address, safeTxHash: Hex): Promise<SafeTxRecord>;
   confirm(input: { safe: Address; safeTxHash: Hex; signature: Hex }): Promise<void>;
 }
@@ -680,6 +686,31 @@ function assertRecordHash(record: SafeTxRecord, chainId: number): void {
   }
 }
 
+/**
+ * How many pages of the queue one read walks. Five pages of 100 is more queued
+ * transactions than a Safe can execute in a month; past that the honest answer
+ * is "stopped looking", not a longer walk.
+ */
+const PENDING_MAX_PAGES = 5;
+
+/** The page size this adapter asks for, and the size a full page comes back at. */
+const PENDING_PAGE_SIZE = 100;
+
+/**
+ * The path part of a service `next` link. The link is usually absolute, and
+ * every request goes to the configured base, so the origin is dropped: fetching
+ * `base` + an absolute URL would produce `https://hosthttps://host/…`.
+ */
+function pagePath(next: unknown): string | undefined {
+  if (typeof next !== 'string' || next.trim() === '') return undefined;
+  try {
+    const url = new URL(next);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return next.startsWith('/') ? next : `/${next}`;
+  }
+}
+
 export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
   const base = opts.config.safeTx.url.trim().replace(/\/+$/, '');
   if (base === '') {
@@ -818,19 +849,54 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
       return { safeTxHash };
     },
 
-    /** Everything queued and not yet executed, in nonce order — the queue. */
-    pending: async (safe): Promise<SafeTxRecord[]> => {
-      const payload = (await json(
-        'GET',
-        `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce`,
-      )) as { results?: unknown[] } | undefined;
-      const results = Array.isArray(payload?.results) ? payload.results : [];
-      // `ordering=nonce` is the service's promise, not something to rely on for
-      // correctness: the queue is the order the nonces must be executed in, and
-      // a page that arrives in another order would be executed out of turn.
-      return results
-        .map((entry) => toRecord(entry, safe, chainId))
-        .sort((left, right) => left.nonce - right.nonce);
+    /**
+     * Everything queued and not yet executed, in nonce order — the queue.
+     *
+     * The collection is paged, and one page is not the queue: a Safe with more
+     * queued transactions than a page fits would hide the record a caller is
+     * looking for, and "not there" would then be a wrong answer about a
+     * transaction that exists. The walk follows `next` for up to
+     * `PENDING_MAX_PAGES` pages and claims `complete` only when `next` runs out,
+     * so the caller can tell "nothing at that nonce" from "stopped looking".
+     *
+     * No page is skipped and no walk stops early at a nonce: `ordering=nonce` is
+     * the service's promise, not something this function checks, and stopping
+     * once a record at or past the wanted nonce appeared would make completeness
+     * rest on the ordering it does not verify. A bounded walk answers for the
+     * pages it read without assuming anything about the order they came in.
+     *
+     * The absence of `next` is not by itself the end of the queue. A service
+     * that truncates a page, or one that simply stops linking, ends the walk the
+     * same way it ends at a real last page — so the last page is only believed
+     * when it is short of the page size AND does not contradict the `count` the
+     * service declared. Anything else is `complete: false`: a caller that is
+     * about to post a transaction at a nonce has to be told "I did not see the
+     * whole queue", never handed a truncated list as the queue.
+     */
+    pending: async (safe) => {
+      const records: SafeTxRecord[] = [];
+      let next: string | undefined = `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce&limit=${String(PENDING_PAGE_SIZE)}`;
+      let complete = false;
+      let page = 0;
+      while (next !== undefined && page < PENDING_MAX_PAGES) {
+        page += 1;
+        const payload = (await json('GET', next)) as
+          | { count?: unknown; results?: unknown[]; next?: unknown }
+          | undefined;
+        const results = Array.isArray(payload?.results) ? payload.results : [];
+        records.push(...results.map((entry) => toRecord(entry, safe, chainId)));
+        next = pagePath(payload?.next);
+        if (next === undefined) {
+          const declared = typeof payload?.count === 'number' ? payload.count : undefined;
+          complete =
+            results.length < PENDING_PAGE_SIZE &&
+            (declared === undefined || declared <= records.length);
+        }
+      }
+      return {
+        records: records.sort((left, right) => left.nonce - right.nonce),
+        complete,
+      };
     },
 
     /**

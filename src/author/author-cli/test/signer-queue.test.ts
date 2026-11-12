@@ -13,7 +13,7 @@ import type { Address, Hex } from 'viem';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addOwnerWithThresholdData, type SafeTxRecord, type SafeTxService } from '../src/adapters/safe-tx';
-import { addSigner } from '../src/core/authors';
+import { addSigner, authorsFilePath, readAuthors } from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerQueue, signerQueue } from '../src/commands/signer-queue';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -89,7 +89,7 @@ function record(overrides: Partial<SafeTxRecord>): SafeTxRecord {
   };
 }
 
-function service(records: SafeTxRecord[]): SafeTxService {
+function service(records: SafeTxRecord[], complete = true): SafeTxService {
   return {
     register() {
       return Promise.reject(new Error('not used by signer queue'));
@@ -98,7 +98,7 @@ function service(records: SafeTxRecord[]): SafeTxService {
       return Promise.reject(new Error('not used by signer queue'));
     },
     pending() {
-      return Promise.resolve(records);
+      return Promise.resolve({ records, complete });
     },
     get() {
       return Promise.reject(new Error('not used by signer queue'));
@@ -274,6 +274,31 @@ describe('s2s signer queue', () => {
     expect(captured.warnings).toHaveLength(1);
     expect(captured.warnings[0]).toContain('rpc 503');
     expect(captured.human[0]).toContain('owners unreadable');
+  });
+
+  it('says a page-capped list is not the whole queue, in both output modes', async () => {
+    const captured = capture();
+    await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), {
+      ...deps([record({})]),
+      service: () => service([record({})], false),
+    });
+
+    expect(captured.results[0]?.complete).toBe(false);
+    expect(captured.human[0]).toContain('unread      : the page cap cut this list short');
+    expect(captured.warnings.join('\n')).toContain('may be longer than this command reads');
+  });
+
+  it('clears a filed-not-an-owner mark on the owner list it already read', async () => {
+    // `signer add` filed the key inactive and marked it unconfirmed; the chain
+    // has since accepted it, and this command is the only one that reads the
+    // owner list without a rotation to settle. The mark cannot outlive that.
+    addSigner({ name: 'signer-7e5f45', privateKey: KEY_SIGNER, safe: SAFE, activate: false });
+    expect(readAuthors(authorsFilePath()).authors['signer-7e5f45']?.unconfirmed).toBe(true);
+
+    const captured = capture();
+    await runSignerQueue(captured.out, args(['signer', 'queue', SAFE]), deps([]));
+
+    expect(readAuthors(authorsFilePath()).authors['signer-7e5f45']?.unconfirmed).toBeUndefined();
   });
 
   it('refuses with no Safe and no stored author', async () => {

@@ -6,7 +6,7 @@
 // calldata. No socket: `send` is a fake that records its call.
 // ============================================================================
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,7 +18,12 @@ import { safeAbi } from '@s2s/soul2soul-shared';
 
 import type { SafeTxRecord, SafeTxService } from '../src/adapters/safe-tx';
 import { computeSafeTxHash } from '../src/adapters/safe-tx';
-import { addSigner, pendingReplacement, readAuthors } from '../src/core/authors';
+import {
+  addSigner,
+  pendingReplacement,
+  readAuthors,
+  storeLockPath,
+} from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
 import type { ChainSafe, SignerDeps } from '../src/commands/signer-store';
@@ -99,6 +104,11 @@ function capture(): Captured {
 /** Owner B's `signMessage` over the hash — a confirmation the packer can prove. */
 async function signedByB(): Promise<Hex> {
   return privateKeyToAccount(KEY_B).signMessage({ message: { raw: HASH } });
+}
+
+/** This machine's own signature over the hash, in the same scheme. */
+async function signedByMine(): Promise<Hex> {
+  return privateKeyToAccount(KEY_SIGNER as Hex).signMessage({ message: { raw: HASH } });
 }
 
 function baseRecord(overrides: Partial<SafeTxRecord> = {}): SafeTxRecord {
@@ -225,6 +235,7 @@ describe('s2s signer confirm', () => {
 
     // One confirmation, over the raw hash, from this key.
     expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
     const signature = first(fake.confirmed).signature;
     expect(await verifyMessage({ address: EOA_SIGNER, message: { raw: HASH }, signature })).toBe(true);
 
@@ -296,6 +307,154 @@ describe('s2s signer confirm', () => {
     // the confirmation reached the service; nothing was sent from the EOA
     expect(fake.confirmed).toHaveLength(1);
     expect(sent).toHaveLength(0);
+  });
+
+  it('executes a proposal this key already signed instead of posting the signature again', async () => {
+    // Both schemes a confirmation arrives in: a bare 27/28 signature over the
+    // digest (`sign({hash})`, which is what `s2s signer rotate` posts with the
+    // old key) and a 31/32 eth_sign signature (`signMessage`). Either is this
+    // owner's confirmation, and the service already holds it.
+    const account = privateKeyToAccount(KEY_SIGNER as Hex);
+    const schemes: { name: string; signature: Hex }[] = [
+      { name: 'sign({hash})', signature: await account.sign({ hash: HASH }) },
+      {
+        name: 'signMessage({raw})',
+        signature: await account.signMessage({ message: { raw: HASH } }),
+      },
+    ];
+
+    for (const scheme of schemes) {
+      const fake = fakeService(
+        baseRecord({
+          confirmations: [{ owner: EOA_SIGNER, signature: scheme.signature }],
+          confirmationsRequired: 1,
+        }),
+      );
+      const sent: Sent[] = [];
+      const captured = capture();
+
+      await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, {
+          sent,
+          chain: { deployed: true, owners: [EOA_SIGNER], threshold: 1, nonce: 7 },
+        }),
+      });
+
+      // No POST: the confirmation is already in the record, and a second one
+      // would only replace the same entry.
+      expect(fake.confirmed, scheme.name).toHaveLength(0);
+      expect(sent, scheme.name).toHaveLength(1);
+      expect(captured.results[0]).toMatchObject({
+        posted: false,
+        confirmed: true,
+        executed: true,
+        confirmations: 1,
+        required: 1,
+      });
+      expect(captured.human[0]).toContain('had already signed');
+      // The signature that was already on the record is the one that was packed.
+      const call = decodeFunctionData({ abi: safeAbi, data: first(sent).data });
+      const execArgs = call.args as readonly Hex[];
+      expect((execArgs[9] ?? '0x').slice(2, 66)).toBe(scheme.signature.slice(2, 66));
+    }
+  });
+
+  it('says nothing was posted when this key had already signed a proposal that cannot execute yet', async () => {
+    // The combination that used to lie: nothing was posted (the signature was
+    // already there) and nothing was executed (the Safe is not at this nonce).
+    const fake = fakeService(
+      baseRecord({
+        safeTxHash: hashFor(9),
+        nonce: 9,
+        confirmations: [{ owner: EOA_SIGNER, signature: await signedByMine() }],
+      }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, {
+        sent,
+        chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 },
+      }),
+    });
+
+    expect(fake.confirmed).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect(captured.results[0]).toMatchObject({ posted: false, confirmed: true, executed: false });
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('already signed by this key, nothing posted');
+    expect(note).toContain('nonce 7');
+    // The old wording claimed a confirmation that never happened.
+    expect(note).not.toContain('confirmed, not executed');
+  });
+
+  it('says the confirmation was posted when it was, and what is still missing', async () => {
+    const fake = fakeService(baseRecord({ confirmations: [], confirmationsRequired: 3 }));
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, {
+        chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 3, nonce: 7 },
+      }),
+    });
+
+    expect(captured.results[0]).toMatchObject({ posted: true, executed: false });
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('confirmation posted');
+    expect(note).toContain('2 more confirmations needed');
+  });
+
+  it('says nothing was posted under --no-execute when the signature was already there', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: EOA_SIGNER, signature: await signedByMine() }] }),
+    );
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE, '--no-execute']),
+      deps(fake, { sent, chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 } }),
+    );
+
+    expect(fake.confirmed).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    const note = String(captured.results[0]?.note);
+    expect(note).toContain('already signed by this key, nothing posted');
+    expect(note).toContain('--no-execute');
+  });
+
+  it('posts its own confirmation when the record carries only other owners', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
+    );
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake),
+    });
+
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
+  });
+
+  it('does not read a signature over another digest as this owner\'s confirmation', async () => {
+    // Owner B's signature, labelled as this key. Recovery over the wrong digest
+    // yields some other valid address rather than an error, so "it recovered"
+    // is not the test — "it recovered to this owner" is. Here it does not, so
+    // the POST happens even though the label says otherwise.
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: EOA_SIGNER, signature: await signedByB() }] }),
+    );
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake),
+    });
+
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results[0]).toMatchObject({ posted: true });
   });
 
   it('posts the confirmation and stops when --no-execute is given', async () => {
@@ -520,6 +679,41 @@ describe('s2s signer confirm', () => {
     const untouched = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
     expect(untouched.active).toBe('zomi');
     expect(untouched.authors['zomi-next']?.replaces).toBe('zomi');
+  });
+
+  it('reports the dead writer whose lock it cleared, the way rotate does', async () => {
+    const fake = fakeService(baseRecord());
+    const warnings: string[] = [];
+    const out: CliOut = {
+      json: true,
+      log: () => undefined,
+      warn: (message: string) => warnings.push(message),
+      result: () => undefined,
+    };
+    const path = join(dir, 'xdg', 's2s', 'authors.json');
+    addSigner({ name: 'zomi', privateKey: KEY_SIGNER, safe: SAFE }, path);
+    addSigner(
+      { name: 'zomi-next', privateKey: KEY_REPLACEMENT, safe: SAFE, replaces: 'zomi' },
+      path,
+    );
+    // A command killed mid-write: the store lock it left names a pid that is not
+    // running. Clearing it is right; clearing it silently is not, because the
+    // killed command may have printed a key it never recorded.
+    const lock = storeLockPath(path);
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    const pid = 2 ** 22 + 11;
+    writeFileSync(lock, `${String(pid)}\n`);
+
+    await expect(
+      runSignerConfirm(out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake, { chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 } }),
+      }),
+    ).rejects.toMatchObject({ code: 'not_owner' });
+
+    expect(warnings.join('\n')).toContain(`pid ${String(pid)}`);
+    expect(warnings.join('\n')).toContain('was not running');
+    expect(existsSync(lock)).toBe(false);
+    expect(readAuthors(path).active).toBe('zomi-next');
   });
 
   it('settles before the record read, so a run that died after executing still reconciles', async () => {

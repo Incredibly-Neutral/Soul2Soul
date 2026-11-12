@@ -68,6 +68,10 @@ s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plainte
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
+s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]      # file a key and propose it as one owner of a deployed Safe
+s2s signer rotate    [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]    # swap this machine's key on a Safe, threshold untouched (the Safe defaults to the one it files)
+s2s signer queue     [<safe>] [--json]                                                           # unexecuted proposals, oldest nonce first, and what this key owes
+s2s signer confirm   <safeTxHash> [--safe <safe>] [--no-execute] [--json]                        # sign a queued proposal, then execute it at the threshold
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
 s2s setup            [--accept-defaults] [--json]                                               # guided first-run config: keep the defaults or paste your own
 s2s config set       <key> <value> [--local] [--json]                                             # write a config value
@@ -321,7 +325,11 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   project layers. The two file layers still resolve but are **deprecated** — see
   [Config file](#config-file-bring-your-own-infra) for the one-time warning and removal.
   `CliConfig.author` reports which layer won, with the pet name and the stored Safe only for the
-  store layer.
+  store layer. `signer confirm` signs with this order. `signer rotate` retires a row: the row for
+  that Safe whose key is an owner (active row first), else the effective key above filed as a row
+  for that Safe; a row whose key is not an owner is a stale row and a refusal. The effective key
+  signs the swap whenever it is an owner, which is a separate question from which key is retired.
+  See [SPEC-author-signers](SPEC-author-signers.md).
 - **The env shadows the store, loudly.** When `S2S_PRIVATE_KEY` is set and the active stored author
   holds a different key, `buildContext` warns on stderr — `S2S_PRIVATE_KEY overrides active author
   'zomi'` — because a shell export silently overriding `author switch` is invisible in every
@@ -573,7 +581,9 @@ s2s <group> <action> [positionals…] [flags…]
 - A `repeatable` flag (`--author`, `--owner` on `publication new`) accumulates; repeating it is
   the same as passing a comma-separated list.
 - `--help` for an action is **derived from that flag declaration**, so it cannot disagree with
-  what the parser accepts; there is no hand-written usage string to fall out of date.
+  what the parser accepts; there is no hand-written usage string to fall out of date. An action
+  may add one `detail` paragraph under its summary — the *why* of its shape, which the flag list
+  cannot carry (e.g. `signer rotate`'s Safe default). A detail that restates a flag is a bug.
 - **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
   carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
 - Failure in `--json` mode puts a single envelope on stdout and nothing else:
@@ -592,7 +602,7 @@ s2s <group> <action> [positionals…] [flags…]
 | `s2s --version` | `{ "schemaVersion": 1, "ok": true, "name": "s2s", "version": "0.1.0" }` | 0 |
 | `s2s` / `s2s --help` | `{ "schemaVersion": 1, "ok": true, "help": "<top help>" }` | 0 |
 | `s2s <group> --help` | `{ "schemaVersion": 1, "ok": true, "help": "<group help>" }` | 0 |
-| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + flags>" }` | 0 |
+| `s2s <group> <action> --help` | `{ …, "ok": true, "help": "<usage + summary + detail? + flags>" }` | 0 |
 | any failure (`--json`) | `{ "schemaVersion": 1, "ok": false, "code": "<code>", "error": "<msg>" }` | 1 or 2 |
 
 ### `author` group — result types
@@ -616,8 +626,12 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 // s2s author list [--json] — stored authors, active one marked
 { action: 'author.list'; active: string | null;
   authors: { name: string; eoa: string | null; safe: string | null; active: boolean;
-             ownership: 'owner' | 'pending';   // 'pending' = filed by `signer rotate`
-             replaces?: string }[] }           // the row it intends to replace
+             ownership: 'owner' | 'pending' | 'unconfirmed';
+                                               // 'pending' = filed by `signer rotate`;
+                                               // 'unconfirmed' = filed by `signer add` for a key
+                                               // the chain has not accepted yet
+             replaces?: string;                // the row it intends to replace
+             unconfirmed?: true }[] }          // filed, not an owner yet
 
 // s2s author rm <pet-name> [--json] — forget an author
 { action: 'author.rm'; name: string; file: string; active: string | null }

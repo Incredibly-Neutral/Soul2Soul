@@ -30,6 +30,12 @@
 // the new key is an owner and the old one is not; until then the row is printed
 // as pending, never as an owner.
 //
+// `proposal` is OPTIONAL and sits beside `replaces`: the `safeTxHash` the swap
+// was queued under. Absent on a row that carries `replaces` means the swap was
+// NEVER QUEUED (the proposal failed), which is exactly the row a retry has to
+// finish rather than add a third key to. It is dropped with the marker, and it
+// never decides on its own whether the swap landed — ownership does that.
+//
 // The store sits in the key-precedence chain between the project config and the
 // user config (see core/config.ts), which is what makes `author switch` a
 // one-command identity switch: no env var, no file edit.
@@ -46,7 +52,19 @@
 // ============================================================================
 
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -54,7 +72,7 @@ import type { Address, Hex } from 'viem';
 import { getAddress, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 
 /** The author-contracts addresses installed on an author's Safe. */
 export interface AuthorContractsRecord {
@@ -106,6 +124,22 @@ export interface AuthorRecord {
    * is not an owner yet; `settleReplacement` clears it the moment it is one.
    */
   replaces?: string;
+  /**
+   * The `safeTxHash` the swap was queued under (`s2s signer rotate`). Present
+   * only beside `replaces`: absent there means the row is filed but no swap was
+   * ever proposed, so the next run must queue this row's swap, not file another.
+   * Cleared with the marker when the swap settles.
+   */
+  proposal?: Hex;
+  /**
+   * Filed by `s2s signer add` and not yet accepted by the chain: the key is on
+   * the owner list only once an owner posts the `addOwnerWithThreshold` proposal
+   * and it executes. Such a row is not an owner, so `author list` prints it as
+   * unconfirmed rather than claiming a share it does not have. A signer command
+   * clears the marker the first time a chain read shows the key as an owner;
+   * it is never set by hand.
+   */
+  unconfirmed?: true;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -174,6 +208,36 @@ function parseSafeSource(value: unknown): AuthorSafeSource | undefined {
   return value === 'derived' || value === 'given' ? value : undefined;
 }
 
+/** A `safeTxHash`: exactly 32 bytes of hex, `0x` prefixed. Nothing shorter. */
+function isSafeTxHash(value: string): value is Hex {
+  return /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+/**
+ * The proposal a row may carry, or undefined when it carries none this build
+ * can read. Reading stays tolerant like the rest of the store: a hand-edited
+ * non-hash reads as "never proposed", and the write paths refuse it loudly.
+ */
+function parseProposal(value: unknown): Hex | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return isSafeTxHash(trimmed) ? trimmed : undefined;
+}
+
+/**
+ * Validate a hash a caller wants written to `name`'s row, naming the row: the
+ * refusal has to say which row, because `setPendingProposal` takes the name.
+ */
+function assertProposal(name: string, value: string): Hex {
+  const trimmed = value.trim();
+  if (!isSafeTxHash(trimmed)) {
+    throw new UsageError(
+      `author '${name}' proposal '${value}' is not a safeTxHash — that is 32 bytes of hex (0x and 64 characters), as \`s2s signer queue\` printed it`,
+    );
+  }
+  return trimmed;
+}
+
 function parseRecord(value: unknown): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -185,6 +249,7 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
   const safeSource = parseSafeSource(declared);
   const unreadable = declared !== undefined && safeSource === undefined ? declared : undefined;
   const replaces = record.replaces;
+  const proposal = parseProposal(record.proposal);
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
@@ -194,6 +259,8 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
     ...(typeof replaces === 'string' && replaces.trim().length > 0
       ? { replaces: replaces.trim() }
       : {}),
+    ...(proposal === undefined ? {} : { proposal }),
+    ...(record.unconfirmed === true ? { unconfirmed: true as const } : {}),
   };
 }
 
@@ -212,6 +279,12 @@ export function isGivenSafe(record: AuthorRecord | undefined): boolean {
 export function givenSafeOf(record: AuthorRecord | undefined): Address | undefined {
   if (!isGivenSafe(record) || !record?.safe) return undefined;
   return record.safe as Address;
+}
+
+/** The address a record names, when it holds one this build can read. */
+function recordSafe(record: AuthorRecord): string | undefined {
+  const value = record.safe;
+  return typeof value === 'string' && isAddress(value) ? value : undefined;
 }
 
 /** `givenSafeOf` by pet name, for a caller holding a name rather than a record. */
@@ -346,6 +419,247 @@ export function writeAuthors(data: AuthorsStore, path: string = authorsFilePath(
 }
 
 /**
+ * The store's exclusive lock: `<store>.lock`, created with `wx`, holding the
+ * writer's pid.
+ *
+ * `writeAuthors` is atomic per write, but every mutation is a read-modify-write
+ * of the whole file, so two commands racing lose one of the two updates — the
+ * duplicate-name check passes in both, both file a row, and one printed key is
+ * gone with the overwritten copy of the file. The lock covers the read and the
+ * write together.
+ *
+ * The pid is what makes a leftover lock recoverable without guessing: `kill(pid,
+ * 0)` says whether the writer that made it still exists. A dead writer's lock is
+ * taken over (the holder cannot still be mid-write — it is gone), and the caller
+ * is told. A live writer, or a lock whose pid cannot be read, is refused with
+ * the pid it holds. There is no timeout: "old enough to steal" is how a live
+ * writer's file gets overwritten.
+ */
+export function storeLockPath(path: string): string {
+  return `${path}.lock`;
+}
+
+/** Paths this process already holds, so a nested call re-enters instead of
+ * deadlocking against its own lock. */
+const heldLocks = new Set<string>();
+
+/** Whether a pid is running: `true`, `false` for a process that is gone, and
+ * `undefined` when this process may not ask (`EPERM` means alive). */
+function processAlive(pid: number): boolean | undefined {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    return undefined;
+  }
+}
+
+/** What a lock file says right now. */
+type LockRead =
+  /** It names a pid. */
+  | { state: 'pid'; pid: number }
+  /** It exists but names no pid: a holder that has created it and not written yet. */
+  | { state: 'empty' }
+  /** It was released between our open and our read. */
+  | { state: 'gone' }
+  /** It exists and cannot be read at all: a different failure, and a different fix. */
+  | { state: 'unreadable'; code: string };
+
+function readLock(lock: string): LockRead {
+  let text: string;
+  try {
+    text = readFileSync(lock, 'utf8').trim();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? 'unknown';
+    // Only "not there" is gone. EACCES, EISDIR, EIO: the file is there and this
+    // process cannot read it, which is not a writer mid-write and not a
+    // leftover — deleting it would be guessing, and `onStaleLock` would be a lie.
+    return code === 'ENOENT' ? { state: 'gone' } : { state: 'unreadable', code };
+  }
+  return /^[0-9]+$/.test(text) ? { state: 'pid', pid: Number.parseInt(text, 10) } : { state: 'empty' };
+}
+
+/** A sleep that works inside a synchronous function: the lock cannot await. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** How long to wait for a lock that exists but names no pid yet, and how often. */
+const LOCK_READ_ATTEMPTS = 10;
+const LOCK_READ_WAIT_MS = 25;
+
+/**
+ * The pid a lock names, waiting out the window between `open(..., 'wx')` and the
+ * holder's `write` of its pid.
+ *
+ * An empty file is a live holder mid-write, not a leftover: `open` creates it and
+ * the pid goes in the next statement, so a reader can catch it empty for a
+ * moment. Concluding "no pid, therefore stale" from that moment is how a live
+ * writer's lock gets deleted. A lock that is *still* empty after the retry is
+ * therefore treated as held, never as stolen.
+ */
+function lockPid(lock: string): LockRead {
+  for (let attempt = 0; attempt < LOCK_READ_ATTEMPTS; attempt += 1) {
+    const read = readLock(lock);
+    if (read.state !== 'empty') return read;
+    if (attempt + 1 < LOCK_READ_ATTEMPTS) sleepSync(LOCK_READ_WAIT_MS);
+  }
+  return { state: 'empty' };
+}
+
+export interface StoreLockOptions {
+  /**
+   * Called when a lock left by a dead process is taken over, with that pid. The
+   * write still happens; the user is told whose leftover was cleared, because a
+   * recovered lock is evidence that an earlier command was killed mid-write.
+   */
+  onStaleLock?: (pid: number) => void;
+}
+
+/**
+ * Claim a lock left by a dead process, or leave the store alone.
+ *
+ * The leftover is renamed to a private path first. Two processes that both saw
+ * the same dead pid both try; exactly one rename succeeds on a given file and
+ * the other sees ENOENT and goes back to `open`, which is correct whether or
+ * not the winner has finished. This is what makes the takeover safe without a
+ * lock library: a `rm` could delete a lock that a third process created in
+ * between, because reading and removing are two steps.
+ *
+ * The renamed file is read once more. If it is not the dead pid this attempt
+ * judged — another process released the leftover and created its own lock in
+ * between — it is put back with `link`, which fails rather than overwriting a
+ * lock that appeared in the meantime, and this run refuses. The window is small
+ * and it is stated, not hidden: a lock this build cannot prove is stale is never
+ * deleted.
+ */
+function takeOverStaleLock(
+  lock: string,
+  pid: number,
+  attempt: number,
+  options: StoreLockOptions,
+): void {
+  const claimed = `${lock}.${String(process.pid)}.${String(attempt)}`;
+  try {
+    renameSync(lock, claimed);
+  } catch (err) {
+    // ENOENT: another process moved it first, or its owner released it.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  const moved = readLock(claimed);
+  if (moved.state !== 'pid' || moved.pid !== pid) {
+    // Not the leftover: put it back where its owner expects it. `link` cannot
+    // overwrite a lock created in between, so this cannot lose one.
+    let restored = true;
+    try {
+      linkSync(claimed, lock);
+    } catch {
+      restored = false;
+    }
+    try {
+      rmSync(claimed, { force: true });
+    } catch {
+      // nothing else to do; the message below names the path
+    }
+    throw new CliError(
+      restored
+        ? `the author store lock ${lock} changed while it was being cleared — another s2s command took it; run this again`
+        : `the author store lock ${lock} changed while it was being cleared, and the file this run moved is at ${claimed} — another s2s command is writing; put that file back as ${lock} only once no s2s command is running`,
+      1,
+      'store_locked',
+    );
+  }
+  try {
+    rmSync(claimed, { force: true });
+    options.onStaleLock?.(pid);
+  } catch (err) {
+    throw new CliError(
+      `cleared the author store lock left by pid ${String(pid)}, but the file this run moved to ${claimed} could not be removed (${(err as NodeJS.ErrnoException).code ?? 'unknown'}) — delete it by hand`,
+      1,
+      'store_locked',
+    );
+  }
+}
+
+/** Why the lock could not be taken, said for the state the file is actually in. */
+function lockRefusal(holder: LockRead, path: string, lock: string): string {
+  switch (holder.state) {
+    case 'pid':
+      return `another s2s command (pid ${String(holder.pid)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`;
+    case 'unreadable':
+      return `the author store lock ${lock} exists and this process cannot read it (${holder.code}), so it cannot tell whether another s2s command is writing ${path} — fix the permissions or ownership of that file; deleting it is safe only once no s2s command is running`;
+    case 'empty':
+      return `another s2s command is writing the author store at ${path} — the lock ${lock} exists and names no pid, which is what a writer looks like for the moment between creating the lock and writing its pid; if no s2s command is running, the lock is a leftover and can be deleted`;
+    case 'gone':
+      // Unreachable: the caller retries the open for this state.
+      return `the author store at ${path} is unlocked now — run this again`;
+  }
+}
+
+/**
+ * Run `fn` holding the store lock at `path`.
+ *
+ * The lock is created beside the store and removed on every exit, including a
+ * throw, so a refusal leaves nothing behind. Re-entrant within the process:
+ * a command may file two rows in one run.
+ */
+export function withStoreLock<T>(path: string, fn: () => T, options: StoreLockOptions = {}): T {
+  if (heldLocks.has(path)) return fn();
+  mkdirSync(dirname(path), { recursive: true });
+  const lock = storeLockPath(path);
+  let fd: number | undefined;
+  // A few attempts, not a spin: the first may clear a dead writer's lock, the
+  // next can lose the race to another process doing the same thing, and that
+  // process is then alive and refused by pid.
+  for (let attempt = 0; fd === undefined && attempt < 3; attempt += 1) {
+    try {
+      fd = openSync(lock, 'wx', 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const holder = lockPid(lock);
+      if (holder.state === 'gone') continue;
+      if (holder.state === 'pid' && processAlive(holder.pid) === false) {
+        // The writer is gone: its lock is a leftover, not a claim. Claim the
+        // leftover by MOVING it to a private name. `rename` is atomic and only
+        // one process can move a given file: the loser gets ENOENT and retries
+        // the open instead of deleting a lock somebody else now holds.
+        takeOverStaleLock(lock, holder.pid, attempt, options);
+        continue;
+      }
+      throw new CliError(lockRefusal(holder, path, lock), 1, 'store_locked');
+    }
+  }
+  if (fd === undefined) {
+    throw new CliError(
+      `could not take the author store lock ${lock} — another process kept re-creating it; try again`,
+      1,
+      'store_locked',
+    );
+  }
+  heldLocks.add(path);
+  try {
+    writeSync(fd, `${String(process.pid)}\n`);
+    return fn();
+  } finally {
+    heldLocks.delete(path);
+    try {
+      closeSync(fd);
+    } catch {
+      // already closed
+    }
+    try {
+      rmSync(lock, { force: true });
+    } catch {
+      // the lock is advisory; a leftover file is reported by the next run
+    }
+  }
+}
+
+/**
  * Whether this row is filed but not yet an owner: it is waiting on a rotation.
  * A pending row is never described as an owner, and never holds the active slot
  * on the strength of the Safe it shares with the row it replaces.
@@ -356,10 +670,12 @@ export function isPendingReplacement(record: AuthorRecord | undefined): boolean 
 
 /**
  * What a row is, for a caller printing it: `pending` until the chain moves the
- * share across, `owner` once it has (or for a row that never chased one).
+ * share across, `unconfirmed` for a joining key the chain has not accepted yet,
+ * `owner` once it has (or for a row that never chased one).
  */
-export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' {
-  return isPendingReplacement(record) ? 'pending' : 'owner';
+export function ownershipOf(record: AuthorRecord): 'owner' | 'pending' | 'unconfirmed' {
+  if (isPendingReplacement(record)) return 'pending';
+  return record.unconfirmed === true ? 'unconfirmed' : 'owner';
 }
 
 /** One row of `author list`, with the pending marker taken into account. */
@@ -368,8 +684,13 @@ export interface AuthorRow {
   eoa: string | null;
   safe: string | null;
   active: boolean;
-  /** `pending` for a row filed by `replaces`; `owner` for every other row. */
-  ownership: 'owner' | 'pending';
+  /**
+   * `pending` for a row filed by `replaces`, `unconfirmed` for a joining key
+   * `signer add` filed and no owner has added yet, `owner` otherwise.
+   */
+  ownership: 'owner' | 'pending' | 'unconfirmed';
+  /** True on a `pending` row only: the row it intends to replace. */
+  unconfirmed?: true;
   /** The row it intends to replace; absent on an owner row. */
   replaces?: string;
 }
@@ -388,6 +709,7 @@ export function authorRows(store: AuthorsStore): AuthorRow[] {
     active: name === store.active,
     ownership: ownershipOf(record),
     ...(record.replaces === undefined ? {} : { replaces: record.replaces }),
+    ...(record.unconfirmed === true ? { unconfirmed: true as const } : {}),
   }));
 }
 
@@ -472,12 +794,35 @@ export interface AddSignerInput {
    * a chase, not a membership, until `settleReplacement` sees the swap land.
    */
   replaces?: string;
+  /**
+   * The `safeTxHash` the swap was queued under, when the caller has it already
+   * (`s2s signer rotate` files and queues in one run). Omitted means the row is
+   * filed only: a swap that has to be proposed later, by `setPendingProposal`.
+   */
+  proposal?: Hex;
+  /**
+   * Whether the row takes the active slot. Defaults to true, which is right for
+   * a key that is already an owner: the store's active row is what every command
+   * signs with, and the key that just proved ownership should be it.
+   *
+   * `s2s signer add` on a *joining* key passes false: that key is not an owner
+   * until an owner posts the proposal and the swap… (there is no swap for an
+   * add) executes. Making it active would point every later command at a key the
+   * chain does not recognise, and `signer confirm` would refuse it `not_owner`
+   * with no hint that the active slot is the reason.
+   */
+  activate?: boolean;
 }
 
 /** A row filed for a Safe that is waiting to become one of its owners. */
 export interface PendingReplacement {
   name: string;
   replaces: string;
+  /**
+   * The hash the swap was queued under. Absent means filed only, never
+   * proposed: the row is stranded and a retry has to queue it, not replace it.
+   */
+  proposal?: Hex;
 }
 
 /**
@@ -505,7 +850,10 @@ function chaserOf(data: AuthorsStore, name: string): ActiveAuthor | undefined {
 
 /**
  * The row filed for `safe` that is waiting to become an owner of it, read from
- * `data`: the pet name plus the row it intends to replace.
+ * `data`: the pet name, the row it intends to replace, and the hash its swap was
+ * queued under when one was. Two states a caller must tell apart: a `proposal`
+ * means the swap is queued and only has to execute; no `proposal` means the row
+ * is filed and stranded, and queuing it is the next step.
  */
 export function pendingReplacementIn(
   data: AuthorsStore,
@@ -513,7 +861,11 @@ export function pendingReplacementIn(
 ): PendingReplacement | undefined {
   const row = pendingRowsIn(data, safe)[0];
   if (!row?.replaces) return undefined;
-  return { name: row.name, replaces: row.replaces };
+  return {
+    name: row.name,
+    replaces: row.replaces,
+    ...(row.proposal === undefined ? {} : { proposal: row.proposal }),
+  };
 }
 
 /**
@@ -547,10 +899,42 @@ export function pendingReplacement(
  * afterwards, by `s2s signer queue`), so the writes that need it check it there.
  */
 export function addSigner(input: AddSignerInput, path: string = authorsFilePath()): ActiveAuthor {
+  // Read-modify-write of the whole file: the uniqueness checks below are only
+  // checks if no other process writes between them and the write.
+  return withStoreLock(path, () => addSignerLocked(input, path));
+}
+
+function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
+  const { store, row } = planSignerAdd(readAuthors(path), input);
+  writeAuthors(store, path);
+  return row;
+}
+
+/**
+ * The store `addSigner` would write, and the row it would return — without
+ * writing.
+ *
+ * Every check `addSigner` makes runs here, so a caller that files two rows in
+ * one run can plan both before the first write: a refusal from the second (a
+ * taken name, a key already filed, a chase already in flight) then leaves the
+ * store byte-identical instead of half-written. The caller holds the store lock.
+ */
+export function planSignerAdd(
+  store: AuthorsStore,
+  input: AddSignerInput,
+): { store: AuthorsStore; row: ActiveAuthor } {
   const { name, privateKey, safe, replaces } = input;
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
   }
+  // A proposal without a row to replace describes no swap, and writing it would
+  // put a hash on a row no caller ever reads one from.
+  if (input.proposal !== undefined && replaces === undefined) {
+    throw new UsageError(
+      `author '${name}' cannot carry a proposal without \`replaces\` — a swap is queued for a row that is taking over another one`,
+    );
+  }
+  const proposal = input.proposal === undefined ? undefined : assertProposal(name, input.proposal);
   // Strict checksum: a mixed-case address with a broken checksum is a
   // transcription error, and storing it would put a typo in the record.
   if (!isAddress(safe.trim())) {
@@ -559,7 +943,6 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
     );
   }
   const address = getAddress(safe.trim());
-  const store = readAuthors(path);
   const existing = findAuthorName(store, name);
   if (existing) {
     throw new UsageError(
@@ -613,20 +996,68 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
     );
   }
 
+  // A row filed for a key the chain has not accepted is marked as such: nothing
+  // else in the store records it, and `author list` would otherwise print a
+  // joining key as an owner of a Safe that never heard of it. A replacement row
+  // needs no marker of its own — `replaces` is already one.
+  const unconfirmed = target === undefined && input.activate === false;
   const record: AuthorRecord = {
     privateKey: normalizeKey(privateKey),
     safe: address,
     safeSource: 'given',
     ...(target ? { replaces: target.name } : {}),
+    ...(proposal === undefined ? {} : { proposal }),
+    ...(unconfirmed ? { unconfirmed: true as const } : {}),
   };
-  // A replacement row is filed WITHOUT the active slot. The old key is still the
-  // Safe's owner, and `s2s signer confirm` runs with whatever key is active —
-  // so activating the newcomer here would hand the confirm to a key the chain
-  // does not yet recognise as an owner, and the queue would wait on a signature
-  // that cannot count. The slot moves in `settleReplacement`, on the evidence.
-  const active = target ? store.active : name;
-  writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
-  return { name, ...record };
+  // A replacement row is filed WITHOUT the active slot, and so is a joining key
+  // the caller marked `activate: false`. The active row is what every command
+  // signs with, so activating a key that is not an owner yet would hand
+  // `s2s signer confirm` a key the chain does not recognise. The slot moves in
+  // `settleReplacement`, on the evidence, or stays where it was.
+  const active = target !== undefined || input.activate === false ? store.active : name;
+  return {
+    store: { active, authors: { ...store.authors, [name]: record } },
+    row: { name, ...record },
+  };
+}
+
+/**
+ * Record (or replace) the `safeTxHash` the pending row's swap was queued under.
+ *
+ * `addSigner` files the row and `s2s signer queue` proposes the swap as two
+ * steps, and the second one can fail: the row then exists with no proposal, and
+ * re-running the rotation would file a THIRD key instead of finishing the
+ * second. The hash is the fact that says which of the two states the row is in,
+ * so it is written here, after the queue, and the caller uses its presence to
+ * decide whether to propose again.
+ *
+ * Only a pending replacement holds a swap, so a row that is not chasing another
+ * one is refused by name rather than given a meaningless hash. Returns the row
+ * as it now reads.
+ */
+export function setPendingProposal(
+  name: string,
+  safeTxHash: Hex,
+  path: string = authorsFilePath(),
+): ActiveAuthor {
+  return withStoreLock(path, () => setPendingProposalLocked(name, safeTxHash, path));
+}
+
+function setPendingProposalLocked(name: string, safeTxHash: Hex, path: string): ActiveAuthor {
+  const store = readAuthors(path);
+  const key = findAuthorName(store, name);
+  const current = key === undefined ? undefined : store.authors[key];
+  if (key === undefined || current === undefined) {
+    throw new UsageError(`no author '${name}' — \`s2s author list\` shows the rows that exist`);
+  }
+  if (!isPendingReplacement(current)) {
+    throw new UsageError(
+      `author '${key}' is not a pending replacement — only a row filed to take over another one records a queued swap`,
+    );
+  }
+  const record: AuthorRecord = { ...current, proposal: assertProposal(key, safeTxHash) };
+  writeAuthors({ active: store.active, authors: { ...store.authors, [key]: record } }, path);
+  return { name: key, ...record };
 }
 
 /** What `settleReplacement` found, and therefore what the caller may say. */
@@ -649,13 +1080,85 @@ export type ReplacementOutcome = 'none' | 'pending' | 'settled' | 'collision';
  * `pending` for ever — nothing else can clear it.) Both EOAs are derived from
  * the stored private keys; a row whose key cannot be derived is no evidence at
  * all, so it stays `pending` rather than resolving on a name alone.
+ *
+ * The queued `proposal` is not evidence either: a row holding one is still
+ * settled on ownership, and the hash is dropped with the marker in the same
+ * write. A collision writes nothing, so both survive — nothing has landed, and
+ * the hash is what lets the caller execute the queue rather than propose it
+ * again.
  */
 export function settleReplacement(
   safe: Address,
   owners: readonly Address[],
   path: string = authorsFilePath(),
+  options: StoreLockOptions = {},
 ): ReplacementOutcome {
+  // The settle path removes a row and activates another in one write; a second
+  // command holding a copy of the store would write that removal back.
+  return withStoreLock(path, () => settleReplacementLocked(safe, owners, path), options);
+}
+
+/**
+ * Clear the `unconfirmed` marker from every row for `safe` whose key the owner
+ * list now holds, and return the store as it stands afterwards.
+ *
+ * `signer add` files a joining key unconfirmed because no chain read has agreed
+ * with it yet. The marker is a fact about the chain, so it is dropped wherever
+ * the owner list is in hand — settle, queue and confirm all reach this. A marker
+ * cleared by hand would be a claim nobody checked; a marker that outlives the
+ * owner list would call a key a stranger after it joined.
+ *
+ * Caller holds the store lock.
+ */
+function sweepConfirmedLocked(
+  safe: Address,
+  owners: readonly Address[],
+  path: string,
+): AuthorsStore {
   const store = readAuthors(path);
+  const cleared: Record<string, AuthorRecord> = {};
+  for (const [name, record] of Object.entries(store.authors)) {
+    if (record.unconfirmed !== true) continue;
+    if (recordSafe(record)?.toLowerCase() !== safe.toLowerCase()) continue;
+    const eoa = authorEoa(record.privateKey);
+    if (!eoa || !owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) continue;
+    const rest: AuthorRecord = { ...record };
+    delete rest.unconfirmed;
+    cleared[name] = rest;
+  }
+  if (Object.keys(cleared).length === 0) return store;
+  const swept: AuthorsStore = { active: store.active, authors: { ...store.authors, ...cleared } };
+  writeAuthors(swept, path);
+  return swept;
+}
+
+/**
+ * Clear `unconfirmed` from the rows for `safe` the chain now lists as owners.
+ * For a command that read the owner list but is not settling a replacement, so
+ * a key that joined is reported as an owner the moment that is true.
+ */
+export function sweepConfirmedSigners(
+  safe: Address,
+  owners: readonly Address[],
+  path: string = authorsFilePath(),
+  options: StoreLockOptions = {},
+): void {
+  // A command that only listed the queue must not create a store to report that
+  // there is nothing in it.
+  if (!existsSync(path)) return;
+  withStoreLock(path, () => sweepConfirmedLocked(safe, owners, path), options);
+}
+
+function settleReplacementLocked(
+  safe: Address,
+  owners: readonly Address[],
+  path: string,
+): ReplacementOutcome {
+  const isOwnerOf = (eoa: Address): boolean =>
+    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
+
+  const store = sweepConfirmedLocked(safe, owners, path);
+
   const chasing = pendingRowsIn(store, safe)[0];
   if (!chasing?.replaces) return 'none';
 
@@ -668,10 +1171,8 @@ export function settleReplacement(
   const oldEoa = oldRow ? authorEoa(oldRow.privateKey) : undefined;
   if (oldRow && !oldEoa) return 'pending';
 
-  const isOwner = (eoa: Address): boolean =>
-    owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase());
-  const newIsOwner = isOwner(newEoa);
-  const oldIsOwner = oldEoa !== undefined && isOwner(oldEoa);
+  const newIsOwner = isOwnerOf(newEoa);
+  const oldIsOwner = oldEoa !== undefined && isOwnerOf(oldEoa);
 
   if (newIsOwner && oldIsOwner) return 'collision';
   // Neither key is an owner: the old one left the list without the swap
@@ -712,7 +1213,7 @@ export function removalHoldIn(data: AuthorsStore, name: string): string | undefi
   const row = findAuthor(data, name);
   if (!row) return undefined;
   const settle =
-    'finish the queued swap with `s2s signer confirm`, or run `s2s signer rotate` on that Safe to settle it';
+    'finish it with `s2s signer confirm <hash>` when the swap is queued, or re-run `s2s signer rotate` on that Safe when it never reached the service';
   if (row.replaces !== undefined) {
     return `author '${row.name}' is the pending replacement for '${row.replaces}' and holds the only copy of the key that swap puts on the Safe — ${settle}, and remove the row after that; \`--force\` drops it and abandons the rotation`;
   }
