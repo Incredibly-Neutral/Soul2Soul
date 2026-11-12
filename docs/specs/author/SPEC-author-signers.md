@@ -481,6 +481,12 @@ swap is HTTP only, and executing it costs gas from whichever owner sends it, old
 help text and the human output say so; a failed send surfaces as an error after the confirmation is
 already posted, because the confirmation is worth keeping.
 
+A send that fails because the sending EOA cannot pay is `insufficient_gas`, and its message names the
+address, says the proposal is queued and signed, and gives the whole recovery: fund the address and
+run the same command again. The node reports this as a reverted execution (`gas required exceeds
+allowance (0)`) or as `insufficient funds`, so it is matched on the text rather than classified; any
+other failure is passed through unchanged.
+
 ## The transport
 
 What the code relies on, checked against `@safe-global/api-kit` 3.0.2 and `@safe-global/types-kit`
