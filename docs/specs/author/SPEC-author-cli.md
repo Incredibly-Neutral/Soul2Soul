@@ -112,7 +112,7 @@ silent no-op:
 |---|---|---|
 | `--publication <ens>` | Target publication ENS (`name.soul2soul.eth`). Defaults to the first `--s2s` publication tag in the note's frontmatter. | upload, offer, preview, publish, revoke |
 | `--cid <cid>` | Explicit content CID. Defaults to the `cid` the last `upload` wrote to the note's frontmatter; a usage error if neither is present. | offer |
-| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` (or carries neither key) while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
+| `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
 | `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
 | `--branch <b>` | Default render branch; empty string when omitted. | publication new |
 | `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
@@ -808,15 +808,19 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   when it was missing. This write path is the missing half of the port: `author.ts:2` calls it the CLI
   port of neutralpress' `publishToPublication`, the step `SPEC-neutralpress.md:73-75` records as never
   wired there — that package publishes plaintext.
-- **Encrypted notes** (`encrypted: true` in the frontmatter; the legacy `encryption` spelling is still
-  read): `core/encrypt.ts buildEncryptFn`
+- **Encrypted notes** (`encrypted: true` in the frontmatter, or no `encrypted`/`encryption` key at all —
+  encryption is the default write, AUTHOR-2; plaintext is the stated opt-out `encrypted: false`. The
+  legacy `encryption` spelling is still read): `core/encrypt.ts buildEncryptFn`
   returns a Lit encryptor bound to `ctx.protocolInfo.pkp` with `LIT_USAGE_KEY`; shared's
   `buildSignedContentItem` calls it **after signing, before upload**. That order is safe because the
   signature covers `plaintextHash`, not the body: `plaintextHash` is the keccak of the JCS-canonical
   body — `jcs` over `{title, slug, content, custom}` (`shared/src/identity/sign-content.ts:54`) —
   fixed in `publicPart` before the EIP-712 signature (`:51-99`), so a ciphertext body still
-  satisfies the commitment. The signed item carries `encryption: true`; `encryption: false`/absent
-  keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. The stored body sits under a
+  satisfies the commitment. The signed item carries `encryption: true`; a note that opts out with
+  `encrypted: false` keeps `noOpEncrypt`, so the body is that canonical JSON in the clear. A note
+  with neither key is **not** an opt-out: `resolveEncryption` returns `true`, so a missing
+  `LIT_USAGE_KEY` or `protocolInfo.pkp` fails the write as a `UsageError` instead of publishing the
+  body in the clear because a flag was absent. The stored body sits under a
   key holder's name in the item's `bodies` map — `buildSignedContentItem` writes the `s2s` entry for
   the press — and a reader resolves it with `bodyForKey(item)` rather than by field. Four checks at
   three call sites, in this order, all before any IPFS or chain side effect: `buildEncryptFn`
@@ -867,7 +871,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   `encrypted: false`), never a quoted string: `'false'` is truthy under `Boolean()`, so a quoted
   value would silently encrypt a note its author meant to publish in the clear. Reading resolves
   `encrypted` first, then the legacy `encryption` spelling (`lib/frontmatter.ts resolveEncryption`,
-  the same read-then-rename precedent as `cid`/`kubo_cid`); the legacy key is deleted on the next
+  the same read-then-rename precedent as `cid`/`kubo_cid`); neither key present means **encrypted**,
+  and a key present but blank (`encrypted:`) means `false`, the author's opt-out; the legacy key is
+  deleted on the next
   write-back, so a migrated note carries one key and no stale one. The published item's own field is
   unchanged: it stays `encryption: boolean` on `S2SContentItem`. Like `cid`, the key is a protocol
   key, not template data — it is stripped from the `custom` bag before signing, because shared's
