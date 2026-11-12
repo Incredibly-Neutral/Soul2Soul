@@ -77,15 +77,16 @@ import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import {
   activeAuthorRecord,
-  addSigner,
   authorEoa,
   authorRowForKey,
   authorsFilePath,
   pendingReplacement,
+  planSignerAdd,
   readAuthors,
   setPendingProposal,
   settleReplacement,
   withStoreLock,
+  writeAuthors,
   type AuthorsStore,
   type StoreLockOptions,
 } from '../core/authors';
@@ -112,6 +113,10 @@ interface FiledKey {
   privateKey: string;
   /** Undefined for a hand-edited row whose key this build cannot read. */
   eoa?: Address;
+  /** The row this one is taking over, when it is a filed swap. */
+  replaces?: string;
+  /** The hash that swap was queued under, when the store recorded one. */
+  proposal?: string;
 }
 
 /**
@@ -123,7 +128,13 @@ function rowsForSafe(store: AuthorsStore, safe: Address): FiledKey[] {
   const rows: FiledKey[] = [];
   for (const [name, record] of Object.entries(store.authors)) {
     if (record.safe?.toLowerCase() !== safe.toLowerCase()) continue;
-    rows.push({ name, privateKey: record.privateKey, eoa: authorEoa(record.privateKey) });
+    rows.push({
+      name,
+      privateKey: record.privateKey,
+      eoa: authorEoa(record.privateKey),
+      ...(record.replaces === undefined ? {} : { replaces: record.replaces }),
+      ...(record.proposal === undefined ? {} : { proposal: record.proposal }),
+    });
   }
   return rows;
 }
@@ -208,9 +219,29 @@ function resolveOldKey(
       );
     }
     const named = rows.map((row) => `'${row.name}' (${row.eoa ?? 'unreadable key'})`).join(', ');
-    const first = rows[0]?.name ?? '';
+    // The remedy depends on what the row is. A plain row is removable; a row
+    // carrying `replaces` holds the only copy of the key its swap installs —
+    // `author rm` refuses it, and `--force` destroys that key — so it is never
+    // offered for removal. Such a row also never carries `proposal` by the time
+    // this runs: a proposed row makes `pending` non-empty and `rotate` refuses
+    // `replacement_pending` before asking for the old key. The swap is therefore
+    // finished by `rotate`, which is what queues or adopts its hash.
+    const plain = rows.find((row) => row.replaces === undefined);
+    const chasing = rows.find((row) => row.replaces !== undefined);
+    const advice = [
+      ...(plain === undefined
+        ? []
+        : [
+            `\`s2s author rm '${plain.name}'\` frees the slot once the key is no longer wanted`,
+          ]),
+      ...(chasing === undefined
+        ? []
+        : [
+            `'${chasing.name}' carries the swap that would make it this Safe's key (→ replaces '${chasing.replaces ?? ''}') and is not removable — the phrase that key came from was printed once; run \`s2s signer rotate ${safe}\` to finish that swap`,
+          ]),
+    ].join('; ');
     throw new CliError(
-      `the row${rows.length === 1 ? ' holds' : 's hold'} a key the chain does not list as an owner of ${safe}: ${named} — a swap removes an owner, and none of these keys is one, so there is nothing for it to retire; \`s2s signer queue ${safe}\` shows what the Safe actually holds. That row is what holds this Safe's slot in the store, so no other key can be filed here; \`s2s author rm '${first}'\` frees the slot once the key is no longer wanted`,
+      `the row${rows.length === 1 ? ' holds' : 's hold'} a key the chain does not list as an owner of ${safe}: ${named} — a swap removes an owner, and none of these keys is one, so there is nothing for it to retire; \`s2s signer queue ${safe}\` shows what the Safe actually holds. That row is what holds this Safe's slot in the store, so no other key can be filed here${advice === '' ? '' : `; ${advice}`}`,
       1,
       'not_owner',
     );
@@ -224,7 +255,7 @@ function resolveOldKey(
   }
 
   // One key, one row: a key filed under another Safe's row cannot also take this
-  // Safe's slot, and `addSigner` refuses to file it twice.
+  // Safe's slot, and `planSignerAdd` refuses to file it twice.
   const filed = authorRowForKey(store, privateKey);
   if (filed !== undefined) {
     throw new CliError(
@@ -545,19 +576,30 @@ export async function runSignerRotate(
     }
 
     // 6. File the old key's row when this machine holds an owner key that no row
-    // named, then the new row. Both writes are here, past every refusal, and the
-    // lock covers them: a refused run leaves the store as it found it.
-    const filedOldRow = oldKey.filedNow ? oldKey.name : undefined;
+    // named, then the new row. Both are PLANNED here and written once at the end,
+    // so every refusal `planSignerAdd` makes — a taken `--name`, a key already filed
+    // under another row, a chase already in flight — is thrown before the first
+    // byte is written. A run that refuses leaves the store byte-identical, which
+    // is what "refusals, all before anything is filed" has to mean: a half-filed
+    // pair would make the next run read the old key as `store` instead of `env`.
+    let staged = store;
+    let filedOldRow: string | undefined;
     if (oldKey.filedNow) {
-      addSigner({ name: oldKey.name, privateKey: oldKey.privateKey, safe }, path);
+      staged = planSignerAdd(staged, {
+        name: oldKey.name,
+        privateKey: oldKey.privateKey,
+        safe,
+      }).store;
+      filedOldRow = oldKey.name;
     }
 
     if (!reused) {
       name = flagString(args.flags, 'name') ?? `${replaces}-next`;
       // The new key lands inactive: the old key is still the Safe's owner and is
       // what signs the swap and confirms it.
-      addSigner({ name, privateKey, safe, replaces }, path);
+      staged = planSignerAdd(staged, { name, privateKey, safe, replaces }).store;
     }
+    if (staged !== store) writeAuthors(staged, path);
 
     // 7. The predecessor comes from the Safe's own list: a mapping has no
     // reverse lookup, and asking the user for it invites a `GS005` revert.
@@ -629,7 +671,7 @@ export async function runSignerRotate(
         if (!listed.complete) {
           // The walk stopped at its page cap with pages unread. That is not
           // "nothing is queued": the record may be on a page nobody read.
-          queueUnread = `the service holds more queued transactions for ${safe} than this command reads in one go, so it cannot say whether nonce ${String(tx.nonce)} is already taken — \`s2s signer queue ${safe}\` lists the first pages and says the same; execute or cancel what is there, then run this again`;
+          queueUnread = `the service did not answer with a whole queue for ${safe}, so this command cannot say whether nonce ${String(tx.nonce)} is already taken — \`s2s signer queue ${safe}\` reads the same pages and says the same; execute or cancel what is there, then run this again`;
         }
       }
     } catch (err) {
@@ -815,7 +857,10 @@ export async function runSignerRotate(
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            `              the service accepts a proposal only from an owner of ${safe}: post this call from an owner machine`,
+            // No guess at the cause: the sender is an owner by construction, so
+            // a failure here is transport, config or the service, never "not an
+            // owner". The call itself is always worth printing.
+            `              the swap is not lost: fix the cause above and run this again, or post this call from any owner of ${safe}`,
             `              to    ${safe}`,
             `              data  ${tx.data}`,
             `              nonce ${String(chain.nonce)}`,

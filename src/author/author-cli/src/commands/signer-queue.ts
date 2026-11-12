@@ -131,7 +131,7 @@ export async function runSignerQueue(
   // block ends with the sentence, because a truncated list that looks whole is
   // how an owner misses the transaction they were waiting for.
   const unread = !listed.complete
-    ? `the service returned more queued transactions than this command reads in one go — the rows above are the first pages of ${safe}, oldest nonce first; a row after them is not missing, it is unread`
+    ? `the queue of ${safe} may be longer than this command reads in one go — the rows above are the pages it read, oldest nonce first, and a row after them is not missing, it is unread`
     : undefined;
   if (unread !== undefined) out.warn(unread);
   const threshold = chain?.threshold ?? 0;

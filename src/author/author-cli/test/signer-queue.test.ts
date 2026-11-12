@@ -285,7 +285,7 @@ describe('s2s signer queue', () => {
 
     expect(captured.results[0]?.complete).toBe(false);
     expect(captured.human[0]).toContain('unread      : the page cap cut this list short');
-    expect(captured.warnings.join('\n')).toContain('more queued transactions');
+    expect(captured.warnings.join('\n')).toContain('may be longer than this command reads');
   });
 
   it('clears a filed-not-an-owner mark on the owner list it already read', async () => {

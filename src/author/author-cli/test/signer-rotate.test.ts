@@ -8,7 +8,16 @@
 // calldata is decoded back to the three addresses `swapOwner` takes, in order.
 // ============================================================================
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,9 +50,13 @@ const EOA_NEW = '0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF';
 const KEY_OTHER = `0x${'00'.repeat(31)}04`;
 /** A second owner that is not this machine's key. */
 const KEY_B: Hex = `0x${'00'.repeat(31)}03`;
+/** A key that is on no owner list: what a never-accepted row holds. */
+const KEY_FIVE: Hex = `0x${'00'.repeat(31)}05`;
 const OWNER_B: Address = privateKeyToAccount(KEY_B).address;
 
 const SAFE: Address = '0x1111111111111111111111111111111111111111';
+/** A second Safe, for rows that must not occupy this one's slot. */
+const OTHER_SAFE: Address = '0x9999999999999999999999999999999999999999';
 /** A well-formed safeTxHash for a queued swap: 32 bytes, nothing else. */
 const QUEUED_HASH: Hex = `0x${'ab'.repeat(32)}`;
 const RPC = 'https://rpc.example';
@@ -755,7 +768,7 @@ describe('s2s signer rotate', () => {
     expect(fake.asked).toEqual([SAFE]);
     expect(fake.proposed).toHaveLength(0);
     expect(captured.results[0]).toMatchObject({ reused: true, proposed: false });
-    expect(String(captured.results[0]?.note)).toContain('more queued transactions');
+    expect(String(captured.results[0]?.note)).toContain('did not answer with a whole queue');
     expect(String(captured.results[0]?.note)).toContain('nonce 7');
     expect(readAuthors(storePath()).authors['zomi-next']?.proposal).toBeUndefined();
   });
@@ -817,6 +830,9 @@ describe('s2s signer rotate', () => {
     expect(existsSync(lock)).toBe(false);
     expect(captured.warnings.join('\n')).toContain(`pid ${String(pid)}`);
     expect(captured.warnings.join('\n')).toContain('was not running');
+    // The takeover moves the leftover aside before deleting it, and leaves no
+    // trace of that private name: only the file at `lock` was ever the lock.
+    expect(readdirSync(join(dir, 'xdg', 's2s')).sort()).toEqual(['authors.json']);
   });
 
   it('waits out an empty lock and then refuses it as a live writer, keeping the file', async () => {
@@ -908,6 +924,87 @@ describe('s2s signer rotate', () => {
     expect(captured.human[0]).toContain("filed first : the owner key from S2S_PRIVATE_KEY as 'signer-7e5f45'");
     // The proposal is still signed by the old key.
     expect(fake.proposed[0]?.sender).toBe(EOA_OLD);
+  });
+
+  it('leaves the store byte-identical when the name it would file is taken', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+    // A row already holds this name. Rule 2 would file the environment key for
+    // the Safe before `addSigner` ever looked at `--name`, so the refusal has to
+    // be planned before the first write or this run halves the store.
+    addSigner({ name: 'taken', privateKey: KEY_OTHER, safe: OTHER_SAFE }, storePath());
+    const before = readFileSync(storePath(), 'utf8');
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW, '--name', 'taken']), {
+        ...deps(fake),
+      }),
+    ).rejects.toThrow(/already exists/);
+
+    expect(readFileSync(storePath(), 'utf8')).toBe(before);
+    expect(fake.proposed).toHaveLength(0);
+  });
+
+  it('reports an unreadable lock by its errno instead of calling it a writer', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    seedOld();
+    const lock = storeLockPath(storePath());
+    mkdirSync(join(dir, 'xdg', 's2s'), { recursive: true });
+    writeFileSync(lock, `${String(process.pid)}\n`);
+    // A lock nobody can read is neither a live writer nor a leftover: the remedy
+    // is the file's permissions, and the message has to say which file.
+    chmodSync(lock, 0o000);
+
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+    ).rejects.toThrow(/cannot read it \(EACCES\)/);
+    chmodSync(lock, 0o600);
+    expect(existsSync(lock)).toBe(true);
+    // Nothing was taken over, so no warning claims a lock was cleared.
+    expect(captured.warnings.join('\n')).not.toContain('cleared the author store lock');
+  });
+
+  it('reports a transport failure as one, and prints the call, instead of blaming the sender', async () => {
+    const fake = fakeService(new Error('connect ECONNREFUSED 127.0.0.1:443'));
+    const captured = capture();
+    seedOld();
+
+    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      ...deps(fake),
+    });
+
+    expect(captured.results[0]).toMatchObject({ proposed: false });
+    const human = captured.human[0] ?? '';
+    expect(human).toContain('proposal    : not queued — connect ECONNREFUSED');
+    expect(human).toContain('post this call from any owner');
+    // The sender is an owner by construction; a socket refusal is not a
+    // permission problem, and saying so sends the user to the wrong fix.
+    expect(human).not.toContain('only from an owner');
+  });
+
+  it('offers `author rm` only for a stale row without a swap, never for the filed swap itself', async () => {
+    const fake = fakeService();
+    const captured = capture();
+    // A row filed by `signer add` for this Safe whose key the chain never
+    // accepted, plus a filed swap waiting behind it.
+    addSigner({ name: 'stale', privateKey: KEY_OTHER, safe: SAFE }, storePath());
+    addSigner({ name: 'stale-next', privateKey: KEY_FIVE, safe: SAFE, replaces: 'stale' }, storePath());
+    // No `--key`: the retry path refuses one while a row holds the swap's key,
+    // so the stale-row refusal is what a bare run meets.
+    const run = (): Promise<unknown> =>
+      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE]), {
+        ...deps(fake, { owners: [EOA_OLD, OWNER_B] }),
+      });
+
+    // The swap row is the only copy of the key it installs: `author rm` refuses
+    // it and `--force` would destroy that key, so it is never offered as the fix.
+    await expect(run()).rejects.toThrow(/carries the swap.*not removable/);
+    await expect(run()).rejects.toThrow(/signer rotate 0x1111/);
+    // `author rm` is offered for the plain row only.
+    await expect(run()).rejects.toThrow(/author rm 'stale'/);
+    await expect(run()).rejects.not.toThrow(/author rm 'stale-next'/);
   });
 
   it('files the old key row only once the run goes ahead, never on a refusal', async () => {

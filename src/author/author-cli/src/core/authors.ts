@@ -56,6 +56,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -463,16 +464,20 @@ type LockRead =
   /** It exists but names no pid: a holder that has created it and not written yet. */
   | { state: 'empty' }
   /** It was released between our open and our read. */
-  | { state: 'gone' };
+  | { state: 'gone' }
+  /** It exists and cannot be read at all: a different failure, and a different fix. */
+  | { state: 'unreadable'; code: string };
 
 function readLock(lock: string): LockRead {
   let text: string;
   try {
     text = readFileSync(lock, 'utf8').trim();
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { state: 'gone' }
-      : { state: 'empty' };
+    const code = (err as NodeJS.ErrnoException).code ?? 'unknown';
+    // Only "not there" is gone. EACCES, EISDIR, EIO: the file is there and this
+    // process cannot read it, which is not a writer mid-write and not a
+    // leftover — deleting it would be guessing, and `onStaleLock` would be a lie.
+    return code === 'ENOENT' ? { state: 'gone' } : { state: 'unreadable', code };
   }
   return /^[0-9]+$/.test(text) ? { state: 'pid', pid: Number.parseInt(text, 10) } : { state: 'empty' };
 }
@@ -515,6 +520,87 @@ export interface StoreLockOptions {
 }
 
 /**
+ * Claim a lock left by a dead process, or leave the store alone.
+ *
+ * The leftover is renamed to a private path first. Two processes that both saw
+ * the same dead pid both try; exactly one rename succeeds on a given file and
+ * the other sees ENOENT and goes back to `open`, which is correct whether or
+ * not the winner has finished. This is what makes the takeover safe without a
+ * lock library: a `rm` could delete a lock that a third process created in
+ * between, because reading and removing are two steps.
+ *
+ * The renamed file is read once more. If it is not the dead pid this attempt
+ * judged — another process released the leftover and created its own lock in
+ * between — it is put back with `link`, which fails rather than overwriting a
+ * lock that appeared in the meantime, and this run refuses. The window is small
+ * and it is stated, not hidden: a lock this build cannot prove is stale is never
+ * deleted.
+ */
+function takeOverStaleLock(
+  lock: string,
+  pid: number,
+  attempt: number,
+  options: StoreLockOptions,
+): void {
+  const claimed = `${lock}.${String(process.pid)}.${String(attempt)}`;
+  try {
+    renameSync(lock, claimed);
+  } catch (err) {
+    // ENOENT: another process moved it first, or its owner released it.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  const moved = readLock(claimed);
+  if (moved.state !== 'pid' || moved.pid !== pid) {
+    // Not the leftover: put it back where its owner expects it. `link` cannot
+    // overwrite a lock created in between, so this cannot lose one.
+    let restored = true;
+    try {
+      linkSync(claimed, lock);
+    } catch {
+      restored = false;
+    }
+    try {
+      rmSync(claimed, { force: true });
+    } catch {
+      // nothing else to do; the message below names the path
+    }
+    throw new CliError(
+      restored
+        ? `the author store lock ${lock} changed while it was being cleared — another s2s command took it; run this again`
+        : `the author store lock ${lock} changed while it was being cleared, and the file this run moved is at ${claimed} — another s2s command is writing; put that file back as ${lock} only once no s2s command is running`,
+      1,
+      'store_locked',
+    );
+  }
+  try {
+    rmSync(claimed, { force: true });
+    options.onStaleLock?.(pid);
+  } catch (err) {
+    throw new CliError(
+      `cleared the author store lock left by pid ${String(pid)}, but the file this run moved to ${claimed} could not be removed (${(err as NodeJS.ErrnoException).code ?? 'unknown'}) — delete it by hand`,
+      1,
+      'store_locked',
+    );
+  }
+}
+
+/** Why the lock could not be taken, said for the state the file is actually in. */
+function lockRefusal(holder: LockRead, path: string, lock: string): string {
+  switch (holder.state) {
+    case 'pid':
+      return `another s2s command (pid ${String(holder.pid)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`;
+    case 'unreadable':
+      return `the author store lock ${lock} exists and this process cannot read it (${holder.code}), so it cannot tell whether another s2s command is writing ${path} — fix the permissions or ownership of that file; deleting it is safe only once no s2s command is running`;
+    case 'empty':
+      return `another s2s command is writing the author store at ${path} — the lock ${lock} exists and names no pid, which is what a writer looks like for the moment between creating the lock and writing its pid; if no s2s command is running, the lock is a leftover and can be deleted`;
+    case 'gone':
+      // Unreachable: the caller retries the open for this state.
+      return `the author store at ${path} is unlocked now — run this again`;
+  }
+}
+
+/**
  * Run `fn` holding the store lock at `path`.
  *
  * The lock is created beside the store and removed on every exit, including a
@@ -537,27 +623,14 @@ export function withStoreLock<T>(path: string, fn: () => T, options: StoreLockOp
       const holder = lockPid(lock);
       if (holder.state === 'gone') continue;
       if (holder.state === 'pid' && processAlive(holder.pid) === false) {
-        // The writer is gone: its lock is a leftover, not a claim. Re-read before
-        // removing it, because another process may have taken the same leftover
-        // over in between and be writing under a fresh lock that is not ours to
-        // delete. Only the exact pid we judged dead may be removed.
-        const again = readLock(lock);
-        if (again.state !== 'pid' || again.pid !== holder.pid) continue;
-        try {
-          rmSync(lock, { force: true });
-          options.onStaleLock?.(holder.pid);
-        } catch {
-          // someone else moved it first; the next open decides
-        }
+        // The writer is gone: its lock is a leftover, not a claim. Claim the
+        // leftover by MOVING it to a private name. `rename` is atomic and only
+        // one process can move a given file: the loser gets ENOENT and retries
+        // the open instead of deleting a lock somebody else now holds.
+        takeOverStaleLock(lock, holder.pid, attempt, options);
         continue;
       }
-      throw new CliError(
-        holder.state === 'pid'
-          ? `another s2s command (pid ${String(holder.pid)}) is writing the author store at ${path} — the lock ${lock} is held by a process that is still running; let it finish rather than deleting the lock`
-          : `another s2s command is writing the author store at ${path} — the lock ${lock} exists and names no pid, which is what a writer looks like for the moment between creating the lock and writing its pid; if no s2s command is running, the lock is a leftover and can be deleted`,
-        1,
-        'store_locked',
-      );
+      throw new CliError(lockRefusal(holder, path, lock), 1, 'store_locked');
     }
   }
   if (fd === undefined) {
@@ -832,6 +905,24 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
 }
 
 function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
+  const { store, row } = planSignerAdd(readAuthors(path), input);
+  writeAuthors(store, path);
+  return row;
+}
+
+/**
+ * The store `addSigner` would write, and the row it would return — without
+ * writing.
+ *
+ * Every check `addSigner` makes runs here, so a caller that files two rows in
+ * one run can plan both before the first write: a refusal from the second (a
+ * taken name, a key already filed, a chase already in flight) then leaves the
+ * store byte-identical instead of half-written. The caller holds the store lock.
+ */
+export function planSignerAdd(
+  store: AuthorsStore,
+  input: AddSignerInput,
+): { store: AuthorsStore; row: ActiveAuthor } {
   const { name, privateKey, safe, replaces } = input;
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
@@ -852,7 +943,6 @@ function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
     );
   }
   const address = getAddress(safe.trim());
-  const store = readAuthors(path);
   const existing = findAuthorName(store, name);
   if (existing) {
     throw new UsageError(
@@ -925,8 +1015,10 @@ function addSignerLocked(input: AddSignerInput, path: string): ActiveAuthor {
   // `s2s signer confirm` a key the chain does not recognise. The slot moves in
   // `settleReplacement`, on the evidence, or stays where it was.
   const active = target !== undefined || input.activate === false ? store.active : name;
-  writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
-  return { name, ...record };
+  return {
+    store: { active, authors: { ...store.authors, [name]: record } },
+    row: { name, ...record },
+  };
 }
 
 /**

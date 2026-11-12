@@ -180,12 +180,14 @@ accusation. The positional stays as the override for a machine holding rows for 
    holds at that nonce (see the retry paragraph): the store alone cannot tell a swap that never
    left this machine from one whose reply was lost.
 
-Refusals, all before anything is filed:
+Refusals, all before anything is filed. Both rows of a run — the old key's, when rule 2 has to file
+it, and the new key's — are built in memory first and written in a single `writeAuthors`, so a
+refusal at any point leaves the store byte-identical, including when `--name` is already taken:
 
 | state | outcome |
 |---|---|
 | no row filed for the Safe on this machine | usage error naming `s2s signer add <safe>` |
-| a row for the Safe holds a key the chain does not list as an owner | `not_owner`, naming the row and its EOA — a stale row is not an owner to swap out, no swap is filed against it, and it holds the Safe's slot; the message points at `s2s signer queue` for what the Safe actually holds |
+| a row for the Safe holds a key the chain does not list as an owner | `not_owner`, naming the row and its EOA — a stale row is not an owner to swap out, no swap is filed against it, and it holds the Safe's slot; the message points at `s2s signer queue` for what the Safe actually holds, and offers `s2s author rm` only for a stale row that carries no `replaces`: a row carrying one holds the only stored copy of the key its swap installs, `author rm` refuses it, and `--force` destroys that key, so that row is finished by the swap instead |
 | no row for the Safe holds an owner, the effective key owns it, and that key is filed under another Safe's row | `not_owner`, naming that row — one key cannot be filed twice, so rotate has to run where the key is not filed |
 | Safe has no bytecode | `safe_not_deployed` |
 | the new key _is_ the old key | `same_key` |
@@ -214,13 +216,20 @@ is `nonce_taken`, and the run refuses rather than posting a swap the Safe will r
 executes in the wrong order. Nothing at that nonce, or a service that cannot be read, means the POST
 goes out; a read failure is a warning, because the store's row is still the right thing to propose.
 The queue is paged, so "nothing at that nonce" is only concluded from a walk that says it finished:
-`pending` returns `{records, complete}` and reports `complete: false` only when it stopped at its
-page cap — five pages of 100, every page read, no early stop at a nonce. Stopping early would make
-the completeness claim rest on `ordering=nonce`, which the same read does not verify, so the walk is
-bounded by page count alone. An unfinished walk is neither "not queued" nor a refusal — `proposed`
-is `false` and `note` says the queue could not be read that far and points at `s2s signer queue`,
-because a second proposal at a used nonce is refused and a swap queued twice is worse than one
-queued late.
+`pending` returns `{records, complete}`. The walk reads up to five pages of 100 and stops early at
+nothing — completeness cannot rest on `ordering=nonce`, which the same read does not verify. The
+absence of `next` is not the end of the queue either: a last page that is exactly full (100 records)
+or that arrives short of the `count` the service declared is `complete: false`, because a truncated
+page and a real last page end the walk the same way. An unfinished walk is neither "not queued" nor a
+refusal — `proposed` is `false`, `note` says the service did not answer with a whole queue, and it
+points at `s2s signer queue`, because a second proposal at a used nonce is refused and a swap queued
+twice is worse than one queued late.
+
+A run whose proposal failed says what failed. Only a note that names ownership is reported as the
+service refusing a sender that is not an owner; a socket or route error is reported as that error,
+with the sentence that the call can be posted by hand from any owner of the Safe. The sender cannot
+be a non-owner here — `rotate` acquires its signing key from the row whose key the chain lists — so
+asserting it would send the user to a fix that does not exist.
 
 The record a rotation files carries `replaces`: the pet name of the row it is meant to replace.
 It is present on every path, because the old key is always a row — either one the store already
@@ -429,19 +438,33 @@ exclusive lock.
 The lock is a file beside the store, `<authors.json>.lock`, created with `wx` and mode `0600`,
 holding the writer's pid, and removed in a `finally` — on success, on a refusal, and on a throw. On
 `EEXIST` the pid is read and `process.kill(pid, 0)` asked: `ESRCH` (no such process) means the
-writer is gone, so the file is a leftover rather than a claim. Before removing it the file is read
-again, and the unlink happens only if it still names the pid that was judged dead: two commands that
-met the same leftover would otherwise each delete the other's fresh lock and both write. A running
-pid — or `EPERM`, which means it exists — is `store_locked` naming the path and the pid.
+writer is gone, so the file is a leftover rather than a claim. A running pid — or `EPERM`, which
+means it exists — is `store_locked` naming the path and the pid.
+
+**A leftover is claimed by moving it, never by deleting it.** Read-then-unlink is two steps, and
+between them a second command can release the leftover and create its own lock, which the first
+would then delete: two writers, one lock. So the takeover renames `<store>.lock` to
+`<store>.lock.<pid>.<n>` and then reads what it moved. `rename` moves exactly one file: two commands
+that both saw the same dead pid both try, one succeeds and the other gets `ENOENT` and goes back to
+`open`, which is right whether or not the winner has finished. If the file that arrived is not the
+dead pid that was judged (the leftover was released and replaced in the window between the read and
+the rename), it is put back with `link`, which fails rather than overwrite a lock created in the
+meantime, and the run refuses `store_locked` naming both paths. What that buys: the lock file is
+never deleted on a stale read. What it does not buy: there is still a window between the pid check
+and the rename, and a command that takes the lock inside it has its file moved aside for a moment;
+the refusal names the private path so nothing is lost, but nothing stops another command from
+creating a new lock while this one is refusing.
 
 A lock that exists and names no pid is read again for about a quarter of a second (ten reads, 25 ms
-apart). The
-window it covers is real: a holder creates the file with `wx` and writes its pid in the next
-statement, so a reader can catch it empty and a live writer's lock must not be treated as a claim to
-the file. A lock still empty after the wait is `store_locked` too — as a holder, never as a leftover.
-An empty file is therefore never removed, and one whose contents are not a pid is never removed
-either: guessing that an unreadable lock is old is how a live writer's file gets overwritten. Age is
-never the test. Within one process the lock is
+apart). The window it covers is real: a holder creates the file with `wx` and writes its pid in the
+next statement, so a reader can catch it empty and a live writer's lock must not be treated as a
+claim to the file. A lock still empty after the wait is `store_locked` as a holder, never as a
+leftover, and an empty file is never removed.
+
+A lock that cannot be read at all is its own case: `EACCES`, `EISDIR` or `EIO` is not a writer
+mid-write and not a leftover, it is a file whose permissions or type are wrong, and deleting it
+would be a guess. It is `store_locked` naming the lock path and the errno, because the remedy is
+that file and not the other process. Age is never the test. Within one process the lock is
 re-entrant (the module counts holders), so a command can file two rows without deadlocking against
 itself, and `signer add` / `signer confirm` / `author` writes take it by the same seam. `rotate`
 passes the same `onStaleLock` handler to both store transactions it makes — the settle and the

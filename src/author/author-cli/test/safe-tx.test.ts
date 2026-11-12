@@ -616,6 +616,34 @@ describe('makeSafeTxService', () => {
     expect(records.map((record) => record.nonce)).toEqual([7, 8]);
   });
 
+  it('does not call a full last page the end of the queue', async () => {
+    // A page of exactly the size it asked for, with no `next`: the service may
+    // have truncated it, so "nothing at that nonce" is not an answer yet.
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 100, next: null, results: Array.from({ length: 100 }, () => recordFor(7)) } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
+  it('does not call the walk complete when the declared count is larger than what arrived', async () => {
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 4, next: null, results: [recordFor(7), recordFor(8)] } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
   it('says the walk stopped at the cap rather than claiming the queue is exhausted', async () => {
     // Every page advertises another one: the cap is what ends the walk.
     const { fetchImpl, calls } = fakeFetch(

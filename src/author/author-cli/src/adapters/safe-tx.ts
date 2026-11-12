@@ -693,6 +693,9 @@ function assertRecordHash(record: SafeTxRecord, chainId: number): void {
  */
 const PENDING_MAX_PAGES = 5;
 
+/** The page size this adapter asks for, and the size a full page comes back at. */
+const PENDING_PAGE_SIZE = 100;
+
 /**
  * The path part of a service `next` link. The link is usually absolute, and
  * every request goes to the configured base, so the origin is dropped: fetching
@@ -861,23 +864,38 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
      * once a record at or past the wanted nonce appeared would make completeness
      * rest on the ordering it does not verify. A bounded walk answers for the
      * pages it read without assuming anything about the order they came in.
+     *
+     * The absence of `next` is not by itself the end of the queue. A service
+     * that truncates a page, or one that simply stops linking, ends the walk the
+     * same way it ends at a real last page — so the last page is only believed
+     * when it is short of the page size AND does not contradict the `count` the
+     * service declared. Anything else is `complete: false`: a caller that is
+     * about to post a transaction at a nonce has to be told "I did not see the
+     * whole queue", never handed a truncated list as the queue.
      */
     pending: async (safe) => {
       const records: SafeTxRecord[] = [];
-      let next: string | undefined = `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce&limit=100`;
+      let next: string | undefined = `/api/v1/safes/${safe}/multisig-transactions/?executed=false&ordering=nonce&limit=${String(PENDING_PAGE_SIZE)}`;
+      let complete = false;
       let page = 0;
       while (next !== undefined && page < PENDING_MAX_PAGES) {
         page += 1;
         const payload = (await json('GET', next)) as
-          | { results?: unknown[]; next?: unknown }
+          | { count?: unknown; results?: unknown[]; next?: unknown }
           | undefined;
         const results = Array.isArray(payload?.results) ? payload.results : [];
         records.push(...results.map((entry) => toRecord(entry, safe, chainId)));
         next = pagePath(payload?.next);
+        if (next === undefined) {
+          const declared = typeof payload?.count === 'number' ? payload.count : undefined;
+          complete =
+            results.length < PENDING_PAGE_SIZE &&
+            (declared === undefined || declared <= records.length);
+        }
       }
       return {
         records: records.sort((left, right) => left.nonce - right.nonce),
-        complete: next === undefined,
+        complete,
       };
     },
 
