@@ -682,6 +682,162 @@ export async function readSafeOwners(opts: ReadSafeOptions): Promise<SafeOwners>
   };
 }
 
+/** One era of the OwnerHistory module: an owner set and the blocks it held. */
+export interface OwnerEra {
+  index: number;
+  startBlock: number;
+  /** The first block NOT in the era; null for the current era (`endBlock == 0`). */
+  endBlock: number | null;
+  owners: Address[];
+}
+
+/** What the history recorded about the Safe's owners, and whether it still agrees. */
+export interface OwnerHistoryRead {
+  module: Address | null;
+  moduleSource: 'enabled' | 'guard' | null;
+  guard: Address | null;
+  /**
+   * The module the guard names, when it answers one — the proof that the address
+   * in the guard slot is an owner-history guard and not somebody's policy guard.
+   * Null with a non-null `guard` means the slot holds something else.
+   */
+  guardModule: Address | null;
+  eraCount: number;
+  eras: OwnerEra[];
+  ownersEver: Address[];
+  lastSyncedBlock: number | null;
+  /** true when the module's current era does not match the Safe's live owner set */
+  lags: boolean;
+}
+
+/**
+ * A module read that answers null when the address is not the contract we hoped.
+ *
+ * Same rule as `answersForeign` everywhere else in this file: a revert is an
+ * answer, a transport failure is not, and quietly reporting "no history" for an
+ * RPC that timed out would tell an author their rotation was not recorded.
+ */
+async function readOrForeign<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch (err) {
+    if (answersForeign(err)) return null;
+    throw err;
+  }
+}
+
+/** An owner set reduced to what "same set" means: lowercased, order ignored. */
+function ownerSet(owners: readonly Address[]): string {
+  return owners
+    .map((owner) => owner.toLowerCase())
+    .sort()
+    .join(',');
+}
+
+/**
+ * The eras the OwnerHistory module recorded, and whether the newest one is still
+ * the Safe's owner set.
+ *
+ * The module comes from the Safe's own enabled list when one is there — that is
+ * the list a gate reads, and an enabled module is the one doing the recording.
+ * Failing that it comes from the guard in the Safe's guard slot, which is the
+ * address the Safe actually routes through: the factory index is permissionless
+ * and forgeable, so it is never the source (see the header of this file). No
+ * source answering means no module, and the read stops rather than guessing.
+ *
+ * `lags` is the one fact a rotation can leave behind: the guard records the new
+ * era after the owners change, so a swap that ran as a module self-call stamped
+ * nothing, and `sync()` — permissionless — is what repairs it.
+ */
+export async function readOwnerHistory(
+  opts: ReadSafeOptions & { guard?: Address | null },
+): Promise<OwnerHistoryRead> {
+  const client = clientFor(opts.rpcUrl);
+  const guard = opts.guard === undefined ? await readSafeGuard(opts) : opts.guard;
+  const enabled = await readEnabledAuthorModules(opts);
+  // Asked even when the enabled list already answered: whether the guard is an
+  // owner-history guard is a separate fact, and the human block states it.
+  const guardModule =
+    guard === null ? null : await readGuardModule({ guard, rpcUrl: opts.rpcUrl });
+
+  let module = enabled.ownerHistory;
+  let moduleSource: 'enabled' | 'guard' | null = module === null ? null : 'enabled';
+  if (module === null && guardModule !== null) {
+    module = guardModule;
+    moduleSource = 'guard';
+  }
+
+  const empty: OwnerHistoryRead = {
+    module: null,
+    moduleSource: null,
+    guard,
+    guardModule,
+    eraCount: 0,
+    eras: [],
+    ownersEver: [],
+    lastSyncedBlock: null,
+    lags: false,
+  };
+  if (module === null) return empty;
+  const target: Address = module;
+
+  const count = await readOrForeign(async () =>
+    client.readContract({ address: target, abi: OwnerHistoryModuleV1, functionName: 'eraCount' }),
+  );
+  // An address that answers no era count is not this module, whatever the list
+  // said: reporting the eras of a contract that has none would be an invention.
+  if (count === null) return empty;
+  const eraCount = Number(count);
+
+  const [records, ever, synced, live] = await Promise.all([
+    Promise.all(
+      Array.from({ length: eraCount }, (_, index) =>
+        client.readContract({
+          address: target,
+          abi: OwnerHistoryModuleV1,
+          functionName: 'eraAt',
+          args: [BigInt(index)],
+        }),
+      ),
+    ),
+    readOrForeign(async () =>
+      client.readContract({
+        address: target,
+        abi: OwnerHistoryModuleV1,
+        functionName: 'ownersEver',
+      }),
+    ),
+    readOrForeign(async () =>
+      client.readContract({
+        address: target,
+        abi: OwnerHistoryModuleV1,
+        functionName: 'lastSyncedBlock',
+      }),
+    ),
+    readSafeOwners(opts),
+  ]);
+
+  const eras: OwnerEra[] = records.map((era, index) => ({
+    index,
+    startBlock: Number(era.startBlock),
+    endBlock: era.endBlock === 0n ? null : Number(era.endBlock),
+    owners: era.owners.map((owner) => getAddress(owner.toLowerCase())),
+  }));
+
+  const current = eras[eras.length - 1];
+  return {
+    module: target,
+    moduleSource,
+    guard,
+    guardModule,
+    eraCount,
+    eras,
+    ownersEver: (ever ?? []).map((owner) => getAddress(owner.toLowerCase())),
+    lastSyncedBlock: synced === null ? null : Number(synced),
+    lags: current !== undefined && ownerSet(current.owners) !== ownerSet(live.owners),
+  };
+}
+
 // ===========================================================================
 // The seam
 // ===========================================================================

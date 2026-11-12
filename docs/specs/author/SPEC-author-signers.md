@@ -21,14 +21,15 @@
 The Safe exists and belongs to somebody else. This key is not an owner yet, the CLI will not
 deploy anything, and no bundler is involved in proposing: `signer add` proposes the key as one more
 owner, `signer rotate` swaps this machine's key for a fresh one, `signer queue` shows what is
-waiting, `signer confirm` signs one proposal and executes it when the confirmations are enough. Every
+waiting, `signer history` says whether the rotation was recorded, `signer confirm` signs one
+proposal and executes it when the confirmations are enough. Every
 proposal is an ordinary `Safe` transaction — `to: safe`, zero gas fields — so the work is an HTTP
 POST to the Safe Transaction Service plus, at most, one send: a sponsored userOp when the Safe can
 validate one, otherwise a plain transaction from the EOA. "Can validate one" is narrow: a paymaster
 URL is configured, the Safe is 1-of-1, and `SAFE_4337_MODULE` is both enabled on the Safe and its
 fallback handler.
 
-All four actions are **store commands**: `cli.ts` dispatches them before `buildContext`, so they
+All five actions are **store commands**: `cli.ts` dispatches them before `buildContext`, so they
 need no `CliContext` and no bundler of their own. `signer confirm` reaches the bundler only through
 the author Safe runner, and only when it decides to sponsor. The config is loaded directly, the L2
 endpoint comes from `buildRpcEndpoints`, and the service is built from `config.safeTx` with the
@@ -40,6 +41,7 @@ default `fetch`.
 s2s signer add      <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer rotate   [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer queue    [<safe>] [--json]
+s2s signer history  [<safe>] [--safe <safe>] [--json]
 s2s signer confirm  <safeTxHash> [--safe <safe>] [--no-execute] [--json]
 ```
 
@@ -302,6 +304,70 @@ others; both are absent when the effective key is itself an owner of the Safe, b
 signs with it and the Safe accepts the signature — the advice closes a gap that does not exist. `reused` is present only
 on a retry, `alreadyQueued` only when the hash came from the service, `filedOldRow` only when this
 run filed the old key. `note`, `mnemonic` and `privateKey` follow the rules of `signer add`.
+
+## `signer history [<safe>] [--safe <safe>]`
+
+Does the OwnerHistory module hold the owners the rotation created? A rotation is a `swapOwner`
+inside `execTransaction`, and the answer is on chain, but no other command reads it: `author
+address` reads the factory index and `signer queue` reads proposals, and neither opens the module.
+
+The command reads the module's eras: `eraCount()`, then every `eraAt(i)` in parallel, then
+`ownersEver()` and `lastSyncedBlock()`. An era is an owner set and the blocks it held; `endBlock ==
+0` is the current era and is reported as `head`. `lags` compares the newest era's owners against
+the Safe's live `getOwners()`, both lowercased and order-insensitive, and the human block ends with
+`sync() is permissionless and repairs it` when they disagree. Two owners means two eras: the old
+one closed at the block the swap landed in, the new one open.
+
+**The module is taken from the Safe's enabled list, else from the guard in its guard slot, and
+never from the factory index.** The enabled list is what a gate reads, so it is the module that
+answers `canPublish` for this Safe. The guard slot is the Safe's own storage: 1.4.1 makes
+`getGuard()` internal, so the address is recovered from the guard-manager slot and its own
+`module()` and `safe()` prove what it is bound to. The factory index is permissionless — any
+account can call `createOwnerHistoryModule(victimSafe)` and append an entry — so it answers "what
+should be created", not "what this Safe carries", and a history read off a griefer's entry would
+read a module that has no eras at all. A guard that answers no `module()` is named as not an
+owner-history guard rather than treated as the hook.
+
+**`sync()` is the repair because the hook is best-effort, not the primary path.** The guard
+records the new era from `checkAfterExecution`, inside a bounded `SYNC_GAS` carved out of what is
+left of the Safe transaction's gas, and it swallows the module's failure to keep a broken module
+from bricking the Safe. A transaction whose gas limit is exactly `eth_estimateGas`'s answer leaves
+no headroom, the sync is skipped, and the rotation lands with the history still on the previous
+era. Nothing is lost when that happens: `sync()` is permissionless, reads the Safe's owners and
+stamps the era itself, so a lagging history is a state anyone can clear. That is also why a
+rotation through `execTransactionFromModule` stamps nothing — `execTransactionFromModule` is a
+self-call that skips guards entirely, so no `checkAfterExecution` runs and no era is opened; the
+store still sees the swap in the owner list, but the history has to be repaired with `sync()`.
+
+Human output:
+
+```
+safe    0x8507CDa436d39D433acC9c88A813dd052C828dfB
+guard   0x…  owner-history guard (bound to this Safe)
+module  0x…  S2S Owner History Module V1
+eras    2
+  #0  blocks 0x… → 0x…  owners 0x018D…190e
+  #1  blocks 0x… → head  owners 0xEF5c…3dF3B
+synced  block 0x…
+```
+
+An owner list prints whole when it names one owner and as `first 6 + last 4` per address
+otherwise. No guard prints `guard   (none)  no owner-history hook is installed`; no module prints
+`module  (none)` and closes with `no owner-history module is enabled on this Safe: nothing recorded
+the rotation`, because a rotation nobody recorded is the fact worth saying. A history that agrees
+with the owners has no closing line: the eras already answer it.
+
+JSON:
+
+```json
+{ "action": "signer.history", "safe": "0x…", "guard": "0x…", "module": "0x…",
+  "moduleSource": "enabled|guard|null", "eraCount": 2,
+  "eras": [{ "index": 0, "startBlock": 100, "endBlock": 640, "owners": ["0x…"] }],
+  "ownersEver": ["0x…"], "lastSyncedBlock": 640, "lags": false }
+```
+
+`endBlock` is `null` for the current era, not `0`. Nothing is signed, nothing is sent and no key is
+needed: the read is the whole command.
 
 ## `signer queue [<safe>]`
 
@@ -607,7 +673,8 @@ Recorded as guesses, not contracts — each one is a place a live service may di
 ## Tests
 
 `test/signer-add.test.ts`, `test/signer-rotate.test.ts`, `test/signer-queue.test.ts`,
-`test/signer-confirm.test.ts`, `test/signer-sponsored-send.test.ts`. Every chain
+`test/signer-history.test.ts`, `test/signer-confirm.test.ts`,
+`test/signer-sponsored-send.test.ts`. Every chain
 read and every service call is injected through `SignerDeps`; no test opens a socket. The signature
 is checked by `verifyMessage` recovery against the raw hash, and the packed list is decoded back out
 of the `execTransaction` calldata. The rotation's calldata is decoded back to the three addresses
@@ -630,7 +697,9 @@ warning first); a refusal raises `sponsored_send_failed` naming its `AA` code, a
 `send_outcome_unknown` without printing a result — the confirmation already posted and the EOA
 untouched in each. The handler read goes through the real `read4337From` over a fake storage word,
 so the slot and the low-20-bytes decode are exercised, and one fixture asserts the slot the reader
-asked for.
+asked for. `signer-history` fakes the module read on `SignerDeps.readHistory`: two eras naming the
+old owner and the new one, a Safe with no module, and a lagging history each assert the whole human
+block, and `--json` asserts the document field for field.
 
 `test/signer-sponsored-send.test.ts` is the layer the command fixtures cannot see: a real
 `SafeSmartAccount` bound to an address and a real permissionless client over viem's `custom`

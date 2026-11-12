@@ -44,8 +44,10 @@ import {
 } from '../adapters/safe-tx';
 import {
   addressFromWord,
+  readOwnerHistory,
   readSafeOwners,
   SAFE_FALLBACK_HANDLER_SLOT,
+  type OwnerHistoryRead,
 } from '../core/author-contracts';
 import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
 import { givenSafeInUse, createAuthorSafeRunner, SAFE_4337_MODULE } from '../core/author-safe';
@@ -320,6 +322,12 @@ export interface SignerDeps {
    * test can fail them together.
    */
   read4337(rpcUrl: string, safe: Address): Promise<Safe4337State>;
+  /**
+   * The OwnerHistory module's eras for `safe`, and whether the newest one still
+   * matches the Safe's owners. The one signer command that needs no key and no
+   * service: a rotation is recorded on chain or it is not.
+   */
+  readHistory(rpcUrl: string, safe: Address): Promise<OwnerHistoryRead>;
   keySource(flags: Record<string, string | boolean>): KeySource;
   authorsPath(): string;
   /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
@@ -334,6 +342,7 @@ const DEFAULT_SIGNER_DEPS: SignerDeps = {
   send: sendFromEoa,
   sendSponsored: sendSponsoredFromSafe,
   read4337,
+  readHistory: (rpcUrl, safe) => readOwnerHistory({ safe, rpcUrl }),
   keySource: (flags) => resolveKeySource(flags),
   authorsPath: () => authorsFilePath(),
   chainId: SIGNER_CHAIN_ID,
