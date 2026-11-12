@@ -1,6 +1,10 @@
 // ============================================================================
-// s2s signer history [<safe>] — what the OwnerHistory module recorded about
-// this Safe's owners, and whether it still agrees with them.
+// s2s signer history — what the OwnerHistory module recorded about this Safe's
+// owners, and whether it still agrees with them.
+//
+// The Safe is the one this machine files for its active author. `signer add` is
+// the one signer command that names a Safe, because it is the one with no row to
+// read one from.
 //
 // A rotation executes `swapOwner` inside `execTransaction`, and the guard the
 // Safe routes through stamps a new era as it goes. That stamp is the only
@@ -20,15 +24,14 @@
 // Nothing is signed and nothing is sent. The read is the whole command.
 // ============================================================================
 
-import { flagString } from '../lib/args';
 import type { ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import type { OwnerEra, OwnerHistoryRead } from '../core/author-contracts';
 import {
-  asSafeAddress,
   l2Rpc,
+  refuseSafeArgument,
   resolveSignerSafe,
   shortAddress,
   signerDeps,
@@ -102,19 +105,14 @@ export async function runSignerHistory(
   args: ParsedArgs,
   overrides: Partial<SignerDeps> = {},
 ): Promise<void> {
+  refuseSafeArgument(args, 'signer history');
   const deps = signerDeps(overrides);
   const config = deps.config();
 
-  const positional = args.positionals[0];
-  const flagged = flagString(args.flags, 'safe');
-  const safe = positional
-    ? asSafeAddress(positional)
-    : flagged
-      ? asSafeAddress(flagged, '--safe')
-      : resolveSignerSafe(config);
+  const safe = resolveSignerSafe(config);
   if (!safe) {
     throw new UsageError(
-      'no Safe given and no stored author to take one from — pass <safe>, or file one with `s2s signer add <safe>`',
+      'this machine files no Safe for its active author — file one with `s2s signer add <safe>`',
     );
   }
 
@@ -146,14 +144,7 @@ export const signerHistory: StoreCommandSpec = {
   name: 'history',
   summary:
     "What the OwnerHistory module recorded about the Safe's owners: the eras, the sync point, and whether the history still matches the owners on chain.",
-  params: '[<safe>]',
-  flags: {
-    safe: {
-      type: 'string',
-      value: '<safe>',
-      summary: 'the Safe to read (default: the active stored author Safe)',
-    },
-  },
+  flags: {},
   async run(out: CliOut, args: ParsedArgs) {
     await runSignerHistory(out, args);
   },

@@ -297,6 +297,16 @@ function first<T>(items: readonly T[]): T {
   return value;
 }
 
+/**
+ * The Safe this machine files for its active author. The command takes no
+ * `--safe` any more: it acts on the Safe the store files for the key that signs,
+ * which is the row this writes. Tests that file their own rows call it
+ * themselves.
+ */
+function filesSafe(): void {
+  addSigner({ name: 'machine', privateKey: KEY_SIGNER, safe: SAFE }, join(dir, 'xdg', 's2s', 'authors.json'));
+}
+
 function args(argv: string[]): ParsedArgs {
   const parsed = parseCommandArgs(argv, signerConfirm.flags);
   return { flags: parsed.flags, positionals: parsed.positionals.slice(2) };
@@ -304,6 +314,7 @@ function args(argv: string[]): ParsedArgs {
 
 describe('s2s signer confirm', () => {
   it('signs the hash and executes when the confirmation meets the threshold', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
@@ -312,7 +323,7 @@ describe('s2s signer confirm', () => {
 
     await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, { sent }),
     );
 
@@ -354,6 +365,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('executes on its own signature when the service has not indexed it yet', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
       { indexConfirmation: false },
@@ -363,7 +375,7 @@ describe('s2s signer confirm', () => {
 
     await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, { sent }),
     );
 
@@ -372,6 +384,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses to execute a confirmation that recovers to nobody, before spending gas', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({
         confirmations: [{ owner: OWNER_B, signature: `0x${'ab'.repeat(64)}1c` }],
@@ -383,7 +396,7 @@ describe('s2s signer confirm', () => {
     await expect(
       runSignerConfirm(
         captured.out,
-        args(['signer', 'confirm', HASH, '--safe', SAFE]),
+        args(['signer', 'confirm', HASH]),
         deps(fake, { sent }),
       ),
     ).rejects.toMatchObject({ code: 'signature_not_owner' });
@@ -393,6 +406,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('executes a proposal this key already signed instead of posting the signature again', async () => {
+    filesSafe();
     // Both schemes a confirmation arrives in: a bare 27/28 signature over the
     // digest (`sign({hash})`, which is what `s2s signer rotate` posts with the
     // old key) and a 31/32 eth_sign signature (`signMessage`). Either is this
@@ -416,7 +430,7 @@ describe('s2s signer confirm', () => {
       const sent: Sent[] = [];
       const captured = capture();
 
-      await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, {
           sent,
           chain: { deployed: true, owners: [EOA_SIGNER], threshold: 1, nonce: 7 },
@@ -443,6 +457,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('says nothing was posted when this key had already signed a proposal that cannot execute yet', async () => {
+    filesSafe();
     // The combination that used to lie: nothing was posted (the signature was
     // already there) and nothing was executed (the Safe is not at this nonce).
     const fake = fakeService(
@@ -455,7 +470,7 @@ describe('s2s signer confirm', () => {
     const sent: Sent[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, {
         sent,
         chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 },
@@ -473,10 +488,11 @@ describe('s2s signer confirm', () => {
   });
 
   it('says the confirmation was posted when it was, and what is still missing', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord({ confirmations: [], confirmationsRequired: 3 }));
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, {
         chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 3, nonce: 7 },
       }),
@@ -489,6 +505,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('says nothing was posted under --no-execute when the signature was already there', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: EOA_SIGNER, signature: await signedByMine() }] }),
     );
@@ -497,7 +514,7 @@ describe('s2s signer confirm', () => {
 
     await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE, '--no-execute']),
+      args(['signer', 'confirm', HASH, '--no-execute']),
       deps(fake, { sent, chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 2, nonce: 7 } }),
     );
 
@@ -509,12 +526,13 @@ describe('s2s signer confirm', () => {
   });
 
   it('posts its own confirmation when the record carries only other owners', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake),
     });
 
@@ -523,6 +541,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('does not read a signature over another digest as this owner\'s confirmation', async () => {
+    filesSafe();
     // Owner B's signature, labelled as this key. Recovery over the wrong digest
     // yields some other valid address rather than an error, so "it recovered"
     // is not the test — "it recovered to this owner" is. Here it does not, so
@@ -532,7 +551,7 @@ describe('s2s signer confirm', () => {
     );
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake),
     });
 
@@ -541,6 +560,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('posts the confirmation and stops when --no-execute is given', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
@@ -549,7 +569,7 @@ describe('s2s signer confirm', () => {
 
     await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE, '--no-execute']),
+      args(['signer', 'confirm', HASH, '--no-execute']),
       deps(fake, { sent }),
     );
 
@@ -560,11 +580,12 @@ describe('s2s signer confirm', () => {
   });
 
   it('waits when the confirmations are still short', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord({ confirmations: [], confirmationsRequired: 3 }));
     const sent: Sent[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { sent, chain: { deployed: true, owners: [EOA_SIGNER, OWNER_B], threshold: 3, nonce: 7 } }),
     });
 
@@ -575,6 +596,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('confirms but does not execute a proposal queued behind another nonce', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({
         safeTxHash: hashFor(8),
@@ -585,7 +607,7 @@ describe('s2s signer confirm', () => {
     const sent: Sent[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { sent }),
     });
 
@@ -596,11 +618,12 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses a key that is not an owner, before signing anything', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord());
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake),
         config: () => ({ ...loadConfig(), privateKey: KEY_STRANGER }),
       }),
@@ -609,26 +632,29 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses an executed proposal', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord({ isExecuted: true }));
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), deps(fake)),
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), deps(fake)),
     ).rejects.toMatchObject({ code: 'already_executed' });
     expect(fake.confirmed).toHaveLength(0);
   });
 
   it('refuses a stale proposal the Safe has moved past', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord({ safeTxHash: hashFor(6), nonce: 6 }));
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), deps(fake)),
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), deps(fake)),
     ).rejects.toMatchObject({ code: 'stale_nonce' });
     expect(fake.confirmed).toHaveLength(0);
   });
 
   it('refuses a record whose fields are not the hash it was given, before spending gas', async () => {
+    filesSafe();
     // The signatures recover over HASH, so packing succeeds; the fields do not
     // hash to it. Without the chain id handed to `execTransactionArgs` this
     // would send: the record's own hash check passed when it was read.
@@ -644,7 +670,7 @@ describe('s2s signer confirm', () => {
     await expect(
       runSignerConfirm(
         captured.out,
-        args(['signer', 'confirm', HASH, '--safe', SAFE]),
+        args(['signer', 'confirm', HASH]),
         deps(fake, { sent }),
       ),
     ).rejects.toMatchObject({ code: 'safe_tx_hash_mismatch' });
@@ -652,11 +678,12 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses a Safe with no bytecode', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord());
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, { chain: { deployed: false, owners: [], threshold: 0, nonce: 0 } }),
       }),
     ).rejects.toMatchObject({ code: 'safe_not_deployed' });
@@ -664,11 +691,12 @@ describe('s2s signer confirm', () => {
   });
 
   it('refuses an owner entry that is a contract', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord());
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, { code: true }),
       }),
     ).rejects.toMatchObject({ code: 'contract_owner' });
@@ -676,22 +704,24 @@ describe('s2s signer confirm', () => {
   });
 
   it('rejects an argument that is not a safeTxHash', async () => {
+    filesSafe();
     const fake = fakeService(baseRecord());
     const captured = capture();
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', '0xdead', '--safe', SAFE]), deps(fake)),
+      runSignerConfirm(captured.out, args(['signer', 'confirm', '0xdead']), deps(fake)),
     ).rejects.toBeInstanceOf(CliError);
     expect(fake.confirmed).toHaveLength(0);
   });
 
   it('reports a refused script transaction from the EOA without pretending it landed', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
     const captured = capture();
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake),
         send: () => Promise.reject(new CliError('insufficient funds for gas', 1, 'rpc_send_failed')),
       }),
@@ -702,6 +732,7 @@ describe('s2s signer confirm', () => {
   });
 
   it('names the gas money when the EOA cannot pay for the execution', async () => {
+    filesSafe();
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
     );
@@ -715,7 +746,7 @@ describe('s2s signer confirm', () => {
     );
 
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake),
         send: () => Promise.reject(reverted),
       }),
@@ -739,17 +770,21 @@ describe('s2s signer confirm', () => {
       path,
     );
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { sent, ownersAfter: [EOA_REPLACEMENT, OWNER_B] }),
     });
 
     expect(sent).toHaveLength(1);
-    expect(captured.results[0]).toMatchObject({ executed: true, settled: 'zomi-next' });
-    expect(captured.human[0]).toContain(`settled: zomi-next is now the key for ${SAFE}`);
-    // the new row is the active one and the old row is gone
+    // The settled row carries the author's name, not the `<old>-next` suffix the
+    // rotation filed it under: `zomi-next` was this CLI's way of keeping two rows
+    // apart, and there is one key again.
+    expect(captured.results[0]).toMatchObject({ executed: true, settled: 'zomi' });
+    expect(captured.human[0]).toContain(`settled: zomi is now the key for ${SAFE}`);
+    // the replacement key is the active row, under the name it inherits
     const store = readAuthors(path);
-    expect(store.active).toBe('zomi-next');
-    expect(store.authors.zomi).toBeUndefined();
+    expect(store.active).toBe('zomi');
+    expect(store.authors.zomi?.privateKey).toBe(KEY_REPLACEMENT);
+    expect(store.authors['zomi-next']).toBeUndefined();
     expect(pendingReplacement(SAFE)).toBeUndefined();
   });
 
@@ -772,7 +807,7 @@ describe('s2s signer confirm', () => {
     // The chain says the swap landed, so this key is no longer an owner: the
     // run stops at the owner check, after the reconcile has moved the store.
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, {
           chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 },
         }),
@@ -781,8 +816,9 @@ describe('s2s signer confirm', () => {
     ).rejects.toMatchObject({ code: 'not_owner' });
 
     expect(fake.gets).toBe(0);
-    expect(readAuthors(seam).active).toBe('zomi-next');
-    expect(readAuthors(seam).authors.zomi).toBeUndefined();
+    expect(readAuthors(seam).active).toBe('zomi');
+    expect(readAuthors(seam).authors.zomi?.privateKey).toBe(KEY_REPLACEMENT);
+    expect(readAuthors(seam).authors['zomi-next']).toBeUndefined();
     // The default store is untouched: its chase is still pending.
     const untouched = readAuthors(join(dir, 'xdg', 's2s', 'authors.json'));
     expect(untouched.active).toBe('zomi');
@@ -813,7 +849,7 @@ describe('s2s signer confirm', () => {
     writeFileSync(lock, `${String(pid)}\n`);
 
     await expect(
-      runSignerConfirm(out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, { chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 } }),
       }),
     ).rejects.toMatchObject({ code: 'not_owner' });
@@ -821,7 +857,7 @@ describe('s2s signer confirm', () => {
     expect(warnings.join('\n')).toContain(`pid ${String(pid)}`);
     expect(warnings.join('\n')).toContain('was not running');
     expect(existsSync(lock)).toBe(false);
-    expect(readAuthors(path).active).toBe('zomi-next');
+    expect(readAuthors(path).active).toBe('zomi');
   });
 
   it('settles before the record read, so a run that died after executing still reconciles', async () => {
@@ -837,14 +873,14 @@ describe('s2s signer confirm', () => {
     // The chain says the swap already landed, so this key is no longer an
     // owner: the confirmation is refused, but the store is reconciled first.
     await expect(
-      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
         ...deps(fake, { chain: { deployed: true, owners: [EOA_REPLACEMENT, OWNER_B], threshold: 2, nonce: 8 } }),
       }),
     ).rejects.toMatchObject({ code: 'not_owner' });
 
     expect(fake.gets).toBe(0);
-    expect(readAuthors(path).active).toBe('zomi-next');
-    expect(readAuthors(path).authors.zomi).toBeUndefined();
+    expect(readAuthors(path).active).toBe('zomi');
+    expect(readAuthors(path).authors.zomi?.privateKey).toBe(KEY_REPLACEMENT);
   });
 });
 
@@ -890,6 +926,7 @@ describe('s2s signer confirm — who pays', () => {
   }
 
   it('sponsors the execution on a 1-of-1 Safe whose handler is the 4337 module', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -897,7 +934,7 @@ describe('s2s signer confirm — who pays', () => {
     const captured = capture();
     const cfg = loadConfig();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
       // The config the command resolved is the one the runner must get: a
       // reload inside the seam would lose an injected config and `--key`.
@@ -927,6 +964,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA under --self-paid, even with the paymaster configured', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -935,7 +973,7 @@ describe('s2s signer confirm — who pays', () => {
 
     await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE, '--self-paid']),
+      args(['signer', 'confirm', HASH, '--self-paid']),
       deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     );
 
@@ -947,13 +985,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA when only the bundler is configured, and names the paymaster setting', async () => {
+    filesSafe();
     vi.stubEnv('S2S_BUNDLER_URL', 'https://bundler.example');
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     });
 
@@ -966,12 +1005,13 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA when nothing is configured, and names the bundler setting', async () => {
+    filesSafe();
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true }),
     });
 
@@ -982,13 +1022,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA on a 2-of-2 Safe, and says the userOp would need two signatures', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { sent, sponsored, moduleEnabled: true }),
     });
 
@@ -1003,13 +1044,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA when the Safe has no 4337 module, and names the module', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: false }),
     });
 
@@ -1021,13 +1063,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA when the fallback handler is not the module, and names the handler', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1046,13 +1089,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA when the Safe has no fallback handler, and says so', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true, fallbackHandler: null }),
     });
 
@@ -1062,13 +1106,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('sends from the EOA with a warning when the 4337 reads fail, rather than throwing', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
     const sponsored: Sponsored[] = [];
     const captured = capture();
 
-    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH]), {
       ...deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1088,6 +1133,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('reports a refusal before submission as sponsored_send_failed, names the AA code, and never retries on the EOA', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -1095,7 +1141,7 @@ describe('s2s signer confirm — who pays', () => {
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1124,13 +1170,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('offers two recoveries that work: --self-paid, or fixing the policy', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const captured = capture();
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         moduleEnabled: true,
@@ -1152,6 +1199,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('reports a send whose receipt was lost as send_outcome_unknown, and sends the user to the queue', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -1159,7 +1207,7 @@ describe('s2s signer confirm — who pays', () => {
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1182,7 +1230,7 @@ describe('s2s signer confirm — who pays', () => {
     expect(message).toContain('was submitted');
     expect(message).toContain('outcome is unknown');
     expect(message).not.toContain('nothing was sent');
-    expect(message).toContain(`s2s signer queue ${SAFE}`);
+    expect(message).toContain(`s2s signer queue`);
     expect(message).toContain('nonce 7');
     expect(message).toContain('twice');
     expect(sent).toHaveLength(0);
@@ -1191,6 +1239,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('reports a reverted userOp as sponsored_send_reverted, naming the transaction', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -1199,7 +1248,7 @@ describe('s2s signer confirm — who pays', () => {
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1231,6 +1280,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('names the reverted transaction once when the revert carried no reason', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const captured = capture();
@@ -1238,7 +1288,7 @@ describe('s2s signer confirm — who pays', () => {
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         moduleEnabled: true,
@@ -1263,6 +1313,7 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('reports a paymaster that could not price the userOp as not sent, not as unknown', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const sent: Sent[] = [];
@@ -1270,7 +1321,7 @@ describe('s2s signer confirm — who pays', () => {
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         sent,
@@ -1296,13 +1347,14 @@ describe('s2s signer confirm — who pays', () => {
   });
 
   it('treats an untagged timeout as unknown rather than refused', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const captured = capture();
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, {
         chain: ONE_OF_ONE,
         moduleEnabled: true,
@@ -1316,17 +1368,18 @@ describe('s2s signer confirm — who pays', () => {
     // Nothing in the text says the bundler rejected it, so the safe reading is
     // that it may have landed.
     expect((err as CliError).code).toBe('send_outcome_unknown');
-    expect((err as Error).message).toContain(`s2s signer queue ${SAFE}`);
+    expect((err as Error).message).toContain(`s2s signer queue`);
   });
 
   it('refuses to claim an execution when the send returns no hash', async () => {
+    filesSafe();
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
     const captured = capture();
 
     const err = await runSignerConfirm(
       captured.out,
-      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      args(['signer', 'confirm', HASH]),
       deps(fake, { chain: ONE_OF_ONE, moduleEnabled: true, noHash: true }),
     ).then(
       () => undefined,

@@ -15,11 +15,12 @@ import type { Address } from 'viem';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OwnerHistoryRead } from '../src/core/author-contracts';
+import { addSigner, authorsFilePath } from '../src/core/authors';
+import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
 import { loadConfig } from '../src/core/config';
 import { findSignerCommand, signerHelpEntries } from '../src/commands/index';
 import { runSignerHistory, signerHistory } from '../src/commands/signer-history';
 import type { SignerDeps } from '../src/commands/signer-store';
-import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
 import type { CliOut } from '../src/lib/out';
 
 const SAFE: Address = '0x8507CDa436d39D433acC9c88A813dd052C828dfB';
@@ -95,16 +96,28 @@ function deps(history: OwnerHistoryRead): Partial<SignerDeps> {
   };
 }
 
+/** Valid key nobody can use: privkey 6. The command reads, so it never signs. */
+const KEY_HARRY = `0x${'00'.repeat(31)}06`;
+
+/**
+ * The Safe this machine files for its active author: what the command reads now
+ * that it takes no `<safe>`. A row that signs is a row that names an address.
+ */
 function args(argv: string[]): ParsedArgs {
   const parsed = parseCommandArgs(argv, signerHistory.flags);
   return { flags: parsed.flags, positionals: parsed.positionals.slice(2) };
 }
 
+function filesSafe(): void {
+  addSigner({ name: 'harry', privateKey: KEY_HARRY, safe: SAFE }, authorsFilePath());
+}
+
 describe('s2s signer history', () => {
   it('shows both owners, one era each, and no closing complaint when the history agrees', async () => {
     const captured = capture();
+    filesSafe();
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(rotated()));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
 
     expect(captured.human[0]).toBe(
       [
@@ -138,10 +151,11 @@ describe('s2s signer history', () => {
 
   it('says nothing is recorded when the Safe carries no owner-history module', async () => {
     const captured = capture();
+    filesSafe();
 
     await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE]),
+      args(['signer', 'history']),
       deps({
         module: null,
         moduleSource: null,
@@ -168,6 +182,7 @@ describe('s2s signer history', () => {
 
   it('ends with the repair when the newest era is not the Safe\'s owner set', async () => {
     const captured = capture();
+    filesSafe();
     const lagging: OwnerHistoryRead = {
       ...rotated(),
       // The swap ran as a module self-call: the owners moved, the era did not.
@@ -177,7 +192,7 @@ describe('s2s signer history', () => {
       lags: true,
     };
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(lagging));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(lagging));
 
     expect(captured.results[0]?.lags).toBe(true);
     const lines = captured.human[0]?.split('\n') ?? [];
@@ -188,8 +203,9 @@ describe('s2s signer history', () => {
 
   it('prints the whole document in --json, with the module the guard named', async () => {
     const captured = capture(true);
+    filesSafe();
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(rotated()));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
 
     expect(captured.results[0]).toEqual({
       action: 'signer.history',
@@ -208,14 +224,16 @@ describe('s2s signer history', () => {
     });
   });
 
-  it('takes the Safe from --safe, and refuses when neither the flag nor the store has one', async () => {
+  it('reads the Safe this machine files, and refuses when it files none', async () => {
     const captured = capture();
-    await runSignerHistory(captured.out, args(['signer', 'history', '--safe', SAFE]), deps(rotated()));
+    filesSafe();
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
     expect(captured.results[0]?.safe).toBe(SAFE);
 
-    await expect(
-      runSignerHistory(capture().out, args(['signer', 'history']), deps(rotated())),
-    ).rejects.toThrow(/no Safe given/);
+    rmSync(join(dir, 'xdg'), { recursive: true, force: true });
+    await expect(runSignerHistory(capture().out, args(['signer', 'history']), deps(rotated()))).rejects.toThrow(
+      /files no Safe for its active author.*s2s signer add <safe>/,
+    );
   });
 
   it('is an action of `s2s signer`, listed in the group help', () => {

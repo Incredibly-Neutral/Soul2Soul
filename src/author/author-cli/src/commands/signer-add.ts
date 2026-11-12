@@ -96,7 +96,7 @@ export async function runSignerAdd(
   }
   if (chain.owners.some((owner) => owner.toLowerCase() === eoa.toLowerCase())) {
     throw new UsageError(
-      `${eoa} is already an owner of ${safe} — nothing to add; \`s2s signer queue ${safe}\` shows what is pending`,
+      `${eoa} is already an owner of ${safe} — nothing to add; \`s2s signer queue\` shows what is pending`,
     );
   }
 

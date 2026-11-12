@@ -1,5 +1,5 @@
 // ============================================================================
-// s2s signer confirm <safeTxHash> [--safe <safe>] [--no-execute]
+// s2s signer confirm <safeTxHash> [--no-execute]
 //
 // Two steps, and the second one is not optional in the usual case: sign the
 // safeTxHash as a message with this key, POST the confirmation to the service,
@@ -54,7 +54,7 @@ import { getAddress, hashMessage, recoverAddress, size, type Address, type Hex }
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { ParsedArgs } from '../lib/args';
-import { flagBool, flagString } from '../lib/args';
+import { flagBool } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, errorText, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
@@ -68,7 +68,6 @@ import {
   SponsoredSendUncertain,
 } from '../adapters/tx-runner';
 import {
-  asSafeAddress,
   l2Rpc,
   reasonOf,
   resolveSignerSafe,
@@ -255,7 +254,7 @@ function unknownOutcomeMessage(input: {
     input.rail === 'sponsored'
       ? `the sponsored send of ${input.safeTxHash} on ${input.safe} was submitted and its outcome is unknown (${input.detail})`
       : `the send of ${input.safeTxHash} on ${input.safe} returned no transaction hash, so its outcome is unknown (${input.detail})`;
-  return `${what} — it may have executed: run \`s2s signer queue ${input.safe}\` and check whether nonce ${String(input.nonce)} is still queued before running this again, because a second send could execute the proposal twice`;
+  return `${what} — it may have executed: run \`s2s signer queue\` and check whether nonce ${String(input.nonce)} is still queued before running this again, because a second send could execute the proposal twice`;
 }
 
 export async function runSignerConfirm(
@@ -285,11 +284,12 @@ export async function runSignerConfirm(
     );
   }
 
-  const safeFlag = flagString(args.flags, 'safe');
-  const safe = safeFlag ? asSafeAddress(safeFlag, '--safe') : resolveSignerSafe(config);
+  // The Safe is the one this machine files for its active author: a queued
+  // proposal is filed against a Safe, and the row that signs is filed for one.
+  const safe = resolveSignerSafe(config);
   if (!safe) {
     throw new UsageError(
-      'no Safe given and no stored author to take one from — pass --safe <safe>',
+      'this machine files no Safe for its active author — file one with `s2s signer add <safe>`',
     );
   }
   // `--no-execute` is parsed as `execute: false`; absent means execute.
@@ -552,11 +552,6 @@ export const signerConfirm: StoreCommandSpec = {
     'Sign a queued proposal with this key, then execute it when the threshold is met; the paymaster sponsors it only for a 1-of-1 Safe with the 4337 module enabled as its handler and a paymaster configured, otherwise the EOA pays.',
   params: '<safeTxHash>',
   flags: {
-    safe: {
-      type: 'string',
-      value: '<safe>',
-      summary: 'the Safe that holds the proposal (default: the active stored author Safe)',
-    },
     execute: {
       type: 'boolean',
       summary:
