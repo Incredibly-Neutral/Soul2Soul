@@ -204,7 +204,7 @@ describe('the sponsored send — what the userOp carries', () => {
     const hash = await sendCallAsUserOp(fake.client, {
       to: SAFE,
       data: EXEC_DATA,
-      fees: FEES,
+      fees: () => Promise.resolve(FEES),
     });
 
     expect(hash).toBe(TX_HASH);
@@ -240,7 +240,7 @@ describe('the sponsored send — what its receipt means', () => {
     const err = await sendCallAsUserOp(fake.client, {
       to: SAFE,
       data: EXEC_DATA,
-      fees: FEES,
+      fees: () => Promise.resolve(FEES),
     }).then(
       () => undefined,
       (thrown: unknown) => thrown,
@@ -259,7 +259,11 @@ describe('the sponsored send — what its receipt means', () => {
   it('names the transaction when a reverted userOp carries no reason', async () => {
     const fake = await bundler({ receipt: () => userOpReceipt({ success: false }) });
 
-    const err = await sendCallAsUserOp(fake.client, { to: SAFE, data: EXEC_DATA, fees: FEES }).then(
+    const err = await sendCallAsUserOp(fake.client, {
+      to: SAFE,
+      data: EXEC_DATA,
+      fees: () => Promise.resolve(FEES),
+    }).then(
       () => undefined,
       (thrown: unknown) => thrown,
     );
@@ -269,6 +273,28 @@ describe('the sponsored send — what its receipt means', () => {
     expect((err as Error).message).toContain(TX_HASH);
   });
 
+  it('reports a paymaster gas-price failure as refused, before a userOp is even built', async () => {
+    const fake = await bundler();
+
+    const err = await sendCallAsUserOp(fake.client, {
+      to: SAFE,
+      data: EXEC_DATA,
+      // The paymaster round trip that precedes submission. Read inside the
+      // guard: a paymaster outage leaves nothing on chain, so it must not
+      // reach the command as an untagged error it reads as "may have executed".
+      fees: () =>
+        Promise.reject(new Error('HTTP request failed: 503 Service Unavailable (paymaster down)')),
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(err).toBeInstanceOf(SponsoredSendRefused);
+    expect((err as Error).message).toContain('503');
+    // Nothing was submitted, so a retry cannot execute twice.
+    expect(fake.methods).not.toContain('eth_sendUserOperation');
+  });
+
   it('reports a rejected submission as refused, before anything is submitted', async () => {
     const fake = await bundler({
       submit: () => {
@@ -276,7 +302,11 @@ describe('the sponsored send — what its receipt means', () => {
       },
     });
 
-    const err = await sendCallAsUserOp(fake.client, { to: SAFE, data: EXEC_DATA, fees: FEES }).then(
+    const err = await sendCallAsUserOp(fake.client, {
+      to: SAFE,
+      data: EXEC_DATA,
+      fees: () => Promise.resolve(FEES),
+    }).then(
       () => undefined,
       (thrown: unknown) => thrown,
     );
@@ -293,7 +323,11 @@ describe('the sponsored send — what its receipt means', () => {
       },
     });
 
-    const err = await sendCallAsUserOp(fake.client, { to: SAFE, data: EXEC_DATA, fees: FEES }).then(
+    const err = await sendCallAsUserOp(fake.client, {
+      to: SAFE,
+      data: EXEC_DATA,
+      fees: () => Promise.resolve(FEES),
+    }).then(
       () => undefined,
       (thrown: unknown) => thrown,
     );

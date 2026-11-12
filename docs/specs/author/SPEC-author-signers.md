@@ -430,11 +430,12 @@ on the next confirmation attempt instead of leaving the old key filed.
    executed, so the message sends the user to `s2s signer queue <safe>` to check the nonce before
    retrying, because a second send could execute the proposal twice. Landed and reverted
    (`waitForUserOperationReceipt` resolves with `success: false`; the transaction exists, the call
-   inside it did not run) is `sponsored_send_reverted`, naming that transaction hash and its revert
-   reason: the proposal is unchanged and a retry cannot execute it twice, but a repeatable revert
+   inside it did not run) is `sponsored_send_reverted`, naming that transaction hash and, when the
+   receipt carried one, its revert reason: the proposal is unchanged and a retry cannot execute it twice, but a repeatable revert
    will spend gas again. `SafeRunnerHandle.sendCall` tags the phase (`SponsoredSendRefused`,
    `SponsoredSendUncertain`, `SponsoredSendReverted`), text is only the fallback, and an
-   unrecognised failure is treated as unknown. A send that resolves with no transaction hash is
+   unrecognised failure is treated as unknown. The paymaster gas-price read is inside that guard
+   too: an outage there means no userOp was ever built, so it is a refusal, not an unknown outcome. A send that resolves with no transaction hash is
    `send_outcome_unknown` too: `executed` and `paidBy` are claims about the chain and are never
    printed without a hash. Nothing is ever retried on the EOA: paying instead is the user's
    decision, not a fallback the command takes for them.

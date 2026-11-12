@@ -1230,6 +1230,71 @@ describe('s2s signer confirm — who pays', () => {
     expect(captured.results).toHaveLength(0);
   });
 
+  it('names the reverted transaction once when the revert carried no reason', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const captured = capture();
+    const REVERTED_TX: Hex = `0x${'55'.repeat(32)}`;
+
+    const err = await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      deps(fake, {
+        chain: ONE_OF_ONE,
+        moduleEnabled: true,
+        sponsoredFails: new SponsoredSendReverted(
+          `the userOp landed and reverted in transaction ${REVERTED_TX}`,
+          REVERTED_TX,
+          undefined,
+        ),
+      }),
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect((err as CliError).code).toBe('sponsored_send_reverted');
+    const message = (err as Error).message;
+    // The error's own sentence already names the transaction, so appending it to
+    // a prefix that names it too printed the hash twice.
+    expect(message.split(REVERTED_TX)).toHaveLength(2);
+    expect(message).toContain('landed and reverted');
+    expect(message).toContain('the proposal did not execute and is unchanged');
+  });
+
+  it('reports a paymaster that could not price the userOp as not sent, not as unknown', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+
+    const err = await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      deps(fake, {
+        chain: ONE_OF_ONE,
+        sent,
+        moduleEnabled: true,
+        // The fee read that precedes the send fails. No userOp was built, so this
+        // may not come back as "it may have executed".
+        sponsoredFails: new SponsoredSendRefused(
+          'HTTP request failed: 503 Service Unavailable (paymaster down)',
+        ),
+      }),
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe('sponsored_send_failed');
+    const message = (err as Error).message;
+    expect(message).toContain('nothing was sent');
+    expect(message).not.toContain('outcome is unknown');
+    expect(message).not.toContain('s2s signer queue');
+    expect(sent).toHaveLength(0);
+  });
+
   it('treats an untagged timeout as unknown rather than refused', async () => {
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();

@@ -440,8 +440,15 @@ export async function runSignerConfirm(
         // denial-of-gas reading of "failed" would send the user to fund or
         // reconfigure a paymaster that worked.
         if (err instanceof SponsoredSendReverted) {
+          // The reason when the receipt carried one, otherwise the error's own
+          // sentence, which already names the transaction. Both together printed
+          // the hash twice.
+          const reverted =
+            err.reason === undefined
+              ? err.message
+              : `the sponsored send of ${safeTxHash} on ${safe} landed and reverted in transaction ${err.transactionHash}: ${err.reason}`;
           throw new CliError(
-            `the sponsored send of ${safeTxHash} on ${safe} landed and reverted in transaction ${err.transactionHash}: ${err.reason ?? err.message} — the proposal did not execute and is unchanged, the confirmation is posted, and running this again re-sends it (read the revert reason before retrying: a repeatable revert will revert again, spending gas)`,
+            `${reverted} — the proposal did not execute and is unchanged, the confirmation is posted, and running this again re-sends it (read the revert reason before retrying: a repeatable revert will revert again, spending gas)`,
             1,
             'sponsored_send_reverted',
           );

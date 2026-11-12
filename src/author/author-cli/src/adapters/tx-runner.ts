@@ -265,7 +265,7 @@ export interface UserOpFees {
  * inside it.
  *
  * Two failure phases and a third outcome, because the advice differs:
- *   - throw from submission        → `SponsoredSendRefused` (nothing landed)
+ *   - throw reading fees or submitting → `SponsoredSendRefused` (nothing landed)
  *   - throw while awaiting receipt → `SponsoredSendUncertain` (may have landed)
  *   - a receipt with `success: false` → `SponsoredSendReverted` (landed,
  *     reverted; the call did not happen and the transaction hash is carried).
@@ -277,13 +277,18 @@ export interface UserOpFees {
  */
 export async function sendCallAsUserOp(
   client: SmartAccountClient,
-  input: { to: Address; data: Hex; fees: UserOpFees },
+  input: { to: Address; data: Hex; fees: () => Promise<UserOpFees> },
 ): Promise<Hex> {
   let userOpHash: Hex;
   try {
+    // Inside the guard, not before the call: the fee read is a paymaster round
+    // trip, and a paymaster outage must not escape as an untagged error — the
+    // command would read an untagged failure as "may have executed" when no
+    // userOp was ever built. One guard, one place where a refusal is tagged.
+    const fees = await input.fees();
     userOpHash = await client.sendUserOperation({
       calls: [{ to: input.to, data: input.data, value: 0n }],
-      ...input.fees,
+      ...fees,
     });
   } catch (err) {
     throw new SponsoredSendRefused(errorText(err), { cause: err });
@@ -399,7 +404,7 @@ export async function createSafeRunner<
     },
     sendCall: async (to: Address, data: Hex): Promise<Hex> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
-      return await sendCallAsUserOp(client, { to, data, fees: await feeOverrides() });
+      return await sendCallAsUserOp(client, { to, data, fees: feeOverrides });
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);
