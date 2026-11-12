@@ -129,6 +129,16 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   next one. `parseNote` reads `encrypted` first, then the pre-rename `encryption`, so an old note
   keeps its state; only the new key is written, and the write-back deletes `encryption`. The
   published item's own field stays `encryption` on `S2SContentItem`.
+- **`label` is missing from neutralpress' `knownKeys` (drift against shared).**
+  `content/content.ctrlr.ts:parseNote` carries its own `knownKeys` set instead of importing
+  shared's `KNOWN_FRONTMATTER_KEYS`, and its return type has no `label`. In shared, `label` is a
+  public, unsigned display name for the manuscript: trimmed, blank or non-string resolving to
+  none, kept out of the custom bag so the signed body stays the same bytes, and absent from
+  `S2S_TYPES_V2` so nothing signs it (ADR-003). Here the key is not recognised, so it lands in
+  `custom` and is signed into the body: the same note published from neutralpress takes a
+  different objectId than the same note published by the CLI, which strips it. One key in that
+  set fixes it. The field would still not reach the stored public part: `publishContent` calls
+  `buildSignedContentItem` without a label, so nothing here writes one today.
 - **Slug override:** `content/content.ctrlr.ts:parseNote` reads `frontmatter?.slug` and uses it
   in preference to `slug(title)`. The chosen slug propagates as `body.slug` through the pipeline
   into the Lit render action's `createPath` (which interpolates `{slug}`). A changed `slug`
