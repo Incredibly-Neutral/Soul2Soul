@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { keccak256, toBytes } from 'viem';
+import { safeAbi } from '@s2s/soul2soul-shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -22,6 +23,7 @@ import {
   createAuthorWriteRunner,
   ensureAuthorSafe,
   explainGivenSafeRead,
+  GIVEN_SAFE_READS_ABI,
   givenSafeInUse,
   initAuthorSafe,
   readGivenSafeState,
@@ -292,7 +294,7 @@ describe('a given author Safe', () => {
   });
 
   it('asks the chain for bytecode before it asks the Safe anything', async () => {
-    // threshold() on an address with no code reverts, so the deployment check
+    // getThreshold() on an address with no code reverts, so the deployment check
     // has to come first. A handle that records the calls proves the order.
     const calls: string[] = [];
     const undeployed = await readGivenSafeState(
@@ -312,7 +314,7 @@ describe('a given author Safe', () => {
       {
         isDeployed: async () => true,
         genericRead: async (_address, _abi, method) =>
-          method === 'threshold' ? 1n : [authorEoa(KEY)],
+          method === 'getThreshold' ? 1n : [authorEoa(KEY)],
       },
       SAFE,
     );
@@ -377,10 +379,26 @@ describe('author writes through a given Safe', () => {
   });
 });
 
+describe('the given-Safe ABI is the deployed Safe ABI', () => {
+  // The bug this pins: `threshold()` is not in the Safe 1.4.1 ABI at all, so
+  // the proxy dispatched it into the fallback and reverted. Every read the CLI
+  // makes of a given Safe has to be a function the singleton actually has.
+  it('asks only for functions safeAbi knows', () => {
+    const asked = GIVEN_SAFE_READS_ABI.split('\n')
+      .map((line) => /function (\w+)/.exec(line)?.[1])
+      .filter((name): name is string => name !== undefined);
+    expect(asked.length).toBeGreaterThan(0);
+    const known = new Set(
+      safeAbi.map((entry) => ('name' in entry ? entry.name : undefined)).filter(Boolean),
+    );
+    for (const name of asked) expect(known.has(name)).toBe(true);
+  });
+});
+
 describe('a given Safe that cannot be read says why', () => {
   const SAFE = '0x8507CDa436d39D433acC9c88A813dd052C828dfB' as const;
   const RPC = 'https://lb.drpc.live/base/key';
-  const revert = new Error('The contract function "threshold" reverted.');
+  const revert = new Error('The contract function "getThreshold" reverted.');
 
   it('names the endpoint when it is not Base', () => {
     const text = explainGivenSafeRead({
