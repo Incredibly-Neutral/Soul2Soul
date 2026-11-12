@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { decodeFunctionData, type Address, type Hex } from 'viem';
+import { decodeFunctionData, recoverAddress, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -95,6 +95,7 @@ interface Proposed {
   safe: Address;
   sender: Address;
   tx: SafeTxInput;
+  signature: Hex;
 }
 
 interface FakeService {
@@ -114,7 +115,12 @@ function fakeService(fail?: Error): FakeService {
     },
     propose(input) {
       if (fail) return Promise.reject(fail);
-      proposed.push({ safe: input.safe, sender: input.sender, tx: input.tx });
+      proposed.push({
+        safe: input.safe,
+        sender: input.sender,
+        tx: input.tx,
+        signature: input.signature,
+      });
       return Promise.resolve({
         safeTxHash: computeSafeTxHash({ chainId: CHAIN_ID, safe: input.safe, tx: input.tx }),
       });
@@ -189,11 +195,20 @@ describe('s2s signer rotate', () => {
     });
 
     // The proposal is addressed to the Safe itself, at zero gas, from the key
-    // that is joining.
+    // that is retiring — not from the key that joins when the swap executes.
     expect(fake.registered).toEqual([{ safe: SAFE, owners: [OWNER_B, EOA_OLD], threshold: 2 }]);
-    expect(fake.proposed).toHaveLength(1);
-    expect(fake.proposed[0]?.sender).toBe(EOA_NEW);
-    expect(fake.proposed[0]?.tx).toEqual(expectedTx);
+    const posted = fake.proposed[0];
+    if (posted === undefined) throw new Error('the command posted no proposal');
+    expect(posted.sender).toBe(EOA_OLD);
+    expect(posted.tx).toEqual(expectedTx);
+    // The service files the signature as its sender's confirmation, so it is the
+    // old key's own signature over the hash, and it recovers to that key.
+    expect(
+      await recoverAddress({
+        hash: computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: expectedTx }),
+        signature: posted.signature,
+      }),
+    ).toBe(EOA_OLD);
 
     // The calldata is swapOwner(prevOwner, oldOwner, newOwner) — three
     // addresses, in that order, and the threshold appears nowhere.
@@ -213,10 +228,12 @@ describe('s2s signer rotate', () => {
       replaces: 'zomi',
     });
 
-    // The two things the human output has to say about the keys: the old key
-    // confirms this proposal, and it is an owner until the swap executes.
+    // The two things the human output has to say about the keys: the old key's
+    // signature already counts as its confirmation, and it is an owner until the
+    // swap executes.
     const human = captured.human[0] ?? '';
-    expect(human).toContain('the OLD key confirms this one');
+    expect(human).toContain("'zomi' signed it (1 of 2 confirmations)");
+    expect(human).toContain('the remaining owners run');
     expect(human).toContain('stops being an owner only when the swap executes');
   });
 
