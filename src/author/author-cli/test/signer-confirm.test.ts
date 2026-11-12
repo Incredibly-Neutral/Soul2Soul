@@ -28,9 +28,14 @@ import {
 import { loadConfig, type CliConfig } from '../src/core/config';
 import { SAFE_4337_MODULE } from '../src/core/author-safe';
 import { runSignerConfirm, signerConfirm } from '../src/commands/signer-confirm';
-import type { ChainSafe, Safe4337State, SignerDeps } from '../src/commands/signer-store';
+import type { ChainSafe, Safe4337Reads, SignerDeps } from '../src/commands/signer-store';
+import { read4337From } from '../src/commands/signer-store';
 import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
-import { SponsoredSendRefused, SponsoredSendUncertain } from '../src/adapters/tx-runner';
+import {
+  SponsoredSendRefused,
+  SponsoredSendReverted,
+  SponsoredSendUncertain,
+} from '../src/adapters/tx-runner';
 import { CliError } from '../src/lib/errors';
 import type { CliOut } from '../src/lib/out';
 
@@ -47,6 +52,14 @@ const SAFE: Address = '0x1111111111111111111111111111111111111111';
 const KEY_B: Hex = `0x${'00'.repeat(31)}02`;
 const OWNER_B: Address = privateKeyToAccount(KEY_B).address;
 const RPC = 'https://rpc.example';
+/** `keccak256("fallback_manager.handler.address")`, the Safe's handler slot. */
+const FALLBACK_HANDLER_SLOT: Hex =
+  '0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5';
+
+/** One storage word holding `address` in its low 20 bytes. */
+function addressWord(address: Address): Hex {
+  return `0x${'00'.repeat(12)}${address.slice(2)}`.toLowerCase() as Hex;
+}
 const CHAIN_ID = 8453;
 
 /**
@@ -207,7 +220,12 @@ function deps(
     sponsoredFails?: unknown;
     /** What the two 4337 reads answer; the module is off unless a test says on. */
     moduleEnabled?: boolean;
-    fallbackHandler?: Address;
+    /**
+     * The fallback handler the Safe's storage slot holds. The fixture below turns
+     * it into a storage word, so the command reads it through the real
+     * `read4337From` and not through a stubbed decision.
+     */
+    fallbackHandler?: Address | null;
     /** A failed 4337 read: refused or unreadable RPC, never silently ignored. */
     read4337Fails?: unknown;
     /** A send that resolves with no transaction hash — not a success. */
@@ -244,17 +262,30 @@ function deps(
       sponsored.push(input);
       return Promise.resolve(options.noHash === true ? (undefined as unknown as Hex) : TX_HASH);
     },
-    // Off by default: every test sits on the EOA rail unless sponsorship is what
-    // it is about.
+    // The real decode, over a fake chain: the storage word goes through
+    // `addressFromWord`, the module check through the same function the command
+    // calls. Stubbing the resulting state instead is what let a handler read
+    // that always threw stay hidden behind a green suite.
     read4337: () => {
       const failure = options.read4337Fails;
       if (failure !== undefined) {
         return Promise.reject(failure instanceof Error ? failure : new Error('read failed'));
       }
-      return Promise.resolve<Safe4337State>({
-        moduleEnabled: options.moduleEnabled ?? false,
-        fallbackHandler: options.fallbackHandler ?? SAFE_4337_MODULE,
-      });
+      const handler =
+        options.fallbackHandler === null ? undefined : (options.fallbackHandler ?? SAFE_4337_MODULE);
+      const reads: Safe4337Reads = {
+        word: (slot) => {
+          // The slot itself is part of the contract: a reader that asks the wrong
+          // slot is as wrong as one that cannot read it.
+          if (slot !== FALLBACK_HANDLER_SLOT) throw new Error(`unexpected slot ${slot}`);
+          return Promise.resolve(handler === undefined ? '0x' : addressWord(handler));
+        },
+        moduleEnabled: (module) => {
+          if (module !== SAFE_4337_MODULE) throw new Error(`unexpected module ${module}`);
+          return Promise.resolve(options.moduleEnabled ?? false);
+        },
+      };
+      return read4337From(reads);
     },
   };
 }
@@ -882,6 +913,9 @@ describe('s2s signer confirm — who pays', () => {
     expect(call.privateKey).toBe(KEY_SIGNER);
     expect(call.to).toBe(SAFE);
     expect(call.config).toBe(cfg);
+    // The command hands the send the `execTransaction` calldata itself; the
+    // adapter is what wraps it in a userOp.
+    expect(call.data.startsWith('0x6a761202')).toBe(true);
     expect(decodeFunctionData({ abi: safeAbi, data: call.data }).functionName).toBe('execTransaction');
 
     expect(captured.results[0]).toMatchObject({
@@ -1011,6 +1045,22 @@ describe('s2s signer confirm — who pays', () => {
     expect(captured.human[0]).toContain('not the Safe4337Module');
   });
 
+  it('sends from the EOA when the Safe has no fallback handler, and says so', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const sponsored: Sponsored[] = [];
+    const captured = capture();
+
+    await runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+      ...deps(fake, { chain: ONE_OF_ONE, sent, sponsored, moduleEnabled: true, fallbackHandler: null }),
+    });
+
+    expect(sponsored).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(captured.human[0]).toContain('no fallback handler');
+  });
+
   it('sends from the EOA with a warning when the 4337 reads fail, rather than throwing', async () => {
     vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
     const fake = await executable();
@@ -1137,6 +1187,46 @@ describe('s2s signer confirm — who pays', () => {
     expect(message).toContain('twice');
     expect(sent).toHaveLength(0);
     expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results).toHaveLength(0);
+  });
+
+  it('reports a reverted userOp as sponsored_send_reverted, naming the transaction', async () => {
+    vi.stubEnv('S2S_PIMLICO_KEY', PIMLICO_KEY);
+    const fake = await executable();
+    const sent: Sent[] = [];
+    const captured = capture();
+    const REVERTED_TX: Hex = `0x${'44'.repeat(32)}`;
+
+    const err = await runSignerConfirm(
+      captured.out,
+      args(['signer', 'confirm', HASH, '--safe', SAFE]),
+      deps(fake, {
+        chain: ONE_OF_ONE,
+        sent,
+        moduleEnabled: true,
+        sponsoredFails: new SponsoredSendReverted(
+          `the userOp landed and reverted in transaction ${REVERTED_TX}`,
+          REVERTED_TX,
+          'GS026',
+        ),
+      }),
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe('sponsored_send_reverted');
+    const message = (err as Error).message;
+    // The transaction exists, so the hash is the only handle on it.
+    expect(message).toContain(REVERTED_TX);
+    expect(message).toContain('GS026');
+    // Landed and reverted is a third state: not "nothing was sent", not unknown.
+    expect(message).toContain('the proposal did not execute and is unchanged');
+    expect(message).not.toContain('nothing was sent');
+    expect(message).not.toContain('outcome is unknown');
+    expect(message).not.toContain('--self-paid');
+    expect(sent).toHaveLength(0);
     expect(captured.results).toHaveLength(0);
   });
 

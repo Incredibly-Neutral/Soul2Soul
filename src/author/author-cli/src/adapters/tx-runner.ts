@@ -44,30 +44,11 @@ import {
 import type { TxCall, TxRunner } from '@s2s/soul2soul-shared';
 
 import type { EntryPointVersion } from '../core/config';
+import { errorText } from '../lib/errors';
 
 /** Parse a JSON ABI string defensively. */
 function parseAbi(abi: string): Abi {
   return JSON.parse(abi) as Abi;
-}
-
-/**
- * The words of a thrown error, in the order viem and the bundler put them:
- * `shortMessage` first (it is the human half), then `details`, then `message`.
- */
-function errorText(err: unknown): string {
-  const seen: string[] = [];
-  let current: unknown = err;
-  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
-    const record = current as Record<string, unknown>;
-    for (const field of ['shortMessage', 'details', 'message'] as const) {
-      const value = record[field];
-      if (typeof value === 'string' && value.trim() !== '' && !seen.includes(value)) {
-        seen.push(value);
-      }
-    }
-    current = record.cause;
-  }
-  return seen.join(': ') || 'no detail from the bundler';
 }
 
 /**
@@ -92,6 +73,30 @@ export class SponsoredSendUncertain extends Error {
     super(message, options);
     this.name = 'SponsoredSendUncertain';
     this.userOpHash = userOpHash;
+  }
+}
+
+/**
+ * The userOp landed and reverted: the transaction exists, the call inside it did
+ * not run. Gas was spent, nothing else changed, so this is a failure the user
+ * can retry — unlike a refusal (nothing sent) and unlike an unknown outcome (it
+ * may have executed). The transaction hash is carried because it is the only
+ * thing that makes the failure inspectable.
+ */
+export class SponsoredSendReverted extends Error {
+  readonly transactionHash: Hex;
+  readonly reason: string | undefined;
+
+  constructor(
+    message: string,
+    transactionHash: Hex,
+    reason: string | undefined,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'SponsoredSendReverted';
+    this.transactionHash = transactionHash;
+    this.reason = reason;
   }
 }
 
@@ -241,6 +246,70 @@ export interface SafeRunnerHandle extends TxRunner {
   sendCall(to: Address, data: Hex): Promise<Hex>;
 }
 
+/** Gas overrides for one userOp, from the paymaster's own price when there is one. */
+export interface UserOpFees {
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+}
+
+/**
+ * Send one call as a userOp through `client` and resolve with the on-chain
+ * transaction hash, or throw with the phase tagged.
+ *
+ * The call goes in `calls`, not as `to`/`data`: viem builds a userOp's
+ * `callData` from `calls` or from `callData`, and silently drops anything else,
+ * so `{ to, data }` produced a userOp with no call in it at all. For a Safe
+ * 1.4.1 + Safe4337Module account the encoder wraps a single call as
+ * `executeUserOpWithErrorString(to, value, data, 0)`, so the userOp's callData
+ * begins `0x541d63c8` and the `execTransaction` calldata begins `0x6a761202`
+ * inside it.
+ *
+ * Two failure phases and a third outcome, because the advice differs:
+ *   - throw from submission        → `SponsoredSendRefused` (nothing landed)
+ *   - throw while awaiting receipt → `SponsoredSendUncertain` (may have landed)
+ *   - a receipt with `success: false` → `SponsoredSendReverted` (landed,
+ *     reverted; the call did not happen and the transaction hash is carried).
+ * Collapsing those is how a retry that could execute twice looks safe.
+ *
+ * Exported so a test can drive it with a real permissionless client over a
+ * custom transport: the callData in `eth_sendUserOperation` is then the same
+ * bytes a bundler would see, with no socket.
+ */
+export async function sendCallAsUserOp(
+  client: SmartAccountClient,
+  input: { to: Address; data: Hex; fees: UserOpFees },
+): Promise<Hex> {
+  let userOpHash: Hex;
+  try {
+    userOpHash = await client.sendUserOperation({
+      calls: [{ to: input.to, data: input.data, value: 0n }],
+      ...input.fees,
+    });
+  } catch (err) {
+    throw new SponsoredSendRefused(errorText(err), { cause: err });
+  }
+  let receipt: Awaited<ReturnType<SmartAccountClient['waitForUserOperationReceipt']>>;
+  try {
+    receipt = await client.waitForUserOperationReceipt({ hash: userOpHash });
+  } catch (err) {
+    throw new SponsoredSendUncertain(errorText(err), userOpHash, { cause: err });
+  }
+  // `waitForUserOperationReceipt` resolves for a reverted userOp too, with
+  // `success: false`: the transaction is on chain, the call inside it did not
+  // run. Returning the hash would print a revert as `executed: true`.
+  if (!receipt.success) {
+    const reason = receipt.reason;
+    throw new SponsoredSendReverted(
+      reason === undefined || reason === ''
+        ? `the userOp landed and reverted in transaction ${receipt.receipt.transactionHash}`
+        : `the userOp landed and reverted in transaction ${receipt.receipt.transactionHash}: ${reason}`,
+      receipt.receipt.transactionHash,
+      reason,
+    );
+  }
+  return receipt.receipt.transactionHash;
+}
+
 export async function createSafeRunner<
   TChain extends Chain,
   TEntry extends EntryPointVersion,
@@ -330,25 +399,7 @@ export async function createSafeRunner<
     },
     sendCall: async (to: Address, data: Hex): Promise<Hex> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
-      // Two phases, and they mean different things to whoever retries: the
-      // bundler validates and simulates before it accepts a userOp, so a throw
-      // here is "nothing was submitted", while a throw after the hash exists is
-      // "submitted, receipt not seen". Collapsing them into one error is what
-      // makes a retry that could execute twice look safe.
-      let fees: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint };
-      let userOpHash: Hex;
-      try {
-        fees = await feeOverrides();
-        userOpHash = await client.sendUserOperation({ to, data, ...fees } as never);
-      } catch (err) {
-        throw new SponsoredSendRefused(errorText(err), { cause: err });
-      }
-      try {
-        const receipt = await client.waitForUserOperationReceipt({ hash: userOpHash });
-        return receipt.receipt.transactionHash;
-      } catch (err) {
-        throw new SponsoredSendUncertain(errorText(err), userOpHash, { cause: err });
-      }
+      return await sendCallAsUserOp(client, { to, data, fees: await feeOverrides() });
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);

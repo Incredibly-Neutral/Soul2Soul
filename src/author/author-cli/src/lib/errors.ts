@@ -3,6 +3,29 @@
 //   0 = ok, 1 = runtime failure, 2 = usage error.
 // ============================================================================
 
+/**
+ * Everything a thrown value says, in the order viem and an RPC put it:
+ * `shortMessage` first (it is the human half), then `details`, then `message`,
+ * following `cause` a few levels. One helper because two callers classify on
+ * this text — the send adapter tags the phase, the command decides what to say
+ * about it — and two copies of the walking would drift.
+ */
+export function errorText(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
+    const record = current as Record<string, unknown>;
+    for (const field of ['shortMessage', 'details', 'message'] as const) {
+      const value = record[field];
+      if (typeof value === 'string' && value.trim() !== '' && !parts.includes(value)) {
+        parts.push(value);
+      }
+    }
+    current = record.cause;
+  }
+  return parts.join(': ') || 'no detail from the bundler';
+}
+
 /** Base CLI error carrying a process exit code and a stable machine code. */
 export class CliError extends Error {
   readonly exitCode: number;

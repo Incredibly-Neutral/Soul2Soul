@@ -389,36 +389,53 @@ on the next confirmation attempt instead of leaving the old key filed.
    executing and is settled before a byte goes out, never after a refusal.
 5. **Pay.** Sponsored when all four hold: `bundlerEndpoints(config, chainId)` yields a
    `paymasterUrl`, the Safe's threshold is 1, the Safe answers `isModuleEnabled(SAFE_4337_MODULE)`
-   true, and `getFallbackHandler()` answers that same module, and `--self-paid` was not given. The
+   true, and the handler in storage slot `keccak256("fallback_manager.handler.address")`
+   (`0x6c9a6c4a…918d5`, `SAFE_FALLBACK_HANDLER_SLOT`) is that same module, and `--self-paid` was
+   not given. The
    same `execTransaction` then goes out as a userOp from the Safe through the author Safe runner
    (`createAuthorSafeRunner`, permissionless + the bundler/paymaster, handed the config this command
    resolved), and `txHash` is the on-chain transaction that carried it. The threshold is a
    condition because the module validates the userOp signature against the Safe's own threshold via
    `checkNSignatures` while this build signs once: at t>1 the bundler refuses the userOp, so the
    command does not offer one. The handler is a condition because the module is reached through the
-   Safe's fallback; an enabled module with another handler validates nothing.
+   Safe's fallback; an enabled module with another handler validates nothing. It is read from
+   storage, not asked for: Safe 1.4.1 has no `getFallbackHandler()` getter, and a call for one falls
+   through to the handler itself and reverts, so asking the Safe is what made this rail unreachable.
+   An empty slot reads as no handler, and the reason says the module is not installed.
 
    Anything else sends it as a plain transaction from the EOA, whose gas the EOA pays, and the
    human output names the condition that failed: `--self-paid`, `no bundler configured — set
    S2S_PIMLICO_KEY or S2S_BUNDLER_URL`, `no paymaster configured — set S2S_PIMLICO_KEY or
    S2S_PAYMASTER_URL`, `the Safe is 2-of-2, so a sponsored send would need 2 signatures while this
-   build signs one`, the module not enabled, or the handler being some other address. The two
+   build signs one`, the module not enabled, the slot holding no handler, or the handler being some
+   other address. The two
    settings are named separately because `bundlerEndpoints` collapses them: reporting "no paymaster"
    when the bundler URL is what is missing sends the user to the wrong variable. An unreadable 4337
    read (RPC failure) is a warning naming the read, then the EOA rail — never a throw, because the
    confirmation is already posted by then.
 
-   A sponsored send that fails is classified, because the two classes have opposite advice.
+   The call goes out in the userOp's `calls` (`[{ to: safe, data: execTransaction… }]`), not as
+   `to`/`data` on the request: viem builds a userOp's `callData` from `calls` or from `callData` and
+   drops anything else, so the earlier shape sent a userOp with no call in it. A Safe 1.4.1 account
+   wraps a single call as `executeUserOpWithErrorString(to, value, data, 0)`, so the userOp's
+   `callData` begins `0x541d63c8` and the `execTransaction` calldata, signatures included, begins
+   `0x6a761202` as its `data` argument.
+
+   A sponsored send that fails is classified, because the three classes have different advice.
    Refused before submission (the bundler's validation or simulation rejected it, an `AA` code
    included) is `sponsored_send_failed`: nothing was sent, the confirmation is posted and the
    proposal is queued, so the recoveries are fixing the paymaster policy or `--self-paid` from a
    funded EOA — funding the EOA on its own is not one, since a rerun without the flag asks the same
    paymaster again. Submitted but with no receipt seen is `send_outcome_unknown`: it may have
    executed, so the message sends the user to `s2s signer queue <safe>` to check the nonce before
-   retrying, because a second send could execute the proposal twice. `SafeRunnerHandle.sendCall`
-   tags the phase (`SponsoredSendRefused` vs `SponsoredSendUncertain`), text is only the fallback,
-   and an unrecognised failure is treated as unknown. A send that resolves with no transaction hash
-   is `send_outcome_unknown` too: `executed` and `paidBy` are claims about the chain and are never
+   retrying, because a second send could execute the proposal twice. Landed and reverted
+   (`waitForUserOperationReceipt` resolves with `success: false`; the transaction exists, the call
+   inside it did not run) is `sponsored_send_reverted`, naming that transaction hash and its revert
+   reason: the proposal is unchanged and a retry cannot execute it twice, but a repeatable revert
+   will spend gas again. `SafeRunnerHandle.sendCall` tags the phase (`SponsoredSendRefused`,
+   `SponsoredSendUncertain`, `SponsoredSendReverted`), text is only the fallback, and an
+   unrecognised failure is treated as unknown. A send that resolves with no transaction hash is
+   `send_outcome_unknown` too: `executed` and `paidBy` are claims about the chain and are never
    printed without a hash. Nothing is ever retried on the EOA: paying instead is the user's
    decision, not a fallback the command takes for them.
 
@@ -435,6 +452,7 @@ Refusals, all before anything is signed:
 | owner entry is a contract (the EOA has code) | `contract_owner` — it confirms by calling `approveHash` from its own code |
 | the paymaster refuses the sponsored send | `sponsored_send_failed` — nothing was sent; the confirmation is posted and the proposal is queued; fix the policy, or `--self-paid` from a funded EOA |
 | a sponsored send was submitted and its receipt was not seen | `send_outcome_unknown` — it may have executed; check `s2s signer queue <safe>` before retrying |
+| a sponsored send landed and reverted | `sponsored_send_reverted` — the transaction hash is named; the proposal did not execute and is unchanged |
 
 A proposal with a nonce **ahead** of the Safe is not a refusal: its confirmation is posted and the
 command reports why it did not execute (it is queued behind the transaction at the front). Same for
@@ -588,7 +606,7 @@ Recorded as guesses, not contracts — each one is a place a live service may di
 ## Tests
 
 `test/signer-add.test.ts`, `test/signer-rotate.test.ts`, `test/signer-queue.test.ts`,
-`test/signer-confirm.test.ts`. Every chain
+`test/signer-confirm.test.ts`, `test/signer-sponsored-send.test.ts`. Every chain
 read and every service call is injected through `SignerDeps`; no test opens a socket. The signature
 is checked by `verifyMessage` recovery against the raw hash, and the packed list is decoded back out
 of the `execTransaction` calldata. The rotation's calldata is decoded back to the three addresses
@@ -606,5 +624,18 @@ resolved reaches the seam, and the plain send is asserted never to run; `--self-
 bundler, a missing paymaster, a 2-of-2 Safe, a disabled module, a different handler, and an
 unreadable 4337 read each take the EOA rail with the reason in the output (the read failure as a
 warning first); a refusal raises `sponsored_send_failed` naming its `AA` code, a lost receipt raises
-`send_outcome_unknown` pointing at `s2s signer queue`, and a hash-less send raises the same without
-printing a result — the confirmation already posted and the EOA untouched in each.
+`send_outcome_unknown` pointing at `s2s signer queue`, a reverted userOp raises
+`sponsored_send_reverted` naming its transaction, and a hash-less send raises
+`send_outcome_unknown` without printing a result — the confirmation already posted and the EOA
+untouched in each. The handler read goes through the real `read4337From` over a fake storage word,
+so the slot and the low-20-bytes decode are exercised, and one fixture asserts the slot the reader
+asked for.
+
+`test/signer-sponsored-send.test.ts` is the layer the command fixtures cannot see: a real
+`SafeSmartAccount` bound to an address and a real permissionless client over viem's `custom`
+transport, so every JSON-RPC request is answered in-process. It asserts the `callData` of
+`eth_sendUserOperation` (prefix `0x541d63c8`, inner `execTransaction` prefix `0x6a761202`, the
+packed signature inside it), and the three receipt outcomes: `success: true` resolves the
+transaction hash, `success: false` raises `SponsoredSendReverted` with that hash and reason, a
+rejected submission raises `SponsoredSendRefused`, a lost receipt raises `SponsoredSendUncertain`
+carrying the userOp hash. Each of those assertions fails against the code it replaced.

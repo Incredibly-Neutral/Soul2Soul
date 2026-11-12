@@ -56,13 +56,17 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { ParsedArgs } from '../lib/args';
 import { flagBool, flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
-import { CliError, UsageError } from '../lib/errors';
+import { CliError, errorText, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
 import { authorEoa } from '../core/authors';
 import { SAFE_4337_MODULE } from '../core/author-safe';
 import { bundlerEndpoints, hexKey } from '../core/config';
 import { execTransactionArgs, packVerifiedSignatures } from '../adapters/safe-tx';
-import { SponsoredSendRefused, SponsoredSendUncertain } from '../adapters/tx-runner';
+import {
+  SponsoredSendRefused,
+  SponsoredSendReverted,
+  SponsoredSendUncertain,
+} from '../adapters/tx-runner';
 import {
   asSafeAddress,
   l2Rpc,
@@ -182,27 +186,13 @@ async function eoaPayerReason(input: PayerInput): Promise<string | undefined> {
   if (!state.moduleEnabled) {
     return `the Safe4337Module (${SAFE_4337_MODULE}) is not enabled on the Safe`;
   }
+  if (state.fallbackHandler === null) {
+    return `the Safe has no fallback handler set, so no Safe4337Module (${SAFE_4337_MODULE}) is installed to validate a userOp`;
+  }
   if (state.fallbackHandler.toLowerCase() !== SAFE_4337_MODULE.toLowerCase()) {
     return `the Safe's fallback handler is ${state.fallbackHandler}, not the Safe4337Module (${SAFE_4337_MODULE})`;
   }
   return undefined;
-}
-
-/** Every word a thrown send error carries, following `cause` a few levels. */
-function sendErrorText(err: unknown): string {
-  const parts: string[] = [];
-  let current: unknown = err;
-  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
-    const record = current as Record<string, unknown>;
-    for (const field of ['shortMessage', 'details', 'message'] as const) {
-      const value = record[field];
-      if (typeof value === 'string' && value.trim() !== '' && !parts.includes(value)) {
-        parts.push(value);
-      }
-    }
-    current = record.cause;
-  }
-  return parts.join(': ') || 'no detail from the bundler';
 }
 
 /**
@@ -214,21 +204,33 @@ function sendErrorText(err: unknown): string {
  * `unknown` on purpose: assuming nothing landed is the error that costs a double
  * execution.
  */
-function classifySendFailure(err: unknown): { phase: 'refused' | 'unknown'; detail: string } {
-  const detail = sendErrorText(err);
-  if (err instanceof SponsoredSendUncertain) return { phase: 'unknown', detail };
-  if (err instanceof SponsoredSendRefused) return { phase: 'refused', detail };
+interface SendFailure {
+  /** `refused`: nothing was submitted. `unknown`: it may have executed. */
+  phase: 'refused' | 'unknown';
+  detail: string;
+  /** The bundler's `AA##` code, when the failure carries one: it is the reason. */
+  aaCode: string | undefined;
+}
+
+/** One AA pattern, read once, so the code and the decision cannot disagree. */
+const AA_CODE = /\b(AA\d{2})\b/;
+
+function classifySendFailure(err: unknown): SendFailure {
+  const detail = errorText(err);
+  const aaCode = AA_CODE.exec(detail)?.[1];
+  if (err instanceof SponsoredSendUncertain) return { phase: 'unknown', detail, aaCode };
+  if (err instanceof SponsoredSendRefused) return { phase: 'refused', detail, aaCode };
   // A UsageError from building the runner: no userOp was ever submitted.
-  if (err instanceof CliError) return { phase: 'refused', detail };
+  if (err instanceof CliError) return { phase: 'refused', detail, aaCode };
   // AA-coded refusals are validation and simulation failures, both pre-submit.
-  if (/\bAA\d{2}\b/.test(detail)) return { phase: 'refused', detail };
+  if (aaCode !== undefined) return { phase: 'refused', detail, aaCode };
   if (/timed? ?out|timeout|waiting for user ?operation receipt|receipt .*not/i.test(detail)) {
-    return { phase: 'unknown', detail };
+    return { phase: 'unknown', detail, aaCode };
   }
   if (/reject|denied|declin|refus|policy|not sponsor|sponsor.*(fail|denied)|simulat|revert/i.test(detail)) {
-    return { phase: 'refused', detail };
+    return { phase: 'refused', detail, aaCode };
   }
-  return { phase: 'unknown', detail };
+  return { phase: 'unknown', detail, aaCode };
 }
 
 /**
@@ -432,8 +434,19 @@ export async function runSignerConfirm(
         : await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
     } catch (err) {
       if (sponsored) {
-        const { phase, detail } = classifySendFailure(err);
-        const code = /\b(AA\d{2})\b/.exec(detail)?.[1];
+        // A reverted userOp is not a refusal and not an unknown: the transaction
+        // is on chain, the call inside it did not run, so the proposal is
+        // untouched and a plain retry is safe. Named separately because the
+        // denial-of-gas reading of "failed" would send the user to fund or
+        // reconfigure a paymaster that worked.
+        if (err instanceof SponsoredSendReverted) {
+          throw new CliError(
+            `the sponsored send of ${safeTxHash} on ${safe} landed and reverted in transaction ${err.transactionHash}: ${err.reason ?? err.message} — the proposal did not execute and is unchanged, the confirmation is posted, and running this again re-sends it (read the revert reason before retrying: a repeatable revert will revert again, spending gas)`,
+            1,
+            'sponsored_send_reverted',
+          );
+        }
+        const { phase, detail, aaCode } = classifySendFailure(err);
         if (phase === 'unknown') {
           throw new CliError(
             unknownOutcomeMessage({ rail: 'sponsored', safe, safeTxHash, nonce: record.nonce, detail }),
@@ -446,7 +459,7 @@ export async function runSignerConfirm(
         // `--self-paid` — a rerun without it asks the paymaster again, because
         // that is what the config says to do.
         throw new CliError(
-          `the bundler or paymaster refused the sponsored send of ${safeTxHash} on ${safe}${code ? ` (${code})` : ''}: ${detail} — nothing was sent, the confirmation is posted and the proposal is queued, so fix the paymaster policy and run this again, or run it with --self-paid to pay from ${eoa}, which needs ${eoa} to hold a little Base ETH (funding it only helps with --self-paid: a rerun without --self-paid asks the paymaster again)`,
+          `the bundler or paymaster refused the sponsored send of ${safeTxHash} on ${safe}${aaCode ? ` (${aaCode})` : ''}: ${detail} — nothing was sent, the confirmation is posted and the proposal is queued, so fix the paymaster policy and run this again, or run it with --self-paid to pay from ${eoa}, which needs ${eoa} to hold a little Base ETH (funding it only helps with --self-paid: a rerun without --self-paid asks the paymaster again)`,
           1,
           'sponsored_send_failed',
         );
