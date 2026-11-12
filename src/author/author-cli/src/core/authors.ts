@@ -30,6 +30,12 @@
 // the new key is an owner and the old one is not; until then the row is printed
 // as pending, never as an owner.
 //
+// `proposal` is OPTIONAL and sits beside `replaces`: the `safeTxHash` the swap
+// was queued under. Absent on a row that carries `replaces` means the swap was
+// NEVER QUEUED (the proposal failed), which is exactly the row a retry has to
+// finish rather than add a third key to. It is dropped with the marker, and it
+// never decides on its own whether the swap landed — ownership does that.
+//
 // The store sits in the key-precedence chain between the project config and the
 // user config (see core/config.ts), which is what makes `author switch` a
 // one-command identity switch: no env var, no file edit.
@@ -106,6 +112,13 @@ export interface AuthorRecord {
    * is not an owner yet; `settleReplacement` clears it the moment it is one.
    */
   replaces?: string;
+  /**
+   * The `safeTxHash` the swap was queued under (`s2s signer rotate`). Present
+   * only beside `replaces`: absent there means the row is filed but no swap was
+   * ever proposed, so the next run must queue this row's swap, not file another.
+   * Cleared with the marker when the swap settles.
+   */
+  proposal?: Hex;
 }
 
 /** The whole store as it lives in `authors.json`. */
@@ -174,6 +187,36 @@ function parseSafeSource(value: unknown): AuthorSafeSource | undefined {
   return value === 'derived' || value === 'given' ? value : undefined;
 }
 
+/** A `safeTxHash`: exactly 32 bytes of hex, `0x` prefixed. Nothing shorter. */
+function isSafeTxHash(value: string): value is Hex {
+  return /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+/**
+ * The proposal a row may carry, or undefined when it carries none this build
+ * can read. Reading stays tolerant like the rest of the store: a hand-edited
+ * non-hash reads as "never proposed", and the write paths refuse it loudly.
+ */
+function parseProposal(value: unknown): Hex | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return isSafeTxHash(trimmed) ? trimmed : undefined;
+}
+
+/**
+ * Validate a hash a caller wants written to `name`'s row, naming the row: the
+ * refusal has to say which row, because `setPendingProposal` takes the name.
+ */
+function assertProposal(name: string, value: string): Hex {
+  const trimmed = value.trim();
+  if (!isSafeTxHash(trimmed)) {
+    throw new UsageError(
+      `author '${name}' proposal '${value}' is not a safeTxHash — that is 32 bytes of hex (0x and 64 characters), as \`s2s signer queue\` printed it`,
+    );
+  }
+  return trimmed;
+}
+
 function parseRecord(value: unknown): AuthorRecord | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -185,6 +228,7 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
   const safeSource = parseSafeSource(declared);
   const unreadable = declared !== undefined && safeSource === undefined ? declared : undefined;
   const replaces = record.replaces;
+  const proposal = parseProposal(record.proposal);
   return {
     privateKey: normalizeKey(privateKey),
     safe: typeof safe === 'string' && safe.length > 0 ? safe : null,
@@ -194,6 +238,7 @@ function parseRecord(value: unknown): AuthorRecord | undefined {
     ...(typeof replaces === 'string' && replaces.trim().length > 0
       ? { replaces: replaces.trim() }
       : {}),
+    ...(proposal === undefined ? {} : { proposal }),
   };
 }
 
@@ -472,12 +517,23 @@ export interface AddSignerInput {
    * a chase, not a membership, until `settleReplacement` sees the swap land.
    */
   replaces?: string;
+  /**
+   * The `safeTxHash` the swap was queued under, when the caller has it already
+   * (`s2s signer rotate` files and queues in one run). Omitted means the row is
+   * filed only: a swap that has to be proposed later, by `setPendingProposal`.
+   */
+  proposal?: Hex;
 }
 
 /** A row filed for a Safe that is waiting to become one of its owners. */
 export interface PendingReplacement {
   name: string;
   replaces: string;
+  /**
+   * The hash the swap was queued under. Absent means filed only, never
+   * proposed: the row is stranded and a retry has to queue it, not replace it.
+   */
+  proposal?: Hex;
 }
 
 /**
@@ -505,7 +561,10 @@ function chaserOf(data: AuthorsStore, name: string): ActiveAuthor | undefined {
 
 /**
  * The row filed for `safe` that is waiting to become an owner of it, read from
- * `data`: the pet name plus the row it intends to replace.
+ * `data`: the pet name, the row it intends to replace, and the hash its swap was
+ * queued under when one was. Two states a caller must tell apart: a `proposal`
+ * means the swap is queued and only has to execute; no `proposal` means the row
+ * is filed and stranded, and queuing it is the next step.
  */
 export function pendingReplacementIn(
   data: AuthorsStore,
@@ -513,7 +572,11 @@ export function pendingReplacementIn(
 ): PendingReplacement | undefined {
   const row = pendingRowsIn(data, safe)[0];
   if (!row?.replaces) return undefined;
-  return { name: row.name, replaces: row.replaces };
+  return {
+    name: row.name,
+    replaces: row.replaces,
+    ...(row.proposal === undefined ? {} : { proposal: row.proposal }),
+  };
 }
 
 /**
@@ -551,6 +614,14 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
   if (!isValidPetName(name)) {
     throw new UsageError(`invalid author name '${name}'`);
   }
+  // A proposal without a row to replace describes no swap, and writing it would
+  // put a hash on a row no caller ever reads one from.
+  if (input.proposal !== undefined && replaces === undefined) {
+    throw new UsageError(
+      `author '${name}' cannot carry a proposal without \`replaces\` — a swap is queued for a row that is taking over another one`,
+    );
+  }
+  const proposal = input.proposal === undefined ? undefined : assertProposal(name, input.proposal);
   // Strict checksum: a mixed-case address with a broken checksum is a
   // transcription error, and storing it would put a typo in the record.
   if (!isAddress(safe.trim())) {
@@ -618,6 +689,7 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
     safe: address,
     safeSource: 'given',
     ...(target ? { replaces: target.name } : {}),
+    ...(proposal === undefined ? {} : { proposal }),
   };
   // A replacement row is filed WITHOUT the active slot. The old key is still the
   // Safe's owner, and `s2s signer confirm` runs with whatever key is active —
@@ -627,6 +699,41 @@ export function addSigner(input: AddSignerInput, path: string = authorsFilePath(
   const active = target ? store.active : name;
   writeAuthors({ active, authors: { ...store.authors, [name]: record } }, path);
   return { name, ...record };
+}
+
+/**
+ * Record (or replace) the `safeTxHash` the pending row's swap was queued under.
+ *
+ * `addSigner` files the row and `s2s signer queue` proposes the swap as two
+ * steps, and the second one can fail: the row then exists with no proposal, and
+ * re-running the rotation would file a THIRD key instead of finishing the
+ * second. The hash is the fact that says which of the two states the row is in,
+ * so it is written here, after the queue, and the caller uses its presence to
+ * decide whether to propose again.
+ *
+ * Only a pending replacement holds a swap, so a row that is not chasing another
+ * one is refused by name rather than given a meaningless hash. Returns the row
+ * as it now reads.
+ */
+export function setPendingProposal(
+  name: string,
+  safeTxHash: Hex,
+  path: string = authorsFilePath(),
+): ActiveAuthor {
+  const store = readAuthors(path);
+  const key = findAuthorName(store, name);
+  const current = key === undefined ? undefined : store.authors[key];
+  if (key === undefined || current === undefined) {
+    throw new UsageError(`no author '${name}' — \`s2s author list\` shows the rows that exist`);
+  }
+  if (!isPendingReplacement(current)) {
+    throw new UsageError(
+      `author '${key}' is not a pending replacement — only a row filed to take over another one records a queued swap`,
+    );
+  }
+  const record: AuthorRecord = { ...current, proposal: assertProposal(key, safeTxHash) };
+  writeAuthors({ active: store.active, authors: { ...store.authors, [key]: record } }, path);
+  return { name: key, ...record };
 }
 
 /** What `settleReplacement` found, and therefore what the caller may say. */
@@ -649,6 +756,12 @@ export type ReplacementOutcome = 'none' | 'pending' | 'settled' | 'collision';
  * `pending` for ever — nothing else can clear it.) Both EOAs are derived from
  * the stored private keys; a row whose key cannot be derived is no evidence at
  * all, so it stays `pending` rather than resolving on a name alone.
+ *
+ * The queued `proposal` is not evidence either: a row holding one is still
+ * settled on ownership, and the hash is dropped with the marker in the same
+ * write. A collision writes nothing, so both survive — nothing has landed, and
+ * the hash is what lets the caller execute the queue rather than propose it
+ * again.
  */
 export function settleReplacement(
   safe: Address,
