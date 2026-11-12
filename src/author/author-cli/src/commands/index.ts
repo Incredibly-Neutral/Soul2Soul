@@ -22,6 +22,7 @@ import { revoke } from './revoke';
 import { newPublication } from './new';
 import { authorAddress } from './address';
 import { authorInit } from './init';
+import { authorMigrate } from './migrate';
 // The store table lives in its own module so `cli.ts` (and tests) can reach it
 // without the content-command graph.
 export { authorStoreCommands, findAuthorStoreCommand } from './author-store';
@@ -40,6 +41,7 @@ export const authorCommands: CommandSpec[] = [
   revoke,
   authorAddress,
   authorInit,
+  authorMigrate,
 ];
 
 /** `s2s publication` — publication lifecycle actions. */
