@@ -13,12 +13,15 @@
 // The old key is the row filed for this Safe whose stored key derives to one of
 // its owners, preferring the active row — and when the active row is not an
 // owner of this Safe, the row that is wins, so the run says `s2s author switch`
-// plainly: `signer confirm` signs with the active key and nothing else. The new
-// key comes from the same resolver `author new` and `signer add` use, so
-// `--key`, `--mnemonic`, a piped line and a generated phrase all work the same
-// way. The new row is filed inactive, with `replaces` naming the old one: the
-// old key is still the owner of the Safe, which is what lets it confirm the
-// swap.
+// plainly: `signer confirm` signs with the active key and nothing else. That row
+// is also the proposer: the service stores a proposal's signature as its
+// sender's confirmation and refuses a sender that is not an owner, so the swap
+// is posted by the OLD key — even when it is not the active one — and never by
+// the key that joins only when the swap executes. The new key comes from the
+// same resolver `author new` and `signer add` use, so `--key`, `--mnemonic`, a
+// piped line and a generated phrase all work the same way. The new row is filed
+// inactive, with `replaces` naming the old one: the old key is still the owner
+// of the Safe, which is what lets it confirm the swap.
 //
 // Step 1 is a reconcile, not a read: if a previous rotation already executed,
 // `settleReplacement` moves the store on before anything is decided. A
@@ -36,7 +39,8 @@
 // Runs without `buildContext`.
 // ============================================================================
 
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
@@ -71,6 +75,7 @@ import {
 /** One row of the store that names this Safe, with the EOA its key signs as. */
 interface FiledKey {
   name: string;
+  privateKey: string;
   eoa: Address;
 }
 
@@ -80,7 +85,7 @@ function keysForSafe(store: AuthorsStore, safe: Address): FiledKey[] {
   for (const [name, record] of Object.entries(store.authors)) {
     if (record.safe?.toLowerCase() !== safe.toLowerCase()) continue;
     const eoa = authorEoa(record.privateKey);
-    if (eoa) rows.push({ name, eoa });
+    if (eoa) rows.push({ name, privateKey: record.privateKey, eoa });
   }
   return rows;
 }
@@ -240,7 +245,13 @@ export async function runSignerRotate(
       // Idempotent, as in `signer add`: a Safe the service does not index is
       // registered, one it knows is left alone. No `modules` — see signer-add.
       await service.register(safe, { owners: chain.owners, threshold: chain.threshold });
-      safeTxHash = (await service.propose({ safe, sender: eoa, tx })).safeTxHash;
+      // Signed by the owner whose key this run is retiring, not by the key it is
+      // installing: the new key is on the owner list only after this transaction
+      // executes, and the service refuses a proposal from a sender that is not an
+      // owner. The old row signs whether or not it is the active author — the
+      // active slot only decides which key `signer confirm` signs with.
+      const signature = await privateKeyToAccount(oldKey.privateKey as Hex).sign({ hash: localHash });
+      safeTxHash = (await service.propose({ safe, sender: oldKey.eoa, tx, signature })).safeTxHash;
       proposed = true;
     } catch (err) {
       note = reasonOf(err);
@@ -297,18 +308,22 @@ export async function runSignerRotate(
       ...(settled ? [`settled     : ${settled} is now the key for ${safe}`] : []),
       ...(proposed
         ? [
-            `proposal    : queued — 0 of ${String(chain.threshold)} confirmations`,
+            `proposal    : queued — '${oldKey.name}' signed it (1 of ${String(chain.threshold)} confirmations)`,
             ...(switchTo
               ? []
-              : [
-                  `              the OLD key confirms this one: run \`s2s signer confirm ${safeTxHash}\` while '${oldKey.name}' is still the active key`,
-                ]),
+              : chain.threshold > 1
+                ? [
+                    `              the remaining owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
+                  ]
+                : [
+                    `              the threshold is met: \`s2s signer confirm ${safeTxHash}\` executes the swap`,
+                  ]),
             `              '${oldKey.name}' stops being an owner only when the swap executes, not when this proposal is filed`,
             `              proposing costs no gas; executing the swap costs gas from whichever owner sends it`,
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            '              propose this call by hand from an owner wallet:',
+            `              the service accepts a proposal only from an owner of ${safe}: post this call from an owner machine`,
             `              to   ${safe}`,
             `              data ${tx.data}`,
           ]),
