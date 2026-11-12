@@ -79,6 +79,13 @@ export interface AuthorSafeState {
    * given one.
    */
   signerIsOwner?: boolean;
+  /**
+   * The pet name this key is filed to replace, when it is a row that is filed
+   * but not an owner yet (`s2s signer rotate`). A row carrying it is pending:
+   * it must not be printed as an owner, and the confirm still runs from the old
+   * key. Absent on every row that is not a chase.
+   */
+  replaces?: string;
 }
 
 /**
@@ -394,6 +401,11 @@ export async function authorSafeState(
           rpcUrl,
         }));
     const state = await read(given);
+    // A row filed by `replaces` is not an owner yet, whichever slot it sits in:
+    // the marker travels with the answer so no caller has to guess.
+    const row = ctx.config.privateKey
+      ? authorRowForKey(readAuthors(), ctx.config.privateKey)
+      : undefined;
     return {
       address: given,
       eoa: ctx.eoaAddress,
@@ -404,6 +416,7 @@ export async function authorSafeState(
       signerIsOwner: state.owners?.some(
         (owner) => owner.toLowerCase() === ctx.eoaAddress.toLowerCase(),
       ),
+      ...(row?.replaces === undefined ? {} : { replaces: row.replaces }),
     };
   }
   const prediction = await predictAuthorSafe({
