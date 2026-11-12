@@ -3,28 +3,29 @@ import {
   getProtocolControllerAndModules,
   getDomainOwnerAndModules,
   findModuleWithRole,
+  findModuleByPublicationName,
   RECORDS_ROLE_ID,
   PUBLICATION_ROLE_ID,
 } from './ens.factory';
 
 // ============================================================================
-// Role discovery is ERC-165: every S2S module answers
-// `supportsInterface(roleId)`, so a module is found by what it implements and
-// not by a NAME() string it could copy.
+// Role discovery is ERC-165 first, with a NAME() fallback for publication.
 //
 // What these tests hold down:
 //
 //   1. The canonical Safe — the Safe 4337 module plus the records and the
-//      publication module — resolves both roles in three probes or fewer. Each
-//      probe is an eth_call and every eth_call spends one of Lit's 50 requests
-//      per session, so the count is part of the contract, not an incidental.
-//   2. A module whose supportsInterface reverts (an address that is a module
-//      but answers no ERC-165 at all) is skipped, not treated as ours.
-//   3. A module that answers the wrong role id is not accepted: answering the
-//      records id does not make a module the publication module.
+//      publication module — resolves both roles. Each probe is an eth_call and
+//      every eth_call spends one of Lit's 50 requests per session, so the count
+//      is part of the contract.
+//   2. A module that answers the role id is found by the id and its NAME() is
+//      never read.
+//   3. A module whose supportsInterface reverts is found through the NAME()
+//      fallback — which is the live case, since none of the three deployed
+//      publication modules implements ERC-165.
+//   4. A module that answers neither is not accepted, and the accepted-name set
+//      is exactly the pre-ERC-165 one.
 //
-// The 4337 skip survives as an optimisation: that module answers no S2S role,
-// so the probe could only ever come back empty.
+// The 4337 skip survives as an optimisation: that module answers no S2S role.
 // ============================================================================
 
 // Canonical SAFE_4337_MODULE_ADDRESS.
@@ -33,25 +34,53 @@ const SAFE_4337_LOWER = SAFE_4337.toLowerCase();
 
 const RECORDS = '0x' + '11'.repeat(20);
 const PUBLICATION = '0x' + '22'.repeat(20);
-const STRANGER = '0x' + '33'.repeat(20); // a module that answers neither role
-const REVERTER = '0x' + '44'.repeat(20); // a module whose supportsInterface reverts
+const STRANGER = '0x' + '33'.repeat(20); // answers neither an id nor a NAME
+const REVERTER = '0x' + '44'.repeat(20); // supportsInterface reverts, NAME answers
 
-// answers[address.toLowerCase()][roleId] === true → the module claims that role.
-// A missing entry, or the string 'revert', makes the eth_call fail.
+// The names the pre-ERC-165 discovery accepted. Asserted end to end below, so a
+// later edit to the predicate that narrows the set fails here.
+const ACCEPTED_PUBLICATION_NAMES = [
+  'S2S Publication Module', // V1
+  'S2S Publication Module V1',
+  'S2S Publication Module V2',
+  'S2S Publication Module V3', // what the live V3 answers
+  'S2S Publication Module V4', // a version this build has never seen
+];
+
+// Names the old discovery rejected, and must still reject.
+const REJECTED_PUBLICATION_NAMES = [
+  'S2S Records Module',
+  'S2S Publication Module V2 Factory',
+  'S2S Publication Module V',
+  'S2S Publication Module VX',
+  's2s publication module',
+  ' S2S Publication Module V3',
+  'S2S Publication Module V3 ',
+  'S2S Publication  Module',
+];
+
 type Answer = boolean | 'revert';
 
 const state = vi.hoisted(() => ({
   MODULES: [] as string[],
+  // answers[address.toLowerCase()][roleId] === true → the module claims that role.
   answers: {} as Record<string, Record<string, Answer>>,
+  // names[address.toLowerCase()] → what the module answers for NAME(); the
+  // string 'revert' makes the call fail.
+  names: {} as Record<string, string | 'revert'>,
   probes: [] as { address: string; roleId: string }[],
+  nameProbes: [] as string[],
 }));
 
 const setAnswers = (address: string, answers: Record<string, Answer>) => {
   state.answers[address.toLowerCase()] = answers;
 };
 
-const probesFor = (roleId: string) =>
-  state.probes.filter((probe) => probe.roleId === roleId).map((probe) => probe.address);
+const setName = (address: string, name: string | 'revert') => {
+  state.names[address.toLowerCase()] = name;
+};
+
+const probedAddresses = () => state.probes.map((probe) => probe.address);
 
 vi.mock('./evm', () => ({
   evmRead: vi.fn(
@@ -75,6 +104,15 @@ vi.mock('./evm', () => ({
           }
           return answer;
         }
+        case 'NAME': {
+          const address = contractAddress.toLowerCase();
+          state.nameProbes.push(address);
+          const name = state.names[address];
+          if (name === undefined || name === 'revert') {
+            throw new Error('execution reverted: no NAME');
+          }
+          return name;
+        }
         default:
           throw new Error('unexpected method ' + method);
       }
@@ -89,12 +127,18 @@ beforeEach(() => {
   };
   state.MODULES = [];
   state.answers = {};
+  state.names = {};
   state.probes = [];
+  state.nameProbes = [];
   setAnswers(RECORDS, { [RECORDS_ROLE_ID]: true });
   setAnswers(PUBLICATION, { [PUBLICATION_ROLE_ID]: true });
+  setName(PUBLICATION, 'S2S Publication Module V3');
   setAnswers(SAFE_4337, {}); // would revert, but it must never be asked
   setAnswers(STRANGER, { [RECORDS_ROLE_ID]: false, [PUBLICATION_ROLE_ID]: false });
+  setName(STRANGER, 'S2S Records Module');
+  // The live case: no supportsInterface at all, a NAME() that says what it is.
   setAnswers(REVERTER, { [RECORDS_ROLE_ID]: 'revert', [PUBLICATION_ROLE_ID]: 'revert' });
+  setName(REVERTER, 'S2S Publication Module V2');
 });
 
 describe('role ids', () => {
@@ -106,7 +150,7 @@ describe('role ids', () => {
   });
 });
 
-describe('getDomainOwnerAndModules — resolves both roles by interface', () => {
+describe('getDomainOwnerAndModules — resolves both roles', () => {
   it('resolves records and publication on a Safe that carries the 4337 module in three probes or fewer', async () => {
     state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
 
@@ -115,8 +159,9 @@ describe('getDomainOwnerAndModules — resolves both roles by interface', () => 
     expect(result.configModule).toBe(RECORDS);
     expect(result.publicationModule).toBe(PUBLICATION);
     expect(state.probes.length).toBeLessThanOrEqual(3);
-    // The 4337 module answers no S2S interface and is skipped outright.
-    expect(state.probes.map((probe) => probe.address)).not.toContain(SAFE_4337_LOWER);
+    // The id was answered, so no NAME() is read anywhere.
+    expect(state.nameProbes).toEqual([]);
+    expect(probedAddresses()).not.toContain(SAFE_4337_LOWER);
   });
 
   it('keeps the three-probe ceiling when the module list is the other way round', async () => {
@@ -127,31 +172,44 @@ describe('getDomainOwnerAndModules — resolves both roles by interface', () => 
     expect(result.configModule).toBe(RECORDS);
     expect(result.publicationModule).toBe(PUBLICATION);
     expect(state.probes.length).toBeLessThanOrEqual(3);
+    expect(state.nameProbes).toEqual([]);
   });
 
-  it('asks records first, so a records-only Safe costs one probe', async () => {
-    state.MODULES = [SAFE_4337, RECORDS, STRANGER];
+  it('finds a publication module whose supportsInterface reverts, through its NAME()', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
 
     const result = await getDomainOwnerAndModules('example.eth');
 
     expect(result.configModule).toBe(RECORDS);
-    // STRANGER answers false to both ids; one probe each, never more.
-    expect(probesFor(RECORDS_ROLE_ID).length).toBeLessThanOrEqual(2);
+    expect(result.publicationModule).toBe(REVERTER);
+    // The id probe came back empty, then NAME() decided it — four calls for
+    // this Safe, which is the count the header states for the live case.
+    expect(state.nameProbes).toEqual([REVERTER.toLowerCase()]);
+    expect(state.probes.length + state.nameProbes.length).toBeLessThanOrEqual(4);
   });
 
-  it('skips a module whose supportsInterface reverts', async () => {
-    state.MODULES = [REVERTER, RECORDS, PUBLICATION];
+  it('does not read NAME() for records, which answers its id', async () => {
+    setName(RECORDS, 'S2S Records Module');
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
+
+    await getDomainOwnerAndModules('example.eth');
+
+    expect(state.nameProbes).not.toContain(RECORDS.toLowerCase());
+  });
+
+  it('does not accept a module that answers neither an id nor a NAME', async () => {
+    setName(STRANGER, 'S2S Records Module');
+    setAnswers(STRANGER, { [RECORDS_ROLE_ID]: false, [PUBLICATION_ROLE_ID]: false });
+
+    state.MODULES = [RECORDS, STRANGER];
 
     const result = await getDomainOwnerAndModules('example.eth');
 
     expect(result.configModule).toBe(RECORDS);
-    expect(result.publicationModule).toBe(PUBLICATION);
-    expect(result.configModule).not.toBe(REVERTER);
-    expect(result.publicationModule).not.toBe(REVERTER);
+    expect(result.publicationModule).toBeNull();
   });
 
   it('does not accept a module that answers the records id as the publication module', async () => {
-    // STRANGER claims nothing; give it a wrong-id answer instead.
     setAnswers(STRANGER, { [RECORDS_ROLE_ID]: true });
 
     state.MODULES = [RECORDS, PUBLICATION, STRANGER];
@@ -164,6 +222,7 @@ describe('getDomainOwnerAndModules — resolves both roles by interface', () => 
 
   it('returns null for a role no module answers', async () => {
     setAnswers(PUBLICATION, {}); // answers neither id
+    setName(PUBLICATION, 'S2S Records Module'); // and is not a publication by name
 
     state.MODULES = [SAFE_4337, RECORDS, PUBLICATION, STRANGER];
 
@@ -179,10 +238,11 @@ describe('getDomainOwnerAndModules — resolves both roles by interface', () => 
     const result = await getDomainOwnerAndModules('example.eth');
 
     expect(result.configModule).toBe(RECORDS);
-    expect(state.probes.map((probe) => probe.address)).not.toContain(SAFE_4337_LOWER);
+    expect(probedAddresses()).not.toContain(SAFE_4337_LOWER);
+    expect(state.nameProbes).not.toContain(SAFE_4337_LOWER);
   });
 
-  it('finds nothing and probes nothing when the 4337 module is the only module', async () => {
+  it('finds nothing and calls nothing when the 4337 module is the only module', async () => {
     state.MODULES = [SAFE_4337];
 
     const result = await getDomainOwnerAndModules('example.eth');
@@ -190,26 +250,28 @@ describe('getDomainOwnerAndModules — resolves both roles by interface', () => 
     expect(result.configModule).toBeNull();
     expect(result.publicationModule).toBeNull();
     expect(state.probes).toEqual([]);
+    expect(state.nameProbes).toEqual([]);
   });
 });
 
 describe('getProtocolControllerAndModules — the records module only', () => {
-  it('resolves the records module and never asks for the publication role', async () => {
+  it('resolves the records module, with no publication probe and no NAME() read', async () => {
     state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
 
     const result = await getProtocolControllerAndModules();
 
     expect(result.configModule).toBe(RECORDS);
     expect(state.probes.length).toBeLessThanOrEqual(2);
-    expect(probesFor(PUBLICATION_ROLE_ID)).toEqual([]);
+    expect(state.nameProbes).toEqual([]);
   });
 
-  it('skips modules answering false or reverting', async () => {
+  it('skips modules answering false or reverting, with no NAME() fallback for records', async () => {
     state.MODULES = [SAFE_4337, STRANGER, REVERTER, RECORDS];
 
     const result = await getProtocolControllerAndModules();
 
     expect(result.configModule).toBe(RECORDS);
+    expect(state.nameProbes).toEqual([]);
   });
 
   it('returns a null config module when no module answers the records id', async () => {
@@ -218,6 +280,42 @@ describe('getProtocolControllerAndModules — the records module only', () => {
     const result = await getProtocolControllerAndModules();
 
     expect(result.configModule).toBeNull();
+    expect(state.nameProbes).toEqual([]);
+  });
+});
+
+describe('the publication NAME() fallback', () => {
+  it('accepts exactly the names the pre-ERC-165 discovery accepted', async () => {
+    for (const name of ACCEPTED_PUBLICATION_NAMES) {
+      state.probes = [];
+      state.nameProbes = [];
+      setName(REVERTER, name);
+
+      await expect(
+        findModuleByPublicationName([REVERTER], undefined),
+        `expected ${JSON.stringify(name)} to be accepted`,
+      ).resolves.toBe(REVERTER);
+    }
+
+    for (const name of REJECTED_PUBLICATION_NAMES) {
+      state.probes = [];
+      state.nameProbes = [];
+      setName(REVERTER, name);
+
+      await expect(
+        findModuleByPublicationName([REVERTER], undefined),
+        `expected ${JSON.stringify(name)} to be rejected`,
+      ).resolves.toBeNull();
+    }
+  });
+
+  it('is not consulted while a module answers the publication id', async () => {
+    state.MODULES = [RECORDS, PUBLICATION, REVERTER];
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.publicationModule).toBe(PUBLICATION);
+    expect(state.nameProbes).toEqual([]);
   });
 });
 
