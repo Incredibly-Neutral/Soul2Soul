@@ -390,6 +390,42 @@ async function recoversTo(candidate: Hex, digest: Hex, owner: Address): Promise<
 }
 
 /**
+ * The proposer's signature, proved before it is spent a round trip on.
+ *
+ * The service stores this signature as `sender`'s confirmation, so two of its
+ * answers are decidable offline: a blank or mis-sized `signature` is `422
+ * {"signature":["This field may not be blank."]}` (or a hex decode failure),
+ * and a signature that recovers to somebody other than `sender` is `422
+ * "Signature not valid"`. Both would leave a `safe_tx_http` naming neither the
+ * field nor the key that was wrong.
+ *
+ * The `v` byte decides the digest, as it does on chain: 31/32 is an eth_sign
+ * signature over the prefixed hash, anything else is over the safeTxHash
+ * itself. A signature that recovers to `sender` under neither is refused.
+ */
+async function assertProposerSignature(signature: Hex, sender: Address, safeTxHash: Hex): Promise<void> {
+  const hexChars = signature.startsWith('0x') ? signature.length - 2 : 0;
+  if (hexChars !== 130 || !/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+    throw new CliError(
+      `signature must be the sender's 65-byte signature over ${safeTxHash} (0x and 130 hex chars), got ${String(hexChars)} hex chars`,
+      1,
+      'signature_malformed',
+    );
+  }
+
+  const candidate = asRecoverableSignature(readSignature(sender, signature));
+  const flagged = Number.parseInt(signature.slice(-2), 16) > 30;
+  const digest = flagged ? hashMessage({ raw: safeTxHash }) : safeTxHash;
+  if (!(await recoversTo(candidate, digest, sender))) {
+    throw new CliError(
+      `signature recovers to another address over ${safeTxHash}, not to sender ${sender} — the service files it as that address's confirmation and would refuse it`,
+      1,
+      'signature_sender_mismatch',
+    );
+  }
+}
+
+/**
  * The call to make on the Safe once enough owners have confirmed:
  * `execTransaction` with the proposal's own fields and the packed signatures.
  *
@@ -457,7 +493,16 @@ export interface SafeTxService {
     safe: Address,
     info: { owners: Address[]; threshold: number; version?: string; modules?: Address[] },
   ): Promise<void>;
-  propose(input: { safe: Address; sender: Address; tx: SafeTxInput }): Promise<{ safeTxHash: Hex }>;
+  propose(input: {
+    safe: Address;
+    sender: Address;
+    tx: SafeTxInput;
+    /**
+     * The sender's own 65-byte signature over the computed safeTxHash. The
+     * service stores it as that owner's confirmation; there is no placeholder.
+     */
+    signature: Hex;
+  }): Promise<{ safeTxHash: Hex }>;
   pending(safe: Address): Promise<SafeTxRecord[]>;
   get(safe: Address, safeTxHash: Hex): Promise<SafeTxRecord>;
   confirm(input: { safe: Address; safeTxHash: Hex; signature: Hex }): Promise<void>;
@@ -731,9 +776,18 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
     },
 
     /**
-     * Queue a transaction for the other owners. The signature is the service's
-     * placeholder `0x`: the proposer's own signature is a confirmation, sent
-     * separately, so a proposal and a confirmation are never the same request.
+     * Queue a transaction for the other owners, with the proposer's own
+     * signature on it.
+     *
+     * `signature` is required and is not a placeholder: the service stores it as
+     * the sender's confirmation of this proposal, and answers `422
+     * {"signature":["This field may not be blank."]}` to a blank one. Proposing
+     * from an owner key therefore also confirms as that key — at a threshold of
+     * 1 the transaction is executable the moment the proposal is accepted, and
+     * one POST has done both halves. `sender` is who the service credits, so it
+     * must be an owner of the Safe (the service refuses `Sender is not an
+     * owner`), and it must be the address `signature` recovers to; a
+     * disagreement is refused here, offline, instead of as a 422.
      *
      * The gas fields are the transaction's own, exactly as the hash was
      * computed from them: the CLI proposes zeros, but a caller that passes a
@@ -742,8 +796,9 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
      * hashing the caller's values would file a proposal under a hash its own
      * fields do not produce.
      */
-    propose: async ({ safe, sender, tx }): Promise<{ safeTxHash: Hex }> => {
+    propose: async ({ safe, sender, tx, signature }): Promise<{ safeTxHash: Hex }> => {
       const safeTxHash = computeSafeTxHash({ chainId, safe, tx });
+      await assertProposerSignature(signature, sender, safeTxHash);
       await json('POST', `/api/v1/safes/${safe}/multisig-transactions/`, {
         to: tx.to,
         value: tx.value.toString(),
@@ -757,7 +812,7 @@ export function makeSafeTxService(opts: SafeTxServiceOptions): SafeTxService {
         nonce: tx.nonce,
         contractTransactionHash: safeTxHash,
         sender,
-        signature: '0x',
+        signature,
         origin: 's2s',
       });
       return { safeTxHash };

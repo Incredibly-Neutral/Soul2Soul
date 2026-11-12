@@ -12,6 +12,7 @@ import {
   decodeFunctionData,
   encodeAbiParameters,
   keccak256,
+  recoverAddress,
   stringToHex,
   type Address,
   type Hex,
@@ -623,15 +624,21 @@ describe('makeSafeTxService', () => {
     expect(calls[0]?.method).toBe('GET');
   });
 
-  it('proposes the transaction with its hash, zero gas and no signature', async () => {
+  it("posts the caller's signature verbatim and a sender that matches it", async () => {
     const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
     const service = makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
       chainId: CHAIN_ID,
     });
+    const signature = await accountA.sign({ hash: SAFE_TX_HASH });
 
-    const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: ADD_OWNER_TX });
+    const { safeTxHash } = await service.propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: ADD_OWNER_TX,
+      signature,
+    });
 
     expect(safeTxHash).toBe(SAFE_TX_HASH);
     expect(calls[0]?.method).toBe('POST');
@@ -648,10 +655,65 @@ describe('makeSafeTxService', () => {
       refundReceiver: ZERO,
       nonce: 7,
       contractTransactionHash: safeTxHash,
-      sender: OWNER_A,
-      signature: '0x',
+      sender: accountA.address,
+      signature,
       origin: 's2s',
     });
+
+    // The service files the body's signature as the sender's confirmation, so it
+    // has to be the sender's own over the hash — not a placeholder and not
+    // somebody else's.
+    const body = calls[0]?.body as { signature: Hex; sender: Address };
+    expect(await recoverAddress({ hash: safeTxHash, signature: body.signature })).toBe(
+      accountA.address,
+    );
+  });
+
+  it.each([
+    ['an empty 0x', '0x'],
+    ['64 bytes', `0x${'11'.repeat(64)}`],
+    ['130 bytes', `0x${'11'.repeat(130)}`],
+  ])('refuses %s before the request', async (_shape, signature) => {
+    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+    const service = makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+      chainId: CHAIN_ID,
+    });
+
+    await expect(
+      service.propose({
+        safe: SAFE,
+        sender: accountA.address,
+        tx: ADD_OWNER_TX,
+        signature: signature as Hex,
+      }),
+    ).rejects.toMatchObject({ code: 'signature_malformed' });
+    // The service answers 422 {"signature":["This field may not be blank."]} to
+    // the empty one; the round trip is not worth spending on any of them.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses a signature that recovers to a key other than sender', async () => {
+    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+    const service = makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+      chainId: CHAIN_ID,
+    });
+    // A real signature, by the wrong key: the shape is perfect and the service
+    // would still refuse it as that address's confirmation.
+    const signature = await accountB.sign({ hash: SAFE_TX_HASH });
+
+    await expect(
+      service.propose({
+        safe: SAFE,
+        sender: accountA.address,
+        tx: ADD_OWNER_TX,
+        signature,
+      }),
+    ).rejects.toMatchObject({ code: 'signature_sender_mismatch' });
+    expect(calls).toHaveLength(0);
   });
 
   it('posts the gas fields the hash was computed from', async () => {
@@ -672,7 +734,14 @@ describe('makeSafeTxService', () => {
       chainId: CHAIN_ID,
     });
 
-    const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: paying });
+    const { safeTxHash } = await service.propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: paying,
+      signature: await accountA.sign({
+        hash: computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: paying }),
+      }),
+    });
 
     expect(calls[0]?.body).toMatchObject({
       safeTxGas: '21000',
@@ -690,7 +759,12 @@ describe('makeSafeTxService', () => {
     const { safeTxHash } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
-    }).propose({ safe: SAFE, sender: OWNER_A, tx: ADD_OWNER_TX });
+    }).propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: ADD_OWNER_TX,
+      signature: await accountA.sign({ hash: SAFE_TX_HASH }),
+    });
 
     expect(safeTxHash).toBe(computeSafeTxHash({ chainId: 8453, safe: SAFE, tx: ADD_OWNER_TX }));
   });
