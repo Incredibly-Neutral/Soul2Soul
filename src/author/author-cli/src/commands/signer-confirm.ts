@@ -90,6 +90,29 @@ async function recoversAs(safeTxHash: Hex, signature: Hex, owner: Address): Prom
   return false;
 }
 
+/**
+ * The message for a send that failed because the EOA has no ETH, or undefined
+ * when the failure was something else.
+ *
+ * A node reports this as a reverted execution ("gas required exceeds allowance
+ * (0)", geth's wording) or as "insufficient funds", not as an error type, so it
+ * is matched rather than classified. It is worth its own message because it is
+ * the one execution failure that leaves nothing to be redone: the proposal is
+ * queued and the confirmation is posted, so the whole recovery is funding the
+ * address and running the same command again.
+ */
+function fundsMessage(err: unknown, eoa: Address, safe: Address, safeTxHash: Hex): string | undefined {
+  const parts: string[] = [];
+  for (const field of ['message', 'shortMessage', 'details'] as const) {
+    const value = (err as Record<string, unknown> | null)?.[field];
+    if (typeof value === 'string') parts.push(value);
+  }
+  if (!/insufficient funds|gas required exceeds allowance|exceeds the balance/i.test(parts.join(' '))) {
+    return undefined;
+  }
+  return `${eoa} has no ETH on base to pay for executing ${safeTxHash} on ${safe}: the proposal is queued and signed, so fund ${eoa} with a little Base ETH and run this command again — nothing needs re-signing and nothing is lost`;
+}
+
 export async function runSignerConfirm(
   out: CliOut,
   args: ParsedArgs,
@@ -238,7 +261,16 @@ export async function runSignerConfirm(
     // chain id, `execTransactionArgs` re-hashes and refuses a record that is
     // not the proposal that was signed.
     const call = execTransactionArgs(after, packed, { chainId: deps.chainId });
-    txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
+    try {
+      txHash = await deps.send({ rpcUrl, privateKey, to: call.to, data: call.data });
+    } catch (err) {
+      // A CliError from the seam already says what it is; a node's rejection is
+      // where the gas-money case hides, and it is the one worth naming.
+      if (err instanceof CliError) throw err;
+      const funds = fundsMessage(err, eoa, safe, safeTxHash);
+      if (funds === undefined) throw err;
+      throw new CliError(funds, 1, 'insufficient_gas');
+    }
     executed = true;
     // The swap has landed: settle again against the owners the chain now
     // reports, so the new row becomes the active one and the old row goes. A

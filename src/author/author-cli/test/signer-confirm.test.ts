@@ -618,6 +618,31 @@ describe('s2s signer confirm', () => {
     expect(captured.results).toHaveLength(0);
   });
 
+  it('names the gas money when the EOA cannot pay for the execution', async () => {
+    const fake = fakeService(
+      baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
+    );
+    const captured = capture();
+
+    // viem surfaces a node's refusal as an execution error whose text carries
+    // the node's wording; the funds case is matched, not typed.
+    const reverted = Object.assign(
+      new Error('Execution reverted with reason: gas required exceeds allowance (0).'),
+      { shortMessage: 'Execution reverted with reason: gas required exceeds allowance (0).' },
+    );
+
+    await expect(
+      runSignerConfirm(captured.out, args(['signer', 'confirm', HASH, '--safe', SAFE]), {
+        ...deps(fake),
+        send: () => Promise.reject(reverted),
+      }),
+    ).rejects.toMatchObject({ code: 'insufficient_gas' });
+    // The recovery is funding the address: the confirmation stays posted and
+    // the message has to say so.
+    expect(fake.confirmed).toHaveLength(1);
+    expect(captured.results).toHaveLength(0);
+  });
+
   it('settles a pending replacement once the swap has executed', async () => {
     const fake = fakeService(
       baseRecord({ confirmations: [{ owner: OWNER_B, signature: await signedByB() }] }),
