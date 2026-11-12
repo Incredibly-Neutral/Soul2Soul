@@ -1573,7 +1573,7 @@ export class S2SApp extends LitElement {
                   ?disabled=${!this.safeIntegration.hasPublicationModule()}
                   @click=${() => this.switchTab('deals')}
                 >
-                  Deals
+                  Agreements
                 </button>
                 <button
                   class="tab ${this.currentTab === 'whitelist' ? 'active' : ''}"

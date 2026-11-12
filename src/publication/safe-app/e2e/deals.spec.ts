@@ -4,35 +4,34 @@ import { bootApp, openTab } from './helpers/app';
 test.setTimeout(180_000);
 
 /**
- * deals.spec.ts — the Deals tab renders its toolbar, the Active Deals section
- * and the Check Deal form. Deals/offers come from real RPC on the publication
+ * deals.spec.ts — the Agreements tab renders its toolbar and the Active
+ * Agreements section. Offers/agreements come from real RPC on the publication
  * module, so assert STRUCTURE (sections, forms, rows-or-empty) not values.
+ * The filename, the deals-tab id and the s2s-deals-tab element keep the older
+ * word.
  */
-test.describe('deals tab', () => {
+test.describe('agreements tab', () => {
   test.beforeEach(async ({ page }) => {
     await bootApp(page);
     await openTab(page, 'deals-tab');
   });
 
-  test('renders the toolbar, Active Deals section and Check Deal form', async ({ page }) => {
+  test('renders the toolbar and Active Agreements section', async ({ page }) => {
     const tab = page.locator('s2s-app').locator('s2s-deals-tab');
     await expect(tab.getByRole('button', { name: /Bulk Render/ })).toBeVisible();
     await expect(
-      tab.locator('.section-title').filter({ hasText: 'Active Deals' }),
-    ).toBeVisible();
-    await expect(
-      tab.locator('.section-title').filter({ hasText: 'Check Deal Status' }),
+      tab.locator('.section-title').filter({ hasText: 'Active Agreements' }),
     ).toBeVisible();
     await expect(tab.locator('s2s-check')).toBeVisible();
   });
 
-  test('offers/deals tables render rows with data-genesis, or the empty state', async ({ page }) => {
+  test('agreements/offers tables render rows with data-genesis, or the empty state', async ({ page }) => {
     const tab = page.locator('s2s-app').locator('s2s-deals-tab');
     const rows = tab.locator('.table-row');
     const empty = tab.locator('.empty-state');
 
-    // The deals tab starts in a loading state while it fetches over real RPC;
-    // afterwards it must render either table rows or an empty state.
+    // The agreements tab starts in a loading state while it fetches over real
+    // RPC; afterwards it must render either table rows or an empty state.
     await expect
       .poll(
         async () =>
