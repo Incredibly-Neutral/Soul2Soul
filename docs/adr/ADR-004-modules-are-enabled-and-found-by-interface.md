@@ -1,4 +1,4 @@
-# ADR-003 — author modules are enabled, and found by interface
+# ADR-004 — author modules are enabled, and found by interface
 
 Status: accepted · Domain: AUTHOR
 

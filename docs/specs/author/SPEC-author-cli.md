@@ -871,6 +871,16 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   (`protocol/actions/src/libs/gates.ts`: `canPublish(authorSafe)` + `isOwner(signer)` +
   `hasDeal(genesis)`) inside `decryptRaw`, so an author preview renders empty/revoked until a deal
   exists for the note.
+- **The label**: frontmatter `label` is a short public name for the manuscript. `parseMarkdownNote`
+  fills `ParsedNote.label`, trimmed, with a blank or non-string value resolving to `null` (no label,
+  so a displayer falls back to the genesis id). It is a protocol key, not template data, so it stays
+  out of the shared `custom` bag, where it would be signed into the body. `author.ts` passes it on as
+  `label: parsed.label ?? undefined`, so a non-blank label is written onto the stored public part
+  and a `null` writes no key at all. It is unsigned there: it rides on the public part and no
+  signature covers it (ADR-003). The tool never writes it back — the frontmatter name is the
+  author's. A note whose frontmatter already carried `label` signed it into the body's `custom`;
+  the key is stripped now, so the next publish signs a different body and that version's objectId
+  differs.
 - **The split**: `upload` ends at Kubo + pins (no chain tx, so its result carries no `txHash`).
   It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
   only the name label, taken from the ENS name itself. On the **first** write-back it also stamps

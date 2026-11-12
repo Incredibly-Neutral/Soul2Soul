@@ -28,12 +28,40 @@ import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import './s2s-check.js';
 import './pet-name.js';
 
+/**
+ * The name a row shows, and the value the ID / Title column sorts on, so the
+ * two cannot disagree:
+ *   unencrypted          -> the title, else the genesis id
+ *   encrypted, labelled  -> the label
+ *   encrypted, bare      -> the genesis id, in full (never a shortened address)
+ * `public.label` is unsigned and read straight off the stored item, absent
+ * meaning "no label"; it is never verified, so an encrypted row with none
+ * falls back to the id rather than inventing a name.
+ *
+ * `||`, not `??`: a blank label or title must fall back to the id too, so a
+ * blank can never render a blank cell. readPublicLabel drops blanks and
+ * whitespace today, and this keeps that guard from being the only one.
+ */
+function displayName(d: Deal): string {
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- blank falls back, not just nullish
+  return d.encryption ? d.label || d.genesis : d.title || d.genesis;
+}
+
+/**
+ * `public.label` off a fetched stored item: a non-blank string, trimmed, or
+ * undefined. A blank is no label at all, never a fabricated one.
+ */
+function readPublicLabel(content: unknown): string | undefined {
+  const label = (content as { public?: { label?: unknown } } | null | undefined)?.public?.label;
+  return typeof label === 'string' && label.trim() !== '' ? label.trim() : undefined;
+}
+
 // Per-column sort configuration for the Offers and Deals tables.
 const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
   {
     key: 'title',
     label: 'ID / Title',
-    get: (o) => (o.encryption ? o.genesis : o.title ?? o.genesis),
+    get: (o) => displayName(o),
   },
   { key: 'author', label: 'Author (safe)', get: (o) => o.author },
   { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (o) => o.postType },
@@ -46,7 +74,7 @@ const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
   {
     key: 'title',
     label: 'ID / Title',
-    get: (d) => (d.encryption ? d.genesis : d.title ?? d.genesis),
+    get: (d) => displayName(d),
   },
   { key: 'author', label: 'Author (safe)', get: (d) => d.author },
   { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (d) => d.postType },
@@ -179,6 +207,7 @@ export class S2SDealsTab extends LitElement {
           l.postType = content.public.postType;
           l.encryption = content.encryption;
           l.title = l.encryption ? '-' : JSON.parse(content.body).title;
+          l.label = readPublicLabel(content);
           l.position = parseInt(content.public.position);
           l.tags = content.public.tags;
         } catch (e) {
@@ -196,6 +225,7 @@ export class S2SDealsTab extends LitElement {
           l.postType = content.public.postType;
           l.encryption = content.encryption;
           l.title = l.encryption ? '-' : JSON.parse(content.body).title;
+          l.label = readPublicLabel(content);
           l.tags = content.public.tags;
         } catch (e) {
           console.warn('Could not augment offer', l.genesis, e);
@@ -228,7 +258,7 @@ export class S2SDealsTab extends LitElement {
       const ok = await this.safeIntegration.hasDeal(g);
       this.dealCheck = {
         result: ok ? 'pass' : 'fail',
-        message: ok ? 'has a deal' : 'no deal',
+        message: ok ? 'has an agreement' : 'no agreement',
       };
     } catch (error) {
       console.error('Error checking deal:', error);
@@ -273,7 +303,7 @@ export class S2SDealsTab extends LitElement {
           store.setOffers(this.offers);
         }
       } else {
-        this.showNotification('Deal rejected — back in pending offers.', 'success');
+        this.showNotification('Agreement rejected — back in pending offers.', 'success');
         // Deal → offer demotion (existing logic)
         const idx = this.deals.findIndex((d) => d.genesis === genesis);
         if (idx !== -1) {
@@ -379,14 +409,10 @@ export class S2SDealsTab extends LitElement {
     console.log(res);
   }
 
-  private shortenAddress(s: string) {
-    return `${s.slice(0, 4)}...${s.slice(-4)}`;
-  }
-
   private renderOfferRow(offer: Deal): TemplateResult {
     return html`
       <div class="offer-card table-row" data-genesis="${offer.genesis}">
-        <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${offer.encryption ? this.shortenAddress(offer.genesis) : (offer.title ?? '—')}'></copy-content-id></div>
+        <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${displayName(offer)}'></copy-content-id></div>
         <div class="table-cell"><pet-name value=${offer.author}></pet-name></div>
         <div class="table-cell">${offer.postType ?? ''}</div>
         <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
@@ -405,7 +431,7 @@ export class S2SDealsTab extends LitElement {
   private renderDealRow(deal: Deal): TemplateResult {
     return html`
       <div class="deal-card table-row" data-genesis="${deal.genesis}">
-        <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${deal.encryption ? this.shortenAddress(deal.genesis) : deal.title}'></copy-content-id></div>
+        <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${displayName(deal)}'></copy-content-id></div>
         <div class="table-cell"><pet-name value=${deal.author}></pet-name></div>
         <div class="table-cell">${deal.postType ?? ''}</div>
         <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
@@ -424,7 +450,7 @@ export class S2SDealsTab extends LitElement {
     if (this.fetching && store.deals.length === 0) {
       return html`
         <div class="loading">
-          <p>Loading deals...</p>
+          <p>Loading agreements...</p>
         </div>
       `;
     }
@@ -470,7 +496,7 @@ export class S2SDealsTab extends LitElement {
 
       <div class="section">
         <s2s-table
-          title="Active Deals"
+          title="Active Agreements"
           .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
             @click=${this.handleRefresh} style="margin-right: 1rem">
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
@@ -484,7 +510,7 @@ export class S2SDealsTab extends LitElement {
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
           .actionsContent=${html`Actions`}
-          emptyText=${store.deals.length > 0 ? 'No deals match the current filters' : 'No active deals yet'}
+          emptyText=${store.deals.length > 0 ? 'No agreements match the current filters' : 'No active agreements yet'}
           gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
           @chip-filter=${(e: CustomEvent) => { this.dealsChips = setChips(this.dealsChips, e.detail.key, e.detail.values); }}

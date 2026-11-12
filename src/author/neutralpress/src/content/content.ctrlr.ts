@@ -127,6 +127,8 @@ export class ContentController implements IContentController {
 		position: number;
 		encryption: boolean;
 		title: string;
+		/** Public but unsigned label, trimmed; blank or non-string is no label. */
+		label: string | null;
 		slug: string;
 		content: string;
 		summary: string | undefined;
@@ -152,6 +154,9 @@ export class ContentController implements IContentController {
 			ENCRYPTED_KEY,
 			LEGACY_ENCRYPTION_KEY,
 			'title',
+			// Public but unsigned: on the stored public part, never the body, so it
+			// must not fall into the custom bag and shift the objectId.
+			'label',
 			'modified_date',
 			'creation_date',
 			'cid',
@@ -196,6 +201,12 @@ export class ContentController implements IContentController {
 
 		const { summary, content } = deriveSummary(mdContent);
 
+		// Only a non-blank string is a label: a number or a blank resolves to none,
+		// so the displayer falls back to the genesis id.
+		const rawLabel: unknown = frontmatter.label;
+		const label =
+			typeof rawLabel === 'string' && rawLabel.trim() !== '' ? rawLabel.trim() : null;
+
 		return {
 			contentId: frontmatter.content_id || null,
 			postType: frontmatter.post_type || 'post',
@@ -205,6 +216,7 @@ export class ContentController implements IContentController {
 			position: frontmatter.position ? parseInt(frontmatter.position) : 0,
 			encryption: encryptionOf(frontmatter),
 			title: resolvedTitle,
+			label,
 			slug,
 			content,
 			summary,
@@ -266,6 +278,9 @@ export class ContentController implements IContentController {
 					modifiedDate: now,
 					tags: parsed.tags,
 					attributes: undefined,
+					// Public but unsigned: stored on the public part, never signed into
+					// the body, so the objectId is the same with or without it.
+					label: parsed.label ?? undefined,
 				},
 				{
 					title: parsed.title,

@@ -145,6 +145,17 @@ absent from the public docs.
   write. Useful for authors; not a guarantee, and never reachable as a published page.
 - **Publication-owned tree reset.** Recorded in `gates.md` — a holder may clear the site outright.
 
+## The name a listing shows
+
+A v2 manuscript may carry `label`, a short name its author wrote that no signature covers
+(ADR-003). `toBody` carries it into template data through `publicLabel(specVersion, label)`: v2
+only, a non-blank string, trimmed, and no key at all when there is none. That gives a template a
+name for an item whose title is inside the ciphertext; a plaintext item carries both, its `label`
+and its real `title`. A v1 public part yields no label, because those bytes are frozen. The press
+does not substitute a genesis id for a missing label — the template data always has `id`, and a
+displayer that wants the fallback resolves `label ?? genesis` itself. No press decision may key on
+a label: it is unsigned, so any relayer can rewrite it.
+
 ## Gaps without a proposal
 
 - **PRESS-7 is unbuilt.** Nothing in the press encrypts a rendered page; `canRead` is checked before
