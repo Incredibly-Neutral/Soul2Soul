@@ -1237,21 +1237,12 @@ export async function migrateAuthorContracts(
   };
 
   try {
-    const newGuard = await seam.readGuardFor({ factory, module: newHistory, rpcUrl });
-    if (newGuard === null) {
-      return {
-        ...nothing({ drafts: enabled.drafts, ownerHistory: enabled.ownerHistory }),
-        state: 'pending-safe',
-        note: `the factory minted no guard for the predicted owner-history module ${newHistory} — nothing to install; run \`s2s author init\` against this factory first`,
-      };
-    }
-
+    // The slot guard is read and proved before any write: a foreign guard means
+    // the run touches nothing at all. The proof is also the only place the old
+    // history module's address comes from.
     const slotGuard = await seam.readGuard({ safe, rpcUrl });
-    const guardMove = !sameAddress(slotGuard, newGuard);
-
     let oldOwnerHistory: Address | null = null;
-
-    if (guardMove && slotGuard !== null) {
+    if (slotGuard !== null) {
       // Replacing a guard is allowed only for this package's own guard of the
       // old module. Anything else stays, and the run says which guard it found.
       const proof = await proveInstalledGuard({ safe, guard: slotGuard, rpcUrl }, seam);
@@ -1265,6 +1256,45 @@ export async function migrateAuthorContracts(
       }
       oldOwnerHistory = proof.module;
     }
+
+    // Create whichever predicted module has no code. The read-back is the code
+    // itself: a create is permissionless and CREATE2, so the address is known
+    // before the transaction and unchanged by it.
+    for (const [address, method] of [
+      [newDrafts, 'createDraftsModule'],
+      [newHistory, 'createOwnerHistoryModule'],
+    ] as const) {
+      if (await seam.readHasCode({ address, rpcUrl })) continue;
+      out.log(`creating ${method} for ${safe}…`);
+      await send(factory, JSON.stringify(AuthorContractsFactory), method, [safe]);
+      if (!(await seam.readHasCode({ address, rpcUrl }))) {
+        return {
+          ...nothing(),
+          drafts: enabled.drafts,
+          ownerHistory: enabled.ownerHistory,
+          guard: null,
+          state: 'pending-safe',
+          txs,
+          note: `the ${method} transaction did not deploy ${address} — it may have reverted; run again`,
+        };
+      }
+    }
+
+    // Only now can the factory answer: `guardFor` is written by
+    // `createOwnerHistoryModule`, so on a first run the guard does not exist
+    // until the loop above has run. A null here is the factory failing to record
+    // its own module, not a missing install step.
+    const newGuard = await seam.readGuardFor({ factory, module: newHistory, rpcUrl });
+    if (newGuard === null) {
+      return {
+        ...nothing({ drafts: enabled.drafts, ownerHistory: enabled.ownerHistory }),
+        state: 'pending-safe',
+        txs,
+        note: `the factory ${factory} recorded no guard for the owner-history module ${newHistory} — guardFor still answers nothing after the module was created; nothing was enabled and the run stopped`,
+      };
+    }
+
+    const guardMove = !sameAddress(slotGuard, newGuard);
 
     const enabledHas = (module: Address) => includesAddress(enabled.modules, module);
     const toEnable: Address[] = [];
@@ -1297,29 +1327,6 @@ export async function migrateAuthorContracts(
         oldDrafts: null,
         oldOwnerHistory: null,
       };
-    }
-
-    // Create whichever predicted module has no code. The read-back is the code
-    // itself: a create is permissionless and CREATE2, so the address is known
-    // before the transaction and unchanged by it.
-    for (const [address, method] of [
-      [newDrafts, 'createDraftsModule'],
-      [newHistory, 'createOwnerHistoryModule'],
-    ] as const) {
-      if (await seam.readHasCode({ address, rpcUrl })) continue;
-      out.log(`creating ${method} for ${safe}…`);
-      await send(factory, JSON.stringify(AuthorContractsFactory), method, [safe]);
-      if (!(await seam.readHasCode({ address, rpcUrl }))) {
-        return {
-          ...nothing(),
-          drafts: enabled.drafts,
-          ownerHistory: enabled.ownerHistory,
-          guard: newGuard,
-          state: 'pending-safe',
-          txs,
-          note: `the ${method} transaction did not deploy ${address} — it may have reverted; run again`,
-        };
-      }
     }
 
     // The pages the absorb needs, from the old log's size.

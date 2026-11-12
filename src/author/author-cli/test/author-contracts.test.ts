@@ -133,9 +133,21 @@ function fakeChain(options: FakeChainOptions = {}) {
     deployed: options.deployed ?? true,
   };
 
-  /** module → the guard the factory minted for it (`guardFor`). */
+  /** Addresses that carry bytecode. */
+  const code = new Set<string>([
+    ...state.drafts.map((entry) => entry.toLowerCase()),
+    ...state.history.map((entry) => entry.toLowerCase()),
+  ]);
+  /**
+   * module → the guard the factory minted for it (`guardFor`).
+   *
+   * A real factory writes this entry in `createOwnerHistoryModule`, so a module
+   * that does not exist yet has no guard: the index is empty on a fresh factory.
+   */
   const minted = new Map<string, Address>();
-  if (options.boundGuard !== null) minted.set(predicted.ownerHistory.toLowerCase(), mintedGuard);
+  if (options.boundGuard !== null && code.has(predicted.ownerHistory.toLowerCase())) {
+    minted.set(predicted.ownerHistory.toLowerCase(), mintedGuard);
+  }
   /** guard → the module it names (`OwnerHistoryGuard.module()`). */
   const guardModules = new Map<string, Address>([
     [GUARD.toLowerCase(), HISTORY],
@@ -154,11 +166,8 @@ function fakeChain(options: FakeChainOptions = {}) {
     [HISTORY.toLowerCase(), SAFE],
     [DRAFTS.toLowerCase(), SAFE],
     [predicted.drafts.toLowerCase(), SAFE],
-  ]);
-  /** Addresses that carry bytecode. */
-  const code = new Set<string>([
-    ...state.drafts.map((entry) => entry.toLowerCase()),
-    ...state.history.map((entry) => entry.toLowerCase()),
+    // A guard in the slot that names this module proves the module exists.
+    [predicted.ownerHistory.toLowerCase(), SAFE],
   ]);
   /** Address → the number of genesis logs it holds (`count()`). */
   const counts = new Map<string, number>(
@@ -739,6 +748,49 @@ describe('migrateAuthorContracts', () => {
     expect(state.slotGuard).toBe(NEW_GUARD);
   });
 
+  it('migrates onto a fresh factory whose index is empty (the first move)', async () => {
+    // The old Safe carries this package's guard for its old history module. The
+    // new factory has created nothing, so `guardFor` cannot answer until the
+    // create runs: reading it first would stop the run before its own create.
+    const { seam, calls, state } = fakeChain({
+      drafts: [],
+      history: [],
+      enabled: [DRAFTS, HISTORY],
+      slotGuard: GUARD,
+      predicted: { drafts: NEW_DRAFTS, ownerHistory: NEW_HISTORY },
+      mintedGuard: NEW_GUARD,
+      draftsCounts: { [DRAFTS]: 250 },
+    });
+
+    const result = await migrateAuthorContracts(installArgs(), seam);
+
+    expect(result.state).toBe('installed');
+    expect(calls.map((call) => call.functionName)).toEqual([
+      'createDraftsModule',
+      'createOwnerHistoryModule',
+      'absorb',
+      'absorb',
+      'absorb',
+      'setGuard',
+      'enableModule',
+      'enableModule',
+      'disableModule',
+      'disableModule',
+    ]);
+    expect(calls[2]?.args).toEqual([DRAFTS, 0n, 100n]);
+    expect(calls[5]?.args).toEqual([NEW_GUARD]);
+    expect(calls[6]?.args).toEqual([NEW_DRAFTS]);
+    expect(calls[7]?.args).toEqual([NEW_HISTORY]);
+    // The guard is the one the create minted, read after the create.
+    expect(result.guard).toBe(NEW_GUARD);
+    expect(result.txs).toHaveLength(10);
+    expect(result.pages).toBe(3);
+    expect(result.oldDrafts).toBe(DRAFTS);
+    expect(result.oldOwnerHistory).toBe(HISTORY);
+    expect(state.slotGuard).toBe(NEW_GUARD);
+    expect(state.enabled).toEqual([NEW_DRAFTS, NEW_HISTORY]);
+  });
+
   it('sends nothing on a second run', async () => {
     const { seam, calls } = oldInstall();
 
@@ -759,6 +811,7 @@ describe('migrateAuthorContracts', () => {
 
     expect(result.state).toBe('pending-safe');
     expect(calls).toHaveLength(0);
+    expect(result.txs).toEqual([]);
     expect(result.note).toContain('refusing to replace the guard');
     expect(result.note).toContain(FOREIGN_GUARD);
     // Nothing moved: the foreign guard is still in the slot.
