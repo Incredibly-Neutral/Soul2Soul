@@ -42,8 +42,8 @@ default `fetch`.
 s2s signer add      <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer rotate   [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer queue    [--json]
-s2s signer history  [--sync] [--json]
-s2s signer confirm  <safeTxHash> [--no-execute] [--json]
+s2s signer history  [--sync] [--self-paid] [--json]
+s2s signer confirm  <safeTxHash> [--no-execute] [--self-paid] [--json]
 ```
 
 **`add` is the one command that names a Safe.** Every other command acts on the Safe the active
@@ -310,7 +310,7 @@ that is not an owner has no other row to switch to. `reused` is present only on 
 `alreadyQueued` only when the hash came from the service. `note`, `mnemonic` and `privateKey` follow
 the rules of `signer add`.
 
-## `signer history [--sync]`
+## `signer history [--sync] [--self-paid]`
 
 Does the OwnerHistory module hold the owners the rotation created? A rotation is a `swapOwner`
 inside `execTransaction`, and the answer is on chain, but no other command reads it: `author
@@ -351,9 +351,20 @@ another tool, executed through `execTransactionFromModule` (a self-call that ski
 nothing when the set already matches, so a matching history is refused with `the history already
 matches the Safe's owners; nothing to sync`. A Safe with no module is refused instead
 (`no_history_module`) — there is nothing to send to — and reading needs no key while sending does,
-so a keyless machine gets a usage error before a transaction is built. The call is a plain
-transaction from the EOA straight to the module: `sync()` is permissionless and reads the Safe's own
-`getOwners()`, so it needs no Safe, no userOp and no paymaster decision, and it costs ~40k gas. The
+so a keyless machine gets a usage error before a transaction is built. The call goes straight to the
+module, because `sync()` is permissionless: it reads the Safe's own `getOwners()`, so the Safe is
+never *needed*, no userOp is needed for it to work, and it costs ~40k gas. Who pays for it is a
+decision all the same, taken before the send by the same `eoaPayerReason` gate `confirm` uses: an
+EOA holding no ETH on Base cannot send it and a paymaster can, which is the point of the sponsored
+rail. A qualifying Safe — 1-of-1, the Safe4337Module enabled and installed as the fallback handler,
+a bundler and a paymaster configured — gets the `sync()` as a sponsored send addressed to the
+module; anything else sends it as a plain transaction from the EOA, and the output names the
+condition that failed. The two rails never cross: a sponsored send that quietly degraded into an
+EOA one, or the reverse, would be a transaction the user did not choose. `--self-paid` is the
+override — it forces the EOA send even on a Safe that qualifies, which is what a keyed machine with
+Base ETH wants when the paymaster's policy would refuse the call. An EOA send the node rejects for
+funds names the address whose balance is the problem and points at the paymaster rail, the shape
+`confirm`'s `insufficient_gas` uses, and keeps the `sync_failed` code. The
 receipt is waited for, then the eras are re-read and printed, so the block in the output is the
 evidence rather than the state the sync was sent to repair. The transaction hash is a `sync    0x…`
 line directly after `safe`, and `syncTx` in JSON.
@@ -773,9 +784,14 @@ sponsored swap earns a sponsored sync with the EOA untouched, that `--self-paid`
 with the paymaster untouched, and that a sync whose send throws or whose receipt reverts is reported
 as `not recorded` while the swap stays `executed: true` and the pending row still settles to the new
 name; a Safe with no module is asserted to send nothing after the swap. `signer history --sync` is
-asserted to send one `sync()` to the module from the EOA, wait for its receipt, and print the
-re-read block with the `sync    0x…` line; a matching history, a Safe with no module and a keyless
-machine are asserted to refuse before any send, and a failed send to raise `sync_failed`.
+asserted to send one `sync()` to the module, wait for its receipt, and print the re-read block with
+the `sync    0x…` line, on the rail `eoaPayerReason` chose: a qualifying Safe earns a sponsored send
+addressed to the module with the EOA untouched, `--self-paid` earns an EOA send with the paymaster
+untouched, and a 2-of-2 Safe, an unreadable 4337 state and a non-module fallback handler each earn
+an EOA send whose warning names the condition; a matching history, a Safe with no module and a
+keyless machine are asserted to refuse before any send; a failed send raises `sync_failed`, with the
+unfunded address and the paymaster rail named for a funds rejection and the bundler's `AA` code or
+the revert reason carried through for a sponsored one.
 
 `test/signer-sponsored-send.test.ts` is the layer the command fixtures cannot see: a real
 `SafeSmartAccount` bound to an address and a real permissionless client over viem's `custom`
