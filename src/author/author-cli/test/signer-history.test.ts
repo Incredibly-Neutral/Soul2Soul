@@ -3,8 +3,8 @@
 // still matches the Safe's owners.
 //
 // The module read is a fake on `SignerDeps.readHistory`; the config and the L2
-// endpoint are the queue test's stubs. No socket, no chain, no key: the command
-// reads and prints.
+// endpoint are the queue test's stubs. No socket, no chain. A read needs no key;
+// `--sync` sends, so those tests hand the command one through the config stub.
 // ============================================================================
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -17,12 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OwnerHistoryModuleV1 } from '@s2s/author-contracts';
 
 import type { OwnerHistoryRead } from '../src/core/author-contracts';
+import { addSigner, authorsFilePath } from '../src/core/authors';
 import { loadConfig } from '../src/core/config';
 import { findSignerCommand, signerHelpEntries } from '../src/commands/index';
 import { runSignerHistory, signerHistory } from '../src/commands/signer-history';
 import type { SignerDeps } from '../src/commands/signer-store';
 import { parseCommandArgs, type ParsedArgs } from '../src/lib/args';
-import { CliError, UsageError } from '../src/lib/errors';
+import { CliError } from '../src/lib/errors';
 import type { CliOut } from '../src/lib/out';
 
 const SAFE: Address = '0x8507CDa436d39D433acC9c88A813dd052C828dfB';
@@ -162,11 +163,17 @@ function args(argv: string[]): ParsedArgs {
   return { flags: parsed.flags, positionals: parsed.positionals.slice(2) };
 }
 
+/** The Safe this machine files for its active author: the command takes no `<safe>`. */
+function filesSafe(): void {
+  addSigner({ name: 'harry', privateKey: KEY_HARRY, safe: SAFE }, authorsFilePath());
+}
+
 describe('s2s signer history', () => {
   it('shows both owners, one era each, and no closing complaint when the history agrees', async () => {
+    filesSafe();
     const captured = capture();
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(rotated()));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
 
     expect(captured.human[0]).toBe(
       [
@@ -199,11 +206,12 @@ describe('s2s signer history', () => {
   });
 
   it('says nothing is recorded when the Safe carries no owner-history module', async () => {
+    filesSafe();
     const captured = capture();
 
     await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE]),
+      args(['signer', 'history']),
       deps({
         module: null,
         moduleSource: null,
@@ -230,6 +238,7 @@ describe('s2s signer history', () => {
 
   it('ends with the repair when the newest era is not the Safe\'s owner set', async () => {
     const captured = capture();
+    filesSafe();
     const lagging: OwnerHistoryRead = {
       ...rotated(),
       // The swap ran as a module self-call: the owners moved, the era did not.
@@ -239,7 +248,7 @@ describe('s2s signer history', () => {
       lags: true,
     };
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(lagging));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(lagging));
 
     expect(captured.results[0]?.lags).toBe(true);
     const lines = captured.human[0]?.split('\n') ?? [];
@@ -249,9 +258,10 @@ describe('s2s signer history', () => {
   });
 
   it('prints the whole document in --json, with the module the guard named', async () => {
+    filesSafe();
     const captured = capture(true);
 
-    await runSignerHistory(captured.out, args(['signer', 'history', SAFE]), deps(rotated()));
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
 
     expect(captured.results[0]).toEqual({
       action: 'signer.history',
@@ -270,14 +280,16 @@ describe('s2s signer history', () => {
     });
   });
 
-  it('takes the Safe from --safe, and refuses when neither the flag nor the store has one', async () => {
+  it('reads the Safe this machine files, and refuses when it files none', async () => {
     const captured = capture();
-    await runSignerHistory(captured.out, args(['signer', 'history', '--safe', SAFE]), deps(rotated()));
+    filesSafe();
+    await runSignerHistory(captured.out, args(['signer', 'history']), deps(rotated()));
     expect(captured.results[0]?.safe).toBe(SAFE);
 
-    await expect(
-      runSignerHistory(capture().out, args(['signer', 'history']), deps(rotated())),
-    ).rejects.toThrow(/no Safe given/);
+    rmSync(join(dir, 'xdg'), { recursive: true, force: true });
+    await expect(runSignerHistory(capture().out, args(['signer', 'history']), deps(rotated()))).rejects.toThrow(
+      /files no Safe for its active author.*s2s signer add <safe>/,
+    );
   });
 
   it('is an action of `s2s signer`, listed in the group help', () => {
@@ -286,6 +298,9 @@ describe('s2s signer history', () => {
     expect(findSignerCommand('bogus')).toBeUndefined();
   });
 });
+
+/** Valid key nobody can use for a read: privkey 6. */
+const KEY_HARRY: Hex = `0x${'00'.repeat(31)}06`;
 
 /** A usable key: privkey 1, and the EOA it belongs to. */
 const KEY: Hex = `0x${'00'.repeat(31)}01`;
@@ -298,13 +313,14 @@ const EOA: Address = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
  */
 describe('s2s signer history --sync', () => {
   it('sends sync() to the module, then prints the eras the sync produced', async () => {
+    filesSafe();
     const sent: Sent[] = [];
     const receipts: { rpcUrl: string; hash: Hex }[] = [];
     const captured = capture();
 
     await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE, '--sync']),
+      args(['signer', 'history', '--sync']),
       deps(lagging(), { after: rotated(), sent, receipts, privateKey: KEY }),
     );
 
@@ -344,12 +360,13 @@ describe('s2s signer history --sync', () => {
   });
 
   it('refuses a history that already matches, and sends nothing', async () => {
+    filesSafe();
     const sent: Sent[] = [];
     const captured = capture();
 
     const err = await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE, '--sync']),
+      args(['signer', 'history', '--sync']),
       deps(rotated(), { sent, privateKey: KEY }),
     ).then(
       () => undefined,
@@ -367,12 +384,13 @@ describe('s2s signer history --sync', () => {
   });
 
   it('refuses --sync when the Safe carries no module, rather than sending into nothing', async () => {
+    filesSafe();
     const sent: Sent[] = [];
     const captured = capture();
 
     const err = await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE, '--sync']),
+      args(['signer', 'history', '--sync']),
       deps(
         {
           module: null,
@@ -397,31 +415,32 @@ describe('s2s signer history --sync', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('refuses --sync with no key, before it tries to send', async () => {
+  it('sends the sync with the key the active author files, and needs no other', async () => {
     const sent: Sent[] = [];
     const captured = capture();
+    filesSafe();
 
-    const err = await runSignerHistory(
+    await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE, '--sync']),
+      args(['signer', 'history', '--sync']),
       deps(lagging(), { sent }),
-    ).then(
-      () => undefined,
-      (thrown: unknown) => thrown,
     );
 
-    // Reading needs no key; sending does.
-    expect(err).toBeInstanceOf(UsageError);
-    expect(sent).toHaveLength(0);
+    // The store's key: the sync is a transaction from this machine, and the row
+    // that files the Safe is the row that signs for it.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.privateKey).toBe(KEY_HARRY);
+    expect(captured.warnings[0]).toContain(`sent sync() to ${MODULE}`);
   });
 
   it('reports a sync that could not be sent as sync_failed, and says the history still lags', async () => {
+    filesSafe();
     const sent: Sent[] = [];
     const captured = capture();
 
     const err = await runSignerHistory(
       captured.out,
-      args(['signer', 'history', SAFE, '--sync']),
+      args(['signer', 'history', '--sync']),
       deps(lagging(), { sent, privateKey: KEY, sendFails: new Error('nonce too low') }),
     ).then(
       () => undefined,

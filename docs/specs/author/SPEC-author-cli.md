@@ -70,9 +70,9 @@ s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]  
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
 s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]      # file a key and propose it as one owner of a deployed Safe
-s2s signer rotate    [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]    # swap this machine's key on a Safe, threshold untouched (the Safe defaults to the one it files)
-s2s signer queue     [<safe>] [--json]                                                           # unexecuted proposals, oldest nonce first, and what this key owes
-s2s signer confirm   <safeTxHash> [--safe <safe>] [--no-execute] [--self-paid] [--json]         # sign a queued proposal, then execute it at the threshold
+s2s signer rotate    [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]             # swap this machine's key on its Safe, threshold untouched
+s2s signer queue     [--json]                                                                    # unexecuted proposals, oldest nonce first, and what this key owes
+s2s signer confirm   <safeTxHash> [--no-execute] [--self-paid] [--json]                          # sign a queued proposal, then execute it at the threshold
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
 s2s setup            [--accept-defaults] [--json]                                               # guided first-run config: keep the defaults or paste your own
 s2s config set       <key> <value> [--local] [--json]                                             # write a config value
@@ -619,7 +619,8 @@ s2s <group> <action> [positionals…] [flags…]
 - `--help` for an action is **derived from that flag declaration**, so it cannot disagree with
   what the parser accepts; there is no hand-written usage string to fall out of date. An action
   may add one `detail` paragraph under its summary — the *why* of its shape, which the flag list
-  cannot carry (e.g. `signer rotate`'s Safe default). A detail that restates a flag is a bug.
+  cannot carry (e.g. why `signer rotate` takes no `<safe>` and `signer add` is the command that
+  names one). A detail that restates a flag is a bug.
 - **stdout** carries exactly one document (the JSON result in `--json` mode). **stderr**
   carries human progress (logs, warnings, human-mode errors) — never parsed by hosts.
 - Failure in `--json` mode puts a single envelope on stdout and nothing else:

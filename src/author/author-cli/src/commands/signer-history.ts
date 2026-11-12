@@ -35,7 +35,7 @@ import { encodeFunctionData, type Address, type Hex } from 'viem';
 
 import { OwnerHistoryModuleV1 } from '@s2s/author-contracts';
 
-import { flagBool, flagString } from '../lib/args';
+import { flagBool } from '../lib/args';
 import type { ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
@@ -44,9 +44,9 @@ import { authorEoa } from '../core/authors';
 import { hexKey } from '../core/config';
 import type { OwnerEra, OwnerHistoryRead } from '../core/author-contracts';
 import {
-  asSafeAddress,
   l2Rpc,
   reasonOf,
+  refuseSafeArgument,
   resolveSignerSafe,
   shortAddress,
   signerDeps,
@@ -126,16 +126,11 @@ export async function runSignerHistory(
   const deps = signerDeps(overrides);
   const config = deps.config();
 
-  const positional = args.positionals[0];
-  const flagged = flagString(args.flags, 'safe');
-  const safe = positional
-    ? asSafeAddress(positional)
-    : flagged
-      ? asSafeAddress(flagged, '--safe')
-      : resolveSignerSafe(config);
+  refuseSafeArgument(args, 'signer history');
+  const safe = resolveSignerSafe(config);
   if (!safe) {
     throw new UsageError(
-      'no Safe given and no stored author to take one from — pass <safe>, or file one with `s2s signer add <safe>`',
+      'this machine files no Safe for its active author — file one with `s2s signer add <safe>`',
     );
   }
 
@@ -227,13 +222,7 @@ export const signerHistory: StoreCommandSpec = {
   name: 'history',
   summary:
     "What the OwnerHistory module recorded about the Safe's owners: the eras, the sync point, and whether the history still matches the owners on chain. --sync sends the permissionless sync() that repairs a lagging history.",
-  params: '[<safe>]',
   flags: {
-    safe: {
-      type: 'string',
-      value: '<safe>',
-      summary: 'the Safe to read (default: the active stored author Safe)',
-    },
     sync: {
       type: 'boolean',
       summary:

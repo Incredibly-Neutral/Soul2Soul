@@ -52,6 +52,7 @@ import {
 import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
 import { givenSafeInUse, createAuthorSafeRunner, SAFE_4337_MODULE } from '../core/author-safe';
 import { loadConfig, type CliConfig } from '../core/config';
+import type { ParsedArgs } from '../lib/args';
 import { UsageError } from '../lib/errors';
 import { buildRpcEndpoints } from '../adapters/rpc';
 import { resolveKeySource, type KeySource } from './author-new';
@@ -96,6 +97,24 @@ export function reasonOf(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
   const code = (err as { code?: unknown }).code;
   return typeof code === 'string' && code ? `${err.message} [${code}]` : err.message;
+}
+
+/**
+ * Refuse a positional argument on a command that acts on the Safe this machine
+ * files.
+ *
+ * Dropping `<safe>` from these commands is the point: the row that signs names
+ * the address. A typed address that is silently ignored is worse than one that
+ * was required — the run would act on the store's Safe while the operator reads
+ * their own words as the target — so the argument is refused and the command
+ * that files a Safe is named.
+ */
+export function refuseSafeArgument(args: ParsedArgs, command: string): void {
+  const [typed] = args.positionals;
+  if (typed === undefined) return;
+  throw new UsageError(
+    `\`s2s ${command}\` takes no <safe> — it acts on the Safe this machine files for its active author; \`s2s signer add <safe>\` is the command that files one (got '${typed}')`,
+  );
 }
 
 /** `0x1234…abcd` — for prose about an address, never for a hash to be typed. */

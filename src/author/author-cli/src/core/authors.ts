@@ -1086,6 +1086,9 @@ export type ReplacementOutcome = 'none' | 'pending' | 'settled' | 'collision';
  * write. A collision writes nothing, so both survive — nothing has landed, and
  * the hash is what lets the caller execute the queue rather than propose it
  * again.
+ *
+ * The settled row carries the author's name, not the one a rotation picked to
+ * keep two rows apart: see `settledAuthorName`.
  */
 export function settleReplacement(
   safe: Address,
@@ -1149,6 +1152,21 @@ export function sweepConfirmedSigners(
   withStoreLock(path, () => sweepConfirmedLocked(safe, owners, path), options);
 }
 
+/**
+ * The name a settled replacement takes: the author's, unless the operator named
+ * the key.
+ *
+ * Two rows for one author exist only while both keys do. A rotation files the
+ * newcomer as `<replaces>-next` because the store cannot hold two rows under one
+ * name, and that suffix is this CLI's choice, not a name the author carries: once
+ * the old row is gone there is one key again, and calling it `harry-next` would
+ * keep a fact about a swap nobody can undo. An explicit `--name` is the
+ * operator's choice and survives settlement.
+ */
+export function settledAuthorName(filed: string, replaces: string): string {
+  return filed === `${replaces}-next` ? replaces : filed;
+}
+
 function settleReplacementLocked(
   safe: Address,
   owners: readonly Address[],
@@ -1190,12 +1208,17 @@ function settleReplacementLocked(
       : { unreadableSafeSource: chasing.unreadableSafeSource }),
     ...(chasing.contracts === undefined ? {} : { contracts: chasing.contracts }),
   };
+  // Both of the rotation's rows leave the file: the one being replaced, and the
+  // filed one under the name it was filed with. The settled row takes the name
+  // `settledAuthorName` decides, which may be either of them or the operator's.
+  const name = settledAuthorName(chasing.name, chasing.replaces);
   const authors: Record<string, AuthorRecord> = {};
   for (const [author, record] of Object.entries(store.authors)) {
-    if (author !== oldRow?.name) authors[author] = record;
+    if (author === oldRow?.name || author === chasing.name) continue;
+    authors[author] = record;
   }
-  authors[chasing.name] = settled;
-  writeAuthors({ active: chasing.name, authors }, path);
+  authors[name] = settled;
+  writeAuthors({ active: name, authors }, path);
   return 'settled';
 }
 
