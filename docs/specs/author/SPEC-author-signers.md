@@ -23,8 +23,10 @@ deploy anything, and no bundler is involved in proposing: `signer add` proposes 
 owner, `signer rotate` swaps this machine's key for a fresh one, `signer queue` shows what is
 waiting, `signer confirm` signs one proposal and executes it when the confirmations are enough. Every
 proposal is an ordinary `Safe` transaction — `to: safe`, zero gas fields — so the work is an HTTP
-POST to the Safe Transaction Service plus, at most, one send: a sponsored userOp when a paymaster is
-configured, otherwise a plain transaction from the EOA.
+POST to the Safe Transaction Service plus, at most, one send: a sponsored userOp when the Safe can
+validate one, otherwise a plain transaction from the EOA. "Can validate one" is narrow: a paymaster
+URL is configured, the Safe is 1-of-1, and `SAFE_4337_MODULE` is both enabled on the Safe and its
+fallback handler.
 
 All four actions are **store commands**: `cli.ts` dispatches them before `buildContext`, so they
 need no `CliContext` and no bundler of their own. `signer confirm` reaches the bundler only through
@@ -385,16 +387,40 @@ on the next confirmation attempt instead of leaving the old key filed.
    that is not the proposal this command was given (`safe_tx_hash_mismatch`), before anything is
    sent. The send itself is decided in the next paragraph, because **who pays** is part of
    executing and is settled before a byte goes out, never after a refusal.
-5. **Pay.** Sponsored when all three hold: `bundlerEndpoints(config, chainId)?.paymasterUrl` is set,
-   the Safe answers `isModuleEnabled(SAFE_4337_MODULE)` true, and `--self-paid` was not given. The
+5. **Pay.** Sponsored when all four hold: `bundlerEndpoints(config, chainId)` yields a
+   `paymasterUrl`, the Safe's threshold is 1, the Safe answers `isModuleEnabled(SAFE_4337_MODULE)`
+   true, and `getFallbackHandler()` answers that same module, and `--self-paid` was not given. The
    same `execTransaction` then goes out as a userOp from the Safe through the author Safe runner
-   (`createAuthorSafeRunner`, permissionless + the bundler/paymaster), and `txHash` is the on-chain
-   transaction that carried it. Anything else sends it as a plain transaction from the EOA, whose
-   gas the EOA pays; the human output says which and why (`no paymaster configured`, the module not
-   enabled, or `--self-paid`). A sponsored send that fails is `sponsored_send_failed`, naming the
-   reason and both ways forward — `--self-paid` from a funded EOA, or fund the address — with the
-   proposal and the confirmation left exactly as they were. It is never retried on the EOA: paying
-   instead is the user's decision, not a fallback the command takes for them.
+   (`createAuthorSafeRunner`, permissionless + the bundler/paymaster, handed the config this command
+   resolved), and `txHash` is the on-chain transaction that carried it. The threshold is a
+   condition because the module validates the userOp signature against the Safe's own threshold via
+   `checkNSignatures` while this build signs once: at t>1 the bundler refuses the userOp, so the
+   command does not offer one. The handler is a condition because the module is reached through the
+   Safe's fallback; an enabled module with another handler validates nothing.
+
+   Anything else sends it as a plain transaction from the EOA, whose gas the EOA pays, and the
+   human output names the condition that failed: `--self-paid`, `no bundler configured — set
+   S2S_PIMLICO_KEY or S2S_BUNDLER_URL`, `no paymaster configured — set S2S_PIMLICO_KEY or
+   S2S_PAYMASTER_URL`, `the Safe is 2-of-2, so a sponsored send would need 2 signatures while this
+   build signs one`, the module not enabled, or the handler being some other address. The two
+   settings are named separately because `bundlerEndpoints` collapses them: reporting "no paymaster"
+   when the bundler URL is what is missing sends the user to the wrong variable. An unreadable 4337
+   read (RPC failure) is a warning naming the read, then the EOA rail — never a throw, because the
+   confirmation is already posted by then.
+
+   A sponsored send that fails is classified, because the two classes have opposite advice.
+   Refused before submission (the bundler's validation or simulation rejected it, an `AA` code
+   included) is `sponsored_send_failed`: nothing was sent, the confirmation is posted and the
+   proposal is queued, so the recoveries are fixing the paymaster policy or `--self-paid` from a
+   funded EOA — funding the EOA on its own is not one, since a rerun without the flag asks the same
+   paymaster again. Submitted but with no receipt seen is `send_outcome_unknown`: it may have
+   executed, so the message sends the user to `s2s signer queue <safe>` to check the nonce before
+   retrying, because a second send could execute the proposal twice. `SafeRunnerHandle.sendCall`
+   tags the phase (`SponsoredSendRefused` vs `SponsoredSendUncertain`), text is only the fallback,
+   and an unrecognised failure is treated as unknown. A send that resolves with no transaction hash
+   is `send_outcome_unknown` too: `executed` and `paidBy` are claims about the chain and are never
+   printed without a hash. Nothing is ever retried on the EOA: paying instead is the user's
+   decision, not a fallback the command takes for them.
 
 Refusals, all before anything is signed:
 
@@ -407,7 +433,8 @@ Refusals, all before anything is signed:
 | the hash-keyed read answers a different proposal | `safe_tx_wrong_transaction` — the record is not the hash that was passed, whatever its own fields say |
 | the record already carries this key's signature | not a refusal: the POST is skipped and the run goes straight to execute (`posted: false`) |
 | owner entry is a contract (the EOA has code) | `contract_owner` — it confirms by calling `approveHash` from its own code |
-| the paymaster refuses the sponsored send | `sponsored_send_failed` — the confirmation is posted and the proposal is queued; `--self-paid` from a funded EOA, or fund the address |
+| the paymaster refuses the sponsored send | `sponsored_send_failed` — nothing was sent; the confirmation is posted and the proposal is queued; fix the policy, or `--self-paid` from a funded EOA |
+| a sponsored send was submitted and its receipt was not seen | `send_outcome_unknown` — it may have executed; check `s2s signer queue <safe>` before retrying |
 
 A proposal with a nonce **ahead** of the Safe is not a refusal: its confirmation is posted and the
 command reports why it did not execute (it is queued behind the transaction at the front). Same for
@@ -415,7 +442,7 @@ a confirmation that leaves the threshold unmet.
 
 `--no-execute` stops after step 2, for a key that should not spend. `--self-paid` skips step 5's
 sponsored branch and pays from the EOA, which is what a keyed machine with Base ETH wants when the
-paymaster's policy would refuse the call.
+paymaster's policy would refuse the call, or when the Safe cannot take a userOp at all.
 
 After a successful execution the owners are read again and `settleReplacement` runs a second time:
 the new row becomes the active record, the old row disappears, and the outcome is printed as
@@ -493,10 +520,12 @@ lock is always reported.
 ## Gas
 
 Proposing and confirming are HTTP only and cost nothing. **Execution costs gas, and who pays it is
-decided before the send:** a configured paymaster sponsors the execution as an ERC-4337 userOp, so
-the EOA needs no ETH at all, and otherwise the EOA sends `execTransaction` itself and pays. The three
-conditions for sponsorship, and the fact that a refusal is `sponsored_send_failed` rather than a
-silent EOA send, are in the `signer confirm` section above.
+decided before the send:** the paymaster sponsors it as an ERC-4337 userOp — no ETH on the EOA at
+all — when a paymaster URL is configured, the Safe is 1-of-1, and `SAFE_4337_MODULE` is both enabled
+and the Safe's fallback handler. Otherwise the EOA sends `execTransaction` itself and pays, and the
+output says which and why. The four conditions, the two failure classes (`sponsored_send_failed`
+for a refusal, `send_outcome_unknown` for a submitted send whose receipt was lost) and the rule that
+neither falls back to the EOA silently are in the `signer confirm` section above.
 
 A self-paid send is never refunded: the proposals this CLI makes carry zero gas fields, so the Safe
 does not repay the sender. A rotation follows the same rule — proposing the swap is HTTP only, and
@@ -571,8 +600,11 @@ signature recovering to the old key — and a row with a `proposal` to refuse `r
 naming `signer confirm`. A failed proposal is checked to leave the `{to, data}` in the result and no
 hash in the row, so the next run finishes it. The confirm fixtures compute the hash from the
 record's own fields, so the chain-id re-hash in step 4 is a live check; one fixture breaks that tie
-deliberately and is refused before a send. Who pays is fixture-driven too: a paymaster URL plus an
-enabled 4337 module takes the sponsored rail and the plain send is asserted never to run,
-`--self-paid` and a disabled module and a missing paymaster each take the EOA rail with the reason
-in the output, and a sponsorship refusal is checked to raise `sponsored_send_failed` with the
-confirmation already posted and the EOA untouched.
+deliberately and is refused before a send. Who pays is fixture-driven too: a paymaster URL plus a
+1-of-1 Safe whose handler is an enabled 4337 module takes the sponsored rail, the config the command
+resolved reaches the seam, and the plain send is asserted never to run; `--self-paid`, a missing
+bundler, a missing paymaster, a 2-of-2 Safe, a disabled module, a different handler, and an
+unreadable 4337 read each take the EOA rail with the reason in the output (the read failure as a
+warning first); a refusal raises `sponsored_send_failed` naming its `AA` code, a lost receipt raises
+`send_outcome_unknown` pointing at `s2s signer queue`, and a hash-less send raises the same without
+printing a result — the confirmation already posted and the EOA untouched in each.

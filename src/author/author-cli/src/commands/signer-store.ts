@@ -23,7 +23,15 @@
 // fake and opens no socket.
 // ============================================================================
 
-import { createPublicClient, createWalletClient, getAddress, http, type Address, type Hex } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  getAddress,
+  http,
+  parseAbi,
+  type Address,
+  type Hex,
+} from 'viem';
 import { base } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -36,7 +44,7 @@ import {
 } from '../adapters/safe-tx';
 import { readSafeOwners } from '../core/author-contracts';
 import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
-import { givenSafeInUse, createAuthorSafeRunner } from '../core/author-safe';
+import { givenSafeInUse, createAuthorSafeRunner, SAFE_4337_MODULE } from '../core/author-safe';
 import { loadConfig, type CliConfig } from '../core/config';
 import { UsageError } from '../lib/errors';
 import { buildRpcEndpoints } from '../adapters/rpc';
@@ -170,22 +178,47 @@ async function sendFromEoa(input: {
   return wallet.sendTransaction({ account, to: input.to, data: input.data });
 }
 
-/** Whether the Safe itself reports `module` enabled — Safe 1.4.1's own getter. */
-export async function readModuleEnabled(
-  rpcUrl: string,
-  safe: Address,
-  module: Address,
-): Promise<boolean> {
+/**
+ * The two facts a sponsored send needs from the Safe itself: the 4337 module is
+ * enabled, and the module is what the Safe falls back to. Both are its own
+ * getters; the second is not implied by the first, because a Safe can enable a
+ * module and still route `validateUserOp` to a different fallback handler.
+ */
+export interface Safe4337State {
+  moduleEnabled: boolean;
+  fallbackHandler: Address;
+}
+
+/**
+ * The reads behind `read4337`. A local fragment rather
+ * than the shared `safeAbi`, because the checked-in shared dump has no
+ * `getFallbackHandler` entry (`src/shared/src/contracts/safe_implementation.ts`
+ * is one generated line); adding it by hand there would be overwritten by
+ * whatever generates that file. The same shape `GIVEN_SAFE_READS_ABI` uses in
+ * `core/author-safe.ts`.
+ */
+const SAFE_4337_READS = parseAbi([
+  'function isModuleEnabled(address module) view returns (bool)',
+  'function getFallbackHandler() view returns (address)',
+]);
+
+/** `isModuleEnabled(module)` and `getFallbackHandler()` read from the Safe. */
+export async function read4337(rpcUrl: string, safe: Address): Promise<Safe4337State> {
   const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
-  // The shared ABI is not a `const` literal, so viem types this as `unknown`;
-  // the answer is the Safe's own bool.
-  const enabled = await client.readContract({
-    address: safe,
-    abi: safeAbi,
-    functionName: 'isModuleEnabled',
-    args: [module],
-  });
-  return enabled === true;
+  const [moduleEnabled, fallbackHandler] = await Promise.all([
+    client.readContract({
+      address: safe,
+      abi: SAFE_4337_READS,
+      functionName: 'isModuleEnabled',
+      args: [SAFE_4337_MODULE],
+    }),
+    client.readContract({
+      address: safe,
+      abi: SAFE_4337_READS,
+      functionName: 'getFallbackHandler',
+    }),
+  ]);
+  return { moduleEnabled, fallbackHandler: getAddress(fallbackHandler) };
 }
 
 /**
@@ -200,18 +233,23 @@ export async function readModuleEnabled(
  *
  * Returns the **on-chain transaction hash** (the transaction that carried the
  * userOp, hence the one that carried the Safe's `execTransaction`), waiting for
- * the userOp receipt first — permissionless' `sendTransaction` does both.
+ * the userOp receipt first — permissionless' `sendTransaction` does both. A
+ * throw is phase-tagged by `sendCall` (`SponsoredSendRefused` before
+ * submission, `SponsoredSendUncertain` after it).
+ *
+ * `config` is the config the command resolved, passed in rather than reloaded:
+ * an injected config or a `--key` has to reach the runner too.
  */
 async function sendSponsoredFromSafe(input: {
+  config: CliConfig;
   rpcUrl: string;
   privateKey: Hex;
   to: Address;
   data: Hex;
   safe: Address;
 }): Promise<Hex> {
-  const config = loadConfig();
   const runner = await createAuthorSafeRunner({
-    config,
+    config: input.config,
     privateKey: input.privateKey,
     eoa: privateKeyToAccount(input.privateKey).address,
     rpcUrl: input.rpcUrl,
@@ -243,14 +281,19 @@ export interface SignerDeps {
    * return the on-chain transaction hash. Throws on refusal; never falls back.
    */
   sendSponsored(input: {
+    config: CliConfig;
     rpcUrl: string;
     privateKey: Hex;
     to: Address;
     data: Hex;
     safe: Address;
   }): Promise<Hex>;
-  /** `isModuleEnabled(module)` read from the Safe. */
-  readModuleEnabled(rpcUrl: string, safe: Address, module: Address): Promise<boolean>;
+  /**
+   * `isModuleEnabled(SAFE_4337_MODULE)` and `getFallbackHandler()` from the
+   * Safe: the two facts the sponsorship decision needs, read in one place so a
+   * test can fail them together.
+   */
+  read4337(rpcUrl: string, safe: Address): Promise<Safe4337State>;
   keySource(flags: Record<string, string | boolean>): KeySource;
   authorsPath(): string;
   /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
@@ -264,7 +307,7 @@ const DEFAULT_SIGNER_DEPS: SignerDeps = {
   readCode,
   send: sendFromEoa,
   sendSponsored: sendSponsoredFromSafe,
-  readModuleEnabled,
+  read4337,
   keySource: (flags) => resolveKeySource(flags),
   authorsPath: () => authorsFilePath(),
   chainId: SIGNER_CHAIN_ID,

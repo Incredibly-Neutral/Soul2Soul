@@ -50,6 +50,51 @@ function parseAbi(abi: string): Abi {
   return JSON.parse(abi) as Abi;
 }
 
+/**
+ * The words of a thrown error, in the order viem and the bundler put them:
+ * `shortMessage` first (it is the human half), then `details`, then `message`.
+ */
+function errorText(err: unknown): string {
+  const seen: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
+    const record = current as Record<string, unknown>;
+    for (const field of ['shortMessage', 'details', 'message'] as const) {
+      const value = record[field];
+      if (typeof value === 'string' && value.trim() !== '' && !seen.includes(value)) {
+        seen.push(value);
+      }
+    }
+    current = record.cause;
+  }
+  return seen.join(': ') || 'no detail from the bundler';
+}
+
+/**
+ * The bundler or paymaster refused the userOp: it was never submitted, so
+ * retrying cannot execute it twice.
+ */
+export class SponsoredSendRefused extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SponsoredSendRefused';
+  }
+}
+
+/**
+ * The userOp was submitted — a userOp hash exists — and its receipt was not
+ * seen. It may have landed: a retry could execute the call twice.
+ */
+export class SponsoredSendUncertain extends Error {
+  readonly userOpHash: Hex;
+
+  constructor(message: string, userOpHash: Hex, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SponsoredSendUncertain';
+    this.userOpHash = userOpHash;
+  }
+}
+
 // ===========================================================================
 // EOA runner
 // ===========================================================================
@@ -176,7 +221,9 @@ export interface SafeRunnerHandle extends TxRunner {
   isDeployed(): Promise<boolean>;
   /**
    * Deploy the counterfactual Safe by sending a self-call userOp — the Safe
-   * factory runs in the userOp's initCode. Returns the userOp/transaction hash.
+   * factory runs in the userOp's initCode. Returns the **on-chain transaction
+   * hash**, like `sendCall`: permissionless' `sendTransaction` waits for the
+   * userOp receipt and returns `receipt.transactionHash`, never the userOp hash.
    */
   deploy(): Promise<string>;
   /**
@@ -185,6 +232,11 @@ export interface SafeRunnerHandle extends TxRunner {
    * waits for it; the userOp hash is not returned). `genericTx` encodes from an
    * ABI; this takes calldata the caller already has, such as a Safe's
    * `execTransaction`, and can address the Safe itself.
+   *
+   * A failure is phase-tagged, because the caller's advice depends on it: a
+   * throw from submission is `SponsoredSendRefused` (nothing landed, retrying is
+   * safe), a throw while waiting for the receipt is `SponsoredSendUncertain`
+   * (the userOp hash exists, the outcome does not).
    */
   sendCall(to: Address, data: Hex): Promise<Hex>;
 }
@@ -278,7 +330,25 @@ export async function createSafeRunner<
     },
     sendCall: async (to: Address, data: Hex): Promise<Hex> => {
       if (!client) throw new Error('SafeRunner not initialised — call connect first');
-      return client.sendTransaction({ to, data, ...(await feeOverrides()) } as never);
+      // Two phases, and they mean different things to whoever retries: the
+      // bundler validates and simulates before it accepts a userOp, so a throw
+      // here is "nothing was submitted", while a throw after the hash exists is
+      // "submitted, receipt not seen". Collapsing them into one error is what
+      // makes a retry that could execute twice look safe.
+      let fees: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint };
+      let userOpHash: Hex;
+      try {
+        fees = await feeOverrides();
+        userOpHash = await client.sendUserOperation({ to, data, ...fees } as never);
+      } catch (err) {
+        throw new SponsoredSendRefused(errorText(err), { cause: err });
+      }
+      try {
+        const receipt = await client.waitForUserOperationReceipt({ hash: userOpHash });
+        return receipt.receipt.transactionHash;
+      } catch (err) {
+        throw new SponsoredSendUncertain(errorText(err), userOpHash, { cause: err });
+      }
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);

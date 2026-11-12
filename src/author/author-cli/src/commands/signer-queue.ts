@@ -197,7 +197,7 @@ export async function runSignerQueue(
         ].join('  '),
       ),
       ...(rows.some((row) => row.keyIsOwner === true && !row.keyConfirmed)
-        ? ['', 'confirm one with `s2s signer confirm <safeTxHash>`: execution is sponsored when a paymaster is configured, otherwise this key pays']
+        ? ['', 'confirm one with `s2s signer confirm <safeTxHash>`: execution is sponsored only for a 1-of-1 Safe with the 4337 module enabled as its handler and a paymaster configured, otherwise this key pays']
         : []),
       ...(unread === undefined
         ? []
