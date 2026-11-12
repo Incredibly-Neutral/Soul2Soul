@@ -735,7 +735,7 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
 | `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler. |
 | `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
-| `S2S_SAFE_TX_URL` | `signer add`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
+| `S2S_SAFE_TX_URL` | `signer add`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
 | `S2S_SAFE_TX_API_KEY` | — (optional) | — | Service API key (`safeTx.key`, secret, masked on read), sent as `Authorization: Bearer`. The public host answers unauthenticated and rate-limits instead. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 

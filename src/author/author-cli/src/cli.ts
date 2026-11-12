@@ -41,7 +41,7 @@ Usage:
 
 Groups:
   author        Author identities + content actions (new/switch/list/rm, upload, publish)
-  signer        Add a key as a Safe owner, list the queue, confirm a proposal
+  signer        Add or rotate a key on a Safe, list the queue, confirm a proposal
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
 
@@ -85,7 +85,11 @@ Run "s2s ${group} <action> --help" for details on an action.`;
 const authorHelp = (): string =>
   groupHelp(authorHelpEntries, 'author', 'author identities and content actions');
 const signerHelp = (): string =>
-  groupHelp(signerHelpEntries, 'signer', 'a key as one owner of a Safe that already exists');
+  groupHelp(
+    signerHelpEntries,
+    'signer',
+    'a key as one owner of a Safe that already exists',
+  );
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
 
@@ -144,10 +148,11 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // `signer` is a group of store commands: adding a key to an existing Safe,
-  // reading its queue and signing a hash need no context, no bundler and no
-  // userOp. Dispatched before buildContext for the same reason `author new` is:
-  // it files the key that every later command would otherwise require.
+  // `signer` is a group of store commands: adding or rotating a key on an
+  // existing Safe, reading its queue and signing a hash need no context, no
+  // bundler and no userOp. Dispatched before buildContext for the same reason
+  // `author new` is: it files the key that every later command would otherwise
+  // require.
   if (group === 'signer') {
     const help = signerHelp();
     if (!action) {
