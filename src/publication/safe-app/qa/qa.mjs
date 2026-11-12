@@ -9,7 +9,7 @@
 //
 // What it checks (functional only — no typography assertions):
 //   - all 5 nav tabs render enabled
-//   - clicking Deals / Whitelists / Records / Storage / Website-Tree switches
+//   - clicking Agreements / Whitelists / Records / Storage / Website-Tree switches
 //     the active tab AND swaps the rendered component
 //
 // Usage:
