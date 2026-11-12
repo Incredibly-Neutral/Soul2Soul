@@ -265,6 +265,59 @@ describe('ContentController.publishContent', () => {
 		expect(sharedFm.encrypted).toBe(false);
 	});
 
+	// -----------------------------------------------------------------------
+	// `label`: public, unsigned, never written back, never a shift of the id
+	// -----------------------------------------------------------------------
+	const FIXED_NOW = 1_700_000_000;
+
+	/** Publish with the clock pinned so two notes sign the same dates. */
+	async function publishAt(frontmatter: Record<string, any>) {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			vi.setSystemTime(FIXED_NOW * 1000);
+			const { ctrlr, sharedFm } = setupPublish(frontmatter, RAW);
+			const item = await ctrlr.publishContent(
+				makeVaultFile('note.md', RAW),
+				'acme.soul2soul.eth',
+			);
+			expect(item).not.toBeNull();
+			return { item: item!, sharedFm };
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
+	it('carries `label` on the public part and keeps it out of the signed body', async () => {
+		const { item } = await publishAt({ label: 'Field notes' });
+
+		expect(item.public.label).toBe('Field notes');
+		const body = JSON.parse(bodyForKey(item) as string);
+		expect(body.custom ?? {}).not.toHaveProperty('label');
+	});
+
+	it('does not write `label` back to frontmatter', async () => {
+		const { sharedFm } = await publishAt({ label: 'Field notes' });
+
+		expect(sharedFm.label).toBe('Field notes');
+	});
+
+	it('writes no `label` key for a note without it, and the objectId is identical', async () => {
+		const bare = await publishAt({});
+		const labelled = await publishAt({ label: 'Field notes' });
+
+		expect('label' in bare.item.public).toBe(false);
+		expect(labelled.item.public.label).toBe('Field notes');
+		expect(labelled.item.objectId).toBe(bare.item.objectId);
+	});
+
+	it('treats a blank label as no label, with the same objectId', async () => {
+		const bare = await publishAt({});
+		const blank = await publishAt({ label: '   ' });
+
+		expect('label' in blank.item.public).toBe(false);
+		expect(blank.item.objectId).toBe(bare.item.objectId);
+	});
+
 	it('returns null when no BASE signer is available', async () => {
 		const main = makeMain();
 		main.oxo.ctrlr.account['BASE'] = { provider: {} }; // no signTypedData

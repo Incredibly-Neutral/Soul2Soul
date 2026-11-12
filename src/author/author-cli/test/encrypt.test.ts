@@ -958,6 +958,77 @@ describe('authorWrite honors frontmatter encryption', () => {
     expect(Object.keys(second)).toEqual(Object.keys(first));
     expect(readFileSync(path, 'utf8')).toContain('\nencrypted: false\n');
   });
+
+  // -------------------------------------------------------------------------
+  // `label`: public, unsigned, and never a shift of the objectId
+  // -------------------------------------------------------------------------
+  const FIXED_NOW = 1_700_000_000;
+
+  /** Publish one note with the clock pinned, so two notes sign the same dates. */
+  async function publishNote(path: string) {
+    const { ctx, uploaded } = fakeCtx({});
+    vi.mocked(authorSafeState).mockResolvedValueOnce(FAKE_SAFE);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW * 1000);
+    try {
+      await authorWrite(ctx, path, 'test.soul2soul.eth', opts);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    return JSON.parse(uploaded[0] ?? '') as S2SContentItemV3;
+  }
+
+  it('carries `label` on the public part and keeps it out of the signed body', async () => {
+    const path = noteWith([
+      'title: Hello',
+      'encrypted: false',
+      'label: Field notes',
+      'creation_date: 2021-01-01T00:00:00',
+    ]);
+    const item = await publishNote(path);
+
+    expect(item.public.label).toBe('Field notes');
+    const signedBody = JSON.parse(bodyForKey(item) ?? '') as {
+      custom?: Record<string, unknown>;
+    };
+    expect(signedBody.custom ?? {}).not.toHaveProperty('label');
+    // The author owns the key: the write-back leaves it exactly as written.
+    expect(writtenFrontmatter(path).label).toBe('Field notes');
+  });
+
+  it('writes no `label` key for a note without it, and the objectId is identical', async () => {
+    const bare = await publishNote(
+      noteWith(['title: Hello', 'encrypted: false', 'creation_date: 2021-01-01T00:00:00']),
+    );
+    const labelled = await publishNote(
+      noteWith([
+        'title: Hello',
+        'encrypted: false',
+        'label: Field notes',
+        'creation_date: 2021-01-01T00:00:00',
+      ]),
+    );
+
+    expect('label' in bare.public).toBe(false);
+    expect(labelled.public.label).toBe('Field notes');
+    expect(bare.objectId).toBe(labelled.objectId);
+  });
+
+  it('treats `label: ""` as no label, with the same objectId', async () => {
+    const bare = await publishNote(
+      noteWith(['title: Hello', 'encrypted: false', 'creation_date: 2021-01-01T00:00:00']),
+    );
+    const blank = await publishNote(
+      noteWith([
+        'title: Hello',
+        'encrypted: false',
+        'label: ""',
+        'creation_date: 2021-01-01T00:00:00',
+      ]),
+    );
+
+    expect('label' in blank.public).toBe(false);
+    expect(blank.objectId).toBe(bare.objectId);
+  });
 });
 
 // ===========================================================================
