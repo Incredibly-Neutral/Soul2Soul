@@ -12,11 +12,19 @@ the Safe has exactly two: the enabled-module list and the guard slot.
 
 ## Decision
 
-An author Safe enables both of its modules. A reader finds a module by asking each address on
-that Safe's enabled-module list `supportsInterface(roleId)` — `0xefb74036` for the drafts role,
-`0xee855023` for owner history — and taking the one that answers true. `enableModule` is
-`onlySelf`, so the list is the Safe's own statement of what it adopted, and it is the
-authoritative role index for both modules.
+An author Safe enables both of its modules. A reader finds a module that implements ERC-165 by
+asking each address on that Safe's enabled-module list `supportsInterface(roleId)` — `0xefb74036`
+for the drafts role, `0xee855023` for owner history — and taking the one that answers true.
+`enableModule` is `onlySelf`, so the list is the Safe's own statement of what it adopted, and it is
+the authoritative role index for both modules. The same rule covers the records module.
+
+It is not yet the rule for the publication module. `S2SPublicationModule` V1, V2 and V3 inherit
+`Initializable` and `UUPSUpgradeable` and declare no `supportsInterface`, so the probe reverts on
+every deployed publication module and a reader cannot read that revert as "no module here". A
+reader that probes publication modules therefore asks for the id first and falls back to `NAME()`
+when no candidate answers it. That fallback is recorded debt, not a design: it is deleted when a
+publication module implementing the role id is deployed and every live publication has migrated to
+it.
 
 The interface id is a compile-time constant of the deployed contract, and it may never change
 once published. A reader that has already decided on an id cannot be reached by an upgrade, so a
@@ -48,6 +56,10 @@ Safe's back.
 
 - An install is now three Safe self-calls in one transaction: `enableModule(drafts)`,
   `enableModule(history)`, `setGuard(guard)`. Before this, only `setGuard` needed the Safe.
+- **The cutover is not free.** The modules deployed today, at the addresses `SPEC-author-cli`
+  records, predate `supportsInterface`. A gate cannot resolve an unmigrated author Safe by role, and
+  that Safe's drafts stay unreadable outside the gate until it adopts new modules. Accepted: the
+  alternative is a name or a factory index, and neither proves adoption.
 - The enabled list becomes security-relevant. Owners must check that the address they enable is a
   proxy over the published implementation, and they must be able to build `disableModule` with
   its linked-list predecessor — a module the Safe cannot disable is a permanent call surface.
