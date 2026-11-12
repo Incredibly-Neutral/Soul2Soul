@@ -29,14 +29,20 @@ import {
   toBody,
   type Entry,
 } from '../libs/module.factory';
-import { mergeDecrypted } from './data.ctrlr';
+import { buildTemplateData, mergeDecrypted } from './data.ctrlr';
+import { renderHTMLFromSource } from '../renderer/html.ctrlr';
 import { evmRead } from '../libs/evm';
 import { catFile } from '../libs/ipfs.factory';
 import { inspectItemIntegrity } from '../libs/item-integrity';
 import { emptyArchive, parseArchive, reconcile, serialize } from '../libs/archive.factory';
 import { jcs } from '@s2s/soul2soul-shared/lit-actions';
-import { buildSigningViewV2 } from '../../../../shared/dist/manuscript/identity/signing-view';
-import { S2S_DOMAIN, S2S_TYPES_V2, type Address } from '../../../../shared/dist/manuscript/types';
+import { buildSigningView, buildSigningViewV2 } from '../../../../shared/dist/manuscript/identity/signing-view';
+import {
+  S2S_DOMAIN,
+  S2S_TYPES,
+  S2S_TYPES_V2,
+  type Address,
+} from '../../../../shared/dist/manuscript/types';
 
 beforeAll(() => {
   vi.stubGlobal('ethers', {
@@ -62,8 +68,18 @@ const entry: Entry = { genesis: GENESIS, author: AUTHOR.address, cid: 'bafyitem'
 const bodyJson = jcs({ title: 'Inside the ciphertext', slug: 'secret', content: 'Hi', custom: {} });
 const plaintextHash = keccak256(toUtf8Bytes(bodyJson));
 
+/** A plaintext whose own `label` key the public part did NOT put there. */
+const bodyJsonWithLabel = jcs({
+  title: 'Inside the plaintext',
+  slug: 'plain',
+  content: 'Hi',
+  custom: {},
+  label: 'From the body',
+});
+const hashOfBodyWithLabel = keccak256(toUtf8Bytes(bodyJsonWithLabel));
+
 /** The signed public block, optionally carrying the unsigned label. */
-const publicV2 = (label?: string) => ({
+const publicV2 = (label?: string, hash: string = plaintextHash) => ({
   specVersion: '2',
   author: AUTHOR.address as Address,
   postType: 'post',
@@ -77,6 +93,24 @@ const publicV2 = (label?: string) => ({
   attributes: {},
   creationDate: 1600000000,
   modifiedDate: 1700000100,
+  plaintextHash: hash,
+  ...(label !== undefined ? { label } : {}),
+});
+
+/** A v1 public part: one `createdAt`, no label field — plus a stray one when asked. */
+const publicV1 = (label?: string) => ({
+  specVersion: '1',
+  author: AUTHOR.address as Address,
+  postType: 'post',
+  mediaType: 'text/markdown',
+  parent: '',
+  position: '0',
+  publication: 'pub',
+  locale: 'en',
+  createdAt: 1600000000,
+  base: '',
+  tags: [],
+  attributes: {},
   plaintextHash,
   ...(label !== undefined ? { label } : {}),
 });
@@ -105,9 +139,36 @@ const encryptedItem = (label?: string) => {
 };
 
 /** The same envelope in plaintext: `bodies.s2s` IS the bytes the hash covers. */
-const plaintextItem = (label?: string) => {
+const plaintextItem = (label?: string, bodies: Record<string, string> = { s2s: bodyJson }) => {
   const pub = publicV2(label);
-  return { public: pub, ...envelope(pub), encryption: false, bodies: { s2s: bodyJson } };
+  return { public: pub, ...envelope(pub), encryption: false, bodies };
+};
+
+/** A plaintext item whose `s2s` body carries a `label` key of its own. */
+const plaintextItemWithBody = (label?: string) => {
+  const pub = publicV2(label, hashOfBodyWithLabel);
+  return { public: pub, ...envelope(pub), encryption: false, bodies: { s2s: bodyJsonWithLabel } };
+};
+
+/** A v1 item whose public part carries a stray label the v1 struct cannot sign. */
+const v1ItemWithStrayLabel = (label: string) => {
+  const pub = publicV1(label);
+  const digest = TypedDataEncoder.hash(
+    S2S_DOMAIN as never,
+    S2S_TYPES as never,
+    buildSigningView(pub as never),
+  );
+  return {
+    public: pub,
+    objectId: digest,
+    proof: {
+      type: 'eip712' as const,
+      signer: AUTHOR.address as `0x${string}`,
+      signature: AUTHOR.signingKey.sign(digest).serialized as `0x${string}`,
+    },
+    encryption: false,
+    bodies: { s2s: bodyJson },
+  };
 };
 
 /** Serve one item over both chain reads: getDeals (collection) and getLatest. */
@@ -166,6 +227,25 @@ describe('toBody — the public label reaches the template', () => {
     expect('label' in body).toBe(false);
   });
 
+  it('trims the label, so the template sees what the writer stored', () => {
+    expect(toBody(entry, encryptedItem('  Field notes  ')).label).toBe('Field notes');
+  });
+
+  it('serves NO label from a v1 public part, even when one is stored there', () => {
+    // A v1 public part has no label field and its bytes are frozen: the shared
+    // schema strips a stray one, so the press must not serve what the writer
+    // would refuse to write.
+    const item = v1ItemWithStrayLabel('Stray');
+
+    expect(toBody(entry, item as never).label).toBeUndefined();
+    expect('label' in toBody(entry, item as never)).toBe(false);
+    // And the stray field changes nothing the verdict checks.
+    expect(inspectItemIntegrity(item, AUTHOR.address)).toMatchObject({
+      level: 'verified',
+      code: 'verified',
+    });
+  });
+
   it('does not change objectId or the signature — the label is unsigned', () => {
     const withLabel = encryptedItem('Field notes');
     const without = encryptedItem();
@@ -194,6 +274,44 @@ describe('toBody — the public label reaches the template', () => {
     });
     expect(toBody(entry, labelled).label).toBe('Field notes');
     expect(toBody(entry, labelled).title).toBe('Inside the ciphertext');
+  });
+
+  it('ignores a `label` key that the plaintext body itself carries', () => {
+    // The public part is the only source. A body key called `label` is body
+    // content: it must not become the manuscript's name, and it must not stand
+    // in for a missing public label either.
+    const labelled = plaintextItemWithBody('Field notes');
+    expect(toBody(entry, labelled).label).toBe('Field notes');
+
+    const unlabelled = plaintextItemWithBody();
+    expect(toBody(entry, unlabelled).label).toBeUndefined();
+    expect('label' in toBody(entry, unlabelled)).toBe(false);
+  });
+});
+
+describe('buildTemplateData — the {{label}} a template actually reads', () => {
+  const templateConfig = { file: 'post', path: '/posts' };
+
+  it('carries the label onto the template data and renders it', () => {
+    const templateData = buildTemplateData(
+      toBody(entry, encryptedItem('Field notes')),
+      templateConfig as never,
+    );
+
+    expect(templateData.label).toBe('Field notes');
+    const html = renderHTMLFromSource('<h1>{{label}}</h1>', {}, templateData);
+    expect(html).toContain('<h1>Field notes</h1>');
+  });
+
+  it('renders an empty slot, not a derived name, when there is no label', () => {
+    // The genesis-id default is a display decision above the template, so the
+    // template must see an absent label rather than the press inventing one.
+    const body = toBody(entry, encryptedItem());
+    const templateData = buildTemplateData(body, templateConfig as never);
+
+    expect(templateData.label).toBeUndefined();
+    expect('label' in templateData).toBe(false);
+    expect(renderHTMLFromSource('<h1>{{label}}</h1>', {}, templateData)).toContain('<h1></h1>');
   });
 });
 
@@ -244,5 +362,24 @@ describe('mergeDecrypted — the public label survives decryption', () => {
 
     expect(merged.label).toBeUndefined();
     expect('label' in merged).toBe(false);
+  });
+
+  it('ignores a label the decrypted object claims', () => {
+    // Decryption yields body content, not public metadata. A decrypted `label`
+    // must not replace the public one, and must not fill a gap either.
+    const decrypted = {
+      title: 'Inside the ciphertext',
+      slug: 'secret',
+      content: 'Hi',
+      custom: {},
+      label: 'From the ciphertext',
+    };
+
+    const labelled = mergeDecrypted(toBody(entry, encryptedItem('Field notes')), decrypted);
+    expect(labelled.label).toBe('Field notes');
+
+    const unlabelled = mergeDecrypted(toBody(entry, encryptedItem()), decrypted);
+    expect(unlabelled.label).toBeUndefined();
+    expect('label' in unlabelled).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import {
   fetchByPublicationDetailed,
   getDeals,
   getLatestEntry,
+  publicLabel,
   toBody,
   verifyDecryptedBody,
   type Entry,
@@ -78,6 +79,10 @@ export interface S2SBodyIdentity {
  * does belong to the signed item's public part, which is the only place the
  * name of an encrypted manuscript can be read before decryption. Absent means
  * the genesis id, resolved by whoever displays it.
+ *
+ * The VALUE is normalised in one place, module.factory's `publicLabel` — v2
+ * envelope, non-blank, trimmed — so `mergeDecrypted` below re-applies the rule
+ * `toBody` used instead of trusting a hand-built body.
  */
 export interface S2SBodyLabel {
   label?: string;
@@ -102,6 +107,11 @@ export const mergeDecrypted = (
   body: S2SBodyEncryptedWithIdentity,
   decrypted: any,
 ): S2SBodyPlainWithIdentity => {
+  // Carried over from the encrypted body, never from the plaintext: the label is
+  // public metadata, and the body map that decrypts into `title` knows nothing
+  // about it. Public wins if the decrypted object claims one too. Exactly the
+  // rule toBody applied (publicLabel), so the value cannot change form here.
+  const label = publicLabel(body.specVersion, body.label);
   return {
     id: body.id,
     author: body.author,
@@ -115,10 +125,7 @@ export const mergeDecrypted = (
     attributes: body.attributes,
     publication: body.publication,
     ...copyIdentity(body),
-    // Carried over from the encrypted body, never from the plaintext: the label
-    // is public metadata, and the body map that decrypts into `title` knows
-    // nothing about it.
-    ...(body.label !== undefined ? { label: body.label } : {}),
+    ...(label !== undefined ? { label } : {}),
     base: decrypted.base || undefined,
     encryption: false as const,
     content: decrypted.content,
