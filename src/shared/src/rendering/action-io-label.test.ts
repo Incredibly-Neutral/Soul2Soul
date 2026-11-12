@@ -80,15 +80,28 @@ describe('label on the v2 public content schema', () => {
     expect('label' in parsed.public).toBe(false);
   });
 
-  it('reads a blank label as no label, so a displayer falls back to the genesis id', () => {
-    // `label` is unsigned and cosmetic: a blank one resolves to absent instead of
-    // failing the item. A refusal here would cost a manuscript whose signature
-    // verifies, over a field the signature never covered.
-    const parsed = s2sContentItemSchema.parse({ ...ITEM_V3, public: { ...PUBLIC_V2, label: '' } });
-    expect(labelOf(parsed)).toBeUndefined();
+  it('parses a label of any other shape as no label, with no label key left behind', () => {
+    // `label` is unsigned and cosmetic, so it is typed on `unknown` and normalised
+    // rather than validated: a producer writing null, a number, an object or an
+    // array must not turn a signed manuscript into a `malformed-item`. The key goes
+    // with the value, because `jcs` throws on an own key holding `undefined`.
+    for (const label of [null, 42, {}, [], '', '   ']) {
+      const parsed = s2sContentItemSchema.parse({ ...ITEM_V3, public: { ...PUBLIC_V2, label } });
 
-    const blank = s2sContentItemSchema.parse({ ...ITEM_V3, public: { ...PUBLIC_V2, label: '   ' } });
-    expect(labelOf(blank)).toBeUndefined();
+      expect(labelOf(parsed)).toBeUndefined();
+      expect('label' in parsed.public).toBe(false);
+      expect(Object.keys(parsed.public)).not.toContain('label');
+    }
+  });
+
+  it('trims a label it does keep', () => {
+    const parsed = s2sContentItemSchema.parse({
+      ...ITEM_V3,
+      public: { ...PUBLIC_V2, label: '  X  ' },
+    });
+
+    expect(labelOf(parsed)).toBe('X');
+    expect('label' in parsed.public).toBe(true);
   });
 
   it('drops a stray label from a v1 public part rather than failing the item', () => {

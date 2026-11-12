@@ -26,18 +26,51 @@ export const authorAddressSchema = z
  *
  * It is not a field of the S2SContentV2 struct, so the signature and the
  * objectId are the same with it and without it; that is also why it must never
- * be the reason an item fails this schema. A blank value is no label at all: it
- * resolves to absent, which a displayer reads as "use the genesis id".
- * Refusing it instead would turn one empty cosmetic field into a
+ * be the reason an item fails this schema. The field is therefore typed on
+ * `unknown` and normalised rather than validated: a producer writing a non-string
+ * (null, a number, an object, an array) or a blank leaves the item parseable and
+ * the name resolves to absent, which a displayer reads as "use the genesis id".
+ * Rejecting instead would turn one cosmetic unsigned field into a
  * `malformed-item` and drop a manuscript whose signature verifies.
  *
- * A v1 public part has no such field and strips a stray one: v1 bytes are
- * frozen, so a label there is unsigned noise with nothing to attach it to.
+ * A label that normalises to absent loses the KEY, not just the value: `jcs`
+ * throws on an own key holding `undefined`, so a public part that kept one would
+ * poison any later canonicalisation.
+ *
+ * A v1 public part has no such field and strips a stray one: v1 bytes are frozen,
+ * so a label there is unsigned noise with nothing to attach it to.
  */
-const labelSchema = z
-  .string()
-  .optional()
-  .transform((v): string | undefined => (v !== undefined && v.trim() !== '' ? v : undefined));
+const v2PublicShape = z.object({
+  specVersion: z.literal('2'),
+  author: authorAddressSchema,
+  postType: z.string().min(1, 'postType is required'),
+  mediaType: z.string().min(1, 'mediaType is required'),
+  parent: z.string(),
+  position: z.string(),
+  publication: z.string().min(1, 'publication is required'),
+  locale: z.string().min(1, 'locale is required'),
+  creationDate: z.number().int('creationDate must be a unix timestamp (integer)'),
+  modifiedDate: z.number().int('modifiedDate must be a unix timestamp (integer)'),
+  base: z.string().optional(),
+  tags: z.array(z.string()),
+  attributes: z.record(z.unknown()).optional(),
+  plaintextHash: z.string().min(1, 'plaintextHash is required'),
+  label: z.unknown().optional(),
+});
+
+type V2PublicShape = Omit<z.infer<typeof v2PublicShape>, 'label'> & { label?: string };
+
+/**
+ * Normalise the label and drop the key when there is none. Destructuring is what
+ * removes it: `{ ...pub, label: undefined }` would keep an own key holding
+ * `undefined`, and `jcs` throws on that.
+ */
+export const s2sPublicContentSchemaV2 = v2PublicShape.transform((pub): V2PublicShape => {
+  const { label, ...rest } = pub;
+  return typeof label === 'string' && label.trim() !== ''
+    ? { ...rest, label: label.trim() }
+    : rest;
+});
 
 export const s2sPublicContentSchemaV1 = z.object({
   specVersion: z
@@ -56,24 +89,6 @@ export const s2sPublicContentSchemaV1 = z.object({
   tags: z.array(z.string()),
   attributes: z.record(z.unknown()).optional(),
   plaintextHash: z.string().min(1, 'plaintextHash is required'),
-});
-
-export const s2sPublicContentSchemaV2 = z.object({
-  specVersion: z.literal('2'),
-  author: authorAddressSchema,
-  postType: z.string().min(1, 'postType is required'),
-  mediaType: z.string().min(1, 'mediaType is required'),
-  parent: z.string(),
-  position: z.string(),
-  publication: z.string().min(1, 'publication is required'),
-  locale: z.string().min(1, 'locale is required'),
-  creationDate: z.number().int('creationDate must be a unix timestamp (integer)'),
-  modifiedDate: z.number().int('modifiedDate must be a unix timestamp (integer)'),
-  base: z.string().optional(),
-  tags: z.array(z.string()),
-  attributes: z.record(z.unknown()).optional(),
-  plaintextHash: z.string().min(1, 'plaintextHash is required'),
-  label: labelSchema,
 });
 
 export const s2sPublicContentSchema = z.union([
