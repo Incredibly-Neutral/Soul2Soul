@@ -66,6 +66,7 @@ export interface Deal {
   postType?: string,
   encryption?: boolean,
   title?: string,
+  label?: string,          // public.label off the stored item — unsigned, never verified; absent = no label
   position?: number,
   tags?: string[]
 }
