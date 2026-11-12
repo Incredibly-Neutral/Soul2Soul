@@ -158,6 +158,10 @@ them by role.
 `NAME()` returns `"S2S Drafts Module V1"` and is a human-readable diagnostic. Nothing discovers a
 module by it, and copying the string proves nothing.
 
+The implementation in `src/author/contracts` answers the id; the deployment this spec records
+predates it and answers nothing, so a gate cannot resolve an unmigrated Safe by role until that Safe
+adopts the new modules.
+
 ## The factory
 
 One factory for the whole package — `AuthorContractsFactory(draftsImplementation, ownerHistoryImplementation)`,

@@ -215,7 +215,7 @@ and an out-of-range index.
 |---|---|
 | `safe() → address` | the Safe this proxy mirrors; the module's only link to it |
 | `NAME() → string` | `"S2S Owner History Module V1"` (pure; a diagnostic, not a trust signal) |
-| `supportsInterface(bytes4) → bool` | `true` for `0xee855023` (`IOwnerHistoryModule`: `sync`, `isOwner`, `isOwnerAt`, `wasOwnerAt`, `eraCount`) and `0x01ffc9a7`; false for everything else |
+| `supportsInterface(bytes4) → bool` | `true` for `0xee855023` (`IOwnerHistoryModule`: `sync`, `isOwner`, `isOwnerAt`, `wasOwnerAt`, `eraCount`) and `0x01ffc9a7`; false for everything else. In the source; the deployment at `0xD830…` predates it and answers nothing |
 | `isOwner(address) → bool` | **live**: staticcalls the Safe's `isOwner`, `false` if the call fails or returns fewer than 32 bytes, and compares the raw word to `1` rather than `abi.decode(…, (bool))` — decoding reverts on a word that is neither 0 nor 1, and the Safe must not be able to make this read revert |
 | `isOwnerAt(address,uint256 blockNumber) → bool` | `blockNumber >= block.number` → the live `isOwner` answer. Otherwise the tenure scan below |
 | `wasOwnerAt(address,uint256 timestamp) → bool` | same, on the timestamp axis (`timestamp >= block.timestamp` → live) |

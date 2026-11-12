@@ -229,7 +229,7 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
   `OwnerHistoryModuleV1` and `OwnerHistoryGuard`, the era model and its boundary rule, and why the Safe
   offers no hook on owner rotation.
 - Modules and the Safe (ADR-003): `adr/ADR-003-modules-are-enabled-and-found-by-interface.md` — why an
-  enabled module costs the Safe no authority here, and why a reader finds one by interface id rather
-  than by name or factory.
+  enabled module costs the Safe no authority here, and why a reader finds the author-side roles and the
+  records module by interface id, with publication's `NAME()` fallback recorded as debt.
 - Clone-local skills: `skills/template-design/SKILL.md` + `skills/s2s-protocol/SKILL.md` (in
   `~/code/website-starter/skills/`, mirrored into each clone).

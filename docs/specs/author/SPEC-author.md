@@ -135,6 +135,20 @@ The prototype is a layer between these invariants and the code: it may do less
   Enabling grants no power because no module calls `execTransactionFromModule`; the enabled
   list becomes the role index, with a fixed id per role.
 
+## Discovery
+
+`supportsInterface(roleId)` is how a module that implements it is found. That is the drafts module,
+the owner-history module, and the records module. It is not the publication module: `S2SPublicationModule`
+V1, V2 and V3 inherit `Initializable` and `UUPSUpgradeable` and declare no `supportsInterface`, so a
+role-id probe reverts on every deployed publication module. A reader that probes a publication
+module asks for the id first and falls back to `NAME()` when no candidate answers; the fallback is
+recorded debt, deleted when a publication module implementing the role id is deployed and every live
+publication has migrated to it.
+
+The modules deployed today do not answer the id yet. A gate cannot resolve an unmigrated author Safe
+by role, so that Safe's drafts stay unreadable until it runs the migration. The cost is accepted, not
+hidden: the alternative is a name or a factory index, and neither is evidence of adoption.
+
 ## Proposals
 
 - **RFC-001** — the portable byline (AUTHOR-9)
