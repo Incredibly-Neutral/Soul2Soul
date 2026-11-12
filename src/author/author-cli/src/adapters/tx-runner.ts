@@ -24,6 +24,7 @@ import {
   encodeFunctionData,
   http,
   keccak256,
+  parseAbi as parseHumanReadableAbi,
   toBytes,
   type Abi,
   type Address,
@@ -46,9 +47,26 @@ import type { TxCall, TxRunner } from '@s2s/soul2soul-shared';
 import type { EntryPointVersion } from '../core/config';
 import { errorText } from '../lib/errors';
 
-/** Parse a JSON ABI string defensively. */
-function parseAbi(abi: string): Abi {
-  return JSON.parse(abi) as Abi;
+/**
+ * An ABI as either shape the seams already carry it: JSON (a compiled ABI, what
+ * `service.ts` hands to `genericTx`) or human-readable, one `function …` line
+ * per entry (what `GIVEN_SAFE_READS_ABI` is).
+ *
+ * `JSON.parse` alone was the whole of this function, so every
+ * `s2s author address` on a filed Safe died on `Unexpected token 'u'` with the
+ * human-readable text in the message. The two shapes are told apart by the
+ * first character, not by trying one and falling back: a malformed ABI should
+ * say so, not be re-parsed as something else.
+ */
+export function parseAbi(abi: string): Abi {
+  const text = abi.trim();
+  if (text.startsWith('[') || text.startsWith('{')) return JSON.parse(text) as Abi;
+  return parseHumanReadableAbi(
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== ''),
+  );
 }
 
 /**
