@@ -2,10 +2,12 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { network } from 'hardhat';
 import {
+  encodeAbiParameters,
   encodeErrorResult,
   getAddress,
   keccak256,
   parseAbi,
+  toFunctionSelector,
   toHex,
   zeroAddress,
   zeroHash,
@@ -18,8 +20,56 @@ import {
  */
 
 const { viem, networkHelpers } = await network.create();
+const publicClient = await viem.getPublicClient();
 
 const genesis = (label: string) => keccak256(toHex(label));
+
+/**
+ * An EIP-165 id as the XOR of the selectors, taken from the signatures the
+ * contract actually compiles to rather than typed in as a literal — the same
+ * shape as the guard's id test.
+ */
+const interfaceIdOf = (signatures: string[]) =>
+  `0x${signatures
+    .map((s) => BigInt(toFunctionSelector(s)))
+    .reduce((a, b) => a ^ b, 0n)
+    .toString(16)
+    .padStart(8, '0')}` as `0x${string}`;
+
+/** Safe 1.4.1 `type(Guard).interfaceId`: what a Safe's `setGuard` asks for. */
+const GUARD_ID = '0xe6d7a83a' as `0x${string}`;
+
+/**
+ * Storage slots of the versions log for a genesis, derived from the compiled
+ * layout rather than from memory. Dump `storageLayout` out of
+ * `artifacts/build-info/*.output.json` and `safe` is at 101, `versions` at 102.
+ *
+ * `versions` is a mapping to a dynamic array, so there are two hashes, not one:
+ *
+ *   length slot  = keccak256(abi.encode(genesis, uint256(102)))
+ *   element base = keccak256(abi.encode(length slot)) + index * 2
+ *
+ * The intermediate word is the array's length slot, not the array's data: an
+ * entry written at `length + 1` lands in unrelated storage and every assertion
+ * here fails, which is the point of deriving it instead of guessing.
+ *
+ * Each element is two words: `cid` (a string is one length word, with its bytes
+ * elsewhere) then `timestamp` and `blockNumber` packed into one word at offsets
+ * 0 and 8. A pre-upgrade entry's second word is a plain uint256 timestamp: its
+ * low 64 bits are the timestamp, the next 64 are zero.
+ */
+const VERSIONS_SLOT = 102n;
+
+/** Slot holding the number of versions of `genesis`. */
+const versionsLengthSlot = (g: `0x${string}`) =>
+  BigInt(keccak256(encodeAbiParameters([{ type: 'bytes32' }, { type: 'uint256' }], [g, VERSIONS_SLOT])));
+
+/** First word of element `index`: the `cid` length word. */
+const entryBase = (g: `0x${string}`, index = 0n) =>
+  BigInt(keccak256(encodeAbiParameters([{ type: 'uint256' }], [versionsLengthSlot(g)]))) + index * 2n;
+
+/** Second word of an entry: the packed `timestamp` | `blockNumber` pair. */
+const timestampWord = (g: `0x${string}`, index = 0n) => entryBase(g, index) + 1n;
 
 /** An unknown genesis is a `bytes32(0)` Entry, so tests need one that is never appended. */
 const UNKNOWN = genesis('never-appended');
@@ -181,6 +231,109 @@ describe('DraftsModuleV1', () => {
     assert.equal(entry.versionCount, 3n);
   });
 
+  it('append records the block of its own transaction, index-aligned with history', async () => {
+    const hash = genesis('draft-with-block');
+
+    // Explicit mining: "the block the append landed in" only means something if
+    // the blocks around it differ from it.
+    await networkHelpers.mine(3);
+    const firstTx = await d.drafts.write.append([hash, 'bafy-blocked-v1'], {
+      account: d.safe.account,
+    });
+    const firstReceipt = await publicClient.waitForTransactionReceipt({ hash: firstTx });
+    const firstBlock = firstReceipt.blockNumber!;
+
+    await networkHelpers.mine(2);
+    const secondTx = await d.drafts.write.append([hash, 'bafy-blocked-v2'], {
+      account: d.safe.account,
+    });
+    const secondReceipt = await publicClient.waitForTransactionReceipt({ hash: secondTx });
+    const secondBlock = secondReceipt.blockNumber!;
+    assert.ok(secondBlock > firstBlock + 1n, 'the two appends are in distinguishable blocks');
+
+    const [timestamps] = await d.drafts.read.history([hash]);
+    const blocks = await d.drafts.read.blocksOf([hash]);
+
+    assert.equal(blocks.length, 2);
+    assert.equal(timestamps.length, 2);
+    assert.equal(blocks[0], firstBlock);
+    assert.equal(blocks[1], secondBlock);
+    assert.equal(timestamps[0], (await publicClient.getBlock({ blockNumber: firstBlock }))!.timestamp);
+    assert.equal(timestamps[1], (await publicClient.getBlock({ blockNumber: secondBlock }))!.timestamp);
+
+    // `Entry.timestamp` is the same value as the latest history entry, cast to
+    // uint256 on the way out; `Entry` itself is unchanged.
+    const entry = await fetch(d, hash);
+    assert.equal(entry.timestamp, timestamps[1]);
+    assert.equal(entry.cid, 'bafy-blocked-v2');
+  });
+
+  it('a pre-upgrade entry reads its timestamp and reports no block', async () => {
+    const hash = genesis('draft-pre-upgrade');
+    await appendAsSafe(d, hash, 'bafy-published-before');
+
+    const [before] = await d.drafts.read.history([hash]);
+    assert.equal(before.length, 1);
+    const realTimestamp = before[0]!;
+
+    // An old-format word: a plain uint256 timestamp, low 64 bits only. It must
+    // differ from the real one, so a write that misses the slot leaves the old
+    // value in place and the assertion below fails instead of passing by luck.
+    const OLD_TIMESTAMP = 1_700_000_001n;
+    assert.notEqual(OLD_TIMESTAMP, realTimestamp, 'the planted value must not match the live one');
+
+    const slot = timestampWord(hash);
+    await networkHelpers.setStorageAt(d.drafts.address, slot, OLD_TIMESTAMP);
+
+    const [timestamps] = await d.drafts.read.history([hash]);
+    const blocks = await d.drafts.read.blocksOf([hash]);
+
+    assert.equal(timestamps[0], OLD_TIMESTAMP, `nothing at slot ${slot}: the slot is wrong`);
+    assert.equal(blocks[0], 0n); // high 64 bits of the old word are zero
+    assert.equal((await fetch(d, hash)).timestamp, OLD_TIMESTAMP);
+
+    // The log is still whole: the CID word was untouched, so only the timestamp
+    // pair changed.
+    const [, cids] = await d.drafts.read.history([hash]);
+    assert.equal(cids[0], 'bafy-published-before');
+  });
+
+  it('a CID longer than 31 bytes reads back intact, and does not shift the stride', async () => {
+    const hash = genesis('draft-long-cid');
+    // A real CIDv1 base32 is already past 31 bytes; this one is longer still, so
+    // the string is one length word plus overflow either way, and the element
+    // must stay two words.
+    const long = `bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi${'q'.repeat(120)}`;
+    assert.ok(long.length > 31);
+
+    await appendAsSafe(d, hash, long);
+    await appendAsSafe(d, hash, 'bafy-short');
+
+    const [timestamps, cids] = await d.drafts.read.history([hash]);
+    const blocks = await d.drafts.read.blocksOf([hash]);
+
+    assert.deepEqual([...cids], [long, 'bafy-short']);
+    // The longer element did not push the next one: its block is read from the
+    // second element's own second word.
+    assert.equal(blocks.length, 2);
+    assert.ok(blocks[0]! > 0n && blocks[1]! >= blocks[0]!);
+    assert.ok(timestamps[1]! >= timestamps[0]!);
+    assert.equal((await fetch(d, hash)).cid, 'bafy-short');
+  });
+
+  it('blocksOf answers an empty array on an unknown genesis and on an empty log', async () => {
+    assert.deepEqual([...(await d.drafts.read.blocksOf([UNKNOWN]))], []);
+    assert.deepEqual([...(await d.drafts.read.blocksOf([zeroHash]))], []);
+
+    // A genesis that is known but has no versions cannot exist (append is what
+    // creates it), so the other empty case is a module with no appends at all.
+    await d.factory.write.createDraftsModule([d.safe.account.address]);
+    const modules = await d.factory.read.getDraftsModulesForSafe([d.safe.account.address]);
+    const fresh = await viem.getContractAt('DraftsModuleV1', modules.at(-1)!);
+    assert.equal(await fresh.read.count(), 0n);
+    assert.deepEqual([...(await fresh.read.blocksOf([genesis('draft-a')]))], []);
+  });
+
   it('fetch on an unknown genesis returns a zeroed Entry instead of reverting', async () => {
     const entry = await fetch(d, UNKNOWN);
 
@@ -319,6 +472,49 @@ describe('DraftsModuleV1', () => {
     assert.equal(everything.length, 3);
 
     assert.deepEqual(await d.drafts.read.fetchAllPaged([3n, max]), []);
+  });
+
+  it('supportsInterface answers the drafts role id and nothing else', async () => {
+    const draftsId = interfaceIdOf([
+      'function append(bytes32,string)',
+      'function isDraft(bytes32)',
+      'function authorOf(bytes32)',
+      'function count()',
+    ]);
+    const historyId = interfaceIdOf([
+      'function sync()',
+      'function isOwner(address)',
+      'function isOwnerAt(address,uint256)',
+      'function wasOwnerAt(address,uint256)',
+      'function eraCount()',
+    ]);
+
+    // Literals so a drift in the interface surfaces here; the ids are constants
+    // of the published contract, so they may never change.
+    assert.equal(draftsId, '0xefb74036');
+    assert.equal(historyId, '0xee855023');
+
+    // The role must be distinguishable from the guard's, and from the other
+    // module's: an id two roles share tells a reader nothing.
+    assert.notEqual(draftsId, GUARD_ID);
+    assert.notEqual(historyId, GUARD_ID);
+    assert.notEqual(draftsId, historyId);
+
+    for (const target of [d.drafts.address, d.implementation.address]) {
+      const module = await viem.getContractAt('DraftsModuleV1', target);
+      assert.equal(await module.read.supportsInterface([draftsId]), true);
+      assert.equal(await module.read.supportsInterface(['0x01ffc9a7']), true); // IERC165
+      assert.equal(await module.read.supportsInterface([historyId]), false);
+      assert.equal(await module.read.supportsInterface([GUARD_ID]), false);
+      assert.equal(await module.read.supportsInterface(['0xffffffff']), false);
+      assert.equal(await module.read.supportsInterface(['0x12345678']), false); // a random id
+    }
+
+    // The other module answers its own id, and not this one.
+    const history = await viem.getContractAt('OwnerHistoryModuleV1', d.historyImplementation.address);
+    assert.equal(await history.read.supportsInterface([historyId]), true);
+    assert.equal(await history.read.supportsInterface([draftsId]), false);
+    assert.equal(await history.read.supportsInterface([GUARD_ID]), false);
   });
 
   it('initialize rejects address(0) instead of birthing a dead module', async () => {
