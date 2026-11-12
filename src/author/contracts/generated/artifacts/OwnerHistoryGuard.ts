@@ -168,7 +168,7 @@ export const Artifact_OwnerHistoryGuard: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "3240": [
+    "4050": [
       {
         "length": 32,
         "start": 361
@@ -178,7 +178,7 @@ export const Artifact_OwnerHistoryGuard: {
         "start": 539
       }
     ],
-    "3243": [
+    "4053": [
       {
         "length": 32,
         "start": 104
@@ -226,7 +226,7 @@ export const Artifact_OwnerHistoryGuard: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "3240": [
+        "4050": [
           {
             "length": 32,
             "start": 361
@@ -236,7 +236,7 @@ export const Artifact_OwnerHistoryGuard: {
             "start": 539
           }
         ],
-        "3243": [
+        "4053": [
           {
             "length": 32,
             "start": 104
@@ -470,7 +470,7 @@ export const Artifact_OwnerHistoryGuard: {
   "linkReferences": {},
   "deployedLinkReferences": {},
   "immutableReferences": {
-    "3240": [
+    "4050": [
       {
         "length": 32,
         "start": 361
@@ -480,7 +480,7 @@ export const Artifact_OwnerHistoryGuard: {
         "start": 539
       }
     ],
-    "3243": [
+    "4053": [
       {
         "length": 32,
         "start": 104
@@ -528,7 +528,7 @@ export const Artifact_OwnerHistoryGuard: {
     },
     "deployedBytecode": {
       "immutableReferences": {
-        "3240": [
+        "4050": [
           {
             "length": 32,
             "start": 361
@@ -538,7 +538,7 @@ export const Artifact_OwnerHistoryGuard: {
             "start": 539
           }
         ],
-        "3243": [
+        "4053": [
           {
             "length": 32,
             "start": 104
