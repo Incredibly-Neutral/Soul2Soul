@@ -9,10 +9,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { utils, Wallet } from 'ethers';
 
-import { S2S_TYPES_V2, bodyForKey, type S2SContentBody } from '../types';
+import { bodyForKey, S2S_TYPES_V2, type S2SContentBody } from '../types';
 import { signingEnvelope } from './signing-view';
 import { buildSignedContentItem, noOpEncrypt, type TypedDataSigner } from './sign-content';
 import { verifyAuthorship } from './verify-content';
+import { s2sContentItemSchema } from '../../rendering/action-io';
 
 beforeAll(() => {
   (globalThis as { ethers?: unknown }).ethers = { utils };
@@ -114,5 +115,39 @@ describe('label is public but unsigned', () => {
 
     expect(item.public.specVersion).toBe('1');
     expect('label' in item.public).toBe(false);
+  });
+
+  it('writes nothing for a null or blank label, so the item still parses', async () => {
+    // `ParsedNote.label` is `string | null`: a writer handing it straight over must
+    // not store a null the reader's schema refuses, because a cosmetic field may
+    // never turn a signed manuscript into a `malformed-item`.
+    for (const label of [null, '', '   ']) {
+      const item = await buildSignedContentItem(
+        { ...pubV2(), label: label as unknown as string },
+        BODY,
+        signerOf(wallet),
+        noOpEncrypt,
+        wallet.address,
+      );
+
+      expect('label' in item.public).toBe(false);
+      expect(item.objectId).toBe(
+        (await buildSignedContentItem(pubV2(), BODY, signerOf(wallet), noOpEncrypt, wallet.address))
+          .objectId,
+      );
+      expect(s2sContentItemSchema.safeParse(item).success).toBe(true);
+    }
+  });
+
+  it('trims the label it does write', async () => {
+    const item = await buildSignedContentItem(
+      pubV2('  Field notes  '),
+      BODY,
+      signerOf(wallet),
+      noOpEncrypt,
+      wallet.address,
+    );
+
+    expect(item.public.label).toBe('Field notes');
   });
 });

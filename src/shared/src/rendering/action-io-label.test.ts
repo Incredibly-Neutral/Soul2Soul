@@ -79,4 +79,37 @@ describe('label on the v2 public content schema', () => {
     expect(labelOf(parsed)).toBeUndefined();
     expect('label' in parsed.public).toBe(false);
   });
+
+  it('reads a blank label as no label, so a displayer falls back to the genesis id', () => {
+    // `label` is unsigned and cosmetic: a blank one resolves to absent instead of
+    // failing the item. A refusal here would cost a manuscript whose signature
+    // verifies, over a field the signature never covered.
+    const parsed = s2sContentItemSchema.parse({ ...ITEM_V3, public: { ...PUBLIC_V2, label: '' } });
+    expect(labelOf(parsed)).toBeUndefined();
+
+    const blank = s2sContentItemSchema.parse({ ...ITEM_V3, public: { ...PUBLIC_V2, label: '   ' } });
+    expect(labelOf(blank)).toBeUndefined();
+  });
+
+  it('drops a stray label from a v1 public part rather than failing the item', () => {
+    // v1 bytes are frozen and never carried a label. A stray one is unsigned noise
+    // with nothing to attach it to, so it is stripped, not made fatal.
+    const v1 = {
+      ...PUBLIC_V2,
+      specVersion: '1',
+      createdAt: PUBLIC_V2.creationDate,
+      label: 'Field notes',
+    };
+
+    const parsed = s2sContentItemSchema.parse({
+      public: v1,
+      objectId: ITEM_V3.objectId,
+      proof: ITEM_V3.proof,
+      encryption: ITEM_V3.encryption,
+      body: 'ciphertext',
+    });
+
+    expect(parsed.public.specVersion).toBe('1');
+    expect(labelOf(parsed)).toBeUndefined();
+  });
 });

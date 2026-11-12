@@ -252,14 +252,6 @@ export interface S2SBodyBase {
   attributes?: any;
   publication?: string;
   base?: string;
-  /**
-   * A short name/title for the manuscript, public but UNSIGNED.
-   *
-   * Same meaning as on `S2SPublicContentV2`: the real title is inside the
-   * ciphertext, the label is what a listing shows, and the envelope never signs
-   * it. Absent means the genesis id, resolved by whoever displays it.
-   */
-  label?: string;
 }
 
 export interface S2SBodyPlain extends S2SBodyBase {

@@ -21,6 +21,24 @@ export const authorAddressSchema = z
 // to the v1 branch when a date is misspelled or missing.
 // ============================================================================
 
+/**
+ * `label` — the public, UNSIGNED short name of a manuscript (v2 only).
+ *
+ * It is not a field of the S2SContentV2 struct, so the signature and the
+ * objectId are the same with it and without it; that is also why it must never
+ * be the reason an item fails this schema. A blank value is no label at all: it
+ * resolves to absent, which a displayer reads as "use the genesis id".
+ * Refusing it instead would turn one empty cosmetic field into a
+ * `malformed-item` and drop a manuscript whose signature verifies.
+ *
+ * A v1 public part has no such field and strips a stray one: v1 bytes are
+ * frozen, so a label there is unsigned noise with nothing to attach it to.
+ */
+const labelSchema = z
+  .string()
+  .optional()
+  .transform((v): string | undefined => (v !== undefined && v.trim() !== '' ? v : undefined));
+
 export const s2sPublicContentSchemaV1 = z.object({
   specVersion: z
     .string()
@@ -55,10 +73,7 @@ export const s2sPublicContentSchemaV2 = z.object({
   tags: z.array(z.string()),
   attributes: z.record(z.unknown()).optional(),
   plaintextHash: z.string().min(1, 'plaintextHash is required'),
-  // Public but UNSIGNED: it is not a field of the S2SContentV2 struct, so it is
-  // not committed by the signature and the objectId is the same without it.
-  // Absent means the genesis id, resolved by whoever displays it.
-  label: z.string().optional(),
+  label: labelSchema,
 });
 
 export const s2sPublicContentSchema = z.union([
