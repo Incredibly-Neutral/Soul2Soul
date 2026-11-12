@@ -187,9 +187,11 @@ function rawDeal(genesis: string, author: string) {
 
 /**
  * The stored item for an encrypted deal/offer: the body is ciphertext (never
- * parsed), and `public.label` is present only when one is asked for.
+ * parsed), and `public.label` is present only when one is asked for. `label`
+ * is `unknown` so a fixture can put a blank or a non-string on the item and
+ * prove the component ignores it.
  */
-function encryptedItem(label?: string) {
+function encryptedItem(label?: unknown) {
   const content = m.contentFor('') as unknown as {
     public: Record<string, unknown>;
     body: string;
@@ -294,6 +296,9 @@ describe('s2s-deals-tab', () => {
         rawDeal('0x48656c6c6f', '0xAuthorDeal'),
         rawDeal('0xLabelled', '0xAuthorDeal'),
         rawDeal('0xBare', '0xAuthorDeal'),
+        rawDeal('0xBlankLabel', '0xAuthorDeal'),
+        rawDeal('0xWhitespaceLabel', '0xAuthorDeal'),
+        rawDeal('0xNumericLabel', '0xAuthorDeal'),
       ],
       offers: [rawDeal('0xOfferLabelled', '0xAuthorOffer'), rawDeal('0xOfferBare', '0xAuthorOffer')],
     });
@@ -303,6 +308,14 @@ describe('s2s-deals-tab', () => {
           return Promise.resolve(encryptedItem('Sealed field notes'));
         case 'cid-0xBare':
           return Promise.resolve(encryptedItem());
+        // A blank label, a whitespace-only label and a non-string are all "no
+        // label": none of them may reach the cell as the row's name.
+        case 'cid-0xBlankLabel':
+          return Promise.resolve(encryptedItem(''));
+        case 'cid-0xWhitespaceLabel':
+          return Promise.resolve(encryptedItem('   '));
+        case 'cid-0xNumericLabel':
+          return Promise.resolve(encryptedItem(42));
         case 'cid-0xOfferLabelled':
           return Promise.resolve(encryptedItem('Offer label'));
         case 'cid-0xOfferBare':
@@ -315,7 +328,7 @@ describe('s2s-deals-tab', () => {
     const el = await mountTab();
     const root = el.shadowRoot!;
     await vi.waitFor(() => {
-      expect(root.textContent).toContain('Active Agreements (3)');
+      expect(root.textContent).toContain('Active Agreements (6)');
       expect(root.textContent).toContain('Pending Offers (2)');
     });
     expect(root.textContent).not.toContain('Active Deals');
@@ -331,30 +344,59 @@ describe('s2s-deals-tab', () => {
     // Encrypted without one: the genesis id, in full — not a shortened address.
     expect(displayOf('0xBare')).toBe('0xBare');
     expect(displayOf('0xOfferBare')).toBe('0xOfferBare');
+    // Blank, whitespace-only and non-string labels are no label at all, and
+    // still never a blank cell.
+    expect(displayOf('0xBlankLabel')).toBe('0xBlankLabel');
+    expect(displayOf('0xWhitespaceLabel')).toBe('0xWhitespaceLabel');
+    expect(displayOf('0xNumericLabel')).toBe('0xNumericLabel');
+
+    // The stored items keep what the fixture put there: the guard is the
+    // component's, not the fixture's.
+    const labels = (store.deals as unknown as Array<{ genesis: string; label?: unknown }>).map((d) => [
+      d.genesis,
+      d.label,
+    ]);
+    expect(labels).toEqual([
+      ['0x48656c6c6f', undefined],
+      ['0xLabelled', 'Sealed field notes'],
+      ['0xBare', undefined],
+      ['0xBlankLabel', undefined],
+      ['0xWhitespaceLabel', undefined],
+      ['0xNumericLabel', undefined],
+    ]);
   });
 
   it('sorts the ID / Title column by the name the row shows', async () => {
+    // One labelled encrypted row among the plaintext ones: a getter that
+    // agreed on titles but sorted an encrypted row by its genesis id (or its
+    // '-' placeholder) lands in a different order.
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
-      deals: [rawDeal('0xaaa', '0xAuthorDeal'), rawDeal('0xbbb', '0xAuthorDeal')],
+      deals: [
+        rawDeal('0xaaa', '0xAuthorDeal'),
+        rawDeal('0xbbb', '0xAuthorDeal'),
+        rawDeal('0xccc', '0xAuthorDeal'),
+      ],
       offers: [],
     });
-    m.fetchFromIPFS.mockImplementation((_gw: string, cid: string) =>
-      Promise.resolve(m.contentFor(cid === 'cid-0xaaa' ? 'Zulu' : 'Alpha')),
-    );
+    m.fetchFromIPFS.mockImplementation((_gw: string, cid: string) => {
+      if (cid === 'cid-0xccc') return Promise.resolve(encryptedItem('Mango'));
+      return Promise.resolve(m.contentFor(cid === 'cid-0xaaa' ? 'Zulu' : 'Alpha'));
+    });
 
     const el = await mountTab();
     const root = el.shadowRoot!;
-    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (2)'));
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (3)'));
 
     const header = root.querySelector<HTMLButtonElement>('button[data-sort="title"]');
     expect(header).not.toBeNull();
     header!.click();
 
-    // Genesis order is 0xaaa, 0xbbb; the shown names sort the other way round.
+    // Genesis order is 0xaaa, 0xbbb, 0xccc; the shown names sort Alpha (0xbbb),
+    // Mango (0xccc), Zulu (0xaaa).
     await vi.waitFor(() => {
       expect(
         [...root.querySelectorAll('.deal-card.table-row')].map((r) => r.getAttribute('data-genesis')),
-      ).toEqual(['0xbbb', '0xaaa']);
+      ).toEqual(['0xbbb', '0xccc', '0xaaa']);
     });
   });
 

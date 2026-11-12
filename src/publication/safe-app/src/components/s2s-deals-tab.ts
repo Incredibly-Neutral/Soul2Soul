@@ -37,10 +37,14 @@ import './pet-name.js';
  * `public.label` is unsigned and read straight off the stored item, absent
  * meaning "no label"; it is never verified, so an encrypted row with none
  * falls back to the id rather than inventing a name.
+ *
+ * `||`, not `??`: a blank label or title must fall back to the id too, so a
+ * blank can never render a blank cell. readPublicLabel drops blanks and
+ * whitespace today, and this keeps that guard from being the only one.
  */
 function displayName(d: Deal): string {
-  if (d.encryption) return d.label ?? d.genesis;
-  return d.title ?? d.genesis;
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- blank falls back, not just nullish
+  return d.encryption ? d.label || d.genesis : d.title || d.genesis;
 }
 
 /**
