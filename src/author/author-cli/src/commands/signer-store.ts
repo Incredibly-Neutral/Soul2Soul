@@ -23,7 +23,15 @@
 // fake and opens no socket.
 // ============================================================================
 
-import { createPublicClient, createWalletClient, getAddress, http, type Address, type Hex } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  getAddress,
+  http,
+  parseAbi,
+  type Address,
+  type Hex,
+} from 'viem';
 import { base } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -34,9 +42,13 @@ import {
   SAFE_TX_CHAIN_ID,
   type SafeTxService,
 } from '../adapters/safe-tx';
-import { readSafeOwners } from '../core/author-contracts';
+import {
+  addressFromWord,
+  readSafeOwners,
+  SAFE_FALLBACK_HANDLER_SLOT,
+} from '../core/author-contracts';
 import { activeAuthorRecord, authorsFilePath, readAuthors, safeProblem } from '../core/authors';
-import { givenSafeInUse } from '../core/author-safe';
+import { givenSafeInUse, createAuthorSafeRunner, SAFE_4337_MODULE } from '../core/author-safe';
 import { loadConfig, type CliConfig } from '../core/config';
 import { UsageError } from '../lib/errors';
 import { buildRpcEndpoints } from '../adapters/rpc';
@@ -170,6 +182,111 @@ async function sendFromEoa(input: {
   return wallet.sendTransaction({ account, to: input.to, data: input.data });
 }
 
+/**
+ * The two facts a sponsored send needs from the Safe itself: the 4337 module is
+ * enabled, and the module is what the Safe falls back to. Enabled does not imply
+ * installed as the handler, because a Safe can enable a module and still route
+ * `validateUserOp` to a different handler.
+ */
+export interface Safe4337State {
+  moduleEnabled: boolean;
+  /** The installed handler, or null when the slot is empty. */
+  fallbackHandler: Address | null;
+}
+
+/**
+ * `isModuleEnabled` in the precise shape viem needs. A local fragment rather
+ * than the shared `safeAbi`, which types the result `unknown` (it is not a
+ * `const` literal), and this read must answer a boolean.
+ */
+const SAFE_4337_READS = parseAbi(['function isModuleEnabled(address module) view returns (bool)']);
+
+/**
+ * The two chain reads the sponsorship decision makes, as functions, so a test
+ * can drive `read4337From` with a fake chain instead of a socket. The handler is
+ * a *storage* read: Safe 1.4.1 has no `getFallbackHandler()` getter — a call for
+ * one falls through into the installed handler and reverts — so asking the Safe
+ * is not an option, and the only way to see the handler is
+ * `fallback_manager.handler.address`.
+ */
+export interface Safe4337Reads {
+  /** One storage word of the Safe, or undefined when the slot is empty. */
+  word(slot: Hex): Promise<Hex | undefined>;
+  /** Safe 1.4.1's own `isModuleEnabled(address)`. */
+  moduleEnabled(module: Address): Promise<boolean>;
+}
+
+/**
+ * `isModuleEnabled(SAFE_4337_MODULE)` and the fallback handler, from `reads`.
+ *
+ * An empty handler word reads as null, not an error: a Safe with no handler
+ * cannot route `validateUserOp` to the module, which is exactly what the
+ * caller's reason string has to say.
+ */
+export async function read4337From(reads: Safe4337Reads): Promise<Safe4337State> {
+  const [moduleEnabled, word] = await Promise.all([
+    reads.moduleEnabled(SAFE_4337_MODULE),
+    reads.word(SAFE_FALLBACK_HANDLER_SLOT),
+  ]);
+  return { moduleEnabled, fallbackHandler: addressFromWord(word) };
+}
+
+/** `read4337From` against the chain at `rpcUrl`. */
+export async function read4337(rpcUrl: string, safe: Address): Promise<Safe4337State> {
+  const client = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  return await read4337From({
+    word: async (slot) => await client.getStorageAt({ address: safe, slot }),
+    moduleEnabled: async (module) =>
+      await client.readContract({
+        address: safe,
+        abi: SAFE_4337_READS,
+        functionName: 'isModuleEnabled',
+        args: [module],
+      }),
+  });
+}
+
+/**
+ * `execTransaction` sent as a userOp from `safe`, sponsored by the configured
+ * paymaster. No ETH is needed on the EOA: the paymaster fronts the gas and the
+ * bundler submits.
+ *
+ * This is deliberately not a fallback for `sendFromEoa`. It makes one attempt
+ * and throws; choosing the EOA instead is the caller's decision, taken before
+ * the send, so a sponsorship refusal can never turn into an EOA transaction the
+ * user did not ask for.
+ *
+ * Returns the **on-chain transaction hash** (the transaction that carried the
+ * userOp, hence the one that carried the Safe's `execTransaction`), waiting for
+ * the userOp receipt first. A throw is one of three, tagged by `sendCall` where
+ * the phase is known: `SponsoredSendRefused` (nothing submitted),
+ * `SponsoredSendUncertain` (submitted, receipt unseen), `SponsoredSendReverted`
+ * (landed, the call inside it reverted, transaction hash carried).
+ *
+ * `config` is the config the command resolved, passed in rather than reloaded:
+ * an injected config or a `--key` has to reach the runner too.
+ */
+async function sendSponsoredFromSafe(input: {
+  config: CliConfig;
+  rpcUrl: string;
+  privateKey: Hex;
+  to: Address;
+  data: Hex;
+  safe: Address;
+}): Promise<Hex> {
+  const runner = await createAuthorSafeRunner({
+    config: input.config,
+    privateKey: input.privateKey,
+    eoa: privateKeyToAccount(input.privateKey).address,
+    rpcUrl: input.rpcUrl,
+    // The command only reaches this after finding a paymaster URL, and a
+    // paymaster URL never exists without a bundler URL (`bundlerEndpoints`).
+    requireBundler: true,
+    safe: input.safe,
+  });
+  return runner.sendCall(input.to, input.data);
+}
+
 // ===========================================================================
 // The seam
 // ===========================================================================
@@ -185,6 +302,24 @@ export interface SignerDeps {
   readCode(rpcUrl: string, address: Address): Promise<boolean>;
   /** Send a plain transaction from the key and return its hash. */
   send(input: { rpcUrl: string; privateKey: Hex; to: Address; data: Hex }): Promise<Hex>;
+  /**
+   * Send the same call as a userOp from `safe`, sponsored by the paymaster, and
+   * return the on-chain transaction hash. Throws on refusal; never falls back.
+   */
+  sendSponsored(input: {
+    config: CliConfig;
+    rpcUrl: string;
+    privateKey: Hex;
+    to: Address;
+    data: Hex;
+    safe: Address;
+  }): Promise<Hex>;
+  /**
+   * `isModuleEnabled(SAFE_4337_MODULE)` and `getFallbackHandler()` from the
+   * Safe: the two facts the sponsorship decision needs, read in one place so a
+   * test can fail them together.
+   */
+  read4337(rpcUrl: string, safe: Address): Promise<Safe4337State>;
   keySource(flags: Record<string, string | boolean>): KeySource;
   authorsPath(): string;
   /** Chain id the safeTxHash is computed for; see `SIGNER_CHAIN_ID`. */
@@ -197,6 +332,8 @@ const DEFAULT_SIGNER_DEPS: SignerDeps = {
   readSafe: readChainSafe,
   readCode,
   send: sendFromEoa,
+  sendSponsored: sendSponsoredFromSafe,
+  read4337,
   keySource: (flags) => resolveKeySource(flags),
   authorsPath: () => authorsFilePath(),
   chainId: SIGNER_CHAIN_ID,

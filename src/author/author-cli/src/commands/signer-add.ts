@@ -214,7 +214,7 @@ export async function runSignerAdd(
               : [
                   `              the threshold is met: \`s2s signer confirm ${safeTxHash}\` executes it`,
                 ]),
-            `              proposing costs no gas; execution costs gas from whichever EOA sends it`,
+            `              proposing costs no gas; execution is sponsored only for a 1-of-1 Safe with the 4337 module enabled as its handler and a paymaster configured, otherwise the sending EOA pays`,
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,

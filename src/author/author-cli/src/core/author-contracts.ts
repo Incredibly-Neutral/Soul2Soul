@@ -137,6 +137,34 @@ export const SAFE_GUARD_SLOT: Hex =
   '0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8';
 
 /**
+ * The Safe's fallback-handler slot: `fallback_manager.handler.address`, i.e.
+ * `keccak256("fallback_manager.handler.address")`. Safe 1.4.1 exposes no getter
+ * for it either — a `getFallbackHandler()` call falls through to the handler
+ * itself and reverts, which is why asking the Safe does not work — so the
+ * installed handler is read from storage, one word, address in the low 20 bytes.
+ *
+ * This is where the 4337 module lives on a Safe this build created: the Safe's
+ * initializer passes it as the fallback handler, and that is how a userOp
+ * signature reaches `Safe4337Module.validateUserOp` at all.
+ */
+export const SAFE_FALLBACK_HANDLER_SLOT: Hex =
+  '0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5';
+
+/**
+ * The address in one storage word: the low 20 bytes, or null when the word is
+ * absent or zero. Tolerates a short or empty word (an undeployed or non-Safe
+ * address answers nothing) by reporting "nothing installed", which is also the
+ * truthful reading.
+ */
+export function addressFromWord(word: Hex | undefined): Address | null {
+  if (!word || word === '0x') return null;
+  const hex = word.slice(2).padStart(64, '0');
+  const low20 = `0x${hex.slice(-40)}`;
+  if (low20 === ZERO_ADDRESS) return null;
+  return getAddress(low20);
+}
+
+/**
  * The ERC-165 role ids, as the contracts answer them.
  *
  * `type(IDraftsModule).interfaceId` and `type(IOwnerHistoryModule).interfaceId`
@@ -629,12 +657,7 @@ export async function readDraftsCount(opts: ModuleReadOptions): Promise<bigint> 
  */
 export async function readSafeGuard(opts: ReadSafeOptions): Promise<Address | null> {
   const client = clientFor(opts.rpcUrl);
-  const word = await client.getStorageAt({ address: opts.safe, slot: SAFE_GUARD_SLOT });
-  if (!word || word === '0x') return null;
-  const hex = word.slice(2).padStart(64, '0');
-  const low20 = `0x${hex.slice(-40)}`;
-  if (low20 === ZERO_ADDRESS) return null;
-  return getAddress(low20);
+  return addressFromWord(await client.getStorageAt({ address: opts.safe, slot: SAFE_GUARD_SLOT }));
 }
 
 /** The Safe's owners and threshold. */

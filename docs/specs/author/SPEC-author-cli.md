@@ -72,7 +72,7 @@ s2s author revoke    <note> [--publication <ens>] [--json]                      
 s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]      # file a key and propose it as one owner of a deployed Safe
 s2s signer rotate    [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]    # swap this machine's key on a Safe, threshold untouched (the Safe defaults to the one it files)
 s2s signer queue     [<safe>] [--json]                                                           # unexecuted proposals, oldest nonce first, and what this key owes
-s2s signer confirm   <safeTxHash> [--safe <safe>] [--no-execute] [--json]                        # sign a queued proposal, then execute it at the threshold
+s2s signer confirm   <safeTxHash> [--safe <safe>] [--no-execute] [--self-paid] [--json]         # sign a queued proposal, then execute it at the threshold
 s2s publication new  <name> --repo <owner/repo> [--branch <b>] [--author <addr>...] [--owner <addr>...] [--json]
 s2s setup            [--accept-defaults] [--json]                                               # guided first-run config: keep the defaults or paste your own
 s2s config set       <key> <value> [--local] [--json]                                             # write a config value

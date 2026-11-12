@@ -44,10 +44,60 @@ import {
 import type { TxCall, TxRunner } from '@s2s/soul2soul-shared';
 
 import type { EntryPointVersion } from '../core/config';
+import { errorText } from '../lib/errors';
 
 /** Parse a JSON ABI string defensively. */
 function parseAbi(abi: string): Abi {
   return JSON.parse(abi) as Abi;
+}
+
+/**
+ * The bundler or paymaster refused the userOp: it was never submitted, so
+ * retrying cannot execute it twice.
+ */
+export class SponsoredSendRefused extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SponsoredSendRefused';
+  }
+}
+
+/**
+ * The userOp was submitted — a userOp hash exists — and its receipt was not
+ * seen. It may have landed: a retry could execute the call twice.
+ */
+export class SponsoredSendUncertain extends Error {
+  readonly userOpHash: Hex;
+
+  constructor(message: string, userOpHash: Hex, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SponsoredSendUncertain';
+    this.userOpHash = userOpHash;
+  }
+}
+
+/**
+ * The userOp landed and reverted: the transaction exists, the call inside it did
+ * not run. Gas was spent, nothing else changed, so this is a failure the user
+ * can retry — unlike a refusal (nothing sent) and unlike an unknown outcome (it
+ * may have executed). The transaction hash is carried because it is the only
+ * thing that makes the failure inspectable.
+ */
+export class SponsoredSendReverted extends Error {
+  readonly transactionHash: Hex;
+  readonly reason: string | undefined;
+
+  constructor(
+    message: string,
+    transactionHash: Hex,
+    reason: string | undefined,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'SponsoredSendReverted';
+    this.transactionHash = transactionHash;
+    this.reason = reason;
+  }
 }
 
 // ===========================================================================
@@ -176,9 +226,93 @@ export interface SafeRunnerHandle extends TxRunner {
   isDeployed(): Promise<boolean>;
   /**
    * Deploy the counterfactual Safe by sending a self-call userOp — the Safe
-   * factory runs in the userOp's initCode. Returns the userOp/transaction hash.
+   * factory runs in the userOp's initCode. Returns the **on-chain transaction
+   * hash**, like `sendCall`: permissionless' `sendTransaction` waits for the
+   * userOp receipt and returns `receipt.transactionHash`, never the userOp hash.
    */
   deploy(): Promise<string>;
+  /**
+   * Send one raw call as a userOp and resolve with the **on-chain transaction
+   * hash** once the userOp's receipt is in (permissionless' `sendTransaction`
+   * waits for it; the userOp hash is not returned). `genericTx` encodes from an
+   * ABI; this takes calldata the caller already has, such as a Safe's
+   * `execTransaction`, and can address the Safe itself.
+   *
+   * A failure is phase-tagged, because the caller's advice depends on it: a
+   * throw from submission is `SponsoredSendRefused` (nothing landed, retrying is
+   * safe), a throw while waiting for the receipt is `SponsoredSendUncertain`
+   * (the userOp hash exists, the outcome does not).
+   */
+  sendCall(to: Address, data: Hex): Promise<Hex>;
+}
+
+/** Gas overrides for one userOp, from the paymaster's own price when there is one. */
+export interface UserOpFees {
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+}
+
+/**
+ * Send one call as a userOp through `client` and resolve with the on-chain
+ * transaction hash, or throw with the phase tagged.
+ *
+ * The call goes in `calls`, not as `to`/`data`: viem builds a userOp's
+ * `callData` from `calls` or from `callData`, and silently drops anything else,
+ * so `{ to, data }` produced a userOp with no call in it at all. For a Safe
+ * 1.4.1 + Safe4337Module account the encoder wraps a single call as
+ * `executeUserOpWithErrorString(to, value, data, 0)`, so the userOp's callData
+ * begins `0x541d63c8` and the `execTransaction` calldata begins `0x6a761202`
+ * inside it.
+ *
+ * Two failure phases and a third outcome, because the advice differs:
+ *   - throw reading fees or submitting → `SponsoredSendRefused` (nothing landed)
+ *   - throw while awaiting receipt → `SponsoredSendUncertain` (may have landed)
+ *   - a receipt with `success: false` → `SponsoredSendReverted` (landed,
+ *     reverted; the call did not happen and the transaction hash is carried).
+ * Collapsing those is how a retry that could execute twice looks safe.
+ *
+ * Exported so a test can drive it with a real permissionless client over a
+ * custom transport: the callData in `eth_sendUserOperation` is then the same
+ * bytes a bundler would see, with no socket.
+ */
+export async function sendCallAsUserOp(
+  client: SmartAccountClient,
+  input: { to: Address; data: Hex; fees: () => Promise<UserOpFees> },
+): Promise<Hex> {
+  let userOpHash: Hex;
+  try {
+    // Inside the guard, not before the call: the fee read is a paymaster round
+    // trip, and a paymaster outage must not escape as an untagged error — the
+    // command would read an untagged failure as "may have executed" when no
+    // userOp was ever built. One guard, one place where a refusal is tagged.
+    const fees = await input.fees();
+    userOpHash = await client.sendUserOperation({
+      calls: [{ to: input.to, data: input.data, value: 0n }],
+      ...fees,
+    });
+  } catch (err) {
+    throw new SponsoredSendRefused(errorText(err), { cause: err });
+  }
+  let receipt: Awaited<ReturnType<SmartAccountClient['waitForUserOperationReceipt']>>;
+  try {
+    receipt = await client.waitForUserOperationReceipt({ hash: userOpHash });
+  } catch (err) {
+    throw new SponsoredSendUncertain(errorText(err), userOpHash, { cause: err });
+  }
+  // `waitForUserOperationReceipt` resolves for a reverted userOp too, with
+  // `success: false`: the transaction is on chain, the call inside it did not
+  // run. Returning the hash would print a revert as `executed: true`.
+  if (!receipt.success) {
+    const reason = receipt.reason;
+    throw new SponsoredSendReverted(
+      reason === undefined || reason === ''
+        ? `the userOp landed and reverted in transaction ${receipt.receipt.transactionHash}`
+        : `the userOp landed and reverted in transaction ${receipt.receipt.transactionHash}: ${reason}`,
+      receipt.receipt.transactionHash,
+      reason,
+    );
+  }
+  return receipt.receipt.transactionHash;
 }
 
 export async function createSafeRunner<
@@ -267,6 +401,10 @@ export async function createSafeRunner<
         value: 0n,
         ...(await feeOverrides()),
       } as never);
+    },
+    sendCall: async (to: Address, data: Hex): Promise<Hex> => {
+      if (!client) throw new Error('SafeRunner not initialised — call connect first');
+      return await sendCallAsUserOp(client, { to, data, fees: feeOverrides });
     },
     updateSigner: async (pk: string): Promise<string> => {
       owner = privateKeyToAccount(pk as Hex);
