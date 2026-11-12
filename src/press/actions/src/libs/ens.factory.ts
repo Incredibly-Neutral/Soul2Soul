@@ -1,35 +1,49 @@
 import { evmRead } from './evm';
+import { isPublicationModuleName } from '@s2s/soul2soul-shared/lit-actions';
 
 declare const ethers: any;
 
 const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 
 // ============================================================================
-// Role discovery — ERC-165, one probe per module per role.
+// Role discovery — ERC-165 first, and a NAME() fallback for publication only.
 //
 // A Safe's enabled-module list is an address list and nothing more: anything the
 // owners enabled sits on it. A module declares which role it fills by answering
-// `supportsInterface(roleId)`, so discovery asks that instead of reading a
-// string. A `NAME()` is copyable by any contract, and the S2S modules answer
-// three different strings for one role; the interface id is a compile-time
-// constant of the deployed bytecode and cannot be copied into a contract that
-// does not implement the functions.
+// `supportsInterface(roleId)`. The interface id is a compile-time constant of the
+// deployed bytecode, so a contract that does not implement the functions cannot
+// claim it; a `NAME()` is a string any contract can copy.
+//
+// The id is authoritative wherever it is answered, and `false` and a revert both
+// mean "not this role". None of the three deployed publication implementations
+// answers an id at all: S2SPublicationModule, V2 and V3 extend Initializable and
+// UUPSUpgradeable and declare no `supportsInterface`, and they answer one NAME()
+// each. So a publication Safe today answers nothing for the publication role.
+// Publication discovery therefore keeps the NAME() comparison as a fallback, run
+// only when no candidate answered the id, over the same candidates and against
+// the same accepted-name set as before. Delete the fallback when a publication
+// module that answers `supportsInterface(PUBLICATION_ROLE_ID)` is deployed and
+// every live publication has been migrated to it.
+//
+// Records has no fallback: its module implements ERC-165 and always has.
 //
 // REQUEST BUDGET. Lit caps a session at 50 HTTP requests, and every eth_call
 // costs one request per RPC URL tried — so a call that reverts costs two and a
-// call that answers `false` costs one. Counts for this file:
+// call that answers costs one. Counts for this file:
 //
-//   getProtocolControllerAndModules   ENS walk 4 + probes
-//   getDomainOwnerAndModules          ENS walk 3 + probes
-//   probes: at most two per module, one per role. Records is asked first and
-//   stops at the first module that answers; publication is asked only of what
-//   is left. The common Safe — 4337 module, records module, publication module
-//   — costs 3 probes: records is asked of both probeable modules in one round
-//   (only one can answer) and publication is asked of the one left over.
+//   getProtocolControllerAndModules   ENS walk 4 + probes (records only)
+//   getDomainOwnerAndModules          ENS walk 3 + probes (records, publication)
 //
-// A module that answers no S2S interface costs one request (a clean `false`) or
-// two (no such function, so the call reverts), which is what the NAME() probe
-// it replaces cost.
+// Probes, for the common Safe (4337 module skipped, records module, publication
+// module), records asked first and stopping at the first module that answers:
+//
+//   publication answers the id        3 calls — two records probes, one
+//                                     publication probe
+//   publication answers only its name 4 calls — the publication probe comes
+//   (every publication on Base today) back empty, then one NAME() finds it
+//   nothing answers                  one id probe per module per role, then one
+//                                     NAME() per module; a module with no NAME()
+//                                     reverts, so its NAME() costs two
 // ============================================================================
 
 // `type(IS2SRecordsModule).interfaceId` — the XOR of the 14 selectors declared
@@ -50,11 +64,14 @@ export const RECORDS_ROLE_ID = '0x19c3e04a';
 //   getWhitelistedAuthors()   getWhitelistedDevs()
 //   MAX_WHITELISTED_AUTHORS() MAX_WHITELISTED_DEVS()
 //
-// `type(IPublicationModule).interfaceId` over exactly those 13 selectors, so
-// every version answers one id. The deal verbs are deliberately outside it:
-// V1 has none of them, and an id a live version cannot answer makes that
-// publication undiscoverable for good. Adding to the surface means publishing a
-// new id, not editing this one.
+// `type(IPublicationModule).interfaceId` over exactly those 13 selectors, which
+// is the surface every version shares, so one id names the role at any version.
+// The deal verbs are deliberately outside it: V1 has none of them, and an id a
+// version cannot answer makes that publication undiscoverable for good. No
+// deployed publication module answers it yet — the contracts must declare the
+// interface and return its id, and until they do the NAME() fallback below is
+// what finds a publication. Adding to the surface means publishing a new id,
+// not editing this one.
 export const PUBLICATION_ROLE_ID = '0x342c5c11';
 
 const SUPPORTS_INTERFACE_ABI = [
@@ -84,6 +101,8 @@ const isKnownNonS2SModule = (address: string): boolean =>
 // intermittent ECONNRESET / 'missing response' transport failures).
 const MAX_CONCURRENT_ROLE_PROBES = 3;
 
+const NAME_ABI = ['function NAME() view returns (string)'];
+
 // One module, one role, one eth_call. A revert (no such function) and a `false`
 // mean the same thing — not ours — so neither is an error here. A transport
 // failure also reads as not ours: evmRead already tried each RPC URL once, and
@@ -109,25 +128,35 @@ const answersRole = async (
   }
 };
 
-/**
- * The first module on `candidates` that answers `roleId`, or null. Probes run
- * `MAX_CONCURRENT_ROLE_PROBES` at a time and stop being issued as soon as one
- * answers, so the cost is the number of modules reached before the hit and
- * never more than one probe per module. A smaller list than the fan-out costs
- * one probe per module, which is why a three-module Safe with the 4337 module
- * skipped spends two probes here and one more for the second role.
- */
-export const findModuleWithRole = async (
-  candidates: string[],
-  roleId: string,
+// A publication module's NAME(), accepted by the same predicate the pre-ERC-165
+// discovery used: `S2S Publication Module`, optionally followed by ` V<digits>`.
+// Kept identical on purpose — a narrower set would silently drop a publication.
+const answersPublicationName = async (
+  moduleAddress: string,
   rpcs?: { L1: string[]; L2: string[] },
+): Promise<boolean> => {
+  try {
+    const name = await evmRead('L2', moduleAddress, NAME_ABI, 'NAME', [], rpcs?.L2);
+    return isPublicationModuleName(name);
+  } catch {
+    return false;
+  }
+};
+
+// The first candidate for which `matches` answers true, or null. Probes run
+// `MAX_CONCURRENT_ROLE_PROBES` at a time and stop being issued as soon as one
+// answers, so the cost is one probe per module reached before the hit and never
+// more than one per module.
+const findModule = async (
+  candidates: string[],
+  matches: (moduleAddress: string) => Promise<boolean>,
 ): Promise<string | null> => {
   let found: string | null = null;
   let nextIndex = 0;
   const worker = async () => {
     while (found === null && nextIndex < candidates.length) {
       const index = nextIndex++;
-      if (await answersRole(candidates[index], roleId, rpcs)) {
+      if (await matches(candidates[index])) {
         if (found === null) found = candidates[index];
       }
     }
@@ -136,6 +165,23 @@ export const findModuleWithRole = async (
   await Promise.all(Array.from({ length: workerCount }, worker));
   return found;
 };
+
+/** The first module on `candidates` that answers `roleId`, or null. */
+export const findModuleWithRole = (
+  candidates: string[],
+  roleId: string,
+  rpcs?: { L1: string[]; L2: string[] },
+): Promise<string | null> => findModule(candidates, (addr) => answersRole(addr, roleId, rpcs));
+
+/**
+ * The first module on `candidates` whose NAME() is a publication module's, or
+ * null. Only used where no module answered the publication role id; see the
+ * header for when it can be deleted.
+ */
+export const findModuleByPublicationName = (
+  candidates: string[],
+  rpcs?: { L1: string[]; L2: string[] },
+): Promise<string | null> => findModule(candidates, (addr) => answersPublicationName(addr, rpcs));
 
 const getModuleList = async (safe: string, rpcs?: { L1: string[]; L2: string[] }) => {
   const [modules] = await evmRead(
@@ -223,11 +269,13 @@ export const getDomainOwnerAndModules = async (
   const modules = await getModuleList(multisig, rpcs);
 
   const configModule = await findModuleWithRole(modules, RECORDS_ROLE_ID, rpcs);
-  const publicationModule = await findModuleWithRole(
-    modules.filter((addr: string) => addr !== configModule),
-    PUBLICATION_ROLE_ID,
-    rpcs,
-  );
+
+  // Publication: the role id decides when it is answered, and the NAME()
+  // fallback is consulted only when no candidate answered it.
+  const rest = modules.filter((addr: string) => addr !== configModule);
+  const publicationModule =
+    (await findModuleWithRole(rest, PUBLICATION_ROLE_ID, rpcs)) ??
+    (await findModuleByPublicationName(rest, rpcs));
 
   return {
     multisig,
