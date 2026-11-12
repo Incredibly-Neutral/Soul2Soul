@@ -130,6 +130,10 @@ The prototype is a layer between these invariants and the code: it may do less
 - **ADR-002** — revoking retracts on-chain first, then re-renders with a remove
   directive → [adr/ADR-002-revoke-retracts-then-re-renders.md](../../adr/ADR-002-revoke-retracts-then-re-renders.md)
   Satisfies AUTHOR-3 in one command, both halves, author alone.
+- **ADR-003** — a manuscript's label is public and unsigned
+  → [adr/ADR-003-label-is-unsigned.md](../../adr/ADR-003-label-is-unsigned.md)
+  A name a listing can show without a key, kept out of the signing types so identity stays
+  the same bytes. The one exception to the public part's "every field is signed" rule.
 
 ## Proposals
 

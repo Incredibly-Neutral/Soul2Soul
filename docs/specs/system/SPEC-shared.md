@@ -67,14 +67,14 @@ These types are the **single source of truth** for stored content items. They li
 
 | type | file | shape |
 |---|---|---|
-| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates |
+| `S2SPublicContent` | `protocol/types.ts` | signed public metadata: `specVersion, author(0x address), postType, mediaType, parent, position, publication, locale, creationDate(number unixts, signing time of the genesis version), modifiedDate(number unixts, signing time of this version), base?, tags[], attributes?(Record), plaintextHash` — a v1 item carries a single `createdAt` in place of the two dates, and never a `label`; a v2 item may carry `label?` (a public, UNSIGNED display name — ADR-003) |
 | `S2SProof` | `protocol/types.ts` | EIP-712 author sig: `type("eip712"), signer(0x), signature(0x)` |
 | `S2SContentItem` | `protocol/types.ts` | **flat stored object** (storage layout v3): `public(S2SPublicContent), objectId, proof(S2SProof), encryption(boolean), bodies(Record<string,string>)` — `bodies` holds one body per key holder, keyed by the key holder's name; `s2s` is the protocol PKP's and every item has it. A v1/v2 item stores a single `body` string instead. |
 | `S2SContentBody` | `protocol/types.ts` | what goes inside a body: `title, slug, content, custom?(Record)` |
 
 Key design decisions (from HANDOFF-content-item):
 - **No discriminated union.** Both readings of a body are `string` (ciphertext when `encryption=true`, stringified JSON when `false`).
-- **No unsigned public field.** Every field in `S2SPublicContent` is signed via EIP-712.
+- **No unsigned public field, with one named exception.** Every field in `S2SPublicContent` is signed via EIP-712 except the v2 `label`, which is absent from `S2S_TYPES_V2` so it enters neither the signing view nor the digest: `objectId` and the signature are the same bytes with it and without it. It is a display name for a listing, resolved by whoever displays the manuscript as `label ?? genesis` and never stored resolved. Nothing may depend on it — no gate, index, cache key or identity — and a relayer may rewrite it, which is why it is not signed. The exception and its cost: [ADR-003](../../adr/ADR-003-label-is-unsigned.md). A second unsigned field needs its own ADR.
 - **`specVersion` selects the struct.** A `'2'` envelope verifies under `S2S_TYPES_V2` with `creationDate`/`modifiedDate`; anything else stays under `S2S_TYPES` with `createdAt`, so a v1 digest still reproduces.
 - **The body is not signed.** `plaintextHash` commits the plaintext instead.
 - **`objectId` = EIP-712 digest** of `public`, available pre-upload, pre-CID.
