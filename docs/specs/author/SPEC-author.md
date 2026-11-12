@@ -130,6 +130,10 @@ The prototype is a layer between these invariants and the code: it may do less
 - **ADR-002** — revoking retracts on-chain first, then re-renders with a remove
   directive → [adr/ADR-002-revoke-retracts-then-re-renders.md](../../adr/ADR-002-revoke-retracts-then-re-renders.md)
   Satisfies AUTHOR-3 in one command, both halves, author alone.
+- **ADR-003** — a Safe enables a module and finds it by interface id
+  → [adr/ADR-003-modules-are-enabled-and-found-by-interface.md](../../adr/ADR-003-modules-are-enabled-and-found-by-interface.md)
+  Enabling grants no power because no module calls `execTransactionFromModule`; the enabled
+  list becomes the role index, with a fixed id per role.
 
 ## Proposals
 

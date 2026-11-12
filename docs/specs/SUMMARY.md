@@ -70,7 +70,7 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
   makes an offer, and that is an explicit copy of a CID, not a shared row.
 - **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, in `src/author/contracts`, deployed on
 Base behind the same factory; the per-Safe proxy and guard are installed by the CLI, and the Safe's
-`setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per
+batch of `enableModule`×2 and `setGuard` is the one transaction the CLI cannot sign for a multisig) — one module per
 author Safe, mirroring the Safe's owner set and keeping every past set with the block and timestamp it
 held, plus a storage-free, non-upgradeable guard whose `checkAfterExecution` calls the module's
 permissionless `sync()`. It exists because Safe 1.4.1 has no hook on owner rotation: every rotation is
@@ -228,5 +228,8 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 - Owner history (who was an owner, and when): `specs/author/SPEC-author-owner-history.md` —
   `OwnerHistoryModuleV1` and `OwnerHistoryGuard`, the era model and its boundary rule, and why the Safe
   offers no hook on owner rotation.
+- Modules and the Safe (ADR-003): `adr/ADR-003-modules-are-enabled-and-found-by-interface.md` — why an
+  enabled module costs the Safe no authority here, and why a reader finds one by interface id rather
+  than by name or factory.
 - Clone-local skills: `skills/template-design/SKILL.md` + `skills/s2s-protocol/SKILL.md` (in
   `~/code/website-starter/skills/`, mirrored into each clone).

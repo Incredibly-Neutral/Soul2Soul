@@ -93,7 +93,7 @@ own area.
 - `system/SPEC-shared.md` — types, validation, the render orchestration, `cid-view`
 - `SUMMARY.md` — the protocol and the pipeline end to end, enough to write a proposal without
   re-reading everything
-- `author/` — nine invariants, ADR-001..002, RFC-001..002, RFC-003, RFC-004; branches:
+- `author/` — nine invariants, ADR-001..003, RFC-001..002, RFC-003, RFC-004; branches:
   `identity`, `publishing`, `shared`, `hosts`, `cli`, `nvim`, `vscode`, `nvim-s2s`, `drafts`,
   `owner-history` (who was an owner of the author Safe, and when — the module, the guard and
   the era model)
