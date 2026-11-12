@@ -198,7 +198,7 @@ function args(argv: string[]): ParsedArgs {
 }
 
 describe('s2s signer rotate', () => {
-  it('shows the optional argument and the reason for it in --help', () => {
+  it('shows no <safe> in --help, and names the command that files one', () => {
     const help = commandHelp(
       'signer',
       signerRotate.name,
@@ -207,10 +207,12 @@ describe('s2s signer rotate', () => {
       signerRotate.params,
       signerRotate.detail,
     );
-    expect(help.startsWith('s2s signer rotate [<safe>] [flags]')).toBe(true);
-    // The reason the argument is optional: the store already names the Safe.
-    expect(help).toContain('this machine files when it signs');
-    expect(help).toContain('pass <safe> only to pick another one');
+    // No optional argument: the Safe is the one this machine files, and an
+    // argument nobody needs teaches that it is needed.
+    expect(help.startsWith('s2s signer rotate [flags]')).toBe(true);
+    expect(help).not.toContain('[<safe>]');
+    expect(help).toContain('this machine files for its active author');
+    expect(help).toContain('`s2s signer add <safe>` is the command that files one');
   });
 
   it('files the new key inactive and proposes swapOwner(prev, old, new)', async () => {
@@ -220,7 +222,7 @@ describe('s2s signer rotate', () => {
 
     // The old key is second in the list, so its predecessor is a real owner —
     // not the sentinel that a hardcoded `prevOwner` would produce.
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake, { owners: [OWNER_B, EOA_OLD], nonce: 9 }),
     });
 
@@ -294,7 +296,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
     seedOld();
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake),
     });
 
@@ -311,15 +313,18 @@ describe('s2s signer rotate', () => {
     addSigner({ name: 'zomi-next', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
 
     // The chain says the swap landed: the new key is an owner, the old is not.
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OTHER]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_OTHER]), {
       ...deps(fake, { owners: [EOA_NEW, OWNER_B] }),
     });
 
-    expect(captured.results[0]).toMatchObject({ replaces: 'zomi-next', name: 'zomi-next-next' });
+    // The settle renames the filed `zomi-next` row to `zomi`, so the key this run
+    // retires is 'zomi' and the new row is filed as its next.
+    expect(captured.results[0]).toMatchObject({ replaces: 'zomi', name: 'zomi-next' });
     const store = readAuthors(storePath());
-    expect(store.active).toBe('zomi-next');
-    expect(store.authors.zomi).toBeUndefined();
-    expect(store.authors['zomi-next-next']?.replaces).toBe('zomi-next');
+    expect(store.active).toBe('zomi');
+    expect(store.authors.zomi?.privateKey).toBe(KEY_NEW);
+    expect(store.authors['zomi-next']?.privateKey).toBe(KEY_OTHER);
+    expect(store.authors['zomi-next']?.replaces).toBe('zomi');
   });
 
   it('calls a row the chain does not own stale, names it, and files no swap against it', async () => {
@@ -328,7 +333,7 @@ describe('s2s signer rotate', () => {
     addSigner({ name: 'zomi', privateKey: KEY_OTHER, safe: SAFE }, storePath());
 
     const run = (): Promise<void> =>
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake));
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake));
 
     await expect(run()).rejects.toMatchObject({ code: 'not_owner' });
     await expect(run()).rejects.toThrow(
@@ -337,22 +342,6 @@ describe('s2s signer rotate', () => {
     expect(fake.proposed).toHaveLength(0);
     expect(fake.asked).toHaveLength(0);
     expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
-  });
-
-  it('refuses when the effective key owns the Safe but the store files it under another one', async () => {
-    const fake = fakeService();
-    const captured = capture();
-    const otherSafe: Address = '0x2222222222222222222222222222222222222222';
-    // No row for this Safe, so rule 2 would file the environment key here — but
-    // one key keeps one row, and this one already names another Safe.
-    addSigner({ name: 'elsewhere', privateKey: KEY_OLD, safe: otherSafe }, storePath());
-    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
-
-    await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toThrow(/is filed as 'elsewhere', a row for 0x2222[\s\S]*one key under one row/);
-    expect(fake.proposed).toHaveLength(0);
-    expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['elsewhere']);
   });
 
   it('keeps the Safe slot for its stale row even when the environment key owns the Safe', async () => {
@@ -365,7 +354,7 @@ describe('s2s signer rotate', () => {
     // Safe, and the stale row holds that slot. Refusing is the only honest
     // answer, and it does not quietly retire a key the chain never accepted.
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(/a key the chain does not list as an owner/);
     expect(readAuthors(storePath()).authors['signer-7e5f45']).toBeUndefined();
     expect(fake.proposed).toHaveLength(0);
@@ -376,7 +365,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(/s2s signer add/);
     expect(fake.proposed).toHaveLength(0);
   });
@@ -387,7 +376,7 @@ describe('s2s signer rotate', () => {
     seedOld();
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_B]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_B]), deps(fake)),
     ).rejects.toMatchObject({ code: 'already_owner' });
     expect(fake.proposed).toHaveLength(0);
     expect(Object.keys(readAuthors(storePath()).authors)).toEqual(['zomi']);
@@ -399,7 +388,7 @@ describe('s2s signer rotate', () => {
     seedOld();
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OLD]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_OLD]), deps(fake)),
     ).rejects.toMatchObject({ code: 'same_key' });
     expect(fake.proposed).toHaveLength(0);
   });
@@ -418,7 +407,7 @@ describe('s2s signer rotate', () => {
     // would drop the row.
     const err = await runSignerRotate(
       captured.out,
-      args(['signer', 'rotate', SAFE, '--key', KEY_OTHER]),
+      args(['signer', 'rotate', '--key', KEY_OTHER]),
       deps(fake),
     ).catch((thrown: unknown) => thrown);
     expect(err).toMatchObject({ code: 'replacement_pending' });
@@ -441,19 +430,6 @@ describe('s2s signer rotate', () => {
     // The row that signs already names its Safe; the command line need not.
     expect(captured.results[0]).toMatchObject({ safe: SAFE, name: 'zomi-next', proposed: true });
     expect(fake.proposed).toHaveLength(1);
-  });
-
-  it('refuses without an argument when no filed key owns a Safe, naming <safe>', async () => {
-    const fake = fakeService();
-    const captured = capture();
-    // Filed for SAFE, but not on its owner list, and nothing is chasing a swap.
-    addSigner({ name: 'zomi', privateKey: KEY_OTHER, safe: SAFE }, storePath());
-
-    await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
-    ).rejects.toThrow(/pass <safe>/);
-    expect(fake.proposed).toHaveLength(0);
-    expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
   });
 
   it('reuses the key a failed run filed instead of minting another', async () => {
@@ -512,7 +488,7 @@ describe('s2s signer rotate', () => {
     const failing = fakeService(new Error('safe transaction service said 422'));
     const first = capture();
 
-    await runSignerRotate(first.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(first.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(failing),
     });
 
@@ -542,7 +518,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
     seedOld();
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake),
     });
 
@@ -571,7 +547,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
     seedOld();
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake),
       config: () => ({ ...loadConfig(), safeTx: { url: '', key: undefined } }),
     });
@@ -587,7 +563,7 @@ describe('s2s signer rotate', () => {
     seedOld();
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
         ...deps(fake, { deployed: false, owners: [], threshold: 0, nonce: 0 }),
       }),
     ).rejects.toMatchObject({ code: 'safe_not_deployed' });
@@ -603,7 +579,7 @@ describe('s2s signer rotate', () => {
 
     await runSignerRotate(
       captured.out,
-      args(['signer', 'rotate', SAFE, '--name', 'cold', '--key', KEY_NEW]),
+      args(['signer', 'rotate', '--name', 'cold', '--key', KEY_NEW]),
       {
         ...deps(fake),
         keySource: () => ({ privateKey: KEY_NEW, mnemonic: phrase, generated: true }),
@@ -634,7 +610,7 @@ describe('s2s signer rotate', () => {
     addSigner({ name: 'decoy', privateKey: KEY_NEW, safe: SAFE, replaces: 'zomi' }, storePath());
     addSigner({ name: 'zomi', privateKey: KEY_OLD, safe: SAFE }, seam);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake),
       authorsPath: () => seam,
     });
@@ -656,7 +632,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
     seedOld();
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake, { threshold: 1 }),
     });
 
@@ -798,10 +774,10 @@ describe('s2s signer rotate', () => {
     writeFileSync(lock, `${String(process.pid)}\n`);
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toMatchObject({ code: 'store_locked' });
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(`pid ${String(process.pid)}`);
     // Nothing was filed behind the other writer's back, and its lock is its own
     // to release.
@@ -821,7 +797,7 @@ describe('s2s signer rotate', () => {
     const pid = deadPid();
     writeFileSync(lock, `${String(pid)}\n`);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake));
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake));
 
     expect(captured.results[0]).toMatchObject({ proposed: true, replaces: 'zomi' });
     expect(readAuthors(storePath()).authors['zomi-next']).toBeTruthy();
@@ -845,12 +821,12 @@ describe('s2s signer rotate', () => {
     writeFileSync(lock, '');
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toMatchObject({ code: 'store_locked' });
     // Empty is not stale: the file was read again for long enough that a holder
     // writing its pid would have finished, and the answer is still "held".
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(/names no pid/);
     expect(existsSync(lock)).toBe(true);
     expect(captured.warnings.join('\n')).not.toContain('cleared the author store lock');
@@ -865,7 +841,7 @@ describe('s2s signer rotate', () => {
     writeFileSync(lock, 'not a pid\n');
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(/names no pid/);
     expect(existsSync(lock)).toBe(true);
     expect(readAuthors(storePath()).authors['zomi-next']).toBeUndefined();
@@ -879,65 +855,46 @@ describe('s2s signer rotate', () => {
     // A refusal thrown inside the lock (the key is already this machine's)
     // leaves no lock behind.
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_OLD]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_OLD]), {
         ...deps(fakeService()),
       }),
     ).rejects.toMatchObject({ code: 'same_key' });
     expect(existsSync(lock)).toBe(false);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fakeService()),
     });
     expect(existsSync(lock)).toBe(false);
   });
 
-  it('rotates a key that only the environment holds, filing it first', async () => {
+  it('does not invent a row for an environment key, and names `signer add` instead', async () => {
     const fake = fakeService();
     const captured = capture();
-    // No store row at all: the owner key arrives from the environment, which is
-    // where a key that owns a Safe is most often kept.
+    // No store row at all: an owner key in the environment names no Safe, and
+    // this command begins from the Safe the store files.
     vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
-      ...deps(fake),
-    });
+    await expect(
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
+        ...deps(fake),
+      }),
+    ).rejects.toThrow(/this machine holds no active key[\s\S]*s2s signer add <safe>/);
 
-    // The store needs a row to record what the swap retires, so one is filed for
-    // the old key, and the new row replaces it.
-    const store = readAuthors(storePath());
-    expect(store.authors['signer-7e5f45']).toMatchObject({
-      privateKey: KEY_OLD,
-      safe: SAFE,
-      safeSource: 'given',
-    });
-    expect(store.authors['signer-7e5f45-next']).toMatchObject({
-      privateKey: KEY_NEW,
-      replaces: 'signer-7e5f45',
-    });
-    expect(captured.results[0]).toMatchObject({
-      oldKeySource: 'env',
-      oldEoa: EOA_OLD,
-      replaces: 'signer-7e5f45',
-      filedOldRow: 'signer-7e5f45',
-      proposed: true,
-    });
-    expect(captured.human[0]).toContain("filed first : the owner key from S2S_PRIVATE_KEY as 'signer-7e5f45'");
-    // The proposal is still signed by the old key.
-    expect(fake.proposed[0]?.sender).toBe(EOA_OLD);
+    expect(readAuthors(storePath()).authors).toEqual({});
+    expect(fake.proposed).toHaveLength(0);
   });
 
   it('leaves the store byte-identical when the name it would file is taken', async () => {
     const fake = fakeService();
     const captured = capture();
-    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
-    // A row already holds this name. Rule 2 would file the environment key for
-    // the Safe before `addSigner` ever looked at `--name`, so the refusal has to
-    // be planned before the first write or this run halves the store.
+    // `--name zomi` is the row this run retires. The new row is planned before the
+    // first write, so the refusal cannot leave a half-filed pair behind.
     addSigner({ name: 'taken', privateKey: KEY_OTHER, safe: OTHER_SAFE }, storePath());
+    seedOld();
     const before = readFileSync(storePath(), 'utf8');
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW, '--name', 'taken']), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW, '--name', 'taken']), {
         ...deps(fake),
       }),
     ).rejects.toThrow(/already exists/);
@@ -958,7 +915,7 @@ describe('s2s signer rotate', () => {
     chmodSync(lock, 0o000);
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), deps(fake)),
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), deps(fake)),
     ).rejects.toThrow(/cannot read it \(EACCES\)/);
     chmodSync(lock, 0o600);
     expect(existsSync(lock)).toBe(true);
@@ -971,7 +928,7 @@ describe('s2s signer rotate', () => {
     const captured = capture();
     seedOld();
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake),
     });
 
@@ -994,7 +951,7 @@ describe('s2s signer rotate', () => {
     // No `--key`: the retry path refuses one while a row holds the swap's key,
     // so the stale-row refusal is what a bare run meets.
     const run = (): Promise<unknown> =>
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate']), {
         ...deps(fake, { owners: [EOA_OLD, OWNER_B] }),
       });
 
@@ -1007,21 +964,21 @@ describe('s2s signer rotate', () => {
     await expect(run()).rejects.not.toThrow(/author rm 'stale-next'/);
   });
 
-  it('files the old key row only once the run goes ahead, never on a refusal', async () => {
+  it('writes nothing before the run goes ahead, never on a refusal', async () => {
     const fake = fakeService();
     const captured = capture();
-    // Rule 2 would file this environment key for the Safe, and then the run
-    // refuses because the key it would install is already an owner. A refused
-    // command leaves the store as it found it.
-    vi.stubEnv('S2S_PRIVATE_KEY', KEY_OLD);
+    seedOld();
+    const before = readFileSync(storePath(), 'utf8');
 
+    // This key is already an owner, so the run refuses after planning the row and
+    // before writing it.
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_B]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_B]), {
         ...deps(fake, { owners: [EOA_OLD, OWNER_B] }),
       }),
     ).rejects.toMatchObject({ code: 'already_owner' });
 
-    expect(readAuthors(storePath()).authors).toEqual({});
+    expect(readFileSync(storePath(), 'utf8')).toBe(before);
     expect(fake.proposed).toHaveLength(0);
   });
 
@@ -1034,7 +991,7 @@ describe('s2s signer rotate', () => {
     // accepts its signature on the swap. Neither fact makes the other a refusal.
     vi.stubEnv('S2S_PRIVATE_KEY', KEY_B);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fake, { owners: [OWNER_B, EOA_OLD] }),
     });
 
@@ -1068,7 +1025,7 @@ describe('s2s signer rotate', () => {
     // the active slot says.
     vi.stubEnv('S2S_PRIVATE_KEY', KEY_OTHER);
 
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+    await runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
       ...deps(fakeService()),
     });
 
@@ -1079,16 +1036,17 @@ describe('s2s signer rotate', () => {
     expect(human).toContain("unset it so 'zomi' signs");
   });
 
-  it('refuses more than one positional argument', async () => {
+  it('refuses a <safe> typed as an argument rather than silently rotating another Safe', async () => {
     const captured = capture();
+    seedOld();
     const other: Address = '0x3333333333333333333333333333333333333333';
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, other]), deps(fakeService())),
+      runSignerRotate(captured.out, args(['signer', 'rotate', other]), deps(fakeService())),
     ).rejects.toMatchObject({ code: 'usage' });
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, other]), deps(fakeService())),
-    ).rejects.toThrow(/one Safe at a time[\s\S]*two|one Safe at a time[\s\S]*2/);
+      runSignerRotate(captured.out, args(['signer', 'rotate', other]), deps(fakeService())),
+    ).rejects.toThrow(/takes no <safe>[\s\S]*s2s signer add <safe>[\s\S]*0x3333/);
   });
 
   it('says the Safe is not deployed instead of blaming the key', async () => {
@@ -1115,42 +1073,15 @@ describe('s2s signer rotate', () => {
     addSigner({ name: 'broken', privateKey: '0xnot-a-key', safe: SAFE }, storePath());
 
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
         ...deps(fakeService()),
       }),
     ).rejects.toMatchObject({ code: 'not_owner' });
     await expect(
-      runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
+      runSignerRotate(captured.out, args(['signer', 'rotate', '--key', KEY_NEW]), {
         ...deps(fakeService()),
       }),
     ).rejects.toThrow(/no key this build can read: 'broken'/);
   });
 
-  it('names `author switch` when the active author does not own the Safe', async () => {
-    const fake = fakeService();
-    const captured = capture();
-    const otherSafe: Address = '0x2222222222222222222222222222222222222222';
-
-    // `signer confirm` signs with the active key and nothing else, so filing a
-    // swap under a row that is not active leaves it unconfirmable until the
-    // slot moves. The output has to say which command moves it.
-    seedOld();
-    // A key that is NOT an owner of SAFE: the active slot is on a row that cannot
-    // sign this swap, which is the state this test is about.
-    addSigner({ name: 'other', privateKey: KEY_OTHER, safe: otherSafe }, storePath());
-    expect(readAuthors(storePath()).active).toBe('other');
-
-    await runSignerRotate(captured.out, args(['signer', 'rotate', SAFE, '--key', KEY_NEW]), {
-      ...deps(fake),
-    });
-
-    expect(captured.results[0]).toMatchObject({ replaces: 'zomi', switchTo: 'zomi' });
-    const human = captured.human[0] ?? '';
-    expect(human).toContain('s2s author switch zomi');
-    expect(human).toContain('s2s signer confirm 0x');
-    // The claim that would be false here: the old key is not the active one.
-    expect(human).not.toContain("while 'zomi' is still the active key");
-    // And the store is left as it was: a rotation does not move the slot.
-    expect(readAuthors(storePath()).active).toBe('other');
-  });
 });

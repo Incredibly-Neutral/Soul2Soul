@@ -39,14 +39,22 @@ default `fetch`.
 
 ```
 s2s signer add      <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
-s2s signer rotate   [<safe>] [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
-s2s signer queue    [<safe>] [--json]
-s2s signer history  [<safe>] [--safe <safe>] [--json]
-s2s signer confirm  <safeTxHash> [--safe <safe>] [--no-execute] [--json]
+s2s signer rotate   [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
+s2s signer queue    [--json]
+s2s signer history  [--json]
+s2s signer confirm  <safeTxHash> [--no-execute] [--json]
 ```
 
-`rotate` takes the Safe from the store when no argument names one (below); every other position is
-required.
+**`add` is the one command that names a Safe.** Every other command acts on the Safe the active
+author files, resolved by `resolveSignerSafe`: `args.positionals` there is empty, and a typed
+`<safe>` is refused rather than ignored, because a run that acted on the store's Safe while the
+operator read their own words as the target would be worse than the argument it replaced.
+
+An optional `[<safe>]` on `rotate`, `queue` and `history`, and a `--safe` flag on all four, were
+added and that was the mistake: an argument nobody needs teaches that it is needed. A reader who
+sees `[<safe>]` in the usage line concludes the store's answer is a guess they should override, and
+the next command they write passes an address that changes nothing. `signer add <safe>` is where a
+Safe is chosen, because that is where the row that records it is written.
 
 ## `signer add <safe>`
 
@@ -110,21 +118,23 @@ row on disk carries `unconfirmed: true` until a chain read shows the key on the 
 yet)`, and closes with the one line that says how it becomes an owner. `ownershipOf` is the only
 reader of the mark, so no command has to remember it.
 
-## `signer rotate [<safe>]`
+## `signer rotate [flags]`
 
 Replace this machine's key on the Safe with a fresh one, in **one** Safe transaction:
 `swapOwner(prevOwner, oldOwner, newOwner)`. The threshold is not a parameter of that call and does
 not move — a rotation is a swap, not a remove followed by an add, so the owner count and the bar
 for a signature stay as they are.
 
-**The argument is optional.** This machine files its own Safe when it signs, so naming that address
-again on the command line would be a third copy of one fact. With no argument the target is the
-active row's `safe` when that row's key is on the Safe's owner list; failing that, the Safe a pending
-replacement row is filed for (which is where a retry lands); failing that, a usage error naming
-`<safe>`. An active row whose Safe has no bytecode is `safe_not_deployed`, naming that Safe and the
-row that selected it — the address is chosen for the user here, so "does not own" would be a false
-accusation. The positional stays as the override for a machine holding rows for several Safes, and
-`--help` says so. More than one positional is a usage error: `rotate` swaps one key on one Safe.
+**There is no `<safe>` argument and no `--safe` flag.** The Safe is the one this machine files for
+its active author: the row's `safe`, which is also what `resolveSignerSafe` gives `queue`, `history`
+and `confirm`. A typed address is refused rather than ignored — `rotate` acts on the store's Safe, so
+ignoring one would rotate a different Safe than the operator asked for. `signer add <safe>` is the
+command that files a Safe, and the refusal names it.
+
+An active row whose Safe has no bytecode is `safe_not_deployed`, naming that Safe and the row that
+selected it — the address is chosen for the user here, so "does not own" would be a false accusation.
+With no active row, or one that names no Safe, the run is a usage error naming `s2s signer add
+<safe>`: there is nothing to rotate on, and the command cannot invent the address.
 
 1. **Settle, then find the old key.** The Safe's owners are read first, and `settleReplacement` is
    called before anything is decided: a rotation that already executed moves the store on here,
@@ -142,13 +152,8 @@ accusation. The positional stays as the override for a machine holding rows for 
      nothing about *which* key is retired: `rotate` replaces what the store says this machine holds
      on that Safe. That second key signs the swap (step 3) and is reported as `signedBy` /
      `signedBySource`, unless no row names it at all, in which case it is the key being retired.
-   - **No owning row, but the effective key owns the Safe.** The effective key (`S2S_PRIVATE_KEY` >
-     project config) is filed for this Safe, under `signer-<first 6 hex>`, and the row just filed is
-     the old key. The result reports `oldKeySource` and `filedOldRow`, and the human line names where
-     the key came from. Filing is what makes `replaces` defined on every path: a swap is recorded
-     against a row, so an owner key that lives only in the environment gets one before the swap is
-     built.
-   - **Otherwise, refusal.**
+   - **Otherwise, refusal.** The Safe always comes from a row, so every refusal below is about rows
+     for a Safe the store already files.
 
    A row for this Safe whose key is **not** an owner is a stale row: the chain does not list it, so
    there is no owner in it to swap out and no swap is ever filed against it. It is `not_owner`,
@@ -278,9 +283,9 @@ JSON:
 { "action": "signer.rotate", "name": "zomi-next", "replaces": "zomi", "eoa": "0x…",
   "oldEoa": "0x…", "safe": "0x…", "threshold": 2, "owners": ["0x…"], "nonce": 7,
   "safeTxHash": "0x…", "proposed": true, "safeTx": { "to": "0x…", "data": "0x…" },
-  "oldKeySource": "env|project|store|user", "filedOldRow": "signer-7e5f45",
+  "oldKeySource": "store",
   "signedBy": "0x…", "signedBySource": "env|project|store|user",
-  "reused": true, "alreadyQueued": true, "switchTo": "zomi", "confirmFix": "…",
+  "reused": true, "alreadyQueued": true, "confirmFix": "…",
   "note": "…", "mnemonic": "…", "privateKey": "0x…" }
 ```
 
@@ -290,22 +295,21 @@ in it — at threshold 1 the swap is executable as soon as the service holds it,
 confirm <safeTxHash>` sends it without adding a signature and there is nothing left for another
 machine to sign; above 1 the remaining owners confirm. And the old key stops being an owner only
 when the swap executes, not when the proposal is filed. A retry says `reusing the key filed by the
-failed run` instead of printing a phrase; an adopted hash says `already queued`; a key filed for an
-environment-only owner says `filed first : the owner key from S2S_PRIVATE_KEY as '<row>'`.
+failed run` instead of printing a phrase; an adopted hash says `already queued`.
 
 **The advice for `confirm` names the layer that supplies its key.** `confirm` signs with the
-effective key, and the store's active row is only one of four possible sources. When the old key is
-not the active row *and* the active row is what supplies the key, the output names `s2s author switch
-<oldName>` first. When the effective key comes from `S2S_PRIVATE_KEY`, from the project config file
-or from a user config file, switching authors changes nothing — the output says which layer holds
-the key and how to remove it (`unset it`, `s2s config unset privateKey --local`, `s2s config unset
-privateKey`). `switchTo` carries the name only in the first case, and `confirmFix` only in the
-others; both are absent when the effective key is itself an owner of the Safe, because then `confirm`
-signs with it and the Safe accepts the signature — the advice closes a gap that does not exist. `reused` is present only
-on a retry, `alreadyQueued` only when the hash came from the service, `filedOldRow` only when this
-run filed the old key. `note`, `mnemonic` and `privateKey` follow the rules of `signer add`.
+effective key, and the store's active row is only one of four possible sources. When the effective
+key comes from `S2S_PRIVATE_KEY`, from the project config file or from a user config file, switching
+authors changes nothing — the output says which layer holds the key and how to remove it (`unset
+it`, `s2s config unset privateKey --local`, `s2s config unset privateKey`). `confirmFix` carries that
+advice, and is absent when the effective key is itself an owner of the Safe, because then `confirm`
+signs with it and the Safe accepts the signature — the advice closes a gap that does not exist.
+There is no `author switch` advice: `safe` comes from the active row, so a store-sourced confirm key
+that is not an owner has no other row to switch to. `reused` is present only on a retry,
+`alreadyQueued` only when the hash came from the service. `note`, `mnemonic` and `privateKey` follow
+the rules of `signer add`.
 
-## `signer history [<safe>] [--safe <safe>]`
+## `signer history [flags]`
 
 Does the OwnerHistory module hold the owners the rotation created? A rotation is a `swapOwner`
 inside `execTransaction`, and the answer is on chain, but no other command reads it: `author
@@ -369,11 +373,12 @@ JSON:
 `endBlock` is `null` for the current era, not `0`. Nothing is signed, nothing is sent and no key is
 needed: the read is the whole command.
 
-## `signer queue [<safe>]`
+## `signer queue [flags]`
 
 Unexecuted proposals, **oldest nonce first** — a Safe executes one nonce at a time, so the queue is
-a sequence, not a set. The default Safe is the stored `given` Safe this config signs for
-(`givenSafeInUse`), else the active record's recorded Safe; with neither, a usage error.
+a sequence, not a set. The Safe is the one this machine files (`resolveSignerSafe`): the stored
+`given` Safe this config signs for (`givenSafeInUse`), else the active record's recorded Safe. With
+neither — no store, no key — it is a usage error naming `s2s signer add <safe>`.
 
 Per row: nonce, the full `safeTxHash` (the argument the next command takes), the decoded method and
 its new-owner argument when the service returned `dataDecoded` (`addOwnerWithThreshold`,
@@ -421,9 +426,11 @@ the queue, and a reader that ignored the flag would take a truncated list for an
 same fact is said in the human block (`unread      : …`) and as a warning, in both output modes,
 because a short list that looks whole is how an owner misses the transaction they were waiting for.
 
-## `signer confirm <safeTxHash> [--safe <safe>] [--no-execute] [--self-paid]`
+## `signer confirm <safeTxHash> [--no-execute] [--self-paid]`
 
-Before anything is read from the service, the store is reconciled against the owners on chain:
+The Safe is the one this machine files, the same `resolveSignerSafe` answer `queue` and `history`
+use; `<safeTxHash>` is the only argument, and a hash for another Safe is not fetched. Before
+anything is read from the service, the store is reconciled against the owners on chain:
 `settleReplacement` is called here too, so a run that died after executing its swap still settles
 on the next confirmation attempt instead of leaving the old key filed.
 
@@ -493,7 +500,7 @@ on the next confirmation attempt instead of leaving the old key filed.
    proposal is queued, so the recoveries are fixing the paymaster policy or `--self-paid` from a
    funded EOA — funding the EOA on its own is not one, since a rerun without the flag asks the same
    paymaster again. Submitted but with no receipt seen is `send_outcome_unknown`: it may have
-   executed, so the message sends the user to `s2s signer queue <safe>` to check the nonce before
+   executed, so the message sends the user to `s2s signer queue` to check the nonce before
    retrying, because a second send could execute the proposal twice. Landed and reverted
    (`waitForUserOperationReceipt` resolves with `success: false`; the transaction exists, the call
    inside it did not run) is `sponsored_send_reverted`, naming that transaction hash and, when the
@@ -518,7 +525,7 @@ Refusals, all before anything is signed:
 | the record already carries this key's signature | not a refusal: the POST is skipped and the run goes straight to execute (`posted: false`) |
 | owner entry is a contract (the EOA has code) | `contract_owner` — it confirms by calling `approveHash` from its own code |
 | the paymaster refuses the sponsored send | `sponsored_send_failed` — nothing was sent; the confirmation is posted and the proposal is queued; fix the policy, or `--self-paid` from a funded EOA |
-| a sponsored send was submitted and its receipt was not seen | `send_outcome_unknown` — it may have executed; check `s2s signer queue <safe>` before retrying |
+| a sponsored send was submitted and its receipt was not seen | `send_outcome_unknown` — it may have executed; check `s2s signer queue` before retrying |
 | a sponsored send landed and reverted | `sponsored_send_reverted` — the transaction hash is named; the proposal did not execute and is unchanged |
 
 A proposal with a nonce **ahead** of the Safe is not a refusal: its confirmation is posted and the
@@ -531,7 +538,9 @@ paymaster's policy would refuse the call, or when the Safe cannot take a userOp 
 
 After a successful execution the owners are read again and `settleReplacement` runs a second time:
 the new row becomes the active record, the old row disappears, and the outcome is printed as
-`settled: <new name> is now the key for <safe>`. It is a note, never an error — a store write that
+`settled: <name> is now the key for <safe>` — `<name>` is `settledAuthorName(filed, replaces)`, the
+name the row now holds, so a rotation's `zomi-next` prints as `zomi` and an explicit `--name zomi2`
+prints as `zomi2`. It is a note, never an error — a store write that
 fails after the transaction landed is a warning, and the next `signer` run settles it.
 
 JSON:
@@ -539,7 +548,7 @@ JSON:
 ```json
 { "action": "signer.confirm", "safe": "0x…", "safeTxHash": "0x…", "eoa": "0x…",
   "nonce": 7, "confirmations": 2, "required": 2, "confirmed": true, "posted": false,
-  "executed": true, "txHash": "0x…", "paidBy": "paymaster", "settled": "zomi-next",
+  "executed": true, "txHash": "0x…", "paidBy": "paymaster", "settled": "zomi",
   "note": "…" }
 ```
 

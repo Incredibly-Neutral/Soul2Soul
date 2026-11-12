@@ -1,5 +1,9 @@
 // ============================================================================
-// s2s signer queue [<safe>] — what is waiting on the Safe, oldest nonce first.
+// s2s signer queue — what is waiting on the Safe, oldest nonce first.
+//
+// The Safe is the one this machine files for its active author: a row that signs
+// is a row that names an address, and asking for it again would teach that it
+// has to be passed. `signer add` is the one command that names a Safe.
 //
 // A Safe executes one nonce at a time, so the queue is a sequence, not a set:
 // the proposal with the Safe's current nonce comes first and the rest wait
@@ -26,9 +30,9 @@ import type { CliOut } from '../lib/out';
 import { authorEoa, sweepConfirmedSigners } from '../core/authors';
 import type { SafeTxRecord } from '../adapters/safe-tx';
 import {
-  asSafeAddress,
   l2Rpc,
   reasonOf,
+  refuseSafeArgument,
   resolveSignerSafe,
   shortAddress,
   signerDeps,
@@ -78,14 +82,14 @@ export async function runSignerQueue(
   args: ParsedArgs,
   overrides: Partial<SignerDeps> = {},
 ): Promise<void> {
+  refuseSafeArgument(args, 'signer queue');
   const deps = signerDeps(overrides);
   const config = deps.config();
 
-  const target = args.positionals[0];
-  const safe = target ? asSafeAddress(target) : resolveSignerSafe(config);
+  const safe = resolveSignerSafe(config);
   if (!safe) {
     throw new UsageError(
-      'no Safe given and no stored author to take one from — pass <safe>, or file one with `s2s signer add <safe>`',
+      'this machine files no Safe for its active author — file one with `s2s signer add <safe>`',
     );
   }
 
@@ -209,7 +213,6 @@ export async function runSignerQueue(
 export const signerQueue: StoreCommandSpec = {
   name: 'queue',
   summary: 'List unexecuted proposals on the Safe, oldest nonce first, and what this key still owes.',
-  params: '[<safe>]',
   flags: {},
   async run(out: CliOut, args: ParsedArgs) {
     await runSignerQueue(out, args);
