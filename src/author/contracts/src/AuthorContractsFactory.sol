@@ -172,9 +172,17 @@ contract AuthorContractsFactory {
      *         the create for that Safe and take the address the caller
      *         predicted. Read it, then let the Safe check what it was actually
      *         handed; do not pre-commit to the hint.
-     *      3. Zero Safe. `create*Module(address(0))` reverts inside `initialize`
-     *         with `ZeroAddress`, so no address is ever realised for it, while
-     *         the prediction still answers the arithmetic result.
+     *      3. Inputs that never realise. The prediction answers for any input,
+     *         because it is arithmetic over the salt and the init code — it is
+     *         not a promise that anything exists there. Two kinds of input never
+     *         reach a proxy: a zero Safe reverts `initialize` with `ZeroAddress`,
+     *         and a non-Safe contract reverts `createOwnerHistoryModule` with
+     *         `SafeCallFailed`, because the history module reads `getOwners()`
+     *         inside `initialize` and a contract without it answers nothing (a
+     *         contract that answers an empty list is `ZeroOwners`). The drafts
+     *         module would accept an EOA on its own; the history one does not,
+     *         so `ownerHistoryModuleAddress` is the view that answers for
+     *         inputs no create can realise.
      */
 
     /// @notice The address the next `createDraftsModule(safe)` would deploy to,
@@ -243,6 +251,15 @@ contract AuthorContractsFactory {
     ///      constructor argument), so it is inside the CREATE2 hash: two
     ///      different Safes can never collide on one address, and the salt does
     ///      not have to carry that weight alone.
+    ///
+    ///      Cost of the shared shape, measured: building the init code that only
+    ///      the prediction reads costs 3,739 gas on `createDraftsModule` and
+    ///      3,741 on `createOwnerHistoryModule` (Hardhat, warm second create:
+    ///      209,843 -> 206,104 and 898,896 -> 895,155 with the build removed).
+    ///      That is 1.8% of a drafts create, and it buys one place the create
+    ///      path and the prediction both read, so the prediction cannot drift
+    ///      from what is deployed. Kept deliberately; a future split must keep
+    ///      both halves derived from the same bytes.
     function _init(address implementation, address safe)
         private
         pure
