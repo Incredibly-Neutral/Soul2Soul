@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { network } from 'hardhat';
-import { encodeErrorResult, getAddress, parseAbi } from 'viem';
+import { encodeErrorResult, getAddress, parseAbi, zeroAddress } from 'viem';
 
 /**
  * Factory suite: the CREATE2 prediction views against the deployment they
@@ -25,8 +25,9 @@ type Deployment = Awaited<ReturnType<typeof deployFactory>>;
 /** Compare addresses as checksummed strings; the chain decodes either casing. */
 const same = (a: Hex, b: Hex) => assert.equal(getAddress(a), getAddress(b));
 
-const ERROR_ABI = parseAbi(['error ZeroAddress()']);
+const ERROR_ABI = parseAbi(['error ZeroAddress()', 'error SafeCallFailed()']);
 const ZERO_ADDRESS_ERROR = encodeErrorResult({ abi: ERROR_ABI, errorName: 'ZeroAddress' });
+const SAFE_CALL_FAILED_ERROR = encodeErrorResult({ abi: ERROR_ABI, errorName: 'SafeCallFailed' });
 
 /** viem wraps reverts: raw revert data and reason strings all live on the cause chain. */
 function revertText(error: unknown): string {
@@ -245,31 +246,46 @@ describe('AuthorContractsFactory', () => {
     same(await d.factory.read.ownerHistoryImplementation(), d.historyImplementation.address);
   });
 
-  it('the prediction for address(0) is arithmetic only: no proxy is ever realised', async () => {
-    const predicted = await d.factory.read.draftsModuleAddress([
-      '0x0000000000000000000000000000000000000000',
-    ]);
-    assert.notEqual(getAddress(predicted), getAddress('0x0000000000000000000000000000000000000000'));
+  it('the prediction answers for inputs no create can realise', async () => {
+    // Two of them, documented on the views: a zero Safe, and a contract that
+    // cannot answer getOwners(). Both make `initialize` revert, so no address is
+    // ever occupied, while the view still returns the arithmetic answer.
+    const predicted = await d.factory.read.draftsModuleAddress([zeroAddress]);
+    assert.notEqual(getAddress(predicted), getAddress(zeroAddress));
 
     await assertReverts(
-      d.factory.write.createDraftsModule(['0x0000000000000000000000000000000000000000']),
+      d.factory.write.createDraftsModule([zeroAddress]),
       ZERO_ADDRESS_ERROR,
     );
     // Nothing was indexed, and the counter did not move: the revert took the
     // whole call with it.
-    assert.equal(
-      (await d.factory.read.getDraftsModulesForSafe(['0x0000000000000000000000000000000000000000']))
-        .length,
-      0,
-    );
-    same(
-      await d.factory.read.draftsModuleAddress(['0x0000000000000000000000000000000000000000']),
-      predicted,
-    );
+    assert.equal((await d.factory.read.getDraftsModulesForSafe([zeroAddress])).length, 0);
+    same(await d.factory.read.draftsModuleAddress([zeroAddress]), predicted);
 
     await assertReverts(
-      d.factory.write.createOwnerHistoryModule(['0x0000000000000000000000000000000000000000']),
+      d.factory.write.createOwnerHistoryModule([zeroAddress]),
       ZERO_ADDRESS_ERROR,
+    );
+
+    // A contract with no getOwners(): the history module reads the Safe inside
+    // initialize, gets no answer, and reverts. The drafts module would accept it,
+    // which is why the prediction is not a statement that a proxy exists.
+    const notASafe = await viem.deployContract('DraftsModuleV1');
+    const historyPrediction = await d.factory.read.ownerHistoryModuleAddress([notASafe.address]);
+    assert.notEqual(getAddress(historyPrediction), getAddress(zeroAddress));
+
+    await assertReverts(
+      d.factory.write.createOwnerHistoryModule([notASafe.address]),
+      SAFE_CALL_FAILED_ERROR,
+    );
+    assert.equal(
+      (await d.factory.read.getOwnerHistoryModulesForSafe([notASafe.address])).length,
+      0,
+    );
+    // The prediction did not move with the failed create.
+    same(
+      await d.factory.read.ownerHistoryModuleAddress([notASafe.address]),
+      historyPrediction,
     );
   });
 });
