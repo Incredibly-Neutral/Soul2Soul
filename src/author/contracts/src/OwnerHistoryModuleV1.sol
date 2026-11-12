@@ -5,6 +5,36 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
+ * @title IOwnerHistoryModule — the owner-history role, as an EIP-165 interface id
+ * @notice The functions that make a contract an owner-history module, and nothing
+ *         else. No `initialize`, no `upgradeTo`: those describe how a module is
+ *         deployed, not what role it plays.
+ *
+ * @dev The id computed from this interface is `0xee855023`, and it is a constant
+ *      of the deployed contract: `supportsInterface` answers a compile-time
+ *      literal, so the answer cannot drift from the deployed bytecode. Once a
+ *      module is published that id may never change. A reader discovers the role
+ *      by asking a module for that exact id — there is no registry to consult and
+ *      the role is not stored anywhere — so changing the id silently makes every
+ *      already-published module undiscoverable, permanently, because a reader
+ *      that already holds the old id cannot be reached by an upgrade.
+ *
+ *      EIP-165 excludes inherited functions from an interface id, so
+ *      `supportsInterface(bytes4)` itself is deliberately not part of it: it is
+ *      how the question is asked, not part of the answer. It also follows that
+ *      this id must differ from the guard's `0xe6d7a83a` and from the drafts
+ *      module's; two roles answering the same id would make the id worthless for
+ *      telling them apart.
+ */
+interface IOwnerHistoryModule {
+    function sync() external returns (bool);
+    function isOwner(address who) external view returns (bool);
+    function isOwnerAt(address who, uint256 blockNumber) external view returns (bool);
+    function wasOwnerAt(address who, uint256 timestamp) external view returns (bool);
+    function eraCount() external view returns (uint256);
+}
+
+/**
  * @title OwnerHistoryModuleV1
  * @notice The author Safe's ownership history: who was an owner, and from which
  *         block. Installed as a UUPS proxy per author Safe, one proxy per Safe,
@@ -59,17 +89,22 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * Storage declaration order is the upgrade contract, same rule as the drafts
  * module (INV-3 in the publication spec): `safe`, `eras`, `tenureBlocks`,
  * `tenureTimes`, `ownersEverSet`, `seen`.
+ *
+ * Role discovery is EIP-165: `supportsInterface(type(IOwnerHistoryModule).interfaceId)`
+ * answers true on every published owner-history module, and the id is a constant
+ * of this contract (see `IOwnerHistoryModule` above for why it may never change,
+ * and why it is not the guard's id).
  */
-contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
+contract OwnerHistoryModuleV1 is IOwnerHistoryModule, Initializable, UUPSUpgradeable {
 
     /// @notice The Safe whose ownership this module mirrors. The only address
     ///         allowed to upgrade the module; everything else is permissionless.
     address public safe;
 
     /// @dev The two Safe calls this module makes, as selector constants rather
-    ///      than through a local `interface`: an interface here would exist only
-    ///      to be called, and would add a second, unused ABI entry to the
-    ///      package's public surface. The strings are the Safe's own signatures.
+    ///      than through a local call interface: `IOwnerHistoryModule` above is a
+    ///      role descriptor, not something to call, and the strings here are the
+    ///      Safe's own signatures.
     bytes4 private constant SAFE_GET_OWNERS = bytes4(keccak256("getOwners()"));
     bytes4 private constant SAFE_IS_OWNER = bytes4(keccak256("isOwner(address)"));
 
@@ -154,6 +189,21 @@ contract OwnerHistoryModuleV1 is Initializable, UUPSUpgradeable {
 
     function NAME() external pure returns (string memory) {
         return "S2S Owner History Module V1";
+    }
+
+    /**
+     * @dev EIP-165 role signalling. The id is a compile-time constant of the
+     *      deployed contract: it is the answer a reader discovers the role by, so
+     *      once published it may never change — a silent change makes every
+     *      already-published module undiscoverable, because no registry exists to
+     *      correct it. `pure` and no storage read, so it cannot fail and cannot be
+     *      made to answer differently by an upgrade. Deliberately not the guard's
+     *      `0xe6d7a83a`: a Safe asks that one of its guard, and would be misled by
+     *      a module that claimed it.
+     */
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IOwnerHistoryModule).interfaceId
+            || interfaceId == 0x01ffc9a7; // type(IERC165).interfaceId
     }
 
     // ── The one write ──────────────────────────────────────────────

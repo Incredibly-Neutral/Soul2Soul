@@ -339,7 +339,7 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
 - **`contracts`** — optional, per author: the addresses the install produced (drafts proxy,
   owner-history proxy, guard). Absent on an author filed before the contracts existed;
   `s2s author init` fills it. It records what was installed, it does not prove adoption — adoption
-  is the Safe's own guard slot, see
+  is the Safe's enabled-module list and guard slot, see
   [Installing the author contracts](#installing-the-author-contracts).
 - **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
   (the `config` group's contract): no private key, no RPC, no bundler, no Lit keys. Every other
@@ -442,53 +442,72 @@ Both commands run the same sequence, in order:
 
 1. **Predict the Safe, deploy it if it is not deployed.** `author init` on a live Safe sends
    nothing for this step.
-2. **Read the guard the Safe carries, and prove it is ours.** The guard slot is the only thing
-   only the Safe can write, so it — not the factory index — decides what is installed:
-   `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` → `M`, `G.safe() == safe`,
-   `M.safe() == safe`. All three are immutables, so the proof needs no factory to agree and survives
-   `contracts.authorFactory` pointing somewhere else. A guard that survives it is the install; the
-   run reports `already` and sends nothing, whatever the permissionless index has accumulated since.
-   If the drafts proxy is missing while the guard is proven, that one step still runs, because
-   `already` with no drafts proxy would leave it missing for ever.
-3. **Nothing in the slot:** `createDraftsModule(safe)` and `createOwnerHistoryModule(safe)` on the
-   factory, for the entries the index lacks. Both are permissionless (`createDraftsModule` /
-   `createOwnerHistoryModule` in [SPEC-author-drafts](SPEC-author-drafts.md) and
+2. **Read what the Safe has adopted.** Modules are found by role, not by the factory: each
+   address on the Safe's enabled-module list is asked `supportsInterface` for `0xefb74036`
+   (drafts) and `0xee855023` (owner history). `enableModule` is `onlySelf`, so an entry on that
+   list is the Safe's own statement that it adopted the module; the factory index is a lead. The
+   guard is read from its slot — `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` →
+   `M`, `G.safe() == safe`, `M.safe() == safe` — because a guard is not an enabled module and only
+   the Safe can write the slot. All three guard facts are immutables, so that proof needs no
+   factory to agree and survives `contracts.authorFactory` pointing somewhere else. A Safe that
+   passes this read carries the install; the run reports `already` and sends nothing, whatever the
+   permissionless index has accumulated since. If one module is missing while the guard is proven,
+   only that module's create runs, and the batch carries only its `enableModule`.
+3. **Whatever the list lacks:** `createDraftsModule(safe)` and
+   `createOwnerHistoryModule(safe)` on the factory for the missing role. Both are permissionless
+   (`createDraftsModule` / `createOwnerHistoryModule` in
+   [SPEC-author-drafts](SPEC-author-drafts.md) and
    [SPEC-author-owner-history](SPEC-author-owner-history.md)) — anyone can add an entry for any
    Safe — so the index is read as "what still needs creating", never as evidence of an install.
-4. **One Safe self-call, `setGuard(guard)`**, with the guard `createOwnerHistoryModule` returned.
+4. **One Safe transaction, a batch, containing only what is missing:** `enableModule(drafts)`,
+   `enableModule(history)`, `setGuard(guard)`, with the guard `createOwnerHistoryModule` returned.
+   `enableModule` is **not** idempotent — Safe 1.4.1 reverts `GS102` (`modules[module].next != 0`)
+   when the module is already enabled — so the batch is built from the addresses step 2 did not find,
+   and a batch that would re-enable one reverts whole.
 
 **A sent userOp is not an install.** `genericTx` resolves with a transaction hash that may have
-reverted (`setGuard` reverts `GS300` on a guard that does not answer ERC-165), so every send is
+reverted (`setGuard` reverts `GS300` on a guard that does not answer ERC-165, and a re-sent
+`enableModule` reverts `GS102`), so every send is
 followed by a re-read of the state it was supposed to change, and only a changed read counts.
-`installed` and `already` therefore both mean *the guard is on the Safe*, read back; `pending-safe`
-means it is not.
+`installed` and `already` therefore both mean *both modules are enabled and the guard is in the
+slot*, read back; `pending-safe` means the Safe has not executed the batch yet.
 
-Only the guard needs a Safe transaction: the drafts proxy's gate is `msg.sender == safe`, so the
-Safe sends `append` to the proxy directly and there is nothing to install for it.
+Only the batch needs a Safe transaction. The proxies are deployed by the factory, and nothing else
+in the install writes to the Safe.
 
-**`enableModule` is never called on an author Safe.** An enabled module can call
-`execTransactionFromModule`, i.e. execute anything as the Safe; `setGuard` is `onlySelf`, the guard
-calls a permissionless `sync()`, and every read is a view call — so no module powers are needed and
-none are granted.
+**`enableModule` is part of the install, and the reason it is safe is that the modules have no
+powers to use.** An enabled module may call `execTransactionFromModule`, i.e. execute anything as
+the Safe, so the question is whether either module ever would. Neither does: each writes its own
+storage and answers views, and neither calls `execTransactionFromModule`. Enabling grants no
+execution power, and it makes the Safe's own enabled-module list the authoritative role index —
+the one record of adoption a gate can read without trusting a factory, a name or an event. A
+proxy's implementation pointer is fixed at creation and moves only through the Safe's own
+`upgradeTo`, so an enabled proxy cannot be repointed behind the Safe's back.
+
+**The guard stays in the slot, because a guard is what sees writes.** Safe 1.4.1 calls the guard
+inside every `execTransaction`, and an owner rotation is an ordinary `execTransaction` with a
+self-call in it. The enabled list answers "which module is adopted"; the slot answers "what watches
+the Safe". Neither replaces the other.
 
 **Idempotency, and what a second or a blocked run says.** A second run of either command reports
 `already` for every step that is in place and sends nothing. On a **multisig** author Safe one CLI
-key cannot complete the install — `setGuard` is a Safe transaction — so the factory calls still run
+key cannot complete the install — the batch is a Safe transaction — so the factory calls still run
 and the command stops at `pending-safe`, printing the `to` and `data` for the owners to propose.
 
 Three other cases are also `pending-safe`, and each says which one it is in `note`: a guard this
-package did not install is in the slot (never overwritten, and no `safeTx` is printed for it — there
-is no call here that is safe to make); a submitted userOp has not shown up in the reads yet; or a
-send is done but its re-read is unchanged, i.e. it may have reverted. A guard read that fails on the
-network is not a foreign guard: the read is retried/propagated and the run says it could not look,
-because naming a healthy author's guard foreign would tell its owner to remove it. A Safe with no
-code yet after the deploy attempt is `skipped`, and nothing is sent to it.
+package did not install is in the slot (never replaced, and no `safeTx` is printed for it — there
+is no call here that is safe to make; replacing a guard is allowed only for this package's own
+one, proven by `guard.module()` and `guard.safe()`); a submitted userOp has not shown up in the
+reads yet; or a send is done but its re-read is unchanged, i.e. it may have reverted. A guard read
+that fails on the network is not a foreign guard: the read is retried/propagated and the run says
+it could not look, because naming a healthy author's guard foreign would tell its owner to remove
+it. A Safe with no code yet after the deploy attempt is `skipped`, and nothing is sent to it.
 
 **Nothing here can cost the key.** Any install failure degrades to a warning naming
 `s2s author init`: the key and the Safe stay in the store, and the commands are re-runnable. The
 addresses are recorded in the author row's `contracts` field when — and only when — the run ends
-`installed` or `already`, i.e. when the guard is really on the Safe; the chain stays the truth and
-the row is only what saves a read.
+`installed` or `already`, i.e. when both modules are enabled and the guard is really in the slot;
+the chain stays the truth and the row is only what saves a read.
 
 ### Exit codes
 
@@ -585,7 +604,7 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
   guard: string | null; state: 'installed' | 'already' | 'pending-safe' | 'skipped';
   txs: string[];                      // transaction hashes, in send order (empty when nothing was sent)
   note?: string;                      // why not installed / what the owners must do
-  safeTx?: { to: string; data: string } }   // `pending-safe` only: the setGuard call
+  safeTx?: { to: string; data: string } }   // `pending-safe` only: the batch (MultiSend calldata)
 
 // s2s author new <pet-name> [--key <0x…>] [--json] — file an identity, activate it, install the contracts
 { action: 'author.new'; name: string; eoa: string; safe: string | null;
@@ -798,8 +817,9 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   carry the author Safe. `s2s author address`/`config` print the EOA only as the Safe's owner.
 - **new** — the Safe is the actor for the deployment sequence: both L1 and L2 Safes are deployed
   with the same salt via `toSafeSmartAccount`; the SafeRunner sends the registerSubdomain (L1),
-  module installs (L2), publication module, enableModule×2, config records, and owner-setup userOps
-  through the bundler (Pimlico paymaster when configured).
+  module installs (L2: drafts and owner-history proxies, `enableModule`×2, `setGuard`), publication
+  module, config records, and owner-setup userOps through the bundler (Pimlico paymaster when
+  configured).
 
 ## Flow notes
 

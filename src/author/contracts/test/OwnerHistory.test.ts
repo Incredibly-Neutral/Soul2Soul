@@ -758,6 +758,56 @@ describe('OwnerHistoryModuleV1', () => {
     assert.equal(await d.guard.read.supportsInterface(['0xffffffff']), false);
   });
 
+  it('supportsInterface answers the owner-history role id, which is not the guard id', async () => {
+    // Both ids as the XOR of the selectors the contracts compile to. EIP-165
+    // excludes inherited functions, so `supportsInterface(bytes4)` is not part of
+    // either: it is how the question is asked, not part of the answer.
+    const interfaceIdOf = (signatures: string[]) =>
+      `0x${signatures
+        .map((s) => BigInt(toFunctionSelector(s)))
+        .reduce((a, b) => a ^ b, 0n)
+        .toString(16)
+        .padStart(8, '0')}` as Hex;
+
+    const historyId = interfaceIdOf([
+      'function sync()',
+      'function isOwner(address)',
+      'function isOwnerAt(address,uint256)',
+      'function wasOwnerAt(address,uint256)',
+      'function eraCount()',
+    ]);
+    const draftsId = interfaceIdOf([
+      'function append(bytes32,string)',
+      'function isDraft(bytes32)',
+      'function authorOf(bytes32)',
+      'function count()',
+    ]);
+    const guardId = '0xe6d7a83a' as Hex; // Safe 1.4.1 type(Guard).interfaceId
+
+    // Literals: the ids are constants of the published contracts and may never
+    // change, so a drift in the interface has to fail here.
+    assert.equal(historyId, '0xee855023');
+    assert.equal(draftsId, '0xefb74036');
+    assert.notEqual(historyId, guardId);
+    assert.notEqual(draftsId, guardId);
+    assert.notEqual(historyId, draftsId);
+
+    for (const target of [d.history.address, d.implementation.address]) {
+      const module = await viem.getContractAt('OwnerHistoryModuleV1', target);
+      assert.equal(await module.read.supportsInterface([historyId]), true);
+      assert.equal(await module.read.supportsInterface(['0x01ffc9a7']), true); // IERC165
+      assert.equal(await module.read.supportsInterface([guardId]), false);
+      assert.equal(await module.read.supportsInterface([draftsId]), false);
+      assert.equal(await module.read.supportsInterface(['0xffffffff']), false);
+      assert.equal(await module.read.supportsInterface(['0x12345678']), false); // a random id
+    }
+
+    // And the guard answers its own id, not the module's: a reader can tell the
+    // two roles apart by id alone, and the reverse claim would be a lie.
+    assert.equal(await d.guard.read.supportsInterface([guardId]), true);
+    assert.equal(await d.guard.read.supportsInterface([historyId]), false);
+  });
+
   it('sync() on a proxy that was never initialized fails cleanly, not with a panic', async () => {
     // The factory always initializes, so this needs a hand-made proxy: the
     // implementation behind an ERC-1967 proxy with no `initialize` call.

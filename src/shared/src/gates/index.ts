@@ -24,10 +24,9 @@
 // only, so an author who has been removed from the whitelist can always end
 // their own earlier work — "or has carried" is not yet enforced on-chain.
 //
-// Divergence to know about: the contract's own `canRead` admits an agreement OR
-// an offer, and admits reviewers. `canRead` below still demands an agreement
-// (`hasDeal`) and an owner of the author Safe, so a caller that wants the
-// reviewer path asks `canReview` instead.
+// `canRead` below asks the publication's own `canRead` — the contract decides
+// which agreements, offers and reviewer sets count — and adds the author Safe's
+// `isOwner`. A caller that wants the reviewer path alone asks `canReview`.
 //
 // Runtime note: the Lit Action runtime supplies ethers (an action's `require`
 // resolves it, and a bare global is also present), which is what the default
@@ -37,7 +36,7 @@
 // ============================================================================
 
 import { toBytes32Id } from '../manuscript/identity/contract-id';
-
+import { isTrueAnswer, resolveAuthorModules } from './modules';
 /**
  * Normalises a content reference into the bytes32 genesis the contract keys
  * deals by. The default hashes through ethers, which the Lit Action runtime
@@ -57,26 +56,54 @@ export type GateRead = (
 ) => Promise<boolean>;
 
 /**
- * A read whose answer is an address rather than a boolean, as the caller
- * implements it against the same EVM. Gates that must resolve *whose* record
- * they are testing (the author's drafts module) use this; everything a gate then
- * decides with it goes through {@link GateRead}.
+ * A read whose answer is not a boolean: an address, a block number, a list. The
+ * caller decodes it; the gates narrow it. Module resolution and the historical
+ * ownership read use this, a boolean read uses {@link GateRead}.
  */
 export type GateValueRead = (
   target: string,
   abi: string[],
   fn: string,
   args: unknown[],
-) => Promise<string>;
+) => Promise<unknown>;
 
 const CAN_PUBLISH_ABI = ['function canPublish(address _author) view returns (bool)'];
 const IS_OWNER_ABI = ['function isOwner(address owner) view returns (bool)'];
+/** OwnerHistoryModuleV1 — the author Safe's owner set, per block. */
+const IS_OWNER_AT_ABI = ['function isOwnerAt(address who, uint256 blockNumber) view returns (bool)'];
 const CAN_READ_ABI = ['function canRead(bytes32 genesis, address reader) view returns (bool)'];
 const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view returns (bool)'];
 /** DraftsModuleV1 — the author's own version log, installed on the author Safe. */
 const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
+/** DraftsModuleV1 — the block behind each version, index for index with history(). */
+const BLOCKS_OF_ABI = ['function blocksOf(bytes32 genesis) view returns (uint64[] blocks)'];
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
+
+const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * The block number of the last version of a genesis, or `undefined` when the
+ * answer is not a block list at all. `uint64` answers arrive as numbers, decimal
+ * strings or BigNumbers depending on the caller's decoder.
+ */
+const lastVersionBlock = (blocks: unknown): number | undefined => {
+  if (!Array.isArray(blocks) || blocks.length === 0) return undefined;
+  const last = blocks[blocks.length - 1] as unknown;
+  if (typeof last === 'number') return last;
+  if (typeof last === 'string') {
+    const parsed = Number(last);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (last && typeof (last as { toNumber?: unknown }).toNumber === 'function') {
+    try {
+      return (last as { toNumber: () => number }).toNumber();
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+};
 
 /**
  * Can this author Safe write to this publication, on behalf of this signer?
@@ -102,11 +129,12 @@ export const canPublish = async (
 /**
  * May this signer read this content item?
  *
- * The content is readable when the publication would still accept its author,
- * the signer owns the author Safe, and a deal exists for the item's genesis.
- * `contentId` is normalised to bytes32 the same way the writes normalise it —
- * an already-hashed 0x+64hex id passes through, anything else (a raw CID,
- * an objectId) is keccak256-hashed. Pass `toId` when your host has no ethers.
+ * Two questions, both required: the publication's own `canRead(genesis, safe)`
+ * — it is the contract that decides which agreements, offers and reviewer sets
+ * admit a reader — and the author Safe's `isOwner(signer)`. `contentId` is
+ * normalised to bytes32 the same way the writes normalise it: an already-hashed
+ * 0x+64hex id passes through, anything else (a raw CID, an objectId) is
+ * keccak256-hashed. Pass `toId` when your host has no ethers.
  */
 export const canRead = async (
   read: GateRead,
@@ -118,12 +146,12 @@ export const canRead = async (
 ): Promise<boolean> => {
   const genesis = toId(contentId);
 
-  const [isOwner, isDeal] = await Promise.all([
+  const [admitted, isOwner] = await Promise.all([
     read(publicationModule, CAN_READ_ABI, 'canRead', [genesis, safeAddress]),
-    read(safeAddress, IS_OWNER_ABI, 'isOwner', [signerAddress])
+    read(safeAddress, IS_OWNER_ABI, 'isOwner', [signerAddress]),
   ]);
 
-  return isOwner && isDeal;
+  return admitted && isOwner;
 };
 
 /**
@@ -145,42 +173,95 @@ export const canReview = async (
 };
 
 /**
+ * Options for {@link owns}. Both are optional; the gate answers without either.
+ */
+export interface OwnsOptions {
+  /**
+   * `AuthorContractsFactory`. Supplied only to order the module probes; the
+   * Safe's own enabled-module list remains the proof. See ./modules.ts.
+   */
+  factory?: string;
+  /** Normaliser for a raw content reference. Defaults to the ethers one. */
+  toId?: IdNormaliser;
+}
+
+/**
  * May this signer open this manuscript because it is theirs?
  *
- * The author branch of GATES-1, read from the author's own contract: the
- * genesis is looked up in the drafts module, the module names the Safe that
- * appended it, and that Safe answers `isOwner` for the signer. No publication
- * is involved, so a draft that was never offered to anyone still opens, and the
- * fact survives the publication de-listing its author — which is what
- * `canPublish` cannot answer.
+ * The author branch of GATES-1, and it takes the author Safe, not a module,
+ * because the Safe is the thing ownership is about. Three reads:
  *
- * `authorModule` is a DraftsModuleV1 instance; the Safe is NOT a parameter, so a
- * caller cannot name whose ownership is being tested. `genesis` is normalised
- * the same way the writes normalise it.
+ *   1. Resolve the Safe's two modules: the drafts log and the owner history,
+ *      both proven by the Safe's own `getModulesPaginated` and by each module's
+ *      `supportsInterface`. Two modules answering one role is a refusal.
+ *   2. `authorOf(genesis)` on the drafts module must name the Safe it was given.
+ *      A genesis another Safe kept is refused, and so is an unknown one (the
+ *      module answers the zero address rather than reverting).
+ *   3. Answer ownership from the history module at the block the genesis's last
+ *      version was appended in: `isOwnerAt(signer, blocksOf(genesis).at(-1))`.
+ *      A signer who was an owner then is admitted even if the Safe has since
+ *      rotated them out, and a signer who became an owner afterwards is not.
  *
- * A caller MUST also check the item it decrypted: `authorOf` is written by
- * whoever owns that module instance (`append` is `onlySafe`), so an unknown
- * genesis is refused here (zero address) but a *known* one only says "this Safe
- * kept this document here" — see docs/specs/author/SPEC-author-drafts.md. Bind
- * the blob by requiring `public.author` to equal this gate's answer before
- * treating the ciphertext as that author's.
+ * Known limit: a version written before `blockNumber` was recorded reads back
+ * as block 0 (see DraftsModuleV1.Version), and an imported log has no block at
+ * all. For those the gate falls back to the Safe's live `isOwner` — the present
+ * tense — so a genesis appended before the upgrade cannot be judged against the
+ * owner set it was written under. It is a fallback, not a second answer: block 0
+ * is never a real append block.
+ *
+ * No publication is involved, so a draft that was never offered to anyone still
+ * opens, and the fact survives the publication de-listing its author.
+ *
+ * A caller MUST also check the item it decrypted: `append` is `onlySafe`, but a
+ * Safe can log any genesis with any ciphertext CID, so a genesis in the log only
+ * says "this Safe kept this document here" — see
+ * docs/specs/author/SPEC-author-drafts.md. Bind the blob by requiring
+ * `public.author` to equal `authorSafe` before treating the ciphertext as that
+ * author's.
  */
 export const owns = async (
   read: GateRead,
   readValue: GateValueRead,
   genesis: string,
-  authorModule: string,
+  authorSafe: string,
   signerAddress: string,
-  toId: IdNormaliser = toBytes32Id,
+  options: OwnsOptions = {},
 ): Promise<boolean> => {
-  const author = await readValue(authorModule, AUTHOR_OF_ABI, 'authorOf', [toId(genesis)]);
+  const genesisId = (options.toId ?? toBytes32Id)(genesis);
+
+  const modules = await resolveAuthorModules(read, readValue, authorSafe, {
+    factory: options.factory,
+  });
+  if (!modules.ok) return false;
+
+  const author = await readValue(modules.drafts, AUTHOR_OF_ABI, 'authorOf', [genesisId]);
 
   // Unknown genesis: DraftsModuleV1 returns a zeroed Entry rather than
   // reverting, so this is the "no such draft" case, not a broken read.
   if (typeof author !== 'string' || author === '' || ZERO_ADDRESS.test(author)) return false;
 
-  return read(author, IS_OWNER_ABI, 'isOwner', [signerAddress]);
+  // The module must name the Safe this gate was asked about. A genesis kept in
+  // another Safe's log is not this Safe's, however the caller labelled it.
+  if (!sameAddress(author, authorSafe)) return false;
+
+  const blockNumber = lastVersionBlock(
+    await readValue(modules.drafts, BLOCKS_OF_ABI, 'blocksOf', [genesisId]),
+  );
+  // A log that answers no block list is not the pre-upgrade case (which answers
+  // a list of zeros); it is a read this gate cannot decide on.
+  if (blockNumber === undefined) return false;
+
+  if (blockNumber === 0) {
+    // Pre-upgrade or imported version: no block to judge the owner set at.
+    return read(authorSafe, IS_OWNER_ABI, 'isOwner', [signerAddress]);
+  }
+
+  return isTrueAnswer(
+    await readValue(modules.ownerHistory, IS_OWNER_AT_ABI, 'isOwnerAt', [signerAddress, blockNumber]),
+  );
 };
+
+export * from './modules';
 
 /**
  * May this signer reset the publication's tree?

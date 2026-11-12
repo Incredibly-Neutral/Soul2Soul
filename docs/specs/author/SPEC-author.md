@@ -134,6 +134,57 @@ The prototype is a layer between these invariants and the code: it may do less
   → [adr/ADR-003-label-is-unsigned.md](../../adr/ADR-003-label-is-unsigned.md)
   A name a listing can show without a key, kept out of the signing types so identity stays
   the same bytes. The one exception to the public part's "every field is signed" rule.
+- **ADR-004** — a Safe enables a module and finds it by interface id
+  → [adr/ADR-004-modules-are-enabled-and-found-by-interface.md](../../adr/ADR-004-modules-are-enabled-and-found-by-interface.md)
+  Enabling grants no power because no module calls `execTransactionFromModule`; the enabled
+  list becomes the role index, with a fixed id per role.
+
+## Discovery
+
+`supportsInterface(roleId)` is how a module that implements it is found. That is the drafts module,
+the owner-history module, and the records module. It is not the publication module: `S2SPublicationModule`
+V1, V2 and V3 inherit `Initializable` and `UUPSUpgradeable` and declare no `supportsInterface`, so a
+role-id probe reverts on every deployed publication module. A reader that probes a publication
+module asks for the id first and falls back to `NAME()` when no candidate answers; the fallback is
+recorded debt, deleted when a publication module implementing the role id is deployed and every live
+publication has migrated to it.
+
+The modules deployed today do not answer the id yet. A gate cannot resolve an unmigrated author Safe
+by role, so that Safe's drafts stay unreadable until it runs the migration. The cost is accepted, not
+hidden: the alternative is a name or a factory index, and neither is evidence of adoption.
+
+## Proposals
+
+- **RFC-001** — the portable byline (AUTHOR-9)
+  → [rfc/RFC-001-portable-byline.md](../../rfc/RFC-001-portable-byline.md)
+  An author-owned records module on the account, holding per-work claim records, plus a
+  derived anyone-can-index view. Ships the list and the reader path together.
+- **RFC-002** — a payee wallet on the account (AUTHOR-7)
+  → [rfc/RFC-002-payee-wallet.md](../../rfc/RFC-002-payee-wallet.md)
+
+## Gaps without a proposal
+
+- **GAP — the subtractive rebuild has no gate of its own.** AUTHOR-3's second half is
+  authorised by the same gate as publishing: `canPublish(author) && isOwner(signer)`, where
+  `canPublish` answers "is this address trusted by the publication" — the publication Safe, its
+  whitelisted devs, its whitelisted authors. Nothing in it asks whether the caller authored
+  *this* manuscript. The publication can call `removeWhitelistedAuthor` at any time, and the
+  author then still retracts on the ledger (that path is theirs alone) but cannot cause the page
+  to be rebuilt away: the withdrawal stops at the ledger while the site keeps the work under the
+  publication's name. So the publication retains a stall lever over precisely the act the
+  protocol promises is unilateral, and retains it exactly when relations have broken — which is
+  when AUTHOR-3 matters.
+  The fact such a gate would need is already on-chain and survives revocation:
+  `genesisAuthor[genesis]` is set when the manuscript is offered and is **not** cleared by
+  `retract`, which only removes the deal and offer flags. Authorship is therefore readable
+  without the publication's trust, and a subtractive gate could be
+  `genesisAuthor(genesis) == authorSafe && isOwner(signer)`, restricted to remove-only
+  directives. Recorded as a gap, not an RFC: no fix is agreed. Belongs in `gates.md` as the
+  missing half of `canPublish` — the additive gate asks whether the publication trusts you, the
+  subtractive one must ask whether the manuscript is yours.
+- Open question, not a gap: AUTHOR-2's reviewer path is implemented but its
+  boundary with the read gate is only described in code. Awaiting `gates.md` and
+  `press.md` before it is written down here.
 
 ## Proposals
 
