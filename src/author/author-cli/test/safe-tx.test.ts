@@ -12,6 +12,7 @@ import {
   decodeFunctionData,
   encodeAbiParameters,
   keccak256,
+  recoverAddress,
   stringToHex,
   type Address,
   type Hex,
@@ -555,9 +556,112 @@ describe('makeSafeTxService', () => {
     await service.pending(SAFE);
 
     expect(calls[0]?.url).toBe(
-      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce`,
+      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=100`,
     );
     expect(calls[0]?.headers.authorization).toBe('Bearer secret');
+  });
+
+  it('follows `next` to reach a nonce on a later page, and reports the walk complete', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      {
+        body: {
+          count: 3,
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=1`,
+          results: [recordFor(7)],
+        },
+      },
+      {
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=2`,
+          results: [recordFor(8)],
+        },
+      },
+      { body: { count: 3, next: null, results: [recordFor(9)] } },
+    ]);
+
+    const { records, complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(true);
+    expect(records.map((record) => record.nonce)).toEqual([7, 8, 9]);
+    // The second request goes to the configured base, not to `base` + the
+    // absolute link the service returned.
+    expect(calls[1]?.url).toBe(
+      `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?executed=false&ordering=nonce&limit=1&offset=1`,
+    );
+  });
+
+  it('walks every page it may read, even when the wanted nonce is on the first', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      {
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?offset=1`,
+          results: [recordFor(7)],
+        },
+      },
+      { body: { next: null, results: [recordFor(8)] } },
+    ]);
+
+    const { records, complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    // Nothing about the walk depends on the order the pages arrive in: it reads
+    // to the end of what it may read, and only then says the queue is exhausted.
+    expect(complete).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(records.map((record) => record.nonce)).toEqual([7, 8]);
+  });
+
+  it('does not call a full last page the end of the queue', async () => {
+    // A page of exactly the size it asked for, with no `next`: the service may
+    // have truncated it, so "nothing at that nonce" is not an answer yet.
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 100, next: null, results: Array.from({ length: 100 }, () => recordFor(7)) } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
+  it('does not call the walk complete when the declared count is larger than what arrived', async () => {
+    const { fetchImpl } = fakeFetch([
+      { body: { count: 4, next: null, results: [recordFor(7), recordFor(8)] } },
+    ]);
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+  });
+
+  it('says the walk stopped at the cap rather than claiming the queue is exhausted', async () => {
+    // Every page advertises another one: the cap is what ends the walk.
+    const { fetchImpl, calls } = fakeFetch(
+      Array.from({ length: 6 }, () => ({
+        body: {
+          next: `${BASE}/api/v1/safes/${SAFE}/multisig-transactions/?offset=1`,
+          results: [recordFor(7)],
+        },
+      })),
+    );
+
+    const { complete } = await makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+    }).pending(SAFE);
+
+    expect(complete).toBe(false);
+    expect(calls).toHaveLength(5);
   });
 
   it('sends no Authorization header without a key', async () => {
@@ -623,15 +727,21 @@ describe('makeSafeTxService', () => {
     expect(calls[0]?.method).toBe('GET');
   });
 
-  it('proposes the transaction with its hash, zero gas and no signature', async () => {
+  it("posts the caller's signature verbatim and a sender that matches it", async () => {
     const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
     const service = makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
       chainId: CHAIN_ID,
     });
+    const signature = await accountA.sign({ hash: SAFE_TX_HASH });
 
-    const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: ADD_OWNER_TX });
+    const { safeTxHash } = await service.propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: ADD_OWNER_TX,
+      signature,
+    });
 
     expect(safeTxHash).toBe(SAFE_TX_HASH);
     expect(calls[0]?.method).toBe('POST');
@@ -648,10 +758,65 @@ describe('makeSafeTxService', () => {
       refundReceiver: ZERO,
       nonce: 7,
       contractTransactionHash: safeTxHash,
-      sender: OWNER_A,
-      signature: '0x',
+      sender: accountA.address,
+      signature,
       origin: 's2s',
     });
+
+    // The service files the body's signature as the sender's confirmation, so it
+    // has to be the sender's own over the hash — not a placeholder and not
+    // somebody else's.
+    const body = calls[0]?.body as { signature: Hex; sender: Address };
+    expect(await recoverAddress({ hash: safeTxHash, signature: body.signature })).toBe(
+      accountA.address,
+    );
+  });
+
+  it.each([
+    ['an empty 0x', '0x'],
+    ['64 bytes', `0x${'11'.repeat(64)}`],
+    ['130 bytes', `0x${'11'.repeat(130)}`],
+  ])('refuses %s before the request', async (_shape, signature) => {
+    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+    const service = makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+      chainId: CHAIN_ID,
+    });
+
+    await expect(
+      service.propose({
+        safe: SAFE,
+        sender: accountA.address,
+        tx: ADD_OWNER_TX,
+        signature: signature as Hex,
+      }),
+    ).rejects.toMatchObject({ code: 'signature_malformed' });
+    // The service answers 422 {"signature":["This field may not be blank."]} to
+    // the empty one; the round trip is not worth spending on any of them.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses a signature that recovers to a key other than sender', async () => {
+    const { fetchImpl, calls } = fakeFetch([{ status: 201, body: {} }]);
+    const service = makeSafeTxService({
+      config: configWith({ url: BASE }),
+      fetchImpl,
+      chainId: CHAIN_ID,
+    });
+    // A real signature, by the wrong key: the shape is perfect and the service
+    // would still refuse it as that address's confirmation.
+    const signature = await accountB.sign({ hash: SAFE_TX_HASH });
+
+    await expect(
+      service.propose({
+        safe: SAFE,
+        sender: accountA.address,
+        tx: ADD_OWNER_TX,
+        signature,
+      }),
+    ).rejects.toMatchObject({ code: 'signature_sender_mismatch' });
+    expect(calls).toHaveLength(0);
   });
 
   it('posts the gas fields the hash was computed from', async () => {
@@ -672,7 +837,14 @@ describe('makeSafeTxService', () => {
       chainId: CHAIN_ID,
     });
 
-    const { safeTxHash } = await service.propose({ safe: SAFE, sender: OWNER_A, tx: paying });
+    const { safeTxHash } = await service.propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: paying,
+      signature: await accountA.sign({
+        hash: computeSafeTxHash({ chainId: CHAIN_ID, safe: SAFE, tx: paying }),
+      }),
+    });
 
     expect(calls[0]?.body).toMatchObject({
       safeTxGas: '21000',
@@ -690,7 +862,12 @@ describe('makeSafeTxService', () => {
     const { safeTxHash } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
-    }).propose({ safe: SAFE, sender: OWNER_A, tx: ADD_OWNER_TX });
+    }).propose({
+      safe: SAFE,
+      sender: accountA.address,
+      tx: ADD_OWNER_TX,
+      signature: await accountA.sign({ hash: SAFE_TX_HASH }),
+    });
 
     expect(safeTxHash).toBe(computeSafeTxHash({ chainId: 8453, safe: SAFE, tx: ADD_OWNER_TX }));
   });
@@ -736,11 +913,12 @@ describe('makeSafeTxService', () => {
       },
     ]);
 
-    const records = await makeSafeTxService({
+    const { records, complete } = await makeSafeTxService({
       config: configWith({ url: BASE }),
       fetchImpl,
     }).pending(SAFE);
 
+    expect(complete).toBe(true);
     expect(records.map((record) => [record.nonce, record.safeTxHash])).toEqual([
       [7, recordFor(7).safeTxHash],
       [8, recordFor(8).safeTxHash],

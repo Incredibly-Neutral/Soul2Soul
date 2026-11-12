@@ -11,23 +11,39 @@
 // how many signatures a transaction needs. The proposal is `to: safe`, so the
 // Safe calls itself; the service carries it until the owners have confirmed.
 //
+// The proposal is signed by a key that already owns the Safe, never by the key
+// being added: the service stores a proposal's signature as its sender's
+// confirmation and refuses a sender that is not on the owner list, and the key
+// this run files joins the list only when the transaction executes. A machine
+// that holds no owner key for the Safe — the usual case for a machine that is
+// joining — posts nothing and reports the same `{to, data}` call for an owner
+// machine to make.
+//
 // The key comes from the same resolver `author new` uses (`--key`, `--mnemonic`,
 // a piped line, else a generated BIP39 phrase printed once). It is filed BEFORE
 // the service is touched, and a failed proposal is reported, never thrown: the
 // key is the thing that cannot be recovered, and the `{to, data}` pair to
 // propose by hand goes into the result.
 //
+// The row is filed INACTIVE (`activate: false`). The active author is the key
+// every command signs with, and this key is not on the owner list until the add
+// executes — activating it would leave a store whose selected author the chain
+// rejects, with `signer confirm` refusing its own machine's key as `not_owner`.
+//
 // Nothing here needs a bundler and nothing sends a userOp: proposing is an HTTP
 // POST, and execution is some owner's later business (`s2s signer confirm`).
 // Runs without `buildContext`.
 // ============================================================================
+
+import type { Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import type { ParsedArgs } from '../lib/args';
 import { flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
-import { addSigner, authorEoa } from '../core/authors';
+import { addSigner, authorEoa, readAuthors } from '../core/authors';
 import { hexKey } from '../core/config';
 import {
   addOwnerWithThresholdData,
@@ -39,6 +55,7 @@ import {
   defaultSignerName,
   l2Rpc,
   reasonOf,
+  shortAddress,
   signerDeps,
   type SignerDeps,
 } from './signer-store';
@@ -84,9 +101,20 @@ export async function runSignerAdd(
   }
 
   const name = flagString(args.flags, 'name') ?? defaultSignerName(eoa);
+  // Read before filing: the point of `activate: false` is that filing a joining
+  // key does not move this, and saying so needs the value it kept.
+  const keptActive = readAuthors(deps.authorsPath()).active;
   // A taken name or a key filed elsewhere is a UsageError from `addSigner`, and
   // it is thrown before anything is written — including this Safe's record.
-  const filed = addSigner({ name, privateKey, safe }, deps.authorsPath());
+  // `activate: false`: the key being filed is NOT an owner of the Safe yet. The
+  // store's active row is the key every command signs with, and pointing it at a
+  // key the chain does not recognise is how `signer confirm` comes to refuse its
+  // own machine's key. The active slot stays where it was; the join is completed
+  // by whoever posts the add, not by filing it here.
+  const filed = addSigner(
+    { name, privateKey, safe, activate: false },
+    deps.authorsPath(),
+  );
 
   const tx: SafeTxInput = {
     to: safe,
@@ -98,11 +126,27 @@ export async function runSignerAdd(
   };
   const localHash = computeSafeTxHash({ chainId: deps.chainId, safe, tx });
 
+  // The key this process can sign for: an env or project key that is on the
+  // Safe's owner list, because the service files a proposal's signature as its
+  // sender's confirmation and refuses a sender that is not an owner. `signer add`
+  // refuses a key that is already an owner, so a machine joining a Safe it does
+  // not own has no such key — that is the ordinary case for this command.
+  const configKey = hexKey(config.privateKey);
+  const configEoa = configKey ? authorEoa(configKey) : undefined;
+  const proposer =
+    configKey && configEoa && chain.owners.some((o) => o.toLowerCase() === configEoa.toLowerCase())
+      ? { privateKey: configKey, eoa: configEoa }
+      : undefined;
+
   let proposed = false;
   let safeTxHash = localHash;
   let note: string | undefined;
   if (config.safeTx.url.trim() === '') {
     note = 'no Safe Transaction Service URL configured (safeTx.url)';
+  } else if (!proposer) {
+    // Decided offline: the service answers "Sender is not an owner" to every
+    // POST this machine could make, and no round trip is spent learning it.
+    note = `no key this machine can sign with is an owner of ${safe}, and the service accepts a proposal only from an owner — an owner machine has to post it [not_owner_key]`;
   } else {
     try {
       const service = deps.service(config);
@@ -114,7 +158,13 @@ export async function runSignerAdd(
       // the Safe, not a default. The field stays unstated until something here
       // can read `isModuleEnabled` for the module address.
       await service.register(safe, { owners: chain.owners, threshold: chain.threshold });
-      safeTxHash = (await service.propose({ safe, sender: eoa, tx })).safeTxHash;
+      // Signed by the owner, because the service files the signature as that
+      // owner's confirmation. Not by `eoa`: the key this run adds is not on the
+      // owner list yet, and a proposal from it is refused.
+      const signature = await privateKeyToAccount(proposer.privateKey as Hex).sign({
+        hash: localHash,
+      });
+      safeTxHash = (await service.propose({ safe, sender: proposer.eoa, tx, signature })).safeTxHash;
       proposed = true;
     } catch (err) {
       note = reasonOf(err);
@@ -141,13 +191,14 @@ export async function runSignerAdd(
       // Always present: the same call the service was given, so a proposal that
       // never reached it can still be made from an owner's wallet.
       safeTx: { to: safe, data: tx.data },
+      activated: false,
       file: deps.authorsPath(),
       ...(note ? { note } : {}),
       ...(source.mnemonic ? { mnemonic: source.mnemonic } : {}),
       ...(source.generated ? { privateKey } : {}),
     },
     [
-      `signer '${filed.name}' filed and activated`,
+      `signer '${filed.name}' filed, not activated — the key is not an owner until an owner posts the proposal`,
       `eoa         : ${eoa}`,
       `safe        : ${safe}`,
       `threshold   : ${String(chain.threshold)} (unchanged — the owner list grows, the bar does not)`,
@@ -155,17 +206,30 @@ export async function runSignerAdd(
       `safeTxHash  : ${safeTxHash}`,
       ...(proposed
         ? [
-            `proposal    : queued — 0 of ${String(chain.threshold)} confirmations`,
-            `              the other owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
+            `proposal    : queued — ${shortAddress(proposer?.eoa ?? '')} signed it (1 of ${String(chain.threshold)} confirmations)`,
+            ...(chain.threshold > 1
+              ? [
+                  `              the other owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
+                ]
+              : [
+                  `              the threshold is met: \`s2s signer confirm ${safeTxHash}\` executes it`,
+                ]),
             `              proposing costs no gas; execution costs gas from whichever EOA sends it`,
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            '              propose this call by hand from an owner wallet:',
-            `              to   ${safe}`,
-            `              data ${tx.data}`,
+            ...(proposer
+              ? []
+              : [
+                  `              this machine cannot queue it: the service accepts a proposal only from an owner of ${safe}, and no key it can sign with is one`,
+                  `              an owner has to post this call from their own machine — nothing here retries it`,
+                ]),
+            `              to    ${safe}`,
+            `              data  ${tx.data}`,
+            `              nonce ${String(chain.nonce)}`,
           ]),
       `store       : ${deps.authorsPath()}`,
+      `active      : ${keptActive ?? '(none)'} (unchanged — a joined key is not an owner yet, so it does not take the slot)`,
       ...(source.mnemonic
         ? [
             `mnemonic    : ${source.mnemonic}`,
