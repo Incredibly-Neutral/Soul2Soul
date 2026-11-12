@@ -320,8 +320,8 @@ The command reads the module's eras: `eraCount()`, then every `eraAt(i)` in para
 `ownersEver()` and `lastSyncedBlock()`. An era is an owner set and the blocks it held; `endBlock ==
 0` is the current era and is reported as `head`. `lags` compares the newest era's owners against
 the Safe's live `getOwners()`, both lowercased and order-insensitive, and the human block ends with
-`sync() is permissionless and repairs it — rerun with --sync to send it` when they disagree. Two owners means two eras: the old
-one closed at the block the swap landed in, the new one open.
+`sync() is permissionless and repairs it — rerun with --sync to send it` when they disagree. Two
+owners means two eras: the old one closed at the block the swap landed in, the new one open.
 
 **The module is taken from the Safe's enabled list, else from the guard in its guard slot, and
 never from the factory index.** The enabled list is what a gate reads, so it is the module that
