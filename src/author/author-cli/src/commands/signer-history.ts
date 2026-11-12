@@ -1,10 +1,6 @@
 // ============================================================================
-// s2s signer history — what the OwnerHistory module recorded about this Safe's
-// owners, and whether it still agrees with them.
-//
-// The Safe is the one this machine files for its active author. `signer add` is
-// the one signer command that names a Safe, because it is the one with no row to
-// read one from.
+// s2s signer history [<safe>] — what the OwnerHistory module recorded about
+// this Safe's owners, and whether it still agrees with them.
 //
 // A rotation executes `swapOwner` inside `execTransaction`, and the guard the
 // Safe routes through stamps a new era as it goes. That stamp is the only
@@ -18,25 +14,47 @@
 // an entry a griefer appended says nothing about what this Safe carries.
 //
 // `sync()` is permissionless, so a history that lags the owners is not a lost
-// rotation: anyone can call it and it stamps the era the guard missed. The
-// command says so rather than printing a repair nobody can perform.
+// rotation: anyone can call it and it stamps the era the guard missed.
+// `--sync` sends that call from this machine's key. Without the flag the read is
+// the whole command — nothing is signed and nothing is sent.
 //
-// Nothing is signed and nothing is sent. The read is the whole command.
+// The flag exists because the guard's hook cannot be relied on under the
+// sponsored rail: the send's gas limit is the bundler's estimate from a
+// simulation in which the hook's failure is swallowed by design, so the estimate
+// never includes what the sync needs and the hook is starved. A rotation can
+// therefore land with the era still holding the old owner, and this is the
+// command that puts it right.
+//
+// The sync is sent from the EOA, not through the Safe: the call needs no Safe at
+// all, which is what permissionless means, and this command has no payer decision
+// to make. `sync()` writes nothing when the set already matched, so a matching
+// history is refused instead of costing a transaction.
 // ============================================================================
 
+import { encodeFunctionData, type Address, type Hex } from 'viem';
+
+import { OwnerHistoryModuleV1 } from '@s2s/author-contracts';
+
+import { flagBool } from '../lib/args';
 import type { ParsedArgs } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
-import { UsageError } from '../lib/errors';
+import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
+import { authorEoa } from '../core/authors';
+import { hexKey } from '../core/config';
 import type { OwnerEra, OwnerHistoryRead } from '../core/author-contracts';
 import {
   l2Rpc,
+  reasonOf,
   refuseSafeArgument,
   resolveSignerSafe,
   shortAddress,
   signerDeps,
   type SignerDeps,
 } from './signer-store';
+
+/** `sync()` on the OwnerHistory module: no arguments, no permission needed. */
+const SYNC_DATA: Hex = encodeFunctionData({ abi: OwnerHistoryModuleV1, functionName: 'sync' });
 
 /** One era's owner list: whole when it names one owner, else shortened per address. */
 function ownerList(owners: readonly string[]): string {
@@ -87,7 +105,7 @@ function humanLines(history: OwnerHistoryRead): string[] {
   // A history that agrees with the owners needs no closing line: the eras above
   // already answer the question. One that disagrees says what repairs it.
   const lag = history.lags
-    ? ["the history lags the Safe's owners: sync() is permissionless and repairs it"]
+    ? ["the history lags the Safe's owners: sync() is permissionless and repairs it — rerun with --sync to send it"]
     : [];
 
   return [
@@ -105,10 +123,10 @@ export async function runSignerHistory(
   args: ParsedArgs,
   overrides: Partial<SignerDeps> = {},
 ): Promise<void> {
-  refuseSafeArgument(args, 'signer history');
   const deps = signerDeps(overrides);
   const config = deps.config();
 
+  refuseSafeArgument(args, 'signer history');
   const safe = resolveSignerSafe(config);
   if (!safe) {
     throw new UsageError(
@@ -116,7 +134,66 @@ export async function runSignerHistory(
     );
   }
 
-  const history = await deps.readHistory(l2Rpc(config), safe);
+  // The human block for a run that sent the sync: the transaction hash is the
+  // claim, and the block below it is the proof, because the eras are the re-read
+  // taken after the receipt.
+  const syncLine = (txHash: Hex): string => `sync    ${txHash}`;
+
+  const rpcUrl = l2Rpc(config);
+  let history = await deps.readHistory(rpcUrl, safe);
+  let syncTx: Hex | undefined;
+
+  if (flagBool(args.flags, 'sync')) {
+    const module: Address | null = history.module;
+    if (module === null) {
+      throw new CliError(
+        `no owner-history module is enabled on ${safe}, so there is nothing to sync`,
+        1,
+        'no_history_module',
+      );
+    }
+    // `sync()` returns false and writes nothing when the set already matches, so
+    // this would be a transaction that buys no fact.
+    if (!history.lags) {
+      throw new CliError(
+        "the history already matches the Safe's owners; nothing to sync",
+        1,
+        'history_in_sync',
+      );
+    }
+    const configured = hexKey(config.privateKey);
+    const privateKey =
+      configured && /^0x[0-9a-fA-F]{64}$/.test(configured) ? (configured as Hex) : undefined;
+    if (!privateKey) {
+      throw new UsageError(
+        'no signing key — the sync is a transaction, so it needs one: activate a key with `s2s author switch <name>`, or file one with `s2s signer add <safe>`',
+      );
+    }
+    const eoa = authorEoa(privateKey);
+    try {
+      // A resolved send with no hash is not a sent sync: the seam's type says
+      // `Hex`, so the check is against a stub that resolves empty.
+      const sent: unknown = await deps.send({ rpcUrl, privateKey, to: module, data: SYNC_DATA });
+      if (typeof sent !== 'string' || sent === '') {
+        throw new Error('the send resolved with no transaction hash');
+      }
+      const hash = sent as Hex;
+      syncTx = hash;
+      await deps.waitForReceipt({ rpcUrl, hash });
+      out.warn(`sent sync() to ${module} in ${hash} as ${eoa ?? 'this key'}`);
+    } catch (err) {
+      // The read below is still worth printing: it says whether the era is
+      // missing, and the reason is why nothing was recorded.
+      throw new CliError(
+        `the sync on ${module} was not recorded (${reasonOf(err)}) — the history still lags, so fix the above and run this again`,
+        1,
+        'sync_failed',
+      );
+    }
+    // Re-read, so the block printed below is the state the sync produced rather
+    // than the one it was sent to repair.
+    history = await deps.readHistory(rpcUrl, safe);
+  }
 
   out.result(
     {
@@ -135,16 +212,23 @@ export async function runSignerHistory(
       ownersEver: history.ownersEver,
       lastSyncedBlock: history.lastSyncedBlock,
       lags: history.lags,
+      ...(syncTx ? { syncTx } : {}),
     },
-    [`safe    ${safe}`, ...humanLines(history)].join('\n'),
+    [`safe    ${safe}`, ...(syncTx ? [syncLine(syncTx)] : []), ...humanLines(history)].join('\n'),
   );
 }
 
 export const signerHistory: StoreCommandSpec = {
   name: 'history',
   summary:
-    "What the OwnerHistory module recorded about the Safe's owners: the eras, the sync point, and whether the history still matches the owners on chain.",
-  flags: {},
+    "What the OwnerHistory module recorded about the Safe's owners: the eras, the sync point, and whether the history still matches the owners on chain. --sync sends the permissionless sync() that repairs a lagging history.",
+  flags: {
+    sync: {
+      type: 'boolean',
+      summary:
+        'send sync() from this key when the history lags the owners, then read it back; refused when it already matches',
+    },
+  },
   async run(out: CliOut, args: ParsedArgs) {
     await runSignerHistory(out, args);
   },

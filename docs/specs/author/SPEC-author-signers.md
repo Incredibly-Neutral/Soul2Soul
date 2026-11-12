@@ -24,8 +24,9 @@ owner, `signer rotate` swaps this machine's key for a fresh one, `signer queue` 
 waiting, `signer history` says whether the rotation was recorded, `signer confirm` signs one
 proposal and executes it when the confirmations are enough. Every
 proposal is an ordinary `Safe` transaction — `to: safe`, zero gas fields — so the work is an HTTP
-POST to the Safe Transaction Service plus, at most, one send: a sponsored userOp when the Safe can
-validate one, otherwise a plain transaction from the EOA. "Can validate one" is narrow: a paymaster
+POST to the Safe Transaction Service plus the sends the command decides on: a sponsored userOp when
+the Safe can validate one, otherwise a plain transaction from the EOA, and — once a rotation
+executes — the `sync()` that records the era it opened. "Can validate one" is narrow: a paymaster
 URL is configured, the Safe is 1-of-1, and `SAFE_4337_MODULE` is both enabled on the Safe and its
 fallback handler.
 
@@ -41,7 +42,7 @@ default `fetch`.
 s2s signer add      <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer rotate   [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]
 s2s signer queue    [--json]
-s2s signer history  [--json]
+s2s signer history  [--sync] [--json]
 s2s signer confirm  <safeTxHash> [--no-execute] [--json]
 ```
 
@@ -309,7 +310,7 @@ that is not an owner has no other row to switch to. `reused` is present only on 
 `alreadyQueued` only when the hash came from the service. `note`, `mnemonic` and `privateKey` follow
 the rules of `signer add`.
 
-## `signer history [flags]`
+## `signer history [--sync]`
 
 Does the OwnerHistory module hold the owners the rotation created? A rotation is a `swapOwner`
 inside `execTransaction`, and the answer is on chain, but no other command reads it: `author
@@ -319,8 +320,8 @@ The command reads the module's eras: `eraCount()`, then every `eraAt(i)` in para
 `ownersEver()` and `lastSyncedBlock()`. An era is an owner set and the blocks it held; `endBlock ==
 0` is the current era and is reported as `head`. `lags` compares the newest era's owners against
 the Safe's live `getOwners()`, both lowercased and order-insensitive, and the human block ends with
-`sync() is permissionless and repairs it` when they disagree. Two owners means two eras: the old
-one closed at the block the swap landed in, the new one open.
+`sync() is permissionless and repairs it — rerun with --sync to send it` when they disagree. Two
+owners means two eras: the old one closed at the block the swap landed in, the new one open.
 
 **The module is taken from the Safe's enabled list, else from the guard in its guard slot, and
 never from the factory index.** The enabled list is what a gate reads, so it is the module that
@@ -332,16 +333,37 @@ should be created", not "what this Safe carries", and a history read off a grief
 read a module that has no eras at all. A guard that answers no `module()` is named as not an
 owner-history guard rather than treated as the hook.
 
-**`sync()` is the repair because the hook is best-effort, not the primary path.** The guard
-records the new era from `checkAfterExecution`, inside a bounded `SYNC_GAS` carved out of what is
-left of the Safe transaction's gas, and it swallows the module's failure to keep a broken module
-from bricking the Safe. A transaction whose gas limit is exactly `eth_estimateGas`'s answer leaves
-no headroom, the sync is skipped, and the rotation lands with the history still on the previous
-era. Nothing is lost when that happens: `sync()` is permissionless, reads the Safe's owners and
-stamps the era itself, so a lagging history is a state anyone can clear. That is also why a
-rotation through `execTransactionFromModule` stamps nothing — `execTransactionFromModule` is a
-self-call that skips guards entirely, so no `checkAfterExecution` runs and no era is opened; the
-store still sees the swap in the owner list, but the history has to be repaired with `sync()`.
+**The guard's hook is starved on the sponsored rail, so the CLI sends `sync()` itself.** The guard
+records the new era from `checkAfterExecution`, inside `gasleft() - 20_000` capped at `600_000`, and
+it swallows the module's failure to keep a broken module from bricking the Safe. Under the sponsored
+rail the transaction's gas limit is the bundler's estimate from a simulation in which that swallowed
+failure is by design, so the estimate never includes the ~29k `sync()` needs and the hook has no gas
+to run with. This is not a theory: Safe `0x8507CDa436d39D433acC9c88A813dd052C828dfB` rotated at
+block 56582189 (transaction `0x6b09…0a4d`) with the guard emitting `SyncFailed(56582189)`, era 0
+still holding the old owner and `lastSyncedBlock` still the install block. Tuning the gas is not a
+fix — the estimate is the bundler's, taken from a simulation that hides the failure. The fix is that
+the CLI does not rely on the hook: `signer confirm` sends `sync()` after the swap executes (see that
+section), and `--sync` here is the repair for a rotation that landed without it — proposed by
+another tool, executed through `execTransactionFromModule` (a self-call that skips guards, so no
+`checkAfterExecution` runs and no era opens), or confirmed before this command sent one.
+
+`--sync` reads first and sends only when the read says `lags`: `sync()` is idempotent and writes
+nothing when the set already matches, so a matching history is refused with `the history already
+matches the Safe's owners; nothing to sync`. A Safe with no module is refused instead
+(`no_history_module`) — there is nothing to send to — and reading needs no key while sending does,
+so a keyless machine gets a usage error before a transaction is built. The call is a plain
+transaction from the EOA straight to the module: `sync()` is permissionless and reads the Safe's own
+`getOwners()`, so it needs no Safe, no userOp and no paymaster decision, and it costs ~40k gas. The
+receipt is waited for, then the eras are re-read and printed, so the block in the output is the
+evidence rather than the state the sync was sent to repair. The transaction hash is a `sync    0x…`
+line directly after `safe`, and `syncTx` in JSON.
+
+**A repair after the fact is lossy by exactly one gap.** `sync()` stamps the new era at the *sync*
+block, not at the block the Safe actually rotated, so the old owner's tenure reads one or two blocks
+longer than it was — the documented cost of a rotation with no callback. Everything between the real
+rotation and the repair is attributed to the old set. A sync sent by `confirm` immediately after the
+swap lands keeps that gap to zero blocks in the normal case, and to one when the sync lands in a
+later block.
 
 Human output:
 
@@ -355,6 +377,9 @@ eras    2
 synced  block 0x…
 ```
 
+With `--sync`, a `sync    0x…` line follows `safe` and the block below it is the re-read taken
+after the receipt.
+
 An owner list prints whole when it names one owner and as `first 6 + last 4` per address
 otherwise. No guard prints `guard   (none)  no owner-history hook is installed`; no module prints
 `module  (none)` and closes with `no owner-history module is enabled on this Safe: nothing recorded
@@ -367,11 +392,12 @@ JSON:
 { "action": "signer.history", "safe": "0x…", "guard": "0x…", "module": "0x…",
   "moduleSource": "enabled|guard|null", "eraCount": 2,
   "eras": [{ "index": 0, "startBlock": 100, "endBlock": 640, "owners": ["0x…"] }],
-  "ownersEver": ["0x…"], "lastSyncedBlock": 640, "lags": false }
+  "ownersEver": ["0x…"], "lastSyncedBlock": 640, "lags": false, "syncTx": "0x…" }
 ```
 
-`endBlock` is `null` for the current era, not `0`. Nothing is signed, nothing is sent and no key is
-needed: the read is the whole command.
+`endBlock` is `null` for the current era, not `0`, and `syncTx` is present only when `--sync` sent
+the call. Without `--sync` nothing is signed, nothing is sent and no key is needed: the read is the
+whole command.
 
 ## `signer queue [flags]`
 
@@ -512,6 +538,30 @@ on the next confirmation attempt instead of leaving the old key filed.
    `send_outcome_unknown` too: `executed` and `paidBy` are claims about the chain and are never
    printed without a hash. Nothing is ever retried on the EOA: paying instead is the user's
    decision, not a fallback the command takes for them.
+6. **Record the era.** The swap is not the whole rotation: the OwnerHistory module's newest era is
+   what keeps a signature made before the rotation verifiable, and the guard's hook cannot be
+   relied on to stamp it. The guard calls `sync()` from `checkAfterExecution` inside
+   `gasleft() - 20_000` capped at `600_000` and swallows the module's failure, and under the
+   sponsored rail the transaction's gas limit is the bundler's estimate from a simulation in which
+   that swallowed failure is by design — so the estimate never includes the ~29k `sync()` needs, and
+   the hook is starved deterministically, not occasionally. Safe `0x8507…8dfB` rotated that way.
+   So `confirm` sends `sync()` itself, after the swap's send resolves and before the store is
+   reconciled, on the payer the swap used: a sponsored execution earns a sponsored `sync()`
+   addressed to the module on the same userOp rail, and a `--self-paid` or EOA execution earns one
+   from the EOA straight to the module. It never crosses rails — falling back to the other payer
+   would be a transaction the user did not choose. The module is `readOwnerHistory({safe,
+   rpcUrl}).module` (the Safe's enabled list first, the guard second), and no module means one line
+   — `history: no owner-history module is installed on the Safe, so this rotation is not recorded`
+   — with no send, which is not an error. The send's receipt is waited for before the eras are read
+   back, because a read taken at broadcast time answers the era the sync was sent to repair. The
+   outcome is one line and a `history` object. A sync that cannot be sent is **never** an exit code
+   — the swap landed and the proposal is executed — and never silence, which is how the production
+   rotation above went unrecorded:
+
+   ```
+   history: era 1 open with 0xEF5c…3dF3B, recorded in 0x…
+   history: not recorded (<reason>) — `s2s signer history --sync` repairs it
+   ```
 
 Refusals, all before anything is signed:
 
@@ -548,9 +598,15 @@ JSON:
 ```json
 { "action": "signer.confirm", "safe": "0x…", "safeTxHash": "0x…", "eoa": "0x…",
   "nonce": 7, "confirmations": 2, "required": 2, "confirmed": true, "posted": false,
-  "executed": true, "txHash": "0x…", "paidBy": "paymaster", "settled": "zomi",
-  "note": "…" }
+  "executed": true, "txHash": "0x…", "paidBy": "paymaster",
+  "history": { "module": "0x…", "recorded": true, "txHash": "0x…", "era": 1, "owners": ["0x…"] },
+  "settled": "zomi", "note": "…" }
 ```
+
+`history` is present only when something was sent, because an era is only owed once a swap executed.
+`recorded: false` carries `reason` instead of `era` and `owners`, and a Safe with no module carries
+`module: null` and `absent: true` — the one shape that says a rotation can never be recorded here,
+rather than that it was not.
 
 `posted` is `false` when the confirmation was already on the record and no POST was made; `txHash` is
 present only when `execTransaction` was sent, and `paidBy` only then too — `paymaster` for a
@@ -709,6 +765,17 @@ so the slot and the low-20-bytes decode are exercised, and one fixture asserts t
 asked for. `signer-history` fakes the module read on `SignerDeps.readHistory`: two eras naming the
 old owner and the new one, a Safe with no module, and a lagging history each assert the whole human
 block, and `--json` asserts the document field for field.
+
+**The era is asserted as a second send, not inferred from the first.** A confirming fixture fakes
+`readHistory` (the era the guard missed, then the era the sync opened) and `waitForReceipt`, records
+both rails, and checks that the second call is addressed to the module and decodes to `sync`, that a
+sponsored swap earns a sponsored sync with the EOA untouched, that `--self-paid` earns an EOA sync
+with the paymaster untouched, and that a sync whose send throws or whose receipt reverts is reported
+as `not recorded` while the swap stays `executed: true` and the pending row still settles to the new
+name; a Safe with no module is asserted to send nothing after the swap. `signer history --sync` is
+asserted to send one `sync()` to the module from the EOA, wait for its receipt, and print the
+re-read block with the `sync    0x…` line; a matching history, a Safe with no module and a keyless
+machine are asserted to refuse before any send, and a failed send to raise `sync_failed`.
 
 `test/signer-sponsored-send.test.ts` is the layer the command fixtures cannot see: a real
 `SafeSmartAccount` bound to an address and a real permissionless client over viem's `custom`
