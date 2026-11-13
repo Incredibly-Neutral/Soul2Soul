@@ -112,16 +112,13 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
     expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880 });
   });
 
-  it('refuses block 0: no height to read the entry at and no owner set to judge it', async () => {
-    // Block 0 is "no block was recorded" (pre-upgrade, or an imported log). The
-    // gate refuses it, so there is no pinned read to make and no unpinned one to
-    // fall back to.
-    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 0 })) });
+  it('passes block 0 through unpinned-worthy: the pre-upgrade fallback has no height', async () => {
+    // Block 0 is "no block was recorded", so there is nothing to pin to; the
+    // gate's own fallback is the live isOwner. evmRead drops a 0 tag.
+    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, block: 0 })) });
     const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBe('no append block was recorded for this draft');
-    expect(entry()).toHaveLength(0);
-    expect(deps.cat).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(true);
+    expect(entry()[0].block).toBe(0);
   });
 
   it('recovers the signer from the signature and judges that address', async () => {

@@ -241,11 +241,9 @@ the enabled-module list says which one.
 `absorb()` carries the log across. It is a Safe call that copies the previous module's whole log —
 every genesis, in order, with its binding and every version — into the new instance. The imported
 versions answer `blockNumber` 0: they were written at a block this instance cannot see, and nothing
-in the copy records which block it was. Ownership is judged at the append block, so the gate treats 0
-as no block and refuses: an imported version cannot be opened through the draft gate by anyone. The
-same holds for a version appended before the module recorded `blockNumber` at all. Absorbing keeps
-the history and loses the access, which is the price of the copy rather than a second reading of the
-same question.
+in the copy records which block it was. A gate treats 0 as no block and falls back to the Safe's
+live `isOwner`, which is weaker than judging ownership at the append block and is the price of
+keeping the history rather than dropping it.
 
 What does not survive is the log's source. Nothing records which module a version came from, so an
 absorbed log cannot be checked against the old proxy except by reading it. Only the log is carried:

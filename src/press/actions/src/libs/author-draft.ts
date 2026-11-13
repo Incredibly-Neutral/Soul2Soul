@@ -14,9 +14,9 @@
 // owner set the signer was tested against are the same version. Reading at the
 // head would let a version appended between the two reads be the one decrypted,
 // under an owner set that never saw it. A block of 0 means the version predates
-// the block field or the log was imported: the gate refuses it, since there is
-// no owner set at that height to judge, and this action refuses it too — there
-// is no unpinned read to fall back to.
+// the block field (or the log was imported): there is no height to read at, so
+// the read is unpinned, which is the same fallback the gate makes for the owner
+// read.
 //
 // The caller-supplied Safe is bound twice over: the drafts log must name it for
 // the genesis, and the blob's own signed `public.author` must equal it. A Safe
@@ -169,10 +169,6 @@ export const decryptAuthorDraft = async (
     if (!sameAddress(verdict.author, safe)) return refuse('draft belongs to another Safe');
     step('draft', verdict.author);
     if (verdict.block === undefined) return refuse('cannot read the append block');
-    // Block 0 is no height: the version was appended before the log recorded a
-    // block number, or carried in by an import, so the gate refused it. The
-    // entry is only ever read at a finite positive block.
-    if (verdict.block === 0) return refuse('no append block was recorded for this draft');
     if (!verdict.ok) return refuse('signer does not own the author Safe');
 
     // The pin: the entry is the one the gate judged, not the current head.

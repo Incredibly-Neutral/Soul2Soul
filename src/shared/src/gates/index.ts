@@ -202,12 +202,12 @@ export interface OwnsOptions {
  *      A signer who was an owner then is admitted even if the Safe has since
  *      rotated them out, and a signer who became an owner afterwards is not.
  *
- * One rule: ownership is judged at the append block, and a version with no
- * block is refused. A version written before `blockNumber` was recorded reads
- * back as block 0 (see DraftsModuleV1.Version), and an imported log has no block
- * at all; block 0 is never a real append block, so those versions have no owner
- * set to be judged against. The Safe's live `isOwner` is never read — the
- * present tense is not this question.
+ * Known limit: a version written before `blockNumber` was recorded reads back
+ * as block 0 (see DraftsModuleV1.Version), and an imported log has no block at
+ * all. For those the gate falls back to the Safe's live `isOwner` — the present
+ * tense — so a genesis appended before the upgrade cannot be judged against the
+ * owner set it was written under. It is a fallback, not a second answer: block 0
+ * is never a real append block.
  *
  * No publication is involved, so a draft that was never offered to anyone still
  * opens, and the fact survives the publication de-listing its author.
@@ -235,9 +235,8 @@ export const owns = async (
  * `block` is the append block of the genesis's last version, and it is reported
  * on exactly the paths that read one:
  *
- *   - `blocksOf` answers a block of 0 (pre-upgrade or imported): `block: 0`
- *     and `ok: false`. A version with no block has no owner set to judge it
- *     against, so it is refused, and nothing is read from the Safe.
+ *   - `blocksOf` answers a block of 0 (pre-upgrade or imported): `block: 0`,
+ *     and the owner answer is the Safe's live `isOwner`.
  *   - `blocksOf` answers a block of N: `block: N`, owner answer `isOwnerAt`.
  *   - `blocksOf` answers no usable list: no `block`, `ok: false`.
  *
@@ -308,9 +307,13 @@ export const ownsVerdict = async (
   if (block === undefined) return { ok: false, modules: resolved, author };
 
   if (block === 0) {
-    // Pre-upgrade or imported version: no block to judge the owner set at, and
-    // no other set that answers this question. Refused, not re-answered.
-    return { ok: false, block, modules: resolved, author };
+    // Pre-upgrade or imported version: no block to judge the owner set at.
+    return {
+      ok: await read(authorSafe, IS_OWNER_ABI, 'isOwner', [signerAddress]),
+      block,
+      modules: resolved,
+      author,
+    };
   }
 
   return {
