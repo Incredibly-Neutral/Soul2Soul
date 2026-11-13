@@ -2,9 +2,9 @@
 // s2s — Soul2Soul headless authoring CLI.
 //
 // Top-level dispatch: `s2s <group> <action> [flags]`.
-// Groups: `author` (author identities + content actions), `publication`
-// (publication lifecycle), and `config` (CLI settings — dispatched without a
-// context build).
+// Groups: `author` (author identities + content actions), `drafts` (the drafts
+// log on the author Safe), `publication` (publication lifecycle), and `config`
+// (CLI settings — dispatched without a context build).
 // Flags parse anywhere; `--json` switches stdout to a machine-readable JSON
 // envelope (Neovim plugin contract). Human progress always goes to stderr.
 //
@@ -23,8 +23,10 @@ import {
   authorHelpEntries,
   findAuthorCommand,
   findAuthorStoreCommand,
+  findDraftsCommand,
   findPublicationCommand,
   findSignerCommand,
+  draftsHelpEntries,
   publicationCommands,
   signerHelpEntries,
 } from './commands';
@@ -41,6 +43,7 @@ Usage:
 
 Groups:
   author        Author identities + content actions (new/switch/list/rm, upload, publish)
+  drafts        The drafts log on the author Safe (list what has been appended)
   signer        Add or rotate a key on a Safe, list the queue, confirm a proposal
   publication   Create publications
   config        Manage CLI settings (bring-your-own RPC, Kubo, keys)
@@ -53,7 +56,7 @@ Global flags:
   -h, --help    show help for the current level
   --version     print the CLI version
 
-Run "s2s author --help", "s2s signer --help" or "s2s publication --help" for the actions.`;
+Run "s2s author --help", "s2s drafts --help", "s2s signer --help" or "s2s publication --help" for the actions.`;
 
 /** Set in `main`; the failure handler prints in the same mode the run chose. */
 let jsonMode = false;
@@ -92,6 +95,8 @@ const signerHelp = (): string =>
   );
 const publicationHelp = (): string =>
   groupHelp(publicationCommands, 'publication', 'publication lifecycle');
+const draftsHelp = (): string =>
+  groupHelp(draftsHelpEntries, 'drafts', 'the drafts log on the author Safe');
 
 async function main(argv: string[]): Promise<number> {
   // Discovery pass — lenient, because the command that owns the flag spec has
@@ -183,14 +188,20 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (group !== 'author' && group !== 'publication') {
+  if (group !== 'author' && group !== 'publication' && group !== 'drafts') {
     throw new UsageError(
-      `unknown command group '${group}' — expected 'author', 'signer', 'publication', 'config', or 'setup'`,
+      `unknown command group '${group}' — expected 'author', 'drafts', 'signer', 'publication', 'config', or 'setup'`,
     );
   }
 
-  const findCommand = group === 'author' ? findAuthorCommand : findPublicationCommand;
-  const help = group === 'author' ? authorHelp() : publicationHelp();
+  const findCommand =
+    group === 'author'
+      ? findAuthorCommand
+      : group === 'publication'
+        ? findPublicationCommand
+        : findDraftsCommand;
+  const help =
+    group === 'author' ? authorHelp() : group === 'publication' ? publicationHelp() : draftsHelp();
 
   if (!action) {
     out.result({ help }, help);

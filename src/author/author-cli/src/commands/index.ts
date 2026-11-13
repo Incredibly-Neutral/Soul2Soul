@@ -1,6 +1,6 @@
 // ============================================================================
-// Command registries: `s2s author <action>`, `s2s publication <action>` and
-// `s2s signer <action>`.
+// Command registries: `s2s author <action>`, `s2s publication <action>`,
+// `s2s drafts <action>` and `s2s signer <action>`.
 //
 // `author` has two kinds of action. The author-store actions (new / switch /
 // list / rm) run without a `CliContext` — `cli.ts` dispatches them before
@@ -20,6 +20,7 @@ import { preview } from './preview';
 import { publish } from './publish';
 import { revoke } from './revoke';
 import { newPublication } from './new';
+import { draftsList } from './drafts-list';
 import { authorAddress } from './address';
 import { authorInit } from './init';
 import { authorMigrate } from './migrate';
@@ -47,6 +48,17 @@ export const authorCommands: CommandSpec[] = [
 
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];
+
+/** `s2s drafts` — the drafts log on the author Safe. */
+export const draftsCommands: CommandSpec[] = [draftsList];
+
+export function findDraftsCommand(name: string): CommandSpec | undefined {
+  return draftsCommands.find((command) => command.name === name);
+}
+
+/** Help order for `s2s drafts --help`. */
+export const draftsHelpEntries: readonly { name: string; summary: string; params?: string }[] =
+  draftsCommands;
 
 /** `s2s signer` — keys filed as owners of a Safe that already exists. */
 export const signerCommands: readonly StoreCommandSpec[] = [
