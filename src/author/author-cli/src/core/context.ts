@@ -66,6 +66,26 @@ export interface CliContext {
 type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
 
 /**
+ * The encrypt action CID: the config/env value when set, else the protocol's
+ * own record (`protocolInfo.litActions.encrypt`, read with every other action
+ * record in shared's `getProtocolInfo`). The key itself is not named here: one
+ * batch of record keys exists, and it lives in shared.
+ *
+ * The config value short-circuits, so a machine that sets it does not depend on
+ * the record being written. `protocolInfo` is a parameter so the precedence is
+ * testable without a chain.
+ */
+export function resolveEncryptActionCid(
+  config: CliConfig,
+  protocolInfo: Pick<S2SProtocolInfo, 'litActions'>,
+): string | undefined {
+  const configured = config.lit.encryptActionCid;
+  if (configured !== undefined && configured.trim() !== '') return configured;
+  const record = protocolInfo.litActions.encrypt;
+  return record !== undefined && record.trim() !== '' ? record : undefined;
+}
+
+/**
  * Warn on stderr when the env key shadows the active stored author.
  *
  * `S2S_PRIVATE_KEY` outranks the store, so a shell export (or a `.env` line)
@@ -105,11 +125,12 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
 
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
+  const encryptActionCid = resolveEncryptActionCid(config, protocolInfo);
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);
 
-  const lit = createLitService(config);
+  const lit = createLitService(config, encryptActionCid);
   const ipfs = createIpfs(config);
   const l2Runner = createEoaRunner({ chain: base, rpcUrl: l2Rpc, privateKey: privateKey as `0x${string}` });
 

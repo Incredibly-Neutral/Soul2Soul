@@ -24,6 +24,7 @@ const RESULT = {
   txHash: undefined,
   render: undefined,
   frontmatterWritten: true,
+  draft: undefined,
 };
 
 /**
@@ -38,13 +39,20 @@ describe('--allow-plaintext command wiring', () => {
 
   beforeEach(() => {
     vi.mocked(authorWrite).mockResolvedValue(RESULT);
-    // offerContent only reports the on-chain fields
+    // offerContent reports the on-chain fields and the version it appended
     vi.mocked(offerContent).mockResolvedValue({
       objectId: RESULT.objectId,
       kuboCid: RESULT.kuboCid,
       publication: RESULT.publication,
       subdomain: RESULT.subdomain,
       txHash: '0x' + '44'.repeat(32),
+      draft: {
+        module: '0x0000000000000000000000000000000000000011',
+        genesis: RESULT.objectId,
+        cid: RESULT.kuboCid,
+        versionCount: 1,
+        txHash: '0x' + '77'.repeat(32),
+      },
     });
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);

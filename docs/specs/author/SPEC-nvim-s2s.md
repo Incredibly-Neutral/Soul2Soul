@@ -33,7 +33,7 @@ Locked 2026-10-22 (the handoff's open §0 questions):
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter.** `upload` writes `cid` back; `propose` falls back to it, `--cid` overrides. The plugin holds **no** CID state. |
+| 1 | `--cid`: explicit flag vs. frontmatter | **Frontmatter.** `upload` writes `cid` back; `offer` falls back to it, `--cid` overrides. The plugin holds **no** CID state. |
 | 2 | Neovim runtime floor | **0.10** (`vim.system`, `vim.ui.open`, `vim.notify` with replaceable id). No `jobstart` fallback. The dev VM runs **0.12.6**. |
 | 3 | Where the plugin lives | **`nvim-s2s/` at the s2s repo root**, pure Lua, no build step, `dir`-installable. Not a pnpm workspace package. |
 | 4 | CID prefill UX | Moot — there is no prefill. `:S2S propose` needs no prompt after `:S2S upload`. |
@@ -141,7 +141,7 @@ This is the only place the plugin cares that the note is also a file on disk.
 - **Detail float** (`:S2S last` / `<Plug>(s2s_detail)`): full known set + pass-through extras, one
   `key: value` per line, `q` to close. This is where "everything else" goes so the notify stays small.
 - **Open**: `preview` → open `previewUrl` when `opts.open`; `publish` → open `prodUrl`. `upload`
-  and `propose` have nothing to open. **No URLs are invented** — only `render.*` fields the binary
+  and `offer` have nothing to open. **No URLs are invented** — only `render.*` fields the binary
   returned are ever opened or printed.
 - **Errors**: notify ERROR with the envelope `error` verbatim (it's written for humans and already
   points at the fix). No Lua stack traces, no "something went wrong".
@@ -154,7 +154,7 @@ This is the only place the plugin cares that the note is also a file on disk.
 | Command | Binary call |
 |---|---|
 | `:S2S upload` | `author upload <note> --json` |
-| `:S2S propose` | `author propose <note> --json` (CID from frontmatter) |
+| `:S2S propose` | `author offer <note> --json` (CID from frontmatter) |
 | `:S2S preview` | `author preview <note> --json` |
 | `:S2S publish` | `author publish <note> --json` |
 | `:S2S revoke` | `author revoke <note> --json` (confirms first — it retracts on-chain) |
@@ -210,7 +210,7 @@ anything that would (publication, keys, RPC) is `s2s config`'s job and stays the
 
 | Layer | How |
 |---|---|
-| `format.lua` | Pure table-in/strings-out tests. Fixtures: one canned result per action (`upload`, `propose`, `preview`, `publish`, `revoke`, `publication new`), the failure envelope, an empty `{}`, and a **future-shaped** result with unknown scalars + an unknown nested object (must not error, must pass the scalars through, must drop the nested one). |
+| `format.lua` | Pure table-in/strings-out tests. Fixtures: one canned result per action (`upload`, `offer`, `preview`, `publish`, `revoke`, `publication new`), the failure envelope, an empty `{}`, and a **future-shaped** result with unknown scalars + an unknown nested object (must not error, must pass the scalars through, must drop the nested one). |
 | `spawn.lua` | Integration against a **fake `s2s`** shell script on `PATH` (or `bin = <script>`): ok / exit 1 / exit 2 / exit 3 / non-JSON stdout / empty stdout / huge stdout. Assert argv shape (note is absolute, `--json` present, trailing args in order) and cwd. No live chain, no real binary. |
 | `state.lua` | last-result-per-buffer + busy flag lifecycle (set on spawn, cleared on exit, survives buffer switch, dropped on `BufWipeout`). |
 | manual smoke | `:S2S upload` on a fixture note against the real binary, to the point it fails on missing env (exit 1) → clean ERROR notify, no stack trace. Then `:S2S propose` / `:S2S preview` the same way. |

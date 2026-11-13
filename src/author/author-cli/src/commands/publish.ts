@@ -62,6 +62,8 @@ export const publish: CommandSpec = {
         objectId: result.objectId,
         cid: result.kuboCid,
         txHash: result.txHash,
+        // The version this publish recorded in the drafts log.
+        draft: result.draft,
         render: result.render
           ? {
               cid: result.render.cid,

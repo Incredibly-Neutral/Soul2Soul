@@ -17,5 +17,7 @@ export const protocolSchema = z.object({
     update: z.string(),
     maintainCache: z.string().optional(),
     repointArchive: z.string().optional(),
+    encrypt: z.string().optional(),
+    decrypt: z.string().optional(),
   }),
 });

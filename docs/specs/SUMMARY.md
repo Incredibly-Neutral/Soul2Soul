@@ -65,7 +65,8 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
 - **`DraftsModuleV1`** (author side, in `src/author/contracts`, deployed on Base behind
   `AuthorContractsFactory` `0xC70eEA1E873DDa4D260f080e3b1698fBC8BD9f2E`; the per-author proxy is
   installed by `s2s author new` / `s2s author init`) — per author Safe, the append-only log of
-  manuscripts uploaded and never offered: `genesis → versions[]`, written by the Safe alone, plaintext
+  uploaded manuscripts, written before any offer and independent of one: `genesis → versions[]`,
+  written by the Safe alone, plaintext
   CIDs, no publication, no deal. The same `genesis` reaches the publication module only when the author
   makes an offer, and that is an explicit copy of a CID, not a shared row.
 - **`OwnerHistoryModuleV1` + `OwnerHistoryGuard`** (author side, in `src/author/contracts`, deployed on
@@ -228,7 +229,7 @@ bare expression, no trailing `;`, pure functions) only; helper failures are sile
 - Actions (I/O contracts, decision tree): `specs/press/SPEC-protocol-actions.md`.
 - Shared types + validation + entry points: `specs/system/SPEC-shared.md`.
 - Publication (the whole group): `specs/publication/SPEC-publication.md`; template kit: `specs/publication/SPEC-publication-look.md` + `rfc/RFC-010-website-starter-agent-kit.md`.
-- Drafts (uploaded, never offered): `specs/author/SPEC-author-drafts.md` — `DraftsModuleV1`, its append
+- Drafts (appended before any offer): `specs/author/SPEC-author-drafts.md` — `DraftsModuleV1`, its append
   log, and why an offer is a copy of a CID rather than a reference into it.
 - Owner history (who was an owner, and when): `specs/author/SPEC-author-owner-history.md` —
   `OwnerHistoryModuleV1` and `OwnerHistoryGuard`, the era model and its boundary rule, and why the Safe

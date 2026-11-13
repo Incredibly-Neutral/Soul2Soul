@@ -1,16 +1,17 @@
 // ============================================================================
 // The Lit adapter — what the CLI hands LitService so it can execute an action.
 //
-// There is no inline action code in this CLI: encrypt runs from
-// `lit.encryptActionCid`, fetched through the gateway the CLI already reads
-// content through. These tests assert the wiring itself (a service that throws
-// "missing actions.encrypt" is the failure that motivated it), not the Lit
-// exchange, which shared's own tests own.
+// There is no inline action code in this CLI, and no action CID ships in it
+// either: encrypt runs from the CID the protocol records module holds
+// (`lit_action_encrypt`), with `lit.encryptActionCid` as the override. These
+// tests assert the wiring — a service that throws "missing actions.encrypt" is
+// the failure that motivated it — not the Lit exchange, which shared's own tests
+// own.
 // ============================================================================
 
 import { describe, expect, it } from 'vitest';
 
-import { createLitService } from '../src/adapters/lit';
+import { createLitService, NO_ENCRYPT_ACTION } from '../src/adapters/lit';
 import { loadConfig } from '../src/core/config';
 
 /** Never the developer's real ~/.config/s2s: a blank machine, as in config.test. */
@@ -25,8 +26,8 @@ const nowhere = {
 const CID = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy';
 
 /** The private fields LitService keeps — the seam this adapter is. */
-const wired = (env: NodeJS.ProcessEnv = {}) => {
-  const svc = createLitService(loadConfig(env, nowhere));
+const wired = (env: NodeJS.ProcessEnv = {}, cid: string | undefined = env.LIT_ENCRYPT_ACTION_CID) => {
+  const svc = createLitService(loadConfig(env, nowhere), cid);
   return svc as unknown as {
     gateway?: string;
     actions: { encrypt?: string; decrypt?: string };
@@ -35,15 +36,24 @@ const wired = (env: NodeJS.ProcessEnv = {}) => {
 };
 
 describe('createLitService', () => {
-  it('hands over the CID of the encrypt action bundle', () => {
-    const svc = wired({ LIT_ENCRYPT_ACTION_CID: CID });
-    expect(svc.actions).toEqual({ encrypt: CID });
+  it('hands over the resolved CID of the encrypt action bundle', () => {
+    expect(wired({}, CID).actions).toEqual({ encrypt: CID });
   });
 
-  it('is unset when no CID is configured, so the encrypt path fails closed', () => {
-    // The file layer is asserted in config.test.ts; here the point is that the
-    // adapter passes the absence through rather than inventing a CID.
-    expect(wired({}).actions.encrypt).toBeUndefined();
+  it('feeds the CID it is given, not a second read of the config', () => {
+    // The resolver (`core/context.ts`) is the only place precedence lives: a CID
+    // that came from the protocol record arrives here exactly like a configured one.
+    expect(wired({ LIT_ENCRYPT_ACTION_CID: 'bafyfromconfig' }, CID).actions.encrypt).toBe(CID);
+  });
+
+  it('fails closed with both remedies when no CID resolved', async () => {
+    const svc = createLitService(loadConfig({}, nowhere));
+    expect((svc as unknown as { actions: Record<string, unknown> }).actions.encrypt).toBeUndefined();
+
+    await expect(svc.encrypt('usage-key', '0xpkp', 'plaintext')).rejects.toThrow(NO_ENCRYPT_ACTION);
+    // Both ways to supply it are named, because either one is a fix.
+    expect(NO_ENCRYPT_ACTION).toContain('s2s config set lit.encryptActionCid <cid>');
+    expect(NO_ENCRYPT_ACTION).toContain('src/press/scripts/lit/update-protocol.ts');
   });
 
   it('uses the Kubo gateway the CLI already reads content through, with a scheme', () => {
@@ -58,7 +68,7 @@ describe('createLitService', () => {
   });
 
   it('adds no second gateway setting and no second credential', () => {
-    const svc = wired({ LIT_ACCOUNT_KEY: '0x' + 'ab'.repeat(32), LIT_ENCRYPT_ACTION_CID: CID });
+    const svc = wired({ LIT_ACCOUNT_KEY: '0x' + 'ab'.repeat(32) }, CID);
     expect(svc.accountKey).toBe('0x' + 'ab'.repeat(32));
     expect(Object.keys(svc.actions)).toEqual(['encrypt']);
   });
