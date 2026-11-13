@@ -23,23 +23,28 @@ gate result MAY be required for it.
 
 Note (this implementation): the gate is `ownsVerdict()` in `src/shared/src/gates`, which resolves the
 author's own modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the
-Safe for the genesis, and asks the Safe's owner history whether the signer was an owner when the last
-version was appended — the Safe is never a parameter. The Lit decrypt action imports that gate and
+Safe for the genesis, and answers whether the signer was an owner when the last version was appended —
+the Safe is never a parameter. The Lit decrypt action imports that gate and
 reads the draft entry at the block the gate reports and from the drafts module it reports, so nothing
 is resolved twice and the ciphertext it opens and the owner set it was judged under are one version.
 It then requires the blob's own signed `public.author` to
 equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
 in their own module, and only the blob's signed author refuses that.
 
-The gate asks one question, at one block. Where the record carries the block it was written in — the
-drafts log's `blocksOf(genesis)`, last entry — ownership is judged at that block: a key rotated out
-keeps access to what it wrote, and a key added afterwards does not gain what it never held. A block of
-0 means no block was recorded (a version older than the field, or a log imported by `absorb()`), and
-the gate refuses it: there is no owner set at that height to judge the signer against, and the Safe's
-live `isOwner` is not that set, so it is never read for this gate. The consequence is plain — a draft
-appended before the drafts module recorded a block number, and every version carried in by an import,
-can no longer be opened. That block is also what bounds the answer: history starts at the
-Safe's era 0, and an owner rotation the guard missed stretches the tenure it should have ended.
+The gate asks one question, and callers see one answer. Where the record carries the block it was
+written in — the drafts log's `blocksOf(genesis)`, last entry, a finite block greater than 0 —
+ownership is judged at that block: a key rotated out keeps access to what it wrote, and a key added
+afterwards does not gain what it never held. Where the log records no append block for the last
+version — a draft written before the module recorded `blockNumber`, or a version carried in by
+`absorb()` or another import — the gate judges against the Safe's current owners, reading the live
+`isOwner` inside the gate. A missing height must not deny access. That is the one path on which the
+present tense answers, and the cost of it is plain: for such a version the answer changes when owners
+rotate, so a key rotated out after the write loses it and a key added since gains it. The verdict
+names which set answered (`ownerSet`: `append-block` or `live`), so a caller that wants to know reads
+it there instead of inferring it from the block. Either way the caller makes one call and gets one
+answer; how the gate reached it is not the caller's concern. That block is also what bounds the
+answer: history starts at the Safe's era 0, and an owner rotation the guard missed stretches the
+tenure it should have ended.
 
 ## GATES-2 — reviewers, until the offer ends
 

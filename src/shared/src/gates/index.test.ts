@@ -162,9 +162,9 @@ describe('owns', () => {
   const APPEND_BLOCK = 4321;
 
   // One chain: the Safe's enabled modules answer the two role ids, the drafts
-  // module answers authorOf and blocksOf, and the history module answers
-  // isOwnerAt. The Safe's own isOwner is answered too, so a test can prove the
-  // gate never asks it. Every read is recorded with its target and arguments.
+  // module answers authorOf and blocksOf, the history module answers isOwnerAt,
+  // and the Safe itself answers isOwner. Every read is recorded with its target
+  // and arguments, so a test can prove which owner set answered.
   const ownsChain = (
     options: {
       author?: string;
@@ -230,26 +230,34 @@ describe('owns', () => {
     expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 
-  it('refuses a version whose block is 0, without reading the Safe', async () => {
-    // Block 0 is "no block was recorded": pre-upgrade, or carried in by an
-    // import. There is no owner set to judge the entry against, so the live
-    // answer does not rescue it.
-    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true });
-
-    expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(false);
-
-    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
-  });
-
-  it('reads no owner at all for block 0: the append block is the only yardstick', async () => {
-    // A signer the history would place as an owner at the block the gate was
-    // asked in is still not judged at that block; block 0 has no yardstick.
-    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwnerAt: true });
+  it('refuses a version whose block is 0 when the live set does not hold the signer', async () => {
+    // Block 0 is "no block was recorded": pre-upgrade, or carried in by an import.
+    // The question is still asked, against the Safe's live owners.
+    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: false, isOwnerAt: true });
 
     expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(false);
 
     expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
-    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+  });
+
+  it('answers a version whose block is 0 from the Safe live isOwner, with no history read', async () => {
+    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true, isOwnerAt: false });
+
+    expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(true);
+
+    const live = asked.find((a) => a.fn === 'isOwner')!;
+    expect(live.target).toBe(SAFE);
+    expect(live.args).toEqual([SIGNER]);
+    expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
+  });
+
+  it('answers a log with no usable block list the same way: live isOwner, no history read', async () => {
+    const { read, readValue, asked } = ownsChain({ blocks: [], isOwner: true, isOwnerAt: false });
+
+    expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(true);
+
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(true);
+    expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
   });
 
   it('reads the block of the last version, not the first', async () => {
@@ -290,10 +298,12 @@ describe('owns', () => {
     expect(asked.some((a) => a.fn === 'authorOf')).toBe(false);
   });
 
-  it('refuses when the drafts log answers no usable block list', async () => {
-    const { read, readValue } = ownsChain({ blocks: 'not-a-list' });
+  it('refuses when the drafts log answers no usable block list and the live set does not hold it', async () => {
+    const { read, readValue, asked } = ownsChain({ blocks: 'not-a-list', isOwner: false });
 
     expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(true);
+    expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
   });
 
   it('holds for a draft no publication knows — the case canPublish cannot answer', async () => {
@@ -327,21 +337,23 @@ describe('owns', () => {
       expect(verdict).toEqual({
         ok: true,
         block: APPEND_BLOCK,
+        ownerSet: 'append-block',
         modules: { drafts: DRAFTS, ownerHistory: HISTORY },
         author: SAFE,
       });
     });
 
-    it('reports block 0 as a refusal, and the answers it had already read', async () => {
+    it('reports block 0 with the live owner set that answered it', async () => {
       const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true });
 
       const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
 
       expect(verdict.block).toBe(0);
-      expect(verdict.ok).toBe(false);
+      expect(verdict.ok).toBe(true);
+      expect(verdict.ownerSet).toBe('live');
       expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
       expect(verdict.author).toBe(SAFE);
-      expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+      expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
     });
 
     it('reports the block on a refusal too', async () => {
@@ -351,18 +363,32 @@ describe('owns', () => {
 
       expect(verdict.ok).toBe(false);
       expect(verdict.block).toBe(APPEND_BLOCK);
+      expect(verdict.ownerSet).toBe('append-block');
     });
 
-    it('reports no block when the drafts log answers no usable block list', async () => {
+    it('reports no block but the live set when the drafts log answers no usable block list', async () => {
       const { read, readValue } = ownsChain({ blocks: 'not-a-list' });
 
       const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
 
-      expect(verdict.ok).toBe(false);
+      expect(verdict.ok).toBe(true);
       expect(verdict.block).toBeUndefined();
+      expect(verdict.ownerSet).toBe('live');
       // The two answers before it did land, so a caller may still use them.
       expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
       expect(verdict.author).toBe(SAFE);
+    });
+
+    it('names the set that answered, so the two paths are told apart without the block-0 rule', async () => {
+      const pinned = ownsChain();
+      const live = ownsChain({ blocks: [0] });
+
+      expect((await ownsVerdict(pinned.read, pinned.readValue, HEX32, SAFE, SIGNER)).ownerSet).toBe(
+        'append-block',
+      );
+      expect((await ownsVerdict(live.read, live.readValue, HEX32, SAFE, SIGNER)).ownerSet).toBe(
+        'live',
+      );
     });
 
     it('reports the module reason, and no modules, when the lookup answers nothing', async () => {
@@ -374,6 +400,7 @@ describe('owns', () => {
       expect(verdict.modules).toBeUndefined();
       expect(verdict.modulesError).toBe('ambiguous-drafts-module');
       expect(verdict.block).toBeUndefined();
+      expect(verdict.ownerSet).toBeUndefined();
       expect(verdict.author).toBeUndefined();
     });
 
@@ -386,6 +413,7 @@ describe('owns', () => {
       expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
       expect(verdict.author).toBeUndefined();
       expect(verdict.block).toBeUndefined();
+      expect(verdict.ownerSet).toBeUndefined();
     });
 
     it('reports the other Safe s name, and no block, when the log is not this Safe s', async () => {
@@ -396,6 +424,7 @@ describe('owns', () => {
       expect(verdict.ok).toBe(false);
       expect(verdict.author).toBe(OTHER_SAFE);
       expect(verdict.block).toBeUndefined();
+      expect(verdict.ownerSet).toBeUndefined();
     });
   });
 });

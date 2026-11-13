@@ -3,20 +3,22 @@
 // The decision is `ownsVerdict` in @s2s/soul2soul-shared/gates: the gate
 // resolves the Safe's drafts log and owner-history module from the Safe's own
 // enabled-module list, requires the drafts log to name that Safe, and answers
-// whether the signer was an owner when the last version was appended. Nothing of
+// whether the signer was an owner when the last version was appended, or — when
+// the log recorded no block for it — whether they own the Safe now. Nothing of
 // that is repeated here: the verdict carries the module it read from, the entry
-// author it read and the block it judged at, so this file neither resolves the
-// Safe's modules a second time (chain calls, and a module set that could rotate
-// in between) nor reads anything it was not handed.
+// author it read, the block it judged at and the owner set that answered, so this
+// file neither resolves the Safe's modules a second time (chain calls, and a
+// module set that could rotate in between) nor reads anything it was not handed.
 //
 // What this file adds is the PIN. The gate reports the append block it judged
 // at; the entry is read at that same block, so the ciphertext this opens and the
 // owner set the signer was tested against are the same version. Reading at the
 // head would let a version appended between the two reads be the one decrypted,
-// under an owner set that never saw it. A block of 0 means the version predates
-// the block field or the log was imported: the gate refuses it, since there is
-// no owner set at that height to judge, and this action refuses it too — there
-// is no unpinned read to fall back to.
+// under an owner set that never saw it. A block of 0, or no usable block list,
+// means the log recorded no height: the gate answered from the Safe's live owner
+// set, and the entry is read at the head, which is the same present the answer
+// was given in. The trace carries which set answered, so a reader does not infer
+// that from a missing block.
 //
 // The caller-supplied Safe is bound twice over: the drafts log must name it for
 // the genesis, and the blob's own signed `public.author` must equal it. A Safe
@@ -105,6 +107,8 @@ export interface TraceStep {
   step: string;
   address?: string;
   block?: number;
+  /** On the `appendBlock` step: the owner set the gate's answer came from. */
+  ownerSet?: OwnsVerdict['ownerSet'];
 }
 
 export interface AuthorDraftData {
@@ -157,7 +161,15 @@ export const decryptAuthorDraft = async (
 
     // GATES-1, and the block this whole action is pinned to.
     const verdict = await deps.owns(genesisId, safe, signer);
-    if (verdict.block !== undefined) trace.push({ step: 'appendBlock', block: verdict.block });
+    // Which set answered, and the block when there was one. The owner set is
+    // named, so the block-0 rule does not have to be inferred from a trace.
+    if (verdict.ownerSet !== undefined) {
+      trace.push({
+        step: 'appendBlock',
+        ...(verdict.block !== undefined ? { block: verdict.block } : {}),
+        ownerSet: verdict.ownerSet,
+      });
+    }
 
     // The gate decided from these; use them rather than resolving the Safe's
     // modules again. Each refusal keeps its own words.
@@ -168,20 +180,18 @@ export const decryptAuthorDraft = async (
     if (verdict.author === undefined) return refuse('unknown draft');
     if (!sameAddress(verdict.author, safe)) return refuse('draft belongs to another Safe');
     step('draft', verdict.author);
-    if (verdict.block === undefined) return refuse('cannot read the append block');
-    // Block 0 is no height: the version was appended before the log recorded a
-    // block number, or carried in by an import, so the gate refused it. The
-    // entry is only ever read at a finite positive block.
-    if (verdict.block === 0) return refuse('no append block was recorded for this draft');
     if (!verdict.ok) return refuse('signer does not own the author Safe');
 
-    // The pin: the entry is the one the gate judged, not the current head.
+    // The pin: the entry is the one the gate judged, not the current head. With
+    // no positive block the gate judged against the live owner set, so the entry
+    // is read at the head — the version that set was read at.
+    const pin = verdict.block !== undefined && verdict.block > 0 ? verdict.block : undefined;
     const entry: DraftEntry = await deps.read(
       verdict.modules.drafts,
       ENTRY_ABI,
       'fetch',
       [genesisId],
-      verdict.block,
+      pin,
     );
 
     if (isZeroCount(entry?.versionCount)) return refuse('unknown draft');

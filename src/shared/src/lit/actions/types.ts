@@ -149,12 +149,17 @@ export interface RepointArchiveData {
 }
 
 // Decrypt (author draft) — opens a draft the author Safe keeps, and refuses
-// unless the signer was an owner of that Safe when the version was appended. The
+// unless the signer was an owner of that Safe when the version was appended, or —
+// where the log recorded no block for it — owns it now. The
 // caller names the Safe, never a module: the action resolves the Safe's drafts
 // log and owner-history module from the Safe's own enabled-module list, requires
-// the drafts log to name that Safe for the genesis, and reads `isOwnerAt` at the
-// genesis's append block. A version that records block 0 has no block to judge
-// an owner set at, so it is refused rather than judged in the present tense.
+// the drafts log to name that Safe for the genesis, and answers whether the signer
+// was an owner when the genesis's last version was appended — reading `isOwnerAt`
+// at that block, or the Safe's live `isOwner` when the log recorded no block for it
+// (a version written before the field, or one carried in by an import), because a
+// missing height must not deny access. The answer names which owner set gave it, so
+// an imported or pre-upgrade version opens against the Safe's current owners and its
+// answer moves when they rotate.
 // Only then is the blob cat'd, and the plaintext is released only if it
 // hashes to the signed `public.plaintextHash`. The action itself lives in
 // `src/press/actions`; `LitService` adds its own `gateway` to these params before

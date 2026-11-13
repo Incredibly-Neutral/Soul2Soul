@@ -197,17 +197,20 @@ export interface OwnsOptions {
  *   2. `authorOf(genesis)` on the drafts module must name the Safe it was given.
  *      A genesis another Safe kept is refused, and so is an unknown one (the
  *      module answers the zero address rather than reverting).
- *   3. Answer ownership from the history module at the block the genesis's last
- *      version was appended in: `isOwnerAt(signer, blocksOf(genesis).at(-1))`.
- *      A signer who was an owner then is admitted even if the Safe has since
- *      rotated them out, and a signer who became an owner afterwards is not.
+ *   3. Answer ownership, and say which set answered. Where the log records the
+ *      block the last version was appended in — a finite block greater than 0 —
+ *      the owner-history module answers `isOwnerAt(signer, block)`: a signer who
+ *      was an owner then is admitted even if the Safe has since rotated them
+ *      out, and a signer who became an owner afterwards is not. Where the log
+ *      records 0 (a version written before `blockNumber` existed, or one carried
+ *      in by `absorb()`) or answers no usable block list, the Safe's live
+ *      `isOwner(signer)` answers, read inside this function: a missing height
+ *      must not deny access. That is the only path on which the present tense
+ *      answers, and its answer changes when owners rotate.
  *
- * One rule: ownership is judged at the append block, and a version with no
- * block is refused. A version written before `blockNumber` was recorded reads
- * back as block 0 (see DraftsModuleV1.Version), and an imported log has no block
- * at all; block 0 is never a real append block, so those versions have no owner
- * set to be judged against. The Safe's live `isOwner` is never read — the
- * present tense is not this question.
+ * One question, one answer. How the gate reaches it is not the caller's
+ * concern, and {@link OwnsVerdict.ownerSet} is how a caller that wants to know
+ * which set answered finds out.
  *
  * No publication is involved, so a draft that was never offered to anyone still
  * opens, and the fact survives the publication de-listing its author.
@@ -235,15 +238,30 @@ export const owns = async (
  * `block` is the append block of the genesis's last version, and it is reported
  * on exactly the paths that read one:
  *
- *   - `blocksOf` answers a block of 0 (pre-upgrade or imported): `block: 0`
- *     and `ok: false`. A version with no block has no owner set to judge it
- *     against, so it is refused, and nothing is read from the Safe.
  *   - `blocksOf` answers a block of N: `block: N`, owner answer `isOwnerAt`.
- *   - `blocksOf` answers no usable list: no `block`, `ok: false`.
+ *   - `blocksOf` answers a block of 0 (pre-upgrade or imported): `block: 0`,
+ *     owner answer the Safe's live `isOwner`, which is read inside the gate.
+ *   - `blocksOf` answers no usable list: no `block`, owner answer the Safe's
+ *     live `isOwner`.
  *
  * It is NOT reported on the refusals that never reach `blocksOf`: a module list
  * that cannot be resolved or is ambiguous, a genesis the drafts log does not
  * name (zeroed `authorOf`), and a genesis the log names for another Safe.
+ *
+ * `ownerSet` names the owner set the answer came from, and like `block` it is
+ * present on exactly the paths that reached an answer:
+ *
+ *   - `'append-block'`: the owner-history module answered `isOwnerAt` at the
+ *     block `block` reports. The tenure is the one at the append.
+ *   - `'live'`: the log recorded no positive block, so the Safe's own
+ *     `isOwner` answered, read at head. `block` is 0 when the log answered 0,
+ *     and absent when it answered no usable list. This is the only path on
+ *     which the present tense answers, and its answer moves with each rotation.
+ *
+ * It is a string rather than a second boolean so that a reader of a trace can
+ * tell the two paths apart without holding the block-0 rule in their head.
+ * Absent exactly where `block` is absent for a reason other than a missing
+ * list: no answer was reached.
  *
  * `modules` and `author` are what the gate had already read when it decided, so
  * a caller that needs the same two answers does not resolve them again — a
@@ -257,6 +275,8 @@ export const owns = async (
 export interface OwnsVerdict {
   ok: boolean;
   block?: number;
+  /** Which owner set answered: the append block's, or the Safe's live one. */
+  ownerSet?: 'append-block' | 'live';
   modules?: { drafts: string; ownerHistory: string };
   modulesError?: AuthorModulesError;
   author?: string;
@@ -303,14 +323,20 @@ export const ownsVerdict = async (
   const block = lastVersionBlock(
     await readValue(modules.drafts, BLOCKS_OF_ABI, 'blocksOf', [genesisId]),
   );
-  // A log that answers no block list is not the pre-upgrade case (which answers
-  // a list of zeros); it is a read this gate cannot decide on.
-  if (block === undefined) return { ok: false, modules: resolved, author };
 
-  if (block === 0) {
-    // Pre-upgrade or imported version: no block to judge the owner set at, and
-    // no other set that answers this question. Refused, not re-answered.
-    return { ok: false, block, modules: resolved, author };
+  if (block === undefined || block === 0) {
+    // No height to judge the owner set at: a version written before the block
+    // was recorded, a version carried in by an import, or a log that answers no
+    // usable list. A missing height is not a denial, so the Safe's live owner
+    // set answers — the only path on which the present tense does. The verdict
+    // says so, and reports the 0 when the log gave one.
+    return {
+      ok: await read(authorSafe, IS_OWNER_ABI, 'isOwner', [signerAddress]),
+      ...(block === 0 ? { block } : {}),
+      ownerSet: 'live',
+      modules: resolved,
+      author,
+    };
   }
 
   return {
@@ -318,6 +344,7 @@ export const ownsVerdict = async (
       await readValue(modules.ownerHistory, IS_OWNER_AT_ABI, 'isOwnerAt', [signerAddress, block]),
     ),
     block,
+    ownerSet: 'append-block',
     modules: resolved,
     author,
   };

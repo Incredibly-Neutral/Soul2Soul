@@ -40,6 +40,7 @@ const INPUT: AuthorDraftInput = {
 const VERDICT = {
   ok: true,
   block: 880,
+  ownerSet: 'append-block' as const,
   modules: { drafts: DRAFTS_MODULE, ownerHistory: HISTORY_MODULE },
   author: SAFE,
 };
@@ -109,18 +110,83 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
   it('reports the judged block in the trace', async () => {
     const { deps } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880 });
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880, ownerSet: 'append-block' });
   });
 
-  it('refuses block 0: no height to read the entry at and no owner set to judge it', async () => {
+  it('reads the entry unpinned at head when the log records block 0, and still opens the draft', async () => {
     // Block 0 is "no block was recorded" (pre-upgrade, or an imported log). The
-    // gate refuses it, so there is no pinned read to make and no unpinned one to
-    // fall back to.
-    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 0 })) });
+    // gate answered from the Safe's live owners, so there is no height to pin to
+    // and the entry is read at the head — the version that answer was given at.
+    const { deps, entry: fetch, reads } = runtime({
+      owns: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })),
+    });
     const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(fetch()).toHaveLength(1);
+    expect(fetch()[0].block).toBeUndefined();
+    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+    expect(deps.cat).toHaveBeenCalledWith(CID);
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 0, ownerSet: 'live' });
+  });
+
+  it('reads the entry unpinned at head when the log answers no block list, and still opens the draft', async () => {
+    const { deps, entry: fetch, reads } = runtime({
+      owns: vi.fn(async () => ({
+        ok: true,
+        ownerSet: 'live' as const,
+        modules: VERDICT.modules,
+        author: SAFE,
+      })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(fetch()[0].block).toBeUndefined();
+    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+    expect(deps.cat).toHaveBeenCalledWith(CID);
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', ownerSet: 'live' });
+  });
+
+  it('reports the live set on the trace even when it refused', async () => {
+    const { deps, entry: fetch } = runtime({
+      owns: vi.fn(async () => ({
+        ok: false,
+        block: 0,
+        ownerSet: 'live' as const,
+        modules: VERDICT.modules,
+        author: SAFE,
+      })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBe('no append block was recorded for this draft');
-    expect(entry()).toHaveLength(0);
+    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 0, ownerSet: 'live' });
+    expect(fetch()).toHaveLength(0);
+  });
+
+  it('still refuses an entry from another Safe on the unpinned path', async () => {
+    const { deps } = runtime(
+      { owns: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })) },
+      { entry: { ...ENTRY, author: OTHER_SAFE } },
+    );
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
+    expect(deps.cat).not.toHaveBeenCalled();
+  });
+
+  it('still refuses an entry with no versions left on the unpinned path', async () => {
+    const { deps } = runtime(
+      { owns: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })) },
+      { entry: { ...ENTRY, versionCount: 0 } },
+    );
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('unknown draft');
     expect(deps.cat).not.toHaveBeenCalled();
   });
 
@@ -164,7 +230,7 @@ describe('decryptAuthorDraft — refusals', () => {
     expect(deps.recoverSigner).not.toHaveBeenCalled();
   });
 
-  it('refuses a signer the gate rejected, and names the block it was refused at', async () => {
+  it('refuses a signer the gate rejected at a positive block, and names that block', async () => {
     // A signer added to the Safe after the version was appended: the gate judges
     // at the append block and answers no.
     const { deps, entry } = runtime({
@@ -173,7 +239,7 @@ describe('decryptAuthorDraft — refusals', () => {
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 900 });
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 900, ownerSet: 'append-block' });
     expect(entry()).toHaveLength(0);
     expect(deps.cat).not.toHaveBeenCalled();
   });
@@ -219,13 +285,15 @@ describe('decryptAuthorDraft — refusals', () => {
     if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
   });
 
-  it('refuses when the log answers no append block', async () => {
+  it('refuses on a verdict with no block and no owner set when the gate said no', async () => {
+    // The residual shape: no block reported and no set named, so no answer was
+    // reached and there is nothing to read the entry under.
     const { deps, entry } = runtime({
       owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules, author: SAFE })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBe('cannot read the append block');
+    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
     expect(entry()).toHaveLength(0);
   });
 
@@ -324,5 +392,6 @@ describe('decryptAuthorDraft — the trace carries no secret', () => {
       'decrypt',
       'plaintextHash',
     ]);
+    expect(outcome.trace.find((s) => s.step === 'appendBlock')?.ownerSet).toBe('append-block');
   });
 });
