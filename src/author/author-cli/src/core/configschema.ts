@@ -92,13 +92,18 @@ export interface FileConfig {
   safeTx?: { url?: string; key?: string };
   filecoin?: { sessionKeyFile?: string; chain?: FilecoinChain; rpcUrl?: string };
   /**
-   * Lit: the account key (a Lit master key), the per-run usage key, and the CID
-   * of the encrypt action bundle. The CID is not a credential: it names the code
-   * `/lit_action` executes, which is fetched from IPFS and hashed against this
-   * value before it runs. There is no `decrypt` CID here until the CLI has a
-   * caller for it.
+   * Lit: the account key (a Lit master key), the per-run usage key, and the CIDs
+   * of the encrypt and decrypt action bundles. A CID is not a credential: it
+   * names the code `/lit_action` executes, which is fetched from IPFS and hashed
+   * against this value before it runs. The two are separate leaves because they
+   * are separate actions, swapped one at a time (`pnpm actions:swap encrypt`).
    */
-  lit?: { accountKey?: string; usageKey?: string; encryptActionCid?: string };
+  lit?: {
+    accountKey?: string;
+    usageKey?: string;
+    encryptActionCid?: string;
+    decryptActionCid?: string;
+  };
   ens?: { registry?: string };
   github?: { token?: string };
   /**
@@ -190,6 +195,7 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   // Not a secret — it is a hash, and it is what makes a dishonest gateway unable
   // to choose what runs next to the PKP.
   { path: 'lit.encryptActionCid', env: ['LIT_ENCRYPT_ACTION_CID'] },
+  { path: 'lit.decryptActionCid', env: ['LIT_DECRYPT_ACTION_CID'] },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
   // The deployed `AuthorContractsFactory` on Base. A protocol constant with a
@@ -352,7 +358,7 @@ export function writePath(root: Record<string, unknown>, dotted: string, value: 
       node = next as Record<string, unknown>;
     }
   }
-  node[parts[parts.length - 1] as string] = value;
+  node[parts[parts.length - 1]!] = value;
 }
 
 /**
@@ -363,15 +369,15 @@ export function deletePath(root: Record<string, unknown>, dotted: string): void 
   const parts = splitPath(dotted);
   const chain: Record<string, unknown>[] = [root];
   for (const part of parts.slice(0, -1)) {
-    const next = own(chain[chain.length - 1] as Record<string, unknown>, part);
+    const next = own(chain[chain.length - 1]!, part);
     if (next === null || typeof next !== 'object' || Array.isArray(next)) return;
     chain.push(next as Record<string, unknown>);
   }
-  delete chain[chain.length - 1]?.[parts[parts.length - 1] as string];
+  delete chain[chain.length - 1]?.[parts[parts.length - 1]!];
   for (let i = chain.length - 1; i > 0; i--) {
-    const child = chain[i] as Record<string, unknown>;
+    const child = chain[i]!;
     if (Object.keys(child).length > 0) break;
-    delete (chain[i - 1] as Record<string, unknown>)[parts[i - 1] as string];
+    delete (chain[i - 1]!)[parts[i - 1]!];
   }
 }
 
@@ -505,6 +511,7 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
     accountKey: textValue(objectValue(raw.lit)?.accountKey),
     usageKey: textValue(objectValue(raw.lit)?.usageKey),
     encryptActionCid: textValue(objectValue(raw.lit)?.encryptActionCid),
+    decryptActionCid: textValue(objectValue(raw.lit)?.decryptActionCid),
   });
   if (lit) out.lit = lit;
 

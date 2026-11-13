@@ -105,9 +105,11 @@ The actions are `prep`, `render`, `update`, `maintain-cache`, `repoint-archive`,
 `encrypt` and `decrypt`. `prep` builds the job list, `render` turns one manuscript into one page,
 `update` assembles the tree and records its root. `encrypt` seals a body under the PKP and returns
 the ciphertext. `decrypt` opens an author's draft: it asks GATES-1's gate, reads the draft entry at
-the block the gate judged it at, cats that entry's CID, decrypts it, and releases the plaintext only
-if it hashes to the signed `public.plaintextHash`. `maintain-cache` and `repoint-archive` maintain
-the per-publication cache pointer, and `render-dev` builds a preview.
+the block the gate judged it at, cats that entry's CID, parses the item's `s2s` body as JSON
+(`bodies.s2s` on a v3 item, `body` on a v1/v2 item; an item carrying neither, or one that does not
+parse, is refused), decrypts it, and releases the plaintext only if it hashes to the signed
+`public.plaintextHash`. `maintain-cache` and `repoint-archive` maintain the per-publication cache
+pointer, and `render-dev` builds a preview.
 
 ## Readings
 

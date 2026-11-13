@@ -280,6 +280,69 @@ export async function readDrafts(
 }
 
 // ===========================================================================
+// One read of the log, for every command that reads it
+// ===========================================================================
+
+/** The log as a command sees it: whose it is, what answered, and the rows. */
+export interface DraftsLog {
+  safe: Address;
+  module: ResolvedDraftsModule;
+  drafts: DraftEntry[];
+}
+
+/** The two reads a log read makes before it touches the module; faked whole in tests. */
+export interface DraftsLogDeps {
+  seam: DraftsSeam;
+  /** The author id: the Safe, predicted or stored, and whether it has code. */
+  safeState(ctx: CliContext): Promise<{ address: Address; deployed: boolean }>;
+}
+
+export function draftsLogDeps(overrides: Partial<DraftsLogDeps> = {}): DraftsLogDeps {
+  return {
+    seam: overrides.seam ?? defaultDraftsSeam,
+    safeState: overrides.safeState ?? authorSafeState,
+  };
+}
+
+/**
+ * The Safe, the module that answers for it, and every row in its log.
+ *
+ * One function for `list`, `fetch` and `pull`, because the three must agree on
+ * which module holds the log — a fetch that resolved a different proxy than the
+ * listing it was given an order from would read a different log's row.
+ *
+ * The two refusals are the ones every reader shares: no L2 endpoint, and an
+ * author Safe with no code (nothing can be enabled on a Safe that is not there,
+ * and viem reports its empty returns as raw errors).
+ */
+export async function readDraftsLog(
+  ctx: CliContext,
+  overrides: Partial<DraftsLogDeps> = {},
+): Promise<DraftsLog> {
+  const deps = draftsLogDeps(overrides);
+  const rpcUrl = ctx.rpcs.L2[0];
+  if (!rpcUrl) {
+    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+
+  const { address: safe, deployed } = await deps.safeState(ctx);
+  if (!deployed) {
+    throw new CliError(
+      `the author Safe ${safe} is not deployed yet — run: s2s author init`,
+      1,
+      'safe_not_deployed',
+    );
+  }
+
+  const module = await resolveDraftsModule(
+    { safe, rpcUrl, factory: draftsFactory(ctx.config) },
+    deps.seam,
+  );
+  const drafts = await readDrafts({ address: module.address, rpcUrl }, deps.seam);
+  return { safe, module, drafts };
+}
+
+// ===========================================================================
 // The write — one append per real upload
 // ===========================================================================
 
@@ -440,7 +503,13 @@ export async function appendDraft(
   }
 
   const id = toBytes32Id(opts.genesis) as Hex;
-  await deps.simulate(ctx, { module: resolved.address, safe, genesis: opts.genesis, id, cid: opts.cid });
+  await deps.simulate(ctx, {
+    module: resolved.address,
+    safe,
+    genesis: opts.genesis,
+    id,
+    cid: opts.cid,
+  });
 
   let txHash: string;
   try {

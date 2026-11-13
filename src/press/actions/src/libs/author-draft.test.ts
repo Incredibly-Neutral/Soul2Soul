@@ -12,9 +12,9 @@ import {
 // The gate itself is shared and tested there (`canAuthorVerdict`); what is tested
 // here is what this file does with its answer: read the entry at the block the
 // gate reported and from the module it reported, refuse unless the blob is that
-// author's and hashes to the signed plaintextHash, and keep every refusal's
-// wording. No module is resolved here, so the chain reads below are the entry
-// read and nothing else.
+// author's and hashes to the signed plaintextHash, hand the decryptor the value
+// the item's body parses to, and keep every refusal's wording. No module is
+// resolved here, so the chain reads below are the entry read and nothing else.
 // ============================================================================
 
 const SAFE = '0x' + '11'.repeat(20);
@@ -27,7 +27,12 @@ const GENESIS = '0x' + 'ab'.repeat(32);
 const CID = 'bafyDraftCid';
 const PLAINTEXT = '{"title":"A draft","body":"secret"}';
 const PLAINTEXT_HASH = keccak256(new TextEncoder().encode(PLAINTEXT));
-const CIPHERTEXT = { ciphertext: 'wrapped', dataToEncryptHash: '0x' + 'cd'.repeat(32) };
+const CIPHERTEXT_HASH = '0x' + 'cd'.repeat(32);
+// Exactly what a v2/v3 write stores: the encryptor's result as JSON text, kept
+// verbatim in `bodies.s2s` (v1/v2 items kept the same text in `body`).
+const CIPHERTEXT = `{"ciphertext":"wrapped","dataToEncryptHash":"${CIPHERTEXT_HASH}"}`;
+/** What `Lit.Actions.Decrypt` receives: the stored text, parsed. */
+const PARSED_CIPHERTEXT = { ciphertext: 'wrapped', dataToEncryptHash: CIPHERTEXT_HASH };
 
 const INPUT: AuthorDraftInput = {
   pkpId: '0x1',
@@ -54,6 +59,13 @@ const ENTRY = {
 };
 
 const ITEM = {
+  encryption: true,
+  bodies: { s2s: CIPHERTEXT },
+  public: { author: SAFE, plaintextHash: PLAINTEXT_HASH },
+};
+
+/** The same ciphertext in the layout a v1/v2 item was written with. */
+const LEGACY_ITEM = {
   encryption: true,
   body: CIPHERTEXT,
   public: { author: SAFE, plaintextHash: PLAINTEXT_HASH },
@@ -214,6 +226,71 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('decryptAuthorDraft — the body handed to the decryptor', () => {
+  it('parses the s2s body of a v3 item and hands over the result', async () => {
+    const seen: unknown[] = [];
+    const { deps } = runtime();
+    deps.decrypt = vi.fn(async (ciphertext) => {
+      seen.push(ciphertext);
+      return { decrypted: PLAINTEXT };
+    });
+
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(seen).toEqual([PARSED_CIPHERTEXT]);
+    expect(seen[0]).not.toBe(CIPHERTEXT);
+  });
+
+  it('parses the top-level body of a legacy item and hands over the result', async () => {
+    const seen: unknown[] = [];
+    const { deps } = runtime();
+    deps.cat = vi.fn(async () => JSON.stringify(LEGACY_ITEM));
+    deps.decrypt = vi.fn(async (ciphertext) => {
+      seen.push(ciphertext);
+      return { decrypted: PLAINTEXT };
+    });
+
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(seen).toEqual([PARSED_CIPHERTEXT]);
+  });
+
+  it('refuses an item carrying neither shape, naming what is missing', async () => {
+    const { deps } = runtime();
+    deps.cat = vi.fn(async () => JSON.stringify({ encryption: true, public: ITEM.public }));
+
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('item carries no s2s body');
+    expect(deps.decrypt).not.toHaveBeenCalled();
+    expect(outcome.trace.map((s) => s.step)).toEqual([
+      'genesis',
+      'signer',
+      'appendBlock',
+      'draft',
+      'item',
+      'blobAuthor',
+    ]);
+  });
+
+  it('refuses a body that is a bare string and not JSON, rather than throwing', async () => {
+    const { deps } = runtime();
+    deps.cat = vi.fn(async () =>
+      JSON.stringify({ ...LEGACY_ITEM, body: 'bare-ciphertext-not-json' }),
+    );
+
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('item s2s body is not JSON');
+    expect(deps.decrypt).not.toHaveBeenCalled();
+    expect(outcome.trace.map((s) => s.step)).not.toContain('decrypt');
   });
 });
 
@@ -407,7 +484,8 @@ describe('decryptAuthorDraft — the trace carries no secret', () => {
 
     expect(serialised).not.toContain(PLAINTEXT);
     expect(serialised).not.toContain('secret');
-    expect(serialised).not.toContain(CIPHERTEXT.dataToEncryptHash);
+    expect(serialised).not.toContain(CIPHERTEXT_HASH);
+    expect(serialised).not.toContain('wrapped');
     expect(serialised).not.toContain(INPUT.signature);
     expect(outcome.trace.map((s) => s.step)).toEqual([
       'genesis',
