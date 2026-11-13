@@ -77,6 +77,8 @@ const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view r
 const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
 /** DraftsModuleV1 — the block behind each version, index for index with history(). */
 const BLOCKS_OF_ABI = ['function blocksOf(bytes32 genesis) view returns (uint64[] blocks)'];
+/** DealsModuleV1 — whether an agreement on this genesis is in force. */
+const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 
@@ -341,4 +343,33 @@ export const canReset = async (
   signerAddress: string,
 ): Promise<boolean> => {
   return read(multisig, IS_OWNER_ABI, 'isOwner', [signerAddress]);
+};
+
+/**
+ * Is this genesis out of force on this publication?
+ *
+ * The subtractive side of the tree rules. The published tree is built from the
+ * agreements in force, so a page whose genesis is out of force must not be on
+ * it, and removing that page is a repair rather than an exercise of authority —
+ * which is why it needs no permission. GATES-4 is what makes the repair
+ * reachable: an author's page can be out of force while the press still carries
+ * it (`has carried`), so the author is asked for a build of a site that no
+ * longer holds their manuscript.
+ *
+ * `genesis` is already bytes32. The caller normalises a content reference with
+ * `toBytes32Id`; this gate hashes nothing.
+ *
+ * True only on a definitive `false` from `hasDeal`. A read that throws answers
+ * false: a transport error must never make a live page look removable.
+ */
+export const isOutOfForce = async (
+  read: GateRead,
+  genesis: string,
+  publicationModule: string,
+): Promise<boolean> => {
+  try {
+    return (await read(publicationModule, HAS_DEAL_ABI, 'hasDeal', [genesis])) === false;
+  } catch {
+    return false;
+  }
 };

@@ -106,14 +106,23 @@ absent from the public docs.
   presented as one. It also means "a publication cannot keep showing the old site" is a matter of
   what the press will build, not of what a holder can do.
 
-## Gaps without a proposal
+## The update gate, page by page
 
-- **GATES-4, first caller.** The implementation authorises builds with `canPublish(author) &&
-  isOwner(signer)`, where `canPublish` covers the second and third callers — the publication and
-  the accounts it has authorised — and never asks whether the caller authored the manuscript. The
-  author branch is missing, so an author whom the publication has de-authorised can end the
-  agreement and cannot cause the rebuild. The on-chain fact that would answer it survives
-  revocation. Detailed in `author.md`; the gate itself is unbuilt.
+The update action is gated per page rather than per request. Adding a page, meaning writing a
+genesis to a destination path that does not already carry it, requires `canPublish(authorSafe)`
+and `isOwner(signer)`. Refreshing a page, meaning the destination path already carries that
+genesis, is ungated. Removing a path is ungated and allowed only while the page's genesis is out of
+force, read through the shared `isOutOfForce`. A reset keeps `canReset` and is unchanged.
+
+The tree is the render of the agreements in force; anything on it that is not that render is drift.
+Drift is repaired by the press, not authorised by a caller, so the repair carries no gate.
+GATES-4's "has carried" is why an author's own page can be out of force while the press still
+carries it, and nothing but a rebuild takes it off.
+
+The effect on a de-listed author: one request completes the takedown, their own page removed and
+every page listing it refreshed. Refreshes are unmetered, so an untrusted caller can make the
+press re-render pages it already carries, and the output is unchanged because the render is a
+function of the ledger.
 
 ## Not yet established
 
