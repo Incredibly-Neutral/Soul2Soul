@@ -688,7 +688,7 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 Draft = { module: string;          // the drafts module the Safe sent append to
   genesis: string;                 // the document's identity
   cid: string;                     // the version's bytes, as appended
-  versionCount: number;            // versionCount(genesis) on that module after the send
+  versionCount?: number;           // versions in the log, read after the send; absent when that read failed
   txHash: string }
 
 // s2s author new <pet-name> [--key <0x…>] [--json] — file an identity, activate it, install the contracts
@@ -788,8 +788,9 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `ipfs
 `s2s drafts list` reads the active author Safe's draft log and `s2s drafts append` writes one
 version to it ([SPEC-author-drafts](SPEC-author-drafts.md)). Neither takes an action flag — `--json`
 and `--help` only. `list` sends no transaction; `append` takes one Safe transaction to the drafts
-module, `append(bytes32 genesis, string cid)`, which is `onlySafe`, so on a multi-owner Safe it is
-a proposal like the offer. Both are dispatched after `buildContext`, because they need the active
+module, `append(bytes32 genesis, string cid)`, which is `onlySafe` — the key running the command
+therefore has to meet the Safe's threshold, and a Safe above it refuses before sending, naming
+`s2s signer queue`. Both are dispatched after `buildContext`, because they need the active
 author and an L2 RPC.
 
 ```ts
@@ -808,11 +809,12 @@ author and an L2 RPC.
 
 // s2s drafts append <genesis> <cid> [--json] — record a version on the active author Safe's log
 { action: 'drafts.append';
+  author: string | null;          // pet name of the active author; null when the key came from a file
   module: string;                 // the drafts module the Safe sent append to
   genesis: string;                // the document's identity, as passed
   cid: string;                    // the version's bytes, as passed
-  versionCount: number;           // versionCount(genesis) on that module after the send
-  txHash: string }                // the Safe transaction (a queued proposal on a multi-owner Safe)
+  versionCount?: number;          // versionCount(genesis) read after the send; absent when that read failed
+  txHash: string }                // the Safe transaction, sent and awaited — never a queued proposal
 ```
 
 **The module is resolved by role, in one order.** Every address on the Safe's enabled-module list
@@ -1035,11 +1037,15 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   the key is stripped now, so the next publish signs a different body and that version's objectId
   differs.
 - **The split**: `upload` ends at Kubo + pins + the drafts append (its result carries no offer
-  `txHash`, only `draft.txHash`). The append runs after the bytes are pinned and before the offer,
-  so a failed offer still leaves the version recorded; a failed append fails the command — the
-  bytes are pinned, the log is not appended — and the retry is `s2s drafts append <genesis> <cid>`.
-  It is a Safe transaction to the drafts module, so on a multi-owner Safe it is a proposal like the
-  offer. `preview` appends nothing: a preview is not a version.
+  `txHash`, only `draft.txHash`). The Safe is checked and the drafts module resolved *before* the
+  pin, so a run that cannot append uploads nothing. The append runs after the bytes are pinned and
+  before the offer, so a failed offer still leaves the version recorded; a failed append fails the
+  command — the bytes are pinned, the log is not appended — and the retry is
+  `s2s drafts append <genesis> <cid>`. It is one Safe transaction to the drafts module, so the
+  running key has to meet the Safe's threshold; a Safe above it refuses before sending. The
+  frontmatter identity block (`genesis`, `author`, `creation_date`) is written before the append,
+  so a run that appends and then fails at the offer leaves a note that names its own row. `preview`
+  appends nothing: a preview is not a version.
   It never resolves the publication (no ENS → Safe → modules lookup): the signed metadata needs
   only the name label, taken from the ENS name itself. On the **first** write-back it also stamps
   `creation_date`: neutralpress has always filled it on save, the CLI never did, and the real

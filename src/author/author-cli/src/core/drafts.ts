@@ -290,14 +290,23 @@ export interface AppendedDraft {
   /** The genesis the version belongs to, as the caller spelled it. */
   genesis: string;
   cid: string;
-  /** Versions logged for `genesis`, read back after the append. */
-  versionCount: number;
+  /**
+   * Versions logged for `genesis`, read back after the append. Absent when that
+   * read failed: the append landed, the count is unknown.
+   */
+  versionCount?: number;
   txHash: string;
 }
 
 export interface AppendDraftOptions {
   genesis: string;
   cid: string;
+  /**
+   * A module the caller already resolved. The publish path resolves it before
+   * pinning, so a run that is going to fail at the append fails with nothing
+   * uploaded; absent, the append resolves its own target.
+   */
+  module?: ResolvedDraftsModule;
 }
 
 /** The `append` call, with both spellings of the genesis: the string and its bytes32. */
@@ -391,7 +400,8 @@ async function simulateAppend(ctx: CliContext, call: SimulateAppendCall): Promis
  * would see, and the write is sent by the author Safe through the ERC-4337
  * runner — `append` is `onlySafe`, so an EOA send can never work. The count
  * returned is read back from the module after the send: it is the log's answer,
- * not the caller's arithmetic.
+ * not the caller's arithmetic, and it is the one part of the result a failed
+ * read may drop.
  */
 export async function appendDraft(
   ctx: CliContext,
@@ -413,16 +423,20 @@ export async function appendDraft(
   }
 
   let resolved: ResolvedDraftsModule;
-  try {
-    resolved = await resolveDraftsModule(
-      { safe, rpcUrl, factory: draftsFactory(ctx.config) },
-      deps.seam,
-    );
-  } catch (err) {
-    // The resolution's own message names the state it found (no module, or one
-    // bound elsewhere) and the install that fixes it. What it cannot know is
-    // that the bytes are already pinned, so the wrap adds exactly that.
-    throw notAppended(opts, err instanceof Error ? err.message : String(err));
+  if (opts.module) {
+    resolved = opts.module;
+  } else {
+    try {
+      resolved = await resolveDraftsModule(
+        { safe, rpcUrl, factory: draftsFactory(ctx.config) },
+        deps.seam,
+      );
+    } catch (err) {
+      // The resolution's own message names the state it found (no module, or one
+      // bound elsewhere) and the install that fixes it. What it cannot know is
+      // that the bytes are already pinned, so the wrap adds exactly that.
+      throw notAppended(opts, err instanceof Error ? err.message : String(err));
+    }
   }
 
   const id = toBytes32Id(opts.genesis) as Hex;
@@ -447,9 +461,17 @@ export async function appendDraft(
     );
   }
 
-  const versionCount = Number(
-    await deps.seam.readVersionCount({ address: resolved.address, rpcUrl, genesis: id }),
-  );
+  // The append is on chain by now, so a read that fails here must not fail the
+  // command: its retry advice would append the same version a second time, and
+  // the module does not dedupe. The count is dropped, the tx hash is reported.
+  let versionCount: number | undefined;
+  try {
+    versionCount = Number(
+      await deps.seam.readVersionCount({ address: resolved.address, rpcUrl, genesis: id }),
+    );
+  } catch {
+    versionCount = undefined;
+  }
 
   return { module: resolved.address, genesis: opts.genesis, cid: opts.cid, versionCount, txHash };
 }

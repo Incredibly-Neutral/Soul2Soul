@@ -165,6 +165,51 @@ describe('appendDraft', () => {
     expect(order).toEqual(['tx', 'read']);
   });
 
+  it('drops the count, not the transaction, when the read-back fails', async () => {
+    const { seam } = fakeSeam();
+    const { ctx, genericTx } = fakeCtx();
+    const flaky: DraftsSeam = {
+      ...seam,
+      readVersionCount: () => Promise.reject(new Error('HTTP request failed')),
+    };
+
+    const draft = await appendDraft(ctx, { genesis: GENESIS, cid: CID }, {
+      seam: flaky,
+      safeState: deployed,
+    });
+
+    // The append landed; a failed read must not advise one that lands again.
+    expect(genericTx).toHaveBeenCalledTimes(1);
+    expect(draft.txHash).toBe('0x' + '11'.repeat(32));
+    expect(draft.versionCount).toBeUndefined();
+  });
+
+  it('uses a module the caller resolved, without resolving it again', async () => {
+    const { seam } = fakeSeam();
+    const { ctx, genericTx } = fakeCtx();
+    const never = (): never => {
+      throw new Error('the enabled list was read a second time');
+    };
+
+    await appendDraft(
+      ctx,
+      {
+        genesis: GENESIS,
+        cid: CID,
+        module: { address: MODULE, source: 'enabled', onEnabledList: true },
+      },
+      { seam: { ...seam, readEnabled: never, readModuleSafe: never }, safeState: deployed },
+    );
+
+    expect(genericTx).toHaveBeenCalledWith(
+      MODULE,
+      JSON.stringify(DraftsModuleV1),
+      'append',
+      [GENESIS, CID],
+      false,
+    );
+  });
+
   it('names the install, the pinned bytes and the retry when no drafts module answers', async () => {
     const { seam } = fakeSeam({ enabled: null, factory: null });
     const { ctx, genericTx } = fakeCtx();

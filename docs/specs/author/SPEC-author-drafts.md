@@ -291,8 +291,8 @@ storage.
 ## What V1 does not do
 
 - **No dedupe.** Appending the CID that is already the latest one is not a no-op: it pushes another
-  version with the same `cid` and a new `timestamp`, and `history` then shows it twice. A retried Safe
-  proposal — the same `append` signed and submitted twice — is how it happens in practice, and the log
+  version with the same `cid` and a new `timestamp`, and `history` then shows it twice. A retried
+  append — the same `append` sent twice — is how it happens in practice, and the log
   cannot tell a retry from a deliberate re-record. Readers that care compare CID and timestamp.
 - **No delete, no tombstone.** And no `tombstone` field at all — do not copy the publication module's
   dead one.
@@ -305,8 +305,8 @@ storage.
 - **No writes beyond the publish path.** `s2s author upload`, `propose` and `publish` append;
   `preview` does not, because a preview is not a version, and nothing but `s2s author migrate` calls
   `absorb()`. The log accepts an append from one caller: the Safe, through
-  `append(bytes32 genesis, string cid)`, so on a multi-owner Safe recording a version is a proposal
-  like the offer. Reading is the other direction: `s2s drafts list` lists the log, and
+  `append(bytes32 genesis, string cid)`, so the appending key has to meet the Safe's threshold — a
+  Safe above it refuses before sending. Reading is the other direction: `s2s drafts list` lists the log, and
   `s2s drafts append <genesis> <cid>` records a version a failed publish did not
   ([SPEC-author-cli](SPEC-author-cli.md)). The package's own surface stays contracts only.
 
@@ -341,6 +341,9 @@ enabled list first and from the factory index after that, and pages the read —
 [SPEC-author-cli](SPEC-author-cli.md). **The write path owns the append.** The CLI appends as part
 of the command that produced the bytes — after the Kubo upload, before the offer — and
 `s2s drafts append <genesis> <cid>` is the retry when that send fails; no other host writes the log.
+The count in the result is a read taken after the send, not this version's index, and a failed
+read drops it rather than failing a command whose transaction already landed: the retry it would
+advise appends a second version, and the module does not dedupe.
 
 ## Safe-to-change vs do-not-touch
 

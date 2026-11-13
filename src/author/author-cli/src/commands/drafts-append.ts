@@ -27,8 +27,11 @@ export interface DraftsAppendResult {
   genesis: string;
   cid: string;
   txHash: string;
-  /** Versions the log holds for `genesis`, read back after the append. */
-  versionCount: number;
+  /**
+   * Versions the log holds for `genesis`, read back after the append. Absent
+   * when that read failed: the append landed, the count is unknown.
+   */
+  versionCount?: number;
 }
 
 /** What the append needs; a test replaces the seam and the Safe read. */
@@ -49,7 +52,7 @@ export async function runDraftsAppend(
     genesis: draft.genesis,
     cid: draft.cid,
     txHash: draft.txHash,
-    versionCount: draft.versionCount,
+    ...(draft.versionCount === undefined ? {} : { versionCount: draft.versionCount }),
   };
 
   ctx.out.result(
@@ -58,7 +61,11 @@ export async function runDraftsAppend(
       `Appended ${draft.cid}`,
       `  genesis  : ${draft.genesis}`,
       `  module   : ${draft.module}`,
-      `  versions : ${draft.versionCount}`,
+      `  versions : ${
+        draft.versionCount === undefined
+          ? 'not read back — the append landed, so do not append it again'
+          : String(draft.versionCount)
+      }`,
       `  tx       : ${draft.txHash}`,
     ].join('\n'),
   );

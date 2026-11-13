@@ -57,6 +57,7 @@ import { authorWrite } from '../src/core/author';
 import { authorSafeState } from '../src/core/author-safe';
 import type { DraftsSeam } from '../src/core/drafts';
 import type { CliContext } from '../src/core/context';
+import type { CliError } from '../src/lib/errors';
 
 const SAFE = '0x934E20411C9E8E92946BD8786D7c3E5bC4DB1387' as Address;
 const MODULE = '0x0000000000000000000000000000000000000011' as Address;
@@ -88,11 +89,13 @@ function fakeSeam(versionCount: bigint): DraftsSeam {
 interface Fakes {
   ctx: CliContext;
   genericTx: ReturnType<typeof vi.fn>;
+  addToKubo: ReturnType<typeof vi.fn>;
   log: ReturnType<typeof vi.fn>;
 }
 
 function fakeCtx(): Fakes {
   const genericTx = vi.fn().mockResolvedValue('0x' + '33'.repeat(32));
+  const addToKubo = vi.fn(async () => CID as Hex);
   const log = vi.fn();
 
   const ctx = {
@@ -103,7 +106,7 @@ function fakeCtx(): Fakes {
     protocolInfo: { pkp: '0x' + '44'.repeat(48) },
     eoaAddress: EOA,
     ipfs: {
-      addToKubo: async () => CID as Hex,
+      addToKubo,
       backupToProviders: async () => ({ filebase: true, pinata: true, filecoin: 'ok' as const }),
     },
     signer: {
@@ -114,7 +117,7 @@ function fakeCtx(): Fakes {
     authorRunner: () => Promise.resolve({ genericTx }),
   } as unknown as CliContext;
 
-  return { ctx, genericTx, log };
+  return { ctx, genericTx, addToKubo, log };
 }
 
 describe('authorWrite appends to the drafts log', () => {
@@ -144,7 +147,7 @@ describe('authorWrite appends to the drafts log', () => {
     return path;
   }
 
-  it('appends the uploaded cid, and says which version it is', async () => {
+  it('appends the uploaded cid and reports the log count', async () => {
     const { ctx, genericTx, log } = fakeCtx();
     const path = note();
 
@@ -171,7 +174,9 @@ describe('authorWrite appends to the drafts log', () => {
       versionCount: 4,
       txHash: '0x' + '33'.repeat(32),
     });
-    expect(log).toHaveBeenCalledWith(`✓ draft v4 appended (${MODULE.slice(0, 8)}…)`);
+    expect(log).toHaveBeenCalledWith(
+      `✓ draft appended (${MODULE.slice(0, 8)}…, 4 versions in the log)`,
+    );
     // The write-back still records the upload the append named.
     expect(readFileSync(path, 'utf8')).toContain(`cid: ${CID}`);
   });
@@ -191,6 +196,92 @@ describe('authorWrite appends to the drafts log', () => {
     // Two sends: `append` first, then `makeOffer`.
     const methods = vi.mocked(genericTx).mock.calls.map((call) => call[2]);
     expect(methods).toEqual(['append']);
+  });
+
+  it('writes the identity block before the append, so nothing is left orphaned', async () => {
+    const { ctx, genericTx } = fakeCtx();
+    const path = note();
+    // The note as the module's send sees it: genesis and author already there.
+    const seen: string[] = [];
+    genericTx.mockImplementation(async () => {
+      seen.push(readFileSync(path, 'utf8'));
+      return '0x' + '33'.repeat(32);
+    });
+
+    const result = await authorWrite(
+      ctx,
+      path,
+      PUBLICATION,
+      { render: false, publish: true, offer: true },
+      { draftsSeam: fakeSeam(1n) },
+    );
+
+    const atAppend = seen[0] ?? '';
+    expect(atAppend).toContain(result.objectId);
+    expect(atAppend).toContain(SAFE);
+    // The upload's own CID is written after the offer, so it is not there yet.
+    expect(atAppend).not.toContain(CID);
+    // Both halves land: the identity keys once, the upload keys once.
+    const final = readFileSync(path, 'utf8');
+    expect(final).toContain(result.objectId);
+    expect(final).toContain(CID);
+  });
+
+  it('refuses an undeployed Safe before pinning anything', async () => {
+    vi.mocked(authorSafeState).mockResolvedValue({
+      address: SAFE,
+      eoa: EOA,
+      salt: null,
+      safeSource: 'derived',
+      chain: 'base',
+      deployed: false,
+    });
+    const { ctx, addToKubo, genericTx } = fakeCtx();
+    const path = note();
+
+    const error = await authorWrite(
+      ctx,
+      path,
+      PUBLICATION,
+      { render: false, publish: true, offer: false },
+      { draftsSeam: fakeSeam(1n) },
+    ).catch((err: unknown) => err);
+
+    expect((error as CliError).code).toBe('author_safe');
+    expect((error as Error).message).toContain('s2s author init');
+    expect(addToKubo).not.toHaveBeenCalled();
+    expect(genericTx).not.toHaveBeenCalled();
+    // No key was written: nothing was uploaded, so nothing is half-recorded.
+    expect(readFileSync(path, 'utf8')).not.toContain('genesis:');
+  });
+
+  it('resolves the drafts module before pinning, so a missing install uploads nothing', async () => {
+    const { ctx, addToKubo, genericTx } = fakeCtx();
+    const path = note();
+    const noModule: DraftsSeam = {
+      ...fakeSeam(1n),
+      readEnabled: () =>
+        Promise.resolve({
+          modules: [],
+          byRole: { drafts: [], ownerHistory: [] },
+          drafts: null,
+          ownerHistory: null,
+        }),
+      readModuleSafe: () => Promise.resolve(null),
+    };
+
+    const error = await authorWrite(
+      ctx,
+      path,
+      PUBLICATION,
+      { render: false, publish: true, offer: false },
+      { draftsSeam: noModule },
+    ).catch((err: unknown) => err);
+
+    expect((error as CliError).code).toBe('drafts_module');
+    expect((error as Error).message).toContain('s2s author init');
+    expect(addToKubo).not.toHaveBeenCalled();
+    expect(genericTx).not.toHaveBeenCalled();
   });
 
   it('does not touch the log on a preview', async () => {
