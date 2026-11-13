@@ -292,6 +292,16 @@ describe('LitService.encrypt executes the bundle fetched by CID', () => {
     ({ ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) }) as unknown as Response;
 
   /**
+   * The two answers the CID path needs: the gateway's `cat`, and Lit's own
+   * `/get_lit_action_ipfs_id`, which hashes the fetched bytes. `servedCid` is
+   * what that hash answers — the requested CID unless a test swaps the code.
+   */
+  const defaultFetch = (servedCid: string = ENCRYPT_CID) => (url: unknown) =>
+    String(url).includes('/get_lit_action_ipfs_id')
+      ? Promise.resolve(answer(JSON.stringify(servedCid)))
+      : Promise.resolve(answer(BUNDLE));
+
+  /**
    * A LitService whose private `call` is replaced — the network seam only. The
    * gateway fetch is real, so the CID→code path is the one under test; the
    * config is the one the CLI will pass once it wires the new fields.
@@ -323,7 +333,7 @@ describe('LitService.encrypt executes the bundle fetched by CID', () => {
   let quiet: MockInstance | undefined;
   beforeEach(() => {
     posted = [];
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(answer(BUNDLE)));
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(defaultFetch());
     // Encrypt failures are reported on stderr with the reason redacted; the
     // tests below provoke them on purpose.
     quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -341,10 +351,13 @@ describe('LitService.encrypt executes the bundle fetched by CID', () => {
     const svc = litWith(() => ({ response: { ciphertext: 'gAAAAABreal' } }));
     await encrypt(svc);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // Two calls: the bundle, then the CID of those bytes. Nothing is posted
+    // until the two agree.
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, { method?: string }];
     expect(url).toBe(`${GATEWAY}/api/v0/cat?arg=${ENCRYPT_CID}`);
     expect(init.method).toBe('POST');
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toContain('/get_lit_action_ipfs_id');
 
     expect(posted).toHaveLength(1);
     expect(posted[0]?.endpoint).toBe('/lit_action');
@@ -354,6 +367,31 @@ describe('LitService.encrypt executes the bundle fetched by CID', () => {
       code: BUNDLE,
       js_params: { pkpId: PKP, message: '{"title":"x"}' },
     });
+  });
+
+  it('refuses code the gateway swapped for another action, before any action call', async () => {
+    // A dishonest gateway serves 200 with some other bundle. The CID is the
+    // identity of the code, so the hash of what it served is not the CID asked
+    // for and nothing runs next to the PKP.
+    fetchSpy.mockImplementation(defaultFetch('bafysomethingelse'));
+    const svc = litWith(() => ({ response: { ciphertext: 'x' } }));
+
+    await expect(encrypt(svc)).rejects.toThrow(
+      'action bundle does not match its CID: asked for bafyencryptaction, the gateway served bafysomethingelse',
+    );
+    expect(posted).toHaveLength(0);
+  });
+
+  it('refuses to execute when the CID cannot be computed', async () => {
+    fetchSpy.mockImplementation((url) =>
+      String(url).includes('/get_lit_action_ipfs_id')
+        ? Promise.resolve(answer('not json'))
+        : Promise.resolve(answer(BUNDLE)),
+    );
+    const svc = litWith(() => ({ response: { ciphertext: 'x' } }));
+
+    await expect(encrypt(svc)).rejects.toThrow(/non-JSON/);
+    expect(posted).toHaveLength(0);
   });
 
   it('names the missing config key instead of falling back to inline code', async () => {

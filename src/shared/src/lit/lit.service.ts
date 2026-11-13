@@ -186,6 +186,12 @@ export class LitService {
    * `code`. The bundle is the action: it is not authored, concatenated or
    * patched here.
    *
+   * The bytes are bound to the CID before they are returned: the fetched text is
+   * hashed by Lit's own `/get_lit_action_ipfs_id` — the same call the swap script
+   * registers the CID with — and a mismatch is a refusal. A gateway is not
+   * trusted to choose the JS that runs next to the PKP, so `cat` answering 200
+   * says only that it answered.
+   *
    * Nothing about the exchange is logged. The bundle is not secret, but the URL
    * is not printed either: a gateway URL can carry an auth token, the same
    * reason the prep action's `endpoints` never reach a log line.
@@ -204,7 +210,18 @@ export class LitService {
       throw new Error(`IPFS gateway answered HTTP ${response.status} for action ${cid}`);
     }
 
-    return response.text();
+    const code = await response.text();
+
+    // The CID is the identity of the code. getActionCid throws on a bad answer,
+    // and that propagates: unverified code is never executed.
+    const actual = String(await this.getActionCid(code));
+    if (actual !== cid) {
+      throw new Error(
+        `action bundle does not match its CID: asked for ${cid}, the gateway served ${actual}`,
+      );
+    }
+
+    return code;
   }
 
   async getChainConfig() {
