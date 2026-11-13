@@ -53,7 +53,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | `libs/module.factory.ts`   | `getLatestEntry` / `getDeals` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅) | live                                                                               |
 | `libs/evm.ts`              | `evmRead` (catch-all failover + aggregated error), `evmWrite`, `toHexString`                                                                                      | live ⚠ GAP-15 (partly addressed)                                                   |
 | `libs/ipfs.factory.ts`     | IPFS cat/add/dag/MFS + `contenthashToIPFS`                                                                                                                        | live (dag/cbor helpers mostly dead)                                                |
-| `libs/gates.ts`            | `canPublish`, `canRead`, `canReset`, `canReview`, `ownsVerdict`, `extractSignerAddress`                                                                           | live                                                                               |
+| `libs/gates.ts`            | `canPublish`, `canRead`, `isOutOfForce`, `canReset`, `canReview`, `ownsVerdict`, `extractSignerAddress`                                                           | live                                                                               |
 | `libs/decrypt.ts`          | `decrypt` (gated `Lit.Actions.Decrypt`)                                                                                                                           | live                                                                               |
 | `decrypt/main.ts`          | GATES-1 — open an author's draft: gate, entry read pinned to the judged block, cat, decrypt, `plaintextHash` check (decisions in `libs/author-draft.ts`)           | live                                                                               |
 | `encrypt/main.ts`          | seal a body under the PKP, `Lit.Actions.Encrypt`                                                                                                                  | live                                                                               |
@@ -224,7 +224,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
 
-**Sequence:** recover signer (INV-1) → modules (INV-4) → `canPublish` gate → `getProtocolInfo` →
+**Sequence:** recover signer (INV-1) → modules (INV-4) → `getProtocolInfo` →
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
@@ -237,13 +237,16 @@ mirror every file in `assets/txt/` to the tree root and drop the stale root txt 
 processes `input.remove[]`. For each `{ path, replacedBy? }`: strip leading/trailing `/` (skip
 empty / `index.html`); if `replacedBy` is present it must equal a genesis in the incoming
 `jobs[].id` set — a **rename** (same content moved to a new path), allowed; a mismatch is skipped
-(traced). With no `replacedBy` it is a **revocation** — currently also allowed (no `hasDeal` gate
-yet; see Remaining). Each validated entry is `files/rm`'d (recursive) on the temp MFS tree.
+(traced). With no `replacedBy` it is a **revocation**, allowed only while the page's genesis is
+out of force and skipped once a deal is in force (the shared `isOutOfForce` is the read). Each
+validated entry is `files/rm`'d (recursive) on the temp MFS tree.
 **Trust model:** the orchestrator supplies the `remove` list — the same actor that supplies `jobs`
-(what to add). At the _external_ auth level this adds no new surface (an unlicensed actor still
-can't reach the loop — `canPublish` gates it). At the _trusted-actor_ level, however, the per-item
-gates are not yet real — see the Remaining block below for the intended deal-state gate and the
-blocking prerequisite (trusted path→genesis resolution).
+(what to add). No gate stands in front of the loop, because a removal takes away a path the
+agreements in force no longer put there. The published tree is the render of the agreements in
+force; anything on it that is not that render is drift, and drift is repaired by the press rather
+than authorised by a caller. So the loop limits what may go, not who may ask: a path whose genesis
+still has a deal in force stays, and a caller nobody trusts can cause the removal of a page nobody
+pays for.
 
 **Network/chain:** Kubo MFS/pin on `ipfs.transport-union.dev`; BASE read (`getText`) + BASE write
 (`setText`, PKP-signed). **Runs on Lit (prod) / Bun (preview, no write).**
@@ -369,9 +372,9 @@ input.remove[] →  per-entry (parallel)
 ### Execution order (structural invariant)
 
 ```
-1. canPublish gate (authorised to act on publication)
-2. copy loop:  verifyProvenance() for each job → cp
-3. remove loop: sanitizeRemovePath() → replacedBy|hasDeal checks → files/rm
+1. per-page gate in the copy loop: add needs canPublish ∧ isOwner, refresh is ungated
+2. copy loop:  verifyProvenance() for each job → path gate → cp
+3. remove loop: sanitizeRemovePath() → replacedBy | isOutOfForce → files/rm
 4. assets copy → root txt mirror (every file in assets/txt → root; stale root txt cleared)
 5. stat root → pin → setText on-chain
 6. finally: rm temp MFS
@@ -393,11 +396,11 @@ trusts it. If copy loop throws, remove loop never runs.
 - **Copy loop succeeds before remove loop runs.** If any job fails verification the entire update
   rejects, so `jobGenesisSet` always contains verified HTML. The rename guard
   `jobGenesisSet.has(replacedBy)` transitively proves the target is verified.
-- **Remove-revoke (`!replacedBy`) checks `!hasDeal` on-chain — not authorship.** Any licensed
-  author can remove any path that has no active deal. "Author A can only remove Author B's content
-  when there is no deal — when B or the publication revoked the deal first." Deal revocation is an
-  on-chain operation performed by the deal-striking author or publication admin before the update
-  action runs.
+- **Remove-revoke (`!replacedBy`) checks `!hasDeal` on-chain — not authorship.** Any caller,
+  trusted or not, can remove any path that has no active deal. "Author A can only remove Author B's
+  content when there is no deal — when B or the publication revoked the deal first." Deal revocation
+  is an on-chain operation performed by the deal-striking author or publication admin before the
+  update action runs.
 - **Rename (`replacedBy`) does NOT check `hasDeal`.** A rename changes the tree path but preserves
   the content — the deal references the genesis, not the path. Buyer still gets what they paid for
   at the new slug.
@@ -507,8 +510,9 @@ section is relied upon.
 | `fetchCollections(templateConfig, pubModule, rpcs, gateway)`                          | templateConfig  | `{ [slug]: items[] }` — calls `fetchByPublication` **once**, caches in `allDeals`, filters per-collection in-memory (Lit fetch-budget fix; previously one `getDeals` per collection)                                                                                                                        |
 | `renderHTML(config, templateConfig, templateData)`                                    | —               | `string` (HTML)                                                                                                                                                                                                                                                                                             |
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)`                            | —               | `string` (HTML + signed JSON-LD)                                                                                                                                                                                                                                                                            |
-| `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ isOwner)                                                                                                                                                                                                                                                                            |
+| `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ isOwner) — the **add** gate, asked per page: a destination path that does not yet carry the incoming genesis                                                                                                                                                                        |
 | `canRead(contentId, safe, pubModule, signer)`                                         | —               | `boolean` (canPublish ∧ isOwner ∧ hasDeal(toBytes32Id(contentId)))                                                                                                                                                                                                                                          |
+| `isOutOfForce`                                                                        | `bytes32 genesis` | `boolean` — no deal in force for the genesis. The **remove** limit: a page whose genesis is out of force may come off the tree, and no gate asks who is asking                                                                                                                                                |
 | `decrypt(pkpId, body, authorSafe, pubModule, signer)`                                 | —               | decrypted obj \| false (gated by `canRead`)                                                                                                                                                                                                                                                                 |
 | `evmRead(chain, addr, abi, method, args, rpcs?)`                                      | —               | call result — **catch-all failover**: tries each URL in `rpcs[]`, collects every failure in `failures[]`, throws one aggregated `Error` (`.failures` attached) on total failure. No transport-vs-revert distinction (attempted & reverted — ethers v5 wraps `SERVER_ERROR` as `CALL_EXCEPTION`; see GAP-15) |
 | `evmWrite(chain, pkp, addr, abi, method, args, confirm?)`                             | —               | `{ success, hash, ... }` (PKP-signed)                                                                                                                                                                                                                                                                       |

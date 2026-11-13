@@ -104,8 +104,8 @@ own area.
 - `agreement/` — seven invariants, two additions, four gaps; the agreement is a boolean per
   manuscript, not an object (`S2SPublicationModuleV2`), and its detail is the
   `publication/SPEC-publication-agreements.md` branch
-- `gates/` — eight invariants, one addition (tree reset), one gap (GATES-4's author caller);
-  no branch — the gates are `src/shared/src/gates`
+- `gates/` — eight invariants, one addition (tree reset), no gap: the update gate is per page,
+  add gated and refresh and repair open; no branch — the gates are `src/shared/src/gates`
 - `press/` — nine invariants, six additions, two gaps (PRESS-7's re-encryption, PRESS-6's config
   choice); the only place plaintext is held; branch: `SPEC-protocol-actions.md` (PREP → RENDER →
   UPDATE)

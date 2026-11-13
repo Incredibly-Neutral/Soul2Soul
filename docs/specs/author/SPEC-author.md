@@ -138,6 +138,15 @@ The prototype is a layer between these invariants and the code: it may do less
   → [adr/ADR-004-modules-are-enabled-and-found-by-interface.md](../../adr/ADR-004-modules-are-enabled-and-found-by-interface.md)
   Enabling grants no power because no module calls `execTransactionFromModule`; the enabled
   list becomes the role index, with a fixed id per role.
+- **Update gates the page it adds.** A page whose path does not yet carry the genesis is added under
+  `canPublish(author) && isOwner(signer)`. Nothing else in the request is gated: a page whose path
+  already carries the genesis is refreshed, and a path comes off while the ledger holds no
+  agreement for its genesis, read through the shared `isOutOfForce`. The tree is the render of the
+  agreements in force, so the press takes drift off without asking who asked. A de-listed author
+  therefore completes a takedown in one request: their own page removed, every page listing it
+  refreshed. `genesisAuthor[genesis]` survives `retract` and would answer whose work it is; no
+  gate needs it. Recorded page by page in
+  [SPEC-gates](../gates/SPEC-gates.md#the-update-gate-page-by-page).
 
 ## Discovery
 
@@ -164,57 +173,6 @@ hidden: the alternative is a name or a factory index, and neither is evidence of
 
 ## Gaps without a proposal
 
-- **GAP — the subtractive rebuild has no gate of its own.** AUTHOR-3's second half is
-  authorised by the same gate as publishing: `canPublish(author) && isOwner(signer)`, where
-  `canPublish` answers "is this address trusted by the publication" — the publication Safe, its
-  whitelisted devs, its whitelisted authors. Nothing in it asks whether the caller authored
-  *this* manuscript. The publication can call `removeWhitelistedAuthor` at any time, and the
-  author then still retracts on the ledger (that path is theirs alone) but cannot cause the page
-  to be rebuilt away: the withdrawal stops at the ledger while the site keeps the work under the
-  publication's name. So the publication retains a stall lever over precisely the act the
-  protocol promises is unilateral, and retains it exactly when relations have broken — which is
-  when AUTHOR-3 matters.
-  The fact such a gate would need is already on-chain and survives revocation:
-  `genesisAuthor[genesis]` is set when the manuscript is offered and is **not** cleared by
-  `retract`, which only removes the deal and offer flags. Authorship is therefore readable
-  without the publication's trust, and a subtractive gate could be
-  `genesisAuthor(genesis) == authorSafe && isOwner(signer)`, restricted to remove-only
-  directives. Recorded as a gap, not an RFC: no fix is agreed. Belongs in `gates.md` as the
-  missing half of `canPublish` — the additive gate asks whether the publication trusts you, the
-  subtractive one must ask whether the manuscript is yours.
-- Open question, not a gap: AUTHOR-2's reviewer path is implemented but its
-  boundary with the read gate is only described in code. Awaiting `gates.md` and
-  `press.md` before it is written down here.
-
-## Proposals
-
-- **RFC-001** — the portable byline (AUTHOR-9)
-  → [rfc/RFC-001-portable-byline.md](../../rfc/RFC-001-portable-byline.md)
-  An author-owned records module on the account, holding per-work claim records, plus a
-  derived anyone-can-index view. Ships the list and the reader path together.
-- **RFC-002** — a payee wallet on the account (AUTHOR-7)
-  → [rfc/RFC-002-payee-wallet.md](../../rfc/RFC-002-payee-wallet.md)
-
-## Gaps without a proposal
-
-- **GAP — the subtractive rebuild has no gate of its own.** AUTHOR-3's second half is
-  authorised by the same gate as publishing: `canPublish(author) && isOwner(signer)`, where
-  `canPublish` answers "is this address trusted by the publication" — the publication Safe, its
-  whitelisted devs, its whitelisted authors. Nothing in it asks whether the caller authored
-  *this* manuscript. The publication can call `removeWhitelistedAuthor` at any time, and the
-  author then still retracts on the ledger (that path is theirs alone) but cannot cause the page
-  to be rebuilt away: the withdrawal stops at the ledger while the site keeps the work under the
-  publication's name. So the publication retains a stall lever over precisely the act the
-  protocol promises is unilateral, and retains it exactly when relations have broken — which is
-  when AUTHOR-3 matters.
-  The fact such a gate would need is already on-chain and survives revocation:
-  `genesisAuthor[genesis]` is set when the manuscript is offered and is **not** cleared by
-  `retract`, which only removes the deal and offer flags. Authorship is therefore readable
-  without the publication's trust, and a subtractive gate could be
-  `genesisAuthor(genesis) == authorSafe && isOwner(signer)`, restricted to remove-only
-  directives. Recorded as a gap, not an RFC: no fix is agreed. Belongs in `gates.md` as the
-  missing half of `canPublish` — the additive gate asks whether the publication trusts you, the
-  subtractive one must ask whether the manuscript is yours.
 - Open question, not a gap: AUTHOR-2's reviewer path is implemented but its
   boundary with the read gate is only described in code. Awaiting `gates.md` and
   `press.md` before it is written down here.
