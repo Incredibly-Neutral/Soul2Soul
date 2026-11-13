@@ -1,8 +1,5 @@
 import { keccak256, toBytes } from "viem";
 import { callWithTimeout, isAbortError, withRetry } from "../helpers/index.js";
-import { decryptAction } from "./actions/decrypt.js";
-import { encryptAction } from "./actions/encrypt.js";
-import { compactAction } from "./actions/index.js";
 import type { ActionResult, DecryptData, DecryptParams } from "./actions/types.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,11 +65,24 @@ type LitEnvironment = 'dev' | 'prod';
 interface LitServiceConfig {
   environment: LitEnvironment;
   accountKey?: string;
+  /**
+   * IPFS gateway base URL the action bundles are read from, e.g.
+   * `https://ipfs.io`. No action code ships from this module: every action is
+   * executed from its built bundle on IPFS.
+   */
+  gateway?: string;
+  /**
+   * The CIDs of the action bundles this service executes, by name. Lit keeps the
+   * bundle, and the group it belongs to, so the CID is the identity of the code.
+   */
+  actions?: { encrypt?: string; decrypt?: string };
 }
 
 export class LitService {
   private baseUrl: string;
   private accountKey?: string;
+  private gateway?: string;
+  private actions: { encrypt?: string; decrypt?: string } = {};
   private poolKeys = new Map<string, string>(); // poolId → usageKey
 
   constructor(config: LitServiceConfig) {
@@ -80,6 +90,8 @@ export class LitService {
       ? 'https://api.dev.litprotocol.com/core/v1'
       : 'https://api.chipotle.litprotocol.com/core/v1';
     this.accountKey = config.accountKey;
+    this.gateway = config.gateway;
+    this.actions = config.actions ?? {};
 
     // (no config dump here on purpose — it printed `accountKey`)
   }
@@ -168,6 +180,32 @@ export class LitService {
   // ============================================================
   // Public (no auth)
   // ============================================================
+
+  /**
+   * The built bundle for an action CID, as the text `/lit_action` takes as
+   * `code`. The bundle is the action: it is not authored, concatenated or
+   * patched here.
+   *
+   * Nothing about the exchange is logged. The bundle is not secret, but the URL
+   * is not printed either: a gateway URL can carry an auth token, the same
+   * reason the prep action's `endpoints` never reach a log line.
+   */
+  private async fetchActionCode(cid: string): Promise<string> {
+    const gateway = this.gateway;
+    if (!gateway) {
+      throw new Error(
+        'LitService config is missing `gateway`: an action is executed from its bundle on IPFS, fetched by CID',
+      );
+    }
+
+    const response = await fetch(`${gateway}/api/v0/cat?arg=${cid}`, { method: 'POST' });
+    if (!response.ok) {
+      // Status and CID only. The CID names the action being run, never a payload.
+      throw new Error(`IPFS gateway answered HTTP ${response.status} for action ${cid}`);
+    }
+
+    return response.text();
+  }
 
   async getChainConfig() {
     return this.call<{
@@ -392,7 +430,13 @@ export class LitService {
       throw new Error(`encrypt: message must be a non-empty string, got: ${typeof message}`);
     }
 
-    const code = compactAction(encryptAction);
+    const cid = this.actions.encrypt;
+    if (!cid) {
+      throw new Error(
+        'encrypt: LitService config is missing `actions.encrypt` — the encrypt action is fetched from IPFS by CID',
+      );
+    }
+    const code = await this.fetchActionCode(cid);
 
     try {
       const result: any = await this.call<{ response: { ciphertext: string } }>(
@@ -426,16 +470,26 @@ export class LitService {
    * Decrypt a draft for its author. `params` names the author Safe, not a module:
    * the action resolves the Safe's drafts log and owner-history module itself and
    * refuses unless the genesis is in that log and the signer was an owner when the
-   * version was appended.
+   * version was appended. Those are the shared gates, imported by the action.
+   *
+   * The bundle is the one named by `actions.decrypt`, fetched from the gateway.
+   * The gateway is the service's, so it is handed to the action with the params
+   * rather than being a parameter of each call.
    * Returns the plaintext; throws on a refusal envelope.
    */
   async decrypt(key: string, params: DecryptParams): Promise<string> {
-      const code = compactAction(decryptAction);
+      const cid = this.actions.decrypt;
+      if (!cid) {
+          throw new Error(
+              'decrypt: LitService config is missing `actions.decrypt` — the decrypt action is fetched from IPFS by CID',
+          );
+      }
+      const code = await this.fetchActionCode(cid);
 
       const result: any = await this.call<{ response: ActionResult<DecryptData>; logs?: string[]; has_error?: boolean }>(
           '/lit_action', {
               method: 'POST',
-              body: { code, js_params: params },
+              body: { code, js_params: { ...params, gateway: this.gateway } },
               key,
           }
       );

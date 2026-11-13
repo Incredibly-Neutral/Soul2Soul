@@ -272,28 +272,108 @@ describe('buildEncryptFn', () => {
 });
 
 // ===========================================================================
-// The REAL LitService.encrypt failure path (not a hand-written fake)
+// The REAL LitService.encrypt, executed from the bundle the gateway serves
 // ===========================================================================
-describe('LitService.encrypt really returns error strings (the reason for the whitelist)', () => {
-  /** A LitService whose private `call` is replaced — the network seam only. */
-  function litWith(impl: () => unknown): LitService {
-    const svc = new LitService({ environment: 'prod' });
-    (svc as unknown as { call: () => Promise<unknown> }).call = () => Promise.resolve().then(impl);
+describe('LitService.encrypt executes the bundle fetched by CID', () => {
+  const GATEWAY = 'https://gw.test';
+  const ENCRYPT_CID = 'bafyencryptaction';
+  // A stand-in bundle. The real one is built in src/press/actions and is not
+  // parsed here: what matters is that the bytes the gateway served are the bytes
+  // posted as `code`.
+  const BUNDLE =
+    'async function main({ pkpId, message }) { const ciphertext = await Lit.Actions.Encrypt({ pkpId, message }); return { ciphertext }; }';
+
+  /** Every `/lit_action` body the service was about to send. */
+  let posted: { endpoint: string; body?: Record<string, unknown> }[];
+  let fetchSpy: MockInstance;
+
+  /** The gateway answer, shaped as much of a Response as `fetchActionCode` reads. */
+  const answer = (body: string, status = 200) =>
+    ({ ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) }) as unknown as Response;
+
+  /**
+   * A LitService whose private `call` is replaced — the network seam only. The
+   * gateway fetch is real, so the CID→code path is the one under test; the
+   * config is the one the CLI will pass once it wires the new fields.
+   */
+  function litWith(
+    impl: () => unknown,
+    overrides: { gateway?: string; actions?: { encrypt?: string; decrypt?: string } } = {},
+  ): LitService {
+    const svc = new LitService({
+      environment: 'prod',
+      gateway: GATEWAY,
+      actions: { encrypt: ENCRYPT_CID },
+      ...overrides,
+    });
+    (
+      svc as unknown as {
+        call: (
+          endpoint: string,
+          options?: { body?: Record<string, unknown> },
+        ) => Promise<unknown>;
+      }
+    ).call = (endpoint, options) => {
+      posted.push({ endpoint, body: options?.body });
+      return Promise.resolve().then(impl);
+    };
     return svc;
   }
 
-  let log: MockInstance | undefined;
+  let quiet: MockInstance | undefined;
   beforeEach(() => {
-    // shared's LitService console.logs { key, pkpId, message } — unrelated, noisy here.
-    log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    posted = [];
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(answer(BUNDLE)));
+    // Encrypt failures are reported on stderr with the reason redacted; the
+    // tests below provoke them on purpose.
+    quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
   afterEach(() => {
-    log?.mockRestore();
-    log = undefined;
+    fetchSpy.mockRestore();
+    quiet?.mockRestore();
+    quiet = undefined;
   });
 
   const encrypt = (svc: LitService): Promise<string> =>
     svc.encrypt('usage-key', PKP, '{"title":"x"}');
+
+  it('fetches the bundle from the gateway by CID and posts it as the action code', async () => {
+    const svc = litWith(() => ({ response: { ciphertext: 'gAAAAABreal' } }));
+    await encrypt(svc);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, { method?: string }];
+    expect(url).toBe(`${GATEWAY}/api/v0/cat?arg=${ENCRYPT_CID}`);
+    expect(init.method).toBe('POST');
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.endpoint).toBe('/lit_action');
+    // Verbatim: a built bundle is not compacted, so a `//` in it cannot swallow
+    // the rest of the file (the reason the inline strings had to avoid them).
+    expect(posted[0]?.body).toEqual({
+      code: BUNDLE,
+      js_params: { pkpId: PKP, message: '{"title":"x"}' },
+    });
+  });
+
+  it('names the missing config key instead of falling back to inline code', async () => {
+    const noCid = litWith(() => ({ response: { ciphertext: 'x' } }), { actions: {} });
+    await expect(noCid.encrypt('usage-key', PKP, 'm')).rejects.toThrow(/actions\.encrypt/);
+
+    const noGateway = litWith(() => ({ response: { ciphertext: 'x' } }), { gateway: undefined });
+    await expect(noGateway.encrypt('usage-key', PKP, 'm')).rejects.toThrow(/gateway/);
+
+    // Neither reached the network or the action.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(0);
+  });
+
+  it('refuses a bundle the gateway will not serve, before any action call', async () => {
+    fetchSpy.mockImplementationOnce(() => Promise.resolve(answer('nope', 504)));
+    const svc = litWith(() => ({ response: { ciphertext: 'x' } }));
+    await expect(encrypt(svc)).rejects.toThrow(/504/);
+    expect(posted).toHaveLength(0);
+  });
 
   it('a timeout surfaces as a DOMException string, which is NOT JSON', async () => {
     const svc = litWith(() =>

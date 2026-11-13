@@ -155,7 +155,9 @@ export interface RepointArchiveData {
 // the drafts log to name that Safe for the genesis, and reads `isOwnerAt` at the
 // genesis's append block (live `isOwner` when a pre-upgrade version records block
 // 0). Only then is the blob cat'd, and the plaintext is released only if it
-// hashes to the signed `public.plaintextHash`. See lit/actions/decrypt.ts.
+// hashes to the signed `public.plaintextHash`. The action itself lives in
+// `src/press/actions`; `LitService` adds its own `gateway` to these params before
+// the action is executed.
 export interface DecryptParams {
   /** Lit PKP id that holds the decryption key. */
   pkpId: string;
@@ -166,8 +168,6 @@ export interface DecryptParams {
   /** Signature over `hashMessage('lit actions auth')` from the caller's wallet. */
   signature: string;
   rpcs: { L2: string[] };
-  /** IPFS gateway base URL, e.g. `https://ipfs.io`. */
-  gateway: string;
 }
 
 export interface DecryptData {

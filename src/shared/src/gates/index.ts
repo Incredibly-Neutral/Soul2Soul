@@ -87,7 +87,7 @@ const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toL
  * answer is not a block list at all. `uint64` answers arrive as numbers, decimal
  * strings or BigNumbers depending on the caller's decoder.
  */
-const lastVersionBlock = (blocks: unknown): number | undefined => {
+export const lastVersionBlock = (blocks: unknown): number | undefined => {
   if (!Array.isArray(blocks) || blocks.length === 0) return undefined;
   const last = blocks[blocks.length - 1] as unknown;
   if (typeof last === 'number') return last;
@@ -226,39 +226,72 @@ export const owns = async (
   authorSafe: string,
   signerAddress: string,
   options: OwnsOptions = {},
-): Promise<boolean> => {
+): Promise<boolean> =>
+  (await ownsVerdict(read, readValue, genesis, authorSafe, signerAddress, options)).ok;
+
+/**
+ * What {@link owns} decides, plus the block it decided at: the append block of
+ * the genesis's last version, or `undefined` when the drafts log answered no
+ * block list at all.
+ */
+export interface OwnsVerdict {
+  ok: boolean;
+  block?: number;
+}
+
+/**
+ * The three reads of {@link owns}, reporting the block they were judged at.
+ *
+ * The block is reported so a caller can read the entry at the same block it was
+ * judged at: the owner set the gate tested is the one at that block, and a
+ * version appended since then would be read at the head instead. It is reported
+ * on a refusal too, so a caller that was refused at block N can still say which
+ * block it was refused at. `block` is `undefined` when there was no block list,
+ * which is the case `owns` refuses outright.
+ */
+export const ownsVerdict = async (
+  read: GateRead,
+  readValue: GateValueRead,
+  genesis: string,
+  authorSafe: string,
+  signerAddress: string,
+  options: OwnsOptions = {},
+): Promise<OwnsVerdict> => {
   const genesisId = (options.toId ?? toBytes32Id)(genesis);
 
   const modules = await resolveAuthorModules(read, readValue, authorSafe, {
     factory: options.factory,
   });
-  if (!modules.ok) return false;
+  if (!modules.ok) return { ok: false };
 
   const author = await readValue(modules.drafts, AUTHOR_OF_ABI, 'authorOf', [genesisId]);
 
   // Unknown genesis: DraftsModuleV1 returns a zeroed Entry rather than
   // reverting, so this is the "no such draft" case, not a broken read.
-  if (typeof author !== 'string' || author === '' || ZERO_ADDRESS.test(author)) return false;
+  if (typeof author !== 'string' || author === '' || ZERO_ADDRESS.test(author)) return { ok: false };
 
   // The module must name the Safe this gate was asked about. A genesis kept in
   // another Safe's log is not this Safe's, however the caller labelled it.
-  if (!sameAddress(author, authorSafe)) return false;
+  if (!sameAddress(author, authorSafe)) return { ok: false };
 
-  const blockNumber = lastVersionBlock(
+  const block = lastVersionBlock(
     await readValue(modules.drafts, BLOCKS_OF_ABI, 'blocksOf', [genesisId]),
   );
   // A log that answers no block list is not the pre-upgrade case (which answers
   // a list of zeros); it is a read this gate cannot decide on.
-  if (blockNumber === undefined) return false;
+  if (block === undefined) return { ok: false };
 
-  if (blockNumber === 0) {
+  if (block === 0) {
     // Pre-upgrade or imported version: no block to judge the owner set at.
-    return read(authorSafe, IS_OWNER_ABI, 'isOwner', [signerAddress]);
+    return { ok: await read(authorSafe, IS_OWNER_ABI, 'isOwner', [signerAddress]), block };
   }
 
-  return isTrueAnswer(
-    await readValue(modules.ownerHistory, IS_OWNER_AT_ABI, 'isOwnerAt', [signerAddress, blockNumber]),
-  );
+  return {
+    ok: isTrueAnswer(
+      await readValue(modules.ownerHistory, IS_OWNER_AT_ABI, 'isOwnerAt', [signerAddress, block]),
+    ),
+    block,
+  };
 };
 
 export * from './modules';
