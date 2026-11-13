@@ -25,8 +25,9 @@ Note (this implementation): the gate is `ownsVerdict()` in `src/shared/src/gates
 author's own modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the
 Safe for the genesis, and asks the Safe's owner history whether the signer was an owner when the last
 version was appended — the Safe is never a parameter. The Lit decrypt action imports that gate and
-reads the draft entry at the block the gate reports, so the ciphertext it opens and the owner set it
-was judged under are the same version. It then requires the blob's own signed `public.author` to
+reads the draft entry at the block the gate reports and from the drafts module it reports, so nothing
+is resolved twice and the ciphertext it opens and the owner set it was judged under are one version.
+It then requires the blob's own signed `public.author` to
 equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
 in their own module, and only the blob's signed author refuses that.
 

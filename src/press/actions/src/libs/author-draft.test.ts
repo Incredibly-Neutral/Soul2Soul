@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  DRAFTS_MODULE_INTERFACE_ID,
-  OWNER_HISTORY_MODULE_INTERFACE_ID,
-} from '@s2s/soul2soul-shared/gates';
 import { keccak256 } from 'viem';
-import { decryptAuthorDraft, type AuthorDraftInput, type AuthorDraftDeps } from './author-draft';
+import {
+  decryptAuthorDraft,
+  type AuthorDraftInput,
+  type AuthorDraftDeps,
+} from './author-draft';
 
 // ============================================================================
 // decryptAuthorDraft — GATES-1 for one draft, plus the PIN.
 //
 // The gate itself is shared and tested there (`ownsVerdict`); what is tested
 // here is what this file does with its answer: read the entry at the block the
-// gate reported, refuse unless the blob is that author's and hashes to the
-// signed plaintextHash, and keep every refusal's wording.
+// gate reported and from the module it reported, refuse unless the blob is that
+// author's and hashes to the signed plaintextHash, and keep every refusal's
+// wording. No module is resolved here, so the chain reads below are the entry
+// read and nothing else.
 // ============================================================================
 
 const SAFE = '0x' + '11'.repeat(20);
@@ -34,6 +36,14 @@ const INPUT: AuthorDraftInput = {
   signature: '0xsigned',
 };
 
+/** What the gate says it resolved and judged at, at block 880. */
+const VERDICT = {
+  ok: true,
+  block: 880,
+  modules: { drafts: DRAFTS_MODULE, ownerHistory: HISTORY_MODULE },
+  author: SAFE,
+};
+
 const ENTRY = {
   genesis: GENESIS,
   author: SAFE,
@@ -51,22 +61,16 @@ const ITEM = {
 type ReadCall = { target: string; fn: string; args: unknown[]; block?: number };
 
 /**
- * The runtime, faked at the injection boundary: a chain read that answers the
- * module lookup and `fetch`, a gateway that answers the item, a decryptor, and a
- * signature recovery. Everything asserted below goes through these.
+ * The runtime, faked at the injection boundary: the gate's verdict, a chain
+ * read that answers the entry, a gateway that answers the item, a decryptor, and
+ * a signature recovery. Everything asserted below goes through these.
  */
 const runtime = (overrides: Partial<AuthorDraftDeps> = {}, options: { entry?: unknown } = {}) => {
   const reads: ReadCall[] = [];
   const deps: AuthorDraftDeps = {
-    owns: vi.fn(async () => ({ ok: true, block: 880 })),
+    owns: vi.fn(async () => ({ ...VERDICT })),
     read: vi.fn(async (target, _abi, fn, args, block) => {
       reads.push({ target, fn, args, block });
-      if (fn === 'getModulesPaginated') return [[DRAFTS_MODULE, HISTORY_MODULE], END_SENTINEL];
-      if (fn === 'supportsInterface') {
-        const drafts = args[0] === DRAFTS_MODULE_INTERFACE_ID && target === DRAFTS_MODULE;
-        const history = args[0] === OWNER_HISTORY_MODULE_INTERFACE_ID && target === HISTORY_MODULE;
-        return drafts || history;
-      }
       if (fn === 'fetch') return options.entry ?? ENTRY;
       throw new Error('unexpected read: ' + fn);
     }),
@@ -79,7 +83,7 @@ const runtime = (overrides: Partial<AuthorDraftDeps> = {}, options: { entry?: un
 };
 
 describe('decryptAuthorDraft — the version that is opened is the version judged', () => {
-  it('reads the entry at the block the gate reported, and cats that entry s cid', async () => {
+  it('reads the entry at the block the gate reported, from the module it reported', async () => {
     const { deps, entry } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
 
@@ -92,6 +96,16 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
     if (outcome.ok) expect(outcome.data).toEqual({ plaintext: PLAINTEXT, author: SAFE, cid: CID });
   });
 
+  it('resolves no module and reads nothing else: the verdict carries what the gate read', async () => {
+    const { deps, reads } = runtime();
+    await decryptAuthorDraft(INPUT, deps);
+
+    // The whole module lookup is one round trip of chain calls; repeating it
+    // here would spend the gate's budget twice and could judge the entry against
+    // a module set that rotated in between.
+    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+  });
+
   it('reports the judged block in the trace', async () => {
     const { deps } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
@@ -101,7 +115,7 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
   it('passes block 0 through unpinned-worthy: the pre-upgrade fallback has no height', async () => {
     // Block 0 is "no block was recorded", so there is nothing to pin to; the
     // gate's own fallback is the live isOwner. evmRead drops a 0 tag.
-    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ok: true, block: 0 })) });
+    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, block: 0 })) });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(true);
     expect(entry()[0].block).toBe(0);
@@ -151,7 +165,7 @@ describe('decryptAuthorDraft — refusals', () => {
     // A signer added to the Safe after the version was appended: the gate judges
     // at the append block and answers no.
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ok: false, block: 900 })),
+      owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 900 })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
@@ -161,7 +175,58 @@ describe('decryptAuthorDraft — refusals', () => {
     expect(deps.cat).not.toHaveBeenCalled();
   });
 
-  it('refuses an unknown draft', async () => {
+  it('says why the module lookup refused, in the string action s words', async () => {
+    const expected: [string, string][] = [
+      ['unreadable-module-list', 'cannot read the author Safe module list'],
+      ['no-enabled-modules', 'author Safe has no enabled modules'],
+      ['no-drafts-module', 'no drafts module on the author Safe'],
+      ['ambiguous-drafts-module', 'two drafts modules answer on the author Safe'],
+      ['no-owner-history-module', 'no owner history module on the author Safe'],
+      ['ambiguous-owner-history-module', 'two owner history modules answer on the author Safe'],
+    ];
+
+    for (const [modulesError, message] of expected) {
+      const { deps, entry } = runtime({
+        owns: vi.fn(async () => ({ ok: false, modulesError: modulesError as never })),
+      });
+      const outcome = await decryptAuthorDraft(INPUT, deps);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.error).toBe(message);
+      expect(entry()).toHaveLength(0);
+    }
+  });
+
+  it('refuses a genesis the drafts log does not name', async () => {
+    const { deps, entry } = runtime({
+      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('unknown draft');
+    expect(entry()).toHaveLength(0);
+    expect(deps.cat).not.toHaveBeenCalled();
+  });
+
+  it('refuses a draft the Safe s log attributes to another Safe', async () => {
+    const { deps } = runtime({
+      owns: vi.fn(async () => ({ ...VERDICT, ok: false, author: OTHER_SAFE })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
+  });
+
+  it('refuses when the log answers no append block', async () => {
+    const { deps, entry } = runtime({
+      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules, author: SAFE })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('cannot read the append block');
+    expect(entry()).toHaveLength(0);
+  });
+
+  it('refuses an entry with no versions left, even if the log named an author', async () => {
     const { deps } = runtime({}, {
       entry: { ...ENTRY, versionCount: 0, author: END_SENTINEL, cid: '' },
     });
@@ -171,7 +236,7 @@ describe('decryptAuthorDraft — refusals', () => {
     expect(deps.cat).not.toHaveBeenCalled();
   });
 
-  it('refuses a draft the Safe s log attributes to another Safe', async () => {
+  it('refuses an entry the pinned read attributes to another Safe', async () => {
     const { deps } = runtime({}, { entry: { ...ENTRY, author: OTHER_SAFE } });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
@@ -221,16 +286,6 @@ describe('decryptAuthorDraft — refusals', () => {
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('decrypt returned no plaintext');
-  });
-
-  it('refuses when the author Safe s modules cannot be resolved', async () => {
-    const { deps } = runtime();
-    deps.read = vi.fn(async () => [[], END_SENTINEL]);
-    const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.error).toBe('cannot resolve the author Safe modules: no-enabled-modules');
-    }
   });
 
   it('turns a thrown failure into a refusal rather than an exception', async () => {

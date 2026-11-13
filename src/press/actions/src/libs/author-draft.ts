@@ -4,7 +4,10 @@
 // resolves the Safe's drafts log and owner-history module from the Safe's own
 // enabled-module list, requires the drafts log to name that Safe, and answers
 // whether the signer was an owner when the last version was appended. Nothing of
-// that is repeated here.
+// that is repeated here: the verdict carries the module it read from, the entry
+// author it read and the block it judged at, so this file neither resolves the
+// Safe's modules a second time (chain calls, and a module set that could rotate
+// in between) nor reads anything it was not handed.
 //
 // What this file adds is the PIN. The gate reports the append block it judged
 // at; the entry is read at that same block, so the ciphertext this opens and the
@@ -29,15 +32,27 @@
 // the key must never appear in it.
 
 import {
-  resolveAuthorModules,
-  type GateRead,
-  type GateValueRead,
+  type AuthorModulesError,
   type OwnsVerdict,
 } from '@s2s/soul2soul-shared/gates';
 import { toBytes32Id, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Why the Safe's module lookup refused, in this action's words. The gate answers
+ * a reason code; the action keeps the distinct message the string action had, so
+ * a refusal still says whether the Safe runs no drafts log or two.
+ */
+const MODULE_REFUSALS: Record<AuthorModulesError, string> = {
+  'unreadable-module-list': 'cannot read the author Safe module list',
+  'no-enabled-modules': 'author Safe has no enabled modules',
+  'no-drafts-module': 'no drafts module on the author Safe',
+  'ambiguous-drafts-module': 'two drafts modules answer on the author Safe',
+  'no-owner-history-module': 'no owner history module on the author Safe',
+  'ambiguous-owner-history-module': 'two owner history modules answer on the author Safe',
+};
 
 // DraftsModuleV1.fetch — the drafts log's own entry read, which unlike the
 // publication module's carries `versionCount`.
@@ -143,21 +158,22 @@ export const decryptAuthorDraft = async (
     // GATES-1, and the block this whole action is pinned to.
     const verdict = await deps.owns(genesisId, safe, signer);
     if (verdict.block !== undefined) trace.push({ step: 'appendBlock', block: verdict.block });
-    if (!verdict.ok) return refuse('signer does not own the author Safe');
 
-    // The gate resolved these too and does not report them; a shared change to
-    // ownVerdict's OwnsVerdict would remove this second lookup. It cannot fail
-    // for a Safe the gate just admitted, unless the reads race a rotation.
-    const modules = await resolveAuthorModules(
-      deps.read as GateRead,
-      deps.read as GateValueRead,
-      safe,
-    );
-    if (!modules.ok) return refuse('cannot resolve the author Safe modules: ' + modules.error);
+    // The gate decided from these; use them rather than resolving the Safe's
+    // modules again. Each refusal keeps its own words.
+    if (verdict.modulesError) {
+      return refuse(MODULE_REFUSALS[verdict.modulesError] ?? 'cannot resolve the author Safe modules');
+    }
+    if (!verdict.modules) return refuse('cannot resolve the author Safe modules');
+    if (verdict.author === undefined) return refuse('unknown draft');
+    if (!sameAddress(verdict.author, safe)) return refuse('draft belongs to another Safe');
+    step('draft', verdict.author);
+    if (verdict.block === undefined) return refuse('cannot read the append block');
+    if (!verdict.ok) return refuse('signer does not own the author Safe');
 
     // The pin: the entry is the one the gate judged, not the current head.
     const entry: DraftEntry = await deps.read(
-      modules.drafts,
+      verdict.modules.drafts,
       ENTRY_ABI,
       'fetch',
       [genesisId],
@@ -170,7 +186,6 @@ export const decryptAuthorDraft = async (
     if (ZERO_ADDRESS.test(author) || !sameAddress(author, safe)) {
       return refuse('draft belongs to another Safe');
     }
-    step('draft', author);
 
     const item = JSON.parse(await deps.cat(String(entry.cid)));
     step('item');
