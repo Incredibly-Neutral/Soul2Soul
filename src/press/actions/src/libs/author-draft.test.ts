@@ -9,7 +9,7 @@ import {
 // ============================================================================
 // decryptAuthorDraft — GATES-1 for one draft, plus the PIN.
 //
-// The gate itself is shared and tested there (`ownsVerdict`); what is tested
+// The gate itself is shared and tested there (`canAuthorVerdict`); what is tested
 // here is what this file does with its answer: read the entry at the block the
 // gate reported and from the module it reported, refuse unless the blob is that
 // author's and hashes to the signed plaintextHash, and keep every refusal's
@@ -40,6 +40,7 @@ const INPUT: AuthorDraftInput = {
 const VERDICT = {
   ok: true,
   block: 880,
+  ownerSet: 'append-block' as const,
   modules: { drafts: DRAFTS_MODULE, ownerHistory: HISTORY_MODULE },
   author: SAFE,
 };
@@ -68,7 +69,7 @@ type ReadCall = { target: string; fn: string; args: unknown[]; block?: number };
 const runtime = (overrides: Partial<AuthorDraftDeps> = {}, options: { entry?: unknown } = {}) => {
   const reads: ReadCall[] = [];
   const deps: AuthorDraftDeps = {
-    owns: vi.fn(async () => ({ ...VERDICT })),
+    canAuthorVerdict: vi.fn(async () => ({ ...VERDICT })),
     read: vi.fn(async (target, _abi, fn, args, block) => {
       reads.push({ target, fn, args, block });
       if (fn === 'fetch') return options.entry ?? ENTRY;
@@ -109,23 +110,91 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
   it('reports the judged block in the trace', async () => {
     const { deps } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880 });
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880, ownerSet: 'append-block' });
   });
 
-  it('passes block 0 through unpinned-worthy: the pre-upgrade fallback has no height', async () => {
-    // Block 0 is "no block was recorded", so there is nothing to pin to; the
-    // gate's own fallback is the live isOwner. evmRead drops a 0 tag.
-    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, block: 0 })) });
+  it('reads the entry unpinned at head when the log records block 0, and still opens the draft', async () => {
+    // Block 0 is "no block was recorded" (pre-upgrade, or an imported log). The
+    // gate answered from the Safe's live owners, so there is no height to pin to
+    // and the entry is read at the head — the version that answer was given at.
+    const { deps, entry: fetch, reads } = runtime({
+      canAuthorVerdict: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })),
+    });
     const outcome = await decryptAuthorDraft(INPUT, deps);
+
     expect(outcome.ok).toBe(true);
-    expect(entry()[0].block).toBe(0);
+    expect(fetch()).toHaveLength(1);
+    expect(fetch()[0].block).toBeUndefined();
+    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+    expect(deps.cat).toHaveBeenCalledWith(CID);
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 0, ownerSet: 'live' });
+  });
+
+  it('reads the entry unpinned at head when the log answers no block list, and still opens the draft', async () => {
+    const { deps, entry: fetch, reads } = runtime({
+      canAuthorVerdict: vi.fn(async () => ({
+        ok: true,
+        ownerSet: 'live' as const,
+        modules: VERDICT.modules,
+        author: SAFE,
+      })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(fetch()[0].block).toBeUndefined();
+    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+    expect(deps.cat).toHaveBeenCalledWith(CID);
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', ownerSet: 'live' });
+  });
+
+  it('reports the live set on the trace even when it refused', async () => {
+    const { deps, entry: fetch } = runtime({
+      canAuthorVerdict: vi.fn(async () => ({
+        ok: false,
+        block: 0,
+        ownerSet: 'live' as const,
+        modules: VERDICT.modules,
+        author: SAFE,
+      })),
+    });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 0, ownerSet: 'live' });
+    expect(fetch()).toHaveLength(0);
+  });
+
+  it('still refuses an entry from another Safe on the unpinned path', async () => {
+    const { deps } = runtime(
+      { canAuthorVerdict: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })) },
+      { entry: { ...ENTRY, author: OTHER_SAFE } },
+    );
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
+    expect(deps.cat).not.toHaveBeenCalled();
+  });
+
+  it('still refuses an entry with no versions left on the unpinned path', async () => {
+    const { deps } = runtime(
+      { canAuthorVerdict: vi.fn(async () => ({ ...VERDICT, block: 0, ownerSet: 'live' as const })) },
+      { entry: { ...ENTRY, versionCount: 0 } },
+    );
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('unknown draft');
+    expect(deps.cat).not.toHaveBeenCalled();
   });
 
   it('recovers the signer from the signature and judges that address', async () => {
     const { deps } = runtime();
     await decryptAuthorDraft(INPUT, deps);
     expect(deps.recoverSigner).toHaveBeenCalledWith(INPUT.signature);
-    expect(deps.owns).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
+    expect(deps.canAuthorVerdict).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
   });
 
   it('normalises a bytes32 genesis to lowercase before any read', async () => {
@@ -141,7 +210,7 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
     });
     try {
       await decryptAuthorDraft({ ...INPUT, genesis: '65f0c0ffee' }, deps);
-      expect(deps.owns).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
+      expect(deps.canAuthorVerdict).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -157,22 +226,46 @@ describe('decryptAuthorDraft — refusals', () => {
       error: 'author Safe is not an address',
       trace: [{ step: 'genesis', address: GENESIS }],
     });
-    expect(deps.owns).not.toHaveBeenCalled();
+    expect(deps.canAuthorVerdict).not.toHaveBeenCalled();
     expect(deps.recoverSigner).not.toHaveBeenCalled();
   });
 
-  it('refuses a signer the gate rejected, and names the block it was refused at', async () => {
+  it('refuses a signer the gate rejected at a positive block, and names that block', async () => {
     // A signer added to the Safe after the version was appended: the gate judges
     // at the append block and answers no.
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 900 })),
+      canAuthorVerdict: vi.fn(async () => ({ ...VERDICT, ok: false, block: 900 })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 900 });
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 900, ownerSet: 'append-block' });
     expect(entry()).toHaveLength(0);
     expect(deps.cat).not.toHaveBeenCalled();
+  });
+
+  it('names the block it refused at when the Safe runs no owner-history module', async () => {
+    // The refusal carries a block and no owner set: nothing answered at that
+    // block, so the trace names the block without claiming a set.
+    const { deps, entry } = runtime({
+      canAuthorVerdict: vi.fn(async () => ({
+        ok: false,
+        block: 880,
+        modules: { drafts: DRAFTS_MODULE },
+        modulesError: 'no-owner-history-module' as const,
+        author: SAFE,
+      })),
+    });
+
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok)
+      expect(outcome.error).toBe(
+        'no owner history module on the author Safe: the append block cannot be judged',
+      );
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880 });
+    expect(entry()).toHaveLength(0);
   });
 
   it('says why the module lookup refused, in the string action s words', async () => {
@@ -181,13 +274,16 @@ describe('decryptAuthorDraft — refusals', () => {
       ['no-enabled-modules', 'author Safe has no enabled modules'],
       ['no-drafts-module', 'no drafts module on the author Safe'],
       ['ambiguous-drafts-module', 'two drafts modules answer on the author Safe'],
-      ['no-owner-history-module', 'no owner history module on the author Safe'],
+      [
+        'no-owner-history-module',
+        'no owner history module on the author Safe: the append block cannot be judged',
+      ],
       ['ambiguous-owner-history-module', 'two owner history modules answer on the author Safe'],
     ];
 
     for (const [modulesError, message] of expected) {
       const { deps, entry } = runtime({
-        owns: vi.fn(async () => ({ ok: false, modulesError: modulesError as never })),
+        canAuthorVerdict: vi.fn(async () => ({ ok: false, modulesError: modulesError as never })),
       });
       const outcome = await decryptAuthorDraft(INPUT, deps);
       expect(outcome.ok).toBe(false);
@@ -198,7 +294,7 @@ describe('decryptAuthorDraft — refusals', () => {
 
   it('refuses a genesis the drafts log does not name', async () => {
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules })),
+      canAuthorVerdict: vi.fn(async () => ({ ok: false, modules: VERDICT.modules })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
@@ -209,20 +305,22 @@ describe('decryptAuthorDraft — refusals', () => {
 
   it('refuses a draft the Safe s log attributes to another Safe', async () => {
     const { deps } = runtime({
-      owns: vi.fn(async () => ({ ...VERDICT, ok: false, author: OTHER_SAFE })),
+      canAuthorVerdict: vi.fn(async () => ({ ...VERDICT, ok: false, author: OTHER_SAFE })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
   });
 
-  it('refuses when the log answers no append block', async () => {
+  it('refuses on a verdict with no block and no owner set when the gate said no', async () => {
+    // The residual shape: no block reported and no set named, so no answer was
+    // reached and there is nothing to read the entry under.
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules, author: SAFE })),
+      canAuthorVerdict: vi.fn(async () => ({ ok: false, modules: VERDICT.modules, author: SAFE })),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBe('cannot read the append block');
+    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
     expect(entry()).toHaveLength(0);
   });
 
@@ -321,5 +419,6 @@ describe('decryptAuthorDraft — the trace carries no secret', () => {
       'decrypt',
       'plaintextHash',
     ]);
+    expect(outcome.trace.find((s) => s.step === 'appendBlock')?.ownerSet).toBe('append-block');
   });
 });

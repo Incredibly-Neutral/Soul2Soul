@@ -551,8 +551,9 @@ The order is fixed, and the first write only happens once the slot guard is prov
    the previous-generation drafts module on the Safe's enabled list, and only on the run that
    moves the guard, so a repeat cannot copy the log twice. A module the Safe never enabled is not
    a source: the enabled list is what names it. Versions carried in this way hold block `0`, which
-   no gate can place in a block, so ownership for them falls back to `isOwner` — see
-   [SPEC-author-drafts](SPEC-author-drafts.md).
+   is no height to judge ownership at, so the draft gate answers with the Safe's live owner set and
+   reports that it did: an absorbed version is judged against who owns the Safe now, and opens for a
+   current owner — see [SPEC-author-drafts](SPEC-author-drafts.md).
 4. **Move the guard, enable both modules, disable the old ones, in that order.** A Safe that is
    not solely owned by this key stops at `pending-safe` with the whole sequence in `safeTxs`: the
    absorb pages, `setGuard`, the enables, the disables. Absorb runs before `setGuard`, so the old

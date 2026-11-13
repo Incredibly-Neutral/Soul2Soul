@@ -282,6 +282,50 @@ describe('resolveAuthorModules', () => {
     expect(result.ownerHistory).toBe(HISTORY);
   });
 
+  it('refuses a Safe with a drafts log and no owner-history module by default', async () => {
+    // The owner history is required unless the caller says otherwise: a caller
+    // that has to judge a block cannot decide without it.
+    const { read, readValue } = chain({
+      enabled: [DRAFTS],
+      answers: { [DRAFTS]: [DRAFTS_MODULE_INTERFACE_ID] },
+    });
+
+    expect(await resolveAuthorModules(read, readValue, SAFE)).toMatchObject({
+      ok: false,
+      error: 'no-owner-history-module',
+    });
+  });
+
+  it('resolves the drafts log alone when the owner history is optional', async () => {
+    const { read, readValue } = chain({
+      enabled: [DRAFTS],
+      answers: { [DRAFTS]: [DRAFTS_MODULE_INTERFACE_ID] },
+    });
+
+    const result = await resolveAuthorModules(read, readValue, SAFE, {
+      ownerHistoryOptional: true,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.drafts).toBe(DRAFTS);
+    expect(result.ownerHistory).toBeUndefined();
+  });
+
+  it('still refuses two owner-history claimants when the module is optional', async () => {
+    // Absent is a case a caller may handle; ambiguous is not: two histories on
+    // one Safe leave no single answer at any block.
+    const other = MODULE(6);
+    const { read, readValue } = chain({
+      enabled: [DRAFTS, HISTORY, other],
+      answers: { ...bothRoles, [other]: [OWNER_HISTORY_MODULE_INTERFACE_ID] },
+    });
+
+    expect(
+      await resolveAuthorModules(read, readValue, SAFE, { ownerHistoryOptional: true }),
+    ).toMatchObject({ ok: false, error: 'ambiguous-owner-history-module' });
+  });
+
   it('refuses a Safe whose module list cannot be read', async () => {
     const read: GateRead = async () => true;
     const readValue: GateValueRead = async () => {
