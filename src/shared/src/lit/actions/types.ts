@@ -153,8 +153,9 @@ export interface RepointArchiveData {
 // caller names the Safe, never a module: the action resolves the Safe's drafts
 // log and owner-history module from the Safe's own enabled-module list, requires
 // the drafts log to name that Safe for the genesis, and reads `isOwnerAt` at the
-// genesis's append block (live `isOwner` when a pre-upgrade version records block
-// 0). Only then is the blob cat'd, and the plaintext is released only if it
+// genesis's append block. A version that records block 0 has no block to judge
+// an owner set at, so it is refused rather than judged in the present tense.
+// Only then is the blob cat'd, and the plaintext is released only if it
 // hashes to the signed `public.plaintextHash`. The action itself lives in
 // `src/press/actions`; `LitService` adds its own `gateway` to these params before
 // the action is executed.
