@@ -4,6 +4,7 @@ import {
   canRead,
   canReset,
   canReview,
+  isOutOfForce,
   owns,
   ownsVerdict,
   type GateRead,
@@ -390,6 +391,26 @@ describe('owns', () => {
       expect(verdict.author).toBe(OTHER_SAFE);
       expect(verdict.block).toBeUndefined();
     });
+  });
+});
+
+describe('isOutOfForce', () => {
+  it('is not out of force while the publication holds a deal on the genesis', async () => {
+    const { read, asked } = makeRead({ [`hasDeal:${PUBLICATION}`]: true });
+    expect(await isOutOfForce(read, HEX32, PUBLICATION)).toBe(false);
+    expect(asked).toEqual([{ target: PUBLICATION, fn: 'hasDeal', args: [HEX32] }]);
+  });
+
+  it('is out of force when hasDeal answers false, so the page can be removed as a repair', async () => {
+    const { read } = makeRead({ [`hasDeal:${PUBLICATION}`]: false });
+    expect(await isOutOfForce(read, HEX32, PUBLICATION)).toBe(true);
+  });
+
+  it('answers false when the read throws — a transport error never makes a page removable', async () => {
+    const read: GateRead = async () => {
+      throw new Error('rpc timeout');
+    };
+    expect(await isOutOfForce(read, HEX32, PUBLICATION)).toBe(false);
   });
 });
 
