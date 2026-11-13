@@ -22,7 +22,12 @@ export interface CommandSpec {
   /** A second `--help` line, for the reason behind the command's shape. */
   detail?: string;
   flags: FlagSpecs;
-  run(ctx: CliContext, args: ParsedArgs): Promise<void>;
+  /**
+   * The command's work. Returning a number sets the process exit code; the
+   * commands that can finish with a partial result (a pull that failed some
+   * rows) use it, the rest return nothing.
+   */
+  run(ctx: CliContext, args: ParsedArgs): Promise<void | number>;
 }
 
 /**

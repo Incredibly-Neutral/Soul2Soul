@@ -55,7 +55,8 @@ publication), `publication` (publication lifecycle), `config` (CLI settings), an
 guided first-run pass over those settings — see [Config file](#config-file-bring-your-own-infra)).
 The `signer` group is the fifth: a key that joins a Safe it did not create —
 [SPEC-author-signers](SPEC-author-signers.md). The `drafts` group is the sixth: the active author
-Safe's draft log — `s2s drafts list` reads it, `s2s drafts append` records a version —
+Safe's draft log — `s2s drafts list` reads it, `s2s drafts append` records a version, and
+`s2s drafts fetch` / `s2s drafts pull` turn a row back into a note —
 [SPEC-author-drafts](SPEC-author-drafts.md).
 
 ```
@@ -85,6 +86,8 @@ s2s config list      [--json]                                                   
 s2s config path      [--local] [--json]                                                           # print every config file location
 s2s drafts list      [--json]                                                                     # the active author Safe's drafts, read from the module it adopted
 s2s drafts append    <genesis> <cid> [--json]                                                     # record a version on that log (a Safe transaction)
+s2s drafts fetch     <order|genesis> [--out <path>] [--stdout] [--json]                           # one draft, decrypted, as a note
+s2s drafts pull      <folder> [--force] [--json]                                                  # every draft in the log as a note in <folder>
 ```
 
 The **upload ↔ offer split**: `upload` signs, uploads to Kubo, fires the pinning
@@ -172,7 +175,7 @@ The nested shape, one section per service:
   "paymaster": { "key": "…", "url": "…" },
   "filecoin":  { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
   "safeTx": { "url": "https://safe-transaction-base.safe.global", "key": "…" },
-  "lit": { "accountKey": "…", "usageKey": "…", "encryptActionCid": "Qm…" },
+  "lit": { "accountKey": "…", "usageKey": "…", "encryptActionCid": "Qm…", "decryptActionCid": "Qm…" },
   "ens": { "registry": "0x…" },
   "github": { "token": "…" } }
 ```
@@ -423,6 +426,7 @@ s2s config set ipfs.kubo.url http://127.0.0.1:5001      # bring your own Kubo
 s2s config set rpc.custom.l1 http://my-l1.example,http://fallback  # comma lists allowed
 s2s config set lit.usageKey … --json                    # stored 0600, masked on read
 s2s config set lit.encryptActionCid bafy…               # the encrypt action bundle's CID
+s2s config set lit.decryptActionCid bafy…               # the decrypt action bundle's CID
 s2s config set environment dev
 s2s config get ipfs.kubo.url      # prints the *effective* value (env may win)
 s2s config list --json            # full effective surface, secrets masked
@@ -458,6 +462,16 @@ a config-file `lit.encryptActionCid`, else `lit_action_encrypt`. With all three
 absent the encrypt path fails closed and names both remedies:
 `s2s config set lit.encryptActionCid <cid>`, or writing the record with
 `press/scripts/lit/update-protocol.ts`.
+
+`lit.decryptActionCid` is the same leaf for the other direction, and the read path
+resolves it the same way: `LIT_DECRYPT_ACTION_CID`, else a config-file
+`lit.decryptActionCid`, else the record `lit_action_decrypt`. The two are separate
+leaves because they are separate bundles, swapped one at a time. With none of the
+three, `drafts fetch` and `drafts pull` fail closed before they ask Lit anything,
+naming `s2s config set lit.decryptActionCid <cid>` and
+`press/scripts/lit/update-protocol.ts` — the same two remedies, because either one
+is a fix. A machine that only writes drafts never needs it, and one that only reads
+them never needs the encrypt CID: neither absence blocks the other path.
 
 ### Installing the author contracts
 
@@ -786,9 +800,11 @@ is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `ipfs
 
 ### `drafts` group — result types
 
-`s2s drafts list` reads the active author Safe's draft log and `s2s drafts append` writes one
-version to it ([SPEC-author-drafts](SPEC-author-drafts.md)). Neither takes an action flag — `--json`
-and `--help` only. `list` sends no transaction; `append` takes one Safe transaction to the drafts
+`s2s drafts list` reads the active author Safe's draft log, `s2s drafts append` writes one version
+to it, and `s2s drafts fetch` / `s2s drafts pull` read those versions back as notes
+([SPEC-author-drafts](SPEC-author-drafts.md)). None takes an action flag — the four take their own
+arguments and `--json`/`--help` as the global ones. `list` and the two reads send no transaction;
+`append` takes one Safe transaction to the drafts
 module, `append(bytes32 genesis, string cid)`, which is `onlySafe` — the key running the command
 therefore has to meet the Safe's threshold, and a Safe above it refuses before sending, naming
 `s2s signer queue`. Both are dispatched after `buildContext`, because they need the active
@@ -816,6 +832,22 @@ author and an L2 RPC.
   cid: string;                    // the version's bytes, as passed
   versionCount?: number;          // versionCount(genesis) read after the send; absent when that read failed
   txHash: string }                // the Safe transaction, sent and awaited — never a queued proposal
+
+// s2s drafts fetch <order|genesis> [--out <path>] [--stdout] [--json] — one draft as a note
+{ action: 'drafts.fetch';
+  genesis: string;                // the row this read came from, bytes32 as the log holds it
+  cid: string;                    // the version the item was read at (the latest append)
+  author: string;                 // the Safe the row bound the genesis to
+  path: string | null;            // where the note was written; null with --stdout
+  bytes: number }                 // bytes of what was produced: the file, or the body under --stdout
+
+// s2s drafts pull <folder> [--force] [--json] — every draft in the log as a note
+{ action: 'drafts.pull';
+  folder: string;                 // as passed, not resolved to an absolute path
+  drafts: { genesis: string;
+            cid: string;          // the log's latest version for this row
+            status: 'written' | 'present' | 'behind' | 'failed';
+            path: string }[] }    // the note's path; empty only for a `failed` row that never chose one
 ```
 
 **The module is resolved by role, in one order.** Every address on the Safe's enabled-module list
@@ -858,10 +890,60 @@ unwritten by this Safe, so the rows are what the index names rather than what th
 module the Safe enabled prints nothing extra — including a factory-index module that is also on the
 enabled list, since being enabled is the fact the warning would deny.
 
-**No label is resolved.** A row is named by its genesis. The draft's `label` lives in the uploaded
-envelope, so showing it would cost one gateway read per draft; the result carries the genesis and
-the CID instead. Whether a draft entry should carry a label of its own is open
+**No label is resolved by `list`.** A row is named by its genesis. The draft's `label` lives in the
+uploaded envelope, so showing it would cost one gateway read per draft; the result carries the
+genesis and the CID instead. `fetch` and `pull` do make that read — one per draft they write — so the
+note they name and the file they write use the label, and fall back to the genesis when the item
+carries none. Whether a draft *entry* should carry a label of its own is open
 ([SPEC-author-drafts](SPEC-author-drafts.md#open-questions)).
+
+### `drafts fetch` — one row, decrypted, as a note
+
+The ref is the **1-based order `list` printed** or a **genesis** (a bytes32, or any id shared's
+`toBytes32Id` normalises to the key the log holds). Two misses are errors, never a zeroed row: an
+order past the end, and a genesis the log does not know — the module answers that one with
+`versionCount == 0` and no revert, which is exactly the shape a caller mistakes for a draft. Both
+messages name `s2s drafts list`, which prints the refs that do work.
+
+The read is the row, the item at its latest `cid`, and — when the item says `encryption: true` — the
+GATES-1 decrypt action. The signature is a **personal message**, `signMessage('lit actions auth')`,
+not a raw digest: the action recovers it with EIP-191, so a typed-data or digest signature would
+recover a different address. The parameters are the protocol PKP (`ctx.protocolInfo.pkp`), the row's
+`author` Safe, its genesis and the L2 endpoints. Nothing here is a new primitive: the action owns the
+gating (the genesis is in that Safe's log, the signer was an owner when the version landed) and the
+CLI only carries the request and the refusal. A plaintext item is copied as it stands and Lit is not
+asked: its bytes are public, and an action that refuses what was never closed answers a reason that
+is not a problem.
+
+The note is rebuilt from the plaintext and the item's public metadata, and it is the note this CLI
+can upload again: `upsertFrontmatter` writes `genesis`, `cid`, `author`, `creation_date`,
+`modified_date` and `encrypted` — the keys the parser and the uploader already read — over a body of
+`# <title>` followed by the body document's `content`. The title is the item's `label`, else the
+genesis. Because the heading is where the parser reads a title, a re-parse finds it, and because the
+genesis is in the frontmatter, the next upload appends to this row instead of minting a draft.
+
+Three outputs, one at a time: the default writes `<title-slug>.md` in the working directory and
+prints the path; `--out` writes that path instead; `--stdout` prints the body alone and writes
+nothing (`--out` with `--stdout` is a usage error, not a silent choice). Under `--json` the envelope
+is the whole of stdout, as it is for every action: `path` is `null`, `bytes` counts the body, and the
+body itself is not printed beside the envelope — one stream, one form.
+
+### `drafts pull` — the log, as a folder
+
+Pull only: nothing is signed, uploaded or appended. Every draft in the log becomes a note, created if
+missing, named by the same title rule as `fetch`. A note already carrying that genesis is compared by
+the **CID it records**: equal is `present` and untouched; different is `behind` and left untouched
+unless `--force` — a pull does not decide that the log is right about work someone edited locally.
+Files carrying another genesis, and files carrying none, are not touched at all; a title collision
+falls back to `<slug>-<genesis8>.md` rather than overwriting the other note, and a folder that does
+not exist is created.
+
+The summary is one row per draft on stderr, `order  status  path`, in log order, with
+`written` / `present` / `behind` / `failed`. One unreadable draft does not stop the run, so the rows
+are printed after the whole log has been walked, and **any `failed` row makes the exit code 1** —
+that, not the text, is how a script sees a partial pull. `--json` puts every row in the envelope and
+prints no stderr rows; the failure reasons still go to stderr, one line per failed draft, because an
+envelope carries the status and not the action's words.
 
 ### `publication` group — result types
 

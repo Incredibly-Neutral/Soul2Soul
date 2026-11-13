@@ -296,7 +296,12 @@ describe('s2s drafts append', () => {
     const command = findDraftsCommand('append');
     expect(findDraftsCommand('list')?.name).toBe('list');
     expect(command?.name).toBe('append');
-    expect(draftsHelpEntries.map((entry) => entry.name)).toEqual(['list', 'append']);
+    expect(draftsHelpEntries.map((entry) => entry.name)).toEqual([
+      'list',
+      'append',
+      'fetch',
+      'pull',
+    ]);
   });
 
   it('renders `s2s drafts append <genesis> <cid>` as its usage line', () => {

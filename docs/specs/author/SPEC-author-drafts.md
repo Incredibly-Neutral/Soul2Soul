@@ -254,6 +254,21 @@ version appended since cannot be read at the head under an older owner's answer.
 records no height there is nothing to pin to and the entry is read at the head, the present the live
 answer was given in.
 
+## Reading a draft back
+
+`canAuthorVerdict` answers whether a caller may open a version; the CLI carries that request for its
+author. `s2s drafts fetch <order|genesis>` reads the row's latest `cid`, reads the item there, and —
+when the item says `encryption: true` — signs `'lit actions auth'` as a personal message and asks the
+decrypt action with the protocol PKP, the Safe the row bound and the genesis. `s2s drafts pull
+<folder>` does the same per row and writes the result into a folder. Both resolve the same module the
+listing did, so the row a number names and the rows a pull walks are one log.
+
+The body is the author's, not the chain's: what comes back is the document that was signed, and the
+CLI rebuilds it into a note carrying the row's `genesis`, `cid`, `author` and dates in its
+frontmatter, so that note is what the next `upload` appends to the same draft. A plaintext version is
+copied without asking Lit, because its bytes were never closed. Nothing on the write side changes:
+the log still holds a genesis, a CID and a binding, and neither read command writes to it.
+
 ## Adoption
 
 An author keeps their Safe and adopts new modules on it. The Safe address is the byline and the
@@ -293,10 +308,12 @@ storage.
 - **Version order is insertion order** — within a genesis, and across the draft list. There is no
   swap-pop and no removal, so pagination is stable: appends only extend. The publication sets get their
   ordering hazard from removal; this log cannot have it.
-- **The log is plaintext in V1.** No ciphertext, no key, no `encryption` flag. The chain publishes the
-  CID; a public gateway serves the bytes. A draft is not private — it is a document whose address is
-  public and whose index is public. This is the exact opposite of AUTHOR-2's encrypt-to-the-press rule,
-  and it is a consequence of a draft having no press to encrypt to.
+- **The log holds identities and CIDs, never bodies.** A genesis gets a binding and every version a
+  `cid`; a public gateway serves the bytes that CID names, and nothing in the module reads them. Those
+  bytes are ciphertext by default — the CLI encrypts a draft the way AUTHOR-2 encrypts a manuscript —
+  so the CID is public and the document is not, and opening it is the decrypt action's decision, taken
+  against this log rather than against the item. A version uploaded plaintext stays plaintext: the log
+  cannot tell the two apart, and neither can a reader without the item's own `encryption` flag.
 - **The block is the chain's.** `timestamp` and `blockNumber` are read from the block at append, never
   taken as arguments, and never rewritten. `blockNumber == 0` marks a version this instance did not
   write, or wrote before the field existed.
@@ -336,9 +353,11 @@ storage.
 1. **Writer auth beyond the Safe.** Today every draft is an N-of-M governance act, the CLI's own
    appends included: it sends `append` as a Safe transaction, so a multi-owner Safe needs its
    owners. A scoped signer is the obvious relief — undecided.
-2. **Encryption.** Plaintext is a V1 choice, not an argument. Options: encrypt to the author's own key
-   (nothing renders a draft, so the cipher is passive), a future gated collection, or accept plaintext
-   for the pre-offer window. Undecided.
+2. **Who can read a draft besides its author.** Encryption is settled: an upload encrypts by default,
+   and opening the bytes is the GATES-1 decrypt action, which asks this log whether the caller was an
+   owner when the version landed. What is undecided is anything wider — a gated collection that shares
+   a draft before an offer, a press reading one on the author's behalf, what a key rotation does to
+   versions encrypted under the old one.
 3. **Deletion.** Append-only means a mistaken upload is in the index forever. A `tombstone` that means
    something, or an `onlySafe` hide flag, is undecided — and the publication module's dead field is the
    cautionary example of adding one without a feature.
@@ -357,8 +376,9 @@ Settled by the implementation, recorded here so it stops being a question: `vers
 **0-based** (the index the new version just took, i.e. the old length); a paged read returns an
 **empty array** when `offset >= count` or `limit == 0`, and otherwise **clamps** the end at `count`;
 `fetch` on an unknown genesis returns the zeroed `Entry` rather than reverting. **The CLI reads the
-log: `s2s drafts list`.** It lists the active author Safe's drafts, takes the module from the Safe's
-enabled list first and from the factory index after that, and pages the read — see
+log: `s2s drafts list`, `s2s drafts fetch`, `s2s drafts pull`.** They list the active author Safe's
+drafts, take the module from the Safe's enabled list first and from the factory index after that, page
+the read, and turn a row back into a note through the decrypt action — see
 [SPEC-author-cli](SPEC-author-cli.md). **The write path owns the append.** The CLI appends as part
 of the command that produced the bytes — after the Kubo upload, before the offer — and
 `s2s drafts append <genesis> <cid>` is the retry when that send fails; no other host writes the log.

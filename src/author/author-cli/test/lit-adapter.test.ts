@@ -2,8 +2,9 @@
 // The Lit adapter — what the CLI hands LitService so it can execute an action.
 //
 // There is no inline action code in this CLI, and no action CID ships in it
-// either: encrypt runs from the CID the protocol records module holds
-// (`lit_action_encrypt`), with `lit.encryptActionCid` as the override. These
+// either: encrypt and decrypt run from the CIDs the protocol records module holds
+// (`lit_action_encrypt`, `lit_action_decrypt`), with `lit.encryptActionCid` /
+// `lit.decryptActionCid` as the overrides. These
 // tests assert the wiring — a service that throws "missing actions.encrypt" is
 // the failure that motivated it — not the Lit exchange, which shared's own tests
 // own.
@@ -11,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createLitService, NO_ENCRYPT_ACTION } from '../src/adapters/lit';
+import { createLitService, NO_DECRYPT_ACTION, NO_ENCRYPT_ACTION } from '../src/adapters/lit';
 import { loadConfig } from '../src/core/config';
 
 /** Never the developer's real ~/.config/s2s: a blank machine, as in config.test. */
@@ -26,8 +27,12 @@ const nowhere = {
 const CID = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy';
 
 /** The private fields LitService keeps — the seam this adapter is. */
-const wired = (env: NodeJS.ProcessEnv = {}, cid: string | undefined = env.LIT_ENCRYPT_ACTION_CID) => {
-  const svc = createLitService(loadConfig(env, nowhere), cid);
+const wired = (
+  env: NodeJS.ProcessEnv = {},
+  cid: string | undefined = env.LIT_ENCRYPT_ACTION_CID,
+  decryptCid: string | undefined = env.LIT_DECRYPT_ACTION_CID,
+) => {
+  const svc = createLitService(loadConfig(env, nowhere), cid, decryptCid);
   return svc as unknown as {
     gateway?: string;
     actions: { encrypt?: string; decrypt?: string };
@@ -48,12 +53,42 @@ describe('createLitService', () => {
 
   it('fails closed with both remedies when no CID resolved', async () => {
     const svc = createLitService(loadConfig({}, nowhere));
-    expect((svc as unknown as { actions: Record<string, unknown> }).actions.encrypt).toBeUndefined();
+    expect(
+      (svc as unknown as { actions: Record<string, unknown> }).actions.encrypt,
+    ).toBeUndefined();
 
     await expect(svc.encrypt('usage-key', '0xpkp', 'plaintext')).rejects.toThrow(NO_ENCRYPT_ACTION);
     // Both ways to supply it are named, because either one is a fix.
     expect(NO_ENCRYPT_ACTION).toContain('s2s config set lit.encryptActionCid <cid>');
     expect(NO_ENCRYPT_ACTION).toContain('src/press/scripts/lit/update-protocol.ts');
+  });
+
+  it('hands over the decrypt CID the same way, and fails closed without one', async () => {
+    // The two bundles are separate: `drafts fetch` runs from the decrypt action
+    // whether or not this machine can encrypt, and `upload` from the encrypt one.
+    const both = wired({}, CID, 'bafydecrypt');
+    expect(both.actions).toEqual({ encrypt: CID, decrypt: 'bafydecrypt' });
+
+    const readOnly = createLitService(loadConfig({}, nowhere), undefined, 'bafydecrypt');
+    expect((readOnly as unknown as { actions: Record<string, unknown> }).actions).toEqual({
+      decrypt: 'bafydecrypt',
+    });
+    await expect(readOnly.encrypt('usage-key', '0xpkp', 'plaintext')).rejects.toThrow(
+      NO_ENCRYPT_ACTION,
+    );
+
+    const svc = createLitService(loadConfig({}, nowhere), CID);
+    await expect(
+      svc.decrypt('usage-key', {
+        pkpId: '0xpkp',
+        genesis: '0x' + '11'.repeat(32),
+        authorSafe: '0x' + '22'.repeat(20),
+        signature: '0xsig',
+        rpcs: { L2: [] },
+      }),
+    ).rejects.toThrow(NO_DECRYPT_ACTION);
+    expect(NO_DECRYPT_ACTION).toContain('s2s config set lit.decryptActionCid <cid>');
+    expect(NO_DECRYPT_ACTION).toContain('src/press/scripts/lit/update-protocol.ts');
   });
 
   it('uses the Kubo gateway the CLI already reads content through, with a scheme', () => {

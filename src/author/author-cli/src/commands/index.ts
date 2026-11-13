@@ -22,6 +22,8 @@ import { revoke } from './revoke';
 import { newPublication } from './new';
 import { draftsList } from './drafts-list';
 import { draftsAppend } from './drafts-append';
+import { draftsFetch } from './drafts-fetch';
+import { draftsPull } from './drafts-pull';
 import { authorAddress, authorInfo } from './address';
 import { authorInit } from './init';
 import { authorMigrate } from './migrate';
@@ -53,8 +55,12 @@ export const authorCommands: CommandSpec[] = [
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];
 
-/** `s2s drafts` — the drafts log on the author Safe: what it holds, and the append. */
-export const draftsCommands: CommandSpec[] = [draftsList, draftsAppend];
+/**
+ * `s2s drafts` — the drafts log on the author Safe: what it holds, the append,
+ * and the two reads that turn a row back into a note. `list` first because it is
+ * what prints the refs the other three take.
+ */
+export const draftsCommands: CommandSpec[] = [draftsList, draftsAppend, draftsFetch, draftsPull];
 
 export function findDraftsCommand(name: string): CommandSpec | undefined {
   return draftsCommands.find((command) => command.name === name);

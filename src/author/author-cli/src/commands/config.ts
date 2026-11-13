@@ -561,7 +561,7 @@ Keys are dotted paths into the service-grouped config:
   paymaster.key          paymaster.url          bundler.url
   filecoin.sessionKeyFile  filecoin.chain       filecoin.rpcUrl
   lit.accountKey         lit.usageKey           lit.encryptActionCid
-  ens.registry           github.token           entryPoint (env-only)
+  lit.decryptActionCid   ens.registry           github.token           entryPoint (env-only)
 
 <label> is any name you choose (e.g. pinning.my-pinner). The same provider is
 merged field by field across layers; naming a different provider replaces the

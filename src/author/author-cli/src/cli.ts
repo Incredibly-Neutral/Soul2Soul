@@ -255,8 +255,14 @@ async function main(argv: string[]): Promise<number> {
 
   const parsed = parseCommandArgs(argv, command.flags);
   const context = await buildContext(out, loadConfig());
-  await command.run(context, { flags: parsed.flags, positionals: parsed.positionals.slice(2) });
-  return 0;
+  const code = await command.run(context, {
+    flags: parsed.flags,
+    positionals: parsed.positionals.slice(2),
+  });
+  // A command that can finish with a partial result says so in its return: a
+  // `drafts pull` that failed some rows still prints the rows, and the exit code
+  // is how a script sees the difference.
+  return typeof code === 'number' ? code : 0;
 }
 
 /** One shape for every `--json` failure, so consumers read `code`, not prose. */
