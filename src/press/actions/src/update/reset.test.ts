@@ -92,6 +92,8 @@ vi.mock('./verify', () => ({
   verifyProvenance: vi.fn(async () => {}),
   verifyPathAvailable: vi.fn(async () => {}),
   verifyRevocable: vi.fn(async () => {}),
+  // No page at any destination — every job is an ADD.
+  readPageIdentity: vi.fn(async () => null),
   sanitizeRemovePath: (p: string) => p,
 }));
 

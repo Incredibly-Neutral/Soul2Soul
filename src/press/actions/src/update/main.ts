@@ -13,6 +13,7 @@ import {
   sanitizeRemovePath,
   verifyRevocable,
   verifyPathAvailable,
+  readPageIdentity,
   type PageIdentity,
 } from './verify';
 
@@ -180,14 +181,29 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
     // A reset is publication-owner gated (stricter than canPublish): the signer
     // must be an owner of the publication Safe (`multisig`), not merely an owner
-    // of a whitelisted author Safe. Normal publishes keep canPublish unchanged.
+    // of a whitelisted author Safe. Everything else is gated PER PAGE in the
+    // jobs loop: an ADD needs canPublish, a REFRESH of the page already at its
+    // own path needs nothing (it introduces no path and displaces no page), and
+    // a remove is a repair that verifyRevocable alone decides. A reset is the
+    // one exception to the ADD rule: canReset already judged the signer, so the
+    // pages a reset rebuilds are not asked about again.
     if (reset) {
       if (!(await canReset(multisig, signerAddress, rpcs?.L2))) {
         throw 'reset requires publication owner';
       }
-    } else if (!(await canPublish(authorSafeAddress, publicationModule, signerAddress, rpcs?.L2))) {
-      throw 'cannot publish';
     }
+
+    // canPublish answers the same question for every page in the request, so it
+    // is asked at most once however many pages are added. The PROMISE is what is
+    // memoised: parallel jobs join the one in flight instead of each issuing the
+    // same reads.
+    let publishGate: Promise<boolean> | null = null;
+    const mayPublish = (): Promise<boolean> => {
+      if (!publishGate) {
+        publishGate = canPublish(authorSafeAddress, publicationModule, signerAddress, rpcs?.L2);
+      }
+      return publishGate;
+    };
 
     const protocolInfo = await getProtocolInfo(false, rpcs);
     if (!protocolInfo?.pkp) {
@@ -284,6 +300,29 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         const destPath = `${mfsPath}/${filePath}`;
         const sourceCid = job.html;
 
+        // Per-page gate: classify the job by the page already at its
+        // destination. The same identifier means this is a REFRESH — a new
+        // render of the content item that owns the path — which needs no
+        // permission: it can neither introduce a path nor displace another
+        // author's page, and the provenance verification below requires a PKP
+        // signature over the genesis named in job.id and over the digest of the
+        // body, so a refresh can only write the press's own render of that
+        // genesis. Anything else is an ADD, and adding content to the
+        // publication needs canPublish — unless the request is a reset, which
+        // canReset (publication-Safe ownership) has already gated more strictly.
+        // A preview writes nothing and is never a refresh, so it still needs
+        // canPublish.
+        //
+        // The identity read here is the one the path gate below needs, so it is
+        // handed over rather than read twice.
+        const existingPage = preview ? undefined : await readPageIdentity(gateway!, destPath);
+        const isRefresh = !preview && existingPage?.identifier === job.id;
+        if (isRefresh) {
+          trace.push(`refresh: ${filePath}`);
+        } else if (!reset && !(await mayPublish())) {
+          throw 'cannot publish';
+        }
+
         // Provenance verification gate — reject unverified content.
         // The gate RETURNS the page's self-description (identifier, claimed
         // author, canonicalisation, claimed body digest) so the tree rules below
@@ -336,6 +375,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
             publicationModule,
             rpcs?.L2,
             incomingPageIdentity,
+            existingPage,
           );
         }
 

@@ -18,6 +18,7 @@ import {
     canRead as gateCanRead,
     canReset as gateCanReset,
     canReview as gateCanReview,
+    isOutOfForce as gateIsOutOfForce,
     ownsVerdict as gateOwnsVerdict,
     type GateRead,
     type GateValueRead,
@@ -71,6 +72,17 @@ export const canReset = (
     rpcs?: string[],
 ): Promise<boolean> =>
     gateCanReset(bindRead(rpcs), multisig, signerAddress);
+
+/**
+ * Is this genesis out of force on this publication? `genesis` is already
+ * bytes32 — the caller normalises, this gate hashes nothing.
+ */
+export const isOutOfForce = (
+    genesis: string,
+    publicationModule: string,
+    rpcs?: string[],
+): Promise<boolean> =>
+    gateIsOutOfForce(bindRead(rpcs), genesis, publicationModule);
 
 /**
  * GATES-1's author branch, reporting the block it judged at. The decrypt action

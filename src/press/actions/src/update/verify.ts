@@ -11,6 +11,7 @@ import {
   PROOF_CANONICALIZATION_JCS,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { ADDRESS_RE } from '../libs/address';
+import { isOutOfForce } from '../libs/gates';
 import { accountAddress } from '../../../../shared/dist/manuscript/identity/author-address';
 
 // Tree-mutation integrity gate — PKP provenance verification
@@ -284,9 +285,11 @@ const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
  * Verify that content at an MFS path is revocable:
  *  - Extract genesis from the existing HTML at ${mfsRoot}/${cleanPath}/index.html
  *  - Convert to bytes32 (keccak256 if not already)
- *  - Check on-chain that no deal exists for it
+ *  - Ask the publication module whether that genesis is out of force
  *
- * Throws if a deal is active (content cannot be removed).
+ * Throws if the genesis is still in force (an active deal: the page carries a
+ * manuscript the press still owes). A page that is out of force is a repair,
+ * not an exercise of authority, so the caller needs no permission for it.
  */
 export async function verifyRevocable(
   gateway: string,
@@ -304,21 +307,8 @@ export async function verifyRevocable(
     ? genesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(genesis));
 
-  // NOTE: destructuring `{ provider }` off a StaticJsonRpcProvider INSTANCE yields
-  // undefined (the instance has no `provider` property), so the Contract would be
-  // constructed with an undefined provider and ethers v5 sets contract.provider =
-  // null — `contract.hasDeal(...)` then reads this.provider.call(...) and throws
-  // "TypeError: Cannot read properties of null (reading 'call')". Construct the
-  // provider directly (mirrors libs/evm.ts evmSetup).
-  const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
-    chainId: 8453,
-    name: 'base',
-  });
-  const contract = new ethers.Contract(publicationModule, HAS_DEAL_ABI, provider);
-  const hasDeal: boolean = await contract.hasDeal(bytes32Genesis);
-
-  if (hasDeal) {
-    throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… has an active deal`;
+  if (!(await isOutOfForce(bytes32Genesis, publicationModule, rpcs))) {
+    throw `Refusing to remove: genesis ${bytes32Genesis.slice(0, 12)}… is still in force`;
   }
 }
 
@@ -369,6 +359,11 @@ export async function readPageIdentity(
  *
  * `incoming` is the identity of the page being written (what verifyProvenance
  * just parsed). Callers that omit it get rules 2 (identifier only) and 3.
+ *
+ * `existing` is the identity the caller already read at `destPath` for its own
+ * classification (main's per-page gate), so the page is not read twice.
+ * `undefined` means "not read" and the read happens here; `null` is a read that
+ * found no page (a free path).
  */
 export async function verifyPathAvailable(
   gateway: string,
@@ -377,10 +372,12 @@ export async function verifyPathAvailable(
   publicationModule: string,
   rpcs: string[] | undefined,
   incoming?: PageIdentity | null,
+  existing?: PageIdentity | null,
 ): Promise<void> {
-  const existing = await readPageIdentity(gateway, destPath);
+  const existingPage =
+    existing === undefined ? await readPageIdentity(gateway, destPath) : existing;
 
-  if (!existing || existing.identifier === null) {
+  if (!existingPage || existingPage.identifier === null) {
     // Free path (no page, or no parseable schema on it) — rule 1.
     if (incoming?.canonicalization === 'LEGACY') {
       throw (
@@ -394,11 +391,11 @@ export async function verifyPathAvailable(
   }
 
   // Rule 2 — a signed, LEGACY-canonicalised page already at the destination.
-  if (existing.signed && existing.canonicalization === 'LEGACY') {
-    if (existing.identifier !== incomingGenesis) {
+  if (existingPage.signed && existingPage.canonicalization === 'LEGACY') {
+    if (existingPage.identifier !== incomingGenesis) {
       throw (
         `Refusing to replace the legacy-signed page at ${destPath} ` +
-        `(genesis ${existing.identifier.slice(0, 12)}…) with a different content item ` +
+        `(genesis ${existingPage.identifier.slice(0, 12)}…) with a different content item ` +
         `(${incomingGenesis.slice(0, 12)}…): a legacy page is an immutable carrier — its ` +
         `signature covers the document skeleton only, so the new body would be unsigned. ` +
         `Re-render the existing content under specVersion 1 (JCS) instead.`
@@ -415,14 +412,20 @@ export async function verifyPathAvailable(
   }
 
   // Same genesis overwriting itself (re-render of the same page) — always allowed
-  if (existing.identifier === incomingGenesis) return;
-  const existingGenesis = existing.identifier;
+  if (existingPage.identifier === incomingGenesis) return;
+  const existingGenesis = existingPage.identifier;
 
   // Different genesis — check if existing content has an active deal
   const bytes32Genesis = HEX32_RE.test(existingGenesis)
     ? existingGenesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(existingGenesis));
 
+  // NOTE: destructuring `{ provider }` off a StaticJsonRpcProvider INSTANCE yields
+  // undefined (the instance has no `provider` property), so the Contract would be
+  // constructed with an undefined provider and ethers v5 sets contract.provider =
+  // null — `contract.hasDeal(...)` then reads this.provider.call(...) and throws
+  // "TypeError: Cannot read properties of null (reading 'call')". Construct the
+  // provider directly (mirrors libs/evm.ts evmSetup).
   const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
     chainId: 8453,
     name: 'base',
