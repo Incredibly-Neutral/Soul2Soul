@@ -479,10 +479,10 @@ not what a gate wants for content older than the current block. The three reads 
 none feeds another.
 
 One block value is special: `blockNumber == 0` means the version predates the field, or was carried
-in by `absorb()`. There is no block to judge, so the gate falls back to the Safe's live `isOwner`.
-That answer is present tense and therefore weaker — a signer rotated out after the write no longer
-passes — and the gate should say which of the two it used rather than present them as the same
-result.
+in by `absorb()`. There is no block to judge, so the gate refuses the version, and it does not read
+the Safe's live `isOwner` in its place: a version with no block has no owner set at that height, and
+the present tense is not that question. A version written before the block was recorded can no longer
+be opened.
 
 One consequence the gate cannot dodge: `canPublish()` in `src/shared/src/gates` reads
 `isOwner` **live** as its second half, so a historical check has to *replace* that half, not
@@ -507,8 +507,8 @@ whoever made the proxy named that Safe. The rules:
    low 20 bytes) → `guard` → `guard.module() → the module`, and require that address to be the one
    the enabled list gave. Two records that must agree are stronger than either alone. Neither is
    required to find the other.
-3. A failed comparison is `false` for the gate, never a fallback to a live `isOwner` — except where
-   `blockNumber` is 0, where the live read is the only answer there is.
+3. A failed comparison is `false` for the gate, never a fallback to a live `isOwner` — including
+   where `blockNumber` is 0, which the gate refuses instead of answering live.
 
 ## Invariants
 

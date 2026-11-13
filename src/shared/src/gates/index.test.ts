@@ -162,9 +162,9 @@ describe('owns', () => {
   const APPEND_BLOCK = 4321;
 
   // One chain: the Safe's enabled modules answer the two role ids, the drafts
-  // module answers authorOf and blocksOf, the history module answers isOwnerAt,
-  // and the Safe answers isOwner (the pre-upgrade fallback). Every read is
-  // recorded with its target and arguments.
+  // module answers authorOf and blocksOf, and the history module answers
+  // isOwnerAt. The Safe's own isOwner is answered too, so a test can prove the
+  // gate never asks it. Every read is recorded with its target and arguments.
   const ownsChain = (
     options: {
       author?: string;
@@ -213,7 +213,8 @@ describe('owns', () => {
     const ownership = asked.find((a) => a.fn === 'isOwnerAt')!;
     expect(ownership.target).toBe(HISTORY);
     expect(ownership.args).toEqual([SIGNER, APPEND_BLOCK]);
-    // The live isOwner is the fallback only; a recorded block never reads it.
+    // The live isOwner is never the answer, at any block; a recorded block reads
+    // the history module and nothing else.
     expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
     expect(asked.find((a) => a.fn === 'authorOf')!.target).toBe(DRAFTS);
   });
@@ -229,21 +230,26 @@ describe('owns', () => {
     expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 
-  it('falls back to the Safe live isOwner for a version whose block is 0', async () => {
-    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true, isOwnerAt: false });
-
-    expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(true);
-
-    expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
-    const live = asked.find((a) => a.fn === 'isOwner')!;
-    expect(live.target).toBe(SAFE);
-    expect(live.args).toEqual([SIGNER]);
-  });
-
-  it('refuses on the fallback path when the Safe no longer lists the signer', async () => {
-    const { read, readValue } = ownsChain({ blocks: [0], isOwner: false });
+  it('refuses a version whose block is 0, without reading the Safe', async () => {
+    // Block 0 is "no block was recorded": pre-upgrade, or carried in by an
+    // import. There is no owner set to judge the entry against, so the live
+    // answer does not rescue it.
+    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true });
 
     expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(false);
+
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
+  });
+
+  it('reads no owner at all for block 0: the append block is the only yardstick', async () => {
+    // A signer the history would place as an owner at the block the gate was
+    // asked in is still not judged at that block; block 0 has no yardstick.
+    const { read, readValue, asked } = ownsChain({ blocks: [0], isOwnerAt: true });
+
+    expect(await owns(read, readValue, HEX32, SAFE, SIGNER)).toBe(false);
+
+    expect(asked.some((a) => a.fn === 'isOwnerAt')).toBe(false);
+    expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
   });
 
   it('reads the block of the last version, not the first', async () => {
@@ -326,8 +332,8 @@ describe('owns', () => {
       });
     });
 
-    it('reports block 0, the pre-upgrade fallback, as a block it judged at', async () => {
-      const { read, readValue } = ownsChain({ blocks: [0], isOwner: false });
+    it('reports block 0 as a refusal, and the answers it had already read', async () => {
+      const { read, readValue, asked } = ownsChain({ blocks: [0], isOwner: true });
 
       const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
 
@@ -335,6 +341,7 @@ describe('owns', () => {
       expect(verdict.ok).toBe(false);
       expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
       expect(verdict.author).toBe(SAFE);
+      expect(asked.some((a) => a.fn === 'isOwner')).toBe(false);
     });
 
     it('reports the block on a refusal too', async () => {

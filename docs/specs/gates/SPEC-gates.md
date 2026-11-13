@@ -31,11 +31,14 @@ It then requires the blob's own signed `public.author` to
 equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
 in their own module, and only the blob's signed author refuses that.
 
-The `isOwner` read above is present tense. Where the record carries the block it was written in — the
-drafts log's `blocksOf(genesis)[versionIndex]` — the gate judges ownership at that block instead: a
-key rotated out keeps access to what it wrote, and a key added afterwards does not gain what it never
-held. A block of 0 means no block was recorded (a version older than the field, or imported), and the
-live read is the only answer there. That block is also what bounds the answer: history starts at the
+The gate asks one question, at one block. Where the record carries the block it was written in — the
+drafts log's `blocksOf(genesis)`, last entry — ownership is judged at that block: a key rotated out
+keeps access to what it wrote, and a key added afterwards does not gain what it never held. A block of
+0 means no block was recorded (a version older than the field, or a log imported by `absorb()`), and
+the gate refuses it: there is no owner set at that height to judge the signer against, and the Safe's
+live `isOwner` is not that set, so it is never read for this gate. The consequence is plain — a draft
+appended before the drafts module recorded a block number, and every version carried in by an import,
+can no longer be opened. That block is also what bounds the answer: history starts at the
 Safe's era 0, and an owner rotation the guard missed stretches the tenure it should have ended.
 
 ## GATES-2 — reviewers, until the offer ends
