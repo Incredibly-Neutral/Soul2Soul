@@ -102,6 +102,8 @@ function fakeSeam(options: FakeOptions = {}) {
       pages.push({ offset, limit });
       return Promise.resolve(log.slice(Number(offset), Number(offset + limit)));
     },
+    // The write path's post-append read; a list never asks for it.
+    readVersionCount: () => Promise.resolve(0n),
   };
 
   return { seam, pages, factoryReads: () => factoryReads };
@@ -454,9 +456,9 @@ describe('top-level dispatch', () => {
 });
 
 describe('registration', () => {
-  it('is a top-level group with one action, `list`', () => {
+  it('is a top-level group whose actions are `list` and the `append` retry', () => {
     expect(findDraftsCommand('list')?.name).toBe('list');
     expect(findDraftsCommand('bogus')).toBeUndefined();
-    expect(draftsHelpEntries.map((command) => command.name)).toEqual(['list']);
+    expect(draftsHelpEntries.map((command) => command.name)).toEqual(['list', 'append']);
   });
 });

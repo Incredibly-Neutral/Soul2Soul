@@ -2,7 +2,7 @@
 
 Read against: `~/code/polyphony/whitepaper/author.md` (2026-10-29).
 
-Branches: [overview](SPEC-author-overview.md) (the model, host matrix, reading order) · [identity](SPEC-author-identity.md) · [publishing](SPEC-author-publishing.md) · [shared](SPEC-author-shared.md) · [hosts](SPEC-author-hosts.md) · [cli](SPEC-author-cli.md) · [signers](SPEC-author-signers.md) (a key that joins a Safe it did not create) · [nvim](SPEC-author-nvim.md) · [vscode](SPEC-author-vscode.md) · [nvim-s2s](SPEC-nvim-s2s.md) · [drafts](SPEC-author-drafts.md) (the draft log on the author Safe — uploaded and never offered, listed by `s2s drafts list`) · [owner-history](SPEC-author-owner-history.md) (who was an owner of the author Safe, and when — the guard plus the module behind it).
+Branches: [overview](SPEC-author-overview.md) (the model, host matrix, reading order) · [identity](SPEC-author-identity.md) · [publishing](SPEC-author-publishing.md) · [shared](SPEC-author-shared.md) · [hosts](SPEC-author-hosts.md) · [cli](SPEC-author-cli.md) · [signers](SPEC-author-signers.md) (a key that joins a Safe it did not create) · [nvim](SPEC-author-nvim.md) · [vscode](SPEC-author-vscode.md) · [nvim-s2s](SPEC-nvim-s2s.md) · [drafts](SPEC-author-drafts.md) (the draft log on the author Safe — appended before any offer, listed by `s2s drafts list`) · [owner-history](SPEC-author-owner-history.md) (who was an owner of the author Safe, and when — the guard plus the module behind it).
 
 An author is an account that signs manuscripts. Everything below is owed to that
 account, not to a person: the protocol never learns a legal name.

@@ -38,9 +38,43 @@ vi.mock('../src/core/service', () => ({
     ),
   },
 }));
-vi.mock('../src/core/author-safe', () => ({
-  authorSafeState: vi.fn(() => Promise.reject(new Error('SAFE_REACHED'))),
-}));
+const RPC = 'http://127.0.0.1:8545';
+
+// Partial: the drafts-log append in `core/author.ts` reaches this module through
+// `core/author-contracts.ts`, which takes `ensureAuthorSafe` out of it at import
+// time. Only the Safe read is replaced — and it rejects, so any path that reaches
+// the chain here fails loudly instead of touching a network.
+vi.mock('../src/core/author-safe', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/author-safe')>();
+  return {
+    ...actual,
+    authorSafeState: vi.fn(() => Promise.reject(new Error('SAFE_REACHED'))),
+  };
+});
+
+// The append is not what this file is about: the offer's guards and the anchored
+// CID are. `offer --cid` now appends before it offers, so the two legacy-offer
+// tests below would otherwise reach the chain to resolve a module. One fake
+// module, one fake transaction, and `offerContent` still reaches `makeOffer`.
+vi.mock('../src/core/drafts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/drafts')>();
+  const module = '0x0000000000000000000000000000000000000011';
+  return {
+    ...actual,
+    resolveDraftsModule: vi.fn(() =>
+      Promise.resolve({ address: module, source: 'enabled', onEnabledList: true }),
+    ),
+    appendDraft: vi.fn((_ctx: unknown, opts: { genesis: string; cid: string }) =>
+      Promise.resolve({
+        module,
+        genesis: opts.genesis,
+        cid: opts.cid,
+        versionCount: 1,
+        txHash: '0x' + '77'.repeat(32),
+      }),
+    ),
+  };
+});
 
 import { authorSafeState } from '../src/core/author-safe';
 import { authorWrite, offerContent } from '../src/core/author';
@@ -1178,6 +1212,9 @@ describe('offerContent verifies the stored item', () => {
     const ctx = {
       config: { ipfs: { entries: [KUBO], primary: KUBO } },
       ipfs: { fetchFromKubo: spy, addToKubo },
+      // An endpoint, so the drafts pre-flight can name one; the drafts module
+      // itself is faked above, so nothing here reaches a chain.
+      rpcs: { L1: [RPC], L2: [RPC] },
       authorRunner: () => Promise.resolve({}),
       out: { log: vi.fn(), warn: vi.fn() },
     } as unknown as CliContext;

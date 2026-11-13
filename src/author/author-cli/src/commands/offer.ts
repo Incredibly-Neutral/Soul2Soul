@@ -57,6 +57,9 @@ export const offer: CommandSpec = {
           txHash: result.txHash,
           ipfsUrl: ipfsUri(result.kuboCid),
           gatewayUrl: ipfsGatewayUrl(result.kuboCid),
+          // The version this offer recorded in the drafts log. The append runs
+          // before makeOffer, so a landed offer always carries one.
+          draft: result.draft,
         },
         [
           `Offered ${notePath}`,
@@ -96,6 +99,8 @@ export const offer: CommandSpec = {
         ipfsUrl: ipfsUri(result.kuboCid),
         gatewayUrl: ipfsGatewayUrl(result.kuboCid),
         frontmatterWritten: result.frontmatterWritten,
+        // The version this upload recorded in the drafts log, before the offer.
+        draft: result.draft,
       },
       [
         `Offered ${notePath}`,

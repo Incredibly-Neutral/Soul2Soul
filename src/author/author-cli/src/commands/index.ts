@@ -21,7 +21,8 @@ import { publish } from './publish';
 import { revoke } from './revoke';
 import { newPublication } from './new';
 import { draftsList } from './drafts-list';
-import { authorAddress } from './address';
+import { draftsAppend } from './drafts-append';
+import { authorAddress, authorInfo } from './address';
 import { authorInit } from './init';
 import { authorMigrate } from './migrate';
 // The store table lives in its own module so `cli.ts` (and tests) can reach it
@@ -41,6 +42,9 @@ export const authorCommands: CommandSpec[] = [
   preview,
   publish,
   revoke,
+  authorInfo,
+  // The alias sits beside the command it aliases, so `--help` reads as one
+  // identity report with a second name, not two commands.
   authorAddress,
   authorInit,
   authorMigrate,
@@ -49,8 +53,8 @@ export const authorCommands: CommandSpec[] = [
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];
 
-/** `s2s drafts` — the drafts log on the author Safe. */
-export const draftsCommands: CommandSpec[] = [draftsList];
+/** `s2s drafts` — the drafts log on the author Safe: what it holds, and the append. */
+export const draftsCommands: CommandSpec[] = [draftsList, draftsAppend];
 
 export function findDraftsCommand(name: string): CommandSpec | undefined {
   return draftsCommands.find((command) => command.name === name);

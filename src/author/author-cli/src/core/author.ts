@@ -3,7 +3,8 @@
 //
 // Flow (upload/publish):  parse note → buildSignedContentItem (shared) →
 //   Kubo upload (2-space JSON to match the Filecoin CAR rootCid) →
-//   on-chain makeOffer → frontmatter write-back → durability legs.
+//   frontmatter identity block → drafts-log append (real writes only) →
+//   on-chain makeOffer → the rest of the frontmatter write-back → durability legs.
 //
 // Flow (revoke):          on-chain retract FIRST (the genesis author's verb,
 //   and terminal: it ends the genesis and tombstones the latest version, so the
@@ -42,6 +43,7 @@ import { CliError, UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
+import { appendDraft, draftsFactory, resolveDraftsModule, type AppendedDraft, type DraftsSeam, type ResolvedDraftsModule } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -130,6 +132,11 @@ export interface AuthorWriteResult {
   render: RenderOutcome | undefined;
   /** Whether the note file's frontmatter was updated. */
   frontmatterWritten: boolean;
+  /**
+   * The drafts-log append this write made — undefined on a preview, which is
+   * the one write-shaped run that must not touch the log.
+   */
+  draft: AppendedDraft | undefined;
 }
 
 export interface AuthorWriteOptions {
@@ -137,7 +144,7 @@ export interface AuthorWriteOptions {
   render: boolean;
   /** true → live prod update (prod render + durability pins); false → preview render only. */
   publish: boolean;
-  /** true → also append the on-chain makeOffer. `upload`/`preview` stay off-chain. */
+  /** true → also append the on-chain makeOffer. `upload`/`preview` make no offer. */
   offer: boolean;
   /** Revocation remove entries (render path only). */
   remove?: { path: string; replacedBy?: string }[];
@@ -147,6 +154,15 @@ export interface AuthorWriteOptions {
    * is refused — see `guardEncryptionDowngrade`.
    */
   allowPlaintext?: boolean;
+}
+
+/** What a test may replace in `authorWrite`: the drafts log's own reads. */
+export interface AuthorWriteDeps {
+  /**
+   * The seam the append resolves its module through. Left out by every command:
+   * the append then reads the chain, as `s2s drafts list` does.
+   */
+  draftsSeam?: DraftsSeam;
 }
 
 // ===========================================================================
@@ -163,6 +179,7 @@ export async function authorWrite(
   notePath: string,
   publication: string,
   opts: AuthorWriteOptions,
+  deps: AuthorWriteDeps = {},
 ): Promise<AuthorWriteResult> {
   const raw = readFileSync(notePath, 'utf8');
   // Basename, not the full path: `parseMarkdownNote` slugifies the filename as
@@ -190,19 +207,56 @@ export async function authorWrite(
   // inside the item still records the EOA that signed it.
   // Resolved before the service so an on-chain append can be sent by the Safe.
   const author = await authorSafeState(ctx);
-  if (!author.deployed) {
+  if (!author.deployed && !opts.publish) {
     // A given Safe is deployed by its owners, not by this CLI: `author init`
-    // would refuse it, so pointing there would be a dead end.
+    // would refuse it, so pointing there would be a dead end. A preview can
+    // read the id and render; an upload cannot, and is refused below.
     ctx.out.warn(
       `author Safe ${author.address} is not deployed — ${
         author.safeSource === 'given'
           ? 'its owners have to deploy it on Base'
           : 'run `s2s author init`'
-      } (the id is still valid, but nothing can verify ownership yet)`,
+      } (an upload appends a draft, and that fails until it is deployed)`,
     );
   }
 
-  // `upload` is off-chain: the publication contributes only its name, which is
+  // The append's two requirements are checked BEFORE the pin, not after it. A
+  // Safe that is not deployed enables no drafts module, and a module that does
+  // not resolve fails the append: discovered after the upload, either leaves
+  // bytes pinned that no version in the log names. Resolving the module here
+  // also means the append does not resolve it a second time.
+  let draftsModule: ResolvedDraftsModule | undefined;
+  if (opts.publish) {
+    const rpcUrl = ctx.rpcs.L2[0];
+    if (!rpcUrl) {
+      throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+    }
+    if (!author.deployed) {
+      throw new CliError(
+        `refusing to upload: the author Safe ${author.address} is not deployed, so it enables no drafts module and the append would fail — ${
+          author.safeSource === 'given'
+            ? 'its owners have to deploy it on Base'
+            : 'run `s2s author init`'
+        }`,
+        1,
+        'author_safe',
+      );
+    }
+    try {
+      draftsModule = await resolveDraftsModule(
+        { safe: author.address, rpcUrl, factory: draftsFactory(ctx.config) },
+        deps.draftsSeam,
+      );
+    } catch (err) {
+      throw new CliError(
+        `refusing to upload: ${err instanceof Error ? err.message : String(err)}`,
+        1,
+        'drafts_module',
+      );
+    }
+  }
+
+  // `upload` makes no offer: the publication contributes only its name, which is
   // derived locally. Resolving the Safe + modules is needed to offer on-chain
   // or to render — so a publication that does not exist yet (or an ENS name
   // with no address record) must not block an upload.
@@ -284,8 +338,61 @@ export async function authorWrite(
   const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
   ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${subdomain})`);
 
-  // On-chain append only when asked (`offer`/`publish`). A bare `upload`
-  // stays off-chain — ipfs + pins only; the offer is a separate step.
+  // The identity block is written BEFORE the append: the note has to name its
+  // genesis by the time the log records one, or a run whose append succeeds and
+  // whose offer fails leaves a row no note names. Written first, the worst case
+  // is a duplicate version, never an orphan.
+  const identityUpdates: Record<string, string> = {};
+  if (!parsed.genesis) {
+    identityUpdates.genesis = objectId;
+    identityUpdates.author = author.address;
+  }
+  // The note may predate `creation_date`: neutralpress fills it on save, the CLI
+  // never did. There is no way to recover the real first-write time from the
+  // file, so an existing note is stamped with the modified time it already had
+  // (a lower bound on how long it has existed) rather than with `now`. Write
+  // back the signed value itself, so the next revision signs the same birth.
+  if (!nonEmptyString(parsed.frontmatter['creation_date'])) {
+    identityUpdates.creation_date = new Date(creationDate * 1000).toISOString().slice(0, 19);
+  }
+  // Format migration: an author pinned before the change is rewritten to the
+  // bare address it names, whatever that address is (a spelling change, not a
+  // re-attribution). Never on the first publish, where the genesis author above
+  // is authoritative and a stale declared one would otherwise win. The shared
+  // helper is the only code that knows what the retired spelling was, so ask it
+  // whether the value needs rewriting rather than matching the form here.
+  const declaredAuthor = nonEmptyString(parsed.frontmatter['author']);
+  if (parsed.genesis && declaredAuthor !== undefined) {
+    const bare = authorAddress(declaredAuthor);
+    if (bare !== declaredAuthor.toLowerCase()) identityUpdates.author = bare;
+  }
+  let frontmatterWritten =
+    Object.keys(identityUpdates).length > 0
+      ? writeNoteFrontmatter(notePath, identityUpdates)
+      : false;
+  // A real write records the version in the author Safe's drafts log, so the log
+  // never lags a version. The condition is `opts.publish`: upload, offer and
+  // publish set it, preview does not, and a preview must not write to the log.
+  // The append comes BEFORE the offer on purpose — a failed offer then still
+  // leaves the version recorded, and the retry the failure names,
+  // `s2s drafts append`, appends these same bytes without uploading them again.
+  let draft: AppendedDraft | undefined;
+  if (opts.publish) {
+    draft = await appendDraft(
+      ctx,
+      { genesis: objectId, cid: kuboCid, ...(draftsModule ? { module: draftsModule } : {}) },
+      {
+        // The Safe was resolved above this run; a second read could only
+        // disagree with the id the item was signed with.
+        safeState: () => Promise.resolve(author),
+        ...(deps.draftsSeam ? { seam: deps.draftsSeam } : {}),
+      },
+    );
+    logAppendedDraft(ctx, draft);
+  }
+
+  // On-chain append only when asked (`offer`/`publish`). A bare `upload` makes
+  // no offer — its one transaction is the drafts append.
   let txHash: string | undefined;
   if (opts.offer) {
     if (!service) throw new Error('internal: on-chain offer requested without a resolved publication');
@@ -293,11 +400,8 @@ export async function authorWrite(
     ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash})`);
   }
 
-  // Frontmatter write-back: genesis+author+creation_date on first publish;
-  // modified_date and the last upload's CID always (the CID is what `offer`
-  // offers on-chain). The author is written as the Safe's bare address; a note
-  // pinned before the change is rewritten to the bare address on its next
-  // publish (the migration below).
+  // The rest of the write-back, after the offer: the upload's own CID, the
+  // modified time, and the encryption state this publish used.
   const modified = new Date().toISOString().slice(0, 19);
   const updates: Record<string, string | boolean> = {
     modified_date: modified,
@@ -309,33 +413,9 @@ export async function authorWrite(
     // is truthy under `Boolean()` and would silently encrypt.
     [ENCRYPTED_KEY]: parsed.encryption,
   };
-  if (!parsed.genesis) {
-    updates.genesis = objectId;
-    updates.author = author.address;
-  }
-  // The note may predate `creation_date`: neutralpress fills it on save, the CLI
-  // never did. There is no way to recover the real first-write time from the
-  // file, so an existing note is stamped with the modified time it already had
-  // (a lower bound on how long it has existed) rather than with `now`. Write
-  // back the signed value itself, so the next revision signs the same birth.
-  if (!nonEmptyString(parsed.frontmatter['creation_date'])) {
-    updates.creation_date = new Date(creationDate * 1000).toISOString().slice(0, 19);
-  }
-  // Format migration: an author pinned before the change is rewritten to the
-  // bare address it names, whatever that address is (a spelling change, not a
-  // re-attribution). Never on the first publish, where the genesis author above
-  // is authoritative and a stale declared one would otherwise win. The shared
-  // helper is the only code that knows what the retired spelling was, so ask it
-  // whether the value needs rewriting rather than matching the form here.
-  const declaredAuthor = nonEmptyString(parsed.frontmatter['author']);
-  if (parsed.genesis && declaredAuthor !== undefined) {
-    const bare = authorAddress(declaredAuthor);
-    if (bare !== declaredAuthor.toLowerCase()) updates.author = bare;
-  }
-  const frontmatterWritten = writeNoteFrontmatter(notePath, updates, [
-    LEGACY_CID_KEY,
-    LEGACY_ENCRYPTED_KEY,
-  ]);
+  frontmatterWritten =
+    writeNoteFrontmatter(notePath, updates, [LEGACY_CID_KEY, LEGACY_ENCRYPTED_KEY]) ||
+    frontmatterWritten;
 
   // Durability — real upload/publish only (never preview-only renders).
   if (opts.publish) {
@@ -359,6 +439,7 @@ export async function authorWrite(
     txHash,
     render,
     frontmatterWritten,
+    draft,
   };
 }
 
@@ -372,15 +453,35 @@ export interface OfferResult {
   subdomain: string;
   /** makeOffer transaction hash on L2. */
   txHash: string;
+  /**
+   * The version this offer recorded in the drafts log. Present on every offer:
+   * the append runs before `makeOffer`, so an offer that lands cannot leave the
+   * log a version behind.
+   */
+  draft: AppendedDraft;
 }
 
 /**
- * On-chain offer only — the `offer` step split out of `upload`. The content
+ * The one line every append prints. The count is the log's own read-back, not
+ * this version's index: a retry that appends twice is one version more, and
+ * nothing here numbers versions.
+ */
+function logAppendedDraft(ctx: CliContext, draft: AppendedDraft): void {
+  ctx.out.log(
+    draft.versionCount === undefined
+      ? `✓ draft appended (${draft.module.slice(0, 8)}…, the count could not be read back)`
+      : `✓ draft appended (${draft.module.slice(0, 8)}…, ${String(draft.versionCount)} versions in the log)`,
+  );
+}
+
+/**
  * On-chain offer for a CID that is already uploaded — the `offer --cid` path
  * (re-offer after a failed chain write, backfill an older revision). `offer`
  * without `--cid` goes through `authorWrite` instead: it uploads the note and
  * offers exactly those bytes. No re-upload, no render, no durability pins, no
- * frontmatter write here.
+ * frontmatter write here — but the drafts append is not skipped: offering a CID
+ * appends that version to the log first, exactly as an upload would, so the log
+ * cannot lag the offers it is supposed to record.
  */
 export async function offerContent(
   ctx: CliContext,
@@ -388,6 +489,7 @@ export async function offerContent(
   publication: string,
   kuboCidFlag: string | undefined,
   opts: { allowPlaintext?: boolean } = {},
+  deps: AuthorWriteDeps = {},
 ): Promise<OfferResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, basename(notePath));
@@ -441,6 +543,41 @@ export async function offerContent(
   }
   warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
 
+  // The log's two requirements are settled here, and the append is sent, BEFORE
+  // the offer's own simulation: an offer that lands with the log a version
+  // behind is the exact state the append exists to prevent, and a missing module
+  // must not be discovered from a transaction that has already gone out.
+  const rpcUrl = ctx.rpcs.L2[0];
+  if (!rpcUrl) {
+    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+  let draftsModule: ResolvedDraftsModule;
+  try {
+    draftsModule = await resolveDraftsModule(
+      { safe: author.address, rpcUrl, factory: draftsFactory(ctx.config) },
+      deps.draftsSeam,
+    );
+  } catch (err) {
+    throw new CliError(
+      `refusing to offer: ${err instanceof Error ? err.message : String(err)}`,
+      1,
+      'drafts_module',
+    );
+  }
+  // Genesis from the note (the identity the item is anchored under), the CID
+  // exactly as given: `offer --cid` appends the version it is about to anchor.
+  const draft = await appendDraft(
+    ctx,
+    { genesis: objectId, cid: kuboCid, module: draftsModule },
+    {
+      // The Safe was resolved above; a second read could only disagree with the
+      // id the offer is sent by.
+      safeState: () => Promise.resolve(author),
+      ...(deps.draftsSeam ? { seam: deps.draftsSeam } : {}),
+    },
+  );
+  logAppendedDraft(ctx, draft);
+
   const service = await PublicationService.init(
     {
       l1: ctx.l1,
@@ -462,6 +599,7 @@ export async function offerContent(
     publication,
     subdomain: service.subdomain,
     txHash,
+    draft,
   };
 }
 

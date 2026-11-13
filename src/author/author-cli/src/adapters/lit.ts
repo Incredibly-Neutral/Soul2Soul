@@ -11,16 +11,21 @@
 //                      (`ipfs.<primary>.url`), NOT a second setting: a
 //                      deployment that can serve a manuscript can serve an
 //                      action bundle.
-//   actions.encrypt    `lit.encryptActionCid`, the CID `pnpm actions:swap
-//                      encrypt` registered on the Lit group.
+//   actions.encrypt    the CID of the encrypt action bundle. The source is the
+//                      protocol record `lit_action_encrypt` (written by
+//                      press/scripts/lit/update-protocol.ts with `pnpm
+//                      actions:swap encrypt`); `lit.encryptActionCid` is the
+//                      override, resolved by `buildContext` and passed in here.
 //
-// Missing either one is not a fallback: LitService throws naming the missing
-// key when the action is called, which is the encrypt path's closed failure.
+// Missing either one is not a fallback: the encrypt path fails closed. With no
+// CID the service's `encrypt` throws naming both remedies, at the point of use
+// rather than at context build — a machine that never encrypts must still run.
 // ============================================================================
 
 import { LitService } from '@s2s/soul2soul-shared';
 
 import type { CliConfig } from '../core/config';
+import { UsageError } from '../lib/errors';
 
 /**
  * The gateway the action bundles are read from, as a base URL.
@@ -37,12 +42,30 @@ function actionGateway(config: CliConfig): string | undefined {
   return withScheme.replace(/\/+$/, '');
 }
 
-export function createLitService(config: CliConfig): LitService {
-  const encrypt = config.lit.encryptActionCid;
-  return new LitService({
+/** What the encrypt path says when neither the config nor the record names a CID. */
+export const NO_ENCRYPT_ACTION =
+  'cannot encrypt: no encrypt action CID — the protocol record `lit_action_encrypt` is not written and `lit.encryptActionCid` is unset. Set the config value with `s2s config set lit.encryptActionCid <cid>`, or write the record with `src/press/scripts/lit/update-protocol.ts`';
+
+/**
+ * @param encryptActionCid the resolved CID: `config.lit.encryptActionCid` when
+ *   set, else the `lit_action_encrypt` record (`core/context.ts`). Undefined
+ *   leaves `actions.encrypt` unset and makes `encrypt` the closed failure.
+ */
+export function createLitService(config: CliConfig, encryptActionCid?: string): LitService {
+  const service = new LitService({
     environment: config.environment,
     accountKey: config.lit.accountKey,
     gateway: actionGateway(config),
-    actions: encrypt ? { encrypt } : undefined,
+    actions: encryptActionCid ? { encrypt: encryptActionCid } : undefined,
   });
+  if (!encryptActionCid) {
+    // Replaced per instance, not thrown at build time: `upload`, `preview` and
+    // every read still run on a machine whose record has no encrypt key yet.
+    // `async`, so it rejects like the real method rather than throwing from the
+    // call — the callers all `await` it.
+    service.encrypt = async () => {
+      throw new UsageError(NO_ENCRYPT_ACTION);
+    };
+  }
+  return service;
 }
