@@ -20,7 +20,8 @@ export type ViemProvider = PublicClient;
  * the on-chain records must be written (see press/scripts/lit/update-protocol.ts):
  *
  *   data_gateway, ens_records, ens_registry, publication_factory, records_factory,
- *   pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update
+ *   pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update,
+ *   lit_action_encrypt, lit_action_decrypt
  *
  * The following keys were DROPPED (stop reading): assets_gateway, lens_app,
  * pkp_tokenId, pkp_publicKey, lit_action_cbor, lit_action_single, lit_action_root_update.
@@ -49,6 +50,8 @@ export const getProtocolInfo = async (
     lit_action_update,
     lit_action_maintainCache,
     lit_action_repointArchive,
+    lit_action_encrypt,
+    lit_action_decrypt,
     pkp_ethAddress,
   ] = await getRecords(
     configModule!,
@@ -68,6 +71,11 @@ export const getProtocolInfo = async (
       // Optional: the one-shot repoint-archive action (recovery). Empty string
       // until deployed → litActions.repointArchive is falsy.
       'lit_action_repointArchive',
+      // Optional: the two author-facing actions. Empty string until the record
+      // is written → litActions.encrypt / .decrypt are undefined, and a caller
+      // that needs one says so itself.
+      'lit_action_encrypt',
+      'lit_action_decrypt',
       'pkp_ethAddress',
     ],
     l2Provider
@@ -86,6 +94,10 @@ export const getProtocolInfo = async (
       update: lit_action_update,
       maintainCache: lit_action_maintainCache || undefined,
       repointArchive: lit_action_repointArchive || undefined,
+      // Empty string → undefined: the record is only written by a protocol
+      // update, and a reader before that write must see "not there", never "".
+      encrypt: lit_action_encrypt || undefined,
+      decrypt: lit_action_decrypt || undefined,
     },
   };
 };

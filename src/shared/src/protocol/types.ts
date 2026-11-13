@@ -38,6 +38,13 @@ export interface S2SProtocolInfo {
     // written on-chain. Read by recovery tooling; the orchestrator does not
     // fire it automatically.
     repointArchive?: string;
+    // CID of the encrypt action, which seals a body under the PKP. OPTIONAL:
+    // present only once its lit_action_encrypt record is written on-chain; a
+    // record that was never written reads back as absent, not as "".
+    encrypt?: string;
+    // CID of the decrypt action, which opens an author's draft behind
+    // GATES-1. OPTIONAL, same rule as `encrypt`.
+    decrypt?: string;
   };
 }
 

@@ -3,14 +3,16 @@
 //
 // The CLI ships no action CID: the CID of the encrypt bundle is a protocol fact
 // and lives in the records module (`lit_action_encrypt`), written by
-// press/scripts/lit/update-protocol.ts. `lit.encryptActionCid` (file or
-// LIT_ENCRYPT_ACTION_CID) is the override, and its presence skips the record
-// read altogether.
+// press/scripts/lit/update-protocol.ts and read with every other action record
+// in shared's `getProtocolInfo` (`litActions.encrypt`). `lit.encryptActionCid`
+// (file or LIT_ENCRYPT_ACTION_CID) is the override, and its presence wins
+// without consulting the record.
 //
-// The record read itself is ENS + an L2 call, so it arrives as a function here.
+// There is no second resolution here: the record arrives on `protocolInfo`, so
+// a timed-out RPC cannot be mistaken for "the record is not written".
 // ============================================================================
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createLitService } from '../src/adapters/lit';
 import { loadConfig } from '../src/core/config';
@@ -27,35 +29,48 @@ const nowhere = {
 
 const RECORD_CID = 'QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh';
 
+/** The shape shared returns: `litActions` with the optional actions absent. */
+function protocolWith(encrypt?: string) {
+  return {
+    litActions: {
+      prep: 'Qmprep',
+      render: 'Qmrender',
+      update: 'Qmupdate',
+      ...(encrypt === undefined ? {} : { encrypt }),
+    },
+  };
+}
+
 describe('resolveEncryptActionCid', () => {
-  it('reads the protocol record when no config value is set', async () => {
+  it('uses the protocol record when no config value is set', () => {
     const config = loadConfig({}, nowhere);
-    const read = vi.fn(() => Promise.resolve(RECORD_CID));
 
-    await expect(resolveEncryptActionCid(config, read)).resolves.toBe(RECORD_CID);
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(resolveEncryptActionCid(config, protocolWith(RECORD_CID))).toBe(RECORD_CID);
   });
 
-  it('lets the config (or env) value win, without reading the record', async () => {
+  it('lets the config (or env) value win over the record', () => {
     const fromEnv = loadConfig({ LIT_ENCRYPT_ACTION_CID: 'bafyfromenv' }, nowhere);
-    const read = vi.fn(() => Promise.resolve(RECORD_CID));
 
-    await expect(resolveEncryptActionCid(fromEnv, read)).resolves.toBe('bafyfromenv');
     // The record may say something else entirely; the override is not asked to agree.
-    expect(read).not.toHaveBeenCalled();
+    expect(resolveEncryptActionCid(fromEnv, protocolWith(RECORD_CID))).toBe('bafyfromenv');
   });
 
-  it('treats a blank config value as unset and falls back to the record', async () => {
+  it('treats a blank config value as unset and falls back to the record', () => {
     const config = loadConfig({ LIT_ENCRYPT_ACTION_CID: '   ' }, nowhere);
 
-    await expect(resolveEncryptActionCid(config, () => Promise.resolve(RECORD_CID))).resolves.toBe(
-      RECORD_CID,
-    );
+    expect(resolveEncryptActionCid(config, protocolWith(RECORD_CID))).toBe(RECORD_CID);
+  });
+
+  it('treats an unwritten record as absent rather than empty', () => {
+    const config = loadConfig({}, nowhere);
+
+    expect(resolveEncryptActionCid(config, protocolWith())).toBeUndefined();
+    expect(resolveEncryptActionCid(config, protocolWith(''))).toBeUndefined();
   });
 
   it('resolves nothing when neither names a CID, and the encrypt path says why', async () => {
     const config = loadConfig({}, nowhere);
-    const cid = await resolveEncryptActionCid(config, () => Promise.resolve(undefined));
+    const cid = resolveEncryptActionCid(config, protocolWith());
 
     expect(cid).toBeUndefined();
     const svc = createLitService(config, cid);

@@ -6,9 +6,7 @@
 // ============================================================================
 
 import {
-  getProtocolControllerAndModules,
   getProtocolInfo,
-  getRecords,
   LitService,
   S2SIPFSMethods,
   type S2SProtocolInfo,
@@ -68,49 +66,23 @@ export interface CliContext {
 type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
 
 /**
- * The protocol record the encrypt action CID is written to. The CLI ships no
- * action CID of its own: the record is the protocol's answer, and the config
- * value is only the override.
- */
-export const ENCRYPT_ACTION_RECORD = 'lit_action_encrypt';
-
-/**
- * Read `lit_action_encrypt` from the records module the ENS name points at, the
- * same two hops `getProtocolInfo` makes for the render/update actions.
+ * The encrypt action CID: the config/env value when set, else the protocol's
+ * own record (`protocolInfo.litActions.encrypt`, read with every other action
+ * record in shared's `getProtocolInfo`). The key itself is not named here: one
+ * batch of record keys exists, and it lives in shared.
  *
- * A failed read is undefined, not an error: the value is only needed on the
- * encrypt path, and everything else must still run when ENS or the L2 RPC is
- * having a bad day. The encrypt path turns the absence into its named failure.
+ * The config value short-circuits, so a machine that sets it does not depend on
+ * the record being written. `protocolInfo` is a parameter so the precedence is
+ * testable without a chain.
  */
-async function readEncryptActionRecord(
-  dev: boolean,
-  l1: SharedPublicClient,
-  l2: SharedPublicClient,
-): Promise<string | undefined> {
-  try {
-    const { configModule } = await getProtocolControllerAndModules(dev, l1, l2);
-    if (!configModule) return undefined;
-    const [cid] = await getRecords(configModule, [ENCRYPT_ACTION_RECORD], l2);
-    return typeof cid === 'string' && cid.trim() !== '' ? cid : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * The encrypt action CID: the config/env value when set, else the record. The
- * record read is skipped entirely when the value is configured, so a machine
- * that sets it pays no ENS walk.
- *
- * `readRecord` is a parameter so the precedence is testable without a chain.
- */
-export async function resolveEncryptActionCid(
+export function resolveEncryptActionCid(
   config: CliConfig,
-  readRecord: () => Promise<string | undefined>,
-): Promise<string | undefined> {
+  protocolInfo: Pick<S2SProtocolInfo, 'litActions'>,
+): string | undefined {
   const configured = config.lit.encryptActionCid;
   if (configured !== undefined && configured.trim() !== '') return configured;
-  return readRecord();
+  const record = protocolInfo.litActions.encrypt;
+  return record !== undefined && record.trim() !== '' ? record : undefined;
 }
 
 /**
@@ -153,10 +125,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
 
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
-  const dev = config.environment === 'dev';
-  const encryptActionCid = await resolveEncryptActionCid(config, () =>
-    readEncryptActionRecord(dev, l1, l2),
-  );
+  const encryptActionCid = resolveEncryptActionCid(config, protocolInfo);
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);
