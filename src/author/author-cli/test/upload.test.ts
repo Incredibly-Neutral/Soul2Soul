@@ -9,8 +9,10 @@ vi.mock('../src/core/author', () => ({ authorWrite: vi.fn() }));
 
 import { authorWrite } from '../src/core/author';
 import { upload } from '../src/commands/upload';
+import { preview } from '../src/commands/preview';
 import { createOut } from '../src/lib/out';
 import { IPFS_GATEWAY_BASE, ipfsGatewayUrl, ipfsUri } from '../src/lib/ipfs-link';
+import type { AppendedDraft } from '../src/core/drafts';
 import type { CliContext } from '../src/core/context';
 import type { ParsedArgs } from '../src/lib/args';
 
@@ -24,6 +26,7 @@ const RESULT = {
   txHash: undefined,
   render: undefined,
   frontmatterWritten: true,
+  draft: undefined,
 };
 
 describe('ipfs links', () => {
@@ -107,5 +110,70 @@ describe('s2s author upload result', () => {
     const lines = text.split('\n');
     const cidAt = lines.findIndex((l) => l.includes(`  cid         : ${CID}`));
     expect(lines[cidAt + 1]).toBe(`  link        : https://ipfs.io/ipfs/${CID}`);
+  });
+});
+
+/**
+ * The drafts-log append a real write makes is reported per write, and a preview
+ * makes none — so the JSON carries the key when there is an append and does not
+ * carry it at all when there is not. `null` would make a plugin render an empty
+ * block, and a missing key is the one shape that says "no append happened".
+ */
+describe('the draft key in the write result', () => {
+  const dirs: string[] = [];
+  let stdout: string[];
+
+  beforeEach(() => {
+    stdout = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function note(): string {
+    const dir = mkdtempSync(join(tmpdir(), 's2s-draft-key-'));
+    dirs.push(dir);
+    const path = join(dir, 'note.md');
+    writeFileSync(path, '---\ntitle: Hello\n---\n\nbody\n');
+    return path;
+  }
+
+  function argsFor(path: string): ParsedArgs {
+    return { positionals: [path], flags: { publication: 'test.soul2soul.eth' } };
+  }
+
+  const DRAFT: AppendedDraft = {
+    module: `0x${'11'.repeat(20)}`,
+    genesis: RESULT.objectId,
+    cid: CID,
+    versionCount: 3,
+    txHash: `0x${'22'.repeat(32)}`,
+  };
+
+  it('carries the append an upload made', async () => {
+    vi.mocked(authorWrite).mockResolvedValue({ ...RESULT, draft: DRAFT });
+    const path = note();
+
+    await upload.run({ out: createOut(true) } as CliContext, argsFor(path));
+
+    const payload = JSON.parse(stdout.join('')) as Record<string, unknown>;
+    expect(payload.draft).toEqual(DRAFT);
+  });
+
+  it('carries no draft key on a preview', async () => {
+    vi.mocked(authorWrite).mockResolvedValue({ ...RESULT, draft: undefined });
+    const path = note();
+
+    await preview.run({ out: createOut(true) } as CliContext, argsFor(path));
+
+    const payload = JSON.parse(stdout.join('')) as Record<string, unknown>;
+    expect(payload.action).toBe('preview');
+    expect('draft' in payload).toBe(false);
   });
 });

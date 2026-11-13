@@ -96,6 +96,8 @@ export const offer: CommandSpec = {
         ipfsUrl: ipfsUri(result.kuboCid),
         gatewayUrl: ipfsGatewayUrl(result.kuboCid),
         frontmatterWritten: result.frontmatterWritten,
+        // The version this upload recorded in the drafts log, before the offer.
+        draft: result.draft,
       },
       [
         `Offered ${notePath}`,
