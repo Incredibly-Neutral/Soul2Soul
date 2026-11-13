@@ -62,7 +62,8 @@ s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]   
 s2s author switch    <pet-name> [--json]                                                          # make a stored author the active one
 s2s author list      [--json]                                                                     # stored authors, active one marked, pending swaps flagged
 s2s author rm        <pet-name> [--force] [--json]                                                  # forget a stored author
-s2s author address   [--json]                                                                     # author id: the Safe (predicted, no deployment)
+s2s author info      [--json]                                                                     # author identity: pet name, then the Safe (predicted, no deployment)
+s2s author address   [--json]                                                                     # alias of `author info`, action 'author.address'; vscode + nvim call it
 s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
 s2s author migrate   [--json]                                                                     # move an installed Safe onto the modules the current factory predicts
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins only (off-chain)
@@ -122,7 +123,7 @@ silent no-op:
 | `--allow-plaintext` | Accept a plaintext write the encryption downgrade guard refuses: the note says `encrypted: false` while the previous revision of the same identity (`genesis`, else `content_id`) was encrypted, could not be read to check, or cannot even be located because the frontmatter records no `cid`. It skips only that guard — offer's "note says `encrypted: true`, anchored item is plaintext" refusal and its refusal of a stored body that is not JSON ciphertext still apply. | upload, offer, preview, publish |
 | `--repo <owner/repo>` | Dev repository of the publication — required. | publication new |
 | `--branch <b>` | Default render branch; empty string when omitted. | publication new |
-| `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author address`) — never the EOA. Repeatable (or comma-separated). | publication new |
+| `--author <addr>,...` | Initial author whitelist; defaults to the **author Safe** (`s2s author info`) — never the EOA. Repeatable (or comma-separated). | publication new |
 | `--owner <addr>,...` | Publication Safe owner; repeatable (or comma-separated). | publication new |
 | `--local` | Target the project config file (`.s2sconfig.json`) instead of the custom one (`~/.config/s2s/custom.json`). | config set, unset, path |
 | `--accept-defaults` | `setup`: ask nothing, write nothing, keep every provided default (the no-TTY path). | setup |
@@ -166,7 +167,8 @@ The nested shape, one section per service:
   "paymaster": { "key": "…", "url": "…" },
   "filecoin":  { "chain": "mainnet", "rpcUrl": "…", "sessionKeyFile": "…" },
   "safeTx": { "url": "https://safe-transaction-base.safe.global", "key": "…" },
-  "lit": { "accountKey": "…", "usageKey": "…" }, "ens": { "registry": "0x…" },
+  "lit": { "accountKey": "…", "usageKey": "…", "encryptActionCid": "Qm…" },
+  "ens": { "registry": "0x…" },
   "github": { "token": "…" } }
 ```
 
@@ -254,7 +256,7 @@ The nested shape, one section per service:
   account, derived from the key locally — no RPC), `author` (the active stored author's pet name,
   `null` when the key came from env or a file) and `safe` (that author's recorded Safe, `null` when
   it has not been predicted yet). The **author id is not the EOA**: it is the author Safe
-  (`s2s author address`), counterfactual and therefore needing an L2 read.
+  (`s2s author info`), counterfactual and therefore needing an L2 read.
 
 ### `s2s setup` (the first-run wizard)
 
@@ -265,8 +267,8 @@ effect *and where it comes from* (`custom: pi…abcd`, `legacy: …`, `defaults:
 `unset`). Enter keeps it; pasting replaces it.
 
 - **It asks about pinning, ipfs, rpc, paymaster and filecoin only.** Never `lit` or `ens` (fixed
-  protocol values that ship in `defaults.json`), never `github` (resolved at publish time), never
-  `privateKey` (the author store's job).
+  protocol values that ship in `defaults.json`, the encrypt action CID included), never `github`
+  (resolved at publish time), never `privateKey` (the author store's job).
 - **It writes one file: the custom layer.** Pasted values go to `~/.config/s2s/custom.json`; the
   project file is never a wizard output (a project file is a deliberate override, not something
   dropped in the current directory), and defaults are never copied — accepting a default writes
@@ -338,13 +340,13 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
   'zomi'` — because a shell export silently overriding `author switch` is invisible in every
   result otherwise. stderr only: stdout still carries exactly one document.
 - **Safe derivation and write-back.** `author new` writes the record first, with `safe: null`, then
-  predicts the author Safe for the key it was given (same `s2s_${eoa}` salt as `author address`) and
+  predicts the author Safe for the key it was given (same `s2s_${eoa}` salt as `author info`) and
   writes that back. The order is deliberate: prediction is a network read, and an interrupted or
   slow one must not cost the key the user just pasted. The endpoint comes from
   `buildRpcEndpoints(config).L2[0]` — the same DRPC → public → Alchemy → Infura chain every other
   author path uses, *not* the explicit `rpc.custom.l2` list, which is usually empty. A failed read (or the
   genuinely empty list) leaves `safe: null` and warns instead of failing: the key is the
-  irreplaceable part, the Safe is re-derivable. `author address` and `author init` write the Safe back when the
+  irreplaceable part, the Safe is re-derivable. `author info` and `author init` write the Safe back when the
   signing key came from the store and the stored value is missing or different, so `author list`
   and `author switch` can report the identity offline (no RPC, no bundler).
 - **`contracts`** — optional, per author: the addresses the install produced (drafts proxy,
@@ -440,6 +442,16 @@ hashes it against this CID before Lit executes it, so an unset CID or a gateway
 that serves different code is a closed failure, not a plaintext upload. The
 bundle is built in `src/press/actions` by the release step; this CLI only names
 it. `LIT_ENCRYPT_ACTION_CID` sets the same leaf.
+
+**It ships as a default.** `defaults.json` carries
+`QmQNnefQsHQoUGyLaGJHMNhTaRtEYGfccejPsQXhJn7Rsh`, the encrypt action registered on
+the s2s Lit group, so a fresh install encrypts with no lit config of its own.
+The default sits at the bottom of the file layers, not above the user: a
+`lit.encryptActionCid` in a config file, and `LIT_ENCRYPT_ACTION_CID` in the env,
+still win — an override names a different bundle, and the fetch-plus-hash against
+the CID it names is unchanged. A defaults file that omits the key leaves the
+encrypt path as it was: LitService refuses with
+`config is missing actions.encrypt` when the action is called.
 
 ### Installing the author contracts
 
@@ -686,10 +698,18 @@ Contracts = { factory: string | null; drafts: string | null; ownerHistory: strin
 // s2s author rm <pet-name> [--json] — forget an author
 { action: 'author.rm'; name: string; file: string; active: string | null }
 
-// s2s author address [--json]      — the author id (Safe), predicted; no tx
+// s2s author info [--json]         — the author identity: pet name, then the Safe, predicted; no tx
+{ action: 'author.info'; address: string; eoa: string; salt: string;
+  chain: 'base'; deployed: boolean;
+  author: string | null }         // pet name of the active stored author; null when the key
+                                  // came from env or a file
+                                  // human: `author : <pet name>` on the first line, else
+                                  // `author : (none — key not in the author store)`
+
+// s2s author address [--json]      — alias of `author info`: same fields, action 'author.address'
 { action: 'author.address'; address: string; eoa: string; salt: string;
   chain: 'base'; deployed: boolean;
-  author: string | null }         // pet name when the key came from the store
+  author: string | null }         // the vscode extension and the nvim plugin still call this one
 
 // s2s author init [--json]         — deploy the Safe and install the author contracts (idempotent)
 { action: 'author.init'; address: string; eoa: string; salt: string;
@@ -918,7 +938,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   (`upload`/`preview` are **off-chain** — they never touch the chain at all.)
 - **Identity everywhere else** — the item's `public.author`, frontmatter `author`, the render action's
   `authorSafeAddress`, and the Filecoin piece attribution (`[publicationSafe, authorSafe]`) all
-  carry the author Safe. `s2s author address`/`config` print the EOA only as the Safe's owner.
+  carry the author Safe. `s2s author info`/`config` print the EOA only as the Safe's owner.
 - **new** — the Safe is the actor for the deployment sequence: both L1 and L2 Safes are deployed
   with the same salt via `toSafeSmartAccount`; the SafeRunner sends the registerSubdomain (L1),
   module installs (L2: drafts and owner-history proxies, `enableModule`×2, `setGuard`), publication
