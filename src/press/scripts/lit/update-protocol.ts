@@ -199,6 +199,8 @@ const proposeToSafe = async (account: any, transactions: any[]) => {
  *   prep         — was lit_action_prep      (unchanged)
  *   render       — was lit_action_single    (renamed; key: lit_action_render)
  *   update       — was lit_action_root_update + cbor merged in (key: lit_action_update)
+ *   encrypt      — seals a body under the PKP        (key: lit_action_encrypt)
+ *   decrypt      — opens an author's draft (GATES-1) (key: lit_action_decrypt)
  */
 export const updateProtocol = async (
   account: any,
@@ -207,6 +209,7 @@ export const updateProtocol = async (
   renderActionCid: string,
   updateActionCid: string,
   encryptActionCid: string,
+  decryptActionCid: string,
   maintainCacheActionCid?: string,
   repointArchiveActionCid?: string
 ) => {
@@ -222,6 +225,7 @@ export const updateProtocol = async (
     setRecord("lit_action_render", renderActionCid),
     setRecord("lit_action_update", updateActionCid),
     setRecord('lit_action_encrypt', encryptActionCid),
+    setRecord('lit_action_decrypt', decryptActionCid),
     // Optional: the dedicated maintain-cache action (parallel cache pointer
     // write). Only written when the action has been built + registered, so a
     // protocol update before this feature's deploy stays valid.
@@ -306,6 +310,7 @@ const main = async () => {
   const account = privateKeyToAccount(`0x${process.env.PROTOCOL_PRIVATE_KEY!}` as `0x${string}`);
 
   const encrypt = group.actions.find((a: any) => a.name === 'encrypt');
+  const decrypt = group.actions.find((a: any) => a.name === 'decrypt');
   const prep    = group.actions.find((a: any) => a.name === 'prep');
   const render  = group.actions.find((a: any) => a.name === 'render');
   const update  = group.actions.find((a: any) => a.name === 'update');
@@ -315,11 +320,22 @@ const main = async () => {
   if (!prep || !render || !update) {
     throw new Error(`Missing action CIDs. Found: ${JSON.stringify(group.actions.map((a: any) => a.name))}`);
   }
+  // Both draft actions must be registered before their record is written: a
+  // record naming a CID that no swap produced would point every client at code
+  // the enclave cannot run.
+  if (!encrypt || !decrypt) {
+    throw new Error(
+      'Run pnpm actions:swap encrypt and pnpm actions:swap decrypt before this — ' +
+        `config.json has: ${JSON.stringify(group.actions.map((a: any) => a.name))}`,
+    );
+  }
 
   console.log("Action CIDs:", {
     prep: prep.cid,
     render: render.cid,
     update: update.cid,
+    encrypt: encrypt.cid,
+    decrypt: decrypt.cid,
     maintainCache: maintainCache?.cid ?? '(not deployed)',
     repointArchive: repointArchive?.cid ?? '(not deployed)',
   });
@@ -331,6 +347,7 @@ const main = async () => {
     render.cid,
     update.cid,
     encrypt.cid,
+    decrypt.cid,
     maintainCache?.cid,
     repointArchive?.cid,
   );

@@ -26,6 +26,8 @@ const entries = [
     in: './press/actions/src/render-dev/main.ts',
     out: './press/actions/dist/render-dev/main.js',
   },
+  { in: './press/actions/src/decrypt/main.ts', out: './press/actions/dist/decrypt/main.js' },
+  { in: './press/actions/src/encrypt/main.ts', out: './press/actions/dist/encrypt/main.js' },
 ];
 
 Promise.all(

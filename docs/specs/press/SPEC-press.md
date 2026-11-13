@@ -101,6 +101,14 @@ never leaves it, and the key, the permitted action CIDs and the usage key are bo
 a Lit Group on Base. The actions are bundled deterministically and registered by the hash of their
 build.
 
+The actions are `prep`, `render`, `update`, `maintain-cache`, `repoint-archive`, `render-dev`,
+`encrypt` and `decrypt`. `prep` builds the job list, `render` turns one manuscript into one page,
+`update` assembles the tree and records its root. `encrypt` seals a body under the PKP and returns
+the ciphertext. `decrypt` opens an author's draft: it asks GATES-1's gate, reads the draft entry at
+the block the gate judged it at, cats that entry's CID, decrypts it, and releases the plaintext only
+if it hashes to the signed `public.plaintextHash`. `maintain-cache` and `repoint-archive` maintain
+the per-publication cache pointer, and `render-dev` builds a preview.
+
 ## Readings
 
 - **PRESS-8's colophon** is the signed JSON-LD block the renderer injects into every page: a SHA-256

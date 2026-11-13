@@ -21,12 +21,14 @@ GATES-6 are constraints on all of them: gates do not move, and ledger state is r
 The author MUST be able to decrypt their own manuscript at any time. No agreement, whitelist or
 gate result MAY be required for it.
 
-Note (this implementation): the gate is `owns()` in `src/shared/src/gates`, which reads `authorOf`
-from the author's own `DraftsModuleV1` and asks the Safe that answers `isOwner` for the signer — the
-Safe is never a parameter. The Lit decrypt action repeats that same read and then requires the
-blob's own signed `public.author` to equal the module's answer: `append` is `onlySafe`, so anyone may
-log another author's genesis and ciphertext CID in their own module, and only the blob's signed
-author refuses that.
+Note (this implementation): the gate is `ownsVerdict()` in `src/shared/src/gates`, which resolves the
+author's own modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the
+Safe for the genesis, and asks the Safe's owner history whether the signer was an owner when the last
+version was appended — the Safe is never a parameter. The Lit decrypt action imports that gate and
+reads the draft entry at the block the gate reports, so the ciphertext it opens and the owner set it
+was judged under are the same version. It then requires the blob's own signed `public.author` to
+equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
+in their own module, and only the blob's signed author refuses that.
 
 The `isOwner` read above is present tense. Where the record carries the block it was written in — the
 drafts log's `blocksOf(genesis)[versionIndex]` — the gate judges ownership at that block instead: a
