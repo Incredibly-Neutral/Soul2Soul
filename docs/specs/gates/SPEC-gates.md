@@ -21,25 +21,30 @@ GATES-6 are constraints on all of them: gates do not move, and ledger state is r
 The author MUST be able to decrypt their own manuscript at any time. No agreement, whitelist or
 gate result MAY be required for it.
 
-Note (this implementation): the gate is `ownsVerdict()` in `src/shared/src/gates`, which resolves the
-author's own modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the
-Safe for the genesis, and asks the Safe's owner history whether the signer was an owner when the last
-version was appended — the Safe is never a parameter. The Lit decrypt action imports that gate and
-reads the draft entry at the block the gate reports and from the drafts module it reports, so nothing
-is resolved twice and the ciphertext it opens and the owner set it was judged under are one version.
-It then requires the blob's own signed `public.author` to
-equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
-in their own module, and only the blob's signed author refuses that.
+Note (this implementation): ownership is one gate, `isOwnerAt`, in `src/shared/src/gates`. It takes
+the author Safe, the signer and an optional block. With no block, or block 0, it asks the Safe's live
+`isOwner`. With a block above 0 it asks the author Safe's `OwnerHistoryModuleV1` whether the signer
+was an owner at that block. `canPublish` and `canReset` ask it with no block. `canRead` asks it at the
+append block of the manuscript's last version, resolving that block inside the gate from the Safe's
+drafts module, and falls back to the live `isOwner` when the Safe's modules cannot be resolved. The
+predicates `owns` and `ownsVerdict` are gone: a drafts log naming a Safe for a genesis is a proof the
+drafts caller makes, and the ownership half of it is `isOwnerAt`.
 
-The gate asks one question, at one block. Where the record carries the block it was written in — the
-drafts log's `blocksOf(genesis)`, last entry — ownership is judged at that block: a key rotated out
-keeps access to what it wrote, and a key added afterwards does not gain what it never held. A block of
-0 means no block was recorded (a version older than the field, or a log imported by `absorb()`), and
-the gate refuses it: there is no owner set at that height to judge the signer against, and the Safe's
-live `isOwner` is not that set, so it is never read for this gate. The consequence is plain — a draft
-appended before the drafts module recorded a block number, and every version carried in by an import,
-can no longer be opened. That block is also what bounds the answer: history starts at the
-Safe's era 0, and an owner rotation the guard missed stretches the tenure it should have ended.
+The block is what makes a read historical. Where the manuscript's last version carries the block it
+was written in — the drafts log's `blocksOf(genesis)`, last entry — `canRead` judges ownership at that
+block: a key rotated out still reads what it wrote, and a key added afterwards does not read what it
+did not. A block of 0 means none was recorded (a version older than the field, or a log carried in by
+`absorb()`), so the gate answers with the live owner set instead. That block is also what bounds the
+answer: history starts at the Safe's era 0, and an owner rotation the guard missed stretches the
+tenure it should have ended.
+
+The drafts decrypt path composes that gate rather than importing one. It resolves the author Safe's
+modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the Safe for the
+genesis, and asks `isOwnerAt` at the append block of the last version. It reads the draft entry at
+that block and from the module it resolved, so nothing is resolved twice and the ciphertext it opens
+and the owner set it was judged under are one version. It then requires the blob's own signed
+`public.author` to equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis
+and ciphertext CID in their own module, and only the blob's signed author refuses that.
 
 ## GATES-2 — reviewers, until the offer ends
 
@@ -109,10 +114,11 @@ absent from the public docs.
 ## The update gate, page by page
 
 The update action is gated per page rather than per request. Adding a page, meaning writing a
-genesis to a destination path that does not already carry it, requires `canPublish(authorSafe)`
-and `isOwner(signer)`. Refreshing a page, meaning the destination path already carries that
-genesis, is ungated. Removing a path is ungated and allowed only while the page's genesis is out of
-force, read through the shared `isOutOfForce`. A reset keeps `canReset` and is unchanged.
+genesis to a destination path that does not already carry it, requires `canPublish`, which admits
+the author Safe and asks `isOwnerAt` of the signer with no block. Refreshing a page, meaning the
+destination path already carries that genesis, is ungated. Removing a path is ungated and allowed
+only while the page's genesis is out of force, read through the shared `isOutOfForce`. A reset keeps
+`canReset` and is unchanged.
 
 The tree is the render of the agreements in force; anything on it that is not that render is drift.
 Drift is repaired by the press, not authorised by a caller, so the repair carries no gate.

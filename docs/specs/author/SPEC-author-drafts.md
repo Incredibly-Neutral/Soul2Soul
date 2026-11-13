@@ -232,6 +232,20 @@ other. What follows:
 - **Being a draft is not a step in a state machine.** Nothing transitions; a genesis may be a draft
   forever, a draft and a deal at once, or a deal with no draft entry ever having existed.
 
+## Opening a draft
+
+The press's drafts decrypt path asks this log, and composes the whole decision itself. It resolves
+the author Safe's drafts module and owner-history module from the Safe's enabled-module list,
+requires `authorOf(genesis)` to name the Safe it was asked about, and asks `isOwnerAt` at the append
+block of the last version. The proof that this log names a Safe is that `authorOf` read, made by the
+caller: a genesis kept in another Safe's log, or an unknown one the zeroed `Entry` answers for, is
+refused there. Nothing composes it on the caller's behalf — the ownership half is `isOwnerAt` alone,
+and a version with a block of 0 is judged against the Safe's live `isOwner`.
+
+The entry read is pinned to the block ownership was judged at, so the ciphertext opened and the owner
+set it was judged under are one version, and a version appended since cannot be read at the head
+under an older owner's answer.
+
 ## Adoption
 
 An author keeps their Safe and adopts new modules on it. The Safe address is the byline and the
@@ -241,11 +255,12 @@ the enabled-module list says which one.
 `absorb()` carries the log across. It is a Safe call that copies the previous module's whole log —
 every genesis, in order, with its binding and every version — into the new instance. The imported
 versions answer `blockNumber` 0: they were written at a block this instance cannot see, and nothing
-in the copy records which block it was. Ownership is judged at the append block, so the gate treats 0
-as no block and refuses: an imported version cannot be opened through the draft gate by anyone. The
+in the copy records which block it was. Ownership is judged at the append block, and 0 is no block,
+so the copied versions are judged against the Safe's live owner set instead: whoever owns the Safe
+now can open them, and the owner set they were written under is not recoverable from the copy. The
 same holds for a version appended before the module recorded `blockNumber` at all. Absorbing keeps
-the history and loses the access, which is the price of the copy rather than a second reading of the
-same question.
+the history and moves the access to the present, which is the price of the copy rather than a second
+reading of the same question.
 
 What does not survive is the log's source. Nothing records which module a version came from, so an
 absorbed log cannot be checked against the old proxy except by reading it. Only the log is carried:
