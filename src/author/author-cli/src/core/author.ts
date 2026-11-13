@@ -388,13 +388,7 @@ export async function authorWrite(
         ...(deps.draftsSeam ? { seam: deps.draftsSeam } : {}),
       },
     );
-    // The count is the log's own read-back, not this version's index: a retry
-    // that appends twice is one version more, and nothing here numbers versions.
-    ctx.out.log(
-      draft.versionCount === undefined
-        ? `✓ draft appended (${draft.module.slice(0, 8)}…, the count could not be read back)`
-        : `✓ draft appended (${draft.module.slice(0, 8)}…, ${String(draft.versionCount)} versions in the log)`,
-    );
+    logAppendedDraft(ctx, draft);
   }
 
   // On-chain append only when asked (`offer`/`publish`). A bare `upload` makes
@@ -459,15 +453,35 @@ export interface OfferResult {
   subdomain: string;
   /** makeOffer transaction hash on L2. */
   txHash: string;
+  /**
+   * The version this offer recorded in the drafts log. Present on every offer:
+   * the append runs before `makeOffer`, so an offer that lands cannot leave the
+   * log a version behind.
+   */
+  draft: AppendedDraft;
 }
 
 /**
- * On-chain offer only — the `offer` step split out of `upload`. The content
+ * The one line every append prints. The count is the log's own read-back, not
+ * this version's index: a retry that appends twice is one version more, and
+ * nothing here numbers versions.
+ */
+function logAppendedDraft(ctx: CliContext, draft: AppendedDraft): void {
+  ctx.out.log(
+    draft.versionCount === undefined
+      ? `✓ draft appended (${draft.module.slice(0, 8)}…, the count could not be read back)`
+      : `✓ draft appended (${draft.module.slice(0, 8)}…, ${String(draft.versionCount)} versions in the log)`,
+  );
+}
+
+/**
  * On-chain offer for a CID that is already uploaded — the `offer --cid` path
  * (re-offer after a failed chain write, backfill an older revision). `offer`
  * without `--cid` goes through `authorWrite` instead: it uploads the note and
  * offers exactly those bytes. No re-upload, no render, no durability pins, no
- * frontmatter write here.
+ * frontmatter write here — but the drafts append is not skipped: offering a CID
+ * appends that version to the log first, exactly as an upload would, so the log
+ * cannot lag the offers it is supposed to record.
  */
 export async function offerContent(
   ctx: CliContext,
@@ -475,6 +489,7 @@ export async function offerContent(
   publication: string,
   kuboCidFlag: string | undefined,
   opts: { allowPlaintext?: boolean } = {},
+  deps: AuthorWriteDeps = {},
 ): Promise<OfferResult> {
   const raw = readFileSync(notePath, 'utf8');
   const parsed = await parseMarkdownNote(raw, basename(notePath));
@@ -528,6 +543,41 @@ export async function offerContent(
   }
   warnOnAuthorMismatch(ctx, notePath, parsed.frontmatter.author, author.address);
 
+  // The log's two requirements are settled here, and the append is sent, BEFORE
+  // the offer's own simulation: an offer that lands with the log a version
+  // behind is the exact state the append exists to prevent, and a missing module
+  // must not be discovered from a transaction that has already gone out.
+  const rpcUrl = ctx.rpcs.L2[0];
+  if (!rpcUrl) {
+    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+  let draftsModule: ResolvedDraftsModule;
+  try {
+    draftsModule = await resolveDraftsModule(
+      { safe: author.address, rpcUrl, factory: draftsFactory(ctx.config) },
+      deps.draftsSeam,
+    );
+  } catch (err) {
+    throw new CliError(
+      `refusing to offer: ${err instanceof Error ? err.message : String(err)}`,
+      1,
+      'drafts_module',
+    );
+  }
+  // Genesis from the note (the identity the item is anchored under), the CID
+  // exactly as given: `offer --cid` appends the version it is about to anchor.
+  const draft = await appendDraft(
+    ctx,
+    { genesis: objectId, cid: kuboCid, module: draftsModule },
+    {
+      // The Safe was resolved above; a second read could only disagree with the
+      // id the offer is sent by.
+      safeState: () => Promise.resolve(author),
+      ...(deps.draftsSeam ? { seam: deps.draftsSeam } : {}),
+    },
+  );
+  logAppendedDraft(ctx, draft);
+
   const service = await PublicationService.init(
     {
       l1: ctx.l1,
@@ -549,6 +599,7 @@ export async function offerContent(
     publication,
     subdomain: service.subdomain,
     txHash,
+    draft,
   };
 }
 
