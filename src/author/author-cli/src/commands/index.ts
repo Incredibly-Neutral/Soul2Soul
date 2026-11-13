@@ -21,6 +21,7 @@ import { publish } from './publish';
 import { revoke } from './revoke';
 import { newPublication } from './new';
 import { draftsList } from './drafts-list';
+import { draftsAppend } from './drafts-append';
 import { authorAddress } from './address';
 import { authorInit } from './init';
 import { authorMigrate } from './migrate';
@@ -49,8 +50,8 @@ export const authorCommands: CommandSpec[] = [
 /** `s2s publication` — publication lifecycle actions. */
 export const publicationCommands: CommandSpec[] = [newPublication];
 
-/** `s2s drafts` — the drafts log on the author Safe. */
-export const draftsCommands: CommandSpec[] = [draftsList];
+/** `s2s drafts` — the drafts log on the author Safe: what it holds, and the append. */
+export const draftsCommands: CommandSpec[] = [draftsList, draftsAppend];
 
 export function findDraftsCommand(name: string): CommandSpec | undefined {
   return draftsCommands.find((command) => command.name === name);

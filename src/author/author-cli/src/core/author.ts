@@ -3,6 +3,7 @@
 //
 // Flow (upload/publish):  parse note → buildSignedContentItem (shared) →
 //   Kubo upload (2-space JSON to match the Filecoin CAR rootCid) →
+//   drafts-log append (real writes only) →
 //   on-chain makeOffer → frontmatter write-back → durability legs.
 //
 // Flow (revoke):          on-chain retract FIRST (the genesis author's verb,
@@ -42,6 +43,7 @@ import { CliError, UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
+import { appendDraft, type AppendedDraft, type DraftsSeam } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -130,6 +132,11 @@ export interface AuthorWriteResult {
   render: RenderOutcome | undefined;
   /** Whether the note file's frontmatter was updated. */
   frontmatterWritten: boolean;
+  /**
+   * The drafts-log append this write made — undefined on a preview, which is
+   * the one write-shaped run that must not touch the log.
+   */
+  draft: AppendedDraft | undefined;
 }
 
 export interface AuthorWriteOptions {
@@ -149,6 +156,15 @@ export interface AuthorWriteOptions {
   allowPlaintext?: boolean;
 }
 
+/** What a test may replace in `authorWrite`: the drafts log's own reads. */
+export interface AuthorWriteDeps {
+  /**
+   * The seam the append resolves its module through. Left out by every command:
+   * the append then reads the chain, as `s2s drafts list` does.
+   */
+  draftsSeam?: DraftsSeam;
+}
+
 // ===========================================================================
 // Author flow
 // ===========================================================================
@@ -163,6 +179,7 @@ export async function authorWrite(
   notePath: string,
   publication: string,
   opts: AuthorWriteOptions,
+  deps: AuthorWriteDeps = {},
 ): Promise<AuthorWriteResult> {
   const raw = readFileSync(notePath, 'utf8');
   // Basename, not the full path: `parseMarkdownNote` slugifies the filename as
@@ -284,6 +301,27 @@ export async function authorWrite(
   const kuboCid = await ctx.ipfs.addToKubo(JSON.stringify(signedItem, null, 2), 'content.json');
   ctx.out.log(`✓ uploaded ${kuboCid} (${objectId.slice(0, 12)}… → ${subdomain})`);
 
+  // A real write records the version in the author Safe's drafts log, so the log
+  // never lags a version. The condition is `opts.publish`: upload, offer and
+  // publish set it, preview does not, and a preview must not write to the log.
+  // The append comes BEFORE the offer on purpose — a failed offer then still
+  // leaves the version recorded, and the retry the failure names,
+  // `s2s drafts append`, appends these same bytes without uploading them again.
+  let draft: AppendedDraft | undefined;
+  if (opts.publish) {
+    draft = await appendDraft(
+      ctx,
+      { genesis: objectId, cid: kuboCid },
+      {
+        // The Safe was resolved above this run; a second read could only
+        // disagree with the id the item was signed with.
+        safeState: () => Promise.resolve(author),
+        ...(deps.draftsSeam ? { seam: deps.draftsSeam } : {}),
+      },
+    );
+    ctx.out.log(`✓ draft v${draft.versionCount} appended (${draft.module.slice(0, 8)}…)`);
+  }
+
   // On-chain append only when asked (`offer`/`publish`). A bare `upload`
   // stays off-chain — ipfs + pins only; the offer is a separate step.
   let txHash: string | undefined;
@@ -359,6 +397,7 @@ export async function authorWrite(
     txHash,
     render,
     frontmatterWritten,
+    draft,
   };
 }
 

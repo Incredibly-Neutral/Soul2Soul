@@ -38,9 +38,17 @@ vi.mock('../src/core/service', () => ({
     ),
   },
 }));
-vi.mock('../src/core/author-safe', () => ({
-  authorSafeState: vi.fn(() => Promise.reject(new Error('SAFE_REACHED'))),
-}));
+// Partial: the drafts-log append in `core/author.ts` reaches this module through
+// `core/author-contracts.ts`, which takes `ensureAuthorSafe` out of it at import
+// time. Only the Safe read is replaced — and it rejects, so any path that reaches
+// the chain here fails loudly instead of touching a network.
+vi.mock('../src/core/author-safe', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/author-safe')>();
+  return {
+    ...actual,
+    authorSafeState: vi.fn(() => Promise.reject(new Error('SAFE_REACHED'))),
+  };
+});
 
 import { authorSafeState } from '../src/core/author-safe';
 import { authorWrite, offerContent } from '../src/core/author';

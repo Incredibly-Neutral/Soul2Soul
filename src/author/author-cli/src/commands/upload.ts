@@ -43,6 +43,9 @@ export const upload: CommandSpec = {
         ipfsUrl: ipfsUri(result.kuboCid),
         gatewayUrl: ipfsGatewayUrl(result.kuboCid),
         frontmatterWritten: result.frontmatterWritten,
+        // Every real upload appends to the drafts log; the key is absent when a
+        // run made no append (a preview), never present-and-null.
+        draft: result.draft,
       },
       [
         `Uploaded ${notePath}`,

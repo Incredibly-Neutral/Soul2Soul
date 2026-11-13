@@ -23,14 +23,19 @@
 // entries, a short page ends the run, and the count stops the walk, so a log that
 // is an exact multiple of the page size costs no empty call.
 //
+// The only write is `appendDraft` — one version per real upload, sent by the
+// author Safe, because the module accepts `append` from its own Safe and from
+// nothing else. A read never appends, and a preview never uploads.
+//
 // The row identifier is the genesis id. `label` is an unsigned V2 field and is
 // not read here: nothing on the module answers it, so nothing is guessed.
 // ============================================================================
 
 import { base } from 'viem/chains';
-import { createPublicClient, getAddress, http, type Address, type Hex } from 'viem';
+import { BaseError, createPublicClient, getAddress, http, type Address, type Hex } from 'viem';
 
 import { DraftsModuleV1 } from '@s2s/author-contracts';
+import { toBytes32Id } from '@s2s/soul2soul-shared';
 
 import type { AuthorContracts, EnabledAuthorModules } from './author-contracts';
 import {
@@ -40,8 +45,10 @@ import {
   readDraftsModuleSafe,
   readEnabledAuthorModules,
 } from './author-contracts';
+import { authorSafeState } from './author-safe';
 import type { CliConfig } from './config';
-import { CliError } from '../lib/errors';
+import type { CliContext } from './context';
+import { CliError, UsageError, errorText } from '../lib/errors';
 
 /** Entries per `fetchAllPaged` call. A page is one `eth_call`. */
 export const DRAFTS_PAGE_SIZE = 100;
@@ -117,6 +124,8 @@ export interface DraftsSeam {
   /** `count()` — the number of genesis ids in the log. */
   readCount(opts: { address: Address; rpcUrl: string }): Promise<bigint>;
   readPage(opts: ReadDraftsPageOptions): Promise<RawDraftEntry[]>;
+  /** `versionCount(genesis)` — versions logged for one genesis. */
+  readVersionCount(opts: { address: Address; rpcUrl: string; genesis: Hex }): Promise<bigint>;
 }
 
 function clientFor(rpcUrl: string) {
@@ -138,6 +147,13 @@ export const defaultDraftsSeam: DraftsSeam = {
         args: [opts.offset, opts.limit],
       })) as readonly RawDraftEntry[],
     ),
+  readVersionCount: async (opts) =>
+    await clientFor(opts.rpcUrl).readContract({
+      address: opts.address,
+      abi: DraftsModuleV1,
+      functionName: 'versionCount',
+      args: [opts.genesis],
+    }),
 };
 
 // ===========================================================================
@@ -261,4 +277,179 @@ export async function readDrafts(
     if (offset + DRAFTS_PAGE_SIZE >= total) break;
   }
   return drafts;
+}
+
+// ===========================================================================
+// The write — one append per real upload
+// ===========================================================================
+
+/** One version appended, as the write path and `s2s drafts append` report it. */
+export interface AppendedDraft {
+  /** The module that took the append. */
+  module: Address;
+  /** The genesis the version belongs to, as the caller spelled it. */
+  genesis: string;
+  cid: string;
+  /** Versions logged for `genesis`, read back after the append. */
+  versionCount: number;
+  txHash: string;
+}
+
+export interface AppendDraftOptions {
+  genesis: string;
+  cid: string;
+}
+
+/** The `append` call, with both spellings of the genesis: the string and its bytes32. */
+export interface SimulateAppendCall {
+  module: Address;
+  safe: Address;
+  genesis: string;
+  id: Hex;
+  cid: string;
+}
+
+/**
+ * The append's dependencies: the reads, the Safe resolution and the pre-flight
+ * call. One object, so a test drives the write with no chain — the same shape
+ * `DraftsSeam` gives the reads.
+ */
+export interface AppendDraftDeps {
+  seam: DraftsSeam;
+  /** The author Safe and whether it has code. */
+  safeState(ctx: CliContext): Promise<{ address: Address; deployed: boolean }>;
+  /** `append` as the Safe, before it is sent, so a revert is named and not paid for. */
+  simulate(ctx: CliContext, call: SimulateAppendCall): Promise<void>;
+}
+
+export function appendDraftDeps(overrides: Partial<AppendDraftDeps> = {}): AppendDraftDeps {
+  return {
+    seam: overrides.seam ?? defaultDraftsSeam,
+    safeState: overrides.safeState ?? authorSafeState,
+    simulate: overrides.simulate ?? simulateAppend,
+  };
+}
+
+/**
+ * The two lines every failed append shares.
+ *
+ * The upload already happened by the time an append is attempted, so the one
+ * fact the author must not have to rediscover is that the bytes are pinned: the
+ * command failed, the content did not. The retry is the command that appends
+ * without uploading again.
+ */
+function notAppended(opts: AppendDraftOptions, why: string): CliError {
+  return new CliError(
+    `the bytes are pinned at ${opts.cid}, but the drafts log was not appended: ${why}\n` +
+      `  retry once that is fixed: s2s drafts append ${opts.genesis} ${opts.cid}`,
+    1,
+    'drafts_not_appended',
+  );
+}
+
+/** What the module's own custom errors mean, named rather than left decoded. */
+function appendRevertHint(reason: string): string {
+  if (/\bOnlySafe\b/.test(reason)) {
+    return ' — OnlySafe(): the module sends `append` for the Safe it was initialised with, and this run is not that Safe';
+  }
+  if (/\bZeroHash\b/.test(reason)) return ' — ZeroHash(): the genesis id is bytes32 zero';
+  if (/\bEmptyCid\b/.test(reason)) return ' — EmptyCid(): the cid is empty';
+  return '';
+}
+
+/**
+ * Simulate `append` as the author Safe, exactly as `src/core/service.ts` does
+ * for `makeOffer`: viem never decodes revert data for a raw send, so a reverted
+ * append would arrive as "execution reverted for an unknown reason", and the
+ * eth_call's `from` is the msg.sender of the deployed userOp — the Safe — so a
+ * module that is the wrong Safe's refuses before gas is spent.
+ */
+async function simulateAppend(ctx: CliContext, call: SimulateAppendCall): Promise<void> {
+  try {
+    await ctx.l2.simulateContract({
+      address: call.module,
+      abi: DraftsModuleV1,
+      functionName: 'append',
+      args: [call.id, call.cid],
+      account: call.safe,
+    });
+  } catch (err) {
+    const reason = err instanceof BaseError ? err.shortMessage : errorText(err);
+    throw notAppended(
+      { genesis: call.genesis, cid: call.cid },
+      `the append from author Safe ${call.safe} would revert — ${reason}${appendRevertHint(reason)}`,
+    );
+  }
+}
+
+/**
+ * Append one version to the author Safe's drafts log.
+ *
+ * The module is resolved the way `s2s drafts list` resolves it (the Safe's own
+ * enabled list first, the factory index second), the genesis is converted by
+ * shared's `toBytes32Id` so the id is the same bytes the publication module
+ * would see, and the write is sent by the author Safe through the ERC-4337
+ * runner — `append` is `onlySafe`, so an EOA send can never work. The count
+ * returned is read back from the module after the send: it is the log's answer,
+ * not the caller's arithmetic.
+ */
+export async function appendDraft(
+  ctx: CliContext,
+  opts: AppendDraftOptions,
+  overrides: Partial<AppendDraftDeps> = {},
+): Promise<AppendedDraft> {
+  const deps = appendDraftDeps(overrides);
+  const rpcUrl = ctx.rpcs.L2[0];
+  if (!rpcUrl) {
+    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
+  }
+
+  const { address: safe, deployed } = await deps.safeState(ctx);
+  if (!deployed) {
+    throw notAppended(
+      opts,
+      `the author Safe ${safe} is not deployed yet, so it enables no module — run: s2s author init`,
+    );
+  }
+
+  let resolved: ResolvedDraftsModule;
+  try {
+    resolved = await resolveDraftsModule(
+      { safe, rpcUrl, factory: draftsFactory(ctx.config) },
+      deps.seam,
+    );
+  } catch (err) {
+    // The resolution's own message names the state it found (no module, or one
+    // bound elsewhere) and the install that fixes it. What it cannot know is
+    // that the bytes are already pinned, so the wrap adds exactly that.
+    throw notAppended(opts, err instanceof Error ? err.message : String(err));
+  }
+
+  const id = toBytes32Id(opts.genesis) as Hex;
+  await deps.simulate(ctx, { module: resolved.address, safe, genesis: opts.genesis, id, cid: opts.cid });
+
+  let txHash: string;
+  try {
+    txHash = await (
+      await ctx.authorRunner()
+    ).genericTx(resolved.address, JSON.stringify(DraftsModuleV1), 'append', [id, opts.cid], false);
+  } catch (err) {
+    // The send failed after the simulation passed: a bundler refusal, or a
+    // userOp that landed and reverted. Neither is a viem message the author can
+    // act on, and the log may or may not hold the version — so say what is
+    // known and name the read that settles it.
+    throw new CliError(
+      `the bytes are pinned at ${opts.cid}, but the append did not complete: ${errorText(err)}\n` +
+        `  check the log with: s2s drafts list\n` +
+        `  retry with: s2s drafts append ${opts.genesis} ${opts.cid}`,
+      1,
+      'drafts_append_failed',
+    );
+  }
+
+  const versionCount = Number(
+    await deps.seam.readVersionCount({ address: resolved.address, rpcUrl, genesis: id }),
+  );
+
+  return { module: resolved.address, genesis: opts.genesis, cid: opts.cid, versionCount, txHash };
 }

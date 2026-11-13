@@ -24,6 +24,7 @@ const RESULT = {
   txHash: undefined,
   render: undefined,
   frontmatterWritten: true,
+  draft: undefined,
 };
 
 /**
