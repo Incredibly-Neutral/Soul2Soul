@@ -46,10 +46,12 @@ function raw(index: number, overrides: Partial<RawDraftEntry> = {}): RawDraftEnt
 }
 
 interface FakeOptions {
-  /** The module the Safe's enabled list answers, if any. */
+  /** The module the Safe's enabled list answers for the drafts role, if any. */
   enabled?: Address | null;
-  /** The Safe the enabled module's `safe()` answers; defaults to this author's. */
-  boundTo?: Address;
+  /** Every address on the enabled list; defaults to `enabled` alone. */
+  modules?: Address[];
+  /** The Safe the enabled module's `safe()` answers; null when it answers none. */
+  boundTo?: Address | null;
   /** The newest drafts proxy the factory index names, if any. */
   factory?: Address | null;
   /** The whole log; pages are sliced out of it. */
@@ -70,7 +72,7 @@ function fakeSeam(options: FakeOptions = {}) {
   const seam: DraftsSeam = {
     readEnabled: () =>
       Promise.resolve({
-        modules: options.enabled ? [options.enabled] : [],
+        modules: options.modules ?? (options.enabled ? [options.enabled] : []),
         byRole: {
           drafts: options.enabled ? [options.enabled] : [],
           ownerHistory: [],
@@ -79,7 +81,13 @@ function fakeSeam(options: FakeOptions = {}) {
         ownerHistory: null,
       }),
     readModuleSafe: ({ module }) =>
-      Promise.resolve(module === options.enabled ? (options.boundTo ?? SAFE) : null),
+      Promise.resolve(
+        module === options.enabled
+          ? options.boundTo === undefined
+            ? SAFE
+            : options.boundTo
+          : null,
+      ),
     readFactory: () => {
       factoryReads += 1;
       return Promise.resolve({
@@ -107,7 +115,7 @@ describe('resolveDraftsModule', () => {
       chain.seam,
     );
 
-    expect(resolved).toEqual({ address: DRAFTS, source: 'enabled' });
+    expect(resolved).toEqual({ address: DRAFTS, source: 'enabled', onEnabledList: true });
     expect(chain.factoryReads()).toBe(0);
   });
 
@@ -118,8 +126,18 @@ describe('resolveDraftsModule', () => {
       chain.seam,
     );
 
-    expect(resolved).toEqual({ address: FACTORY_DRAFTS, source: 'factory' });
+    expect(resolved).toEqual({ address: FACTORY_DRAFTS, source: 'factory', onEnabledList: false });
     expect(chain.factoryReads()).toBe(1);
+  });
+
+  it('falls through when the enabled module answers the role but no safe()', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, boundTo: null, factory: FACTORY_DRAFTS });
+    const resolved = await resolveDraftsModule(
+      { safe: SAFE, rpcUrl: RPC, factory: FACTORY },
+      chain.seam,
+    );
+
+    expect(resolved).toEqual({ address: FACTORY_DRAFTS, source: 'factory', onEnabledList: false });
   });
 
   it('does not read as this Safe a module the Safe enabled but another Safe owns', async () => {
@@ -130,7 +148,7 @@ describe('resolveDraftsModule', () => {
     );
 
     // `enableModule` takes any address; the module's own `safe()` says whose log it holds.
-    expect(resolved).toEqual({ address: FACTORY_DRAFTS, source: 'factory' });
+    expect(resolved).toEqual({ address: FACTORY_DRAFTS, source: 'factory', onEnabledList: false });
     expect(chain.factoryReads()).toBe(1);
   });
 
@@ -140,6 +158,26 @@ describe('resolveDraftsModule', () => {
     await expect(
       resolveDraftsModule({ safe: SAFE, rpcUrl: RPC, factory: FACTORY }, chain.seam),
     ).rejects.toMatchObject({ code: 'no_drafts_module' });
+  });
+
+  it('names the module it rejected when that one is bound to another Safe', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, boundTo: OTHER_SAFE, factory: null });
+
+    await expect(
+      resolveDraftsModule({ safe: SAFE, rpcUrl: RPC, factory: FACTORY }, chain.seam),
+    ).rejects.toThrow(
+      `no drafts module bound to author Safe ${SAFE} — the drafts module enabled here (${DRAFTS}) is bound to ${OTHER_SAFE}, not to this Safe; run: s2s author init`,
+    );
+  });
+
+  it('names the module it rejected when that one answers no safe()', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, boundTo: null, factory: null });
+
+    await expect(
+      resolveDraftsModule({ safe: SAFE, rpcUrl: RPC, factory: FACTORY }, chain.seam),
+    ).rejects.toThrow(
+      `no drafts module bound to author Safe ${SAFE} — the drafts module enabled here (${DRAFTS}) answers no safe(), so this run cannot tell whose log it holds; run: s2s author init`,
+    );
   });
 
   it('names `s2s author init` when neither answers', async () => {
@@ -300,6 +338,28 @@ describe('drafts list output', () => {
     });
     // A factory-index module is a lead, not an install: the warning says so.
     expect(cap.warnings[0]).toContain('not on the Safe');
+  });
+
+  it('does not call a resolved module unenabled when the Safe does have it enabled', async () => {
+    // The role went to DRAFTS, which is bound to another Safe; the factory index
+    // names FACTORY_DRAFTS, which this Safe also enables. "Not enabled" would be false.
+    const chain = fakeSeam({
+      enabled: DRAFTS,
+      modules: [FACTORY_DRAFTS, DRAFTS],
+      boundTo: OTHER_SAFE,
+      factory: FACTORY_DRAFTS,
+      log: [raw(0)],
+    });
+    const cap = capture();
+
+    await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
+
+    const text = cap.human[0] ?? '';
+    expect(text).toContain(
+      'from the factory index (on the enabled list, but not the module this run took for the drafts role)',
+    );
+    expect(text).not.toContain('not enabled on the Safe');
+    expect(cap.warnings).toEqual([]);
   });
 
   it("says this Safe's log when an enabled module is the one that answered", async () => {

@@ -596,8 +596,9 @@ export async function readModuleSafe(opts: ModuleReadOptions): Promise<Address |
  *
  * `enableModule` is `onlySelf`, so an entry in a Safe's enabled list is that
  * Safe's own statement — but it names any address, including a drafts module
- * minted for a different Safe. `safe()` is the module's immutable, so it is the
- * read that says whose log an enabled module actually holds.
+ * minted for a different Safe. `safe` is proxy storage, written once by
+ * `initialize` and changed by no setter, so it is the read that says whose log
+ * an enabled module actually holds.
  */
 export async function readDraftsModuleSafe(opts: ModuleReadOptions): Promise<Address | null> {
   try {

@@ -52,6 +52,12 @@ export type DraftsModuleSource = 'enabled' | 'factory';
 export interface ResolvedDraftsModule {
   address: Address;
   source: DraftsModuleSource;
+  /**
+   * Whether `address` is in the Safe's own enabled-module list, whichever branch
+   * answered. A factory-index module can still be enabled on the Safe: it is just
+   * not the module this run took for the drafts role.
+   */
+  onEnabledList: boolean;
 }
 
 /** One row of the log: the latest version of one genesis. */
@@ -150,8 +156,9 @@ export const defaultDraftsSeam: DraftsSeam = {
  * An enabled module is checked against the Safe it was minted for. `enableModule`
  * is `onlySelf`, so the entry is this Safe's own call, but the call names any
  * address: a drafts module created for another Safe answers the role id too, and
- * its log is that Safe's. `safe()` is the module's immutable, so a module bound
- * elsewhere is not adopted and the resolution falls through to the index.
+ * its log is that Safe's. `safe()` is proxy storage fixed by `initialize` and no
+ * setter exists, so a module bound elsewhere is not adopted and the resolution
+ * falls through to the index.
  */
 export async function resolveDraftsModule(
   opts: ResolveDraftsModuleOptions,
@@ -159,22 +166,50 @@ export async function resolveDraftsModule(
 ): Promise<ResolvedDraftsModule> {
   const enabled = await seam.readEnabled({ safe: opts.safe, rpcUrl: opts.rpcUrl });
   const onSafe = enabled.drafts;
+  let rejected: { module: Address; bound: Address | null } | null = null;
   if (onSafe !== null) {
     const bound = await seam.readModuleSafe({ module: onSafe, rpcUrl: opts.rpcUrl });
     if (bound !== null && bound.toLowerCase() === opts.safe.toLowerCase()) {
-      return { address: getAddress(onSafe.toLowerCase()), source: 'enabled' };
+      return { address: getAddress(onSafe.toLowerCase()), source: 'enabled', onEnabledList: true };
     }
+    // Kept for the error: this Safe does enable a drafts module, and saying it
+    // enables none would deny the one the read just saw.
+    rejected = { module: getAddress(onSafe.toLowerCase()), bound };
   }
 
   const index = await seam.readFactory(opts);
   const created = index.drafts;
-  if (created !== null) return { address: getAddress(created.toLowerCase()), source: 'factory' };
+  if (created !== null) {
+    return {
+      address: getAddress(created.toLowerCase()),
+      source: 'factory',
+      onEnabledList: enabled.modules.some(
+        (module) => module.toLowerCase() === created.toLowerCase(),
+      ),
+    };
+  }
 
-  throw new CliError(
-    `no enabled drafts module on author Safe ${opts.safe} — run: s2s author init`,
-    1,
-    'no_drafts_module',
-  );
+  throw new CliError(noModuleMessage(opts.safe, rejected), 1, 'no_drafts_module');
+}
+
+/**
+ * Why no module answered, in the state the read actually found: a Safe that
+ * enables nothing, or a Safe that enables a drafts module bound to a different
+ * one. The second names the module, because the remedy is to install one of its
+ * own, not to enable a draft module it already has.
+ */
+function noModuleMessage(
+  safe: Address,
+  rejected: { module: Address; bound: Address | null } | null,
+): string {
+  if (rejected === null) {
+    return `no enabled drafts module on author Safe ${safe} — run: s2s author init`;
+  }
+  const why =
+    rejected.bound === null
+      ? 'answers no safe(), so this run cannot tell whose log it holds'
+      : `is bound to ${rejected.bound}, not to this Safe`;
+  return `no drafts module bound to author Safe ${safe} — the drafts module enabled here (${rejected.module}) ${why}; run: s2s author init`;
 }
 
 // ===========================================================================

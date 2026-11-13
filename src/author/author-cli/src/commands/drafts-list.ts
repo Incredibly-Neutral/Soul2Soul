@@ -61,10 +61,17 @@ export function isoDate(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
 }
 
-/** How the module was found, in the words the human line uses. */
-function sourceText(source: DraftsModuleSource): string {
-  return source === 'enabled'
-    ? 'enabled on the Safe'
+/**
+ * How the module was found, in the words the human line uses.
+ *
+ * "Not enabled on the Safe" is only said when that is true: a factory-index
+ * answer can still be on the enabled list, it is just not the module this run
+ * took for the drafts role.
+ */
+function sourceText(result: DraftsListResult, onEnabledList: boolean): string {
+  if (result.source === 'enabled') return 'enabled on the Safe';
+  return onEnabledList
+    ? 'from the factory index (on the enabled list, but not the module this run took for the drafts role)'
     : 'from the factory index (not enabled on the Safe)';
 }
 
@@ -87,7 +94,7 @@ export function emptyLogLine(result: DraftsListResult): string {
  * An empty log is one line and nothing else — a header over no rows would make
  * the reader look for a table that is not there.
  */
-export function draftsListLines(result: DraftsListResult): string {
+export function draftsListLines(result: DraftsListResult, onEnabledList = false): string {
   if (result.count === 0) {
     return emptyLogLine(result);
   }
@@ -100,7 +107,7 @@ export function draftsListLines(result: DraftsListResult): string {
   );
 
   return [
-    `module ${result.module} — ${sourceText(result.source)} — author Safe ${result.safe}`,
+    `module ${result.module} — ${sourceText(result, onEnabledList)} — author Safe ${result.safe}`,
     `drafts ${String(result.count)}`,
     '',
     `${'genesis'.padEnd(genesisWidth)}  ${'versions'.padStart(versionWidth)}  latest`,
@@ -145,12 +152,12 @@ export async function runDraftsList(
     drafts,
   };
 
-  if (result.source === 'factory') {
+  if (result.source === 'factory' && !resolved.onEnabledList) {
     ctx.out.warn(
       `drafts module ${result.module} is not on the Safe's enabled list — found it in the factory index; run \`s2s author init\` to enable it`,
     );
   }
-  ctx.out.result(result, draftsListLines(result));
+  ctx.out.result(result, draftsListLines(result, resolved.onEnabledList));
 }
 
 export const draftsList: CommandSpec = {
