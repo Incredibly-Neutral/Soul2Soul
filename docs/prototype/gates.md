@@ -18,7 +18,7 @@ A gate in Soul2Soul is a function that asks the L2 a fixed set of questions and 
 
 There are three:
 
-- `canPublish`: may this account write to the publication? The publication admits the account (the publication's own Safe, or the Safe of a listed author or developer), and the signer owns it. Every build except a reset asks it.
+- `canPublish`: may this account write to the publication? The publication admits the account (the publication's own Safe, or the Safe of a listed author or developer), and the signer owns it. Update asks it of a page it adds; a page already at its path is refreshed without it.
 - `canRead`: may the press decrypt this manuscript? The two questions of `canPublish`, and an agreement for the manuscript's genesis id. Every decryption asks it, and the genesis id comes from the ledger, never from the ciphertext.
 - `canReset`: may this signer reset the publication's site? Only if the signer owns the publication's Safe; stricter than a publish, because a reset rewrites the whole site.
 
