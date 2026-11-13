@@ -591,6 +591,29 @@ export async function readModuleSafe(opts: ModuleReadOptions): Promise<Address |
   }
 }
 
+/**
+ * The Safe a drafts module is bound to (`DraftsModuleV1.safe()`), or null.
+ *
+ * `enableModule` is `onlySelf`, so an entry in a Safe's enabled list is that
+ * Safe's own statement — but it names any address, including a drafts module
+ * minted for a different Safe. `safe` is proxy storage, written once by
+ * `initialize` and changed by no setter, so it is the read that says whose log
+ * an enabled module actually holds.
+ */
+export async function readDraftsModuleSafe(opts: ModuleReadOptions): Promise<Address | null> {
+  try {
+    const safe = await clientFor(opts.rpcUrl).readContract({
+      address: opts.module,
+      abi: DraftsModuleV1,
+      functionName: 'safe',
+    });
+    return safe === ZERO_ADDRESS ? null : getAddress(safe.toLowerCase());
+  } catch (err) {
+    if (answersForeign(err)) return null;
+    throw err;
+  }
+}
+
 /** The guard the factory minted for `module` (`guardFor`), or null for zero. */
 export async function readGuardFor(opts: GuardForOptions): Promise<Address | null> {
   const guard = await clientFor(opts.rpcUrl).readContract({
