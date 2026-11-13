@@ -302,7 +302,7 @@ storage.
   draft log.
 - **No metadata beyond `cid`, `timestamp` and `blockNumber`.** No title, slug, tags, or locale — those
   stay in the note and in the signed content item.
-- **No writes beyond the publish path.** `s2s author upload`, `propose` and `publish` append;
+- **No writes beyond the publish path.** `s2s author upload`, `offer` and `publish` append;
   `preview` does not, because a preview is not a version, and nothing but `s2s author migrate` calls
   `absorb()`. The log accepts an append from one caller: the Safe, through
   `append(bytes32 genesis, string cid)`, so the appending key has to meet the Safe's threshold — a

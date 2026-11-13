@@ -68,7 +68,7 @@ s2s author address   [--json]                                                   
 s2s author init      [--json]                                                                     # deploy the Safe + install the author contracts (idempotent)
 s2s author migrate   [--json]                                                                     # move an installed Safe onto the modules the current factory predicts
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins + drafts append (no offer)
-s2s author propose   <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]  # drafts append + on-chain offer only
+s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]      # drafts append + on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain, no append)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
@@ -87,23 +87,23 @@ s2s drafts list      [--json]                                                   
 s2s drafts append    <genesis> <cid> [--json]                                                     # record a version on that log (a Safe transaction)
 ```
 
-The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
+The **upload ↔ offer split**: `upload` signs, uploads to Kubo, fires the pinning
 legs, writes `genesis`/`author` back, and appends the CID to the author Safe's
 drafts log — but **never makes an offer**. `author`
 in that frontmatter is the **author Safe** as a bare `0x…` address, not the signing EOA — the same
 value the signed item carries in `public.author`, so note and item cannot drift;
 `author` sits inside the EIP-712 signing view, so it is part of `genesis`. The on-chain
-`makeOffer` is the separate **`propose`** step, which takes the `cid` that `upload`
+`makeOffer` is the separate **`offer`** step, which takes the `cid` that `upload`
 reported (`--cid`) and the note's stable on-chain identity (frontmatter `genesis`, else
 `content_id`, mirroring neutralpress' revoke genesis resolution). `upload` also writes the
-CID it just produced into the frontmatter as `cid`, so `propose` works with no flags
+CID it just produced into the frontmatter as `cid`, so `offer` works with no flags
 after an upload; `--cid` overrides. `publish` remains the
-one-shot convenience that does upload + propose + prod render + pins together.
+one-shot convenience that does upload + offer + prod render + pins together.
 
 **`upload` does not resolve the publication on-chain.** The publication contributes only its
 name (the `subdomain` label of the ENS name, derived locally), so an upload succeeds for a
 publication that has not been created yet or whose ENS name has no address record. Only
-`propose` / `publish` / `revoke` (and the Filecoin durability leg) resolve the Safe and its
+`offer` / `publish` / `revoke` (and the Filecoin durability leg) resolve the Safe and its
 modules. The drafts append resolves nothing about the publication either: it takes the drafts
 module off the author Safe's enabled list, which is this machine's own identity. The Filecoin leg
 is the one deferred lookup: it runs after the pins, and a
@@ -738,8 +738,8 @@ Draft = { module: string;          // the drafts module the Safe sent append to
   frontmatterWritten: boolean;
   draft: Draft }          // the append; no top-level txHash, because it makes no offer
 
-// s2s author propose <note> [--cid <cid>] [--publication <ens>] [--json] — drafts append, then on-chain offer
-{ action: 'propose'; note: string; publication: string; subdomain: string;
+// s2s author offer <note> [--cid <cid>] [--publication <ens>] [--json] — drafts append, then on-chain offer
+{ action: 'offer'; note: string; publication: string; subdomain: string;
   objectId: string; cid: string; txHash: string;
   draft: Draft }
 
@@ -774,7 +774,7 @@ Shared field meanings:
 | `txHash` | L2 transaction hash of the on-chain action. |
 | `render` | Render descriptor: `cid` (render CID), `path`, `previewUrl`, `prodUrl`. |
 | `frontmatterWritten` | True when upload changed the note's frontmatter (`genesis`/`author`/`creation_date` on first publish, `cid`, `modified_date` and `encrypted` always). |
-| `draft` | The drafts append: `module`, `genesis`, `cid`, `versionCount`, `txHash`. On `upload`, `propose` and `publish`; absent on `preview`, which records no version. |
+| `draft` | The drafts append: `module`, `genesis`, `cid`, `versionCount`, `txHash`. On `upload`, `offer` and `publish`; absent on `preview`, which records no version. |
 
 `ipfsUrl`/`gatewayUrl` are **additive scalars** on `upload` alone — existing keys are unchanged, so
 hosts that read the result as an open shape need no change: the Neovim plugin formats known fields,
@@ -927,7 +927,7 @@ src/
   lib/              args parser, command spec, errors, output contract, frontmatter write-back
   core/             configschema (the nested shape + field registry), config (the merger), configfile (config-file IO), defaults (the shipped layer — S2S_DEFAULTS_FILE seam), authors (the multi-identity store), context (clients), service, author write/revoke, encrypt seam
   adapters/         signer (viem EOA), tx-runner (EOA + permissionless Safe), safe-tx (Safe Transaction Service + the signed struct), ipfs, lit, rpc, filecoin
-  commands/         upload / propose / preview / publish / revoke (author), new / switch / list / rm (author store), new (publication), config set/get/unset/list/path, setup
+  commands/         upload / offer / preview / publish / revoke (author), new / switch / list / rm (author store), new (publication), config set/get/unset/list/path, setup
 ```
 
 Reused from shared (only): `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`,
@@ -958,7 +958,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 
 ### The ETH actor split (AD-1 / INV-10)
 
-- **propose / publish / revoke** — the **author Safe** (`0x7907…`, derived from `s2s_${eoa}`,
+- **offer / publish / revoke** — the **author Safe** (`0x7907…`, derived from `s2s_${eoa}`,
   owned by the EOA) is the actor. `makeOffer`/`retract` are ERC-4337 userOps through the bundler,
   so `msg.sender` — and therefore `genesisAuthor` — is the Safe. The EOA is the **signer only**:
   it signs the EIP-712 content item (`proof.signer`), signs `lit actions auth` for the render
@@ -1054,7 +1054,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   bare 64-hex `0x…` parses as a YAML number.
   It writes `cid` into the frontmatter (the CID of that upload — ephemeral: the next
   upload overwrites it, and it describes the note as of that upload, not current edits).
-  `cid` succeeded `kubo_cid`; the old key is still **read** (by `propose`'s fallback and by the
+  `cid` succeeded `kubo_cid`; the old key is still **read** (by `offer`'s fallback and by the
   downgrade guard, both through `resolveKuboCid`) and is **deleted** on the next write-back, so a
   note never carries two CIDs naming different revisions. `cid` is not template data, so it is
   excluded from the shared `custom` bag like every other protocol key.
@@ -1075,12 +1075,12 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   `custom`. The read side is otherwise untouched: `Boolean(frontmatter.encryption)` in
   `shared/src/authoring/note.ts` still means a note carrying the string `'false'` encrypts, and the
   write-back's `true` then makes the file truthful.
-  `propose` appends the CID to the drafts log, then re-resolves the note's on-chain identity
+  `offer` appends the CID to the drafts log, then re-resolves the note's on-chain identity
   (`genesis`, else `content_id`) and sends
   the `makeOffer(objectId, cid)` for `--cid` if given, else the stored `cid`; it
   expects `upload` to have run first (no identity — `genesis` or `content_id` — or no CID and no
   `--cid`, → usage error pointing at `s2s author upload`). When the note says `encrypted: true`,
-  `propose` also verifies the item it is about to anchor: it fetches that CID and refuses if the
+  `offer` also verifies the item it is about to anchor: it fetches that CID and refuses if the
   stored item does not declare `encryption: true`, has no string body, or cannot be read or parsed —
   and the check is on the anchored CID (including `--cid`), not on the frontmatter's `cid`. It
   runs the same downgrade guard as the write path.
