@@ -335,6 +335,59 @@ describe('runDraftsPull', () => {
     expect(text).toContain('<p>one</p>');
   });
 
+  it('honours the legacy kubo_cid as the recorded version', async () => {
+    mkdirSync('notes');
+    writeFileSync(
+      join('notes', 'first-draft.md'),
+      ['---', `genesis: "${GENESIS_0}"`, 'kubo_cid: bafy-draft-0', '---', '# First Draft', ''].join(
+        '\n',
+      ),
+    );
+
+    const { ctx, fetchFromKubo } = context({ items: {}, plaintexts: {} });
+    const outcome = await runDraftsPull(
+      ctx,
+      'notes',
+      {},
+      { safeState: SAFE_STATE, seam: seam([entry(0)]) },
+    );
+
+    // A note written before the rename records the same version under the old key.
+    expect(outcome.result.drafts[0]).toMatchObject({ status: 'present' });
+    expect(fetchFromKubo).not.toHaveBeenCalled();
+  });
+
+  it('says so when two notes carry the same genesis, and compares the first in name order', async () => {
+    const cap = capture();
+    mkdirSync('notes');
+    for (const name of ['aaa.md', 'zzz.md']) {
+      writeFileSync(
+        join('notes', name),
+        ['---', `genesis: "${GENESIS_0}"`, 'cid: bafy-draft-0', '---', '# First Draft', ''].join(
+          '\n',
+        ),
+      );
+    }
+
+    const { ctx } = context({ cap, items: {}, plaintexts: {} });
+    const outcome = await runDraftsPull(
+      ctx,
+      'notes',
+      {},
+      { safeState: SAFE_STATE, seam: seam([entry(0)]) },
+    );
+
+    // Neither file is rewritten, and the duplicate is named rather than absorbed.
+    expect(cap.warnings).toHaveLength(1);
+    expect(cap.warnings[0]).toContain(GENESIS_0);
+    expect(cap.warnings[0]).toContain(join('notes', 'aaa.md'));
+    expect(cap.warnings[0]).toContain(join('notes', 'zzz.md'));
+    expect(outcome.result.drafts[0]).toMatchObject({
+      status: 'present',
+      path: join('notes', 'aaa.md'),
+    });
+  });
+
   it('leaves files carrying another genesis, and files carrying none, untouched', async () => {
     mkdirSync('notes');
     writeFileSync(

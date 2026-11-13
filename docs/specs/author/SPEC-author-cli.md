@@ -86,7 +86,7 @@ s2s config list      [--json]                                                   
 s2s config path      [--local] [--json]                                                           # print every config file location
 s2s drafts list      [--json]                                                                     # the active author Safe's drafts, read from the module it adopted
 s2s drafts append    <genesis> <cid> [--json]                                                     # record a version on that log (a Safe transaction)
-s2s drafts fetch     <order|genesis> [--out <path>] [--stdout] [--json]                           # one draft, decrypted, as a note
+s2s drafts fetch     <order|genesis> [--out <path>] [--stdout] [--force] [--json]                 # one draft, decrypted, as a note
 s2s drafts pull      <folder> [--force] [--json]                                                  # every draft in the log as a note in <folder>
 ```
 
@@ -833,13 +833,13 @@ author and an L2 RPC.
   versionCount?: number;          // versionCount(genesis) read after the send; absent when that read failed
   txHash: string }                // the Safe transaction, sent and awaited — never a queued proposal
 
-// s2s drafts fetch <order|genesis> [--out <path>] [--stdout] [--json] — one draft as a note
+// s2s drafts fetch <order|genesis> [--out <path>] [--stdout] [--force] [--json] — one draft as a note
 { action: 'drafts.fetch';
   genesis: string;                // the row this read came from, bytes32 as the log holds it
   cid: string;                    // the version the item was read at (the latest append)
   author: string;                 // the Safe the row bound the genesis to
   path: string | null;            // where the note was written; null with --stdout
-  bytes: number }                 // bytes of what was produced: the file, or the body under --stdout
+  bytes: number }                 // bytes written, or printed under --stdout
 
 // s2s drafts pull <folder> [--force] [--json] — every draft in the log as a note
 { action: 'drafts.pull';
@@ -915,18 +915,43 @@ CLI only carries the request and the refusal. A plaintext item is copied as it s
 asked: its bytes are public, and an action that refuses what was never closed answers a reason that
 is not a problem.
 
-The note is rebuilt from the plaintext and the item's public metadata, and it is the note this CLI
-can upload again: `upsertFrontmatter` writes `genesis`, `cid`, `author`, `creation_date`,
-`modified_date` and `encrypted` — the keys the parser and the uploader already read — over a body of
-`# <title>` followed by the body document's `content`. The title is the item's `label`, else the
-genesis. Because the heading is where the parser reads a title, a re-parse finds it, and because the
-genesis is in the frontmatter, the next upload appends to this row instead of minting a draft.
+The note is rebuilt from the plaintext and the item's public metadata, and it carries what the write
+path signs, so uploading it again is a new version of this draft and not a new draft:
+`upsertFrontmatter` writes the row (`genesis`, `cid`, `author`), the dates the item was signed with
+(`creation_date`, `modified_date`), `encrypted`, and the public block's `post_type`, `language`
+(from `locale`), `tags`, `parent`, `position` and `label` — each in the key the parser reads it back
+from, each omitted when the item left it out. The body document's `custom` bag is written key for key,
+so a template's `summary` survives, and a `slug` the document names is kept so the re-upload's `base`
+is the same. The body is `# <title>` followed by the document's `content`.
+
+What is not reproduced is what an upload derives: `proof`, `objectId` and `plaintextHash` are
+computed at signing time, `modifiedDate` becomes the new upload's own timestamp, and `attributes` are
+never signed by this CLI at all. Everything else round-trips — the test that holds this down rebuilds
+a note, parses it with the CLI's own parser, runs the uploader's own metadata mapping over it, and
+compares the signed public block and body document against the item it was fetched from.
+
+The title is the item's `label`, else the body document's own `title`, else the genesis. Because the
+heading is where the parser reads a title, a re-parse finds it, and because the genesis is in the
+frontmatter, the next upload appends to this row instead of minting a draft. A note the item names
+nowhere gets no heading: a `# 0x…` line would be the file inventing a name the log never had, and the
+genesis is already in the frontmatter where the row lives.
 
 Three outputs, one at a time: the default writes `<title-slug>.md` in the working directory and
 prints the path; `--out` writes that path instead; `--stdout` prints the body alone and writes
-nothing (`--out` with `--stdout` is a usage error, not a silent choice). Under `--json` the envelope
-is the whole of stdout, as it is for every action: `path` is `null`, `bytes` counts the body, and the
-body itself is not printed beside the envelope — one stream, one form.
+nothing. `--out` with `--stdout` is a usage error, not a silent choice, and so is `--json` with
+`--stdout`: stdout is one stream, and neither the envelope nor the body can ride beside the other.
+`--stdout` is the way to read a body without a file; a machine that wants both fields and bytes asks
+for them one run at a time.
+
+Writing over a note is a decision, and `fetch` makes the same one `pull` does, through the same
+comparison. A path holding another genesis, or this genesis at another recorded CID, is refused with
+the path named and `--force` offered; a path holding this draft at this version is rewritten without
+asking, because the bytes it would write are the ones the file already names. `bytes` is the length of
+what was written, or of what was printed under `--stdout`.
+
+The file stem is the shared slugifier, capped at 96 characters so a long label cannot outrun the
+filesystem's name limit; the collision fallback appends `-<genesis8>` after the cap. Only the file
+name is cut — the heading keeps the whole title.
 
 ### `drafts pull` — the log, as a folder
 
@@ -937,6 +962,17 @@ unless `--force` — a pull does not decide that the log is right about work som
 Files carrying another genesis, and files carrying none, are not touched at all; a title collision
 falls back to `<slug>-<genesis8>.md` rather than overwriting the other note, and a folder that does
 not exist is created.
+
+A note whose recorded CID is current is `present` even when its text has moved on: the frontmatter is
+the note's own claim about which version it came from, and a pull that re-derived the version by
+hashing the body would need the plaintext it is trying not to fetch. The comparison is the claim.
+
+The recorded CID is `cid`, or the legacy `kubo_cid` a note written before the rename still carries —
+both are the version the note came from, and comparing only the new key would call an old note
+behind forever. Two files carrying one genesis is a fact about the folder, and the pull says so on
+stderr naming both paths: the comparison and any rewrite run against the first in name order, and the
+other is left exactly as it is, because picking one quietly is how an author ends up editing the file
+the tool is not comparing.
 
 The summary is one row per draft on stderr, `order  status  path`, in log order, with
 `written` / `present` / `behind` / `failed`. One unreadable draft does not stop the run, so the rows

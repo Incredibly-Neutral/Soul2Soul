@@ -25,7 +25,8 @@ import {
   subdomainOf,
   toPreviewLabel,
 } from '@s2s/soul2soul-shared';
-import type { ParsedNote } from '@s2s/soul2soul-shared';
+import type { ParsedNote, S2SContentBody } from '@s2s/soul2soul-shared';
+import type { PublicInputV2 } from '@s2s/soul2soul-shared';
 import type { Address } from 'viem';
 
 import { createFilecoinStorage } from '../adapters/filecoin';
@@ -43,7 +44,14 @@ import { CliError, UsageError, ActionError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
-import { appendDraft, draftsFactory, resolveDraftsModule, type AppendedDraft, type DraftsSeam, type ResolvedDraftsModule } from './drafts';
+import {
+  appendDraft,
+  draftsFactory,
+  resolveDraftsModule,
+  type AppendedDraft,
+  type DraftsSeam,
+  type ResolvedDraftsModule,
+} from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
 import { PublicationService } from './service';
@@ -174,6 +182,53 @@ export interface AuthorWriteDeps {
  * preview/prod render pipeline; `publish` gates which one. Durability
  * (Pinata/Filebase/Filecoin) is fired fire-and-forget on real uploads.
  */
+/** What the uploader signs for one parsed note: the public metadata and the body. */
+export interface NoteSigningInputs {
+  pub: PublicInputV2;
+  body: S2SContentBody;
+}
+
+/**
+ * The values one upload signs for a parsed note.
+ *
+ * Pure and exported so a test can run the write path's own mapping instead of
+ * a copy of it: `drafts fetch` rebuilds a note from a stored item, and the only
+ * proof that the rebuild is faithful is that this function turns the rebuilt
+ * note back into the item it came from.
+ *
+ * `modifiedDate` is this upload's time by construction, and `attributes` are
+ * never signed by this CLI; everything else comes off the note.
+ */
+export function noteSigningInputs(
+  parsed: ParsedNote,
+  options: { subdomain: string; creationDate: number; modifiedDate: number },
+): NoteSigningInputs {
+  const custom = { ...parsed.custom };
+  if (parsed.summary !== undefined) custom.summary = parsed.summary;
+
+  return {
+    pub: {
+      specVersion: '2',
+      postType: parsed.postType,
+      mediaType: 'text/markdown',
+      parent: String(parsed.parent),
+      position: String(parsed.position),
+      publication: options.subdomain,
+      locale: parsed.locale,
+      creationDate: options.creationDate,
+      modifiedDate: options.modifiedDate,
+      base: parsed.slug,
+      tags: parsed.tags,
+      attributes: undefined,
+      // Public but unsigned: it rides on the stored public part, never the body,
+      // so a label does not move the objectId. `null` is no label, and the
+      // builder writes nothing for it.
+      label: parsed.label ?? undefined,
+    },
+    body: { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
+  };
+}
+
 export async function authorWrite(
   ctx: CliContext,
   notePath: string,
@@ -304,33 +359,12 @@ export async function authorWrite(
       `refusing to publish ${notePath}: frontmatter \`creation_date\` is ${JSON.stringify(declaredCreation)}, which is not a date. Fix it to \`YYYY-MM-DDTHH:mm:ss\` (UTC) or remove the key.`,
     );
   }
-  const custom = { ...parsed.custom };
-  if (parsed.summary !== undefined) custom.summary = parsed.summary;
-
-  const signedItem = await buildSignedContentItem(
-    {
-      specVersion: '2',
-      postType: parsed.postType,
-      mediaType: 'text/markdown',
-      parent: String(parsed.parent),
-      position: String(parsed.position),
-      publication: subdomain,
-      locale: parsed.locale,
-      creationDate,
-      modifiedDate: now,
-      base: parsed.slug,
-      tags: parsed.tags,
-      attributes: undefined,
-      // Public but unsigned: it rides on the stored public part, never the body,
-      // so a label does not move the objectId. `null` is no label, and the
-      // builder writes nothing for it.
-      label: parsed.label ?? undefined,
-    },
-    { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
-    ctx.signer,
-    encryptFn,
-    author.address,
-  );
+  const { pub, body } = noteSigningInputs(parsed, {
+    subdomain,
+    creationDate,
+    modifiedDate: now,
+  });
+  const signedItem = await buildSignedContentItem(pub, body, ctx.signer, encryptFn, author.address);
 
   const objectId = parsed.genesis ?? signedItem.objectId;
   // 2-space JSON.stringify is load-bearing: filecoin-pin builds the CAR from
@@ -395,7 +429,8 @@ export async function authorWrite(
   // no offer — its one transaction is the drafts append.
   let txHash: string | undefined;
   if (opts.offer) {
-    if (!service) throw new Error('internal: on-chain offer requested without a resolved publication');
+    if (!service)
+      throw new Error('internal: on-chain offer requested without a resolved publication');
     txHash = await service.makeOffer(objectId, kuboCid);
     ctx.out.log(`✓ offered ${objectId.slice(0, 12)}… → ${subdomain} (tx ${txHash})`);
   }
@@ -737,12 +772,14 @@ function describePreviousReadFailure(err: unknown): { reason: string; remedy: st
   if (/abort|timeout/i.test(message)) {
     return {
       reason: `the gateway read timed out (${message})`,
-      remedy: 'Re-run once the gateway is responsive, or pass --allow-plaintext if you accept a plaintext revision.',
+      remedy:
+        'Re-run once the gateway is responsive, or pass --allow-plaintext if you accept a plaintext revision.',
     };
   }
   return {
     reason: `the gateway could not be reached (${message})`,
-    remedy: 'Re-run once the gateway is reachable, or pass --allow-plaintext if you accept a plaintext revision.',
+    remedy:
+      'Re-run once the gateway is reachable, or pass --allow-plaintext if you accept a plaintext revision.',
   };
 }
 
@@ -790,13 +827,17 @@ async function renderContent(
   }
   const cid = res.cid;
   if (!cid) {
-    throw new ActionError('render reported success but produced no root CID', (res.trace ?? []) as unknown[]);
+    throw new ActionError(
+      'render reported success but produced no root CID',
+      (res.trace ?? []) as unknown[],
+    );
   }
 
   // `res.path` is already root-absolute (`/1-introduction/`, from the
   // template's `path: /{slug}/`) — join instead of concatenating, or every URL
   // prints with a doubled slash (`https://polyphony.soul2soul.eth//1-intro/`).
-  const join = (root: string, path: string) => `${root.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  const join = (root: string, path: string) =>
+    `${root.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
   const previewUrl = join(`https://${toPreviewLabel(cid)}.ipfs.transport-union.dev`, res.path);
   const ipfsUrl = join(ipfsUri(cid), res.path);
   const prodUrl = opts.publish ? join(`https://${publication}`, res.path) : undefined;
@@ -975,14 +1016,12 @@ export async function revokeContent(
   const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths);
   ctx.out.log(`removing ${removePath} from the rendered tree…`);
 
-  const render = await renderContent(
-    ctx,
-    service,
-    publication,
-    genesis,
-    authorSafeAddress,
-    { render: true, publish: true, offer: false, remove: [{ path: removePath }] },
-  );
+  const render = await renderContent(ctx, service, publication, genesis, authorSafeAddress, {
+    render: true,
+    publish: true,
+    offer: false,
+    remove: [{ path: removePath }],
+  });
 
   return {
     objectId: genesis,

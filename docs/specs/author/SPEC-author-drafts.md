@@ -264,10 +264,14 @@ decrypt action with the protocol PKP, the Safe the row bound and the genesis. `s
 listing did, so the row a number names and the rows a pull walks are one log.
 
 The body is the author's, not the chain's: what comes back is the document that was signed, and the
-CLI rebuilds it into a note carrying the row's `genesis`, `cid`, `author` and dates in its
-frontmatter, so that note is what the next `upload` appends to the same draft. A plaintext version is
-copied without asking Lit, because its bytes were never closed. Nothing on the write side changes:
-the log still holds a genesis, a CID and a binding, and neither read command writes to it.
+CLI rebuilds it into a note carrying the row (`genesis`, `cid`, `author`), the dates the version was
+signed with, `encrypted`, and the public block's post type, locale, tags, parent, position and label,
+with the body document's `custom` bag written out key for key — so that note is what the next
+`upload` appends to the same draft as its next version. What an upload derives — the proof, the
+objectId, the plaintext hash, and the new `modifiedDate` — is not in a note and is not preserved. A
+plaintext version is copied without asking Lit, because its bytes were never closed. Nothing on the
+write side changes: the log still holds a genesis, a CID and a binding, and neither read command
+writes to it.
 
 ## Adoption
 

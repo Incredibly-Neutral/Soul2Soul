@@ -14,6 +14,12 @@ import type { FlagSpecs, ParsedArgs } from './args';
 import type { CliOut } from './out';
 import type { CliContext } from '../core/context';
 
+/** A command that finishes with a status: any number but zero fails. */
+export type ResultRun = (ctx: CliContext, args: ParsedArgs) => Promise<number>;
+
+/** A command that has nothing to say about the exit code. */
+export type PlainRun = (ctx: CliContext, args: ParsedArgs) => Promise<void>;
+
 export interface CommandSpec {
   name: string;
   summary: string;
@@ -23,11 +29,11 @@ export interface CommandSpec {
   detail?: string;
   flags: FlagSpecs;
   /**
-   * The command's work. Returning a number sets the process exit code; the
-   * commands that can finish with a partial result (a pull that failed some
-   * rows) use it, the rest return nothing.
+   * The command's work. A `ResultRun` returns a number, which sets the process
+   * exit code; the commands that can finish with a partial result (a pull that
+   * failed some rows) use that, and the rest return nothing and exit 0.
    */
-  run(ctx: CliContext, args: ParsedArgs): Promise<void | number>;
+  run: ResultRun | PlainRun;
 }
 
 /**

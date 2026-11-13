@@ -10,7 +10,7 @@
 // note it writes parses back into the item it came from.
 // ============================================================================
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,11 +28,14 @@ import type { CliContext } from '../src/core/context';
 import { resolveDecryptActionCid } from '../src/core/context';
 import type { DraftEntry, DraftsSeam, RawDraftEntry } from '../src/core/drafts';
 import {
+  DRAFT_SLUG_MAX,
   buildDraftNote,
   draftNoteSlug,
   readDraftContent,
   resolveDraftRef,
+  type StoredDraftItem,
 } from '../src/core/draft-content';
+import { noteSigningInputs } from '../src/core/author';
 import { runDraftsFetch } from '../src/commands/drafts-fetch';
 import { CliError } from '../src/lib/errors';
 import type { CliOut } from '../src/lib/out';
@@ -115,6 +118,56 @@ function storedItem(options: { encrypted?: boolean; label?: string; body?: strin
     bodies: { s2s: options.body ?? (encrypted ? CIPHERTEXT : BODY_DOCUMENT) },
   };
 }
+
+/** The public input an upload signs, and the body document it signs with it. */
+const PUB_INPUT = {
+  specVersion: '2' as const,
+  postType: 'post',
+  mediaType: 'text/markdown',
+  parent: '0',
+  position: '0',
+  publication: 'test',
+  locale: 'en',
+  creationDate: 1700000000,
+  modifiedDate: 1700000600,
+  base: 'my-draft',
+  tags: ['s2s', 's2s/test'],
+  label: 'My Draft',
+};
+
+const BODY_WITH_CUSTOM = JSON.stringify({
+  title: 'My Draft',
+  slug: 'my-draft',
+  content: BODY_CONTENT,
+  custom: { summary: '<p>the draft</p>', template: 'essay' },
+});
+
+/**
+ * The item a real upload of that note produces, signed: the fixture the rebuild
+ * is compared against, so the comparison is against the write path's output and
+ * not against a hand-written object.
+ */
+let signedItem: Promise<StoredDraftItem> | undefined;
+async function fullItem(): Promise<StoredDraftItem> {
+  if (signedItem === undefined) {
+    const body = JSON.parse(BODY_WITH_CUSTOM) as {
+      title: string;
+      slug: string;
+      content: string;
+      custom: Record<string, string>;
+    };
+    signedItem = buildSignedContentItem(PUB_INPUT, body, SIGNER, noOpEncrypt, SAFE).then(
+      (signed) => signed as unknown as StoredDraftItem,
+    );
+  }
+  return signedItem;
+}
+
+/** The signer `buildSignedContentItem` needs; the signature itself is not under test. */
+const SIGNER = {
+  getAddress: () => AUTHOR,
+  signTypedData: () => Promise.resolve(`0x${'33'.repeat(65)}`),
+};
 
 interface Captured {
   out: CliOut;
@@ -318,7 +371,7 @@ describe('readDraftContent', () => {
 // The note
 // ===========================================================================
 describe('buildDraftNote', () => {
-  it('names the note by the item label, and by the genesis when there is none', () => {
+  it('names the note by the label, then the body document title, then the genesis', () => {
     const labelled = buildDraftNote({
       entry: entry(0),
       item: storedItem({ label: 'My Draft: A Story!' }),
@@ -327,16 +380,47 @@ describe('buildDraftNote', () => {
     });
     expect(labelled.title).toBe('My Draft: A Story!');
     expect(labelled.slug).toBe('my-draft-a-story');
+    // The heading is the signed title, not the label: the label names the file.
+    expect(labelled.body.startsWith('# My Draft\n')).toBe(true);
 
+    // No label: the body document's own title is the name, and it is the heading.
     const unlabelled = buildDraftNote({
       entry: entry(0),
       item: storedItem(),
       plaintext: BODY_DOCUMENT,
       encrypted: true,
     });
-    expect(unlabelled.title).toBe(GENESIS_0);
-    expect(unlabelled.slug).toBe(GENESIS_0);
+    expect(unlabelled.title).toBe('My Draft');
+    expect(unlabelled.slug).toBe('my-draft');
+
+    // Nothing names it at all: the file falls back to the genesis, and the note
+    // writes no heading rather than inventing a hex one.
+    const anonymous = buildDraftNote({
+      entry: entry(0),
+      item: storedItem(),
+      plaintext: JSON.stringify({ slug: 'x', content: BODY_CONTENT }),
+      encrypted: true,
+    });
+    expect(anonymous.title).toBe(GENESIS_0);
+    expect(anonymous.body.startsWith('# ')).toBe(false);
+
     expect(draftNoteSlug('!!!')).toBe('draft');
+  });
+
+  it('caps the file stem so a long label cannot outrun the filesystem', () => {
+    const slug = draftNoteSlug(`${'a very long title '.repeat(40)}end`);
+    expect(slug.length).toBeLessThanOrEqual(DRAFT_SLUG_MAX);
+    expect(slug.endsWith('-')).toBe(false);
+
+    const note = buildDraftNote({
+      entry: entry(0),
+      item: storedItem({ label: 'x'.repeat(300) }),
+      plaintext: BODY_DOCUMENT,
+      encrypted: true,
+    });
+    expect(note.slug).toBe('x'.repeat(DRAFT_SLUG_MAX));
+    // The title itself is uncut: only the file name is capped.
+    expect(note.title).toBe('x'.repeat(300));
   });
 
   it('carries the frontmatter the uploader reads, in its own writer', () => {
@@ -357,6 +441,25 @@ describe('buildDraftNote', () => {
     expect(block).toContain('encrypted: true');
     expect(block).not.toContain('kubo_cid');
     expect(note.body.startsWith('# My Draft\n')).toBe(true);
+  });
+
+  it('writes the public block and the template bag in the keys the parser reads', async () => {
+    const note = buildDraftNote({
+      entry: entry(0),
+      item: await fullItem(),
+      plaintext: BODY_WITH_CUSTOM,
+      encrypted: false,
+    });
+    const block = note.text.slice(0, note.text.indexOf('\n---\n'));
+
+    expect(block).toContain('post_type: post');
+    expect(block).toContain('language: en');
+    expect(block).toContain('label: My Draft');
+    expect(block).toMatch(/tags:\n {2}- s2s\n {2}- s2s\/test/);
+    expect(block).toContain('parent: "0"');
+    expect(block).toContain('position: "0"');
+    expect(block).toContain('summary: <p>the draft</p>');
+    expect(block).toContain('template: essay');
   });
 
   it('parses back into the note the CLI uploads, and re-uploads as the same draft', async () => {
@@ -409,6 +512,38 @@ describe('buildDraftNote', () => {
     );
   });
 
+  it('re-uploads as the item it was read from: same public metadata, same body document', async () => {
+    const item = await fullItem();
+    const note = buildDraftNote({
+      entry: entry(0),
+      item,
+      plaintext: BODY_WITH_CUSTOM,
+      encrypted: false,
+    });
+
+    // The write path's own mapping, not a copy of it: parse the rebuilt note the
+    // way `upload` parses it, hand the result to the same function `upload`
+    // uses, and sign.
+    const parsed = await parseMarkdownNote(note.text, `${note.slug}.md`);
+    const { pub, body } = noteSigningInputs(parsed, {
+      subdomain: PUB_INPUT.publication,
+      creationDate: 1700000000,
+      modifiedDate: 1700000600,
+    });
+    const rebuilt = await buildSignedContentItem(pub, body, SIGNER, noOpEncrypt, SAFE);
+
+    // Public metadata: the whole stored block, field for field — post type,
+    // locale, tags, parent, position, base, label, and the plaintext hash that
+    // gives the manuscript its objectId. Equality here is what says this is the
+    // same draft and not a similar one.
+    expect(rebuilt.public).toEqual(item.public);
+    expect(rebuilt.public.plaintextHash).toBe(item.public.plaintextHash);
+
+    // Body document: title, slug, content and the custom bag, byte for byte.
+    const signedBody = JSON.parse(bodyForKey(rebuilt) ?? '') as unknown;
+    expect(signedBody).toEqual(JSON.parse(BODY_WITH_CUSTOM));
+  });
+
   it('leaves a plaintext draft plaintext, so a re-upload does not encrypt it', async () => {
     const note = buildDraftNote({
       entry: entry(0),
@@ -427,7 +562,9 @@ describe('buildDraftNote', () => {
       plaintext: '# From another host\n\nits markdown',
       encrypted: false,
     });
-    expect(note.body).toBe(`# ${GENESIS_0}\n\n# From another host\n\nits markdown\n`);
+    // Its own heading is the title; nothing is prefixed above it.
+    expect(note.title).toBe('From another host');
+    expect(note.body).toBe('# From another host\n\nits markdown\n');
   });
 });
 
@@ -468,6 +605,48 @@ describe('runDraftsFetch', () => {
     expect(readFileSync(join(dir, 'my-draft.md'), 'utf8')).toContain(`genesis: "${GENESIS_1}"`);
   });
 
+  it('refuses to replace a note for another draft, and names the file', async () => {
+    const elsewhere = `---\ngenesis: "${GENESIS_1}"\ncid: bafy-draft-1\n---\n\n# Theirs\n`;
+    writeFileSync(join(dir, 'my-draft.md'), elsewhere);
+    const { ctx } = context({ items: { 'bafy-draft-0': storedItem({ label: 'My Draft' }) } });
+
+    await expect(
+      runDraftsFetch(ctx, '1', {}, { safeState: SAFE_STATE, seam: seam() }),
+    ).rejects.toThrow(/my-draft\.md: it already holds draft 0x/);
+    // Nothing of theirs is touched, and --force is what the message names.
+    expect(readFileSync(join(dir, 'my-draft.md'), 'utf8')).toBe(elsewhere);
+  });
+
+  it('refuses this draft at another version, and names both CIDs', async () => {
+    const older = `---\ngenesis: "${GENESIS_0}"\ncid: bafy-older\n---\n\n# Mine, edited\n`;
+    writeFileSync(join(dir, 'my-draft.md'), older);
+    const { ctx } = context({ items: { 'bafy-draft-0': storedItem({ label: 'My Draft' }) } });
+
+    await expect(
+      runDraftsFetch(ctx, '1', {}, { safeState: SAFE_STATE, seam: seam() }),
+    ).rejects.toThrow(/bafy-older.*bafy-draft-0/);
+    expect(readFileSync(join(dir, 'my-draft.md'), 'utf8')).toBe(older);
+  });
+
+  it('overwrites either of them under --force', async () => {
+    writeFileSync(join(dir, 'my-draft.md'), '---\ngenesis: "0xdead"\n---\n\n# Theirs\n');
+    const { ctx } = context({ items: { 'bafy-draft-0': storedItem({ label: 'My Draft' }) } });
+
+    await runDraftsFetch(ctx, '1', { force: true }, { safeState: SAFE_STATE, seam: seam() });
+
+    expect(readFileSync(join(dir, 'my-draft.md'), 'utf8')).toContain(`genesis: "${GENESIS_0}"`);
+  });
+
+  it('rewrites a note that already holds this draft at this version without asking', async () => {
+    const same = `---\ngenesis: "${GENESIS_0}"\ncid: bafy-draft-0\n---\n\n# Mine\n`;
+    writeFileSync(join(dir, 'my-draft.md'), same);
+    const { ctx } = context({ items: { 'bafy-draft-0': storedItem({ label: 'My Draft' }) } });
+
+    await runDraftsFetch(ctx, '1', {}, { safeState: SAFE_STATE, seam: seam() });
+
+    expect(readFileSync(join(dir, 'my-draft.md'), 'utf8')).toContain('# My Draft');
+  });
+
   it('writes the path --out names', async () => {
     const { ctx } = context({ items: { 'bafy-draft-0': storedItem({ label: 'My Draft' }) } });
     const out = join(dir, 'nested', 'draft.md');
@@ -499,14 +678,33 @@ describe('runDraftsFetch', () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
-  it('carries path null in the envelope under --json --stdout', async () => {
+  it('refuses --json with --stdout: one stream cannot be an envelope and a body', async () => {
     const cap = capture(true);
+    const { ctx, fetchFromKubo } = context({ cap, items: { 'bafy-draft-0': storedItem() } });
+
+    await expect(
+      runDraftsFetch(ctx, '1', { stdout: true }, { safeState: SAFE_STATE, seam: seam() }),
+    ).rejects.toThrow(/--json/);
+    // Refused before the read: nothing is fetched, nothing printed, nothing written.
+    expect(fetchFromKubo).not.toHaveBeenCalled();
+    expect(cap.results).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('counts the bytes it printed under --stdout, trailing newline excluded', async () => {
+    const cap = capture();
     const { ctx } = context({ cap, items: { 'bafy-draft-0': storedItem() } });
 
-    await runDraftsFetch(ctx, '1', { stdout: true }, { safeState: SAFE_STATE, seam: seam() });
+    const result = await runDraftsFetch(
+      ctx,
+      '1',
+      { stdout: true },
+      { safeState: SAFE_STATE, seam: seam() },
+    );
 
-    expect(cap.results[0]).toMatchObject({ action: 'drafts.fetch', path: null });
-    expect(readdirSync(dir)).toEqual([]);
+    expect(result.path).toBeNull();
+    expect(result.bytes).toBe(Buffer.byteLength(cap.human[0] ?? '', 'utf8'));
+    expect(cap.human[0]?.endsWith('\n')).toBe(false);
   });
 
   it('refuses --out with --stdout instead of choosing one', async () => {

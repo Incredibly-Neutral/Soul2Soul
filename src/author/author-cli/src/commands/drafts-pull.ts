@@ -28,6 +28,7 @@ import type { CliContext } from '../core/context';
 import { readDraftsLog, type DraftsLogDeps } from '../core/drafts';
 import {
   buildDraftNote,
+  draftFileState,
   indexDraftFolder,
   newDraftNotePath,
   readDraftContent,
@@ -93,19 +94,31 @@ export async function runDraftsPull(
   overrides: DraftsPullDeps = {},
 ): Promise<DraftsPullOutcome> {
   const log = await readDraftsLog(ctx, overrides);
-  const present = indexDraftFolder(folder);
+  const { files: present, duplicates } = indexDraftFolder(folder);
   const rows: DraftsPullRow[] = [];
   let failed = 0;
+
+  // Two notes for one draft is a fact about the folder, not something to absorb:
+  // the comparison below runs against the first in name order, and the other is
+  // left exactly as it is.
+  for (const duplicate of duplicates) {
+    const [first, ...rest] = duplicate.paths;
+    if (first === undefined) continue;
+    ctx.out.warn(
+      `${String(duplicate.paths.length)} notes carry ${duplicate.genesis}: ${duplicate.paths.join(', ')} — comparing and rewriting ${first}, leaving ${rest.join(', ')} alone`,
+    );
+  }
 
   for (const [index, entry] of log.drafts.entries()) {
     const order = index + 1;
     const existing = present.get(entry.genesis.toLowerCase());
+    const state = draftFileState(existing, entry.genesis, entry.cid);
 
-    if (existing?.cid === entry.cid) {
+    if (existing !== undefined && state === 'same') {
       rows.push({ genesis: entry.genesis, cid: entry.cid, status: 'present', path: existing.path });
       continue;
     }
-    if (existing !== undefined && options.force !== true) {
+    if (existing !== undefined && state === 'behind' && options.force !== true) {
       // A note that differs is a note someone edited. Say so and leave it: the
       // pull has no business deciding which side is newer.
       rows.push({ genesis: entry.genesis, cid: entry.cid, status: 'behind', path: existing.path });
@@ -118,7 +131,7 @@ export async function runDraftsPull(
       const path =
         existing !== undefined ? existing.path : newDraftNotePath(folder, note.slug, entry.genesis);
       writeDraftNote(path, note.text);
-      present.set(entry.genesis.toLowerCase(), { path, cid: entry.cid });
+      present.set(entry.genesis.toLowerCase(), { path, genesis: entry.genesis, cid: entry.cid });
       rows.push({ genesis: entry.genesis, cid: entry.cid, status: 'written', path });
     } catch (err) {
       failed += 1;

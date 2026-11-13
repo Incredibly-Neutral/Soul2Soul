@@ -20,16 +20,21 @@
 // the only refusal: `LitService.decrypt` already redacts the reason and keeps
 // the payload out, so this module re-states the reason and never the bytes.
 //
-// The note rebuilt from that plaintext is the note the CLI can upload again:
-// the same frontmatter keys the uploader reads (`genesis`, `cid`, `author`,
-// `creation_date`, `modified_date`, `encrypted`), the title as a `# heading`
-// (the parser's own title field, so a re-parse finds it), and the body document's
-// content below it. The CLI's own writer (`upsertFrontmatter`) serialises the
-// block, so the file it writes is the file it reads.
+// The note rebuilt from that plaintext is a note this CLI can upload again, and
+// what it carries is everything the write path signs: the body document's own
+// title (written as a `# heading`, which is where the parser reads a title), its
+// content, its `custom` bag, and the public block's `postType`, `locale`, `tags`,
+// `parent`, `position` and `label` in the frontmatter keys the parser reads for
+// them. The row's `genesis`, `cid`, `author` and dates ride beside them, which is
+// what makes the next upload a version of this draft rather than a new one.
 //
-// The title is the item's `label` — the manuscript's short public name — and the
-// genesis when there is none. Nothing invents a name: an absent label means the
-// genesis id, exactly as a listing resolves it.
+// What is not reproduced is the signature: `proof`, `objectId` and
+// `plaintextHash` are derived at upload, `modifiedDate` becomes the upload's own
+// time, and `attributes` are never signed by this CLI at all.
+//
+// The title is the item's `label` — the manuscript's short public name — and
+// when there is none the body document's own title, and the genesis only when
+// the item names itself nowhere. A hex id is a row address, never a heading.
 // ============================================================================
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -38,6 +43,7 @@ import { dirname, join } from 'node:path';
 import {
   bodyForKey,
   extractFrontmatter,
+  extractTitleAndBase,
   slugifyTitle,
   toBytes32Id,
   type AnyS2SContentItem,
@@ -48,7 +54,13 @@ import { requireSetting } from './config';
 import type { CliContext } from './context';
 import type { DraftEntry } from './drafts';
 import { CliError, UsageError, errorText } from '../lib/errors';
-import { CID_KEY, ENCRYPTED_KEY, LEGACY_CID_KEY, upsertFrontmatter } from '../lib/frontmatter';
+import {
+  CID_KEY,
+  ENCRYPTED_KEY,
+  LEGACY_CID_KEY,
+  resolveKuboCid,
+  upsertFrontmatter,
+} from '../lib/frontmatter';
 
 /** The message the caller signs; the action rebuilds it with `hashMessage`. */
 export const AUTH_MESSAGE = 'lit actions auth';
@@ -291,59 +303,134 @@ function isoDate(seconds: number): string {
   return new Date(seconds * 1000).toISOString().slice(0, 19);
 }
 
+/** The signed body document: what this CLI's own upload puts behind a CID. */
+interface BodyDocument {
+  title: string | undefined;
+  slug: string | undefined;
+  content: string | undefined;
+  custom: Record<string, unknown>;
+}
+
 /**
- * The note's title: the item's `label`, else the genesis.
+ * Read the plaintext as a body document, when it is one.
+ *
+ * Another host may store markdown, or JSON of its own shape; anything that is
+ * not this CLI's `{ title, slug, content, custom }` is `undefined`, and the
+ * caller treats the plaintext as the content it is.
+ */
+function bodyDocument(plaintext: string): BodyDocument | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(plaintext);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const document = parsed as Record<string, unknown>;
+  const custom = document.custom;
+  return {
+    title: nonEmptyString(document.title),
+    slug: nonEmptyString(document.slug),
+    content: typeof document.content === 'string' ? document.content : undefined,
+    custom:
+      custom !== null && typeof custom === 'object' && !Array.isArray(custom)
+        ? (custom as Record<string, unknown>)
+        : {},
+  };
+}
+
+/** The longest file stem a note takes; the collision suffix is added after it. */
+export const DRAFT_SLUG_MAX = 96;
+
+/**
+ * The note's title: the item's `label`, then the body document's own title, then
+ * the genesis.
  *
  * The label is public and unsigned, and it is the only human name a reader gets
- * without a key; the genesis is what a listing shows when there is none. The
- * body document's own `title` is inside the plaintext and is not used here, so a
- * note fetched twice is named the same both times.
+ * without a key; the genesis is what a listing shows when there is none. It is
+ * a fallback for naming a file, never for the document's heading.
  */
-export function draftNoteTitle(entry: DraftEntry, item: StoredDraftItem): string {
-  return nonEmptyString(item.public.label) ?? entry.genesis;
-}
-
-/** The file stem for a title: the shared slugifier, and `draft` when nothing survives it. */
-export function draftNoteSlug(title: string): string {
-  return slugifyTitle(title) || 'draft';
+export function draftNoteTitle(entry: DraftEntry, item: StoredDraftItem, heading?: string): string {
+  return nonEmptyString(item.public.label) ?? heading ?? entry.genesis;
 }
 
 /**
- * The body below the frontmatter: a `# title` heading, then the body document's
- * content.
+ * The file stem for a title: the shared slugifier, capped so a long label cannot
+ * outrun the filesystem's name limit, and `draft` when nothing survives it.
  *
- * The heading is what makes the title survive a re-parse — the CLI's parser
- * reads the title from it, and falls back to the filename only when there is
- * none. A plaintext body that is not a body document (another host's markdown)
- * is used as it stands rather than parsed and dropped.
+ * The cap is on the stem alone; the collision fallback appends `-` and eight hex
+ * characters after it, so both cap and suffix stay inside a 255-byte name.
  */
-function noteBody(title: string, plaintext: string): string {
-  let content = plaintext.trimEnd();
-  try {
-    const parsed: unknown = JSON.parse(plaintext);
-    if (parsed !== null && typeof parsed === 'object') {
-      const stored = (parsed as { content?: unknown }).content;
-      if (typeof stored === 'string') content = stored.trimEnd();
-    }
-  } catch {
-    // Not a body document: the plaintext is the content.
-  }
-  return content === '' ? `# ${title}\n` : `# ${title}\n\n${content}\n`;
+export function draftNoteSlug(title: string): string {
+  const slug = slugifyTitle(title);
+  if (slug.length <= DRAFT_SLUG_MAX) return slug === '' ? 'draft' : slug;
+  const capped = slug.slice(0, DRAFT_SLUG_MAX).replace(/-+$/, '');
+  return capped === '' ? 'draft' : capped;
+}
+
+/**
+ * The body below the frontmatter: a `# title` heading, then the content.
+ *
+ * The heading is what makes the title survive a re-parse — the parser reads the
+ * title from it, and falls back to the filename only when there is none. No
+ * heading is written when the item names itself nowhere: a hollow `# 0x…` would
+ * be the note inventing a name, and the genesis is already in the frontmatter.
+ */
+function noteBody(heading: string | undefined, content: string): string {
+  const trimmed = content.trim();
+  if (heading === undefined) return trimmed === '' ? '' : `${trimmed}\n`;
+  return trimmed === '' ? `# ${heading}\n` : `# ${heading}\n\n${trimmed}\n`;
+}
+
+/** A list of strings from a stored value, for `tags`; anything else is no tags. */
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
+}
+
+/** A frontmatter scalar from a stored value: strings as given, numbers as text. */
+function scalarText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() === '' ? undefined : value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
 }
 
 /**
  * Rebuild the note from the plaintext and the item's public metadata.
  *
- * The dates are the signed ones (`creationDate` / `modifiedDate`, the v1
- * `createdAt` before them), falling back to the block time of the append that
- * is the only other time the log knows. `encrypted` records the state the item
- * actually has, so a re-upload encrypts exactly what was encrypted and leaves a
- * plaintext draft in the clear.
+ * The body is the body document's `content`, its custom bag is written back as
+ * frontmatter keys, and the public block's fields are written in the keys the
+ * parser reads them from, so the next upload signs the same values. The dates are
+ * the signed ones (`creationDate` / `modifiedDate`, the v1 `createdAt` before
+ * them), falling back to the block time of the append that is the only other
+ * time the log knows. `encrypted` records the state the item actually has, so a
+ * re-upload encrypts exactly what was encrypted and leaves a plaintext draft in
+ * the clear.
  */
 export function buildDraftNote(content: DraftContent): DraftNote {
   const { entry, item, plaintext, encrypted } = content;
-  const title = draftNoteTitle(entry, item);
-  const body = noteBody(title, plaintext);
+  const document = bodyDocument(plaintext);
+
+  // A body document carries its title inside the signed bytes; a plaintext that
+  // is another host's markdown carries one as its own heading.
+  let heading: string | undefined;
+  let body: string;
+  if (document !== undefined) {
+    heading = document.title;
+    body = document.content ?? '';
+  } else {
+    const extracted = extractTitleAndBase(plaintext);
+    heading = nonEmptyString(extracted.title ?? '');
+    body = extracted.body;
+  }
+
+  const label = nonEmptyString(item.public.label);
+  heading ??= label;
+  const title = draftNoteTitle(entry, item, heading);
+  const text = noteBody(heading, body);
 
   const publicBlock = item.public;
   const creation =
@@ -357,20 +444,48 @@ export function buildDraftNote(content: DraftContent): DraftNote {
     unixSeconds(publicBlock.creationDate) ??
     entry.timestamp;
 
-  const text = upsertFrontmatter(
-    body,
-    {
-      genesis: entry.genesis,
-      [CID_KEY]: entry.cid,
-      author: entry.author,
-      creation_date: isoDate(creation),
-      modified_date: isoDate(modified),
-      [ENCRYPTED_KEY]: encrypted,
-    },
-    [LEGACY_CID_KEY],
-  );
+  const updates: Record<string, unknown> = {
+    genesis: entry.genesis,
+    [CID_KEY]: entry.cid,
+    author: entry.author,
+    creation_date: isoDate(creation),
+    modified_date: isoDate(modified),
+    [ENCRYPTED_KEY]: encrypted,
+  };
+  // The public block, in the frontmatter keys the parser reads it back from. An
+  // absent field is left out rather than written empty, so the note says only
+  // what the item said.
+  const postType = nonEmptyString(publicBlock.postType);
+  if (postType !== undefined) updates.post_type = postType;
+  const language = nonEmptyString(publicBlock.locale);
+  if (language !== undefined) updates.language = language;
+  const tags = stringList(publicBlock.tags);
+  if (tags.length > 0) updates.tags = tags;
+  const parent = scalarText(publicBlock.parent);
+  if (parent !== undefined) updates.parent = parent;
+  const position = scalarText(publicBlock.position);
+  if (position !== undefined) updates.position = position;
+  if (label !== undefined) updates.label = label;
+  // The template bag, key for key: the uploader signs these into the body's
+  // `custom`, and `summary` is one of them.
+  for (const [key, value] of Object.entries(document?.custom ?? {})) {
+    if (key === 'slug' || key in updates) continue;
+    updates[key] = value;
+  }
+  // A body document whose slug is not the slug of its title came from a note
+  // that named one. Writing it back is what keeps the re-upload's `base` the
+  // same, and the key was in that note's custom bag before it was ever signed.
+  const storedSlug = document?.slug;
+  if (storedSlug !== undefined && storedSlug !== slugifyTitle(heading ?? title)) {
+    updates.slug = storedSlug;
+  }
 
-  return { text, body, title, slug: draftNoteSlug(title) };
+  return {
+    text: upsertFrontmatter(text, updates, [LEGACY_CID_KEY]),
+    body: text,
+    title,
+    slug: draftNoteSlug(title),
+  };
 }
 
 // ===========================================================================
@@ -380,8 +495,70 @@ export function buildDraftNote(content: DraftContent): DraftNote {
 /** A note already in the folder: where it is, and the version it records. */
 export interface DraftFile {
   path: string;
-  /** The frontmatter `cid`, empty when the note records none. */
+  /** The frontmatter `genesis`, as the note spells it. */
+  genesis: string;
+  /** The version the note records (`cid`, else the legacy `kubo_cid`); empty when it records none. */
   cid: string;
+}
+
+/** What a file claims to be, which may be nothing: a plain note carries no genesis. */
+export interface DraftFileNote {
+  path: string;
+  genesis: string | undefined;
+  cid: string;
+}
+
+/**
+ * What one path already holds, and whether this draft may be written over it.
+ *
+ * `free` is nothing there. `same` is this genesis at this version: rewriting it
+ * costs no edit, since the bytes are the ones it already names. `behind` is this
+ * genesis at another version, and `foreign` is another genesis — or no genesis at
+ * all — which is a note that is not this draft's file to replace.
+ */
+export type DraftFileState = 'free' | 'same' | 'behind' | 'foreign';
+
+export function draftFileState(
+  note: DraftFileNote | undefined,
+  genesis: string,
+  cid: string,
+): DraftFileState {
+  if (note === undefined) return 'free';
+  if (note.genesis === undefined) return 'foreign';
+  if (note.genesis.toLowerCase() !== genesis.toLowerCase()) return 'foreign';
+  return note.cid === cid ? 'same' : 'behind';
+}
+
+/**
+ * Read one note's claim: its genesis and the version it records, or `undefined`
+ * when there is no file at that path.
+ *
+ * The recorded version is resolved the way `offer` resolves it — `cid`, then the
+ * legacy `kubo_cid` — because a note written before the rename is the note whose
+ * version is being compared. A note that records neither is `behind` whatever
+ * the log holds: nothing says which version it came from.
+ */
+export function readDraftNote(path: string): DraftFileNote | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  const { frontmatter } = extractFrontmatter(raw);
+  return {
+    path,
+    genesis: nonEmptyString(frontmatter.genesis),
+    cid: resolveKuboCid(undefined, frontmatter) ?? '',
+  };
+}
+
+/** The folder as a pull sees it: one note per genesis, and the genesises that repeat. */
+export interface DraftFolderIndex {
+  /** Lowercase genesis → the note that carries it (the first in name order). */
+  files: Map<string, DraftFile>;
+  /** Genesises more than one note carries, each with every path that carries it. */
+  duplicates: { genesis: string; paths: string[] }[];
 }
 
 /**
@@ -389,12 +566,16 @@ export interface DraftFile {
  *
  * Read fresh on every pull, because the folder is the other half of the
  * comparison and the user may have edited a file since the last run. Names are
- * sorted so two files carrying one genesis always resolve to the same one. A
- * missing folder is an empty index, not an error: a pull creates what it needs.
+ * sorted so two notes carrying one genesis always resolve to the same one, and
+ * the collision is reported rather than silently absorbed: two files for one
+ * draft is a fact about the folder, and picking one quietly is how an author
+ * comes to edit the note the tool is not comparing. A missing folder is an empty
+ * index, not an error: a pull creates what it needs.
  */
-export function indexDraftFolder(folder: string): Map<string, DraftFile> {
-  const index = new Map<string, DraftFile>();
-  if (!existsSync(folder)) return index;
+export function indexDraftFolder(folder: string): DraftFolderIndex {
+  const files = new Map<string, DraftFile>();
+  const repeated = new Map<string, string[]>();
+  if (!existsSync(folder)) return { files, duplicates: [] };
 
   const names = readdirSync(folder, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
@@ -403,20 +584,24 @@ export function indexDraftFolder(folder: string): Map<string, DraftFile> {
 
   for (const name of names) {
     const path = join(folder, name);
-    let raw: string;
-    try {
-      raw = readFileSync(path, 'utf8');
-    } catch {
+    const note = readDraftNote(path);
+    if (note?.genesis === undefined) continue;
+    const key = note.genesis.toLowerCase();
+    const existing = files.get(key);
+    if (existing === undefined) {
+      files.set(key, { path, genesis: note.genesis, cid: note.cid });
       continue;
     }
-    const { frontmatter } = extractFrontmatter(raw);
-    const genesis = nonEmptyString(frontmatter.genesis);
-    if (genesis === undefined) continue;
-    const key = genesis.toLowerCase();
-    if (index.has(key)) continue;
-    index.set(key, { path, cid: nonEmptyString(frontmatter[CID_KEY]) ?? '' });
+    const paths = repeated.get(key) ?? [existing.path];
+    paths.push(path);
+    repeated.set(key, paths);
   }
-  return index;
+
+  const duplicates = [...repeated].map(([key, paths]) => ({
+    genesis: files.get(key)?.genesis ?? key,
+    paths,
+  }));
+  return { files, duplicates };
 }
 
 /** Write a note, creating the directory it needs. */
