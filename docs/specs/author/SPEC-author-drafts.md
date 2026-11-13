@@ -120,10 +120,11 @@ zero above it — so `blockNumber == 0` is the pre-upgrade form, and `timestamp`
 `blocksOf` is a separate call rather than a third return value of `history`, so the read existing
 callers use keeps its shape and a reader that does not need blocks pays nothing for them.
 
-**Call `fetchAllPaged`, not `fetchAll`.** The paged read is what a UI should use: an unpaged `fetchAll`
-builds and returns the whole log in one `eth_call` and fails once the log is big enough to matter. The
-unpaged `fetchAll` and `history` are for scripts and small logs — `history` is per genesis and bounded by
-that genesis's version count, `fetchAll` is bounded by `count()` and is not.
+**Call `fetchAllPaged`, not `fetchAll`.** The paged read is what a UI should use: `s2s drafts list`
+is one, reading `count()` and then `fetchAllPaged` in pages of 100. An unpaged `fetchAll` builds
+and returns the whole log in one `eth_call` and fails once the log is big enough to matter. The
+unpaged `fetchAll` and `history` are for scripts and small logs — `history` is per genesis and
+bounded by that genesis's version count, `fetchAll` is bounded by `count()` and is not.
 
 Paging never reverts: `offset >= count` or `limit == 0` returns an empty array, and a limit past the end
 — including `type(uint256).max` — is clamped to `count - offset`, never overflowed.
@@ -299,8 +300,10 @@ storage.
   draft log.
 - **No metadata beyond `cid`, `timestamp` and `blockNumber`.** No title, slug, tags, or locale — those
   stay in the note and in the signed content item.
-- **No host writes.** No CLI or plugin command appends to this module, and none calls `absorb()`. The
-  CLI deploys the proxy and the Safe enables it; the package's own surface is contracts only.
+- **No host writes.** No CLI or plugin command appends to this module, and none calls `absorb()`.
+  Reads are the other direction: `s2s drafts list` lists the log
+  ([SPEC-author-cli](SPEC-author-cli.md)). The CLI deploys the proxy and the Safe enables it; the
+  package's own surface is contracts only.
 
 ## Open questions
 
@@ -312,19 +315,24 @@ storage.
 3. **Deletion.** Append-only means a mistaken upload is in the index forever. A `tombstone` that means
    something, or an `onlySafe` hide flag, is undecided — and the publication module's dead field is the
    cautionary example of adding one without a feature.
-4. **Should the CLI read drafts?** Listing a Safe's drafts would let a host resume local work, but it is
-   a chain read per document and nothing in `author-cli` reads the log today (it installs the proxy, and
-   that is all).
+4. **Should a draft entry carry a label?** A listing that shows a manuscript's name instead of its
+   id has to fetch the uploaded envelope, one gateway read per CID, because the label lives in the
+   item and not in the log. Whether the module should carry a short label of its own is undecided, and
+   a stored one has nowhere to go: `Version` may not grow a field, so it would need a mapping beside
+   the log.
 5. **Is this the works list (AUTHOR-9)?** No — [RFC-001](../../rfc/RFC-001-portable-byline.md) is the
    byline and covers works that carry agreements. Whether the byline should also read drafts is open.
 6. **Is a draft entry ever pruned?** Not in V1 (INV: append-only). If storage cost on Base becomes the
    complaint, an `onlySafe` prune that keeps the CID but drops the record is the first thing to weigh
    against the invariant that `history` is a complete trail.
 
-Settled by the implementation, recorded here so it stops being a question: `versionIndex` is **0-based**
-(the index the new version just took, i.e. the old length); a paged read returns an **empty array** when
-`offset >= count` or `limit == 0`, and otherwise **clamps** the end at `count`; `fetch` on an unknown
-genesis returns the zeroed `Entry` rather than reverting.
+Settled by the implementation, recorded here so it stops being a question: `versionIndex` is
+**0-based** (the index the new version just took, i.e. the old length); a paged read returns an
+**empty array** when `offset >= count` or `limit == 0`, and otherwise **clamps** the end at `count`;
+`fetch` on an unknown genesis returns the zeroed `Entry` rather than reverting. **The CLI reads the
+log: `s2s drafts list`.** It lists the active author Safe's drafts, takes the module from the Safe's
+enabled list first and from the factory index after that, and pages the read — see
+[SPEC-author-cli](SPEC-author-cli.md). Writes stay out of every host; a read is not a write.
 
 ## Safe-to-change vs do-not-touch
 
