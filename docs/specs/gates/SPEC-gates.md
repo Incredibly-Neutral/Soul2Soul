@@ -24,12 +24,16 @@ gate result MAY be required for it.
 Note (this implementation): the gate is `ownsVerdict()` in `src/shared/src/gates`, which resolves the
 author's own modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the
 Safe for the genesis, and answers whether the signer was an owner when the last version was appended —
-the Safe is never a parameter. The Lit decrypt action imports that gate and
-reads the draft entry at the block the gate reports and from the drafts module it reports, so nothing
-is resolved twice and the ciphertext it opens and the owner set it was judged under are one version.
-It then requires the blob's own signed `public.author` to
-equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis and ciphertext CID
-in their own module, and only the blob's signed author refuses that.
+or, where the log records no block for it, whether they own the Safe now. The Safe is never a
+parameter. The Lit decrypt action imports that gate and reads the draft entry from the drafts module
+it reports, at the block the gate reports when it reports one. On the append-block path the ciphertext
+it opens and the owner set it was judged under are one version, so nothing is resolved twice. The live
+path reports no height, and the action reads the entry at head — the present the owner answer was
+given in — which is the one place the two reads are not bound: a version appended between the
+`isOwner` read and the fetch can be decrypted under ownership tested before it existed. It then
+requires the blob's own signed `public.author` to equal the Safe: `append` is `onlySafe`, so anyone may
+log another author's genesis and ciphertext CID in their own module, and only the blob's signed author
+refuses that.
 
 The gate asks one question, and callers see one answer. Where the record carries the block it was
 written in — the drafts log's `blocksOf(genesis)`, last entry, a finite block greater than 0 —
@@ -42,7 +46,7 @@ present tense answers, and the cost of it is plain: for such a version the answe
 rotate, so a key rotated out after the write loses it and a key added since gains it. The verdict
 names which set answered (`ownerSet`: `append-block` or `live`), so a caller that wants to know reads
 it there instead of inferring it from the block. Either way the caller makes one call and gets one
-answer; how the gate reached it is not the caller's concern. That block is also what bounds the
+answer; how the gate reached it is not the caller's concern. That block also bounds the append-block
 answer: history starts at the Safe's era 0, and an owner rotation the guard missed stretches the
 tenure it should have ended.
 

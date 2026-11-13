@@ -248,8 +248,9 @@ export const owns = async (
  * that cannot be resolved or is ambiguous, a genesis the drafts log does not
  * name (zeroed `authorOf`), and a genesis the log names for another Safe.
  *
- * `ownerSet` names the owner set the answer came from, and like `block` it is
- * present on exactly the paths that reached an answer:
+ * `ownerSet` names the owner set the answer came from. It is present on every
+ * path that reached an answer, including the no-usable-list path, where `block`
+ * is not reported:
  *
  *   - `'append-block'`: the owner-history module answered `isOwnerAt` at the
  *     block `block` reports. The tenure is the one at the append.
@@ -260,8 +261,6 @@ export const owns = async (
  *
  * It is a string rather than a second boolean so that a reader of a trace can
  * tell the two paths apart without holding the block-0 rule in their head.
- * Absent exactly where `block` is absent for a reason other than a missing
- * list: no answer was reached.
  *
  * `modules` and `author` are what the gate had already read when it decided, so
  * a caller that needs the same two answers does not resolve them again — a
