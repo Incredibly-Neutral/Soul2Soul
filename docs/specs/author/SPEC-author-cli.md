@@ -475,7 +475,6 @@ Both commands run the same sequence, in order:
    Safe that passes this read carries the install; the run reports `already` and sends nothing,
    whatever the permissionless index has accumulated since. If one module is missing while the guard
    is proven, only that module's create runs, and the batch carries only its `enableModule`.
-
 3. **Whatever the list lacks:** `createDraftsModule(safe)` and
    `createOwnerHistoryModule(safe)` on the factory for the missing role. Both are permissionless
    (`createDraftsModule` / `createOwnerHistoryModule` in
