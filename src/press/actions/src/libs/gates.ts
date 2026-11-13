@@ -19,10 +19,11 @@ import {
     canReset as gateCanReset,
     canReview as gateCanReview,
     isOutOfForce as gateIsOutOfForce,
-    ownsVerdict as gateOwnsVerdict,
+    isOwnerAt as gateIsOwnerAt,
+    resolveAuthorModules as gateResolveAuthorModules,
+    type AuthorModules,
     type GateRead,
     type GateValueRead,
-    type OwnsVerdict,
 } from '@s2s/soul2soul-shared/gates';
 
 export const extractSignerAddress = (messageHash: string, signature: string): string => {
@@ -48,7 +49,14 @@ export const canRead = (
     signerAddress: string,
     rpcs: string[],
 ): Promise<boolean> =>
-    gateCanRead(bindRead(rpcs), contentId, safeAddress, publicationModule, signerAddress);
+    gateCanRead(
+        bindRead(rpcs),
+        bindValueRead(rpcs),
+        contentId,
+        safeAddress,
+        publicationModule,
+        signerAddress,
+    );
 
 export const canPublish = (
     authorSafeAddress: string,
@@ -85,20 +93,24 @@ export const isOutOfForce = (
     gateIsOutOfForce(bindRead(rpcs), genesis, publicationModule);
 
 /**
- * GATES-1's author branch, reporting the block it judged at. The decrypt action
- * needs the block, not just the answer: it reads the draft entry at that block
- * so the ciphertext it opens belongs to the version ownership was tested on.
+ * Which two modules this author Safe runs. The decrypt action needs the answer
+ * rather than a verdict: it reads the drafts log and the owner history itself.
  */
-export const ownsVerdict = (
-    genesis: string,
+export const resolveAuthorModules = (
     authorSafe: string,
-    signerAddress: string,
     rpcs?: string[],
-): Promise<OwnsVerdict> =>
-    gateOwnsVerdict(
-        bindRead(rpcs),
-        bindValueRead(rpcs),
-        genesis,
-        authorSafe,
-        signerAddress,
-    );
+): Promise<AuthorModules> =>
+    gateResolveAuthorModules(bindRead(rpcs), bindValueRead(rpcs), authorSafe);
+
+/**
+ * Was `who` an owner of `safe` at `blockNumber`? No block is the present tense;
+ * a block above 0 needs the Safe's `ownerHistory` module to judge against.
+ */
+export const isOwnerAt = (
+    safe: string,
+    who: string,
+    blockNumber: number | undefined,
+    ownerHistory: string | undefined,
+    rpcs?: string[],
+): Promise<boolean> =>
+    gateIsOwnerAt(bindRead(rpcs), safe, who, blockNumber, ownerHistory);

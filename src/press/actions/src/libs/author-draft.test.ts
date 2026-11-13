@@ -9,12 +9,12 @@ import {
 // ============================================================================
 // decryptAuthorDraft — GATES-1 for one draft, plus the PIN.
 //
-// The gate itself is shared and tested there (`ownsVerdict`); what is tested
-// here is what this file does with its answer: read the entry at the block the
-// gate reported and from the module it reported, refuse unless the blob is that
-// author's and hashes to the signed plaintextHash, and keep every refusal's
-// wording. No module is resolved here, so the chain reads below are the entry
-// read and nothing else.
+// The pieces are shared and tested there (`resolveAuthorModules`, `isOwnerAt`);
+// what is tested here is the composition and what this file does with it:
+// resolve the Safe's modules once, require the drafts log to name that Safe,
+// take the block from `blocksOf`, judge ownership at that block, and read the
+// entry there and nowhere else. Every refusal's wording is pinned, and so is the
+// direction of the historical judgement in both directions.
 // ============================================================================
 
 const SAFE = '0x' + '11'.repeat(20);
@@ -29,6 +29,10 @@ const PLAINTEXT = '{"title":"A draft","body":"secret"}';
 const PLAINTEXT_HASH = keccak256(new TextEncoder().encode(PLAINTEXT));
 const CIPHERTEXT = { ciphertext: 'wrapped', dataToEncryptHash: '0x' + 'cd'.repeat(32) };
 
+/** The append block of the draft's last version, and an earlier one before it. */
+const APPEND_BLOCK = 880;
+const BLOCKS = [640, APPEND_BLOCK];
+
 const INPUT: AuthorDraftInput = {
   pkpId: '0x1',
   genesis: GENESIS,
@@ -36,12 +40,11 @@ const INPUT: AuthorDraftInput = {
   signature: '0xsigned',
 };
 
-/** What the gate says it resolved and judged at, at block 880. */
-const VERDICT = {
-  ok: true,
-  block: 880,
-  modules: { drafts: DRAFTS_MODULE, ownerHistory: HISTORY_MODULE },
-  author: SAFE,
+const MODULES = {
+  ok: true as const,
+  drafts: DRAFTS_MODULE,
+  ownerHistory: HISTORY_MODULE,
+  reads: 7,
 };
 
 const ENTRY = {
@@ -61,14 +64,22 @@ const ITEM = {
 type ReadCall = { target: string; fn: string; args: unknown[]; block?: number };
 
 /**
- * The runtime, faked at the injection boundary: the gate's verdict, a chain
- * read that answers the entry, a gateway that answers the item, a decryptor, and
- * a signature recovery. Everything asserted below goes through these.
+ * The runtime, faked at the injection boundary: module resolution, the two
+ * value reads the composition makes, ownership at a block, a pinned chain read
+ * that answers the entry, a gateway, a decryptor, and a signature recovery.
+ * Everything asserted below goes through these.
  */
 const runtime = (overrides: Partial<AuthorDraftDeps> = {}, options: { entry?: unknown } = {}) => {
   const reads: ReadCall[] = [];
   const deps: AuthorDraftDeps = {
-    owns: vi.fn(async () => ({ ...VERDICT })),
+    resolveModules: vi.fn(async () => ({ ...MODULES })),
+    readValue: vi.fn(async (target, _abi, fn, args) => {
+      reads.push({ target, fn, args });
+      if (fn === 'authorOf') return SAFE;
+      if (fn === 'blocksOf') return BLOCKS;
+      throw new Error('unexpected value read: ' + fn);
+    }),
+    isOwnerAt: vi.fn(async () => true),
     read: vi.fn(async (target, _abi, fn, args, block) => {
       reads.push({ target, fn, args, block });
       if (fn === 'fetch') return options.entry ?? ENTRY;
@@ -79,48 +90,63 @@ const runtime = (overrides: Partial<AuthorDraftDeps> = {}, options: { entry?: un
     recoverSigner: vi.fn(() => SIGNER),
     ...overrides,
   };
-  return { deps, reads, entry: () => reads.filter((r) => r.fn === 'fetch') };
+  const entry = () => reads.filter((r) => r.fn === 'fetch');
+  const calls = (fn: string) => reads.filter((r) => r.fn === fn);
+  return { deps, reads, entry, calls };
 };
 
 describe('decryptAuthorDraft — the version that is opened is the version judged', () => {
-  it('reads the entry at the block the gate reported, from the module it reported', async () => {
+  it('reads the entry at the append block, from the drafts module it resolved', async () => {
     const { deps, entry } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
 
     expect(outcome.ok).toBe(true);
     expect(entry()).toHaveLength(1);
-    expect(entry()[0].block).toBe(880);
+    expect(entry()[0].block).toBe(APPEND_BLOCK);
     expect(entry()[0].target).toBe(DRAFTS_MODULE);
     expect(entry()[0].args).toEqual([GENESIS]);
     expect(deps.cat).toHaveBeenCalledWith(CID);
     if (outcome.ok) expect(outcome.data).toEqual({ plaintext: PLAINTEXT, author: SAFE, cid: CID });
   });
 
-  it('resolves no module and reads nothing else: the verdict carries what the gate read', async () => {
+  it('resolves the Safe s modules once, and every read goes to the drafts log it named', async () => {
     const { deps, reads } = runtime();
     await decryptAuthorDraft(INPUT, deps);
 
-    // The whole module lookup is one round trip of chain calls; repeating it
-    // here would spend the gate's budget twice and could judge the entry against
-    // a module set that rotated in between.
-    expect(reads.map((r) => r.fn)).toEqual(['fetch']);
+    // A second lookup would spend the chain budget twice and could judge the
+    // entry against a module set that rotated in between.
+    expect(deps.resolveModules).toHaveBeenCalledTimes(1);
+    expect(deps.resolveModules).toHaveBeenCalledWith(SAFE);
+    expect(reads.map((r) => r.fn)).toEqual(['authorOf', 'blocksOf', 'fetch']);
+    expect(reads.every((r) => r.target === DRAFTS_MODULE)).toBe(true);
+  });
+
+  it('takes the last entry of blocksOf, not the first', async () => {
+    const { deps, calls } = runtime();
+    await decryptAuthorDraft(INPUT, deps);
+    expect(calls('blocksOf')[0].args).toEqual([GENESIS]);
+    expect(calls('blocksOf')[0].target).toBe(DRAFTS_MODULE);
   });
 
   it('reports the judged block in the trace', async () => {
     const { deps } = runtime();
     const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 880 });
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: APPEND_BLOCK });
   });
 
   it('refuses block 0: no height to read the entry at and no owner set to judge it', async () => {
-    // Block 0 is "no block was recorded" (pre-upgrade, or an imported log). The
-    // gate refuses it, so there is no pinned read to make and no unpinned one to
-    // fall back to.
-    const { deps, entry } = runtime({ owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 0 })) });
+    // Block 0 is "no block was recorded" (pre-upgrade, or an imported log). There
+    // is no pinned read to make and no unpinned one to fall back to.
+    const { deps, entry } = runtime({
+      readValue: vi.fn(async (_target: string, _abi: string[], fn: string) =>
+        fn === 'authorOf' ? SAFE : [640, 0],
+      ),
+    });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('no append block was recorded for this draft');
     expect(entry()).toHaveLength(0);
+    expect(deps.isOwnerAt).not.toHaveBeenCalled();
     expect(deps.cat).not.toHaveBeenCalled();
   });
 
@@ -128,26 +154,54 @@ describe('decryptAuthorDraft — the version that is opened is the version judge
     const { deps } = runtime();
     await decryptAuthorDraft(INPUT, deps);
     expect(deps.recoverSigner).toHaveBeenCalledWith(INPUT.signature);
-    expect(deps.owns).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
+    expect(deps.isOwnerAt).toHaveBeenCalledWith(SAFE, SIGNER, APPEND_BLOCK, HISTORY_MODULE);
   });
 
   it('normalises a bytes32 genesis to lowercase before any read', async () => {
-    const { deps, entry } = runtime();
+    const { deps, calls } = runtime();
     await decryptAuthorDraft({ ...INPUT, genesis: GENESIS.toUpperCase().replace('0X', '0x') }, deps);
-    expect(entry()[0].args).toEqual([GENESIS]);
+    expect(calls('authorOf')[0].args).toEqual([GENESIS]);
+    expect(calls('fetch')[0].args).toEqual([GENESIS]);
   });
 
   it('normalises a raw objectId through toBytes32Id', async () => {
-    const { deps } = runtime();
+    const { deps, calls } = runtime();
     vi.stubGlobal('ethers', {
       utils: { toUtf8Bytes: (s: string) => s, keccak256: () => GENESIS },
     });
     try {
       await decryptAuthorDraft({ ...INPUT, genesis: '65f0c0ffee' }, deps);
-      expect(deps.owns).toHaveBeenCalledWith(GENESIS, SAFE, SIGNER);
+      expect(calls('authorOf')[0].args).toEqual([GENESIS]);
+      expect(deps.isOwnerAt).toHaveBeenCalledWith(SAFE, SIGNER, APPEND_BLOCK, HISTORY_MODULE);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('decryptAuthorDraft — ownership is judged at the append block', () => {
+  it('admits an owner at the append block who is not an owner now', async () => {
+    // A key rotated out of the Safe after the version was appended keeps what it
+    // wrote: the question is historical, and the present tense is not asked.
+    const { deps, entry } = runtime({ isOwnerAt: vi.fn(async () => true) });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(true);
+    expect(deps.isOwnerAt).toHaveBeenCalledWith(SAFE, SIGNER, APPEND_BLOCK, HISTORY_MODULE);
+    expect(entry()[0].block).toBe(APPEND_BLOCK);
+  });
+
+  it('refuses an owner now who was not an owner at the append block', async () => {
+    // A key added afterwards does not inherit what the Safe wrote before it.
+    const { deps, entry } = runtime({ isOwnerAt: vi.fn(async () => false) });
+    const outcome = await decryptAuthorDraft(INPUT, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
+    expect(deps.isOwnerAt).toHaveBeenCalledWith(SAFE, SIGNER, APPEND_BLOCK, HISTORY_MODULE);
+    expect(entry()).toHaveLength(0);
+    expect(deps.cat).not.toHaveBeenCalled();
+    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: APPEND_BLOCK });
   });
 });
 
@@ -160,22 +214,8 @@ describe('decryptAuthorDraft — refusals', () => {
       error: 'author Safe is not an address',
       trace: [{ step: 'genesis', address: GENESIS }],
     });
-    expect(deps.owns).not.toHaveBeenCalled();
+    expect(deps.resolveModules).not.toHaveBeenCalled();
     expect(deps.recoverSigner).not.toHaveBeenCalled();
-  });
-
-  it('refuses a signer the gate rejected, and names the block it was refused at', async () => {
-    // A signer added to the Safe after the version was appended: the gate judges
-    // at the append block and answers no.
-    const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ...VERDICT, ok: false, block: 900 })),
-    });
-    const outcome = await decryptAuthorDraft(INPUT, deps);
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBe('signer does not own the author Safe');
-    expect(outcome.trace).toContainEqual({ step: 'appendBlock', block: 900 });
-    expect(entry()).toHaveLength(0);
-    expect(deps.cat).not.toHaveBeenCalled();
   });
 
   it('says why the module lookup refused, in the string action s words', async () => {
@@ -190,7 +230,7 @@ describe('decryptAuthorDraft — refusals', () => {
 
     for (const [modulesError, message] of expected) {
       const { deps, entry } = runtime({
-        owns: vi.fn(async () => ({ ok: false, modulesError: modulesError as never })),
+        resolveModules: vi.fn(async () => ({ ok: false as const, error: modulesError as never, reads: 1 })),
       });
       const outcome = await decryptAuthorDraft(INPUT, deps);
       expect(outcome.ok).toBe(false);
@@ -201,32 +241,42 @@ describe('decryptAuthorDraft — refusals', () => {
 
   it('refuses a genesis the drafts log does not name', async () => {
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules })),
+      readValue: vi.fn(async (_target: string, _abi: string[], fn: string) =>
+        fn === 'authorOf' ? END_SENTINEL : BLOCKS,
+      ),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('unknown draft');
     expect(entry()).toHaveLength(0);
+    expect(deps.isOwnerAt).not.toHaveBeenCalled();
     expect(deps.cat).not.toHaveBeenCalled();
   });
 
   it('refuses a draft the Safe s log attributes to another Safe', async () => {
-    const { deps } = runtime({
-      owns: vi.fn(async () => ({ ...VERDICT, ok: false, author: OTHER_SAFE })),
+    const { deps, entry } = runtime({
+      readValue: vi.fn(async (_target: string, _abi: string[], fn: string) =>
+        fn === 'authorOf' ? OTHER_SAFE : BLOCKS,
+      ),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('draft belongs to another Safe');
+    expect(entry()).toHaveLength(0);
+    expect(deps.isOwnerAt).not.toHaveBeenCalled();
   });
 
-  it('refuses when the log answers no append block', async () => {
+  it('refuses when the log answers no usable block list', async () => {
     const { deps, entry } = runtime({
-      owns: vi.fn(async () => ({ ok: false, modules: VERDICT.modules, author: SAFE })),
+      readValue: vi.fn(async (_target: string, _abi: string[], fn: string) =>
+        fn === 'authorOf' ? SAFE : [],
+      ),
     });
     const outcome = await decryptAuthorDraft(INPUT, deps);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBe('cannot read the append block');
     expect(entry()).toHaveLength(0);
+    expect(deps.isOwnerAt).not.toHaveBeenCalled();
   });
 
   it('refuses an entry with no versions left, even if the log named an author', async () => {
