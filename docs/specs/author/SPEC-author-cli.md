@@ -54,7 +54,8 @@ Top-level bin `s2s`; four groups: `author` (content actions on an existing
 publication), `publication` (publication lifecycle), `config` (CLI settings), and `setup` (the
 guided first-run pass over those settings — see [Config file](#config-file-bring-your-own-infra)).
 The `signer` group is the fifth: a key that joins a Safe it did not create —
-[SPEC-author-signers](SPEC-author-signers.md).
+[SPEC-author-signers](SPEC-author-signers.md). The `drafts` group is the sixth: the active author
+Safe's draft log, read only — [SPEC-author-drafts](SPEC-author-drafts.md).
 
 ```
 s2s author new       <pet-name> [--key <0x…> | --mnemonic <words>] [--json]                      # add an author identity (activates it; installs the author contracts)
@@ -80,6 +81,7 @@ s2s config get       <key> [--json]                                             
 s2s config unset     <key> [--local] [--json]                                                     # remove a key from the file
 s2s config list      [--json]                                                                     # all effective values (secrets masked)
 s2s config path      [--local] [--json]                                                           # print every config file location
+s2s drafts list      [--json]                                                                     # the active author Safe's drafts, read from the module it adopted
 ```
 
 The **upload ↔ propose split**: `upload` signs, uploads to Kubo, fires the pinning
@@ -463,15 +465,16 @@ Both commands run the same sequence, in order:
    nothing for this step.
 2. **Read what the Safe has adopted.** Modules are found by role, not by the factory: each
    address on the Safe's enabled-module list is asked `supportsInterface` for `0xefb74036`
-   (drafts) and `0xee855023` (owner history). `enableModule` is `onlySelf`, so an entry on that
-   list is the Safe's own statement that it adopted the module; the factory index is a lead. The
-   guard is read from its slot — `getStorageAt(safe, 0x4a204f…34c8)` → `G`, then `G.module()` →
-   `M`, `G.safe() == safe`, `M.safe() == safe` — because a guard is not an enabled module and only
-   the Safe can write the slot. All three guard facts are immutables, so that proof needs no
-   factory to agree and survives `contracts.authorFactory` pointing somewhere else. A Safe that
-   passes this read carries the install; the run reports `already` and sends nothing, whatever the
-   permissionless index has accumulated since. If one module is missing while the guard is proven,
-   only that module's create runs, and the batch carries only its `enableModule`.
+   (drafts) and `0xee855023` (owner history). `s2s drafts list` reads the drafts role by the same
+   probe, and falls back to the factory index when no enabled module answers it. `enableModule` is
+   `onlySelf`, so an entry on that list is the Safe's own statement that it adopted the module; the
+   factory index is a lead. The guard is read from its slot — `getStorageAt(safe, 0x4a204f…34c8)` →
+   `G`, then `G.module()` → `M`, `G.safe() == safe`, `M.safe() == safe` — because a guard is not an
+   enabled module and only the Safe can write the slot. All three guard facts are immutables, so that
+   proof needs no factory to agree and survives `contracts.authorFactory` pointing somewhere else. A
+   Safe that passes this read carries the install; the run reports `already` and sends nothing,
+   whatever the permissionless index has accumulated since. If one module is missing while the guard
+   is proven, only that module's create runs, and the batch carries only its `enableModule`.
 3. **Whatever the list lacks:** `createDraftsModule(safe)` and
    `createOwnerHistoryModule(safe)` on the factory for the missing role. Both are permissionless
    (`createDraftsModule` / `createOwnerHistoryModule` in
@@ -742,6 +745,46 @@ passes unknown scalars through and never rejects extras (SPEC-nvim-s2s decision 
 future-shaped fixture in its test seams). Both links come from `lib/ipfs-link.ts`, where the gateway
 is one constant (`IPFS_GATEWAY_BASE`) — serving them from the configured `ipfs.kubo.url` instead of
 `ipfs.io` is a one-line change there, not a change at any call site.
+
+### `drafts` group — result types
+
+`s2s drafts list` reads the active author Safe's draft log
+([SPEC-author-drafts](SPEC-author-drafts.md)). It takes no action flags — `--json` and `--help`
+only — and sends no transaction. It is dispatched after `buildContext`, because it needs the active
+author and an L2 RPC.
+
+```ts
+// s2s drafts list [--json] — the active author Safe's drafts
+{ action: 'drafts.list';
+  author: string | null;          // pet name of the active author; null when the key came from a file
+  safe: string;                   // the author Safe that holds the log
+  module: string;                 // the drafts module that answered
+  source: 'enabled' | 'factory';  // the Safe's enabled list, or the factory index
+  count: number;                  // count() on that module
+  drafts: { genesis: string;      // the row identifier: nothing else names a draft here
+            cid: string;          // the latest version's CID
+            author: string;       // the Safe that bound the genesis, from the module's Entry
+            timestamp: number;    // the latest version's block time
+            versionCount: number }[] }
+```
+
+**The module is resolved by role, in one order.** Every address on the Safe's enabled-module list
+is asked `supportsInterface(0xefb74036)`, and the **last** one that answers wins — two enabled
+modules of one role make the role ambiguous, so the command takes the final answer instead of
+refusing (`source: 'enabled'`). With nothing on the list answering, the factory index
+`getDraftsModulesForSafe(safe)` is read and its last entry taken (`source: 'factory'`). That index
+is permissionless and forgeable — anyone can create a proxy for any Safe — so an entry implies no
+install, and the result says which of the two it used. With neither, the command fails and names
+`s2s author init`, which is the command that installs the module.
+
+**Every read is paged.** `count()` first, then `fetchAllPaged` in pages of 100 until the count is
+covered. `fetchAll` is never called: it builds the whole log in one `eth_call` and fails on a log
+big enough to matter.
+
+**No label is resolved.** A row is named by its genesis. The draft's `label` lives in the uploaded
+envelope, so showing it would cost one gateway read per draft; the result carries the genesis and
+the CID instead. Whether a draft entry should carry a label of its own is open
+([SPEC-author-drafts](SPEC-author-drafts.md#open-questions)).
 
 ### `publication` group — result types
 
