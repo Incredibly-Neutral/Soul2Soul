@@ -20,7 +20,6 @@ import {
   parseMarkdownNote,
   bodyForKey,
   toBytes32Id,
-  type AnyS2SContentItem,
 } from '@s2s/soul2soul-shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -462,7 +461,7 @@ describe('buildDraftNote', () => {
     expect(block).toContain('template: essay');
   });
 
-  it('parses back into the note the CLI uploads, and re-uploads as the same draft', async () => {
+  it('parses back into the note the CLI uploads', async () => {
     const note = buildDraftNote({
       entry: entry(0),
       item: storedItem({ label: 'My Draft' }),
@@ -480,36 +479,6 @@ describe('buildDraftNote', () => {
     expect(parsed.content).toBe(BODY_CONTENT);
     expect(parsed.frontmatter.cid).toBe('bafy-draft-0');
     expect(parsed.custom).toEqual({});
-
-    // And the item the uploader builds from it is the item that was read: the
-    // body document is the same bytes, so the plaintext survives the round trip.
-    const item = await buildSignedContentItem(
-      {
-        specVersion: '2',
-        postType: parsed.postType,
-        mediaType: 'text/markdown',
-        parent: String(parsed.parent),
-        position: String(parsed.position),
-        publication: 'test',
-        locale: parsed.locale,
-        creationDate: 1700000000,
-        modifiedDate: 1700000600,
-        base: parsed.slug,
-        tags: parsed.tags,
-        attributes: undefined,
-        label: parsed.label ?? undefined,
-      },
-      { title: parsed.title, slug: parsed.slug, content: parsed.content, custom: {} },
-      {
-        getAddress: () => AUTHOR,
-        signTypedData: () => Promise.resolve(`0x${'33'.repeat(65)}`),
-      },
-      noOpEncrypt,
-      AUTHOR,
-    );
-    expect(JSON.parse(bodyForKey(item as AnyS2SContentItem) ?? '')).toEqual(
-      JSON.parse(BODY_DOCUMENT),
-    );
   });
 
   it('re-uploads as the item it was read from: same public metadata, same body document', async () => {

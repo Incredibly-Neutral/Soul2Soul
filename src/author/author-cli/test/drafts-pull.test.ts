@@ -77,7 +77,7 @@ function seam(drafts: DraftEntry[]): DraftsSeam {
 }
 
 /** The item stored at a CID: encrypted, labelled, one body. */
-function item(label: string, _content: string) {
+function item(label: string) {
   return {
     public: {
       specVersion: '2',
@@ -181,8 +181,8 @@ describe('runDraftsPull', () => {
     const drafts = [entry(0), entry(1)];
     const { ctx } = context({
       items: {
-        'bafy-draft-0': item('First Draft', '<p>one</p>'),
-        'bafy-draft-1': item('Second Draft', '<p>two</p>'),
+        'bafy-draft-0': item('First Draft'),
+        'bafy-draft-1': item('Second Draft'),
       },
       plaintexts: {
         [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>'),
@@ -225,7 +225,7 @@ describe('runDraftsPull', () => {
     const cap = capture();
     const { ctx } = context({
       cap,
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
 
@@ -313,7 +313,7 @@ describe('runDraftsPull', () => {
     );
 
     const { ctx } = context({
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
     const outcome = await runDraftsPull(
@@ -399,7 +399,7 @@ describe('runDraftsPull', () => {
     writeFileSync(join('notes', 'plain.md'), '# No frontmatter\n');
 
     const { ctx } = context({
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
     await runDraftsPull(ctx, 'notes', {}, { safeState: SAFE_STATE, seam: seam([entry(0)]) });
@@ -416,7 +416,7 @@ describe('runDraftsPull', () => {
     );
 
     const { ctx } = context({
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
     const outcome = await runDraftsPull(
@@ -442,8 +442,8 @@ describe('runDraftsPull', () => {
     const { ctx } = context({
       cap,
       items: {
-        'bafy-draft-0': item('First Draft', '<p>one</p>'),
-        'bafy-draft-1': item('Second Draft', '<p>two</p>'),
+        'bafy-draft-0': item('First Draft'),
+        'bafy-draft-1': item('Second Draft'),
       },
       plaintexts: { [GENESIS_1]: bodyDocument('Second Draft', '<p>two</p>') },
       refuse: [GENESIS_0],
@@ -478,7 +478,7 @@ describe('runDraftsPull', () => {
 
   it('creates the folder it was given, and writes nothing but the notes', async () => {
     const { ctx } = context({
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
     await runDraftsPull(
@@ -497,7 +497,7 @@ describe('runDraftsPull', () => {
     const cap = capture(true);
     const { ctx } = context({
       cap,
-      items: { 'bafy-draft-0': item('First Draft', '<p>one</p>') },
+      items: { 'bafy-draft-0': item('First Draft') },
       plaintexts: { [GENESIS_0]: bodyDocument('First Draft', '<p>one</p>') },
     });
 
