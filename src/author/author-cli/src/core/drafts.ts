@@ -11,10 +11,11 @@
 //      permissionless and therefore a lead, not a proof.
 //
 // The enabled list wins whenever it answers, because `enableModule` is
-// `onlySelf`: an entry there is the Safe's own statement. The index is read only
-// when the list has no drafts module, and the result says which answered
-// (`source`), so a human can tell an installed author from a proxy somebody
-// created for that Safe.
+// `onlySelf`: an entry there is the Safe's own statement — of enabling a module,
+// not necessarily of holding this Safe's log, so the module's own `safe()` is
+// read too. The index is read only when the list has no drafts module bound to
+// this Safe, and the result says which answered (`source`), so a human can tell
+// an installed author from a proxy somebody created for that Safe.
 //
 // The log itself is read COUNT-then-PAGES. `fetchAll` builds the whole list in
 // one `eth_call` and fails once the log is big enough to matter; `fetchAllPaged`
@@ -36,6 +37,7 @@ import {
   authorContractsFactory,
   readAuthorContracts,
   readDraftsCount,
+  readDraftsModuleSafe,
   readEnabledAuthorModules,
 } from './author-contracts';
 import type { CliConfig } from './config';
@@ -102,6 +104,8 @@ export interface ReadDraftsPageOptions {
 export interface DraftsSeam {
   /** The Safe's enabled modules, classified by ERC-165 role. */
   readEnabled(opts: { safe: Address; rpcUrl: string }): Promise<EnabledAuthorModules>;
+  /** `module.safe()` — the Safe a module was minted for; null when it answers none. */
+  readModuleSafe(opts: { module: Address; rpcUrl: string }): Promise<Address | null>;
   /** The factory index (`getDraftsModulesForSafe` and siblings). */
   readFactory(opts: ResolveDraftsModuleOptions): Promise<AuthorContracts>;
   /** `count()` — the number of genesis ids in the log. */
@@ -115,6 +119,7 @@ function clientFor(rpcUrl: string) {
 
 export const defaultDraftsSeam: DraftsSeam = {
   readEnabled: (opts) => readEnabledAuthorModules(opts),
+  readModuleSafe: (opts) => readDraftsModuleSafe(opts),
   readFactory: (opts) => readAuthorContracts(opts),
   // The same `count()` an install reads, so the two cannot spell it differently.
   readCount: async (opts) => await readDraftsCount({ module: opts.address, rpcUrl: opts.rpcUrl }),
@@ -141,6 +146,12 @@ export const defaultDraftsSeam: DraftsSeam = {
  * append-only and forgeable, so its newest entry is a proxy the Safe may never
  * have used. Nothing answering both means no install, and the remedy is the
  * command that installs one.
+ *
+ * An enabled module is checked against the Safe it was minted for. `enableModule`
+ * is `onlySelf`, so the entry is this Safe's own call, but the call names any
+ * address: a drafts module created for another Safe answers the role id too, and
+ * its log is that Safe's. `safe()` is the module's immutable, so a module bound
+ * elsewhere is not adopted and the resolution falls through to the index.
  */
 export async function resolveDraftsModule(
   opts: ResolveDraftsModuleOptions,
@@ -148,7 +159,12 @@ export async function resolveDraftsModule(
 ): Promise<ResolvedDraftsModule> {
   const enabled = await seam.readEnabled({ safe: opts.safe, rpcUrl: opts.rpcUrl });
   const onSafe = enabled.drafts;
-  if (onSafe !== null) return { address: getAddress(onSafe.toLowerCase()), source: 'enabled' };
+  if (onSafe !== null) {
+    const bound = await seam.readModuleSafe({ module: onSafe, rpcUrl: opts.rpcUrl });
+    if (bound !== null && bound.toLowerCase() === opts.safe.toLowerCase()) {
+      return { address: getAddress(onSafe.toLowerCase()), source: 'enabled' };
+    }
+  }
 
   const index = await seam.readFactory(opts);
   const created = index.drafts;

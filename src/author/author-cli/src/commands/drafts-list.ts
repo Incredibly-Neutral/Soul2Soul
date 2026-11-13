@@ -29,7 +29,7 @@ import {
   type DraftsSeam,
   type ResolvedDraftsModule,
 } from '../core/drafts';
-import { UsageError } from '../lib/errors';
+import { UsageError, CliError } from '../lib/errors';
 
 /** The result the Neovim contract reads. */
 export interface DraftsListResult {
@@ -45,8 +45,8 @@ export interface DraftsListResult {
 /** The reads the command makes; a test replaces them whole. */
 export interface DraftsListDeps {
   seam: DraftsSeam;
-  /** The author id: the Safe, predicted or stored. */
-  safeState(ctx: CliContext): Promise<{ address: Address }>;
+  /** The author id: the Safe, predicted or stored, and whether it has code. */
+  safeState(ctx: CliContext): Promise<{ address: Address; deployed: boolean }>;
 }
 
 export function draftsListDeps(overrides: Partial<DraftsListDeps> = {}): DraftsListDeps {
@@ -64,8 +64,22 @@ export function isoDate(seconds: number): string {
 /** How the module was found, in the words the human line uses. */
 function sourceText(source: DraftsModuleSource): string {
   return source === 'enabled'
-    ? "enabled on the Safe"
+    ? 'enabled on the Safe'
     : 'from the factory index (not enabled on the Safe)';
+}
+
+/**
+ * The empty-log line, which must not claim more than the source proves. An
+ * enabled module is the Safe's own adoption, so the log is the Safe's. A module
+ * from the factory index is a proxy the Safe may never have used: the index is
+ * permissionless, so the line says what the index said and no more.
+ */
+export function emptyLogLine(result: DraftsListResult): string {
+  const what =
+    result.source === 'enabled'
+      ? "nothing has been appended to this Safe's log"
+      : 'the factory index names it for this Safe, and it holds no entries';
+  return `no drafts in module ${result.module} (author Safe ${result.safe}) — ${what}`;
 }
 
 /**
@@ -75,7 +89,7 @@ function sourceText(source: DraftsModuleSource): string {
  */
 export function draftsListLines(result: DraftsListResult): string {
   if (result.count === 0) {
-    return `no drafts in module ${result.module} (author Safe ${result.safe}) — nothing has been appended to this Safe's log`;
+    return emptyLogLine(result);
   }
 
   const genesisWidth = Math.max(...result.drafts.map((draft) => draft.genesis.length));
@@ -104,7 +118,17 @@ export async function runDraftsList(
     throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
   }
 
-  const { address: safe } = await deps.safeState(ctx);
+  const { address: safe, deployed } = await deps.safeState(ctx);
+  // A predicted Safe has no code, so every module read against it answers nothing
+  // and viem reports an empty return as a raw error. Nothing can be enabled on a
+  // Safe that is not there, and the command that deploys it is the remedy.
+  if (!deployed) {
+    throw new CliError(
+      `the author Safe ${safe} is not deployed yet — run: s2s author init`,
+      1,
+      'safe_not_deployed',
+    );
+  }
   const resolved: ResolvedDraftsModule = await resolveDraftsModule(
     { safe, rpcUrl, factory: draftsFactory(ctx.config) },
     deps.seam,
