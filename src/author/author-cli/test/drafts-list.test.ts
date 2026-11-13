@@ -511,9 +511,14 @@ describe('top-level dispatch', () => {
 });
 
 describe('registration', () => {
-  it('is a top-level group whose actions are `list` and the `append` retry', () => {
+  it('is a top-level group whose actions are `list`, `append` and the two reads', () => {
     expect(findDraftsCommand('list')?.name).toBe('list');
     expect(findDraftsCommand('bogus')).toBeUndefined();
-    expect(draftsHelpEntries.map((command) => command.name)).toEqual(['list', 'append']);
+    expect(draftsHelpEntries.map((command) => command.name)).toEqual([
+      'list',
+      'append',
+      'fetch',
+      'pull',
+    ]);
   });
 });

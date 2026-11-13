@@ -42,6 +42,7 @@ import {
   type CanAuthorVerdict,
 } from '@s2s/soul2soul-shared/gates';
 import { toBytes32Id, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
+import { storedBody } from './item-integrity';
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -228,7 +229,25 @@ export const decryptAuthorDraft = async (
     if (!sameAddress(blobAuthor, safe)) return refuse('item author is not the draft author');
     step('blobAuthor', blobAuthor);
 
-    const res = await deps.decrypt(item.body);
+    // The ciphertext is the body this press reads everywhere: `bodies.s2s` on a
+    // v2 item, whose envelope carries the per-key body map, and `body` on a v1
+    // item, whose envelope keeps the single body. The write path stores the
+    // encryptor's result as JSON text (`assertCiphertext` makes every stored
+    // body parse), so the value Lit receives is what that text parses to — the
+    // same parse `libs/decrypt.ts` does before `Lit.Actions.Decrypt`. An item
+    // carrying neither body, or one whose body is not JSON, is refused here
+    // rather than reaching Lit.
+    const stored = storedBody(item);
+    if (stored === undefined) return refuse('item carries no s2s body');
+
+    let ciphertext: unknown;
+    try {
+      ciphertext = JSON.parse(stored);
+    } catch {
+      return refuse('item s2s body is not JSON');
+    }
+
+    const res = await deps.decrypt(ciphertext);
     const plaintext =
       typeof res === 'string'
         ? res

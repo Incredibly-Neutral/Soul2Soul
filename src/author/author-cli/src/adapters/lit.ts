@@ -16,10 +16,14 @@
 //                      press/scripts/lit/update-protocol.ts with `pnpm
 //                      actions:swap encrypt`); `lit.encryptActionCid` is the
 //                      override, resolved by `buildContext` and passed in here.
+//   actions.decrypt    the same for the decrypt action, from the record
+//                      `lit_action_decrypt` and `lit.decryptActionCid`: the
+//                      drafts read path (`drafts fetch` / `drafts pull`).
 //
-// Missing either one is not a fallback: the encrypt path fails closed. With no
-// CID the service's `encrypt` throws naming both remedies, at the point of use
-// rather than at context build — a machine that never encrypts must still run.
+// Missing either one is not a fallback: that direction fails closed. With no
+// CID the service's `encrypt` / `decrypt` throws naming both remedies, at the
+// point of use rather than at context build — a machine that never encrypts
+// must still run.
 // ============================================================================
 
 import { LitService } from '@s2s/soul2soul-shared';
@@ -46,26 +50,42 @@ function actionGateway(config: CliConfig): string | undefined {
 export const NO_ENCRYPT_ACTION =
   'cannot encrypt: no encrypt action CID — the protocol record `lit_action_encrypt` is not written and `lit.encryptActionCid` is unset. Set the config value with `s2s config set lit.encryptActionCid <cid>`, or write the record with `src/press/scripts/lit/update-protocol.ts`';
 
+/** What the decrypt path says when neither the config nor the record names a CID. */
+export const NO_DECRYPT_ACTION =
+  'cannot decrypt: no decrypt action CID — the protocol record `lit_action_decrypt` is not written and `lit.decryptActionCid` is unset. Set the config value with `s2s config set lit.decryptActionCid <cid>`, or write the record with `src/press/scripts/lit/update-protocol.ts`';
+
 /**
  * @param encryptActionCid the resolved CID: `config.lit.encryptActionCid` when
  *   set, else the `lit_action_encrypt` record (`core/context.ts`). Undefined
  *   leaves `actions.encrypt` unset and makes `encrypt` the closed failure.
+ * @param decryptActionCid the same for `actions.decrypt`.
  */
-export function createLitService(config: CliConfig, encryptActionCid?: string): LitService {
+export function createLitService(
+  config: CliConfig,
+  encryptActionCid?: string,
+  decryptActionCid?: string,
+): LitService {
   const service = new LitService({
     environment: config.environment,
     accountKey: config.lit.accountKey,
     gateway: actionGateway(config),
-    actions: encryptActionCid ? { encrypt: encryptActionCid } : undefined,
+    actions: {
+      ...(encryptActionCid ? { encrypt: encryptActionCid } : {}),
+      ...(decryptActionCid ? { decrypt: decryptActionCid } : {}),
+    },
   });
   if (!encryptActionCid) {
     // Replaced per instance, not thrown at build time: `upload`, `preview` and
     // every read still run on a machine whose record has no encrypt key yet.
-    // `async`, so it rejects like the real method rather than throwing from the
-    // call — the callers all `await` it.
-    service.encrypt = async () => {
-      throw new UsageError(NO_ENCRYPT_ACTION);
-    };
+    // A rejected promise, not a throw from the call: it fails like the real
+    // method, and every caller `await`s it.
+    service.encrypt = () => Promise.reject(new UsageError(NO_ENCRYPT_ACTION));
+  }
+  if (!decryptActionCid) {
+    // Same shape, same reason: `drafts fetch` and `drafts pull` are the only
+    // callers, and a machine that lists drafts must run without the decrypt
+    // bundle deployed.
+    service.decrypt = () => Promise.reject(new UsageError(NO_DECRYPT_ACTION));
   }
   return service;
 }

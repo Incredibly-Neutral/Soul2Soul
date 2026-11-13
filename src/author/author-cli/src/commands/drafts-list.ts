@@ -22,18 +22,12 @@ import type { Address } from 'viem';
 
 import type { CliContext } from '../core/context';
 import type { CommandSpec } from '../lib/command';
-import { authorSafeState } from '../core/author-safe';
 import {
-  defaultDraftsSeam,
-  draftsFactory,
-  readDrafts,
-  resolveDraftsModule,
+  readDraftsLog,
   type DraftEntry,
+  type DraftsLogDeps,
   type DraftsModuleSource,
-  type DraftsSeam,
-  type ResolvedDraftsModule,
 } from '../core/drafts';
-import { UsageError, CliError } from '../lib/errors';
 
 /** The result the Neovim contract reads. */
 export interface DraftsListResult {
@@ -47,18 +41,7 @@ export interface DraftsListResult {
 }
 
 /** The reads the command makes; a test replaces them whole. */
-export interface DraftsListDeps {
-  seam: DraftsSeam;
-  /** The author id: the Safe, predicted or stored, and whether it has code. */
-  safeState(ctx: CliContext): Promise<{ address: Address; deployed: boolean }>;
-}
-
-export function draftsListDeps(overrides: Partial<DraftsListDeps> = {}): DraftsListDeps {
-  return {
-    seam: overrides.seam ?? defaultDraftsSeam,
-    safeState: overrides.safeState ?? authorSafeState,
-  };
-}
+export type DraftsListDeps = DraftsLogDeps;
 
 /** `0x…` → `YYYY-MM-DD HH:mm` in UTC, no seconds and no `Z`. */
 export function utcMinute(seconds: number): string {
@@ -90,28 +73,10 @@ export async function runDraftsList(
   ctx: CliContext,
   overrides: Partial<DraftsListDeps> = {},
 ): Promise<void> {
-  const deps = draftsListDeps(overrides);
-  const rpcUrl = ctx.rpcs.L2[0];
-  if (!rpcUrl) {
-    throw new UsageError('no L2 RPC endpoint configured — set S2S_RPC_L2 (or BASE_RPC_URL)');
-  }
-
-  const { address: safe, deployed } = await deps.safeState(ctx);
-  // A predicted Safe has no code, so every module read against it answers nothing
-  // and viem reports an empty return as a raw error. Nothing can be enabled on a
-  // Safe that is not there, and the command that deploys it is the remedy.
-  if (!deployed) {
-    throw new CliError(
-      `the author Safe ${safe} is not deployed yet — run: s2s author init`,
-      1,
-      'safe_not_deployed',
-    );
-  }
-  const resolved: ResolvedDraftsModule = await resolveDraftsModule(
-    { safe, rpcUrl, factory: draftsFactory(ctx.config) },
-    deps.seam,
-  );
-  const drafts = await readDrafts({ address: resolved.address, rpcUrl }, deps.seam);
+  // The resolution, the Safe check and the paged read are shared with `fetch`
+  // and `pull` (`core/drafts.ts`), so an order printed here and an order taken
+  // there can only be the same log.
+  const { safe, module: resolved, drafts } = await readDraftsLog(ctx, overrides);
 
   const result: DraftsListResult = {
     action: 'drafts.list',

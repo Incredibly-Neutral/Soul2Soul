@@ -97,12 +97,13 @@ export interface CliConfig {
   author: CliAuthor | undefined;
   /**
    * Lit master/network key (LitService account), the action-run usage key, and
-   * the CID of the encrypt action bundle the service executes.
+   * the CIDs of the encrypt and decrypt action bundles the service executes.
    */
   lit: {
     accountKey: string | undefined;
     usageKey: string | undefined;
     encryptActionCid: string | undefined;
+    decryptActionCid: string | undefined;
   };
   /** ENS registry override; `protocolInfo.ensRegistry` is the fallback. */
   ens: { registry: string | undefined };
@@ -630,6 +631,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: LoadConfi
       accountKey: hexKey(file.lit?.accountKey),
       usageKey: file.lit?.usageKey,
       encryptActionCid: file.lit?.encryptActionCid,
+      decryptActionCid: file.lit?.decryptActionCid,
     },
     ens: { registry: file.ens?.registry },
     github: { token: file.github?.token },

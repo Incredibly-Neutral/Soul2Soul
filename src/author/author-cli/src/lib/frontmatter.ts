@@ -136,8 +136,7 @@ export function frontmatterDateToUnix(value: unknown): number | undefined {
   const offsetMinutes =
     zone === undefined || zone === 'Z'
       ? 0
-      : (zone.startsWith('-') ? -1 : 1) *
-        (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(-2)));
+      : (zone.startsWith('-') ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(-2)));
   const ms = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
   const date = new Date(ms);
   // Reject rollovers (`2021-13-01T…` → next year): only a real calendar time counts.
@@ -156,7 +155,7 @@ export function frontmatterDateToUnix(value: unknown): number | undefined {
 
 export function upsertFrontmatter(
   raw: string,
-  updates: Record<string, string | boolean>,
+  updates: Record<string, unknown>,
   remove: readonly string[] = [],
 ): string {
   const { frontmatter, body } = extractFrontmatter(raw);

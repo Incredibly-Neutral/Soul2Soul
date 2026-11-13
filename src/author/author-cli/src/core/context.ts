@@ -86,6 +86,22 @@ export function resolveEncryptActionCid(
 }
 
 /**
+ * The decrypt action CID, resolved exactly like the encrypt one: the config/env
+ * value first (`LIT_DECRYPT_ACTION_CID` / `lit.decryptActionCid`), then the
+ * `lit_action_decrypt` record. Two leaves, not one: the actions are separate
+ * bundles, swapped one at a time.
+ */
+export function resolveDecryptActionCid(
+  config: CliConfig,
+  protocolInfo: Pick<S2SProtocolInfo, 'litActions'>,
+): string | undefined {
+  const configured = config.lit.decryptActionCid;
+  if (configured !== undefined && configured.trim() !== '') return configured;
+  const record = protocolInfo.litActions.decrypt;
+  return record !== undefined && record.trim() !== '' ? record : undefined;
+}
+
+/**
  * Warn on stderr when the env key shadows the active stored author.
  *
  * `S2S_PRIVATE_KEY` outranks the store, so a shell export (or a `.env` line)
@@ -126,13 +142,18 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
   const encryptActionCid = resolveEncryptActionCid(config, protocolInfo);
+  const decryptActionCid = resolveDecryptActionCid(config, protocolInfo);
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);
 
-  const lit = createLitService(config, encryptActionCid);
+  const lit = createLitService(config, encryptActionCid, decryptActionCid);
   const ipfs = createIpfs(config);
-  const l2Runner = createEoaRunner({ chain: base, rpcUrl: l2Rpc, privateKey: privateKey as `0x${string}` });
+  const l2Runner = createEoaRunner({
+    chain: base,
+    rpcUrl: l2Rpc,
+    privateKey: privateKey as `0x${string}`,
+  });
 
   let authorRunnerPromise: Promise<TxRunner> | undefined;
   const authorRunner = (): Promise<TxRunner> => {
