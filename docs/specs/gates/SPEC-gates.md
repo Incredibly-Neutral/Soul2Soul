@@ -21,28 +21,37 @@ GATES-6 are constraints on all of them: gates do not move, and ledger state is r
 The author MUST be able to decrypt their own manuscript at any time. No agreement, whitelist or
 gate result MAY be required for it.
 
-Note (this implementation): ownership is one gate, `isOwnerAt`, in `src/shared/src/gates`. It takes
-the author Safe, the signer and an optional block. With no block, or block 0, it asks the Safe's live
-`isOwner`. With a block above 0 it asks the author Safe's `OwnerHistoryModuleV1` whether the signer
-was an owner at that block. `canPublish` and `canReset` ask it with no block. `canRead` asks it at the
-append block of the manuscript's last version, resolving that block inside the gate from the Safe's
-drafts module, and falls back to the live `isOwner` when the Safe's modules cannot be resolved. The
-predicates `owns` and `ownsVerdict` are gone: a drafts log naming a Safe for a genesis is a proof the
-drafts caller makes, and the ownership half of it is `isOwnerAt`.
+Note (this implementation): ownership is one primitive, `isOwnerAt`, in `src/shared/src/gates`:
+it takes the author Safe, the signer and an optional block, and asks the Safe's owner-history module
+at a block above 0, the Safe's live `isOwner` otherwise. `canPublish` and `canReset` ask the live
+question, because a write is being admitted now. The author's own read is `canAuthor`, which takes the
+author Safe, resolves its drafts log and owner-history module from the Safe's own enabled-module
+list, requires the drafts log to name that Safe for the genesis, and answers ownership. `canAuthor`
+is the author-side half of `canRead`: `canRead` asks the publication to admit the reader and then
+asks `canAuthor`, and `canAuthor` asks only the second question, since a draft was never offered and
+no agreement is involved.
 
-The block is what makes a read historical. Where the manuscript's last version carries the block it
-was written in — the drafts log's `blocksOf(genesis)`, last entry — `canRead` judges ownership at that
-block: a key rotated out still reads what it wrote, and a key added afterwards does not read what it
-did not. A block of 0 means none was recorded (a version older than the field, or a log carried in by
-`absorb()`), so the gate answers with the live owner set instead. That block is also what bounds the
-answer: history starts at the Safe's era 0, and an owner rotation the guard missed stretches the
-tenure it should have ended.
+`canAuthor` answers at the append block. Where the drafts log's `blocksOf(genesis)` gives a finite
+block above 0, the owner history answers `isOwnerAt` there: a key rotated out still reads what it
+wrote, and a key added afterwards does not read what it did not. Where the log gives 0 — a version
+older than the block field, or one carried in by `absorb()` — or no usable block list, there is no
+height to judge at, and the gate answers with the Safe's live owner set, read inside the gate: a
+missing height must not deny access. That is the only path on which the present tense answers, and
+its answer moves with every rotation. `canAuthorVerdict` returns that answer with what it read: the
+block it judged at, which set answered (`append-block` or `live`), the modules, and the entry author.
+A Safe whose modules cannot be resolved is a refusal, not a live answer: without the drafts log there
+is no `authorOf` and no height. The owner-history module is the other half of that refusal, but it
+bites only where a block does: a Safe that runs none is refused at a positive append block, with the
+missing module named, because nothing there says who owned the Safe then, while the missing-height
+path still answers live, since the live owner set needs no history at all. The append block also
+bounds the answer, since history starts at the Safe's era 0 and a rotation the guard missed stretches
+the tenure it should have ended.
 
-The drafts decrypt path composes that gate rather than importing one. It resolves the author Safe's
-modules from the Safe's enabled-module list, requires its `DraftsModuleV1` to name the Safe for the
-genesis, and asks `isOwnerAt` at the append block of the last version. It reads the draft entry at
-that block and from the module it resolved, so nothing is resolved twice and the ciphertext it opens
-and the owner set it was judged under are one version. It then requires the blob's own signed
+The drafts decrypt path calls `canAuthorVerdict` rather than composing the reads, so nothing is
+resolved twice in one execution. On the append-block path it reads the entry at the block the verdict
+names, from the drafts module the verdict carries, so the ciphertext it opens and the owner set it
+was judged under are one version. On the live path there is no height to pin to and the entry is read
+at the head, the same present the answer was given in. It then requires the blob's own signed
 `public.author` to equal the Safe: `append` is `onlySafe`, so anyone may log another author's genesis
 and ciphertext CID in their own module, and only the blob's signed author refuses that.
 

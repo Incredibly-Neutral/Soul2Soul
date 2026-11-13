@@ -22,6 +22,11 @@
 // has no single answer to "whose is this genesis", and picking one would make
 // the gate depend on probe order.
 //
+// A Safe may run no owner-history module at all. A caller that only needs the
+// drafts log can say so (`ownerHistoryOptional`), and the answer then carries the
+// drafts module alone: who owned the Safe at a block is a question this lookup
+// did not answer, and the caller decides what that means for the block it has.
+//
 // Cost per lookup, because a Lit Action session has a request cap: one eth_call
 // per page of enabled modules (page size 100), two per enabled module (one per
 // role), and two more when a factory address is supplied for the predictions.
@@ -78,8 +83,11 @@ export type AuthorModules =
       ok: true;
       /** The one enabled module answering the drafts role id. */
       drafts: string;
-      /** The one enabled module answering the owner-history role id. */
-      ownerHistory: string;
+      /**
+       * The one enabled module answering the owner-history role id, or absent
+       * when the caller said it was optional and the Safe runs none.
+       */
+      ownerHistory?: string;
       /** eth_calls this lookup made, so a caller can budget a session. */
       reads: number;
     }
@@ -94,6 +102,14 @@ export interface ResolveAuthorModulesOptions {
   factory?: string;
   /** Modules per page. Lowering it only adds pages, i.e. calls. */
   pageSize?: number;
+  /**
+   * Whether the owner-history module may be missing. Off by default: a caller
+   * that needs to judge a block requires it, and `no-owner-history-module` is
+   * then a refusal. A caller that has a present-tense question to fall back on
+   * passes `true` and decides for itself what a missing module means for the
+   * height it was given.
+   */
+  ownerHistoryOptional?: boolean;
 }
 
 const isAddress = (value: unknown): value is string =>
@@ -228,9 +244,11 @@ export const resolveAuthorModules = async (
 
   if (draftsClaimants.length === 0) return { ok: false, error: 'no-drafts-module', reads };
   if (draftsClaimants.length > 1) return { ok: false, error: 'ambiguous-drafts-module', reads };
-  if (ownerHistoryClaimants.length === 0) {
+  if (ownerHistoryClaimants.length === 0 && !options.ownerHistoryOptional) {
     return { ok: false, error: 'no-owner-history-module', reads };
   }
+  // Two claimants is still no answer, optional or not: the Safe runs two owner
+  // histories, and picking one would make the gate depend on probe order.
   if (ownerHistoryClaimants.length > 1) {
     return { ok: false, error: 'ambiguous-owner-history-module', reads };
   }
@@ -238,7 +256,7 @@ export const resolveAuthorModules = async (
   return {
     ok: true,
     drafts: draftsClaimants[0],
-    ownerHistory: ownerHistoryClaimants[0],
+    ...(ownerHistoryClaimants[0] ? { ownerHistory: ownerHistoryClaimants[0] } : {}),
     reads,
   };
 };

@@ -1,39 +1,45 @@
 // Author draft — GATES-1 for one genesis, by the author Safe that keeps it.
 //
-// The parts are in @s2s/soul2soul-shared/gates and this file composes them, in
-// this order: resolve the Safe's drafts log and owner-history module from the
-// Safe's own enabled-module list; require the drafts log's `authorOf(genesis)`
-// to name that Safe; take the append block from `blocksOf(genesis)`'s last
-// entry; and ask `isOwnerAt` whether the signer was an owner of the Safe at that
-// block. The modules are resolved once and every read below goes to the drafts
-// log that resolution named.
+// The decision is `canAuthorVerdict` in @s2s/soul2soul-shared/gates: the gate
+// resolves the Safe's drafts log and owner-history module from the Safe's own
+// enabled-module list, requires the drafts log to name that Safe, and answers
+// whether the signer was an owner when the last version was appended — or, where
+// the log records no height, whether they own the Safe now. None of that is
+// decided here and none of it is read twice: the verdict carries the drafts
+// module it read from, the entry author it read, the block it judged at and the
+// owner set that answered, so this file neither resolves the Safe's modules a
+// second time (chain calls, and a module set that could rotate in between) nor
+// reads anything it was not handed.
 //
-// What this file adds is the PIN. The append block the signer was judged at is
-// also the block the entry is read at, so the ciphertext this opens and the
-// owner set the signer was tested against are the same version. Reading at the
-// head would let a version appended between the two reads be the one decrypted,
-// under an owner set that never saw it. A block of 0 means the version predates
-// the block field or the log was imported: there is no owner set at that height
-// to judge, so this action refuses it — there is no unpinned read to fall back
-// to.
+// What this file adds is the PIN, and the pin is the append-block path. When the
+// gate judged at a positive block, the entry is read at that same block, so the
+// ciphertext this opens and the owner set the signer was tested against are one
+// version; reading at the head would let a version appended between the two
+// reads be the one decrypted, under an owner set that never saw it. When the
+// gate answered from the live owner set — block 0, or no usable block list —
+// there is no height to pin to, and the entry is read at the head, the same
+// present the answer was given in. That is the one path on which the entry and
+// the owner answer are not bound: a version appended between the `isOwner` read
+// and the fetch can be opened under ownership tested before it existed. The
+// trace names the owner set that answered, so a reader does not infer it from a
+// missing block.
 //
 // The caller-supplied Safe is bound twice over: the drafts log must name it for
 // the genesis, and the blob's own signed `public.author` must equal it. A Safe
 // can log another author's genesis and ciphertext CID in its own module, and
 // only the blob's signed author refuses that.
 //
-// Every dependency is injected (gate, reads, cat, decryptor, signature
-// recovery), so the decisions below run in a unit test without an enclave. The
-// wiring is decrypt/main.ts.
+// Every dependency is injected (gate, read, cat, decryptor, signature recovery),
+// so the decisions below run in a unit test without an enclave. The wiring is
+// decrypt/main.ts.
 //
 // Log hygiene: this file logs nothing. The trace it returns is the action's
 // returned value (stdout), and the plaintext, the ciphertext, the signature and
 // the key must never appear in it.
 
 import {
-  lastVersionBlock,
-  type AuthorModules,
   type AuthorModulesError,
+  type CanAuthorVerdict,
 } from '@s2s/soul2soul-shared/gates';
 import { toBytes32Id, verifyBodyHash } from '@s2s/soul2soul-shared/lit-actions';
 
@@ -50,7 +56,8 @@ const MODULE_REFUSALS: Record<AuthorModulesError, string> = {
   'no-enabled-modules': 'author Safe has no enabled modules',
   'no-drafts-module': 'no drafts module on the author Safe',
   'ambiguous-drafts-module': 'two drafts modules answer on the author Safe',
-  'no-owner-history-module': 'no owner history module on the author Safe',
+  'no-owner-history-module':
+    'no owner history module on the author Safe: the append block cannot be judged',
   'ambiguous-owner-history-module': 'two owner history modules answer on the author Safe',
 };
 
@@ -59,12 +66,6 @@ const MODULE_REFUSALS: Record<AuthorModulesError, string> = {
 const ENTRY_ABI = [
   'function fetch(bytes32 genesis) view returns (tuple(bytes32 genesis, address author, string cid, uint256 timestamp, uint256 versionCount))',
 ];
-
-/** DraftsModuleV1.authorOf — the Safe this genesis's first append named. */
-const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
-
-/** DraftsModuleV1.blocksOf — the block behind each version, oldest first. */
-const BLOCKS_OF_ABI = ['function blocksOf(bytes32 genesis) view returns (uint64[] blocks)'];
 
 export interface DraftEntry {
   genesis: string;
@@ -93,30 +94,19 @@ export interface AuthorDraftInput {
 /**
  * What the action needs from its runtime, injected for testability.
  *
- * `resolveModules` is `resolveAuthorModules` bound in ./gates, and answers the
- * author Safe's drafts log and owner history or why it could not. `readValue`
- * is `evmRead` on L2 without a block, for the two answers that are not
- * booleans: `authorOf` and `blocksOf` on the drafts log. `isOwnerAt` is the
- * shared `isOwnerAt` bound in ./gates, asked at a block against the Safe's
- * owner-history module. `read` is `evmRead` on L2 and its trailing block
- * argument is the pin. `cat` is the gateway; `decrypt` is
+ * `canAuthorVerdict` is `canAuthorVerdict` bound in ./gates: the whole author
+ * question, answered in one call, carrying the modules, the entry author, the
+ * judged block and the owner set it decided from. `read` is `evmRead` on L2 and
+ * its trailing block argument is the pin. `cat` is the gateway; `decrypt` is
  * `Lit.Actions.Decrypt`; `recoverSigner` is `extractSignerAddress` over
  * `hashMessage('lit actions auth')`.
  */
 export interface AuthorDraftDeps {
-  resolveModules: (authorSafe: string) => Promise<AuthorModules>;
-  readValue: (
-    target: string,
-    abi: string[],
-    fn: string,
-    args: unknown[],
-  ) => Promise<unknown>;
-  isOwnerAt: (
-    safe: string,
-    who: string,
-    blockNumber: number,
-    ownerHistory: string,
-  ) => Promise<boolean>;
+  canAuthorVerdict: (
+    genesis: string,
+    authorSafe: string,
+    signerAddress: string,
+  ) => Promise<CanAuthorVerdict>;
   read: DraftRead;
   cat: (cid: string) => Promise<string>;
   decrypt: (ciphertext: unknown) => Promise<unknown>;
@@ -128,6 +118,8 @@ export interface TraceStep {
   step: string;
   address?: string;
   block?: number;
+  /** On the `appendBlock` step: the owner set the gate's answer came from. */
+  ownerSet?: CanAuthorVerdict['ownerSet'];
 }
 
 export interface AuthorDraftData {
@@ -145,17 +137,6 @@ export type AuthorDraftOutcome =
 
 const sameAddress = (a: unknown, b: unknown): boolean =>
   String(a).toLowerCase() === String(b).toLowerCase();
-
-/**
- * An address answer from a read, or `undefined` when it is not one. A zero
- * address is the drafts log's "no such genesis" answer.
- */
-const addressAnswer = (value: unknown): string | undefined => {
-  if (typeof value !== 'string' || !ADDRESS_RE.test(value) || ZERO_ADDRESS.test(value)) {
-    return undefined;
-  }
-  return value;
-};
 
 /** A version count of zero is the module's "no such draft" answer, in any of its shapes. */
 const isZeroCount = (count: unknown): boolean =>
@@ -189,46 +170,42 @@ export const decryptAuthorDraft = async (
     const signer = deps.recoverSigner(String(input.signature ?? ''));
     step('signer', signer);
 
-    // The Safe's modules are resolved once; every read below goes to the drafts
-    // log this named. Each refusal keeps its own words.
-    const modules = await deps.resolveModules(safe);
-    if (!modules.ok) {
-      return refuse(MODULE_REFUSALS[modules.error] ?? 'cannot resolve the author Safe modules');
+    // GATES-1, and the block this whole action is pinned to when there is one.
+    const verdict = await deps.canAuthorVerdict(genesisId, safe, signer);
+    // The block when the gate reached one, and which set answered when it
+    // answered at all. A refusal can still name a block — a positive append
+    // block with no owner-history module names the block no one could judge at —
+    // so the step is emitted whenever there is either, never inferred from
+    // `ownerSet` alone.
+    if (verdict.block !== undefined || verdict.ownerSet !== undefined) {
+      trace.push({
+        step: 'appendBlock',
+        ...(verdict.block !== undefined ? { block: verdict.block } : {}),
+        ...(verdict.ownerSet !== undefined ? { ownerSet: verdict.ownerSet } : {}),
+      });
     }
 
-    const draftAuthor = addressAnswer(
-      await deps.readValue(modules.drafts, AUTHOR_OF_ABI, 'authorOf', [genesisId]),
-    );
-    if (draftAuthor === undefined) return refuse('unknown draft');
-    if (!sameAddress(draftAuthor, safe)) return refuse('draft belongs to another Safe');
-
-    // GATES-1's block: the version the signer is judged at is the version this
-    // action reads.
-    const block = lastVersionBlock(
-      await deps.readValue(modules.drafts, BLOCKS_OF_ABI, 'blocksOf', [genesisId]),
-    );
-    if (block !== undefined) trace.push({ step: 'appendBlock', block });
-    step('draft', draftAuthor);
-
-    // A log that answers no block list is not the pre-upgrade case, which
-    // answers a list of zeros; it is a read this action cannot pin.
-    if (block === undefined) return refuse('cannot read the append block');
-    // Block 0 is no height: the version was appended before the log recorded a
-    // block number, or carried in by an import, so there is no owner set at that
-    // height to judge. The entry is only ever read at a finite positive block.
-    if (block === 0) return refuse('no append block was recorded for this draft');
-
-    if (!(await deps.isOwnerAt(safe, signer, block, modules.ownerHistory))) {
-      return refuse('signer does not own the author Safe');
+    // The gate decided from these; use them rather than resolving the Safe's
+    // modules again. Each refusal keeps its own words.
+    if (verdict.modulesError) {
+      return refuse(MODULE_REFUSALS[verdict.modulesError] ?? 'cannot resolve the author Safe modules');
     }
+    if (!verdict.modules) return refuse('cannot resolve the author Safe modules');
+    if (verdict.author === undefined) return refuse('unknown draft');
+    if (!sameAddress(verdict.author, safe)) return refuse('draft belongs to another Safe');
+    step('draft', verdict.author);
+    if (!verdict.ok) return refuse('signer does not own the author Safe');
 
-    // The pin: the entry is the one ownership was judged on, not the current head.
+    // The pin: the entry is the one the gate judged, not the current head. With
+    // no positive block the gate judged against the live owner set, so the entry
+    // is read at the head — the version that set was read at.
+    const pin = verdict.block !== undefined && verdict.block > 0 ? verdict.block : undefined;
     const entry: DraftEntry = await deps.read(
-      modules.drafts,
+      verdict.modules.drafts,
       ENTRY_ABI,
       'fetch',
       [genesisId],
-      block,
+      pin,
     );
 
     if (isZeroCount(entry?.versionCount)) return refuse('unknown draft');

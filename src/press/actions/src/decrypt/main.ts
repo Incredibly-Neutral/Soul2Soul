@@ -2,11 +2,7 @@
 
 import type { ActionResult, DecryptData, DecryptParams } from '@s2s/soul2soul-shared/lit-actions';
 import { decryptAuthorDraft } from '../libs/author-draft';
-import {
-  extractSignerAddress,
-  isOwnerAt,
-  resolveAuthorModules,
-} from '../libs/gates';
+import { canAuthorVerdict, extractSignerAddress } from '../libs/gates';
 import { evmRead } from '../libs/evm';
 import { catFile } from '../libs/ipfs.factory';
 
@@ -28,10 +24,11 @@ async function main(input: DecryptParams & { gateway: string }): Promise<ActionR
   const rpcs = input.rpcs?.L2;
 
   const outcome = await decryptAuthorDraft(input, {
-    resolveModules: (authorSafe) => resolveAuthorModules(authorSafe, rpcs),
-    readValue: (target, abi, fn, args) => evmRead('L2', target, abi, fn, args, rpcs),
-    isOwnerAt: (safe, who, block, ownerHistory) =>
-      isOwnerAt(safe, who, block, ownerHistory, rpcs),
+    // One call for the whole author question: the Safe's modules, whose the
+    // genesis is, the append block and the owner answer. The action reads the
+    // entry from what the verdict carries, so nothing is resolved twice.
+    canAuthorVerdict: (genesis, authorSafe, signer) =>
+      canAuthorVerdict(genesis, authorSafe, signer, rpcs),
     read: (target, abi, fn, args, block) => evmRead('L2', target, abi, fn, args, rpcs, block),
     cat: (cid) => {
       if (!input.gateway) throw new Error('no gateway');

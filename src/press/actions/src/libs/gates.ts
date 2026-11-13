@@ -19,9 +19,9 @@ import {
     canReset as gateCanReset,
     canReview as gateCanReview,
     isOutOfForce as gateIsOutOfForce,
-    isOwnerAt as gateIsOwnerAt,
-    resolveAuthorModules as gateResolveAuthorModules,
-    type AuthorModules,
+    canAuthorVerdict as gateCanAuthorVerdict,
+    type CanAuthorOptions,
+    type CanAuthorVerdict,
     type GateRead,
     type GateValueRead,
 } from '@s2s/soul2soul-shared/gates';
@@ -93,24 +93,27 @@ export const isOutOfForce = (
     gateIsOutOfForce(bindRead(rpcs), genesis, publicationModule);
 
 /**
- * Which two modules this author Safe runs. The decrypt action needs the answer
- * rather than a verdict: it reads the drafts log and the owner history itself.
+ * May this signer open this draft because it is theirs, and what did the gate
+ * decide that from?
+ *
+ * The whole author question in one call: the Safe's modules, the drafts log's
+ * `authorOf`, the append block and the owner answer. The decrypt action takes
+ * the verdict rather than composing the reads itself, so nothing is resolved
+ * twice in one execution and the entry is read from the module and at the block
+ * the answer was judged from.
  */
-export const resolveAuthorModules = (
+export const canAuthorVerdict = (
+    genesis: string,
     authorSafe: string,
+    signerAddress: string,
     rpcs?: string[],
-): Promise<AuthorModules> =>
-    gateResolveAuthorModules(bindRead(rpcs), bindValueRead(rpcs), authorSafe);
-
-/**
- * Was `who` an owner of `safe` at `blockNumber`? No block is the present tense;
- * a block above 0 needs the Safe's `ownerHistory` module to judge against.
- */
-export const isOwnerAt = (
-    safe: string,
-    who: string,
-    blockNumber: number | undefined,
-    ownerHistory: string | undefined,
-    rpcs?: string[],
-): Promise<boolean> =>
-    gateIsOwnerAt(bindRead(rpcs), safe, who, blockNumber, ownerHistory);
+    options?: CanAuthorOptions,
+): Promise<CanAuthorVerdict> =>
+    gateCanAuthorVerdict(
+        bindRead(rpcs),
+        bindValueRead(rpcs),
+        genesis,
+        authorSafe,
+        signerAddress,
+        options,
+    );

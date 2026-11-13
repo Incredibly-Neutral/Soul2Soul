@@ -149,13 +149,13 @@ export interface RepointArchiveData {
 }
 
 // Decrypt (author draft) — opens a draft the author Safe keeps, and refuses
-// unless the signer was an owner of that Safe when the version was appended. The
-// caller names the Safe, never a module: the action resolves the Safe's drafts
-// log and owner-history module from the Safe's own enabled-module list, requires
-// the drafts log to name that Safe for the genesis, and reads `isOwnerAt` at the
-// genesis's append block (live `isOwner` when a pre-upgrade version records block
-// 0). Only then is the blob cat'd, and the plaintext is released only if it
-// hashes to the signed `public.plaintextHash`. The action itself lives in
+// unless the signer was an owner of that Safe when the version was appended, or
+// owns it now where the log recorded no block for that version. The caller names
+// the Safe, never a module: one `canAuthorVerdict` call resolves the Safe's
+// drafts log and owner-history module from its own enabled-module list, requires
+// the drafts log to name that Safe for the genesis, and answers ownership, so the
+// action reads nothing twice. Only then is the blob cat'd, and the plaintext is
+// released only if it hashes to the signed `public.plaintextHash`. The action itself lives in
 // `src/press/actions`; `LitService` adds its own `gateway` to these params before
 // the action is executed.
 export interface DecryptParams {

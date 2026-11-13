@@ -479,17 +479,16 @@ not what a gate wants for content older than the current block. The three reads 
 none feeds another.
 
 One block value is special: `blockNumber == 0` means the version predates the field, or was carried
-in by `absorb()`. There is no block to judge, so the gate refuses the version, and it does not read
-the Safe's live `isOwner` in its place: a version with no block has no owner set at that height, and
-the present tense is not that question. A version written before the block was recorded can no longer
-be opened.
+in by `absorb()`. There is no block to judge, so the gate answers with the Safe's live owner set
+instead and reports that it did: the height that would make this a historical question was never
+recorded, and the present tense is the only one left to ask. Such a version opens for a current
+owner, not for the owner it was written under.
 
-One consequence the gate cannot dodge: `canPublish()` in `src/shared/src/gates` reads
-`isOwner` **live** as its second half, so a historical check has to *replace* that half, not
-sit beside it — otherwise a signer who has since been removed fails the live read and the
-module buys nothing. That is the sketch above (`canPublish` split back into its publication
-half), and it is a change to the gates package, not to this one. Until it lands, this package
-is the store and the read; it is not yet a retrofit for old content.
+`canAuthor` in `src/shared/src/gates` is that gate, and `canRead` asks it as its ownership half:
+it takes the height from the drafts log's `blocksOf` and puts `isOwnerAt` in place of the live read
+on the append-block path, so a signer who has since been removed still reads what they wrote. The
+write gates keep the live read, because a write is admitted now: `canPublish` and `canReset` ask
+who owns the Safe today, which is why an old version is readable but not rewritable.
 
 **The trust anchor is the Safe's enabled-module list, not the factory.** `createModule` is
 permissionless: anyone can create a history proxy *claiming* any Safe, and `NAME()` (“S2S Owner
@@ -507,8 +506,8 @@ whoever made the proxy named that Safe. The rules:
    low 20 bytes) → `guard` → `guard.module() → the module`, and require that address to be the one
    the enabled list gave. Two records that must agree are stronger than either alone. Neither is
    required to find the other.
-3. A failed comparison is `false` for the gate, never a fallback to a live `isOwner` — including
-   where `blockNumber` is 0, which the gate refuses instead of answering live.
+3. A failed comparison is `false` for the gate, never a fallback to a live `isOwner` — the present
+   tense is reached only where the log records no height to compare at.
 
 ## Invariants
 
@@ -559,13 +558,13 @@ whoever made the proxy named that Safe. The rules:
 
 ## Open questions
 
-1. **The gate's shape.** `canPublish` embeds the live `isOwner` read, so using this module
-   needs a gate form that takes a block (`canPublishAt(…, block)`, or `canPublish` split into
-   publication-admission plus a signer check the caller supplies). Which of those lands, and
-   in which package, is unsettled — and it decides whether old content is actually covered.
-2. **Which package owns the read helper?** `@s2s/author-contracts` owns the ABI and the
-   deploy script; whether the TS read helper lives in the gates package or beside the ABI is
-   unsettled. Whoever owns it owns the trust-anchor rule above, which argues for the gates.
+1. **The gate's shape.** Settled: `canAuthor` in `src/shared/src/gates` takes the author Safe,
+   the signer and no block, reads the height from the drafts log itself, and is the ownership
+   half of `canRead`. `canPublish` and `canReset` keep the live `isOwner`, because a write is
+   admitted now.
+2. **Which package owns the read helper?** Settled: the gate is in `@s2s/soul2soul-shared`
+   (`src/shared/src/gates`), beside the other gates, which is where the trust-anchor rule above
+   belongs. This package owns the ABI, the module and the deploy script.
 3. **Threshold history** (above): wanted, out of scope, and the only addition that changes
    what a gate can assert rather than how finely it can date it.
 4. **Safe 1.5.0 and module guards.** If a later Safe notifies modules on owner change, the

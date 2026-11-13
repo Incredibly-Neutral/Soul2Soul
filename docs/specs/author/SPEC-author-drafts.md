@@ -234,17 +234,23 @@ other. What follows:
 
 ## Opening a draft
 
-The press's drafts decrypt path asks this log, and composes the whole decision itself. It resolves
-the author Safe's drafts module and owner-history module from the Safe's enabled-module list,
-requires `authorOf(genesis)` to name the Safe it was asked about, and asks `isOwnerAt` at the append
-block of the last version. The proof that this log names a Safe is that `authorOf` read, made by the
-caller: a genesis kept in another Safe's log, or an unknown one the zeroed `Entry` answers for, is
-refused there. Nothing composes it on the caller's behalf — the ownership half is `isOwnerAt` alone,
-and a version with a block of 0 is judged against the Safe's live `isOwner`.
+The press's drafts decrypt path asks this log through `canAuthorVerdict`, the shared gate, which
+does the whole decision in one call: resolve the Safe's drafts module and owner-history module from
+the Safe's enabled-module list, require `authorOf(genesis)` to name the Safe it was asked about, and
+answer ownership. The proof that this log names a Safe is part of that answer: a genesis kept in
+another Safe's log, or an unknown one the zeroed `Entry` answers for, is refused there. A Safe whose
+modules cannot be resolved is refused too, not answered live: without the drafts module there is no
+`authorOf` and no height. A drafts log with no owner-history module beside it is refused only where
+the log records a block; at no height the live owner set answers, and needs no history. The gate's rules, and the version with a block of 0, are stated in
+SPEC-gates and not repeated here.
 
-The entry read is pinned to the block ownership was judged at, so the ciphertext opened and the owner
-set it was judged under are one version, and a version appended since cannot be read at the head
-under an older owner's answer.
+The verdict carries what the gate read — the modules, the entry author, the judged block and which
+owner set answered — so the caller resolves nothing a second time and reads the entry from the module
+the answer came from. On the append-block path the entry read is pinned to the block ownership was
+judged at, so the ciphertext opened and the owner set it was judged under are one version, and a
+version appended since cannot be read at the head under an older owner's answer. Where the log
+records no height there is nothing to pin to and the entry is read at the head, the present the live
+answer was given in.
 
 ## Adoption
 
