@@ -5,6 +5,7 @@ import {
   canReset,
   canReview,
   owns,
+  ownsVerdict,
   type GateRead,
   type GateValueRead,
 } from './index';
@@ -305,6 +306,90 @@ describe('owns', () => {
 
     await owns(read, readValue, 'bafyrawwcid', SAFE, SIGNER, { toId: (r) => `hashed:${r}` });
     expect(asked.find((a) => a.fn === 'authorOf')!.args).toEqual(['hashed:bafyrawwcid']);
+  });
+
+  // `owns` is `ownsVerdict(...).ok`, so every decision above is also the
+  // verdict's decision. What is tested here is what the verdict REPORTS: which
+  // paths carry the judged block, and which carry the module answers and the
+  // entry author, so a caller does not resolve the Safe's modules a second time.
+  describe('ownsVerdict — what it reports', () => {
+    it('reports the append block and the answers it judged from', async () => {
+      const { read, readValue } = ownsChain();
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict).toEqual({
+        ok: true,
+        block: APPEND_BLOCK,
+        modules: { drafts: DRAFTS, ownerHistory: HISTORY },
+        author: SAFE,
+      });
+    });
+
+    it('reports block 0, the pre-upgrade fallback, as a block it judged at', async () => {
+      const { read, readValue } = ownsChain({ blocks: [0], isOwner: false });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.block).toBe(0);
+      expect(verdict.ok).toBe(false);
+      expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
+      expect(verdict.author).toBe(SAFE);
+    });
+
+    it('reports the block on a refusal too', async () => {
+      const { read, readValue } = ownsChain({ isOwnerAt: false });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.block).toBe(APPEND_BLOCK);
+    });
+
+    it('reports no block when the drafts log answers no usable block list', async () => {
+      const { read, readValue } = ownsChain({ blocks: 'not-a-list' });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.block).toBeUndefined();
+      // The two answers before it did land, so a caller may still use them.
+      expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
+      expect(verdict.author).toBe(SAFE);
+    });
+
+    it('reports the module reason, and no modules, when the lookup answers nothing', async () => {
+      const { read, readValue } = ownsChain({ ambiguousDrafts: true });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.modules).toBeUndefined();
+      expect(verdict.modulesError).toBe('ambiguous-drafts-module');
+      expect(verdict.block).toBeUndefined();
+      expect(verdict.author).toBeUndefined();
+    });
+
+    it('reports the modules but no author when the log names no genesis', async () => {
+      const { read, readValue } = ownsChain({ author: ZERO });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.modules).toEqual({ drafts: DRAFTS, ownerHistory: HISTORY });
+      expect(verdict.author).toBeUndefined();
+      expect(verdict.block).toBeUndefined();
+    });
+
+    it('reports the other Safe s name, and no block, when the log is not this Safe s', async () => {
+      const { read, readValue } = ownsChain({ author: OTHER_SAFE });
+
+      const verdict = await ownsVerdict(read, readValue, HEX32, SAFE, SIGNER);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.author).toBe(OTHER_SAFE);
+      expect(verdict.block).toBeUndefined();
+    });
   });
 });
 

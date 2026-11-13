@@ -218,6 +218,13 @@ export const evmWrite = async (
  * render outside the session (a fresh 50-request budget) — see
  * shared/src/rendering/sequence.ts. These reads are not retry-until-success;
  * fail fast and let the orchestrator decide whether to re-run.
+ *
+ * `blockTag` pins the read to that block (eth_call overrides). One caller needs
+ * it: the decrypt action reads the draft entry at the block the ownership gate
+ * judged it at, so the ciphertext opened and the owner set it was judged under
+ * are the same version. A tag of 0 is not passed — the node reads genesis
+ * state for it, and block 0 is this protocol's "no block was recorded" marker,
+ * not a height to read at.
  */
 export const evmRead = async (
     chain: string,
@@ -226,16 +233,23 @@ export const evmRead = async (
     method: string,
     args: any[],
     rpcs?: string[],
+    blockTag?: number,
 ) => {
     const urls = rpcs || [];
     if (urls.length === 0) throw "evmRead: rpcs array is empty or missing";
     const failures: string[] = [];
     let lastError: any;
+    const overrides =
+        typeof blockTag === "number" && Number.isFinite(blockTag) && blockTag > 0
+            ? { blockTag }
+            : undefined;
 
     for (const url of urls) {
         try {
             const { contract } = evmSetup(contractAddress, abi, chain, url);
-            return await contract[method](...args);
+            return overrides
+                ? await contract[method](...args, overrides)
+                : await contract[method](...args);
         } catch (error: any) {
             const msg = `RPC call to ${url} failed: ${error?.message || String(error)}`;
             failures.push(msg);

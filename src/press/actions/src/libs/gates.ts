@@ -18,7 +18,10 @@ import {
     canRead as gateCanRead,
     canReset as gateCanReset,
     canReview as gateCanReview,
+    ownsVerdict as gateOwnsVerdict,
     type GateRead,
+    type GateValueRead,
+    type OwnsVerdict,
 } from '@s2s/soul2soul-shared/gates';
 
 export const extractSignerAddress = (messageHash: string, signature: string): string => {
@@ -27,6 +30,14 @@ export const extractSignerAddress = (messageHash: string, signature: string): st
 
 /** Bind the injected GateRead to this runtime's evmRead (L2 + optional RPC list). */
 const bindRead = (rpcs?: string[]): GateRead => (target, abi, fn, args) =>
+    evmRead('L2', target, abi, fn, args, rpcs);
+
+/**
+ * The same binding for the gate's value reads. `evmRead` answers `unknown`
+ * (contract tuples and uints come back as ethers shapes the gate narrows), so
+ * the declared return is what the gate expects, not what the runtime knows.
+ */
+const bindValueRead = (rpcs?: string[]): GateValueRead => (target, abi, fn, args) =>
     evmRead('L2', target, abi, fn, args, rpcs);
 
 export const canRead = (
@@ -60,3 +71,22 @@ export const canReset = (
     rpcs?: string[],
 ): Promise<boolean> =>
     gateCanReset(bindRead(rpcs), multisig, signerAddress);
+
+/**
+ * GATES-1's author branch, reporting the block it judged at. The decrypt action
+ * needs the block, not just the answer: it reads the draft entry at that block
+ * so the ciphertext it opens belongs to the version ownership was tested on.
+ */
+export const ownsVerdict = (
+    genesis: string,
+    authorSafe: string,
+    signerAddress: string,
+    rpcs?: string[],
+): Promise<OwnsVerdict> =>
+    gateOwnsVerdict(
+        bindRead(rpcs),
+        bindValueRead(rpcs),
+        genesis,
+        authorSafe,
+        signerAddress,
+    );

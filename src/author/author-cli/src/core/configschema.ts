@@ -91,7 +91,14 @@ export interface FileConfig {
    */
   safeTx?: { url?: string; key?: string };
   filecoin?: { sessionKeyFile?: string; chain?: FilecoinChain; rpcUrl?: string };
-  lit?: { accountKey?: string; usageKey?: string };
+  /**
+   * Lit: the account key (a Lit master key), the per-run usage key, and the CID
+   * of the encrypt action bundle. The CID is not a credential: it names the code
+   * `/lit_action` executes, which is fetched from IPFS and hashed against this
+   * value before it runs. There is no `decrypt` CID here until the CLI has a
+   * caller for it.
+   */
+  lit?: { accountKey?: string; usageKey?: string; encryptActionCid?: string };
   ens?: { registry?: string };
   github?: { token?: string };
   /**
@@ -179,6 +186,10 @@ export const CONFIG_FIELDS: readonly ConfigFieldSpec[] = [
   },
   { path: 'lit.accountKey', env: ['LIT_ACCOUNT_KEY'], secret: true },
   { path: 'lit.usageKey', env: ['LIT_USAGE_KEY'], secret: true },
+  // The action bundles are executed by CID; the CID is the identity of the code.
+  // Not a secret — it is a hash, and it is what makes a dishonest gateway unable
+  // to choose what runs next to the PKP.
+  { path: 'lit.encryptActionCid', env: ['LIT_ENCRYPT_ACTION_CID'] },
   { path: 'ens.registry', env: ['S2S_ENS_REGISTRY'] },
   { path: 'github.token', env: ['GITHUB_TOKEN', 'S2S_GITHUB_TOKEN'], secret: true },
   // The deployed `AuthorContractsFactory` on Base. A protocol constant with a
@@ -493,6 +504,7 @@ export function normalizeFileConfig(raw: Record<string, unknown> | undefined): F
   const lit = compact({
     accountKey: textValue(objectValue(raw.lit)?.accountKey),
     usageKey: textValue(objectValue(raw.lit)?.usageKey),
+    encryptActionCid: textValue(objectValue(raw.lit)?.encryptActionCid),
   });
   if (lit) out.lit = lit;
 

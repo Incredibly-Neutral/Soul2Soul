@@ -28,7 +28,7 @@
  * proposing.
  *
  * Usage (repo root, npm wiring unchanged):
- *   pnpm actions:swap <prep|render|update|maintain-cache|encrypt>
+ *   pnpm actions:swap <prep|render|update|maintain-cache|repoint-archive|encrypt|decrypt>
  */
 import { LitService, compactAction, S2SIPFSMethods } from '@s2s/soul2soul-shared';
 import fs from 'fs';
@@ -62,7 +62,15 @@ loadMonorepoEnv(__filename);
 
 const configPath = path.join(__dirname, 'config.json');
 const groupName = 's2s';
-const validActions = ['prep', 'render', 'update', 'maintain-cache', 'repoint-archive', 'encrypt'];
+const validActions = [
+  'prep',
+  'render',
+  'update',
+  'maintain-cache',
+  'repoint-archive',
+  'encrypt',
+  'decrypt',
+];
 
 const actionName = process.argv[2];
 if (!actionName || !validActions.includes(actionName)) {

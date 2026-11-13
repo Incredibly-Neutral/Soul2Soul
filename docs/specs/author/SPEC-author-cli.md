@@ -413,6 +413,7 @@ s2s setup                                              # guided: keep the defaul
 s2s config set ipfs.kubo.url http://127.0.0.1:5001      # bring your own Kubo
 s2s config set rpc.custom.l1 http://my-l1.example,http://fallback  # comma lists allowed
 s2s config set lit.usageKey … --json                    # stored 0600, masked on read
+s2s config set lit.encryptActionCid bafy…               # the encrypt action bundle's CID
 s2s config set environment dev
 s2s config get ipfs.kubo.url      # prints the *effective* value (env may win)
 s2s config list --json            # full effective surface, secrets masked
@@ -428,6 +429,15 @@ per **value** instead: a query-string credential becomes `********` and the
 endpoint stays readable — and the `--local` warning covers them too. The signing
 key is not among them: it belongs to the author store (`s2s author new`), and
 `config set privateKey` is refused.
+
+`lit.encryptActionCid` is the CID of the built encrypt action, the one
+`pnpm actions:swap encrypt` registered on the Lit group. `encrypt` has no inline
+code to fall back to: the CLI fetches that bundle from the gateway it already
+reads content through (`ipfs.<primary>.url`, given an `https://` scheme) and
+hashes it against this CID before Lit executes it, so an unset CID or a gateway
+that serves different code is a closed failure, not a plaintext upload. The
+bundle is built in `src/press/actions` by the release step; this CLI only names
+it. `LIT_ENCRYPT_ACTION_CID` sets the same leaf.
 
 ### Installing the author contracts
 

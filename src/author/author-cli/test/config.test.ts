@@ -191,6 +191,21 @@ describe('layer precedence', () => {
     expect(loadConfig({ LIT_USAGE_KEY: 'from-env' }, paths).lit.usageKey).toBe('from-env');
   });
 
+  it('carries the encrypt action CID through every lit layer', () => {
+    // A CID is not a secret and not a URL, so it merges like any text leaf: the
+    // CLI needs it set, or the encrypt path refuses (LitService has no inline
+    // code to fall back to).
+    const paths = {
+      ...nowhere,
+      userConfigPath: file('custom.json', { lit: { encryptActionCid: 'bafyfromfile' } }),
+    };
+    expect(loadConfig({}, paths).lit.encryptActionCid).toBe('bafyfromfile');
+    expect(loadConfig({ LIT_ENCRYPT_ACTION_CID: 'bafyfromenv' }, paths).lit.encryptActionCid).toBe(
+      'bafyfromenv',
+    );
+    expect(loadConfig({}, nowhere).lit.encryptActionCid).toBeUndefined();
+  });
+
   it('keeps the lower layer credential when the higher entry names only a gateway', () => {
     // Provider identity is the ONLY isolation rule: the custom entry names the
     // same provider, so its gateway merges onto the default JWT. Blanking the

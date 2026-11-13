@@ -1,5 +1,5 @@
 
-import { LitService, encryptAction, compactAction } from '@s2s/soul2soul-shared';
+import { LitService } from '@s2s/soul2soul-shared';
 import * as dotenv from 'dotenv';
 import fs from 'fs';                                                                                              
 import { fileURLToPath } from 'url';                                                                              

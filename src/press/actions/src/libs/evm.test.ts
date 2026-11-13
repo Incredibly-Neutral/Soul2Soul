@@ -330,6 +330,23 @@ describe('evmRead fail-fast (single pass, no in-session retry)', () => {
     expect(err.message).toContain('https://a.example');
     expect(err.message).toContain('https://b.example');
   });
+
+  // The decrypt action reads the draft entry at the block the ownership gate
+  // judged it at, so eth_call carries `{ blockTag }`. A tag of 0 is this
+  // protocol's "no block recorded" marker, not a height: it must not be passed.
+  it('passes a positive blockTag as the last contract argument', async () => {
+    const { calls } = withFakeEthers(() => 'NAME');
+    await evmRead('L2', '0xaddr', ABI, 'NAME', ['0x' + 'ab'.repeat(32)], RPC_URLS, 880);
+    expect(calls[0].args).toEqual(['0x' + 'ab'.repeat(32), { blockTag: 880 }]);
+  });
+
+  it('passes no overrides for block 0, undefined or a non-finite tag', async () => {
+    for (const tag of [0, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const { calls } = withFakeEthers(() => 'NAME');
+      await evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS, tag);
+      expect(calls[0].args).toEqual([]);
+    }
+  });
 });
 
 // ============================================================================

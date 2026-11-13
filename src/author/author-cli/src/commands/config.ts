@@ -560,7 +560,7 @@ Keys are dotted paths into the service-grouped config:
   rpc.custom.l1          rpc.custom.l2          (comma-separated)
   paymaster.key          paymaster.url          bundler.url
   filecoin.sessionKeyFile  filecoin.chain       filecoin.rpcUrl
-  lit.accountKey         lit.usageKey
+  lit.accountKey         lit.usageKey           lit.encryptActionCid
   ens.registry           github.token           entryPoint (env-only)
 
 <label> is any name you choose (e.g. pinning.my-pinner). The same provider is

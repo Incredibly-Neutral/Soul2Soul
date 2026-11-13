@@ -65,8 +65,8 @@ export const catFile = async (gateway: string, cid: string) => {
   const response = await fetchWithTimeout(ipfsApiUrl, { method: 'POST' }, 30_000);
 
   if (!response.ok) {
-    console.log(response);
-
+    // Status only. The Response object carries the request URL, and a gateway
+    // URL can carry an auth token — the same rule lit.service.ts follows.
     throw new Error(`IPFS retrieval failed: ${response.status} ${response.statusText}`);
   }
 
