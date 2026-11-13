@@ -6,8 +6,7 @@
 // `author-contracts.test.ts` replaces: the Safe's enabled-module list, the
 // factory index, `count()` and `fetchAllPaged`. What is under test is the
 // decision — enabled before factory, the error when neither answers, pages of
-// 100 until a short one — and the two documents the command prints, not viem's
-// encoding.
+// 100 until a short one — and the rows it prints, not viem's encoding.
 // ============================================================================
 
 import type { Address, Hex } from 'viem';
@@ -273,7 +272,7 @@ const SAFE_STATE = () => Promise.resolve({ address: SAFE, deployed: true });
 const UNDEPLOYED_SAFE_STATE = () => Promise.resolve({ address: SAFE, deployed: false });
 
 describe('drafts list output', () => {
-  it('prints one row per draft, the genesis id first', async () => {
+  it('prints one row per draft and nothing else', async () => {
     const log = [raw(0, { versionCount: 3n }), raw(1, { versionCount: 1n })];
     const chain = fakeSeam({ enabled: DRAFTS, log });
     const cap = capture();
@@ -309,42 +308,69 @@ describe('drafts list output', () => {
       ],
     });
 
-    const text = cap.human[0] ?? '';
-    expect(text).toContain(`module ${DRAFTS}`);
-    expect(text).toContain('enabled on the Safe');
-    expect(text).toContain(`author Safe ${SAFE}`);
-    // The genesis id is the row identifier, then the version count and an ISO date.
-    expect(text).toContain(`${raw(0).genesis}  3  2023-11-14T22:13:20.000Z`);
+    // The 1-based order, the genesis in full (it is the argument `append` takes),
+    // the version count, then the latest block time in UTC minutes. Two spaces
+    // between columns, no module line, no count line, no header row.
+    expect(cap.human[0]).toBe(
+      [
+        `1  ${raw(0).genesis}  3  2023-11-14 22:13`,
+        `2  ${raw(1).genesis}  1  2023-11-14 22:13`,
+      ].join('\n'),
+    );
     expect(cap.warnings).toEqual([]);
   });
 
-  it("says a factory-index module is empty without calling it this Safe's log", async () => {
-    const chain = fakeSeam({ enabled: null, factory: FACTORY_DRAFTS, log: [] });
+  it('prints nothing at all for an empty log on an enabled module', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, log: [] });
     const cap = capture();
 
     await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
 
-    const text = cap.human[0] ?? '';
-    expect(text).toBe(
-      `no drafts in module ${FACTORY_DRAFTS} (author Safe ${SAFE}) — the factory index names it for this Safe, and it holds no entries`,
-    );
-    // The index is permissionless: the line must not claim the Safe ever used it,
-    // and it must not say "this Safe's log".
-    expect(text).not.toContain("this Safe's log");
-    expect(text.includes('\n')).toBe(false);
-    expect(cap.results[0]).toMatchObject({
-      action: 'drafts.list',
-      source: 'factory',
-      count: 0,
-      drafts: [],
-    });
-    // A factory-index module is a lead, not an install: the warning says so.
-    expect(cap.warnings[0]).toContain('not on the Safe');
+    // Not a blank line: no stdout write at all, and no stderr line either.
+    expect(cap.results).toEqual([]);
+    expect(cap.human).toEqual([]);
+    expect(cap.warnings).toEqual([]);
   });
 
-  it('does not call a resolved module unenabled when the Safe does have it enabled', async () => {
+  it('still prints the JSON envelope for an empty log', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, log: [] });
+    const cap = capture();
+    cap.out.json = true;
+
+    await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
+
+    expect(cap.results[0]).toMatchObject({ count: 0, drafts: [] });
+  });
+
+  it('warns once that the factory index is permissionless when it named the module', async () => {
+    const chain = fakeSeam({ enabled: null, factory: FACTORY_DRAFTS, log: [raw(0)] });
+    const cap = capture();
+
+    await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
+
+    expect(cap.warnings).toHaveLength(1);
+    expect(cap.warnings[0]).toContain('permissionless');
+    expect(cap.warnings[0]).toContain('unwritten by this Safe');
+    expect(cap.warnings[0]).toContain(FACTORY_DRAFTS);
+    // The rows are the index's claim, not the Safe's adoption, so the warning is
+    // the only place that provenance is said.
+    expect(cap.human[0]).toBe(`1  ${raw(0).genesis}  1  2023-11-14 22:13`);
+  });
+
+  it('says nothing extra when the Safe enabled the module', async () => {
+    const chain = fakeSeam({ enabled: DRAFTS, log: [raw(0)] });
+    const cap = capture();
+
+    await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
+
+    expect(cap.warnings).toEqual([]);
+    expect(cap.human[0]).toBe(`1  ${raw(0).genesis}  1  2023-11-14 22:13`);
+  });
+
+  it('does not warn when the factory-index module is on the enabled list', async () => {
     // The role went to DRAFTS, which is bound to another Safe; the factory index
-    // names FACTORY_DRAFTS, which this Safe also enables. "Not enabled" would be false.
+    // names FACTORY_DRAFTS, which this Safe also enables. It is enabled, so no
+    // warning — "not on the enabled list" would be false.
     const chain = fakeSeam({
       enabled: DRAFTS,
       modules: [FACTORY_DRAFTS, DRAFTS],
@@ -356,24 +382,8 @@ describe('drafts list output', () => {
 
     await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
 
-    const text = cap.human[0] ?? '';
-    expect(text).toContain(
-      'from the factory index (on the enabled list, but not the module this run took for the drafts role)',
-    );
-    expect(text).not.toContain('not enabled on the Safe');
     expect(cap.warnings).toEqual([]);
-  });
-
-  it("says this Safe's log when an enabled module is the one that answered", async () => {
-    const chain = fakeSeam({ enabled: DRAFTS, log: [] });
-    const cap = capture();
-
-    await runDraftsList(context(cap.out), { seam: chain.seam, safeState: SAFE_STATE });
-
-    expect(cap.human[0]).toBe(
-      `no drafts in module ${DRAFTS} (author Safe ${SAFE}) — nothing has been appended to this Safe's log`,
-    );
-    expect(cap.warnings).toEqual([]);
+    expect(cap.human[0]).toBe(`1  ${raw(0).genesis}  1  2023-11-14 22:13`);
   });
 
   it('says the Safe is not deployed and names the remedy, instead of a viem error', async () => {
@@ -393,18 +403,63 @@ describe('drafts list output', () => {
 });
 
 describe('draftsListLines', () => {
-  it('renders nothing but the empty line for a count of zero', () => {
-    const text = draftsListLines({
+  it('is the empty string for an empty log', () => {
+    expect(
+      draftsListLines({
+        action: 'drafts.list',
+        author: null,
+        safe: SAFE,
+        module: DRAFTS,
+        source: 'enabled',
+        count: 0,
+        drafts: [],
+      }),
+    ).toBe('');
+  });
+
+  it('keeps the genesis whole and formats the timestamp as UTC minutes', () => {
+    const genesis = raw(0).genesis;
+    expect(
+      draftsListLines({
+        action: 'drafts.list',
+        author: null,
+        safe: SAFE,
+        module: DRAFTS,
+        source: 'enabled',
+        count: 1,
+        drafts: [
+          { genesis, cid: 'bafy', author: SAFE, timestamp: 1794589140, versionCount: 12 },
+        ],
+      }),
+    ).toBe(`1  ${genesis}  12  2026-11-13 16:59`);
+  });
+
+  it('right-aligns the order to the highest row and keeps the log order, not the timestamps', () => {
+    // Ten rows: two digits of width, so the single-digit orders pad. The third
+    // row carries the earliest timestamp and still sits third — the number is the
+    // position in the log, not a rank.
+    const drafts = Array.from({ length: 10 }, (_, index) => ({
+      genesis: raw(index).genesis,
+      cid: `bafy-${String(index)}`,
+      author: SAFE,
+      timestamp: index === 2 ? 1600000000 : 1794589140 + index,
+      versionCount: 1,
+    }));
+
+    const rows = draftsListLines({
       action: 'drafts.list',
       author: null,
       safe: SAFE,
       module: DRAFTS,
       source: 'enabled',
-      count: 0,
-      drafts: [],
-    });
-    expect(text.split('\n')).toHaveLength(1);
-    expect(text).toContain(DRAFTS);
+      count: drafts.length,
+      drafts,
+    }).split('\n');
+
+    expect(rows).toHaveLength(10);
+    expect(rows[0]).toBe(` 1  ${raw(0).genesis}  1  2026-11-13 16:59`);
+    expect(rows[2]).toBe(` 3  ${raw(2).genesis}  1  2020-09-13 12:26`);
+    expect(rows[9]).toBe(`10  ${raw(9).genesis}  1  2026-11-13 16:59`);
   });
 });
 

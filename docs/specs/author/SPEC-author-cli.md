@@ -832,6 +832,32 @@ target the same way, then sends `append` to the module that resolution names.
 covered. `fetchAll` is never called: it builds the whole log in one `eth_call` and fails on a log
 big enough to matter.
 
+**Human mode prints the rows and nothing else.** No module line, no count line, no header row — one
+row per draft, in the log's own order, two spaces between columns:
+
+```
+1  0xa108477b9fc56aa419744398fce8e0f4a2e913ac606968791e006f04b2bfa446  1  2026-11-13 16:59
+2  0x9b24c1f0d7a3e5b8c2d4f6a8e0b1c3d5f7a9b1c3d5e7f9a1b3c5d7e9f1a3b5c7  3  2026-11-13 17:04
+```
+
+The first column is the 1-based position in the log's own sequence — the first-append order
+`genesisList` and the paged read already yield, identical across runs, never sorted by timestamp and
+never recomputed per call. It is right-aligned to the digit count of the highest row, so a log of
+one draft has no padding. That number is what `s2s drafts fetch <order>` takes. The genesis follows
+in full, never elided: it is the identifier `s2s drafts append <genesis> <cid>` takes, and a
+truncated one cannot be copied. Then the version count, then the latest version's block time as
+`YYYY-MM-DD HH:mm` in UTC — no seconds, no `Z`. The order column is human output only;
+`--json` gains no index field, because the array order is the order.
+
+**An empty log prints nothing.** The list is the output; a zero-entry log has no row to make, and
+no summary line replaces one. `--json` still emits its envelope with `count: 0, drafts: []`.
+
+**One stderr line, and only where provenance matters.** When the module came from the factory index
+rather than the Safe's enabled list, the command warns once that the index is permissionless and
+unwritten by this Safe, so the rows are what the index names rather than what the Safe enabled. A
+module the Safe enabled prints nothing extra — including a factory-index module that is also on the
+enabled list, since being enabled is the fact the warning would deny.
+
 **No label is resolved.** A row is named by its genesis. The draft's `label` lives in the uploaded
 envelope, so showing it would cost one gateway read per draft; the result carries the genesis and
 the CID instead. Whether a draft entry should carry a label of its own is open
