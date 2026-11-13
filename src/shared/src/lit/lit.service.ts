@@ -163,7 +163,13 @@ export class LitService {
             `[Lit API] ${method} ${endpoint} -> ${response.status}` +
             ` (body ${text.length} bytes, json ${bodyShape(data)})`,
           );
-          const reason = data?.error ?? data?.message ?? data?.detail;
+          // A refusal can be a bare JSON string rather than an object
+          // (`bodyShape` reports `string`), and on /lit_action that is where
+          // the reason is: Lit answers 403 with a quoted sentence, so reading
+          // only `error`/`message`/`detail` threw the diagnosis away and left
+          // `HTTP 403` with no reason at all.
+          const reason =
+            typeof data === 'string' ? data : (data?.error ?? data?.message ?? data?.detail);
           throw new Error(
             `HTTP ${response.status} from ${endpoint}` + (reason ? `: ${redact(reason)}` : ''),
           );
