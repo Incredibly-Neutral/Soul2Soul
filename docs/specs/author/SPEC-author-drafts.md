@@ -23,9 +23,10 @@
 
 ## Responsibility
 
-A UUPS module installed on an author Safe, keeping **drafts**: manuscripts uploaded but never offered to
-a publication. Its storage, per instance, is exactly four declaration-ordered storage variables — the order
-is part of the upgrade contract, so read it here rather than from a diff:
+A UUPS module installed on an author Safe, keeping **drafts**: the versions an author uploaded,
+offered to a publication or not. Its storage, per instance, is exactly four declaration-ordered
+storage variables — the order is part of the upgrade contract, so read it here rather than from a
+diff:
 
 | declaration | type | holds |
 |---|---|---|
@@ -282,9 +283,10 @@ storage.
   module, from a compile-time constant that no upgrade and no storage can move.
 - **Reads never revert on unknown input.** `fetch`, `history`, `blocksOf`, `versionCount`, `isDraft`,
   `authorOf` all answer for a genesis that was never appended.
-- **AUTHOR-1 holds by not being implemented.** Writing is local; `append` is a separate, deliberate,
-  signed act by the Safe. The log is an index of what was uploaded, never the act of writing — so a host
-  must not make saving a note depend on it.
+- **AUTHOR-1 holds: the log never causes the write.** The bytes are pinned before the append runs,
+  and `append` is a separate, deliberate, signed act by the Safe. Saving a note never waits on the
+  log; a version the publish path could not append is recorded later with `s2s drafts append`
+  ([SPEC-author-cli](SPEC-author-cli.md)). The log is an index of what was uploaded.
 
 ## What V1 does not do
 
@@ -300,15 +302,19 @@ storage.
   draft log.
 - **No metadata beyond `cid`, `timestamp` and `blockNumber`.** No title, slug, tags, or locale — those
   stay in the note and in the signed content item.
-- **No host writes.** No CLI or plugin command appends to this module, and none calls `absorb()`.
-  Reads are the other direction: `s2s drafts list` lists the log
-  ([SPEC-author-cli](SPEC-author-cli.md)). The CLI deploys the proxy and the Safe enables it; the
-  package's own surface is contracts only.
+- **No writes beyond the publish path.** `s2s author upload`, `propose` and `publish` append;
+  `preview` does not, because a preview is not a version, and nothing but `s2s author migrate` calls
+  `absorb()`. The log accepts an append from one caller: the Safe, through
+  `append(bytes32 genesis, string cid)`, so on a multi-owner Safe recording a version is a proposal
+  like the offer. Reading is the other direction: `s2s drafts list` lists the log, and
+  `s2s drafts append <genesis> <cid>` records a version a failed publish did not
+  ([SPEC-author-cli](SPEC-author-cli.md)). The package's own surface stays contracts only.
 
 ## Open questions
 
-1. **Writer auth beyond the Safe.** Today every draft is an N-of-M governance act. A scoped signer, or
-   `append` reached through a 4337 userOp from the Safe, is the obvious relief — undecided.
+1. **Writer auth beyond the Safe.** Today every draft is an N-of-M governance act, the CLI's own
+   appends included: it sends `append` as a Safe transaction, so a multi-owner Safe needs its
+   owners. A scoped signer is the obvious relief — undecided.
 2. **Encryption.** Plaintext is a V1 choice, not an argument. Options: encrypt to the author's own key
    (nothing renders a draft, so the cipher is passive), a future gated collection, or accept plaintext
    for the pre-offer window. Undecided.
@@ -332,7 +338,9 @@ Settled by the implementation, recorded here so it stops being a question: `vers
 `fetch` on an unknown genesis returns the zeroed `Entry` rather than reverting. **The CLI reads the
 log: `s2s drafts list`.** It lists the active author Safe's drafts, takes the module from the Safe's
 enabled list first and from the factory index after that, and pages the read — see
-[SPEC-author-cli](SPEC-author-cli.md). Writes stay out of every host; a read is not a write.
+[SPEC-author-cli](SPEC-author-cli.md). **The write path owns the append.** The CLI appends as part
+of the command that produced the bytes — after the Kubo upload, before the offer — and
+`s2s drafts append <genesis> <cid>` is the retry when that send fails; no other host writes the log.
 
 ## Safe-to-change vs do-not-touch
 
