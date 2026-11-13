@@ -19,10 +19,11 @@ import {
     canReset as gateCanReset,
     canReview as gateCanReview,
     isOutOfForce as gateIsOutOfForce,
-    ownsVerdict as gateOwnsVerdict,
+    canAuthorVerdict as gateCanAuthorVerdict,
+    type CanAuthorOptions,
+    type CanAuthorVerdict,
     type GateRead,
     type GateValueRead,
-    type OwnsVerdict,
 } from '@s2s/soul2soul-shared/gates';
 
 export const extractSignerAddress = (messageHash: string, signature: string): string => {
@@ -48,7 +49,14 @@ export const canRead = (
     signerAddress: string,
     rpcs: string[],
 ): Promise<boolean> =>
-    gateCanRead(bindRead(rpcs), contentId, safeAddress, publicationModule, signerAddress);
+    gateCanRead(
+        bindRead(rpcs),
+        bindValueRead(rpcs),
+        contentId,
+        safeAddress,
+        publicationModule,
+        signerAddress,
+    );
 
 export const canPublish = (
     authorSafeAddress: string,
@@ -85,20 +93,27 @@ export const isOutOfForce = (
     gateIsOutOfForce(bindRead(rpcs), genesis, publicationModule);
 
 /**
- * GATES-1's author branch, reporting the block it judged at. The decrypt action
- * needs the block, not just the answer: it reads the draft entry at that block
- * so the ciphertext it opens belongs to the version ownership was tested on.
+ * May this signer open this draft because it is theirs, and what did the gate
+ * decide that from?
+ *
+ * The whole author question in one call: the Safe's modules, the drafts log's
+ * `authorOf`, the append block and the owner answer. The decrypt action takes
+ * the verdict rather than composing the reads itself, so nothing is resolved
+ * twice in one execution and the entry is read from the module and at the block
+ * the answer was judged from.
  */
-export const ownsVerdict = (
+export const canAuthorVerdict = (
     genesis: string,
     authorSafe: string,
     signerAddress: string,
     rpcs?: string[],
-): Promise<OwnsVerdict> =>
-    gateOwnsVerdict(
+    options?: CanAuthorOptions,
+): Promise<CanAuthorVerdict> =>
+    gateCanAuthorVerdict(
         bindRead(rpcs),
         bindValueRead(rpcs),
         genesis,
         authorSafe,
         signerAddress,
+        options,
     );
