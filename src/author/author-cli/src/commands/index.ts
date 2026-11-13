@@ -21,7 +21,7 @@ import { publish } from './publish';
 import { revoke } from './revoke';
 import { newPublication } from './new';
 import { draftsList } from './drafts-list';
-import { authorAddress } from './address';
+import { authorAddress, authorInfo } from './address';
 import { authorInit } from './init';
 import { authorMigrate } from './migrate';
 // The store table lives in its own module so `cli.ts` (and tests) can reach it
@@ -41,6 +41,9 @@ export const authorCommands: CommandSpec[] = [
   preview,
   publish,
   revoke,
+  authorInfo,
+  // The alias sits beside the command it aliases, so `--help` reads as one
+  // identity report with a second name, not two commands.
   authorAddress,
   authorInit,
   authorMigrate,

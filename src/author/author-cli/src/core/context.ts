@@ -6,7 +6,9 @@
 // ============================================================================
 
 import {
+  getProtocolControllerAndModules,
   getProtocolInfo,
+  getRecords,
   LitService,
   S2SIPFSMethods,
   type S2SProtocolInfo,
@@ -66,6 +68,52 @@ export interface CliContext {
 type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
 
 /**
+ * The protocol record the encrypt action CID is written to. The CLI ships no
+ * action CID of its own: the record is the protocol's answer, and the config
+ * value is only the override.
+ */
+export const ENCRYPT_ACTION_RECORD = 'lit_action_encrypt';
+
+/**
+ * Read `lit_action_encrypt` from the records module the ENS name points at, the
+ * same two hops `getProtocolInfo` makes for the render/update actions.
+ *
+ * A failed read is undefined, not an error: the value is only needed on the
+ * encrypt path, and everything else must still run when ENS or the L2 RPC is
+ * having a bad day. The encrypt path turns the absence into its named failure.
+ */
+async function readEncryptActionRecord(
+  dev: boolean,
+  l1: SharedPublicClient,
+  l2: SharedPublicClient,
+): Promise<string | undefined> {
+  try {
+    const { configModule } = await getProtocolControllerAndModules(dev, l1, l2);
+    if (!configModule) return undefined;
+    const [cid] = await getRecords(configModule, [ENCRYPT_ACTION_RECORD], l2);
+    return typeof cid === 'string' && cid.trim() !== '' ? cid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The encrypt action CID: the config/env value when set, else the record. The
+ * record read is skipped entirely when the value is configured, so a machine
+ * that sets it pays no ENS walk.
+ *
+ * `readRecord` is a parameter so the precedence is testable without a chain.
+ */
+export async function resolveEncryptActionCid(
+  config: CliConfig,
+  readRecord: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const configured = config.lit.encryptActionCid;
+  if (configured !== undefined && configured.trim() !== '') return configured;
+  return readRecord();
+}
+
+/**
  * Warn on stderr when the env key shadows the active stored author.
  *
  * `S2S_PRIVATE_KEY` outranks the store, so a shell export (or a `.env` line)
@@ -105,11 +153,15 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
 
   const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
+  const dev = config.environment === 'dev';
+  const encryptActionCid = await resolveEncryptActionCid(config, () =>
+    readEncryptActionRecord(dev, l1, l2),
+  );
 
   const account = privateKeyToAccount(privateKey as `0x${string}`);
   const signer = new ViemTypedDataSigner(account);
 
-  const lit = createLitService(config);
+  const lit = createLitService(config, encryptActionCid);
   const ipfs = createIpfs(config);
   const l2Runner = createEoaRunner({ chain: base, rpcUrl: l2Rpc, privateKey: privateKey as `0x${string}` });
 

@@ -268,12 +268,15 @@ export function buildEncryptFn(
 
   // `LitService.encrypt` does not throw (it stringifies its own errors), but a
   // throwing transport or a future fix must still not surface as a raw stack:
-  // both paths end as "nothing was published".
+  // both paths end as "nothing was published". A `CliError` is the CLI's own
+  // closed failure (the adapter's missing-CID refusal) and is rethrown as it
+  // stands, or its two remedies would be buried in a wrapper.
   return async (plaintext: string): Promise<string> => {
     let result: unknown;
     try {
       result = await ctx.lit.encrypt(litUsageKey, pkp, plaintext);
     } catch (err) {
+      if (err instanceof CliError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       throw new CliError(`encryption failed: Lit threw (${message}) — nothing was published`);
     }
