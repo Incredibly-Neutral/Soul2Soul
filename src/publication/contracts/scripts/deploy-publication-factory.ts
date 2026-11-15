@@ -2,9 +2,33 @@
  * Deploy S2SPublicationModuleV4Create2Factory on Base.
  *
  * Two-step: deploy the implementation first, then the factory, which takes
- * `[protocolSafe, implementation]` as constructor arguments and checks both
- * have code. The protocol safe must already exist — passing an EOA would make
- * the factory's only privileged key an ordinary private key.
+ * `[protocolSafe, implementation, legacyImplementations]` as constructor
+ * arguments and checks each has code. The protocol safe must already exist —
+ * passing an EOA would make the factory's only privileged key an ordinary
+ * private key.
+ *
+ * The factory does not only create modules. It also records which module a
+ * publication runs, so it adopts modules it did not deploy: the V2 and V3
+ * proxies publications already have at plain-CREATE addresses, upgraded to V4 in
+ * place, which cannot move to a predicted address without losing their storage.
+ * `PUBLICATION_LEGACY_IMPL_V2` and `PUBLICATION_LEGACY_IMPL_V3` name the
+ * implementations those proxies were built over. Both are required: a factory
+ * deployed without them can never recognise an upgraded publication, and the set
+ * has no setter, so that cannot be repaired later.
+ *
+ * `registerModule(safe, module, implementation)` accepts a module on either of
+ * two facts: it answers `factory()` with the factory's address and names an
+ * implementation the factory approved, or it answers nothing and names one of
+ * the two recorded from the variables above. Either way the module must answer
+ * `safe()` with the safe it is registered for, so a proxy minted for another
+ * publication cannot be filed under this one. What the contract does not do is
+ * read the proxy's ERC-1967 slot — that read is `eth_getStorageAt`, which the
+ * proposer does while the proxy still runs V2/V3 and passes in as
+ * `implementation`. After the upgrade the slot names the V4 implementation, which
+ * the factory refuses as a legacy entry, so the order is read, register, upgrade. A gated implementation pasted
+ * into a legacy variable would widen acceptance instead of narrowing it, so the
+ * constructor refuses one, and the check below runs before the deploy rather
+ * than after it.
  *
  * The factory deploys each publication's module with CREATE2 at an address
  * computed from the safe, and returns the recorded module if one already
@@ -20,6 +44,9 @@
  *   PROTOCOL_PRIVATE_KEY    deployer key (pays gas, needs no privilege)
  *   PROTOCOL_SAFE_ADDRESS   the address that will be the only one able to call
  *                           setImplementation — must be a contract
+ *   PUBLICATION_LEGACY_IMPL_V2  the deployed S2SPublicationModuleV2
+ *                               implementation existing V2 proxies delegate to
+ *   PUBLICATION_LEGACY_IMPL_V3  the same for S2SPublicationModuleV3
  *
  * The implementation and the factory are a pair: the V4 factory approves every
  * implementation it has been set to, and a V4 module reads that approval through
@@ -152,6 +179,25 @@ async function main() {
   }
   const protocolSafe = getAddress(safeEnv);
 
+  // Required, not optional: the constructor has no setter for this set, so a
+  // factory deployed with an empty list can never adopt an existing publication.
+  const legacyImplementations = (['PUBLICATION_LEGACY_IMPL_V2', 'PUBLICATION_LEGACY_IMPL_V3'] as const).map(
+    (name) => {
+      const value = process.env[name];
+      if (!value) {
+        console.error(`❌ ${name} not set.`);
+        console.error('   The factory records the implementations existing V2/V3 publication proxies were');
+        console.error('   built over, so it can adopt them via registerModule. It cannot be given them later.');
+        process.exit(1);
+      }
+      if (!isAddress(value)) {
+        console.error(`❌ ${name} is not an address: ${value}`);
+        process.exit(1);
+      }
+      return getAddress(value) as `0x${string}`;
+    },
+  );
+
   const rpcUrl =
     process.env.BASE_RPC_URL ||
     (process.env.VITE_DRPC_API_KEY
@@ -183,7 +229,24 @@ async function main() {
 
   console.log(`Deploying from ${account.address}`);
   console.log(`   Network:      ${rpcUrl}`);
-  console.log(`   Protocol safe: ${protocolSafe}\n`);
+  console.log(`   Protocol safe: ${protocolSafe}`);
+  console.log(`   Legacy V2/V3: ${legacyImplementations.join(', ')}\n`);
+
+  for (const legacy of legacyImplementations) {
+    const code = await publicClient.getCode({ address: legacy });
+    if (!code || code === '0x') {
+      console.error(`❌ ${legacy} has no code — a legacy implementation must be deployed.`);
+      console.error('   The constructor refuses an address without code with NotAContract.');
+      process.exit(1);
+    }
+    // A V2/V3 implementation has no factory() getter. If this one answers it, the
+    // wrong address was pasted: recording the current V4 implementation as legacy
+    // would let registerModule accept a module whose code this factory governs.
+    if (await hasUpgradeGate(publicClient, legacy).catch(() => false)) {
+      console.error(`❌ ${legacy} answers factory() — that is a V4-era implementation, not V2/V3.`);
+      process.exit(1);
+    }
+  }
 
   console.log(`1/2 Deploying ${IMPL_NAME}...`);
   const impl = await deployContract(client, publicClient, IMPL_NAME, []);
@@ -200,8 +263,12 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`2/2 Deploying ${FACTORY_NAME} [protocolSafe, implementation]...`);
-  const factory = await deployContract(client, publicClient, FACTORY_NAME, [protocolSafe, impl]);
+  console.log(`2/2 Deploying ${FACTORY_NAME} [protocolSafe, implementation, legacy]...`);
+  const factory = await deployContract(client, publicClient, FACTORY_NAME, [
+    protocolSafe,
+    impl,
+    legacyImplementations,
+  ]);
   console.log(`   ✅ Factory at ${factory}\n`);
 
   console.log('Set in .env:\n');
@@ -210,6 +277,19 @@ async function main() {
   console.log(`\nPROTOCOL_SAFE_ADDRESS stays ${protocolSafe} — the only address that can call setImplementation.`);
   console.log('Module addresses for this factory are computed from the safe, not read back from logs.');
   console.log('Existing publication proxies are UUPS and are not affected by this deploy.');
+  console.log('');
+  console.log('The factory also records which module a publication runs. For an existing publication,');
+  console.log('registerModule(safe, module, implementation) is a protocol-safe call:');
+  console.log('  implementation  the address the proxy delegated to BEFORE the upgrade, i.e. the V2/V3');
+  console.log('                  address passed here, read with eth_getStorageAt at that time');
+  console.log('  module          the proxy the publication already has, which must answer safe() = safe');
+  console.log('  safe            the publication Safe');
+  console.log('');
+  console.log('ORDER: read each proxy slot while the proxy still runs V2/V3, register every proxy, and');
+  console.log('only then upgrade those proxies to V4 in place. Afterwards the slot holds this factory\'s V4');
+  console.log('implementation, which the factory refuses as a legacy entry, and the set has no setter.');
+  console.log('It refuses a module that answers safe() with another address, and any contract that answers');
+  console.log('nothing at all, so a bare implementation address cannot be registered by mistake.');
 }
 
 main().catch((err) => {

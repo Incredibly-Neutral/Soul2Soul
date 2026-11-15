@@ -102,6 +102,8 @@ async function deploy() {
   const factory = await viem.deployContract('S2SPublicationModuleV4Create2Factory', [
     caller.address,
     implementation.address,
+    // No legacy implementations: this suite is about a freshly created module.
+    [],
   ]);
 
   const safe = caller.address;
