@@ -9,7 +9,7 @@
  * the upgrade, because the factory cannot read another contract's ERC-1967 slot.
  * The order is read, register, upgrade: read the slot while the proxy still runs
  * V2/V3, register, and only then upgrade in place. A proxy upgraded first names
- * the V4 implementation in its slot, which the factory refuses as a legacy entry
+ * the upgrade target (V5) in its slot, which the factory refuses as a legacy entry
  * with `ModuleNotRecognised(module)`, and the legacy set has no setter.
  *
  * Two output formats, both copy-pasteable:
