@@ -8,7 +8,7 @@
  *   npx tsx contracts/scripts/verify-contracts.ts
  *
  * Requires BASESCAN_API_KEY in the root .env. The V2 addresses are hardcoded below
- * (deployed code never moves); the V3 factory address comes from
+ * (deployed code never moves); the V4 CREATE2 factory address comes from
  * PUBLICATION_FACTORY_ADDRESS and is skipped when unset.
  */
 
@@ -40,9 +40,9 @@ const CONTRACTS: ContractToVerify[] = [
   },
   {
     // The V2 factory is superseded, not verified: it stays deployed and leaky.
-    name: 'S2SPublicationModuleV3Factory',
+    name: 'S2SPublicationModuleV4Create2Factory',
     address: process.env.PUBLICATION_FACTORY_ADDRESS || '',
-    file: 'src/S2SPublicationModuleV3Factory.sol/S2SPublicationModuleV3Factory.json',
+    file: 'src/S2SPublicationModuleV4Create2Factory.sol/S2SPublicationModuleV4Create2Factory.json',
   },
 ];
 

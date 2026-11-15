@@ -77,6 +77,8 @@ function makeSafeIntegration(
     existing?: { recordsModule?: string; publicationModule?: string };
     /** Byte size of each factory's code on this chain; 0 models "wrong chain". */
     factoryCode?: { records?: number; publication?: number };
+    /** Byte size of code at any other address (a confirmed CREATE2 module). */
+    moduleCode?: Record<string, number>;
     /**
      * ENS (step 1) state on L1. The default models the happy legacy/hand-made
      * case — the subnode is already registered to THIS Safe — so the module
@@ -172,6 +174,9 @@ function makeSafeIntegration(
       const addr = address.toLowerCase();
       if (addr === RECORDS_FACTORY.toLowerCase()) return code.records ?? 4321;
       if (addr === PUB_FACTORY.toLowerCase()) return code.publication ?? 5432;
+      for (const [moduleAddress, size] of Object.entries(opts.moduleCode ?? {})) {
+        if (moduleAddress.toLowerCase() === addr) return size;
+      }
       return 0;
     }),
     fetchFactoryModuleCreatedLogs: vi.fn(async (factoryAddress: string) =>
@@ -1072,6 +1077,61 @@ describe('s2s-publication-init', () => {
     expect(bodyText(el)).not.toContain('Publication initialized');
   });
 
+  it('takes an existing publication module from the factory when its log is outside the window', async () => {
+    // The publication's ModuleCreated log is older than the lookback, so the
+    // scan sees only the records module. The create2 factory still names the
+    // module it recorded for this Safe, and code at that address is proof the
+    // publication exists — without it the create batch is proposed again and the
+    // (non-idempotent) records factory deploys a second records module.
+    const FACTORY_MODULE = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+    const si = makeSafeIntegration({
+      enabled: false,
+      existing: { recordsModule: RECORDS_MODULE },
+      moduleCode: { [FACTORY_MODULE]: 4321 },
+    });
+    si.predictNextPublicationModule = vi.fn(async () => FACTORY_MODULE);
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    expect(si.createProposals()).toEqual([]);
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, FACTORY_MODULE);
+    expect(si.proposeBatch).toHaveBeenCalledTimes(1);
+    expectFinalizeShape(si.proposeBatch.mock.calls[0][0] as MetaTransactionData[], PUB_NAME);
+  });
+
+  it('keeps the log scan as the fallback when the factory predicts an address with no code', async () => {
+    // A prediction is not an existence proof: the address the next create would
+    // land at has no code. The log scan still decides.
+    const PREDICTED_MODULE = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+    const si = makeSafeIntegration({ enabled: false });
+    si.predictNextPublicationModule = vi.fn(async () => PREDICTED_MODULE);
+
+    const el = await mount({ safeIntegration: si });
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+
+    await vi.waitFor(() => expect(si.createProposals()).toHaveLength(1));
+    await vi.waitFor(() => {
+      const raw = window.localStorage.getItem(INIT_SESSION_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).phase).toBe('awaiting-finalize');
+    });
+
+    // The module the logs named, not the address the factory named: code at the
+    // prediction is what would have made it an existence check.
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.publicationModule).toBe(PUB_MODULE);
+    expect(si.adoptModules).toHaveBeenCalledWith(RECORDS_MODULE, PUB_MODULE);
+  });
+
   it('completes without any proposal when the existing pair is enabled and the name is recorded', async () => {
     const si = makeSafeIntegration({
       enabled: true,
@@ -1399,6 +1459,75 @@ describe('s2s-publication-init', () => {
     expect(error).toContain(
       `(chain 8453, factories ${RECORDS_FACTORY}/${PUB_FACTORY}, blocks 11990000-12000000, last poll: 0/0 logs)`,
     );
+  });
+
+  it('persists the CREATE2 prediction and enables the module it named', async () => {
+    // Deliberately NOT the address the ModuleCreated log reports: every
+    // assertion below can then only pass if the prediction chose the module.
+    const PREDICTED_MODULE = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+    const si = makeSafeIntegration({ enabled: true, moduleCode: { [PREDICTED_MODULE]: 4321 } });
+    // Record the order of the two calls the whole feature rests on: the factory
+    // has to be asked BEFORE the create is proposed, because after it executes
+    // the answer describes the next create.
+    const order: string[] = [];
+    si.predictNextPublicationModule = vi.fn(async () => {
+      order.push('predict');
+      return PREDICTED_MODULE;
+    });
+    const propose = si.proposeBatch.getMockImplementation()!;
+    si.proposeBatch.mockImplementation(async (txs: MetaTransactionData[]) => {
+      order.push('propose');
+      return propose(txs);
+    });
+    const el = await mount({
+      safeIntegration: si,
+      detectionTimeoutMs: 30,
+      detectionPollIntervalMs: 5,
+    });
+
+    // First pass: no ModuleCreated log at all, so detection cannot finish and
+    // the session has to be readable on disk with the prediction in it.
+    const logsInFlow = si.fetchFactoryModuleCreatedLogs;
+    si.fetchFactoryModuleCreatedLogs = vi.fn(async () => []);
+
+    setInput(el, '#init-name', 'my-publication');
+    clickInit(el);
+    await vi.waitFor(() => expect(bodyText(el)).toContain('Initialization failed'));
+
+    expect(si.predictNextPublicationModule).toHaveBeenCalledWith({
+      factory: PUB_FACTORY,
+      safeAddress: SAFE_ADDRESS,
+      chainId: 8453,
+    });
+    // Prediction first, and on the FIRST pass: reading it at detect time would
+    // be reading it about a create that has already happened.
+    expect(order.slice(0, 2)).toEqual(['predict', 'propose']);
+    const persisted = JSON.parse(window.localStorage.getItem(INIT_SESSION_KEY)!);
+    expect(persisted.phase).toBe('detecting');
+    // The whole point of persisting it: the factory answers for the NEXT create
+    // once this one executes, so the value cannot be recomputed at detect time.
+    expect(persisted.predictedPublicationModule).toBe(PREDICTED_MODULE);
+
+    // Retry with the create's log present: detection now accepts the persisted
+    // prediction by code and the finalize batch enables THAT address.
+    si.fetchFactoryModuleCreatedLogs = logsInFlow;
+    const complete = new Promise<CustomEvent>((resolve) => {
+      el.addEventListener('s2s-init-complete', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    el.shadowRoot!.querySelector<HTMLElement>('#init-retry')!.click();
+    await complete;
+    await flush();
+
+    // No second create batch: the resume must not redeploy the pair.
+    expect(si.createProposals()).toHaveLength(1);
+    const finalize = si.proposeBatch.mock.calls[1][0] as MetaTransactionData[];
+    expect(finalize[0].to).toBe(SAFE_ADDRESS);
+    expect(finalize[1].to).toBe(SAFE_ADDRESS);
+    const enable = new Interface(['function enableModule(address module)']);
+    const enabled = finalize
+      .slice(0, 2)
+      .map((tx) => String(enable.parseTransaction({ data: tx.data })!.args[0]));
+    expect(enabled).toEqual([RECORDS_MODULE, PREDICTED_MODULE]);
   });
 });
 

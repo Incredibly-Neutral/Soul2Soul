@@ -42,12 +42,19 @@ write itself. Everything a holder does is a Safe transaction; everything a reade
 
 | piece | what it is | child |
 |---|---|---|
-| account | Safe + `S2SPublicationModuleV2` (proxy) + `S2SRecordsModule` (immutable) | [account](SPEC-publication-account.md) |
+| account | Safe + `S2SPublicationModuleV4` (proxy) + `S2SRecordsModule` (immutable) | [account](SPEC-publication-account.md) |
 | agreements | offer/deal sets, version log, whitelists | [agreements](SPEC-publication-agreements.md) |
 | read gate | who may decrypt a pending offer | [review](SPEC-publication-review.md) |
 | surface | `safe-app` — the five tabs, proposals, config build | [admin-app](SPEC-publication-admin-app.md) |
 | look | `mapping.json`, templates, assets, config CID | [look](SPEC-publication-look.md) |
 | site | MFS tree, copies, root, availability, mirror | [storage](SPEC-publication-storage.md) |
+
+V4 is what a new publication gets: V3's surface and storage prefix, `NAME()` `"S2S Publication Module
+V4"`, and one appended slot holding the factory recorded in `initialize`. V3 and V2 stay as the
+implementations existing publications run. A reader needs no change for V4: `isPublicationModuleName`
+already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
+`publicationBindingFor` binds a later version to the current surface
+(`publication/safe-app/src/lib/publication-version.ts`).
 
 ## Lifecycle
 
@@ -79,7 +86,7 @@ The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 | `retract` | ✗ (`NotAuthorized()` for the Safe) | the **genesis author** only, and terminal: ends the genesis |
 | `makeOffer` | ✓ (lands as a deal) | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer |
 | whitelist add/remove | ✓ | — |
-| `upgradeToAndCall` | ✓ | — |
+| `upgradeToAndCall` | ✓ (`msg.sender` is the safe) | an implementation the protocol safe has set on the factory, and no other — the holders carry out the upgrade, they do not choose the code |
 | factory `createModule` / `createModuleEmpty` | ✓ (the safe it names) | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
 | factory `setImplementation` | **not the publication** | the protocol safe only, fixed at construction |
 | ENS `contenthash_wrapped` | **not the publication** | the PKP (INV-12), granted by the protocol |

@@ -12,20 +12,29 @@
 // main.ts exposes as the page global).
 //
 // FLOW (two Safe proposals, NOT one):
-//   Both factories deploy via plain CREATE (new ERC1967Proxy / new
-//   S2SRecordsModule(safe)), so the module addresses are unknowable in
-//   advance. Safe enableModule is onlySelf (the Safe must self-call) and does
-//   NOT check that the target has code, so predicting CREATE addresses risks
-//   silently enabling a wrong/empty address. Therefore:
+//   A CREATE2 publication factory answers `moduleAddress(safe)` — the exact
+//   address its next `createModule(safe, …)` deploys under the latest
+//   implementation. Where it does, the address is known BEFORE the create
+//   batch is proposed and the enable step needs no log read; where it does not
+//   (a plain-CREATE factory, which is every V2-era deployment), the address is
+//   unknowable in advance and is read back from the ModuleCreated log. Safe
+//   enableModule is onlySelf (the Safe must self-call) and does NOT check that
+//   the target has code, so a predicted address that is not confirmed by code
+//   is never enabled. Therefore:
 //     batch1 = create both modules (records + publication)
-//     detect  = read ModuleCreated logs to learn the deployed addresses
+//     detect  = predicted address if it has code, else the ModuleCreated logs
 //     batch2 = enable both modules
 //     batch3 = (optional) records.setRecord("name", name)
 //
 // The inverse (buildDeletePublicationBatch) is a teardown for starting over:
 // disable both modules on the Safe + records.deleteRecord("name"). It never
-// creates or destroys contracts — the factories are non-idempotent, so the
-// NEXT init run deploys fresh modules regardless.
+// creates or destroys contracts, so the modules stay deployed and disabled.
+// The NEXT init run therefore does not start from nothing: a CREATE2
+// publication factory answers `moduleAddress(safe)` with the very module it
+// already made for this Safe, re-enables it and cannot change its authors or
+// devs, while the records factory is still non-idempotent and deploys a second
+// records module. A publication that wants different authors needs a Safe of
+// its own.
 
 import { Interface, getAddress } from 'ethers';
 import type { InterfaceAbi } from 'ethers';
@@ -74,6 +83,16 @@ export type DetectModuleAddressesDeps = {
   legacyPublicationFactories?: readonly string[];
   getBlockNumber: () => Promise<number>;
   now?: () => number;
+  /**
+   * The address the create batch is expected to deploy, from
+   * `moduleAddress(safe)` (see predictNextModuleAddress) captured BEFORE the
+   * batch executed. Detection accepts it once it has code — that is what
+   * confirms the create landed there — and then skips this factory's log read.
+   * Without it, or while it is still empty, detection polls the logs.
+   */
+  predictedPublicationModule?: string;
+  /** Does `address` have code on the Safe's chain? Confirms the prediction. */
+  hasCode?: (address: string) => Promise<boolean>;
 };
 
 export type DetectModuleAddressesOpts = {
@@ -91,6 +110,14 @@ export type InitializePublicationDeps = {
   getBlockNumber: () => Promise<number>;
   isModuleEnabled: (module: string) => Promise<boolean>;
   now?: () => number;
+  /**
+   * `moduleAddress(safe)` on the publication factory, for the create this call
+   * is about to propose. Called BEFORE the create batch, because after it
+   * executes the factory answers for the NEXT create; the prediction is only
+   * accepted once the module has code (see detectModuleAddresses).
+   */
+  predictNextModuleAddress?: () => Promise<string | undefined>;
+  hasCode?: (address: string) => Promise<boolean>;
 };
 
 export type InitializePublicationOpts = {
@@ -205,8 +232,10 @@ export function moduleCreatedTopic0(factoryAbi: InterfaceAbi): string {
 /**
  * Batch 1: create both modules from their factories. Creates:
  *   [recordsFactory.createModule(safe), publicationFactory.createModule(safe, authors, [])]
- * The deployed addresses are unknowable in advance (plain CREATE) — read them
- * from ModuleCreated logs before enabling.
+ * A plain-CREATE factory leaves the deployed addresses unknowable until the
+ * batch executes (read them from ModuleCreated logs then). A CREATE2 factory
+ * answers `moduleAddress(safe)` first — capture it BEFORE this batch is
+ * proposed, since afterwards it names the next create (predictNextModuleAddress).
  */
 export function buildCreateModuleBatch(
   protocolInfo: ProtocolInfo,
@@ -399,6 +428,171 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// CREATE2 prediction.
+// ---------------------------------------------------------------------------
+
+/**
+ * The three reads a CREATE2 module factory answers, as its source defines them
+ * (`src/publication/contracts/src/S2SPublicationModuleV4Create2Factory.sol`).
+ *
+ * Kept inline rather than taken from `@s2s/publication-contracts/abis`: these
+ * three are the whole surface either front end touches, and the callers want
+ * different shapes for it (an ethers `InterfaceAbi` here, a viem `abi` in
+ * neutralpress).
+ *
+ * What the callers rely on, and the source says:
+ *  - `moduleAddress(safe)` is the module the factory already recorded for that
+ *    Safe when it has one, and the address `createModule(safe, …)` would deploy
+ *    at otherwise. It names a create that has not happened only for a Safe with
+ *    no module, and only that answer moves when the protocol Safe calls
+ *    `setImplementation`.
+ *  - `moduleAddressForVersion(safe, version)` is 1-based over
+ *    `implementationHistory` and reverts `InvalidVersion` outside
+ *    `1..implementationCount()`.
+ *  - The address does not depend on what the create is called with: the factory
+ *    constructs the proxy with empty initializer data and calls
+ *    `initialize(safe, authors, devs)` on it afterwards, so the authors array
+ *    cannot move it.
+ *
+ * A factory that predates them answers none, so each caller catches the revert
+ * (that revert IS the "not a create2 factory" answer) and falls back to the log
+ * scan.
+ */
+export const CREATE2_FACTORY_ABI: InterfaceAbi = [
+  'function moduleAddress(address safe) view returns (address)',
+  'function moduleAddressForVersion(address safe, uint256 version) view returns (address)',
+  'function implementationCount() view returns (uint256)',
+];
+
+/** A view read on a contract, in whatever shape the host has for one. */
+export type Create2Read = (
+  factory: string,
+  abi: InterfaceAbi,
+  method: string,
+  args: unknown[],
+) => Promise<unknown>;
+
+/** Byte size of the code at an address on the Safe's chain (0 = no contract). */
+export type Create2CodeSize = (address: string) => Promise<number>;
+
+export interface PredictModuleAddressDeps {
+  read: Create2Read;
+  /** The publication factory from the protocol record. */
+  factory: string;
+  safeAddress: string;
+}
+
+/** A plausible, non-zero address (the factories answer address(0) for nothing). */
+function isModuleAddress(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^0x[0-9a-fA-F]{40}$/.test(value) &&
+    !/^0x0{40}$/.test(value)
+  );
+}
+
+/**
+ * The module address the factory reports for a Safe, or `undefined` when it
+ * does not answer the create2 views.
+ *
+ * For a Safe with no module this is the address the next
+ * `createModule(safe, …)` deploys under the latest implementation; for a Safe
+ * that already has one it is that module, so the same call doubles as the
+ * existence check the log scan can only do inside its lookback. It is never
+ * trusted on its own: the init flow captures it BEFORE proposing the create
+ * batch, `detectModuleAddresses` accepts it only once the address carries code,
+ * and `scanExistingModules` still reads the logs when the factory has nothing
+ * to report.
+ */
+export async function predictNextModuleAddress(
+  deps: PredictModuleAddressDeps,
+): Promise<string | undefined> {
+  if (!deps.factory) return undefined;
+  try {
+    const predicted = await deps.read(deps.factory, CREATE2_FACTORY_ABI, 'moduleAddress', [
+      deps.safeAddress,
+    ]);
+    return isModuleAddress(predicted) ? getAddress(predicted) : undefined;
+  } catch {
+    // No such selector: a pre-create2 factory. The caller scans logs instead.
+    return undefined;
+  }
+}
+
+export interface ResolveModuleAddressDeps extends PredictModuleAddressDeps {
+  codeSize: Create2CodeSize;
+  /** How far back through `implementationHistory` to look (default 8). */
+  maxVersions?: number;
+}
+
+/**
+ * The module an ALREADY CREATED publication lives at, for discovery.
+ *
+ * Unlike the prediction this has to prove the module exists: an address the
+ * factory would deploy for the next create has no code, and `setImplementation`
+ * moves `moduleAddress(safe)`, so an older publication is only named by
+ * `moduleAddressForVersion(safe, version)`. Candidates are tried newest
+ * implementation first and the first one carrying code wins.
+ *
+ * A revert on `moduleAddress` means the factory has no create2 views at all,
+ * and that is answered immediately: no `implementationCount` read and no
+ * reverted `moduleAddressForVersion` calls. `undefined` is "this factory cannot
+ * answer for this Safe" and the caller keeps its own NAME() scan.
+ */
+export async function resolveModuleAddress(
+  deps: ResolveModuleAddressDeps,
+): Promise<string | undefined> {
+  const hasCode = async (address: string): Promise<boolean> => {
+    try {
+      return (await deps.codeSize(address)) > 0;
+    } catch {
+      return false;
+    }
+  };
+
+  let latest: unknown;
+  try {
+    latest = await deps.read(deps.factory, CREATE2_FACTORY_ABI, 'moduleAddress', [
+      deps.safeAddress,
+    ]);
+  } catch {
+    // Pre-create2 factory: the revert is the answer.
+    return undefined;
+  }
+  if (isModuleAddress(latest)) {
+    const address = getAddress(latest);
+    if (await hasCode(address)) return address;
+  }
+
+  let count = 0;
+  try {
+    count = Number(await deps.read(deps.factory, CREATE2_FACTORY_ABI, 'implementationCount', []));
+  } catch {
+    return undefined;
+  }
+  if (!Number.isFinite(count) || count < 1) return undefined;
+
+  // moduleAddressForVersion is 1-based over implementationHistory and reverts
+  // outside 1..count, so the walk is bounded on both ends.
+  const floor = Math.max(1, count - (deps.maxVersions ?? 8) + 1);
+  for (let version = count; version >= floor; version--) {
+    let candidate: unknown;
+    try {
+      candidate = await deps.read(deps.factory, CREATE2_FACTORY_ABI, 'moduleAddressForVersion', [
+        deps.safeAddress,
+        BigInt(version),
+      ]);
+    } catch {
+      continue;
+    }
+    if (!isModuleAddress(candidate)) continue;
+    const address = getAddress(candidate);
+    if (await hasCode(address)) return address;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Detection.
 // ---------------------------------------------------------------------------
 
@@ -520,6 +714,13 @@ export async function scanExistingModules(
  * distinct topic0. Throws a descriptive error naming the missing module(s).
  * Reads `publicationFactory` only — this runs after a create batch sent to
  * that factory, so its logs are the only ones that can describe the new pair.
+ *
+ * A `predictedPublicationModule` short-circuits the publication half: once that
+ * address has CODE the create landed exactly there (the prediction is only
+ * ever captured before the batch executed, so "has code" is the confirmation),
+ * and this factory's log read is skipped entirely. The records module is still
+ * read from its log — its factory is plain CREATE, so there is nothing to
+ * predict.
  */
 export async function detectModuleAddresses(
   deps: DetectModuleAddressesDeps,
@@ -533,6 +734,7 @@ export async function detectModuleAddresses(
 
   let recordsModule: string | undefined;
   let publicationModule: string | undefined;
+  let predictionConfirmed = false;
 
   for (;;) {
     if (now() - start > timeoutMs) {
@@ -544,11 +746,30 @@ export async function detectModuleAddresses(
       );
     }
 
+    if (!publicationModule && !predictionConfirmed && deps.predictedPublicationModule) {
+      predictionConfirmed = deps.hasCode
+        ? await deps.hasCode(deps.predictedPublicationModule).catch(() => false)
+        : false;
+      if (predictionConfirmed) {
+        publicationModule = deps.predictedPublicationModule;
+        console.log(`[init] detect: predicted publication module confirmed ${publicationModule}`);
+      }
+    }
+
     // Detection answers a different question from the existence check: the
     // create batch was just sent to `publicationFactory`, so only that
     // factory's logs describe the pair being waited for. A retired factory's
     // log would name a module from an earlier run and short-circuit the wait.
-    const poll = await scanModuleLogs({ ...deps, legacyPublicationFactories: undefined }, lookbackBlocks);
+    // A confirmed prediction replaces that log read for the publication half
+    // (empty factory → no read), and nothing else.
+    const poll = await scanModuleLogs(
+      {
+        ...deps,
+        legacyPublicationFactories: undefined,
+        publicationFactory: predictionConfirmed ? '' : deps.publicationFactory,
+      },
+      lookbackBlocks,
+    );
     console.log(
       `[init] detect poll block=${poll.blockNumber} recordsLogs=${poll.recordsLogs} publicationLogs=${poll.publicationLogs}`,
     );
@@ -633,6 +854,16 @@ export async function initializePublication(
   const name = opts.name;
   const proposals: string[] = [];
 
+  // The address the create batch will deploy, if the factory can name it. Read
+  // BEFORE the batch: afterwards the factory answers for the next create. The
+  // value is unconfirmed (no code yet), so detection still proves it landed.
+  let predictedPublicationModule: string | undefined;
+  if (deps.predictNextModuleAddress) {
+    predictedPublicationModule = await deps
+      .predictNextModuleAddress()
+      .catch(() => undefined);
+  }
+
   // Batch 1: create both modules.
   const createBatch = buildCreateModuleBatch(deps.protocolInfo, deps.safeAddress, authors);
   proposals.push(await deps.propose(createBatch));
@@ -646,6 +877,8 @@ export async function initializePublication(
       publicationFactory: deps.protocolInfo.publicationFactory,
       getBlockNumber: deps.getBlockNumber,
       now: deps.now,
+      predictedPublicationModule,
+      hasCode: deps.hasCode,
     },
     {},
   );

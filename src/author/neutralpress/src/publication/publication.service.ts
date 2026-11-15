@@ -33,6 +33,96 @@ const readL2 = async (main: IMainController, address: string, abi: any[], functi
 	return main.oxo.ctrlr.viem.read(address as `0x${string}`, abi, functionName, args);
 };
 
+/**
+ * The three reads a CREATE2 module factory answers, as its source defines them
+ * (`src/publication/contracts/src/S2SPublicationModuleV4Create2Factory.sol`).
+ *
+ * Kept inline rather than taken from `@s2s/publication-contracts/abis`: these
+ * three are all this service touches, and viem wants the parsed shape the
+ * generated module also exports (the same trio, in another package).
+ *
+ * What this resolver relies on, and the source says:
+ *  - moduleAddress(safe) is the module the factory already recorded for that
+ *    Safe when it has one, and the address createModule(safe, …) would deploy
+ *    at otherwise. It names a create that has not happened only for a Safe with
+ *    no module, and only that answer moves when the protocol Safe calls
+ *    setImplementation.
+ *  - moduleAddressForVersion(safe, version) is 1-based over
+ *    implementationHistory and reverts InvalidVersion outside 1..implementationCount().
+ *  - The address does not depend on the create's arguments: the factory
+ *    constructs the proxy with empty initializer data and calls
+ *    initialize(safe, authors, devs) on it afterwards, so the authors array
+ *    cannot move it.
+ *
+ * An older factory answers none of them: the call reverts, and that revert is
+ * the signal to fall back to the NAME() scan.
+ */
+const create2FactoryAbi = [
+	{ "inputs": [{ "internalType": "address", "name": "safe", "type": "address" }], "name": "moduleAddress", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+	{ "inputs": [{ "internalType": "address", "name": "safe", "type": "address" }, { "internalType": "uint256", "name": "version", "type": "uint256" }], "name": "moduleAddressForVersion", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+	{ "inputs": [], "name": "implementationCount", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
+];
+
+const isModuleAddress = (value: unknown): value is string =>
+	typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value) && !/^0x0{40}$/.test(value);
+
+/**
+ * The module an existing publication lives at, per the CREATE2 factory.
+ *
+ * `moduleAddress(safe)` names the module the factory recorded for this Safe, or
+ * the create that has not happened yet when it has none, so it is only
+ * meaningful once code sits there; a publication made under an earlier
+ * implementation is named by `moduleAddressForVersion(safe, version)`, tried
+ * newest first. `undefined` means this factory cannot answer for this Safe — a
+ * pre-CREATE2 factory, or a module from a plain-CREATE generation — and the
+ * caller falls back to the NAME() scan.
+ */
+const predictPublicationModule = async (main: IMainController, safe: string): Promise<string | undefined> => {
+	const factory = main.protocolInfo?.publicationFactory;
+	if (!factory || !isModuleAddress(safe)) return undefined;
+
+	const hasCode = async (address: string): Promise<boolean> => {
+		try {
+			const code = await main.oxo.ctrlr.viem.publicClient.getCode({ address: address as `0x${string}` });
+			return !!code && code !== '0x';
+		} catch {
+			return false;
+		}
+	};
+
+	// A revert on moduleAddress IS the answer: this factory predates the create2
+	// views, so stop here instead of spending an implementationCount read and up
+	// to eight reverted moduleAddressForVersion calls before the NAME() scan.
+	let next: unknown;
+	try {
+		next = await readL2(main, factory, create2FactoryAbi, 'moduleAddress', [safe]);
+	} catch {
+		return undefined;
+	}
+	if (isModuleAddress(next) && await hasCode(next)) return next;
+
+	let count = 0;
+	try {
+		count = Number(await readL2(main, factory, create2FactoryAbi, 'implementationCount', []));
+	} catch {
+		return undefined;
+	}
+	if (!Number.isFinite(count) || count < 1) return undefined;
+
+	// 1-based over implementationHistory, reverting outside 1..count.
+	const floor = Math.max(1, count - 7);
+	for (let version = count; version >= floor; version--) {
+		let address: unknown;
+		try {
+			address = await readL2(main, factory, create2FactoryAbi, 'moduleAddressForVersion', [safe, version]);
+		} catch {
+			continue;
+		}
+		if (isModuleAddress(address) && await hasCode(address)) return address;
+	}
+	return undefined;
+};
+
 export class PublicationService implements IPublicationSrv{
 	main: IMainController;
 	subdomain: string;
@@ -126,6 +216,20 @@ export class PublicationService implements IPublicationSrv{
 			["0x0000000000000000000000000000000000000001", "10"]
 		);
 
+		// Prediction first: a CREATE2 factory names the module this publication
+		// lives at, which does not depend on the module list being readable. It is
+		// accepted only when the Safe still LISTS it — a module disabled by a
+		// teardown stays deployed, and every write to it would revert.
+		// The prediction is held aside and applied after the scan: the scan keeps
+		// its own tie-break (last publication module listed wins) so a factory
+		// that answers nothing changes nothing, and the confirmed prediction is
+		// not overwritten by the scan either.
+		const predicted = await predictPublicationModule(this.main, this.multisig);
+		const predictedModule =
+			predicted && (modules[0] as string[]).some((m: string) => (m ?? '').toLowerCase() === predicted.toLowerCase())
+				? predicted
+				: undefined;
+
 		for (let moduleAddress of modules[0]) {
 			try {
 				let moduleName;
@@ -152,6 +256,8 @@ export class PublicationService implements IPublicationSrv{
 				// console.log("Error checking module:", moduleAddress, error.message);
 			}
 		}
+
+		if (predictedModule) publicationModule = predictedModule;
 
 		return { configModule, publicationModule } 
 	}

@@ -48,6 +48,8 @@ const safeIntMocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
   adoptModules: vi.fn(),
   evmRead: vi.fn(),
+  setPublicationFactory: vi.fn(),
+  predictNextPublicationModule: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -145,6 +147,25 @@ const storeMock = vi.hoisted(() => {
   return { store: new MockStore() as any };
 });
 
+/**
+ * Wait until the first fetch has settled.
+ *
+ * The app renders its loading spinner until `store.safeInfo` exists, and the
+ * protocol record is read BEFORE module discovery (the create2 prediction needs
+ * its factory), so nothing in the shell is queryable right after mount.
+ */
+async function settled(el: S2SApp): Promise<void> {
+  await vi.waitFor(() => expect((el as unknown as { fetching: boolean }).fetching).toBe(false));
+}
+
+/** The init progress modal, once the shell has rendered it. */
+async function progressModal(el: S2SApp): Promise<S2SInitProgressModal> {
+  await vi.waitFor(() =>
+    expect(el.shadowRoot?.querySelector('s2s-init-progress-modal')).toBeTruthy(),
+  );
+  return el.shadowRoot!.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+}
+
 vi.mock('@/lib/safe-integration.js', () => ({
   SafeIntegration: class {
     initialize = safeIntMocks.initialize;
@@ -162,6 +183,8 @@ vi.mock('@/lib/safe-integration.js', () => ({
     getProvider = safeIntMocks.getProvider;
     adoptModules = safeIntMocks.adoptModules;
     evmRead = safeIntMocks.evmRead;
+    setPublicationFactory = safeIntMocks.setPublicationFactory;
+    predictNextPublicationModule = safeIntMocks.predictNextPublicationModule;
   },
 }));
 
@@ -392,6 +415,10 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
     safeIntMocks.adoptModules.mockReset();
     safeIntMocks.adoptModules.mockResolvedValue(undefined);
+    // No CREATE2 prediction by default: the init flow falls back to the
+    // ModuleCreated log, which is the path these tests were written against.
+    safeIntMocks.predictNextPublicationModule.mockReset();
+    safeIntMocks.predictNextPublicationModule.mockResolvedValue(undefined);
     // L1 ENS reads: default = the subnode is registered to THIS Safe, i.e. the
     // publication's ENS step is already done (the repair path stays quiet).
     safeIntMocks.evmRead.mockReset();
@@ -448,6 +475,42 @@ describe('s2s-app (shell)', () => {
     for (const id of NAV_TABS) {
       expect(el.shadowRoot?.querySelector(`#${id}`)).toBeTruthy();
     }
+  });
+
+  it('sets the publication factory before the first module discovery, so the first pass predicts', async () => {
+    // Discovery asks the factory for the module address, so the factory has to
+    // be in place for EVERY pass, including the first one of a page load. Set
+    // after initialize(), the CREATE2 prediction is skipped on load and only a
+    // later refresh would use it.
+    const PUBLICATION_FACTORY = '0x00000000000000000000000000000000000000f2';
+    safeIntMocks.setPublicationFactory.mockReset();
+    const order: string[] = [];
+    protocolMocks.initialize.mockImplementation(async () => {
+      order.push('protocol');
+      return { ensRegistry: ENS_REGISTRY, publicationFactory: PUBLICATION_FACTORY };
+    });
+    safeIntMocks.setPublicationFactory.mockImplementation((factory: string) => {
+      order.push(`factory:${factory}`);
+    });
+    safeIntMocks.initialize.mockImplementation(async () => {
+      // What the integration sees at discovery time is the whole point.
+      order.push(`initialize:${safeIntMocks.setPublicationFactory.mock.lastCall?.[0] ?? 'unset'}`);
+      return SAFE_INFO;
+    });
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
+
+    expect(order.slice(0, 3)).toEqual([
+      'protocol',
+      `factory:${PUBLICATION_FACTORY}`,
+      `initialize:${PUBLICATION_FACTORY}`,
+    ]);
+    // Every discovery pass of this load, not just the first: a pass that ran
+    // before the factory was set is exactly the regression.
+    const initializes = order.filter((entry) => entry.startsWith('initialize:'));
+    expect(initializes.length).toBeGreaterThan(0);
+    expect(initializes.every((entry) => !entry.endsWith(':unset'))).toBe(true);
   });
 
   it('renders the five nav tabs and keeps the default deals tab active', async () => {
@@ -995,6 +1058,7 @@ describe('s2s-app (shell)', () => {
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
     const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
     await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-step')).toBeTruthy());
 
@@ -1007,6 +1071,7 @@ describe('s2s-app (shell)', () => {
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
     const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
     await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-step')).toBeTruthy());
     (step.shadowRoot?.querySelector('#ens-dismiss') as HTMLElement).click();
@@ -1033,6 +1098,7 @@ describe('s2s-app (shell)', () => {
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
     const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
     await vi.waitFor(() => expect(step?.shadowRoot?.querySelector('#ens-propose')).toBeTruthy());
 
@@ -1085,10 +1151,10 @@ describe('s2s-app (shell)', () => {
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
     // Let the post-records check settle: asserting before it runs would pass
-    // even with the hardcoded fallback restored.
-    await vi.waitFor(() => expect((el as unknown as { fetching: boolean }).fetching).toBe(false));
+    // even with the hardcoded fallback restored. The repair path seeds step 1
+    // here, so the tabs are not rendered at all — settle on the fetch, not a tab.
+    await settled(el);
 
     const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep | null;
     expect(step?.shadowRoot?.querySelector('#ens-step') ?? null).toBeNull();
@@ -1147,7 +1213,7 @@ describe('s2s-app (shell)', () => {
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    const modal = await progressModal(el);
     await vi.waitFor(() => expect(modal.open).toBe(true));
 
     // The flow is seeded at step 1, for THIS Safe, with the label from the name
@@ -1322,7 +1388,7 @@ describe('s2s-app (shell)', () => {
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+    const modal = await progressModal(el);
     await vi.waitFor(() => expect(modal.open).toBe(true));
 
     expect(safeIntMocks.evmRead).toHaveBeenCalledWith(
@@ -1475,7 +1541,7 @@ describe('s2s-app (shell)', () => {
     );
 
     const el = await mountLit<S2SApp>('s2s-app', {});
-    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    await settled(el);
 
     const probe = el as unknown as {
       initPhase: InitPhase | null;
@@ -2239,7 +2305,7 @@ describe('s2s-app (shell)', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => t0 + ticks++ * 11 * 60_000);
     try {
       const el = await mountLit<S2SApp>('s2s-app', {});
-      const modal = el.shadowRoot?.querySelector('s2s-init-progress-modal') as S2SInitProgressModal;
+      const modal = await progressModal(el);
 
       await vi.waitFor(() =>
         expect(modal.shadowRoot?.querySelector('#init-progress-error')).toBeTruthy(),

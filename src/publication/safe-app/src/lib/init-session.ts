@@ -102,6 +102,14 @@ export interface InitSession {
   /** Learned on-chain module addresses (set once the create batch executed). */
   recordsModule?: string;
   publicationModule?: string;
+  /** The publication module address the create batch was expected to deploy, read
+   *  from `moduleAddress(safe)` BEFORE that batch was proposed.
+   *
+   *  It cannot be recomputed later — once the create executes the factory answers
+   *  for the next one — so it is persisted with the proposal. It is only a hint:
+   *  detection accepts it once that address has code, and reads the
+   *  ModuleCreated log for everything else. */
+  predictedPublicationModule?: string;
   /** Step 1's L1 `registerSubdomain` tx was proposed (or its `to`/`data` was
    *  surfaced for a manual registration). Kept SEPARATE from `phase`: step 1
    *  can re-enter from a later phase (the name was released/transferred on L1
@@ -383,6 +391,10 @@ export function loadInitSession(storage: InitSessionStorage, key: string): InitS
       recordsModule: typeof parsed.recordsModule === 'string' ? parsed.recordsModule : undefined,
       publicationModule:
         typeof parsed.publicationModule === 'string' ? parsed.publicationModule : undefined,
+      predictedPublicationModule:
+        typeof parsed.predictedPublicationModule === 'string'
+          ? parsed.predictedPublicationModule
+          : undefined,
       // Step-1 flags. A session written before they existed tells us the same
       // thing through its phase: 'awaiting-ens' means the L1 tx was proposed.
       ...(parsed.ensProposed === true || parsed.phase === 'awaiting-ens'

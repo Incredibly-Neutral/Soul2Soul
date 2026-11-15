@@ -30,7 +30,7 @@ interface ContractToVerify {
 
 const CONTRACTS: ContractToVerify[] = [
   { name: 'S2SPublicationModuleV2', address: '0x4d05a336700644De60F09aF8104DC96047023C1f' },
-  { name: 'S2SPublicationModuleV3Factory', address: process.env.PUBLICATION_FACTORY_ADDRESS || '' },
+  { name: 'S2SPublicationModuleV4Create2Factory', address: process.env.PUBLICATION_FACTORY_ADDRESS || '' },
 ].filter((c) => {
   if (!c.address) {
     console.log(`  ⏭  ${c.name}: no address yet (set PUBLICATION_FACTORY_ADDRESS after deploying)`);

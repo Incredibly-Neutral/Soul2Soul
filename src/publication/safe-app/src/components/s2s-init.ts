@@ -160,6 +160,16 @@ interface InitSafeIntegration {
   getRecord(key: string): Promise<string>;
   /** Byte size of the code at an address on the Safe's chain (0 = no contract). */
   contractCodeSize(address: string): Promise<number>;
+  /**
+   * `moduleAddress(safe)` on the publication factory: the address its next
+   * create deploys. Absent/undefined on a factory that predates CREATE2, in which
+   * case detection reads the ModuleCreated log exactly as before.
+   */
+  predictNextPublicationModule?(target: {
+    factory: string;
+    safeAddress: string;
+    chainId: number;
+  }): Promise<string | undefined>;
   /** Make getRecord / module reads work for freshly-created modules. */
   adoptModules(recordsModule?: string, publicationModule?: string): void | Promise<void>;
   /** Raw chain read (src/lib/evm). The ENS step reads the L1 registry through it. */
@@ -1049,10 +1059,50 @@ export class S2SPublicationInit extends LitElement {
           scanExistingModules(scanDeps, { lookbackBlocks });
         const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-        let existing: { recordsModule?: string; publicationModule?: string } = {};
+        // Ask the factory for this Safe's module first: `moduleAddress(safe)` is
+        // the module it recorded when the Safe has one, and the address the next
+        // create would land at otherwise. Code at that address is proof the
+        // publication exists, however long ago it was deployed — the log scan
+        // below only looks back DEFAULT/WIDE windows, so a pair older than the
+        // window would be re-created (the records factory is non-idempotent).
+        // Read once, before anything is proposed: after the create executes the
+        // factory answers for the NEXT create. Failures are not fatal; the log
+        // scan is the fallback either way.
+        let factoryModule: string | undefined;
+        try {
+          factoryModule = await si.predictNextPublicationModule?.({
+            factory: info.publicationFactory,
+            safeAddress,
+            chainId: this.safeInfo?.chainId ?? session.chainId,
+          });
+        } catch (e) {
+          console.log(`[init] create: module address prediction unavailable (${reason(e)})`);
+        }
+
+        let factoryModuleExists = false;
+        if (factoryModule) {
+          try {
+            factoryModuleExists = (await si.contractCodeSize(factoryModule)) > 0;
+          } catch {
+            factoryModuleExists = false;
+          }
+        }
+        if (factoryModuleExists) {
+          console.log(`[init] create: factory reports an existing module at ${factoryModule}`);
+        }
+
+        let existing: { recordsModule?: string; publicationModule?: string } = factoryModuleExists
+          ? { publicationModule: factoryModule }
+          : {};
         let narrowScanFailed = false;
         try {
-          existing = await scanAt(DEFAULT_LOOKBACK_BLOCKS);
+          // A log hit wins per module (it is the record of what the factory
+          // did); the factory's answer fills a module the window missed.
+          const scanned = await scanAt(DEFAULT_LOOKBACK_BLOCKS);
+          existing = {
+            recordsModule: scanned.recordsModule ?? existing.recordsModule,
+            publicationModule: scanned.publicationModule ?? existing.publicationModule,
+          };
         } catch (err) {
           // A failed scan must never block the flow: without an answer we are
           // back to the pre-scan behaviour (propose the create batch). No
@@ -1117,10 +1167,18 @@ export class S2SPublicationInit extends LitElement {
         console.log(
           `[init] create: no complete module pair found (records=${existing.recordsModule ?? 'none'} publication=${existing.publicationModule ?? 'none'}), proposing the create batch`,
         );
+
+        // The address this batch's publication create lands at, if the factory
+        // can name it: read above, before the proposal, because after the batch
+        // executes the factory answers for the NEXT create. A create2 factory
+        // re-creating a module the Safe already has is idempotent, so a module
+        // confirmed there before the batch is still the one detection finds.
+        const predictedPublicationModule: string | undefined = factoryModule;
+
         const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
         const createUrl = await si.proposeBatch(createBatch);
         this.proposals = [createUrl];
-        this.persist('detecting', { proposals: [createUrl] });
+        this.persist('detecting', { proposals: [createUrl], predictedPublicationModule });
         this.step = 'detecting';
         this.dispatchProgress();
         return false;
@@ -1162,6 +1220,13 @@ export class S2SPublicationInit extends LitElement {
           safeAddress,
           recordsFactory: info.recordsFactory,
           publicationFactory: info.publicationFactory,
+          // The create batch is this Safe's next one on this factory, so its
+          // address was known before it was proposed. Detection confirms it by
+          // code instead of waiting for this factory's log; the records module
+          // has no prediction (plain-CREATE factory) and is still read from its
+          // log.
+          predictedPublicationModule: session.predictedPublicationModule,
+          hasCode: async (address: string) => (await si.contractCodeSize(address)) > 0,
           getBlockNumber: async () => {
             const block = await si.getProvider().getBlockNumber();
             lastPoll.block = block;

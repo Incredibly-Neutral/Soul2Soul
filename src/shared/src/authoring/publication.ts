@@ -1,7 +1,8 @@
 // ============================================================================
 // Publication address resolution — pure viem reads that resolve a publication
 // subdomain to its Safe (L1 ENS NameWrapper) and then to its Records +
-// Publication module addresses (L2 Safe `getModulesPaginated` + NAME() sniff).
+// Publication module addresses (L2 Safe `getModulesPaginated` + NAME() sniff,
+// or the CREATE2 factory's own prediction when that factory is supplied).
 //
 // Ported from neutralpress' publication/ens.ts + publication.service.ts so the
 // headless author-cli resolves addresses exactly the way the Obsidian plugin
@@ -11,6 +12,7 @@
 import { keccak256, toBytes, type Address, type PublicClient } from 'viem';
 
 import { ensSubdomainRegistryAbi, safeAbi } from '../contracts';
+import { predictPublicationModule } from '../protocol/factories';
 import { isPublicationModuleName } from '../protocol/module-name';
 
 /** Minimal NameWrapper `ownerOf` ABI — the ENS registry points at it. */
@@ -93,13 +95,19 @@ export interface ResolvedPublicationModules {
  * `isPublicationModuleName`, because a publication on an older implementation
  * still serves reads and author writes. Mirrors neutralpress'
  * `PublicationService.getModuleAdresses`.
+ *
+ * `factoryAddress` is the `publication_factory` record. A CREATE2 factory already
+ * knows where the module is, so its prediction is tried first and wins; a
+ * V2-generation factory cannot answer, and the `NAME()` scan is the answer as it
+ * always was. The scan also stays for the records module, which no factory
+ * predicts.
  */
 export async function resolvePublicationModules(
   l2: PublicClient,
   safeAddress: Address,
+  factoryAddress?: Address,
 ): Promise<ResolvedPublicationModules> {
   let configModule: Address | undefined;
-  let publicationModule: Address | undefined;
 
   const [modules] = (await l2.readContract({
     address: safeAddress,
@@ -107,6 +115,11 @@ export async function resolvePublicationModules(
     functionName: 'getModulesPaginated',
     args: ['0x0000000000000000000000000000000000000001', 10],
   })) as [Address[], Address];
+
+  const predicted = factoryAddress
+    ? await predictPublicationModule(l2, factoryAddress, safeAddress, modules)
+    : undefined;
+  let publicationModule = predicted;
 
   for (const moduleAddress of modules) {
     try {
@@ -118,7 +131,7 @@ export async function resolvePublicationModules(
 
       if (moduleName === 'S2S Records Module') {
         configModule = moduleAddress;
-      } else if (isPublicationModuleName(moduleName)) {
+      } else if (isPublicationModuleName(moduleName) && !predicted) {
         publicationModule = moduleAddress;
       }
     } catch {

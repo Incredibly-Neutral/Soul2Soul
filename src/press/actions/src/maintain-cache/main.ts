@@ -7,7 +7,7 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
@@ -74,7 +74,15 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
     trace.push(`signer: ${signerAddress}`);
     trace.push(`pub: ${publication}`);
 
-    const { publicationModule } = await getDomainOwnerAndModules(publication, rpcs);
+    // The one `publication_factory` record, so module discovery can use the
+    // factory's prediction; the protocol walk itself stays behind the gate.
+    const publicationFactory = await getPublicationFactory(rpcs);
+
+    const { publicationModule } = await getDomainOwnerAndModules(
+      publication,
+      rpcs,
+      publicationFactory,
+    );
     if (!publicationModule) throw 'missing publication module';
 
     // Same authorization gate as the update action — only a legitimate author

@@ -1,7 +1,7 @@
 /**
  * Deploy a new S2SPublicationModule implementation, then point the factory at it.
  *
- * The factory half is privileged. S2SPublicationModuleV3Factory only accepts
+ * The factory half is privileged. S2SPublicationModuleV4Create2Factory only accepts
  * setImplementation from the protocol safe, so this script does not sign that
  * call unless the configured key *is* the protocol safe. Default behaviour is
  * to print a ready-to-paste Safe transaction for the protocol safe's owners to
@@ -14,12 +14,17 @@
  * publication proxies are UUPS and upgrade independently (upgradeTo on each
  * proxy, authorised by its safe) — updating the factory does not touch them.
  *
+ * The factory must be the V4 one. A V4 module reads its upgrade approval
+ * through the factory it recorded, so before deploying anything this script
+ * asks `isApprovedImplementation` on that factory and refuses one that does not
+ * answer — the plain-CREATE V3 factory answers protocolSafe() but keeps no set.
+ *
  * Usage:
  *   cd src/publication/contracts && pnpm deploy:pub
  *
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY             deployer key for the implementation
- *   PUBLICATION_FACTORY_ADDRESS      the V3 factory, as printed by pnpm deploy:pubfac
+ *   PUBLICATION_FACTORY_ADDRESS      the V4 CREATE2 factory, as printed by pnpm deploy:pubfac
  *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  */
 
@@ -53,13 +58,14 @@ const ARTIFACT_ROOT = resolve(__dirname, '../artifacts');
 type Wallet = WalletClient<HttpTransport, typeof base, Account>;
 type Pub = PublicClient<HttpTransport, typeof base>;
 
-const IMPL_NAME = process.env.PUBLICATION_IMPL_CONTRACT || 'S2SPublicationModuleV3';
+const IMPL_NAME = process.env.PUBLICATION_IMPL_CONTRACT || 'S2SPublicationModuleV4';
 
 const FACTORY_ABI = parseAbi([
   'function setImplementation(address _implementation)',
   'function latestImplementation() view returns (address)',
   'function implementationCount() view returns (uint256)',
   'function protocolSafe() view returns (address)',
+  'function isApprovedImplementation(address implementation) view returns (bool)',
 ]);
 
 const SAFE_ABI = parseAbi([
@@ -173,7 +179,7 @@ async function main() {
   } catch {
     console.error(`❌ ${factory} has no protocolSafe() — that is the V2 factory.`);
     console.error('   V2 setImplementation is callable by anyone and cannot be patched.');
-    console.error('   Deploy S2SPublicationModuleV3Factory (pnpm deploy:pubfac) and update that address instead.');
+    console.error('   Deploy S2SPublicationModuleV4Create2Factory (pnpm deploy:pubfac) and update that address instead.');
     process.exit(1);
   }
 
@@ -183,6 +189,34 @@ async function main() {
     abi: FACTORY_ABI,
     functionName: 'latestImplementation',
   });
+
+  // A V4 module reads its upgrade approval through the factory it recorded at
+  // birth. S2SPublicationModuleV3Factory answers protocolSafe() as well, but it
+  // keeps no approval set: the selector is absent and this call reverts. That
+  // revert is the whole signal — a module the V3 factory deploys records a
+  // factory that cannot answer the upgrade check, so every upgrade on it reverts
+  // on an unknown selector, without a NoFactory() to say why. The returned value
+  // is not the test; a factory that answers has the set, and setImplementation
+  // fills it.
+  //
+  // The argument is immaterial for the probe: any address reverts on a factory
+  // without the selector. Naming the implementation the factory already holds
+  // keeps it concrete, and on a V4 factory the answer is true.
+  try {
+    await publicClient.readContract({
+      address: factory,
+      abi: FACTORY_ABI,
+      functionName: 'isApprovedImplementation',
+      args: [prevImpl],
+    });
+  } catch {
+    console.error(`❌ ${factory} has no isApprovedImplementation() — that factory keeps no approval set.`);
+    console.error('   The plain-CREATE V3 factory answers protocolSafe() but records no approvals, so a');
+    console.error('   V4 module it deploys cannot pass its own upgrade check and every upgrade reverts.');
+    console.error('   Deploy S2SPublicationModuleV4Create2Factory (pnpm deploy:pubfac) and update that address instead.');
+    process.exit(1);
+  }
+
   console.log(`   Previous implementation: ${prevImpl}\n`);
 
   console.log(`1/2 Deploying ${IMPL_NAME}...`);

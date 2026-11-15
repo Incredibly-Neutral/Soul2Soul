@@ -51,6 +51,8 @@ vi.mock('../libs/ens.factory', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
+  // The one record read before the module call; null is the probe path.
+  getPublicationFactory: vi.fn(async () => null),
   getProtocolInfo: vi.fn(async () => ({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
@@ -116,6 +118,7 @@ const gatewayResponse = (url: string): Response => {
 // ===========================================================================
 
 import { main } from './main';
+import { getProtocolInfo } from '../libs/protocol.factory';
 
 const gateway = 'http://gateway.test';
 
@@ -289,7 +292,9 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('reset requires publication owner');
-    // Nothing was written to the gateway (the gate fails before the tree build).
+    // Nothing was written to the gateway (the gate fails before the tree build),
+    // and the protocol walk behind the gate was never paid.
+    expect(getProtocolInfo).not.toHaveBeenCalled();
     expect(mocks.gatewayUrls.length).toBe(0);
   });
 

@@ -5,6 +5,11 @@ import { toBytes32Id } from '@s2s/soul2soul-shared';
 import { isPublicationModuleName } from '@s2s/soul2soul-shared/protocol';
 
 import { publicationBindingFor, type PublicationBinding } from './publication-version';
+import {
+  predictNextModuleAddress,
+  resolveModuleAddress,
+  type Create2Read,
+} from './publication-init';
 
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -25,6 +30,16 @@ function contractAddress(module: unknown): string {
   return typeof target === 'string' ? target : '';
 }
 
+/** Which factory, Safe and chain a CREATE2 prediction is for. */
+export interface PublicationFactoryTarget {
+  /** Defaults to the factory recorded by setPublicationFactory. */
+  factory?: string;
+  /** Defaults to the initialized Safe. */
+  safeAddress?: string;
+  /** Defaults to the Safe's chain. */
+  chainId?: number;
+}
+
 export class SafeIntegration {
   private safeSdk: SafeAppsSDK | null = null;
   public recordsModule: EthersContract | null = null;
@@ -35,6 +50,13 @@ export class SafeIntegration {
    * Every mutation reads it; nothing else in the app inspects a version.
    */
   private publicationBinding: PublicationBinding | null = null;
+  /**
+   * `publication_factory` from the protocol record, set once it has been read.
+   * While set, module discovery asks it for the address it will deploy (a CREATE2
+   * factory can answer) before falling back to probing the Safe's module list
+   * with NAME(). Empty means "not known yet": discovery scans, exactly as before.
+   */
+  private publicationFactory = '';
   private safeInfo: SafeInfo = {
     safeAddress: '',
     s2sRecords: '',
@@ -121,6 +143,38 @@ export class SafeIntegration {
       const rpcUrl = getRpcUrl(safeData.chainId);
       const provider = new window.ethers.JsonRpcProvider(rpcUrl);
 
+      // Prediction first: a CREATE2 factory names the module this Safe's
+      // publication lives at, so the answer does not depend on the module list
+      // being readable. Accepted only when the Safe still LISTS it (a module
+      // disabled by a teardown stays deployed, and every write to it would
+      // revert) and the NAME() probe still decides the ABI version — the factory
+      // answers addresses, not versions.
+      // The accepted prediction is held aside and applied AFTER the scan: the
+      // scan keeps its own tie-break (last publication module listed wins), so a
+      // prediction must not change what an unfactored Safe resolves to, and it
+      // must not be overwritten by the scan either.
+      let predictedModule: EthersContract | null = null;
+      let predictedBinding: PublicationBinding | null = null;
+      if (!contractAddress(publicationModule)) {
+        try {
+          const predicted = await this.resolvePublicationModule({
+            factory: this.publicationFactory,
+            safeAddress: safeData.safeAddress,
+            chainId: safeData.chainId,
+          });
+          if (predicted && isListed(predicted)) {
+            const binding = await this.readPublicationBinding(predicted, provider);
+            if (binding) {
+              predictedModule = new window.ethers.Contract(predicted, binding.abi, provider);
+              predictedBinding = binding;
+              console.log(`[si] publication module resolved by prediction: ${predicted}`);
+            }
+          }
+        } catch (error) {
+          console.log('[si] publication module prediction failed, scanning the module list', error);
+        }
+      }
+
       // Find both modules
       const NAME_ABI = ['function NAME() view returns (string)'];
 
@@ -180,6 +234,13 @@ export class SafeIntegration {
       if (this.publicationModule && this.publicationModule !== capturedPublication) {
         publicationModule = this.publicationModule;
         publicationBinding = this.publicationBinding;
+      }
+
+      // A confirmed prediction is exact for this Safe, so it beats whatever the
+      // list scan landed on (including a stale second publication module).
+      if (predictedModule && predictedBinding) {
+        publicationModule = predictedModule;
+        publicationBinding = predictedBinding;
       }
 
       // Single, complete publication of the discovery result. The addresses in
@@ -256,6 +317,64 @@ export class SafeIntegration {
     // eth_getCode returns '0x' for an account without code: 2 hex chars per
     // byte once the 0x prefix is dropped.
     return Math.max(0, (code.length - 2) / 2);
+  }
+
+  /**
+   * Record the publication factory (the `publication_factory` protocol record).
+   * Called by the host as soon as the record is read; discovery run before that
+   * point simply scans, and the next initialize() uses the factory.
+   */
+  setPublicationFactory(factory: string): void {
+    this.publicationFactory = factory ?? '';
+  }
+
+  /** A view read on a contract on a given chain, in the shape the CREATE2 helpers take. */
+  private create2Read(chainId: number): Create2Read {
+    return (factory, abi, method, args) => this.evmRead(chainId, factory, abi, method, args);
+  }
+
+  /**
+   * The address the next `createModule(safe, …)` on the publication factory will
+   * deploy, or `undefined` when that factory predates CREATE2 (it answers no such
+   * selector). Read it BEFORE the create batch is proposed: once that executes
+   * the factory answers for the following create.
+   *
+   * Every input defaults to the initialized state and can be passed explicitly,
+   * because a discovery pass runs before `safeInfo` is published.
+   */
+  async predictNextPublicationModule(
+    target: PublicationFactoryTarget = {},
+  ): Promise<string | undefined> {
+    const factory = target.factory ?? this.publicationFactory;
+    const safeAddress = target.safeAddress ?? this.safeInfo.safeAddress;
+    const chainId = target.chainId ?? this.safeInfo.chainId;
+    if (!factory || !safeAddress || !chainId) return undefined;
+    return predictNextModuleAddress({
+      read: this.create2Read(chainId),
+      factory,
+      safeAddress,
+    });
+  }
+
+  /**
+   * The module an ALREADY CREATED publication lives at, per the factory, or
+   * `undefined` when the factory cannot answer for this Safe (pre-CREATE2, or a
+   * module made by the plain-CREATE factories). Candidates without code are
+   * rejected here, so the caller keeps its NAME() scan for everything else.
+   */
+  async resolvePublicationModule(
+    target: PublicationFactoryTarget = {},
+  ): Promise<string | undefined> {
+    const factory = target.factory ?? this.publicationFactory;
+    const safeAddress = target.safeAddress ?? this.safeInfo.safeAddress;
+    const chainId = target.chainId ?? this.safeInfo.chainId;
+    if (!factory || !safeAddress || !chainId) return undefined;
+    return resolveModuleAddress({
+      read: this.create2Read(chainId),
+      codeSize: (address: string) => this.contractCodeSize(address, chainId),
+      factory,
+      safeAddress,
+    });
   }
 
   /**
@@ -361,9 +480,11 @@ export class SafeIntegration {
    * V3 binding looks healthy until the first Accept or Refuse fails
    * client-side, with no transaction to inspect.
    */
-  private async readPublicationBinding(address: string): Promise<PublicationBinding | undefined> {
+  private async readPublicationBinding(
+    address: string,
+    provider = this.getProvider(),
+  ): Promise<PublicationBinding | undefined> {
     try {
-      const provider = this.getProvider();
       const probe = new window.ethers.Contract(address, ['function NAME() view returns (string)'], provider);
       const name = (await probe.NAME()) as string;
       const binding = publicationBindingFor(name);

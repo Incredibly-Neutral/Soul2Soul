@@ -28,6 +28,8 @@ import {
   waitForModulesEnabled,
   initializePublication,
   defaultSafeUrl,
+  predictNextModuleAddress,
+  resolveModuleAddress,
 } from '../../src/lib/publication-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
 
@@ -674,6 +676,231 @@ describe('detectModuleAddresses', () => {
 });
 
 // ---------------------------------------------------------------------------
+// CREATE2 prediction (SPEC-publication-account.md: the factory names the
+// module address). A create2 factory answers moduleAddress(safe) for the create
+// that has NOT happened yet, so the value is only accepted where code sits.
+// ---------------------------------------------------------------------------
+
+describe('predictNextModuleAddress / resolveModuleAddress', () => {
+  const PREDICTED = getAddress('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  const OLDER = getAddress('0xcccccccccccccccccccccccccccccccccccccccc');
+
+  /** A `read` that answers only the selectors `answers` lists; the rest revert. */
+  function makeRead(answers: {
+    moduleAddress?: string | Error;
+    count?: number | Error;
+    forVersion?: Record<number, string>;
+  }) {
+    return vi.fn(async (_factory: string, _abi: unknown, method: string, args: unknown[]) => {
+      if (method === 'moduleAddress') {
+        if (answers.moduleAddress instanceof Error) throw answers.moduleAddress;
+        return answers.moduleAddress;
+      }
+      if (method === 'implementationCount') {
+        if (answers.count instanceof Error || answers.count === undefined) {
+          throw answers.count instanceof Error ? answers.count : new Error('no such selector');
+        }
+        return BigInt(answers.count);
+      }
+      if (method === 'moduleAddressForVersion') {
+        const version = Number(args[1]);
+        const answer = answers.forVersion?.[version];
+        if (!answer) throw new Error('execution reverted');
+        return answer;
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+  }
+
+  const codeAt = (withCode: string[]) => async (address: string) =>
+    withCode.includes(address) ? 200 : 0;
+
+  it('predictNextModuleAddress: returns the factory answer, checksummed', async () => {
+    const predicted = await predictNextModuleAddress({
+      read: makeRead({ moduleAddress: PREDICTED.toLowerCase() }),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(predicted).toBe(PREDICTED);
+  });
+
+  it('predictNextModuleAddress: undefined when the factory answers no such selector', async () => {
+    const predicted = await predictNextModuleAddress({
+      read: makeRead({ moduleAddress: new Error('function selector was not recognized') }),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(predicted).toBeUndefined();
+  });
+
+  it('predictNextModuleAddress: treats address(0) as no answer', async () => {
+    const predicted = await predictNextModuleAddress({
+      read: makeRead({ moduleAddress: '0x0000000000000000000000000000000000000000' }),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(predicted).toBeUndefined();
+  });
+
+  it('predictNextModuleAddress: no factory known → no read', async () => {
+    const read = makeRead({ moduleAddress: PREDICTED });
+    expect(await predictNextModuleAddress({ read, factory: '', safeAddress: SAFE })).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('resolveModuleAddress: takes moduleAddress once that address has code', async () => {
+    const address = await resolveModuleAddress({
+      read: makeRead({ moduleAddress: PREDICTED }),
+      codeSize: codeAt([PREDICTED]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(address).toBe(PREDICTED);
+  });
+
+  it('resolveModuleAddress: an empty moduleAddress is not the publication, so it walks versions', async () => {
+    const read = makeRead({ moduleAddress: PREDICTED, count: 2, forVersion: { 1: OLDER } });
+    const address = await resolveModuleAddress({
+      read,
+      codeSize: codeAt([OLDER]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(address).toBe(OLDER);
+    expect(read).toHaveBeenCalledWith(PUB_FACTORY, expect.anything(), 'moduleAddressForVersion', [
+      SAFE,
+      1n,
+    ]);
+  });
+
+  it('resolveModuleAddress: undefined when the factory cannot answer at all', async () => {
+    const address = await resolveModuleAddress({
+      read: makeRead({ moduleAddress: new Error('no selector'), count: new Error('no selector') }),
+      codeSize: codeAt([]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(address).toBeUndefined();
+  });
+
+  it('resolveModuleAddress: a reverting moduleAddress ends the attempt at once', async () => {
+    // The revert means "plain-CREATE factory", so the version walk cannot help
+    // and costs a provider rebuild per read on the boot path.
+    const read = makeRead({ moduleAddress: new Error('no selector'), count: 3 });
+    await resolveModuleAddress({
+      read,
+      codeSize: codeAt([PREDICTED]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls.map(([, , method]) => method)).toEqual(['moduleAddress']);
+  });
+
+  it('resolveModuleAddress: undefined when no candidate has code', async () => {
+    const address = await resolveModuleAddress({
+      read: makeRead({ moduleAddress: PREDICTED, count: 3, forVersion: { 1: OLDER, 2: OLDER } }),
+      codeSize: codeAt([]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+    });
+    expect(address).toBeUndefined();
+  });
+
+  it('resolveModuleAddress: bounded by maxVersions, newest first', async () => {
+    const read = makeRead({ moduleAddress: PREDICTED, count: 10, forVersion: {} });
+    await resolveModuleAddress({
+      read,
+      codeSize: codeAt([]),
+      factory: PUB_FACTORY,
+      safeAddress: SAFE,
+      maxVersions: 2,
+    });
+    const versions = read.mock.calls
+      .filter(([, , method]) => method === 'moduleAddressForVersion')
+      .map(([, , , args]) => Number((args as unknown[])[1]));
+    expect(versions).toEqual([10, 9]);
+  });
+});
+
+describe('detectModuleAddresses with a predicted module address', () => {
+  const PREDICTED = getAddress('0xdddddddddddddddddddddddddddddddddddddddd');
+
+  it('confirmed prediction: returned without reading the publication logs', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
+    );
+    const hasCode = vi.fn(async () => true);
+
+    const result = await detectModuleAddresses(
+      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
+      { pollIntervalMs: 0 },
+    );
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PREDICTED });
+    // Records only: the publication half never waited on a log.
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(1);
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
+      RECORDS_FACTORY,
+      SAFE,
+      recordsTopic0,
+      expect.any(Number),
+    );
+  });
+
+  it('unconfirmed prediction: the create has not executed, so the logs are still read', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY
+        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
+        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
+    );
+    const hasCode = vi.fn(async () => false);
+
+    const result = await detectModuleAddresses(
+      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
+      { pollIntervalMs: 0 },
+    );
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
+  });
+
+  it('a code check that throws counts as unconfirmed (no crash)', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY
+        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
+        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
+    );
+    const hasCode = vi.fn(async () => {
+      throw new Error('rpc down');
+    });
+
+    const result = await detectModuleAddresses(
+      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
+      { pollIntervalMs: 0 },
+    );
+
+    expect(result.publicationModule).toBe(PUB_MODULE);
+  });
+
+  it('no prediction: behaviour is unchanged (both logs read)', async () => {
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY
+        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
+        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
+    );
+
+    const result = await detectModuleAddresses(
+      { ...detectDeps, fetchModuleCreatedLogs },
+      { pollIntervalMs: 0 },
+    );
+
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // waitForModulesEnabled — the human-in-the-loop bridge between the enable
 // proposal and the name-record proposal.
 // ---------------------------------------------------------------------------
@@ -771,8 +998,62 @@ describe('initializePublication', () => {
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
 
-  it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {
+  it('reads the predicted address BEFORE proposing the create batch and skips the publication log', async () => {
+    const PREDICTED = getAddress('0xdddddddddddddddddddddddddddddddddddddddd');
+    const order: string[] = [];
     let n = 0;
+    const propose = vi.fn(async (_txs: MetaTransactionData[]) => {
+      order.push('propose');
+      return `proposal-${++n}`;
+    });
+    const predictNextModuleAddress = vi.fn(async () => {
+      order.push('predict');
+      return PREDICTED;
+    });
+    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
+      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
+    );
+
+    const result = await initializePublication(
+      {
+        ...initDeps,
+        propose,
+        fetchModuleCreatedLogs,
+        predictNextModuleAddress,
+        hasCode: async (address: string) => address === PREDICTED,
+      },
+      {},
+    );
+
+    // The prediction is only exact before the create executes: afterwards the
+    // factory answers for the NEXT create.
+    expect(order.slice(0, 2)).toEqual(['predict', 'propose']);
+    expect(result.publicationModule).toBe(PREDICTED);
+    // The enable batch still carries the predicted module.
+    expect(propose.mock.calls[1][0]).toEqual(
+      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PREDICTED),
+    );
+    // Only the records factory's log was read.
+    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it('a prediction that fails does not stop the create: the logs still resolve the pair', async () => {
+    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${propose.mock.calls.length}`);
+    const predictNextModuleAddress = vi.fn(async () => {
+      throw new Error('rpc down');
+    });
+
+    const result = await initializePublication({ ...initDeps, propose, predictNextModuleAddress }, {});
+
+    expect(result).toEqual({
+      recordsModule: RECORDS_MODULE,
+      publicationModule: PUB_MODULE,
+      nameRecorded: false,
+      proposals: ['proposal-1', 'proposal-2'],
+    });
+  });
+
+  it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {    let n = 0;
     const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
 
     const result = await initializePublication({ ...initDeps, propose }, { name: 'my-pub' });

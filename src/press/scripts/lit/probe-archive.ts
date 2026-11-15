@@ -64,6 +64,11 @@ const ABIS = {
     outputs: [{ type: 'address[]', name: 'array' }, { type: 'address', name: 'next' }],
   }],
   name: [{ type: 'function', name: 'NAME', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] }],
+  // The CREATE2 factory's predictions. A factory deployed before it answers none
+  // of the three; every read below is caught and the name scan runs instead.
+  moduleAddress: [{ type: 'function', name: 'moduleAddress', stateMutability: 'view', inputs: [{ type: 'address', name: 'safe' }], outputs: [{ type: 'address' }] }],
+  moduleAddressForVersion: [{ type: 'function', name: 'moduleAddressForVersion', stateMutability: 'view', inputs: [{ type: 'address', name: 'safe' }, { type: 'uint256', name: 'version' }], outputs: [{ type: 'address' }] }],
+  implementationCount: [{ type: 'function', name: 'implementationCount', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] }],
   getText: [{
     type: 'function', name: 'getText', stateMutability: 'view',
     inputs: [{ type: 'bytes32', name: 'node' }, { type: 'string', name: 'key' }],
@@ -83,7 +88,7 @@ const timeout = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
   Promise.race([p, timeout(ms).then(() => { throw new Error('timeout'); })]);
 
-async function resolvePublicationModule(name: string) {
+async function resolvePublicationModule(name: string, publicationFactory: `0x${string}` | null) {
   const node = namehash(name);
   const nw = await l1.readContract({ address: ENS_REGISTRY, abi: ABIS.nameWrapper, functionName: 'nameWrapper' });
   const multisig = await l1.readContract({ address: nw, abi: ABIS.ownerOf, functionName: 'ownerOf', args: [BigInt(node)] });
@@ -92,17 +97,59 @@ async function resolvePublicationModule(name: string) {
     address: multisig as `0x${string}`, abi: ABIS.getModulesPaginated, functionName: 'getModulesPaginated',
     args: ['0x0000000000000000000000000000000000000001', 10n],
   });
+  const candidates = (modules as `0x${string}`[]).filter(
+    (addr) => !KNOWN_NON_S2S_MODULES.some((k) => k.toLowerCase() === addr.toLowerCase()),
+  );
   let configModule: string | null = null;
   let publicationModule: string | null = null;
-  for (const addr of modules as `0x${string}`[]) {
-    if (KNOWN_NON_S2S_MODULES.some((k) => k.toLowerCase() === addr.toLowerCase())) continue;
+
+  // Prediction first: the factory names the publication module for this Safe,
+  // and the answer counts only when the Safe already lists it.
+  publicationModule = await predictPublicationModule(
+    publicationFactory,
+    multisig as `0x${string}`,
+    candidates,
+  );
+
+  // The name scan still reads every candidate, for the records module and for
+  // V2-created publications, which no version of the factory predicts.
+  for (const addr of candidates) {
+    if (publicationModule && addr === publicationModule) continue;
     try {
       const n = await l2.readContract({ address: addr, abi: ABIS.name, functionName: 'NAME' });
       if (n === 'S2S Records Module') configModule = addr;
-      else if (isPublicationModuleName(n)) publicationModule = addr;
+      else if (isPublicationModuleName(n) && !publicationModule) publicationModule = addr;
     } catch { /* no NAME() */ }
   }
   return { node, multisig, configModule, publicationModule };
+}
+
+// The factory's CREATE2 prediction for this Safe, accepted only when the Safe's
+// module list already holds it. A factory without these reads fails on the first
+// one and the caller falls through to the name scan.
+async function predictPublicationModule(
+  publicationFactory: `0x${string}` | null,
+  safe: `0x${string}`,
+  candidates: `0x${string}`[],
+): Promise<`0x${string}` | null> {
+  if (!publicationFactory) return null;
+  const onList = (addr: unknown) =>
+    typeof addr === 'string'
+      ? ((candidates.find((m) => m.toLowerCase() === addr.toLowerCase()) as `0x${string}`) ?? null)
+      : null;
+  try {
+    const next = onList(await l2.readContract({ address: publicationFactory, abi: ABIS.moduleAddress, functionName: 'moduleAddress', args: [safe] }));
+    if (next) return next;
+    const count = Number(await l2.readContract({ address: publicationFactory, abi: ABIS.implementationCount, functionName: 'implementationCount' }));
+    // Versions are 1-based over the implementation history and the view reverts
+    // InvalidVersion at 0, so the walk is for the older generations only:
+    // `moduleAddress` already covered the newest one. Count 2 asks version 1.
+    for (let version = count - 1; version >= Math.max(1, count - 8); version--) {
+      const hit = onList(await l2.readContract({ address: publicationFactory, abi: ABIS.moduleAddressForVersion, functionName: 'moduleAddressForVersion', args: [safe, BigInt(version)] }));
+      if (hit) return hit;
+    }
+  } catch { /* not a CREATE2 factory, or a failed read: fall through */ }
+  return null;
 }
 
 async function getDeals(pubModule: string) {
@@ -189,7 +236,7 @@ async function main() {
     console.log(`  ${key} pointer raw: ${pointerRaw || '(empty)'}`);
     console.log(`  → archive CID: ${pointerCid || '(none / unreadable)'}`);
 
-    const { multisig, configModule, publicationModule } = await resolvePublicationModule(name);
+    const { multisig, configModule, publicationModule } = await resolvePublicationModule(name, pubFactory as `0x${string}` | null);
     console.log(`  publication Safe: ${multisig || '(unresolved)'}`);
     if (multisig) {
       console.log(`  config module:    ${configModule || '(none found)'}`);

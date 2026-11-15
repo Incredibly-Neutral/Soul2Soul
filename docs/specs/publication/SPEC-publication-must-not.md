@@ -9,13 +9,23 @@
 > the receipt. A row opens with a bold slug, not a number: no `INV-` is minted here, and no requirement
 > id is extended. Where a row derives from a requirement, it names the existing one.
 >
-> **Audited against live code:** 2026-11-10 (`S2SPublicationModuleV3.sol`,
-> `S2SPublicationModuleV3Factory.sol`, `shared/src/gates/index.ts`, `press/actions/src/libs/decrypt.ts`,
-> `publication/safe-app/src/lib/publication-version.ts`).
+> **Audited against live code:** 2026-11-14 (`S2SPublicationModuleV4.sol`,
+> `S2SPublicationModuleV4Create2Factory.sol`, both read on `agent/c2-v4-contracts` at `0fb1f71`,
+> including the `factory()` capability check that guards the approved set; and the reader-side check of
+> the same pass, the `factory()` probes in `shared/src/authoring/publication.ts`,
+> `shared/src/protocol/index.ts`, `publication/safe-app/src/lib/publication-init.ts` and
+> `author/neutralpress/src/publication/publication.service.ts`). The 2026-11-10 pass read
+> `S2SPublicationModuleV3.sol`, `S2SPublicationModuleV3Factory.sol`, `shared/src/gates/index.ts`,
+> `press/actions/src/libs/decrypt.ts`, `publication/safe-app/src/lib/publication-version.ts`. The
+> CREATE2 factory was added on 2026-11-13 as `S2SPublicationModuleV3Create2Factory.sol` and renamed to
+> the V4 factory on 2026-11-14, deploying `S2SPublicationModuleV4`; neither it nor V4 is deployed, so
+> nothing in this file's factory or upgrade rows has run against a live instance.
 >
-> **Test coverage:** the module has no unit test in this tree; only the factory does. Rows that cite a
-> code line and no test name are unproven by a suite, and say so. A row marked `[GAP]` is a claim the
-> code does not enforce.
+> **Test coverage:** 43 pass, all in `publication/contracts/test/`: 20 in
+> `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 7 in
+> `S2SPublicationModuleV4.test.ts`. At the 2026-11-10 pass the module had no unit test in this tree.
+> Rows that cite a code line and no test name are unproven by a suite, and say so. A row marked
+> `[GAP]` is a claim the code does not enforce.
 
 ---
 
@@ -26,7 +36,9 @@ V3 removes that right, and these rows are everything else of the same shape: a p
 state where the record and the byline disagree.
 
 Each row is a MUST NOT, stated against the mechanism. Cites are to
-`src/publication/contracts/src/S2SPublicationModuleV3.sol` unless a path is given.
+`src/publication/contracts/src/S2SPublicationModuleV3.sol` unless a path is given; V4 keeps that
+surface and adds the `factory()` getter and two errors, but the two files are not line-aligned, so a
+row whose behaviour is V4's names the file and not a line.
 
 ## Ending
 
@@ -118,6 +130,19 @@ Evidence: `:410-415`, `:297-312`; code only. The shape invites the mistake, so i
 
 ## Factory
 
+The rows below are stated against `S2SPublicationModuleV3Factory`, whose file and lines they cite.
+`S2SPublicationModuleV4Create2Factory` is the generation that ships: a copy of the same surface, not a
+subclass, so it **re-implements** `implementation-by-protocol-safe-only` and
+`no-module-for-another-safe` in its own file rather than inheriting them, and each row carries a
+second receipt. `upgrade-only-by-own-safe` is no longer inherited unchanged: the `onlySafe` half lives
+in the module and V4 extends it with the factory's approval, so its receipt is the module's and the
+factory's together. The V3 factory deploys V3. The V4 implementation is deployed against the CREATE2
+factory alone, whose constructor and `setImplementation` refuse an implementation that does not answer
+`factory()`, so no supported path pairs V4 code with the plain-CREATE factory. The CREATE2 deployment
+adds no state to the safe and weakens nothing here; it does mean a module
+exists at its predicted address before it is enabled, so `safeModules` and the safe's own module list
+can disagree for a while — the safe's list stays the record.
+
 **`implementation-by-protocol-safe-only`** — The implementation can only be set by the protocol safe.
 `latestImplementation` decides the logic of every module created afterwards, so a permissionless
 setter is a takeover of every future publication.
@@ -125,16 +150,46 @@ Mechanism: `protocolSafe` is immutable (`S2SPublicationModuleV3Factory.sol:32`);
 is `onlyProtocolSafe` (`:74`); the constructor refuses a zero or codeless protocol safe (`:58-62`).
 Evidence: `S2SPublicationModuleV3Factory.test.ts` — "reverts for a caller that is not the protocol
 safe", "refuses an EOA as the protocol safe", "refuses a zero protocol safe".
+Re-implemented in `S2SPublicationModuleV4Create2Factory.sol`: its own immutable `protocolSafe`, its own
+`onlyProtocolSafe` setter, the same four constructor checks, and the gate check V4 adds. Evidence:
+`S2SPublicationModuleV4Create2Factory.test.ts` — "refuses a zero protocol safe", "refuses a protocol
+safe without code", "refuses a zero implementation", "refuses an implementation without code",
+"refuses setImplementation from a caller that is not the protocol safe".
 
 **`no-module-for-another-safe`** — No third party can mint a module that names another publication's
 safe. A spoofed module would enter that safe's module list and be indistinguishable from a real one.
 Mechanism: `createModule` reverts `NotSafeOrProtocolSafe` unless the caller is the safe it names or the
 protocol safe (`:92-95`). Evidence: `S2SPublicationModuleV3Factory.test.ts` — "reverts for a third
 party naming another safe", "reverts for a third party calling createModuleEmpty".
+Re-implemented in `S2SPublicationModuleV4Create2Factory.sol`, and the gate is checked **before** the
+idempotent return: a stranger naming a safe that already has a module is refused, not handed that
+module. Evidence: `S2SPublicationModuleV4Create2Factory.test.ts` — "reverts for a stranger naming
+somebody else's safe", "reverts for a stranger calling createModuleEmpty", "reverts for a stranger
+naming a safe that already has a module".
 
-**`upgrade-only-by-own-safe`** — A module upgrades only by its own safe. Otherwise one publication
-could replace the logic running under another's address.
-Mechanism: `_authorizeUpgrade` is `onlySafe` (`:197`). Evidence: code only; no test.
+**`upgrade-only-by-own-safe`** — A module upgrades only by its own safe, and only to an implementation
+the factory has approved. Otherwise one publication could replace the logic running under another's
+address, or the publication's holders could adopt code the protocol never set for them.
+Mechanism: `_authorizeUpgrade` is `onlySafe`, then requires
+`isApprovedImplementation(newImplementation)` from the factory the module recorded in `initialize`
+(`msg.sender` at creation, no setter), and reverts `ImplementationNotApproved(address)` when it
+answers false. With no factory recorded it reverts `NoFactory()` and refuses every upgrade — the
+fail-closed case, and the state of a V3 proxy upgraded to V4 outside a factory create, because
+`initialize` does not run again. The approved set is the factory's `implementationHistory`, appended
+by its constructor and by `setImplementation`, so an earlier protocol-set implementation stays a legal
+target and rollback works. A protocol-set implementation cannot hand the gate back to the publication:
+the factory refuses an implementation that does not answer `factory()` with
+`ImplementationWithoutUpgradeGate(address)`, in the constructor and in `setImplementation`, so the set
+holds nothing whose `_authorizeUpgrade` is the publication-safe check alone.
+Evidence: `_authorizeUpgrade` is `onlySafe` in `S2SPublicationModuleV4.sol`, unchanged from
+`S2SPublicationModuleV3.sol:197`; the approval and `NoFactory` halves are V4's, and
+`S2SPublicationModuleV4.test.ts` covers each path — "lets the safe upgrade to an implementation the
+factory has set", "refuses an implementation the factory never set", "refuses an upgrade started by
+anyone but the safe", "refuses every upgrade once it runs V4 without a factory recorded", "keeps
+version 1 legal after setImplementation, so a module can roll back", "makes a new implementation legal
+for an existing module without moving any address". The gate check is
+`S2SPublicationModuleV4Create2Factory.test.ts` — "refuses an implementation that carries no upgrade
+gate", "refuses setImplementation of an implementation that carries no upgrade gate".
 
 ## Reading
 

@@ -60,6 +60,8 @@ vi.mock('../libs/ens.factory', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
+  // The one record read before the module call; null is the probe path.
+  getPublicationFactory: vi.fn(async () => null),
   getProtocolInfo: vi.fn(async () => ({
     pkp: '0x' + '55'.repeat(20),
     ensRecords: '0x' + '66'.repeat(20),

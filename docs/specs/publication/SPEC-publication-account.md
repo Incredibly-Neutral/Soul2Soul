@@ -78,10 +78,33 @@ module to be enabled, so the whole finalisation fits one MultiSend and the half-
 ("modules enabled, name never written") is unreachable. `enableModule` is idempotent, so re-proposing
 the batch during a recovery is harmless. An earlier three-proposal flow had exactly that dead end.
 
-**Module addresses cannot be predicted, so they are read back.** `createModule` uses plain `CREATE`,
-and `Safe.enableModule` is `onlySelf` and does not check that the target has code — so the app reads
-`ModuleCreated` events from the transaction receipt: last matching log per factory, within a
-10 000-block lookback, `safe` in topic 1, module in topic 2.
+**Module addresses are computable, and the app still reads them back.**
+`S2SPublicationModuleV4Create2Factory.createModule` deploys with `CREATE2`, so `moduleAddress(safe)`
+answers before the batch is proposed — the module the factory already made for that safe, or the
+address the create will deploy at when there is none. Against `S2SPublicationModuleV3Factory`, whose
+`createModule` uses plain `CREATE`, there is nothing to compute: `Safe.enableModule` is `onlySelf` and
+does not check that the target has code, so the receipt is the only proof a module exists, and the
+app reads `ModuleCreated` events from it — last matching log per factory, within a 10 000-block
+lookback, `safe` in topic 1, module in topic 2.
+
+Both front ends ask the CREATE2 factory first and keep the log read as the fallback. The answer is a
+statement about the factory, not about the Safe: `moduleAddress(safe)` reports the module recorded for
+that safe when there is one, and otherwise the prediction under `latestImplementation`. So it names a
+create that has not happened only for a safe without a module, and `setImplementation` moves it only
+for that safe. A publication created earlier keeps reporting the address it was born at; where a
+create under a given generation would have landed is `moduleAddressForVersion(safe, version)`, 1-based
+over `implementationHistory`, which reverts `InvalidVersion` outside `1..implementationCount()`. The
+prediction is the address alone: the factory constructs the proxy with empty initializer data and
+calls `initialize(safe, authors, devs)` on it afterwards, so the authors array cannot move it.
+
+The caller still confirms: it accepts the publication module from the factory only when that address
+has code and the Safe lists it, since a disabled module keeps its code and every write to it reverts.
+Route B uses the same answer as its existence check before proposing the create: code at
+`moduleAddress(safe)` is a publication older than the log window, which the `ModuleCreated` scan alone
+would miss and re-create. A factory that reports nothing leaves the log scan as the fallback.
+The records module has no prediction — its factory is plain `CREATE` — so its address still comes from
+the log. A factory from the V2 generation answers none of the three selectors; the revert is the
+fallback signal, and `NAME()` still decides the ABI version either way.
 
 After batch 2 the flow waits on a human: poll `isModuleEnabled` every 2 s for up to **10 minutes**
 (`DEFAULT_ENABLE_TIMEOUT_MS = 600_000`). The app cannot confirm its own proposal; a holder has to.
@@ -90,7 +113,9 @@ After batch 2 the flow waits on a human: poll `isModuleEnabled` every 2 s for up
 
 | module | kind | NAME | notes |
 |---|---|---|---|
-| `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | per publication; holds agreements + whitelists |
+| `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | per publication; the implementation new publications get. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards |
+| `S2SPublicationModuleV3` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V3"` | frozen: still what publications created under it run, and upgradable only by its own Safe, with no approval check — the pre-V4 right |
+| `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | history; holds agreements + whitelists under the pre-V3 names |
 | `S2SRecordsModule` | immutable, v1.1.0 | `"S2S Records Module"` | KV records: `name`, `config`, `repo`, `branch`, `feed`, `ens_records` |
 | ERC-4337 module | installed by the Safe host | n/a | the only module on the **author** Safe; a publication Safe created by route A may carry it too |
 
@@ -112,9 +137,22 @@ see [the upgrade edge](#upgradeability).
 
 Two independent upgrade surfaces, and they are not equally guarded.
 
-**Per publication — guarded.** `upgradeToAndCall` arrives through `UUPSUpgradeable`; the contract
-implements `_authorizeUpgrade` as `onlySafe`. Only the publication's own Safe can replace its
-implementation. Storage layout is append-only (INV-3), so an upgrade cannot reorder what exists.
+**Per publication — guarded, and not by the owners.** `upgradeToAndCall` arrives through
+`UUPSUpgradeable`; `_authorizeUpgrade` is `onlySafe`, so the publication's Safe is `msg.sender` and
+no third party reaches the call. The Safe no longer chooses the code. The implementation must be one
+the protocol safe has set: the module asks the factory it recorded in `initialize` for
+`isApprovedImplementation(newImplementation)` and reverts `ImplementationNotApproved(address)` when
+the answer is false. Rollback to an earlier protocol-set implementation is legal, because what the
+factory holds is the whole `implementationHistory`, not the latest entry — approving the whole history
+is sound only because every entry answers `factory()`, which the constructor and `setImplementation`
+check by staticcall before adding one, refusing `ImplementationWithoutUpgradeGate(address)` otherwise.
+That check is a presence test, not a proof of what an implementation does with the field. Storage
+layout is append-only (INV-3), so an upgrade cannot reorder what exists.
+
+A module with no factory recorded refuses every upgrade with `NoFactory()`: fail closed, not open.
+That is the state of a proxy upgraded to V4 by an older module's `onlySafe` right, since `initialize`
+does not run again on upgrade and the slot stays zero. Such a module keeps working and cannot change
+implementation.
 
 **Per deployment — guarded, one address.** `S2SPublicationModuleV3Factory`:
 
@@ -126,6 +164,45 @@ implementation. Storage layout is append-only (INV-3), so an upgrade cannot reor
 | `implementationHistory` | read | append-only list of former implementations, 1-based |
 | `safeModules` / `getModulesForSafe` | read | the factory's own index |
 
+It deploys V3. Its `setImplementation` takes any address, so a V4 implementation set here would still
+answer `factory()` and still gate upgrades, but nothing would predict the addresses of the modules it
+made. The tree does not construct that pair: the deploy script offers the CREATE2 factory alone, and a
+V4 implementation is deployed against it.
+
+**Per deployment — guarded, one predictable address.** `S2SPublicationModuleV4Create2Factory` is the
+same surface, deploying V4, with the same six errors and three views on top of it. It keeps the
+create2 salt, the prediction views, the protocol-safe gate and the idempotent `createModule`, and adds
+the check that an implementation it approves carries the gate: a candidate must answer `factory()` to
+be set, by the protocol safe at construction or later. It is the only CREATE2 factory in the tree and
+is not deployed.
+
+| fn | access control | effect |
+|---|---|---|
+| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated` |
+| `createModuleEmpty(safe)` | same | same, empty lists |
+| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, and adds to the approved set; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
+| `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`, and that set holds only implementations carrying the gate: what `_authorizeUpgrade` accepts, which is why rollback is legal |
+| `moduleAddress(safe)` | read | the address `createModule(safe)` returns right now: the module already created for that safe, else the prediction under `latestImplementation` |
+| `moduleAddressForVersion(safe, version)` | read | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range |
+| `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read | append-only, 1-based |
+| `safeModules` / `getModulesForSafe` | read | the factory's own index, at most one entry per safe |
+
+The salt is `keccak256(abi.encode(keccak256("s2s.publication.module"), safe))`: fixed per safe, no
+counter and no caller input, so one publication has one module address and nobody can grind a salt.
+The proxy is deployed with empty calldata and initialised afterwards, so its init code is the
+`ERC1967Proxy` creation code plus `abi.encode(implementation, "")` — no argument lists, which is why
+the prediction depends on the safe alone and `createModule` and `createModuleEmpty` land on the same
+address. A revert in `initialize` reverts the proxy deployment with it, leaving nothing at the
+predicted address.
+
+The implementation is part of that init code, so `setImplementation` moves the prediction. A safe
+with no module sees `moduleAddress` move; a safe that already has one keeps reporting that module,
+because `moduleAddress` is the address `createModule` returns right now. Where a create under an
+older implementation would have landed is the other question, and `moduleAddressForVersion` answers
+it: a generation, not the module the safe has. Because the
+address is one per safe, `createModule` is idempotent: a safe that already has a module gets it back,
+with nothing deployed and no second `ModuleCreated`, and the lists of the repeat call are ignored.
+
 The protocol safe is `immutable`, fixed at construction, and it is the only address that can name an
 implementation. `createModule` names a safe the caller must be: a third party cannot mint a module
 carrying somebody else's safe, which is what keeps `getModulesForSafe` honest.
@@ -136,12 +213,35 @@ leaked key enough to redirect every future publication. The named safe in `creat
 code-checked: the gate already requires `msg.sender == safe`, so an address without code can only
 ever name itself, and a module bound to an EOA is one nobody else can upgrade or write to.
 
-So the trust edge is: **a per-publication upgrade needs that publication's holders, and what code a
-publication is born with needs one named address — the protocol safe.** Nobody else can change it.
+So the trust edge is: **what code a publication runs, at birth and after every upgrade, is set by the
+protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and
+cannot choose what the upgrade contains. Nobody else can change it either. Moving to V4 is not a way
+out of the gate: a V3 module that upgrades to V4 keeps working and can never upgrade again, the
+`NoFactory()` case above. The only route to a gated module is `createModule` on the V4 factory, which
+mints a new proxy at a new address with an empty version log and no offers or agreements. That
+publication starts from nothing, and reads of the old log stop at the old address.
+
+**The gate binds a module, not a publication.** A publication Safe can enable a second proxy that
+answers the publication module's `NAME()`, disable the gated one, and the contract cannot prevent it:
+the Safe is the only caller and `NAME()` is all a reader matches on (INV-4). The readers now check what
+they matched. `resolvePublicationModules` in `src/shared/src/authoring/publication.ts`,
+`getProtocolControllerAndModules` in `src/shared/src/protocol/index.ts`, the module scan in
+`src/publication/safe-app/src/lib/publication-init.ts`, and `getModuleAdresses` in
+`src/author/neutralpress/src/publication/publication.service.ts` probe `factory()` on a `NAME()` match
+and ignore a module that answers an address other than the `publication_factory` record they hold. A
+probe that reverts is accepted, because V1, V2 and pre-V4 proxies have no such field and rejecting
+them would hide every existing publication; with no record held, the module is accepted. A
+substituted V4-era proxy is therefore ignored rather than served, and the app cannot be pointed at an
+ungated copy of the current surface. It does not stop an owner running V1 or V2 code under their own
+name, or withdrawing the name altogether: the gate protects the implementation of a publication that
+keeps its identity, not the identity.
+
 The V2 factory deployed at `0xe948735151c43183accd8e85b992952b2711d554` cannot be patched: no admin,
 no proxy, no initializer, so its `setImplementation` stays callable by anyone forever. V3 supersedes
-it; the migration is a new factory address in the `publication_factory` record, not a repair.
-`S2SRecordsModuleFactory.createModule` is still ungated (plain `CREATE`, non-idempotent).
+it; the migration is a new factory address in the `publication_factory` record, not a repair. The
+CREATE2 generation supersedes V3 the same way, and predicted addresses count only from the factory
+that produced them: a module at `moduleAddress(safe)` on the V3 factory is not the same address on
+this one. `S2SRecordsModuleFactory.createModule` is still ungated (plain `CREATE`, non-idempotent).
 
 `_authorizeUpgrade` being `onlySafe` is why the app's whole write model — propose, never send — is
 also the upgrade model, and why removing upgradeability changes the app as well as the contract.
@@ -157,6 +257,11 @@ for the whole batch.
 What teardown does **not** do: unpin any CID, re-render or remove any page, unregister the ENS subname,
 or delete the Safe. It removes the publication's *ability to act*, and leaves the site standing.
 
+The init run that follows a teardown cannot start over: the publication module is still deployed, so the
+CREATE2 factory returns the module it already made for that Safe and the run re-enables it with its
+original authors and devs — the whitelist is what changes them, not a second init — while the records
+module is the only fresh one, because the records factory is still non-idempotent.
+
 ## Invariants
 
 - **INV-3 — append-only storage.** C1 declaration order is part of the contract: `safe`, `versions`,
@@ -167,16 +272,24 @@ or delete the Safe. It removes the publication's *ability to act*, and leaves th
   matrix lives in the agreements child and in [the front door](SPEC-publication.md#permissions).
 - **Two addresses, one account.** An L1 write (subnode registration) and an L2 write (modules) act as
   the same Safe because the address is chain-independent.
-- **Creation is not idempotent at the factory, only at `enableModule`.** Re-running route B is safe;
-  re-running route A is not (it would deploy a second set of modules).
+- **Creation is idempotent at the CREATE2 factory, and at `enableModule`.**
+  `S2SPublicationModuleV4Create2Factory.createModule` returns the module it already made for a safe,
+  so re-running route A against it is harmless; against `S2SPublicationModuleV3Factory` it still
+  deploys a second set. Route B is safe either way, because `enableModule` is idempotent.
 
 ## Safe-to-change vs do-not-touch
 
 - 🟢 add module functions/events; add records keys (coordinate INV-2 with the readers); improve
   enumeration gas; add an owner-management surface; add an ownership check on adoption (additive).
 - 🟢 add access control to either factory — strictly additive, nothing depends on it being open.
+- 🟢 supersede a factory with a new generation at a new address — that is what the CREATE2 factory is,
+  and it is the only way to change a deploy path already on chain.
 - 🔴 reorder C1 storage (INV-3); change `NAME()` strings (INV-4); loosen `onlySafe` on the records
-  module or `_authorizeUpgrade`; predict module addresses instead of reading logs; make route A
+  module or `_authorizeUpgrade`; let `_authorizeUpgrade` accept an implementation the factory has not
+  approved, or give the factory address a setter after `initialize`; make `createModule`
+  non-idempotent or give it a caller-chosen salt in the CREATE2 factory, whose address must stay a
+  function of the safe alone; predict addresses against
+  a factory whose `createModule` uses plain `CREATE` (V2, V3) instead of reading logs back; make route A
   idempotent by reusing an existing module.
 
 ## Test seams
@@ -186,8 +299,14 @@ or delete the Safe. It removes the publication's *ability to act*, and leaves th
   the right topic indexes; assert batch 2 is one MultiSend and includes the name record.
 - Discovery: a Safe with a V1-named module → `shared` resolves it, the app does not (this asymmetry is
   currently untested and is the thing most likely to bite).
-- Upgrade: `upgradeToAndCall` from a non-Safe EOA reverts; from the Safe succeeds and
-  `implementationHistory` grows.
+- Upgrade: `upgradeToAndCall` from a non-Safe EOA reverts `OnlySafe`; from the Safe to an
+  implementation the factory never approved reverts `ImplementationNotApproved`; from the Safe to a
+  former implementation succeeds; from a module with no factory recorded it reverts `NoFactory`.
+- CREATE2 factory: `moduleAddress` equals the deployed proxy for both create entry points; a second
+  create returns the same address and emits no `ModuleCreated`; a stranger naming a safe that already
+  has a module gets the gate's revert, not the idempotent return; a safe created before
+  `setImplementation` still reports its own module from `moduleAddress`, while
+  `moduleAddressForVersion(1)` answers the address of that generation.
 - Teardown: `disableModule` ordering against a 3-module list; `deleteRecord` suppressed when the name is
   unknown.
 

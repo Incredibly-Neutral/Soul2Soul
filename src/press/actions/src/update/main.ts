@@ -2,7 +2,7 @@
 
 import { ActionResult, EvmUpdateData, EvmUpdateInput } from '@s2s/soul2soul-shared/lit-actions';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { contenthashToIPFS } from '../libs/ipfs.factory';
 import { fetchWithTimeout, requireFields, setRpcAuth } from '../libs/helpers';
@@ -167,9 +167,15 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     );
     trace.push(`signer: ${signerAddress}`);
     trace.push(`pub: ${publication}`);
+
+    // The one `publication_factory` record, so module discovery can use the
+    // factory's prediction; the protocol walk itself stays behind the gates.
+    const publicationFactory = await getPublicationFactory(rpcs);
+
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,
       rpcs,
+      publicationFactory,
     );
     if (!multisig || !configModule || !publicationModule) {
       throw 'missing config modules';

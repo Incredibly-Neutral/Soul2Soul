@@ -235,7 +235,7 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 |---|---|---|
 | whitelist add/remove | ✓ | — |
 | `admit` (`acceptOffer` alias) | ✓ | — |
-| `upgradeToAndCall` | ✓ | — |
+| `upgradeToAndCall` | ✓ (`msg.sender` is the safe) | an implementation the protocol safe has set on the factory, and no other — see [the account child](SPEC-publication-account.md#upgradeability) |
 | `makeOffer` | ✓ (as entitled) | `genesisAuthor` for later versions; any `canPublish` address for a genesis's first version |
 | `reject` | ✓ (demote a deal, or decline an offer — reversible) | — |
 | `retract` | ✗ (`NotAuthorized()`) | `genesisAuthor` only (withdrawal, terminal) |
