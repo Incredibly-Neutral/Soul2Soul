@@ -5,11 +5,12 @@
  * is `onlySafe`, so only the publication's own Safe can send it — this script
  * never signs anything, it only prints what to paste.
  *
- * The upgrade data is `0x` by default: no initializer runs. A V4 implementation
- * has no initializer at all, and `reinitializeV3()` is gated by `reinitializer(2)`,
- * so on a proxy that already ran it the nonce is spent and attaching it again
- * reverts the whole upgrade. Those V3 proxies are exactly the population being
- * upgraded, which is why the backfill is opt-in rather than the default.
+ * The upgrade data is `0x` by default: no initializer runs. Every proxy has
+ * already run `initialize`, and `reinitializeV3()` is gated by `reinitializer(2)`,
+ * so on a proxy that already ran the backfill that nonce is spent too and
+ * attaching it again reverts the whole upgrade. Those V3 proxies are exactly the
+ * population being upgraded, which is why the backfill is opt-in rather than the
+ * default.
  *
  * `--reinit-v3` attaches `reinitializeV3()` for the one case that still needs it:
  * a V2 proxy that has never backfilled the agreement counter. A V3 proxy, or any
@@ -88,13 +89,13 @@ for (let i = 0; i < argv.length; i++) {
 const [proxyArg, implArg] = positional;
 if (!proxyArg) usage('Missing the proxy address.');
 
-const proxy = isAddress(proxyArg)
+const proxy = isAddress(proxyArg, { strict: false })
   ? getAddress(proxyArg)
   : usage(`Not an address: ${proxyArg}`);
 
 const implRaw = implArg || process.env.PUBLICATION_IMPLEMENTATION_ADDRESS;
 if (!implRaw) usage('No implementation given and PUBLICATION_IMPLEMENTATION_ADDRESS is unset.');
-const implementation = isAddress(implRaw)
+const implementation = isAddress(implRaw, { strict: false })
   ? getAddress(implRaw)
   : usage(`Not an address: ${implRaw}`);
 
@@ -121,7 +122,7 @@ const batch = {
   chainId: CHAIN_ID,
   createdAt: Date.now(),
   meta: {
-    name: `Upgrade publication ${proxy} to ${implementation}`,
+    name: `Upgrade publication ${proxy} to ${implementation}${reinitV3 ? ' with reinitializeV3' : ''}`,
     description: `upgradeToAndCall(${implementation}, ${attached})`,
     txBuilderVersion: '1.16.5',
     createdFromSafeAddress: proxy,

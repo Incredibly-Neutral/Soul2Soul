@@ -17,18 +17,21 @@
  *   --format batch  a Safe Transaction Builder batch file (default)
  *   --format data   the raw calldata for a "Custom data" / raw transaction
  *
- * Read-only in the strict sense: no key, no signing, and no network at all. It
- * encodes and prints.
+ * No key, no signature, and no chain state: the calldata is encoded locally and
+ * printed. The only network step is the preflight, and it is opt-in.
  *
- * The one optional network step is a preflight, and it runs only when
- * `BASE_RPC_URL` is set. It asks the factory the four questions that decide
- * whether the call reverts or does nothing — `registeredModule(safe)`,
- * `module.safe()`, `isLegacyImplementation(implementation)` and
- * `isApprovedImplementation(implementation)` — and prints one line per condition
- * that would make the transaction a revert or a no-op. When `BASE_RPC_URL` is
- * unset it prints one line saying it was skipped. It never stops the calldata
- * from printing: a dead RPC or a wrong factory address is a sentence, not an
- * exit.
+ * The preflight runs only when `BASE_RPC_URL` is set. It reads
+ * `registeredModule(safe)`, `module.safe()`, `module.factory()`,
+ * `isLegacyImplementation(implementation)` and `isApprovedImplementation(implementation)`,
+ * and prints one line per condition that would make the transaction a revert or a
+ * no-op. `module.factory()` is the read that matters most: the factory picks its
+ * branch on whether the module answers `factory()` with its own address, so a
+ * module that does not is judged on the legacy set and one that does is judged on
+ * the approval set. Asking only the two sets cannot tell which question applies.
+ *
+ * When `BASE_RPC_URL` is unset it prints one line saying the preflight was
+ * skipped. It never stops the calldata from printing: a dead RPC or a wrong
+ * factory address is a sentence, not an exit.
  *
  * Usage:
  *   cd src/publication/contracts
@@ -47,7 +50,14 @@
  * the protocol safe from the factory, which would mean a network round trip.
  */
 
-import { createPublicClient, encodeFunctionData, getAddress, http, isAddress, parseAbi } from 'viem';
+import {
+  createPublicClient,
+  encodeFunctionData,
+  getAddress,
+  http,
+  isAddress,
+  parseAbi,
+} from 'viem';
 import { config } from 'dotenv';
 import { fileURLToPath } from 'url';
 
@@ -60,7 +70,10 @@ const FACTORY_ABI = parseAbi([
   'function isApprovedImplementation(address implementation) view returns (bool)',
 ]);
 
-const MODULE_ABI = parseAbi(['function safe() view returns (address)']);
+const MODULE_ABI = parseAbi([
+  'function safe() view returns (address)',
+  'function factory() view returns (address)',
+]);
 
 const CHAIN_ID = '8453'; // Base
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -88,11 +101,13 @@ for (let i = 0; i < argv.length; i++) {
   if (arg === '--') continue;
   if (arg === '--format') {
     const value = argv[++i];
-    if (value !== 'batch' && value !== 'data') usage(`--format must be batch or data, got ${value}`);
+    if (value !== 'batch' && value !== 'data')
+      usage(`--format must be batch or data, got ${value}`);
     format = value;
   } else if (arg.startsWith('--format=')) {
     const value = arg.slice('--format='.length);
-    if (value !== 'batch' && value !== 'data') usage(`--format must be batch or data, got ${value}`);
+    if (value !== 'batch' && value !== 'data')
+      usage(`--format must be batch or data, got ${value}`);
     format = value;
   } else if (arg === '--factory') {
     factoryArg = argv[++i];
@@ -109,9 +124,15 @@ if (!safeArg) usage('Missing the safe address.');
 if (!moduleArg) usage('Missing the module address.');
 if (!implArg) usage('Missing the implementation address.');
 
-const safe = isAddress(safeArg) ? getAddress(safeArg) : usage(`Not an address: ${safeArg}`);
-const module = isAddress(moduleArg) ? getAddress(moduleArg) : usage(`Not an address: ${moduleArg}`);
-const implementation = isAddress(implArg) ? getAddress(implArg) : usage(`Not an address: ${implArg}`);
+// Non-strict: a checksummed address re-typed in another case is the same address,
+// and refusing it would reject a correct paste. Nothing here is signed, so a
+// tolerant parse costs nothing.
+const parseAddress = (value: string, label: string): `0x${string}` =>
+  isAddress(value, { strict: false }) ? getAddress(value) : usage(`Not an address: ${label}`);
+
+const safe = parseAddress(safeArg, safeArg);
+const module = parseAddress(moduleArg, moduleArg);
+const implementation = parseAddress(implArg, implArg);
 
 if (module === implementation) usage('Module and implementation are the same address.');
 
@@ -122,9 +143,7 @@ if (!factoryRaw) {
       'registerModule is sent to the factory, so there is no default.',
   );
 }
-const factory = isAddress(factoryRaw)
-  ? getAddress(factoryRaw)
-  : usage(`Not an address: ${factoryRaw}`);
+const factory = parseAddress(factoryRaw, factoryRaw);
 
 // ── Preflight: only with an RPC, and never fatal ──────────────────
 
@@ -161,6 +180,24 @@ async function preflight(): Promise<void> {
       }),
     ]);
 
+    // The branch selector. A revert or an empty return means the module answers
+    // nothing, which is the legacy branch; answering a *different* factory also
+    // lands there, because only this factory's own address counts.
+    let namedFactory: `0x${string}` | null = null;
+    try {
+      namedFactory = await client.readContract({
+        address: module,
+        abi: MODULE_ABI,
+        functionName: 'factory',
+      });
+    } catch {
+      namedFactory = null;
+    }
+    const claimsThisFactory = namedFactory !== null && getAddress(namedFactory) === factory;
+    const answersAnotherFactory =
+      namedFactory !== null && namedFactory !== ZERO && getAddress(namedFactory) !== factory;
+    const branch = claimsThisFactory ? 'approval' : 'legacy';
+
     if (registered !== ZERO) {
       notes.push(
         registered === module
@@ -173,18 +210,30 @@ async function preflight(): Promise<void> {
       notes.push(`revert SafeMismatch: ${module}.safe() is ${moduleSafe}, not ${safe}`);
     }
 
-    if (!legacy && !approved) {
+    if (!claimsThisFactory && !legacy) {
+      const why = answersAnotherFactory
+        ? `${module}.factory() is ${namedFactory}, not ${factory}`
+        : `${module} does not answer factory()`;
       notes.push(
-        `revert ModuleNotRecognised: ${implementation} is in neither the legacy set nor the approval set`,
+        `revert ModuleNotRecognised: ${why}, so the legacy branch applies, and ` +
+          `${implementation} is not in the legacy set`,
+      );
+    }
+
+    if (claimsThisFactory && !approved) {
+      notes.push(
+        `revert ModuleNotRecognised: ${module} answers factory() with ${factory}, so the ` +
+          `approval branch applies, and ${implementation} is not in the approval set`,
       );
     }
 
     if (legacy && approved) {
-      // No such implementation should exist: the constructor refuses a legacy
-      // entry that answers factory(). Say so, and say which branch wins.
+      // The constructor refuses a legacy entry that answers factory(), so no
+      // implementation should be in both sets. Say which branch wins rather than
+      // leaving the reader to guess.
       notes.push(
-        `note: ${implementation} is in both sets; branch is decided by whether ${module} answers ` +
-          `factory() with ${factory}`,
+        `note: ${implementation} is in both sets, so the branch (${branch}) decides whether ` +
+          `the call is accepted`,
       );
     }
   } catch (error) {
@@ -224,7 +273,8 @@ const batch = {
     name: `Adopt publication ${safe}`,
     description: `registerModule(${safe}, ${module}, ${implementation})`,
     txBuilderVersion: '1.16.5',
-    createdFromSafeAddress: protocolSafe && isAddress(protocolSafe) ? getAddress(protocolSafe) : '',
+    createdFromSafeAddress:
+      protocolSafe && isAddress(protocolSafe, { strict: false }) ? getAddress(protocolSafe) : '',
     createdFromOwnerAddress: '',
   },
   transactions: [{ to: factory, value: '0', data }],
