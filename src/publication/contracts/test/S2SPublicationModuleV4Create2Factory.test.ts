@@ -51,6 +51,8 @@ const ERRORS = parseAbi([
   'error InvalidVersion()',
   'error AlreadyRegistered(address safe, address existing)',
   'error ModuleNotRecognised(address module)',
+  'error LegacyImplementationWithUpgradeGate(address implementation)',
+  'error SafeMismatch(address safe, address moduleSafe)',
 ]);
 
 const enc = {
@@ -72,6 +74,14 @@ const enc = {
     encodeErrorResult({ abi: ERRORS, errorName: 'AlreadyRegistered', args: [safe, existing] }),
   moduleNotRecognised: (module: Hex) =>
     encodeErrorResult({ abi: ERRORS, errorName: 'ModuleNotRecognised', args: [module] }),
+  legacyWithGate: (implementation: Hex) =>
+    encodeErrorResult({
+      abi: ERRORS,
+      errorName: 'LegacyImplementationWithUpgradeGate',
+      args: [implementation],
+    }),
+  safeMismatch: (safe: Hex, moduleSafe: Hex) =>
+    encodeErrorResult({ abi: ERRORS, errorName: 'SafeMismatch', args: [safe, moduleSafe] }),
 };
 
 /** Every layer of a viem error, as text: revert data can sit in `raw` or `data`. */
@@ -125,12 +135,13 @@ async function deploy(legacyImplementations: Hex[] = []) {
 
 /**
  * A publication-shaped proxy over `implementation`, deployed the V2/V3 way:
- * plain `CREATE`, uninitialized, at an address nothing can predict or move. The
+ * plain `CREATE`, at an address nothing can predict or move, initialised with
+ * `safe` so it answers `safe()` the way a real publication module does. The
  * fixture contract exists because the OpenZeppelin proxy is not artifacted for
  * the test runtime; see `LegacyModuleProxy.t.sol`.
  */
-async function plainProxy(implementation: Hex): Promise<Hex> {
-  const deployer = await viem.deployContract('LegacyModuleProxyDeployer', [implementation]);
+async function plainProxy(implementation: Hex, safe: Hex): Promise<Hex> {
+  const deployer = await viem.deployContract('LegacyModuleProxyDeployer', [implementation, safe]);
   return (await deployer.read.proxy()) as Hex;
 }
 
@@ -472,6 +483,27 @@ describe('S2SPublicationModuleV4Create2Factory — constructor and access', () =
     );
   });
 
+  /**
+   * The inverse of the gate check. A gated implementation answers `factory()`,
+   * so it belongs in the approved set, where every upgrade is governed. Recorded
+   * as legacy it would sit in the branch that checks set membership and nothing
+   * else, which is the widest acceptance this contract has.
+   */
+  it('refuses a gated implementation recorded as legacy', async () => {
+    const { caller, implementation } = await deploy();
+    const otherV4 = await viem.deployContract('S2SPublicationModuleV4');
+
+    await expectRevert(
+      viem.deployContract('S2SPublicationModuleV4Create2Factory', [
+        caller.address,
+        implementation.address,
+        [otherV4.address],
+      ]),
+      enc.legacyWithGate(otherV4.address),
+      'LegacyImplementationWithUpgradeGate',
+    );
+  });
+
   it('refuses setImplementation from a caller that is not the protocol safe', async () => {
     const d = await deploy();
     await expectRevert(
@@ -602,28 +634,36 @@ describe('S2SPublicationModuleV4Create2Factory — versions', () => {
 });
 
 /**
- * The index is the answer to "which module does this publication run". It has
- * to hold two populations: the proxies this factory deployed, and the proxies
- * it did not — V2/V3 publications sitting at plain-CREATE addresses, upgraded
- * to V4 in place, which cannot be re-created at a predicted address without
- * losing their storage. The legacy branch therefore recognises an
- * implementation, and only a proxy whose slot holds one of the recorded
- * implementations gets in that way.
+ * The record is the answer to "which module does this publication run". It has
+ * to hold two populations: the proxies this factory deployed, and the proxies it
+ * did not — V2/V3 publications at plain-CREATE addresses, upgraded to V4 in
+ * place, which cannot be re-created at a predicted address without losing their
+ * storage.
+ *
+ * The two writes are kept apart, so a Safe that creates its own bare proxy
+ * cannot occupy the entry the protocol safe is about to fill. The legacy branch
+ * accepts a module that does not answer `factory()` when the named
+ * implementation is one the constructor recorded. It does not read the proxy's
+ * slot and cannot, so what it establishes is set membership, not what code runs.
+ * The binding it does check is `safe()`.
+ *
+ * "The index" below means what `moduleAddress` and `getModulesForSafe` answer,
+ * not which mapping holds it.
  */
 describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
   it('accepts a module this factory deployed', async () => {
     const d = await deploy();
-    const createdFor = d.deployer.account.address;
-    await d.factory.write.createModuleEmpty([createdFor], { account: d.deployer.account });
-    const [module] = await d.factory.read.getModulesForSafe([createdFor]);
+    const safe = d.deployer.account.address;
+    await d.factory.write.createModuleEmpty([safe], { account: d.deployer.account });
+    const [module] = await d.factory.read.getModulesForSafe([safe]);
 
-    // Registered under a second safe: the only way to reach the `factory()`
-    // branch, since `createModule` always records the safe it was given and a
-    // factory-born module with no entry cannot otherwise exist.
-    const safe = d.other.account.address;
+    // The created entry and the adopted entry are separate slots, so adopting a
+    // module this factory deployed is reachable: the module answers `factory()`
+    // with this address, which is branch (a).
     const hash = await asProtocolSafe(d, registerData(safe, module!, d.implementation.address));
 
     assert.equal((await d.factory.read.moduleAddress([safe])).toLowerCase(), module!.toLowerCase());
+    assert.equal((await d.factory.read.registeredModule([safe])).toLowerCase(), module!.toLowerCase());
     const [registered] = await eventsFrom(d.factory.address, hash, MODULE_REGISTERED);
     assert.equal(registered!.module!.toLowerCase(), module!.toLowerCase());
     assert.equal(
@@ -637,7 +677,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v3.address]);
     const safe = d.other.account.address;
-    const module = await plainProxy(v3.address);
+    const module = await plainProxy(v3.address, safe);
 
     const hash = await asProtocolSafe(d, registerData(safe, module, v3.address));
 
@@ -646,7 +686,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     assert.equal(
       String(registered!.implementation).toLowerCase(),
       v3.address.toLowerCase(),
-      'a legacy module reports the slot value, which is the code it was built over',
+      'a legacy module reports the implementation the protocol safe named',
     );
   });
 
@@ -654,7 +694,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const v2 = await viem.deployContract('S2SPublicationModuleV2');
     const d = await deploy([v2.address]);
     const safe = d.other.account.address;
-    const module = await plainProxy(v2.address);
+    const module = await plainProxy(v2.address, safe);
 
     await asProtocolSafe(d, registerData(safe, module, v2.address));
 
@@ -662,37 +702,129 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
   });
 
   /**
+   * The binding: a module says which safe it belongs to, and the protocol safe
+   * cannot file it under another. Without this, any module — including one
+   * minted for a safe the protocol meant to leave alone — would be accepted
+   * under any safe at all.
+   */
+  it('refuses a module minted for a different safe', async () => {
+    const d = await deploy();
+    const mintedFor = d.deployer.account.address;
+    await d.factory.write.createModuleEmpty([mintedFor], { account: d.deployer.account });
+    const [module] = await d.factory.read.getModulesForSafe([mintedFor]);
+    const safe = d.other.account.address;
+
+    // Everything else about this module qualifies: it answers `factory()` with
+    // this address and the named implementation is approved.
+    await expectRevert(
+      d.caller.write.exec([
+        d.factory.address,
+        registerData(safe, module!, d.implementation.address),
+      ]),
+      enc.safeMismatch(safe, mintedFor),
+      'SafeMismatch',
+    );
+    assert.equal(await d.factory.read.registeredModule([safe]), zeroAddress);
+  });
+
+  /**
+   * A bare implementation address has code and can be in the legacy set, but no
+   * storage of its own: it answers `safe()` with zero, so it is not a module.
+   */
+  it('refuses a bare implementation address, even one recorded as legacy', async () => {
+    const v3 = await viem.deployContract('S2SPublicationModuleV3');
+    const d = await deploy([v3.address]);
+    const safe = d.other.account.address;
+
+    await expectRevert(
+      d.caller.write.exec([d.factory.address, registerData(safe, v3.address, v3.address)]),
+      enc.safeMismatch(safe, zeroAddress),
+      'SafeMismatch',
+    );
+  });
+
+  it('refuses a contract that answers no safe()', async () => {
+    const v3 = await viem.deployContract('S2SPublicationModuleV3');
+    const d = await deploy([v3.address]);
+    const stranger = await viem.deployContract('MockCaller');
+    const safe = d.other.account.address;
+
+    await expectRevert(
+      d.caller.write.exec([d.factory.address, registerData(safe, stranger.address, v3.address)]),
+      enc.safeMismatch(safe, zeroAddress),
+      'SafeMismatch',
+    );
+  });
+
+  /**
+   * The hostile order. A publication's Safe may call `createModule` itself, and
+   * a V2/V3 publication still has one, so it can deploy a bare proxy over
+   * `latestImplementation` — empty storage, no version log — before the protocol
+   * safe adopts the module the publication actually runs. If both writes shared
+   * one slot, that create would make adoption impossible for good, and a reader
+   * trusting the index would read a module with nothing in it.
+   */
+  it('a create before the protocol registers does not take the adopted entry', async () => {
+    const v3 = await viem.deployContract('S2SPublicationModuleV3');
+    const d = await deploy([v3.address]);
+    const safe = d.other.account.address;
+
+    await d.factory.write.createModuleEmpty([safe], { account: safe });
+    const [created] = await d.factory.read.getModulesForSafe([safe]);
+
+    const legacy = await plainProxy(v3.address, safe);
+    await asProtocolSafe(d, registerData(safe, legacy, v3.address));
+
+    assert.notEqual(created!.toLowerCase(), legacy.toLowerCase());
+    assert.equal(
+      (await d.factory.read.moduleAddress([safe])).toLowerCase(),
+      legacy.toLowerCase(),
+      'the adopted module is the answer, not the bare proxy the safe made',
+    );
+    const modules = await d.factory.read.getModulesForSafe([safe]);
+    assert.equal(modules.length, 1, 'one module per safe, whichever half holds it');
+    assert.equal(modules[0]!.toLowerCase(), legacy.toLowerCase());
+
+    const { result } = await d.factory.simulate.createModule([safe, [], []], { account: safe });
+    assert.equal(
+      (result as Hex).toLowerCase(),
+      legacy.toLowerCase(),
+      'a later create returns the adopted module instead of the stored one',
+    );
+  });
+
+  /**
    * A proxy over an implementation that is neither in the legacy set nor this
-   * factory's approved one: `factory()` answers zero rather than this address,
-   * and the implementation named is in neither set. That is what has to be
-   * refused, or the index would be an assertion the protocol safe can make
+   * factory's approved one: `factory()` answers the deployer rather than this
+   * address, and the implementation named is in neither set. That is what has to
+   * be refused, or the index would be an assertion the protocol safe can make
    * about arbitrary code.
    */
   it('refuses a proxy over an implementation that is neither legacy nor its own', async () => {
     const d = await deploy();
     const stranger = await viem.deployContract('S2SPublicationModuleV4');
-    const module = await plainProxy(stranger.address);
     const safe = d.other.account.address;
+    const module = await plainProxy(stranger.address, safe);
 
     await expectRevert(
       d.caller.write.exec([d.factory.address, registerData(safe, module, stranger.address)]),
       enc.moduleNotRecognised(module),
       'ModuleNotRecognised',
     );
-    assert.equal((await d.factory.read.getModulesForSafe([safe])).length, 0);
+    assert.equal(await d.factory.read.registeredModule([safe]), zeroAddress);
   });
 
   /**
    * The named implementation is checked against the set, so naming an
-   * implementation that was never recorded — a V4 deployment this factory did
-   * not create the proxy over — is the same refusal.
+   * implementation that was never recorded — a V3 deployment this factory does
+   * not know — is the same refusal.
    */
   it('refuses a legacy-looking module when the implementation named was never recorded', async () => {
     const v2 = await viem.deployContract('S2SPublicationModuleV2');
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v2.address]);
-    const module = await plainProxy(v3.address);
     const safe = d.other.account.address;
+    const module = await plainProxy(v3.address, safe);
 
     await expectRevert(
       d.caller.write.exec([d.factory.address, registerData(safe, module, v3.address)]),
@@ -705,10 +837,9 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const v2 = await viem.deployContract('S2SPublicationModuleV2');
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v3.address]);
-    const createdFor = d.deployer.account.address;
-    await d.factory.write.createModuleEmpty([createdFor], { account: d.deployer.account });
-    const [module] = await d.factory.read.getModulesForSafe([createdFor]);
     const safe = d.other.account.address;
+    await d.factory.write.createModuleEmpty([safe], { account: safe });
+    const [module] = await d.factory.read.getModulesForSafe([safe]);
 
     await expectRevert(
       d.caller.write.exec([d.factory.address, registerData(safe, module!, v3.address)]),
@@ -726,13 +857,14 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v3.address]);
     const safe = d.other.account.address;
-    const module = await plainProxy(v3.address);
+    const module = await plainProxy(v3.address, safe);
 
     await expectRevert(
       d.factory.write.registerModule([safe, module, v3.address], { account: safe }),
       enc.onlyProtocolSafe(safe),
       'OnlyProtocolSafe',
     );
+    assert.equal(await d.factory.read.registeredModule([safe]), zeroAddress);
     assert.equal((await d.factory.read.getModulesForSafe([safe])).length, 0);
   });
 
@@ -742,10 +874,10 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const d = await deploy([v3.address, v2.address]);
     const safe = d.other.account.address;
 
-    const first = await plainProxy(v3.address);
+    const first = await plainProxy(v3.address, safe);
     await asProtocolSafe(d, registerData(safe, first, v3.address));
 
-    const second = await plainProxy(v2.address);
+    const second = await plainProxy(v2.address, safe);
     await expectRevert(
       d.caller.write.exec([d.factory.address, registerData(safe, second, v2.address)]),
       enc.alreadyRegistered(safe, first),
@@ -754,7 +886,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     assert.equal(
       (await d.factory.read.moduleAddress([safe])).toLowerCase(),
       first.toLowerCase(),
-      'the index is never overwritten',
+      'the adopted entry is never overwritten',
     );
   });
 
@@ -762,7 +894,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v3.address]);
     const safe = d.other.account.address;
-    const module = await plainProxy(v3.address);
+    const module = await plainProxy(v3.address, safe);
 
     await asProtocolSafe(d, registerData(safe, module, v3.address));
     const hash = await asProtocolSafe(d, registerData(safe, module, v3.address));
@@ -783,7 +915,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     const safe = d.other.account.address;
     const predicted = await d.factory.read.moduleAddress([safe]);
 
-    const module = await plainProxy(v3.address);
+    const module = await plainProxy(v3.address, safe);
     await asProtocolSafe(d, registerData(safe, module, v3.address));
 
     assert.equal((await d.factory.read.moduleAddress([safe])).toLowerCase(), module.toLowerCase());
@@ -808,7 +940,7 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     );
   });
 
-  it('refuses a zero safe, a zero module and a module without code', async () => {
+  it('refuses a zero safe, a zero module, a zero implementation, and a module without code', async () => {
     const v3 = await viem.deployContract('S2SPublicationModuleV3');
     const d = await deploy([v3.address]);
     const safe = d.other.account.address;
@@ -820,6 +952,11 @@ describe('S2SPublicationModuleV4Create2Factory — the module index', () => {
     );
     await expectRevert(
       d.caller.write.exec([d.factory.address, registerData(safe, zeroAddress, v3.address)]),
+      enc.zeroAddress,
+      'ZeroAddress',
+    );
+    await expectRevert(
+      d.caller.write.exec([d.factory.address, registerData(safe, v3.address, zeroAddress)]),
       enc.zeroAddress,
       'ZeroAddress',
     );

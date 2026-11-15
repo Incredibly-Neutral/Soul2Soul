@@ -182,12 +182,14 @@ only CREATE2 factory in the tree and is not deployed.
 | `createModuleEmpty(safe)` | same | same, empty lists |
 | `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, and adds to the approved set; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
 | `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`, and that set holds only implementations carrying the gate: what `_authorizeUpgrade` accepts, which is why rollback is legal |
-| `moduleAddress(safe)` | read | the address `createModule(safe)` returns right now: the module already created for that safe, else the prediction under `latestImplementation` |
+| `moduleAddress(safe)` | read | the module `safe` runs, in the order the record is read: the adopted module (`registeredModule`), else the one `createModule` deployed, else the prediction under `latestImplementation` |
 | `moduleAddressForVersion(safe, version)` | read | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range |
 | `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read | append-only, 1-based |
-| `registerModule(safe, module, implementation)` | **the protocol safe only** | adopts `module` as the module `safe` runs, so `moduleAddress(safe)` answers it; refuses a zero address, a module without code, a different module for a safe that already has one (`AlreadyRegistered(safe, existing)`), and an implementation in neither the approved nor the legacy set (`ModuleNotRecognised(module)`); identical re-register returns quietly; emits `ModuleRegistered(safe, module, implementation)` |
-| `isLegacyImplementation(address)` | read | true for each implementation the constructor recorded as V2/V3; written once, no setter |
-| `safeModules` / `getModulesForSafe` | read | the index, at most one entry per safe, written by `createModule` or `registerModule` and never overwritten |
+| `registerModule(safe, module, implementation)` | **the protocol safe only** | adopts `module` as the module `safe` runs, so `moduleAddress(safe)` answers it; refuses a zero safe, zero module or zero implementation (`ZeroAddress`), a module without code (`NotAContract`), a module whose `safe()` is not `safe` (`SafeMismatch(safe, moduleSafe)`), a different module for a safe that already has one adopted (`AlreadyRegistered(safe, existing)`), and an implementation the branch does not admit: not approved when the module answers `factory()` with this factory, not legacy when it does not (`ModuleNotRecognised(module)`); identical re-register returns quietly; emits `ModuleRegistered(safe, module, implementation)` |
+| `isLegacyImplementation(address)` | read | true for each implementation the constructor recorded as V2/V3; written once, no setter; refuses an entry that answers `factory()` with `LegacyImplementationWithUpgradeGate(address)` |
+| `safeModules` | read | the created half of the record: at most one proxy per safe, written by `createModule` and never overwritten |
+| `registeredModule` | read | the adopted half: one module per safe or the zero address, written by `registerModule` and nothing else |
+| `getModulesForSafe` | read | one address per safe: the adopted module if there is one, else the created one, else nothing |
 
 The salt is `keccak256(abi.encode(keccak256("s2s.publication.module"), safe))`: fixed per safe, no
 counter and no caller input, so one publication has one module address and nobody can grind a salt.
@@ -210,7 +212,7 @@ implementation. `createModule` names a safe the caller must be: a third party ca
 carrying somebody else's safe, which is what keeps `getModulesForSafe` honest.
 
 The constructor's code checks cover the protocol safe, the implementation and each legacy
-implementation. An EOA cannot
+implementation, and the legacy entries are also refused when they answer `factory()`. An EOA cannot
 be set as the **protocol safe**; that is the point, since a key-controlled "safe" would make one
 leaked key enough to redirect every future publication. The named safe in `createModule` is not
 code-checked: the gate already requires `msg.sender == safe`, so an address without code can only
@@ -218,26 +220,47 @@ ever name itself, and a module bound to an EOA is one nobody else can upgrade or
 
 ### The index is the identity
 
-The factory answers a second question: which module does this publication run. The answer is
-`safeModules[safe]`, read as `moduleAddress(safe)`, and it is an address — not `NAME()`. A module with
-the same string as another is a different module; a proxy over the same implementation is a different
-module; and nothing in the index is read from what the code calls itself. This is the fact a reader
-needs and `NAME()` cannot supply, since `NAME()` is a claim the module makes about itself and a Safe
-can enable any module it likes (INV-4, and [the upgrade edge](#upgradeability)).
+The factory answers a second question: which module does this publication run. It answers with an
+address — never `NAME()` — read in a fixed order: `registeredModule(safe)`, the module the protocol safe
+adopted; else `safeModules[safe]`, the proxy `createModule` deployed; else the prediction under
+`latestImplementation`. A module with the same string as another is a different module, a proxy over
+the same implementation is a different module, and nothing in either half is read from what the code
+calls itself. `NAME()` is a claim the module makes about itself, and a Safe can enable any module it
+likes (INV-4, and [the upgrade edge](#upgradeability)).
+
+The record answers what this factory knows. It does not replace the Safe: INV-4 makes the Safe's
+enabled-module list the authority on discovery, and that stands. A module the Safe does not list, or
+has since disabled, is not one to read, whatever the factory answers. The record says which module the
+protocol considers the publication's; the Safe says whether the publication still uses it.
+
+The two halves are kept apart because different callers write them. `createModule` writes
+`safeModules[safe]`, and it is callable by the safe it names, so a publication's Safe can always deploy
+a bare proxy over `latestImplementation` — empty storage, no version log — for its own address. Had
+adoption written the same mapping, that create would take the entry first and `registerModule` would
+revert `AlreadyRegistered` for the module the publication actually runs, permanently, and a reader
+trusting the record would read a module with no publication in it. `registerModule` writes
+`registeredModule[safe]` instead, and every read prefers it: adoption outranks creation, a later
+`createModule` returns the adopted module and deploys nothing, and that hostile order ends with the
+adopted module as the answer.
 
 The constructor is `(address protocolSafe, address implementation, address[] legacyImplementations)`.
 Each legacy entry must have code — `ZeroAddress` on a zero entry, `NotAContract(address)` on one
-without — and is recorded with `LegacyImplementationRecorded(address indexed implementation)`. The set
-is written once, at construction, and has no setter: what the factory will recognise cannot be widened
-after deployment. `isLegacyImplementation(address)` is the read. Two errors are new alongside it:
-`AlreadyRegistered(address safe, address existing)` and `ModuleNotRecognised(address module)`.
+without — and must not answer `factory()`: a gated implementation belongs in the approved set, and
+`LegacyImplementationWithUpgradeGate(address)` refuses one pasted here, since recording it would put
+the widest acceptance under the branch that checks nothing. Each accepted entry is recorded with
+`LegacyImplementationRecorded(address indexed implementation)`. The set is written once, at
+construction, and has no setter: what the factory will recognise cannot be widened after deployment.
+`isLegacyImplementation(address)` is the read.
 
 `registerModule(safe, module, implementation)` is the protocol safe's write, never the publication's.
 A publication's Safe may enable whatever it wants; only the protocol safe can make this contract say
 which module is the publication's. A zero safe, a zero module, a zero implementation and a module
-without code are refused. The index is written once per safe and never overwritten: the same module
-again returns quietly, a different module reverts `AlreadyRegistered`, and the event is
-`ModuleRegistered(address indexed safe, address indexed module, address implementation)`.
+without code are refused. So is a module that answers `safe()` with an address other than `safe` —
+`SafeMismatch(safe, moduleSafe)` — which stops a module minted for one publication being filed under
+another, and keeps a bare implementation address out even when its address is in the legacy set, since
+a bare implementation has no storage and answers zero. Adoption is final on its own side: the same
+module again returns quietly, a different one reverts `AlreadyRegistered(safe, existing)`, and the
+event is `ModuleRegistered(address indexed safe, address indexed module, address implementation)`.
 
 A module is accepted on one of two facts. It answers `factory()` with this factory's address and the
 named `implementation` is in the approval set: a proxy this factory deployed, whose upgrades the
@@ -248,18 +271,20 @@ not a move, which is why the legacy population is adopted rather than redeployed
 
 `implementation` is an argument because the ERC-1967 slot (`0x360894a1…382bbc`) is legible over RPC,
 not from inside a contract: `sload` in the factory reads the factory's own storage, and no EVM
-operation reads another account's. So the legacy branch checks that the protocol safe named an
-implementation the factory recorded, for a module that does not claim this factory. It is a
-recognition step, not a proof of what the module's code does — a proxy upgraded since naming that
-implementation runs other code behind the same slot, and nothing in the factory inspects it. Only the
-`factory()` branch ties a module to the approval set.
+operation reads another account's. What the legacy branch establishes is that the protocol safe named
+a recorded implementation for a module that does not claim this factory — recognition, not proof of
+what the module runs. A proxy upgraded since names an implementation it no longer delegates to; a bare
+implementation address, or any contract that answers `safe()` with the right address, is accepted on
+the name alone. The slot read is the protocol safe's own, over `eth_getStorageAt`, before it builds the
+proposal, and the factory cannot repeat or check it. Only the `factory()` branch ties a module to a
+code path this contract governs.
 
-**The read path has not changed yet.** This is the index, not its use: `moduleAddress` and
-`moduleAddressForVersion` answer as before, `createModule` returns a registered module instead of
-deploying (so a registered safe's later create is a no-op), and the front ends in this tree still
-discover a publication's module by `NAME()` over the Safe's module list and still probe `factory()` on
-a match. Nothing in the tree calls `registerModule`. Readers move to the index in a follow-up; until
-then the prediction remains the address they use.
+**The read path has not changed yet.** This is the record, not its use: `moduleAddress` answers as
+before for a safe with no adopted module, `createModule` returns an adopted module instead of
+deploying, and nothing in the tree calls `registerModule`. `resolvePublicationModules` in
+`src/shared/src/authoring/publication.ts` still asks the factory for a prediction and proves it against
+the Safe's enabled list, using a `NAME()` match only when the factory answers nothing. Readers move to
+the adopted entry in a follow-up; until then the prediction remains the address they use.
 
 So the trust edge is: **what code a publication runs, at birth and after every upgrade, is set by the
 protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and
@@ -271,18 +296,19 @@ publication starts from nothing, and reads of the old log stop at the old addres
 
 **The gate binds a module, not a publication.** A publication Safe can enable a second proxy that
 answers the publication module's `NAME()`, disable the gated one, and the contract cannot prevent it:
-the Safe is the only caller and `NAME()` is all a reader matches on (INV-4). The readers now check what
-they matched. `resolvePublicationModules` in `src/shared/src/authoring/publication.ts`,
-`getProtocolControllerAndModules` in `src/shared/src/protocol/index.ts`, the module scan in
-`src/publication/safe-app/src/lib/publication-init.ts`, and `getModuleAdresses` in
-`src/author/neutralpress/src/publication/publication.service.ts` probe `factory()` on a `NAME()` match
-and ignore a module that answers an address other than the `publication_factory` record they hold. A
-probe that reverts is accepted, because V1, V2 and pre-V4 proxies have no such field and rejecting
-them would hide every existing publication; with no record held, the module is accepted. A
-substituted V4-era proxy is therefore ignored rather than served, and the app cannot be pointed at an
-ungated copy of the current surface. It does not stop an owner running V1 or V2 code under their own
-name, or withdrawing the name altogether: the gate protects the implementation of a publication that
-keeps its identity, not the identity.
+the Safe is the only caller, and which module it enables is its own choice (INV-4). What the readers
+rely on is precedence, not a probe. `resolvePublicationModules` in
+`src/shared/src/authoring/publication.ts` takes the factory's prediction and keeps it only when the Safe
+lists that address, and uses a `NAME()` match only when the factory answers nothing (the same proof of
+the prediction, against the Safe's list, is in `getProtocolControllerAndModules` in
+`src/shared/src/protocol/index.ts`, in the safe-app's `resolveModuleAddress` in
+`src/publication/safe-app/src/lib/publication-init.ts`, where the proof is code at the address, and in
+`getModuleAdresses` in `src/author/neutralpress/src/publication/publication.service.ts`). None of them
+asks a module for `factory()`. A substituted proxy the factory would not predict is therefore not
+served while the prediction stands, and the app cannot be pointed at an ungated copy of the current
+surface. Nothing here stops an owner running V1 or V2 code under their own name, or withdrawing the
+name altogether: the gate protects the implementation of a publication that keeps its identity, not the
+identity.
 
 The V2 factory deployed at `0xe948735151c43183accd8e85b992952b2711d554` cannot be patched: no admin,
 no proxy, no initializer, so its `setImplementation` stays callable by anyone forever. V3 supersedes
@@ -357,14 +383,17 @@ module is the only fresh one, because the records factory is still non-idempoten
   has a module gets the gate's revert, not the idempotent return; a safe created before
   `setImplementation` still reports its own module from `moduleAddress`, while
   `moduleAddressForVersion(1)` answers the address of that generation.
-- Module index: a module this factory deployed is accepted under another safe (the `factory()` branch);
-  a proxy over the real V3 and one over the real V2 are accepted when their implementation is in the
-  legacy set; a proxy over an implementation in neither set is refused `ModuleNotRecognised`; a caller
-  that is not the protocol safe, including the publication's own Safe, is refused `OnlyProtocolSafe`;
-  a second, different module for one safe reverts `AlreadyRegistered`; the same module again is a quiet
-  no-op with no event; `moduleAddress` answers the registered module and a later `createModule` returns
-  it with no deploy and no `ModuleCreated`; the constructor refuses a legacy implementation without
-  code.
+- Module index: a module this factory deployed is accepted for the safe that created it (the
+  `factory()` branch); a proxy over the real V3 and one over the real V2 are accepted when their
+  implementation is in the legacy set and they answer `safe()` with the safe being registered; a proxy
+  over an implementation in neither set is refused `ModuleNotRecognised`; a module minted for another
+  safe, a bare implementation address and a contract that answers no `safe()` are refused
+  `SafeMismatch`; a caller that is not the protocol safe, including the publication's own Safe, is
+  refused `OnlyProtocolSafe`; a second, different module for one safe reverts `AlreadyRegistered`; the
+  same module again is a quiet no-op with no event; a create by the publication before the protocol
+  registers does not take the adopted entry, and `moduleAddress` answers the adopted module while a
+  later `createModule` returns it with no deploy and no `ModuleCreated`; the constructor refuses a
+  legacy implementation without code, a zero one, and one that answers `factory()`.
 - Teardown: `disableModule` ordering against a 3-module list; `deleteRecord` suppressed when the name is
   unknown.
 

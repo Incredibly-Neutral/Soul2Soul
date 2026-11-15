@@ -7,15 +7,26 @@
  * passing an EOA would make the factory's only privileged key an ordinary
  * private key.
  *
- * The factory does not only create modules. It is also the index of which module
- * a publication runs, so it adopts modules it did not deploy: the V2 and V3
- * proxies that publications already have at plain-CREATE addresses, upgraded to
- * V4 in place, which cannot move to a predicted address without losing their
- * storage. `PUBLICATION_LEGACY_IMPL_V2` and `PUBLICATION_LEGACY_IMPL_V3` name
- * the implementations those proxies were built over, and `registerModule`
- * refuses a module whose named implementation is not one of them. Both are
- * required: a factory deployed without them can never recognise an upgraded
- * publication, and the set has no setter, so that cannot be repaired later.
+ * The factory does not only create modules. It also records which module a
+ * publication runs, so it adopts modules it did not deploy: the V2 and V3
+ * proxies publications already have at plain-CREATE addresses, upgraded to V4 in
+ * place, which cannot move to a predicted address without losing their storage.
+ * `PUBLICATION_LEGACY_IMPL_V2` and `PUBLICATION_LEGACY_IMPL_V3` name the
+ * implementations those proxies were built over. Both are required: a factory
+ * deployed without them can never recognise an upgraded publication, and the set
+ * has no setter, so that cannot be repaired later.
+ *
+ * `registerModule(safe, module, implementation)` accepts a module on either of
+ * two facts: it answers `factory()` with the factory's address and names an
+ * implementation the factory approved, or it answers nothing and names one of
+ * the two recorded from the variables above. Either way the module must answer
+ * `safe()` with the safe it is registered for, so a proxy minted for another
+ * publication cannot be filed under this one. What the contract does not do is
+ * read the proxy's ERC-1967 slot — that read is `eth_getStorageAt`, which the
+ * proposer does and passes in as `implementation`. A gated implementation pasted
+ * into a legacy variable would widen acceptance instead of narrowing it, so the
+ * constructor refuses one, and the check below runs before the deploy rather
+ * than after it.
  *
  * The factory deploys each publication's module with CREATE2 at an address
  * computed from the safe, and returns the recorded module if one already
@@ -265,9 +276,13 @@ async function main() {
   console.log('Module addresses for this factory are computed from the safe, not read back from logs.');
   console.log('Existing publication proxies are UUPS and are not affected by this deploy.');
   console.log('');
-  console.log('The factory also answers which module a publication runs. For an existing publication,');
-  console.log('registerModule(safe, module, implementation) is a protocol-safe call: implementation must');
-  console.log('be the V2/V3 address passed here, read from the proxy slot with eth_getStorageAt:');
+  console.log('The factory also records which module a publication runs. For an existing publication,');
+  console.log('registerModule(safe, module, implementation) is a protocol-safe call:');
+  console.log('  implementation  the V2/V3 address passed here, read from the proxy slot (eth_getStorageAt)');
+  console.log('  module          the proxy the publication already has, which must answer safe() = safe');
+  console.log('  safe            the publication Safe');
+  console.log('It refuses a module that answers safe() with another address, and any contract that answers');
+  console.log('nothing at all, so a bare implementation address cannot be registered by mistake.');
 }
 
 main().catch((err) => {

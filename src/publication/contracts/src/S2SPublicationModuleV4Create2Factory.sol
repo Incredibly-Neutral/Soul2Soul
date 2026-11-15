@@ -20,6 +20,13 @@ interface IPublicationModuleUpgradeGate {
     function factory() external view returns (address);
 }
 
+/// @dev The getter that binds a module to its publication, in every gated
+///      implementation and in V2 and V3 before them. `registerModule` asks it so
+///      that a module minted for one safe cannot be filed under another.
+interface IPublicationModuleSafe {
+    function safe() external view returns (address);
+}
+
 /**
  * @notice Factory for S2SPublicationModule proxies, version 4, deployed at a
  *         predictable address.
@@ -45,21 +52,37 @@ interface IPublicationModuleUpgradeGate {
  * approve the way around it: a publication's safe could upgrade to that
  * implementation, and from there name anything at all.
  *
- * This contract is the index of "the module this publication runs". A reader
- * asks it, by safe, instead of enumerating the Safe's modules and matching
- * `NAME()`. The identity in the index is address equality: `moduleAddress(safe)`
- * and `safeModules(safe)` name one address per safe, and nothing about that
- * address is read from a string the module publishes. Two proxies over the same
- * implementation are two modules, and a module that answers `NAME()` like
- * another is a different module, because the question is which address the
- * protocol recorded, not what the code calls itself.
+ * This contract records which module a publication runs, by safe, so the answer
+ * is an address the protocol wrote down rather than a string a module publishes
+ * about itself. The identity in the record is address equality:
+ * `moduleAddress(safe)` and `getModulesForSafe(safe)` name one address per safe,
+ * and nothing about that address is read from what the module calls itself. Two
+ * proxies over the same implementation are two modules, and a module that
+ * answers `NAME()` like another is a different module, because the question is
+ * which address the protocol recorded.
  *
- * `registerModule` is how a module this factory did not deploy gets into the
- * index, and it is the protocol safe's write, never the publication's. A
- * publication's Safe may enable any module it likes; only the protocol safe can
- * make this contract say which one is the publication's module. A registered
- * module is permanent: the index is written once per safe and never overwritten,
- * so the answer cannot be moved out from under a reader by a later call.
+ * The record is subordinate to the Safe's module list, which INV-4 makes the
+ * authority on discovery. A module the Safe does not list, or has since
+ * disabled, is not a module to read, however this contract answers for it: the
+ * record says which module the protocol considers the publication's, and the
+ * Safe says whether the publication still uses it. Nothing here can make a
+ * reader accept a module the Safe has turned off.
+ *
+ * Two writes fill the record and they are kept apart. `createModule` records the
+ * proxy it deployed, under the safe that asked for it. `registerModule` records
+ * the module the protocol adopted, and only the protocol safe can call it: a
+ * publication's Safe may enable any module it likes, but only the protocol can
+ * make this contract say which one is the publication's. The adopted entry is
+ * final on its own side and outranks the created one, so a Safe that creates a
+ * bare proxy first does not occupy the entry the protocol safe is about to fill.
+ *
+ * `registerModule` binds a module to a safe: the module must answer `safe()` with
+ * the safe it is registered for. A module minted for another publication, or a
+ * contract that answers nothing, is refused rather than filed under a safe it
+ * was not made for. The constructor refuses the reverse mistake as well: a
+ * legacy entry that answers `factory()` is a gated implementation, and a gated
+ * implementation belongs in the approved set rather than in the branch that
+ * checks nothing but membership.
  *
  * The legacy branch exists for publications that already exist. A V2 or V3
  * publication runs at a plain-CREATE address it cannot leave, and its proxy was
@@ -71,18 +94,18 @@ interface IPublicationModuleUpgradeGate {
  *
  * That argument is named by the caller, not read here, and the reason is the
  * EVM: a contract cannot read another account's storage, so this one cannot
- * `sload` a proxy's ERC-1967 implementation slot
- * (`0x360894a1…382bbc`) and see what the proxy delegates to. Reading it is an
- * RPC question (`eth_getStorageAt`), which is what a caller does before it
- * builds the proposal. What this contract checks is that the protocol safe
- * named an implementation it recorded, for a module that does not answer this
- * factory. That is a recognition step, not a proof: it does not establish what
- * code runs behind the proxy, and it cannot, either for a proxy upgraded since
- * or for one built over a recorded implementation and left alone. Only the
- * factory-born branch, where the module answers `factory()` with this address
- * and the named implementation is in the approval set, ties a module to a code
- * path this contract governs.
- * *
+ * `sload` a proxy's ERC-1967 implementation slot (`0x360894a1…382bbc`) and see
+ * what the proxy delegates to. Reading it is an RPC question
+ * (`eth_getStorageAt`), which is what the protocol safe does before it builds
+ * the proposal. What this contract checks is that the named implementation is in
+ * its recorded set. That is recognition, not proof of what the module runs: a
+ * module that does not answer `factory()` and names a recorded implementation is
+ * accepted whatever code sits behind it, including a bare implementation address
+ * with no proxy at all, a proxy upgraded since, and any contract that answers
+ * `safe()` with the right address. Only the factory-born branch, where the module
+ * answers `factory()` with this address and the named implementation is in the
+ * approval set, ties a module to a code path this contract governs.
+ *
  * Why the address is predictable:
  *
  *   - The init code carries no arrays. `ERC1967Proxy` is constructed with empty
@@ -98,8 +121,8 @@ interface IPublicationModuleUpgradeGate {
  *     there is exactly one address per safe per implementation, and a caller
  *     cannot grind a salt to choose where its module lands.
  *   - Because the address is one per safe, `createModule` is idempotent per
- *     safe: if the factory has already created a module for it, the recorded
- *     proxy is returned and nothing is deployed. Re-running a route that
+ *     safe: if the factory has already created a module for it, or the protocol
+ *     safe has adopted one, that module is returned and nothing is deployed. Re-running a route that
  *     creates modules is harmless, and the authors/devs arguments of a repeat
  *     call are ignored rather than silently applied — `initialize` cannot run a
  *     second time on a live proxy.
@@ -107,7 +130,7 @@ interface IPublicationModuleUpgradeGate {
  * What `setImplementation` does to a module's address. The implementation is
  * part of the init code, so the prediction moves when the implementation does.
  * `moduleAddress(safe)` is the address `createModule(safe)` answers with right
- * now: the module already recorded for that safe if there is one, and the
+ * now: the module adopted or created for that safe if there is one, and the
  * prediction under the current implementation otherwise. A publication created
  * earlier therefore keeps reporting the address it was born at. Where a create
  * under a given implementation would have landed is the other question, and
@@ -142,9 +165,19 @@ contract S2SPublicationModuleV4Create2Factory {
     ///      recognises.
     mapping(address implementation => bool) public isLegacyImplementation;
 
-    /// @notice The module this safe runs: the one `createModule` deployed for it
-    ///         or the one `registerModule` adopted. At most one entry.
+    /// @notice The module `createModule` deployed for this safe, at most one.
+    /// @dev Kept apart from `registeredModule` so a safe that calls
+    ///      `createModule` cannot occupy the entry the protocol safe is about to
+    ///      fill. Every read that answers "which module" prefers the registered
+    ///      entry, so a created module never outranks an adopted one.
     mapping(address => address[]) public safeModules;
+
+    /// @notice The module the protocol safe adopted for this safe: the zero
+    ///         address if it adopted none.
+    /// @dev Written by `registerModule` and by nothing else, once per safe.
+    ///      Outranks `safeModules` in `moduleAddress`, `getModulesForSafe` and
+    ///      `createModule`, so adoption is not something a later create can undo.
+    mapping(address => address) public registeredModule;
 
     /// @dev The salt domain. One module kind per factory, so the domain keeps
     ///      this address apart from any other CREATE2 deployer in the protocol.
@@ -163,6 +196,8 @@ contract S2SPublicationModuleV4Create2Factory {
     error InvalidVersion();
     error AlreadyRegistered(address safe, address existing);
     error ModuleNotRecognised(address module);
+    error LegacyImplementationWithUpgradeGate(address implementation);
+    error SafeMismatch(address safe, address moduleSafe);
 
     modifier onlyProtocolSafe() {
         if (msg.sender != protocolSafe) revert OnlyProtocolSafe(msg.sender);
@@ -201,9 +236,15 @@ contract S2SPublicationModuleV4Create2Factory {
         for (uint256 i = 0; i < _legacyImplementations.length; ++i) {
             address legacy = _legacyImplementations[i];
             if (legacy == address(0)) revert ZeroAddress();
-            // Recorded so a proxy's slot can be matched against it, which is a
-            // fact about the code that exists, so the code must exist.
+            // Recorded so a named implementation can be matched against it,
+            // which is a fact about the code that exists, so the code must
+            // exist.
             if (legacy.code.length == 0) revert NotAContract(legacy);
+            // The inverse of `_requireUpgradeGate`: a gated implementation is
+            // one this factory should be creating and governing, and admitting
+            // it here would accept modules under the widest branch, where set
+            // membership is the only check.
+            if (_answersUpgradeGate(legacy)) revert LegacyImplementationWithUpgradeGate(legacy);
             isLegacyImplementation[legacy] = true;
             emit LegacyImplementationRecorded(legacy);
         }
@@ -231,10 +272,11 @@ contract S2SPublicationModuleV4Create2Factory {
      * @notice Deploy a publication module proxy for `safe`, at the address
      *         `moduleAddress(safe)` reported before the call.
      * @dev Callable by `safe` itself, or by the protocol safe on its behalf.
-     *      Idempotent per safe: a second call returns the proxy already
-     *      recorded, deploys nothing and emits nothing. That includes a module
-     *      recorded by `registerModule`: once a safe has an entry in the index,
-     *      this function returns it and never deploys over it.
+     *      Idempotent per safe: a second call returns the module already
+     *      recorded, deploys nothing and emits nothing. An adopted module comes
+     *      first: if `registerModule` recorded one for this safe, this returns it
+     *      and never deploys anything, which is what makes adoption final even
+     *      for a safe that has never had a created module.
      */
     function createModule(
         address safe,
@@ -245,6 +287,8 @@ contract S2SPublicationModuleV4Create2Factory {
         if (msg.sender != safe && msg.sender != protocolSafe) {
             revert NotSafeOrProtocolSafe(msg.sender, safe);
         }
+        address registered = registeredModule[safe];
+        if (registered != address(0)) return registered;
         if (safeModules[safe].length != 0) return safeModules[safe][0];
 
         address implementation = latestImplementation;
@@ -266,16 +310,24 @@ contract S2SPublicationModuleV4Create2Factory {
     /**
      * @notice Adopt `module` as the module `safe` runs, so `moduleAddress(safe)`
      *         answers it. The only way a module this factory did not deploy
-     *         enters the index.
+     *         enters the record.
      * @dev The protocol safe's write, never the publication's: this is the
      *      protocol saying which module is a publication's module, and a
      *      publication's Safe cannot say it about itself.
      *
-     *      Zero addresses and a module without code are refused. An existing
-     *      entry is final: re-registering the same module returns quietly, and a
-     *      different module reverts `AlreadyRegistered(safe, existing)`. Nothing
-     *      overwrites the index, so a reader that resolved a module once cannot
-     *      have it swapped under it.
+     *      Zero addresses and a module without code are refused. So is a module
+     *      whose `safe()` is not `safe` (`SafeMismatch(safe, moduleSafe)`): the
+     *      binding is what stops a module minted for one publication being filed
+     *      under another, and it is why a bare implementation address, which has
+     *      no storage and answers `safe()` with zero, cannot be registered even
+     *      when its address is in the legacy set.
+     *
+     *      Adoption is final on its own side: registering the same module again
+     *      returns quietly, and a different module reverts
+     *      `AlreadyRegistered(safe, existing)`. Nothing overwrites it, and
+     *      `createModule` returns the adopted module rather than deploying over
+     *      it, so a reader that resolved a module once cannot have it swapped
+     *      under it.
      *
      *      A module is accepted on either of two facts:
      *
@@ -289,16 +341,15 @@ contract S2SPublicationModuleV4Create2Factory {
      *      `implementation` is named by the caller because a contract cannot read
      *      another contract's storage: the ERC-1967 slot
      *      (`0x360894a1…382bbc`) is legible over RPC, not from inside this
-     *      contract. So the legacy branch checks that the protocol safe named an
-     *      implementation this factory recorded, for a module that does not claim
-     *      this factory. It is a recognition step, not a proof of what the
-     *      module's code does: a proxy upgraded since naming that implementation
-     *      runs something else behind the same slot, and nothing here inspects
-     *      it. A module that claims this factory is the only case where the
-     *      approval set above actually governs the code.
+     *      contract. Branch (b) therefore checks set membership and nothing about
+     *      the module's code: a proxy upgraded since, or a contract with no
+     *      relation to the implementation named, is accepted if it answers
+     *      `safe()`. What the protocol safe relies on is its own slot read before
+     *      the proposal, which this contract cannot repeat or verify. Branch (a)
+     *      is the only one where the approval set governs the code.
      *
      *      `implementation` in `ModuleRegistered` is the argument, recorded so the
-     *      index says which implementation the protocol was told to expect.
+     *      record says which implementation the protocol was told to expect.
      */
     function registerModule(
         address safe,
@@ -310,12 +361,14 @@ contract S2SPublicationModuleV4Create2Factory {
         if (implementation == address(0)) revert ZeroAddress();
         if (module.code.length == 0) revert NotAContract(module);
 
-        address[] storage registered = safeModules[safe];
-        if (registered.length != 0) {
-            address existing = registered[0];
+        address existing = registeredModule[safe];
+        if (existing != address(0)) {
             if (existing == module) return;
             revert AlreadyRegistered(safe, existing);
         }
+
+        address moduleSafe = _moduleSafe(module);
+        if (moduleSafe != safe) revert SafeMismatch(safe, moduleSafe);
 
         if (_answersThisFactory(module)) {
             if (!isApprovedImplementation[implementation]) revert ModuleNotRecognised(module);
@@ -323,11 +376,21 @@ contract S2SPublicationModuleV4Create2Factory {
             revert ModuleNotRecognised(module);
         }
 
-        registered.push(module);
+        registeredModule[safe] = module;
         emit ModuleRegistered(safe, module, implementation);
     }
 
-    function getModulesForSafe(address safe) external view returns (address[] memory) {
+    /// @notice The one module this contract names for `safe`: the adopted one if
+    ///         there is one, else the created one, else nothing.
+    /// @dev A view over both halves of the record. The adopted entry comes
+    ///      first, so the answer agrees with `moduleAddress` and `createModule`.
+    function getModulesForSafe(address safe) external view returns (address[] memory modules) {
+        address registered = registeredModule[safe];
+        if (registered != address(0)) {
+            modules = new address[](1);
+            modules[0] = registered;
+            return modules;
+        }
         return safeModules[safe];
     }
 
@@ -341,15 +404,17 @@ contract S2SPublicationModuleV4Create2Factory {
     }
 
     /// @notice The module `safe` runs: the address `createModule(safe)` answers
-    ///         with right now, registered or created.
-    /// @dev The index is `safeModules[safe]`, so this answers the entry no matter
-    ///      how it got there: `createModule` pushes the proxy it deployed, and
-    ///      `registerModule` pushes a module deployed elsewhere. Once there is an
-    ///      entry, `createModule` returns it, deploys nothing and emits nothing,
-    ///      so a registered module is the module for good and this view cannot
-    ///      drift from it. With no entry it is the prediction under
-    ///      `latestImplementation`, which names a create that has not happened.
+    ///         with right now, adopted or created.
+    /// @dev Adopted first, created second: `registerModule` is the protocol's
+    ///      statement and `createModule` is the safe's own, so the protocol's
+    ///      wins and a create by the publication cannot shadow it. Once either
+    ///      half is set, `createModule` returns that module, deploys nothing and
+    ///      emits nothing, so this view cannot drift from what a create would do.
+    ///      With neither, it is the prediction under `latestImplementation`,
+    ///      which names a create that has not happened.
     function moduleAddress(address safe) external view returns (address) {
+        address registered = registeredModule[safe];
+        if (registered != address(0)) return registered;
         address[] storage created = safeModules[safe];
         if (created.length != 0) return created[0];
         return _predict(latestImplementation, safe);
@@ -396,10 +461,36 @@ contract S2SPublicationModuleV4Create2Factory {
      *      the code does with the field.
      */
     function _requireUpgradeGate(address implementation) private view {
+        if (!_answersUpgradeGate(implementation)) {
+            revert ImplementationWithoutUpgradeGate(implementation);
+        }
+    }
+
+    /// @dev Does `implementation` answer `factory()` at all? Presence, not the
+    ///      value: this is the question `_requireUpgradeGate` asks before letting
+    ///      code into the approved set, and the constructor asks its opposite
+    ///      before letting code into the legacy set.
+    function _answersUpgradeGate(address implementation) private view returns (bool) {
         (bool ok, bytes memory answer) = implementation.staticcall(
             abi.encodeWithSelector(IPublicationModuleUpgradeGate.factory.selector)
         );
-        if (!ok || answer.length != 32) revert ImplementationWithoutUpgradeGate(implementation);
+        return ok && answer.length == 32;
+    }
+
+    /// @dev The safe a module says it belongs to, or the zero address when it does
+    ///      not answer `safe()`. Decoded as a raw word for the same reason
+    ///      `_answersThisFactory` is: `abi.decode` would panic on a malformed
+    ///      answer, turning a refusal into a revert with no reason.
+    function _moduleSafe(address module) private view returns (address) {
+        (bool ok, bytes memory answer) = module.staticcall(
+            abi.encodeWithSelector(IPublicationModuleSafe.safe.selector)
+        );
+        if (!ok || answer.length != 32) return address(0);
+        uint256 word;
+        assembly {
+            word := mload(add(answer, 32))
+        }
+        return address(uint160(word));
     }
 
     /// @dev keccak256(abi.encode(MODULE_ROLE, safe)). No counter and no caller

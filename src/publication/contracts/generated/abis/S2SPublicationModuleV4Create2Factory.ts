@@ -56,6 +56,17 @@ export type Abi_S2SPublicationModuleV4Create2Factory = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "LegacyImplementationWithUpgradeGate",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "module",
         "type": "address"
       }
@@ -99,6 +110,22 @@ export type Abi_S2SPublicationModuleV4Create2Factory = [
       }
     ],
     "name": "OnlyProtocolSafe",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "moduleSafe",
+        "type": "address"
+      }
+    ],
+    "name": "SafeMismatch",
     "type": "error"
   },
   {
@@ -267,7 +294,7 @@ export type Abi_S2SPublicationModuleV4Create2Factory = [
     "outputs": [
       {
         "internalType": "address[]",
-        "name": "",
+        "name": "modules",
         "type": "address[]"
       }
     ],
@@ -434,6 +461,25 @@ export type Abi_S2SPublicationModuleV4Create2Factory = [
     "name": "registerModule",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "registeredModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -532,6 +578,17 @@ export const Abi_S2SPublicationModuleV4Create2Factory: Abi_S2SPublicationModuleV
     "inputs": [
       {
         "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "LegacyImplementationWithUpgradeGate",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "module",
         "type": "address"
       }
@@ -575,6 +632,22 @@ export const Abi_S2SPublicationModuleV4Create2Factory: Abi_S2SPublicationModuleV
       }
     ],
     "name": "OnlyProtocolSafe",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "safe",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "moduleSafe",
+        "type": "address"
+      }
+    ],
+    "name": "SafeMismatch",
     "type": "error"
   },
   {
@@ -743,7 +816,7 @@ export const Abi_S2SPublicationModuleV4Create2Factory: Abi_S2SPublicationModuleV
     "outputs": [
       {
         "internalType": "address[]",
-        "name": "",
+        "name": "modules",
         "type": "address[]"
       }
     ],
@@ -910,6 +983,25 @@ export const Abi_S2SPublicationModuleV4Create2Factory: Abi_S2SPublicationModuleV
     "name": "registerModule",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "registeredModule",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
