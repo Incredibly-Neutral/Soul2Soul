@@ -77,11 +77,11 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * safe. A live proxy upgraded from V2 backfills `agreementsHeldBy` through
  * `reinitializeV3`.
  *
- * Storage: V3's layout, unchanged, and nothing after it. V4 appended one slot,
- * `factory`, and V5 removes it. It was the last declaration, so no slot a live
- * proxy already uses moves, and a proxy upgraded to V5 is left with that slot
- * at zero and unread: the address it used to hold is now a constructor
- * constant, which occupies no storage at all.
+ * Storage: V3's layout, unchanged, and one bool after it. V4 appended a slot at
+ * 119, `factory`, and V5 removes it: the address is a constructor constant now.
+ * The bool at 119, `_backfilled`, is the backfill sentinel, so no slot a live
+ * proxy already uses moves, every V2 proxy leaves 119 unspent, and the slot a
+ * proxy upgraded to V4 holds as an address is never read as one here.
  *
  * Agreements and offers are enumerable sets of genesis pointing into the one
  * log; `getAgreements`/`getOffers` read each entry's latest version via a
@@ -153,6 +153,16 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     mapping(address author => uint256) private agreementsHeldBy;
     mapping(bytes32 genesis => bool) private _ended;
 
+    // ── Backfill sentinel (slot 119, V4's removed `factory` slot) ──
+
+    /// @dev True once `agreementsHeldBy` has been counted for this proxy: set by
+    ///      `initialize` on a fresh deployment, and by `reinitializeV3` when it
+    ///      runs. `reinitializeV3` requires it to be false, so a fresh proxy
+    ///      cannot run a backfill over counts `_addAgreement` already made. It
+    ///      occupies the slot V4's `factory` did, which every V2 proxy leaves
+    ///      unspent, so nothing a live proxy uses moves.
+    bool private _backfilled;
+
     // ── Upgrade authority (constructor constant, no storage) ───────
 
     /// @dev The factory whose approved set decides what this module may upgrade
@@ -203,6 +213,7 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     error Ended();
     error InvalidFactory(address factory);
     error ImplementationNotApproved(address implementation);
+    error AlreadyBackfilled();
 
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
@@ -226,6 +237,7 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     ) public initializer {
         __UUPSUpgradeable_init();
         safe = _safe;
+        _backfilled = true;
 
         for (uint i = 0; i < _authors.length; i++) {
             if (_authors[i] == address(0)) revert InvalidAuthorAddress();
@@ -240,11 +252,20 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     /**
      * @dev Run once at upgrade time on a live proxy, so `agreementsHeldBy`
      *      reflects the agreements struck while the proxy ran V2. The list holds
-     *      unique genesis and the reinitializer can only run once, so nothing is
-     *      cleared first. A fresh deployment does not need it: the list is empty
-     *      and the call is a no-op.
+     *      unique genesis, so nothing is cleared first.
+     *
+     *      It increments, so it must not run where the counts are already right.
+     *      `reinitializer(2)` is spent on a proxy that ran it, and `_backfilled`
+     *      is set by `initialize`, so a fresh deployment cannot run it either:
+     *      there `_addAgreement` has already counted every agreement and a
+     *      second pass would double it, which `_removeAgreement` floors at zero
+     *      rather than unwinds, leaving `ownerHasAgreement` true for an author
+     *      holding nothing. On a fresh deployment the call is refused
+     *      `AlreadyBackfilled()`, not accepted as a no-op.
      */
     function reinitializeV3() external reinitializer(2) onlySafe {
+        if (_backfilled) revert AlreadyBackfilled();
+        _backfilled = true;
         for (uint i = 0; i < agreementList.length; i++) {
             address author = genesisAuthor[agreementList[i]];
             if (author != address(0)) agreementsHeldBy[author] += 1;

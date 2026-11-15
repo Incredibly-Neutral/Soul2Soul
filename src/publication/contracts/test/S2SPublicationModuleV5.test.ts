@@ -39,12 +39,14 @@ const ERRORS = parseAbi([
   'error OnlySafe()',
   'error InvalidFactory(address factory)',
   'error ImplementationNotApproved(address implementation)',
+  'error AlreadyBackfilled()',
 ]);
 
 const enc = {
   onlySafe: encodeErrorResult({ abi: ERRORS, errorName: 'OnlySafe' }),
   invalidFactory: (factory: Hex) =>
     encodeErrorResult({ abi: ERRORS, errorName: 'InvalidFactory', args: [factory] }),
+  alreadyBackfilled: encodeErrorResult({ abi: ERRORS, errorName: 'AlreadyBackfilled' }),
   notApproved: (implementation: Hex) =>
     encodeErrorResult({
       abi: ERRORS,
@@ -405,6 +407,7 @@ describe('S2SPublicationModuleV5 — a V2 proxy upgrades in one hop', () => {
     assert.equal(counters.length, 1, 'one address-keyed counter for a whitelisted author');
     assert.equal(counters[0]!.value, 2n, 'one increment per agreement, never two runs');
     assert.equal(await readSlot(proxy, 0), 2n, 'nonce 2 is spent');
+    assert.equal(await readSlot(proxy, 119), 1n, 'the backfill set the sentinel in the slot');
 
     // A second payload reverts and the counter is unchanged.
     const reason = 'Initializable: contract is already initialized';
@@ -414,6 +417,39 @@ describe('S2SPublicationModuleV5 — a V2 proxy upgrades in one hop', () => {
       `expected "${reason}"`,
     );
     assert.equal(await readSlot(proxy, counters[0]!.slot), 2n);
+  });
+
+  /**
+   * A proxy the factory created as V5 has never run the backfill and must never
+   * run it: `_addAgreement` counted every agreement at the time it was struck,
+   * so a second pass doubles the counter and `_removeAgreement` floors at zero
+   * rather than unwinding, which leaves `ownerHasAgreement` true for an author
+   * holding nothing.
+   */
+  it('refuses the backfill on a proxy whose counts are already right', async () => {
+    const d = await deploy();
+    const proxy = await createModule(d);
+    const module = await moduleAt(proxy);
+
+    // The safe strikes it, so it lands as an agreement and `_addAgreement`
+    // increments the author's counter immediately.
+    await asSafe(
+      d.caller,
+      proxy,
+      encodeFunctionData({
+        abi: module.abi,
+        functionName: 'makeOffer',
+        args: [genesisOf('counted-once'), 'cid-counted-once'],
+      }),
+    );
+    assert.equal(await module.read.getAgreementCount(), 1n);
+
+    await expectRevert(
+      asSafe(d.caller, proxy, REINIT_V3),
+      enc.alreadyBackfilled,
+      'AlreadyBackfilled',
+    );
+    assert.equal(await readSlot(proxy, 119), 1n, 'initialize set the sentinel');
   });
 });
 
@@ -466,7 +502,9 @@ describe('S2SPublicationModuleV5 — storage below the removed slot', () => {
       1,
       'the factory was one slot',
     );
-    assert.equal(v5Slots[factorySlot], 0n, 'V5 writes nothing where V4 kept the factory');
+    // V5 uses the same index for the backfill sentinel, which `initialize` set.
+    // No slot holds the factory address, which the test above covers.
+    assert.equal(v5Slots[factorySlot], 1n, 'V5 keeps only the backfill sentinel there');
 
     for (let slot = 0; slot < factorySlot; slot++) {
       assert.equal(v5Slots[slot], v4Slots[slot], `slot ${slot} moved between V4 and V5`);

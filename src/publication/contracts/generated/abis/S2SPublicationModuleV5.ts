@@ -12,6 +12,11 @@ export type Abi_S2SPublicationModuleV5 = [
   },
   {
     "inputs": [],
+    "name": "AlreadyBackfilled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "EmptyCid",
     "type": "error"
   },
@@ -1276,6 +1281,11 @@ export const Abi_S2SPublicationModuleV5: Abi_S2SPublicationModuleV5 = [
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyBackfilled",
+    "type": "error"
   },
   {
     "inputs": [],
