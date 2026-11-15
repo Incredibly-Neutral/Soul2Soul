@@ -170,11 +170,11 @@ made. The tree does not construct that pair: the deploy script offers the CREATE
 V4 implementation is deployed against it.
 
 **Per deployment — guarded, one predictable address.** `S2SPublicationModuleV4Create2Factory` is the
-same surface, deploying V4, with the same six errors and three views on top of it. It keeps the
-create2 salt, the prediction views, the protocol-safe gate and the idempotent `createModule`, and adds
-the check that an implementation it approves carries the gate: a candidate must answer `factory()` to
-be set, by the protocol safe at construction or later. It is the only CREATE2 factory in the tree and
-is not deployed.
+same surface, deploying V4, with the same six errors and three views on top of it, plus the module
+index below. It keeps the create2 salt, the prediction views, the protocol-safe gate and the
+idempotent `createModule`, and adds the check that an implementation it approves carries the gate: a
+candidate must answer `factory()` to be set, by the protocol safe at construction or later. It is the
+only CREATE2 factory in the tree and is not deployed.
 
 | fn | access control | effect |
 |---|---|---|
@@ -185,7 +185,9 @@ is not deployed.
 | `moduleAddress(safe)` | read | the address `createModule(safe)` returns right now: the module already created for that safe, else the prediction under `latestImplementation` |
 | `moduleAddressForVersion(safe, version)` | read | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range |
 | `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read | append-only, 1-based |
-| `safeModules` / `getModulesForSafe` | read | the factory's own index, at most one entry per safe |
+| `registerModule(safe, module, implementation)` | **the protocol safe only** | adopts `module` as the module `safe` runs, so `moduleAddress(safe)` answers it; refuses a zero address, a module without code, a different module for a safe that already has one (`AlreadyRegistered(safe, existing)`), and an implementation in neither the approved nor the legacy set (`ModuleNotRecognised(module)`); identical re-register returns quietly; emits `ModuleRegistered(safe, module, implementation)` |
+| `isLegacyImplementation(address)` | read | true for each implementation the constructor recorded as V2/V3; written once, no setter |
+| `safeModules` / `getModulesForSafe` | read | the index, at most one entry per safe, written by `createModule` or `registerModule` and never overwritten |
 
 The salt is `keccak256(abi.encode(keccak256("s2s.publication.module"), safe))`: fixed per safe, no
 counter and no caller input, so one publication has one module address and nobody can grind a salt.
@@ -207,11 +209,57 @@ The protocol safe is `immutable`, fixed at construction, and it is the only addr
 implementation. `createModule` names a safe the caller must be: a third party cannot mint a module
 carrying somebody else's safe, which is what keeps `getModulesForSafe` honest.
 
-The constructor's two code checks cover the protocol safe and the implementation only. An EOA cannot
+The constructor's code checks cover the protocol safe, the implementation and each legacy
+implementation. An EOA cannot
 be set as the **protocol safe**; that is the point, since a key-controlled "safe" would make one
 leaked key enough to redirect every future publication. The named safe in `createModule` is not
 code-checked: the gate already requires `msg.sender == safe`, so an address without code can only
 ever name itself, and a module bound to an EOA is one nobody else can upgrade or write to.
+
+### The index is the identity
+
+The factory answers a second question: which module does this publication run. The answer is
+`safeModules[safe]`, read as `moduleAddress(safe)`, and it is an address — not `NAME()`. A module with
+the same string as another is a different module; a proxy over the same implementation is a different
+module; and nothing in the index is read from what the code calls itself. This is the fact a reader
+needs and `NAME()` cannot supply, since `NAME()` is a claim the module makes about itself and a Safe
+can enable any module it likes (INV-4, and [the upgrade edge](#upgradeability)).
+
+The constructor is `(address protocolSafe, address implementation, address[] legacyImplementations)`.
+Each legacy entry must have code — `ZeroAddress` on a zero entry, `NotAContract(address)` on one
+without — and is recorded with `LegacyImplementationRecorded(address indexed implementation)`. The set
+is written once, at construction, and has no setter: what the factory will recognise cannot be widened
+after deployment. `isLegacyImplementation(address)` is the read. Two errors are new alongside it:
+`AlreadyRegistered(address safe, address existing)` and `ModuleNotRecognised(address module)`.
+
+`registerModule(safe, module, implementation)` is the protocol safe's write, never the publication's.
+A publication's Safe may enable whatever it wants; only the protocol safe can make this contract say
+which module is the publication's. A zero safe, a zero module, a zero implementation and a module
+without code are refused. The index is written once per safe and never overwritten: the same module
+again returns quietly, a different module reverts `AlreadyRegistered`, and the event is
+`ModuleRegistered(address indexed safe, address indexed module, address implementation)`.
+
+A module is accepted on one of two facts. It answers `factory()` with this factory's address and the
+named `implementation` is in the approval set: a proxy this factory deployed, whose upgrades the
+factory governs. Or it does not, and the named `implementation` is in the legacy set: a V2 or V3
+publication, at the plain-CREATE address it cannot leave, whose proxy was upgraded to V4 in place.
+Re-creating such a publication at its CREATE2 address would be a different proxy with empty storage,
+not a move, which is why the legacy population is adopted rather than redeployed.
+
+`implementation` is an argument because the ERC-1967 slot (`0x360894a1…382bbc`) is legible over RPC,
+not from inside a contract: `sload` in the factory reads the factory's own storage, and no EVM
+operation reads another account's. So the legacy branch checks that the protocol safe named an
+implementation the factory recorded, for a module that does not claim this factory. It is a
+recognition step, not a proof of what the module's code does — a proxy upgraded since naming that
+implementation runs other code behind the same slot, and nothing in the factory inspects it. Only the
+`factory()` branch ties a module to the approval set.
+
+**The read path has not changed yet.** This is the index, not its use: `moduleAddress` and
+`moduleAddressForVersion` answer as before, `createModule` returns a registered module instead of
+deploying (so a registered safe's later create is a no-op), and the front ends in this tree still
+discover a publication's module by `NAME()` over the Safe's module list and still probe `factory()` on
+a match. Nothing in the tree calls `registerModule`. Readers move to the index in a follow-up; until
+then the prediction remains the address they use.
 
 So the trust edge is: **what code a publication runs, at birth and after every upgrade, is set by the
 protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and
@@ -284,7 +332,9 @@ module is the only fresh one, because the records factory is still non-idempoten
 - 🟢 add access control to either factory — strictly additive, nothing depends on it being open.
 - 🟢 supersede a factory with a new generation at a new address — that is what the CREATE2 factory is,
   and it is the only way to change a deploy path already on chain.
-- 🔴 reorder C1 storage (INV-3); change `NAME()` strings (INV-4); loosen `onlySafe` on the records
+- 🔴 overwrite an entry in the module index, give `registerModule` a caller other than the protocol
+  safe, or give the legacy set a setter after construction; reorder C1 storage (INV-3); change `NAME()`
+  strings (INV-4); loosen `onlySafe` on the records
   module or `_authorizeUpgrade`; let `_authorizeUpgrade` accept an implementation the factory has not
   approved, or give the factory address a setter after `initialize`; make `createModule`
   non-idempotent or give it a caller-chosen salt in the CREATE2 factory, whose address must stay a
@@ -307,6 +357,14 @@ module is the only fresh one, because the records factory is still non-idempoten
   has a module gets the gate's revert, not the idempotent return; a safe created before
   `setImplementation` still reports its own module from `moduleAddress`, while
   `moduleAddressForVersion(1)` answers the address of that generation.
+- Module index: a module this factory deployed is accepted under another safe (the `factory()` branch);
+  a proxy over the real V3 and one over the real V2 are accepted when their implementation is in the
+  legacy set; a proxy over an implementation in neither set is refused `ModuleNotRecognised`; a caller
+  that is not the protocol safe, including the publication's own Safe, is refused `OnlyProtocolSafe`;
+  a second, different module for one safe reverts `AlreadyRegistered`; the same module again is a quiet
+  no-op with no event; `moduleAddress` answers the registered module and a later `createModule` returns
+  it with no deploy and no `ModuleCreated`; the constructor refuses a legacy implementation without
+  code.
 - Teardown: `disableModule` ordering against a 3-module list; `deleteRecord` suppressed when the name is
   unknown.
 
