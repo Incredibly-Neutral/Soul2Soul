@@ -3,16 +3,18 @@
  *
  * Deploy only. The factory half of `pnpm deploy:pub` (setImplementation, and the
  * Safe transaction it prints when the key is not the protocol safe) is
- * privileged and is not needed to upgrade an existing publication: a proxy's
- * `_authorizeUpgrade` asks the factory whether the *target implementation* is
- * approved, and the target here is already approved. This script leaves the
- * factory alone.
+ * privileged, so this script leaves the factory alone — and a freshly deployed
+ * implementation is therefore **not approved yet**: the approved set is filled
+ * by `setImplementation`. Until the protocol safe runs it, the `pnpm upgrade:pub`
+ * line this prints reverts `ImplementationNotApproved` on every proxy.
  *
  * Why the factory is a constructor argument. V5 takes the approving factory as
  * an immutable, so one implementation serves every proxy and the upgrade needs
- * nothing in proxy storage. The address is fixed at deployment and cannot be
- * corrected, which is why the factory is checked before the deploy: it must have
- * code and answer `isApprovedImplementation`, the selector V5 reads.
+ * nothing in proxy storage. Two addresses are fixed at deployment and cannot be
+ * corrected afterwards, so both are checked before the deploy: the factory must
+ * have code and answer `isApprovedImplementation`, the selector V5 reads, and
+ * its `protocolSafe()` must be the `PROTOCOL_SAFE_ADDRESS` in .env, which is the
+ * second constructor argument.
  *
  * The printed line is the one `pnpm upgrade:pub` reads:
  *
@@ -25,6 +27,8 @@
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY             deployer key, pays gas, carries no privilege
  *   PUBLICATION_FACTORY_ADDRESS      the V4 CREATE2 factory (pnpm deploy:pubfac)
+ *   PROTOCOL_SAFE_ADDRESS            the protocol safe that factory answers, and
+ *                                    V5's second constructor argument
  *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  */
 
@@ -83,6 +87,14 @@ async function main() {
   }
   const factory = getAddress(factoryEnv);
 
+  const expectedSafeEnv = process.env.PROTOCOL_SAFE_ADDRESS;
+  if (!expectedSafeEnv) {
+    console.error('❌ PROTOCOL_SAFE_ADDRESS not set — V5 takes it as its second constructor');
+    console.error('   argument, and the factory is checked against it before the deploy.');
+    process.exit(1);
+  }
+  const expectedSafe = getAddress(expectedSafeEnv);
+
   const rpcUrl =
     process.env.BASE_RPC_URL ||
     (process.env.VITE_DRPC_API_KEY
@@ -105,8 +117,9 @@ async function main() {
     console.error(`❌ No contract at ${factory}`);
     process.exit(1);
   }
+  let factorySafe: `0x${string}`;
   try {
-    await publicClient.readContract({
+    factorySafe = await publicClient.readContract({
       address: factory,
       abi: FACTORY_ABI,
       functionName: 'protocolSafe',
@@ -126,6 +139,16 @@ async function main() {
     process.exit(1);
   }
 
+  if (getAddress(factorySafe) !== expectedSafe) {
+    console.error(`❌ ${factory} answers protocolSafe() = ${factorySafe},`);
+    console.error(`   but PROTOCOL_SAFE_ADDRESS is ${expectedSafe}.`);
+    console.error('   V5 takes both as constructor arguments and the pair is fixed for good.');
+    console.error('   Point PUBLICATION_FACTORY_ADDRESS or PROTOCOL_SAFE_ADDRESS at the pair');
+    console.error('   the protocol actually governs before deploying.');
+    process.exit(1);
+  }
+  console.log(`   Protocol safe: ${expectedSafe} (read from the factory, as expected)\n`);
+
   const artifactPath = findArtifact(IMPL_NAME);
   if (!artifactPath) {
     console.error(`❌ Artifact for ${IMPL_NAME} not found under ${ARTIFACT_ROOT}`);
@@ -134,11 +157,11 @@ async function main() {
   }
   const artifact = JSON.parse(readFileSync(artifactPath, 'utf-8'));
 
-  console.log(`Deploying ${IMPL_NAME} over ${factory}...`);
+  console.log(`Deploying ${IMPL_NAME} over ${factory}, protocol safe ${expectedSafe}...`);
   const hash = await walletClient.deployContract({
     abi: artifact.abi,
     bytecode: artifact.bytecode as `0x${string}`,
-    args: [factory],
+    args: [factory, expectedSafe],
     gas: 3_000_000n,
   });
   console.log(`   Deploy tx: ${hash}`);
@@ -153,14 +176,18 @@ async function main() {
   const implementation = getAddress(receipt.contractAddress);
 
   console.log(`\n========================================`);
-  console.log(` Implementation:      ${implementation}`);
-  console.log(` Factory (immutable): ${factory}`);
+  console.log(` Implementation:                 ${implementation}`);
+  console.log(` Factory (immutable):            ${factory}`);
+  console.log(` Protocol safe (immutable):      ${expectedSafe}`);
+  console.log(` Approved on that factory:       no`);
   console.log(`========================================`);
   console.log('\nAdd to .env:');
   console.log(`PUBLICATION_IMPLEMENTATION_ADDRESS=${implementation}`);
-  console.log('\npnpm upgrade:pub -- <proxy> reads that line, and needs no --reinit-v3');
-  console.log('on a proxy that has already run the backfill.');
-  console.log('The factory is unchanged: createModule keeps deploying what it deployed.');
+  console.log('\nNext: the protocol safe must run pnpm deploy:pub (or its printed batch),');
+  console.log(`which calls setImplementation(${implementation}) on ${factory}.`);
+  console.log('Until that executes, no proxy can upgrade to it: the module is not in the');
+  console.log('approved set, so _authorizeUpgrade reverts ImplementationNotApproved.');
+  console.log('The factory is otherwise unchanged: createModule keeps deploying what it deployed.');
 }
 
 main().catch((err) => {

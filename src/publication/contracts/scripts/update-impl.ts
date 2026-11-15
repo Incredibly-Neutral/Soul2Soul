@@ -1,11 +1,15 @@
 /**
  * Deploy a new S2SPublicationModule implementation, then point the factory at it.
  *
- * The implementation is V5 by default. It takes the approving factory as a
- * constructor argument, so the factory address in .env is passed to the
- * constructor rather than written into the module's storage: every proxy over
- * that implementation, including one born under V2, answers the same factory on
- * its first hop.
+ * The implementation is V5 by default. It takes the approving factory and the
+ * protocol safe as constructor arguments, so both come from .env rather than
+ * from the module's storage: every proxy over that implementation, including one
+ * born under V2, answers the same factory on its first hop. The scripts compare
+ * the factory's own `protocolSafe()` against `PROTOCOL_SAFE_ADDRESS` and refuse
+ * a pair that disagrees, because neither argument can be corrected afterwards.
+ * That comparison is a deploy-time guard, not a proof of ownership: what binds
+ * this implementation to the protocol is the protocol safe's `setImplementation`
+ * on that factory, which is step 2 below.
  *
  * If PUBLICATION_IMPLEMENTATION_ADDRESS is set, the deploy is skipped and that
  * implementation is adopted instead — that is the address `pnpm deploy:pubimpl`
@@ -36,6 +40,8 @@
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY             deployer key for the implementation
  *   PUBLICATION_FACTORY_ADDRESS      the V4 CREATE2 factory, as printed by pnpm deploy:pubfac
+ *   PROTOCOL_SAFE_ADDRESS            the protocol safe that factory answers, and V5's
+ *                                    second constructor argument
  *   PUBLICATION_IMPLEMENTATION_ADDRESS optional: an implementation to adopt, not deploy
  *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  */
@@ -87,16 +93,22 @@ const SAFE_ABI = parseAbi([
 
 /**
  * Constructor arguments, read from the artifact rather than hard-coded per
- * version: V4 has no constructor, V5 takes the factory, and the factory address
- * is the only address this script knows.
+ * version: V4 has no constructor, V5 takes the factory and the protocol safe in
+ * that order, and those two are the only addresses a deploy here supplies.
  */
-function constructorArgs(abi: readonly unknown[], factory: `0x${string}`): readonly unknown[] {
+function constructorArgs(
+  abi: readonly unknown[],
+  factory: `0x${string}`,
+  protocolSafe: `0x${string}`,
+): readonly unknown[] {
   const entry = (abi as { type?: string; inputs?: { type: string }[] }[]).find(
     (item) => item.type === 'constructor',
   );
   const inputs = entry?.inputs ?? [];
   if (inputs.length === 0) return [];
-  if (inputs.length === 1 && inputs[0]?.type === 'address') return [factory];
+  if (inputs.length === 2 && inputs.every((i) => i.type === 'address')) {
+    return [factory, protocolSafe];
+  }
   throw new Error(`Unhandled constructor: ${inputs.map((i) => i.type).join(',')}`);
 }
 
@@ -120,6 +132,7 @@ async function deployImplementation(
   publicClient: Pub,
   name: string,
   factory: `0x${string}`,
+  protocolSafe: `0x${string}`,
 ): Promise<`0x${string}`> {
   const artifactPath = findArtifact(name);
   if (!artifactPath) {
@@ -132,7 +145,7 @@ async function deployImplementation(
   const hash = await walletClient.deployContract({
     abi: artifact.abi,
     bytecode: artifact.bytecode as `0x${string}`,
-    args: constructorArgs(artifact.abi, factory),
+    args: constructorArgs(artifact.abi, factory, protocolSafe),
     gas: 3_000_000n,
   });
   console.log(`   Deploy tx: ${hash}`);
@@ -174,6 +187,14 @@ async function main() {
   }
   const factory = getAddress(factoryEnv);
 
+  const expectedSafeEnv = process.env.PROTOCOL_SAFE_ADDRESS;
+  if (!expectedSafeEnv) {
+    console.error('❌ PROTOCOL_SAFE_ADDRESS not set — V5 takes it as its second constructor');
+    console.error('   argument, and the factory is checked against it before the deploy.');
+    process.exit(1);
+  }
+  const expectedSafe = getAddress(expectedSafeEnv);
+
   const rpcUrl =
     process.env.BASE_RPC_URL ||
     (process.env.VITE_DRPC_API_KEY
@@ -213,7 +234,18 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`   Protocol safe: ${protocolSafe}`);
+  console.log(`   Protocol safe (factory answers): ${protocolSafe}`);
+  console.log(`   Protocol safe (PROTOCOL_SAFE_ADDRESS): ${expectedSafe}`);
+  if (getAddress(protocolSafe) !== expectedSafe) {
+    console.error('❌ The factory and .env name different protocol safes.');
+    console.error(
+      `   ${factory} answers ${protocolSafe}; PROTOCOL_SAFE_ADDRESS is ${expectedSafe}.`,
+    );
+    console.error('   V5 takes both as constructor arguments, and the pair is fixed for good:');
+    console.error('   a mismatch here would bind the implementation to a factory another safe');
+    console.error('   governs. Correct the address that is wrong before deploying.');
+    process.exit(1);
+  }
   const prevImpl = await publicClient.readContract({
     address: factory,
     abi: FACTORY_ABI,
@@ -269,7 +301,7 @@ async function main() {
     console.log(`1/2 Adopting ${impl} from PUBLICATION_IMPLEMENTATION_ADDRESS — not deploying.`);
   } else {
     console.log(`1/2 Deploying ${IMPL_NAME}...`);
-    impl = await deployImplementation(walletClient, publicClient, IMPL_NAME, factory);
+    impl = await deployImplementation(walletClient, publicClient, IMPL_NAME, factory, expectedSafe);
     console.log(`   ✅ Implementation at ${impl}`);
   }
   console.log('');

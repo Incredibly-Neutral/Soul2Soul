@@ -29,9 +29,18 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * was running V2 a transaction ago, answers the same immutable on its first hop,
  * and the upgrade needs nothing in storage to work.
  *
- * The constructor refuses a factory with no code. The value cannot be corrected
- * later, so a wrong one would brick every upgrade on every proxy over this
- * implementation, and the refusal has to happen where the mistake is made.
+ * The constructor checks the factory it is given: it must have code, and its
+ * `protocolSafe()` must be the second argument. Neither check can be repeated
+ * afterwards, because the immutable cannot be corrected, so a wrong address
+ * would point every proxy over this implementation at an approval set the
+ * protocol does not control, which is one hop to arbitrary code. The checks
+ * make that mistake loud at the only moment it can be caught. They are not a
+ * proof that the factory is the protocol's: a forked factory answering the same
+ * protocol safe passes them. The binding act is the protocol safe's
+ * `setImplementation` on the factory both sides are known by, and until that
+ * call records this implementation, every proxy that upgrades to it reverts
+ * `ImplementationNotApproved` — the module is a target, not a release.
+ *
  * `factory()` answers the constructor argument for the same reason V4's getter
  * did: the create2 factory reads it to decide whether a module is one it
  * governs.
@@ -89,7 +98,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * is owned by `shared` and used identically at write time and at the gate, so
  * no on-chain cid map exists.
  */
-/// @dev The one read this module makes on the factory. Declared locally for the
+/// @dev The reads this module makes on the factory. Declared locally for the
 ///      same reason the factory declares its own initializer interface: importing
 ///      the factory would tie the module to one version of it, and the address in
 ///      `FACTORY` is whatever factory the protocol deploy chose to approve
@@ -97,6 +106,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 ///      files declaring it do not collide in the generated ABI index.
 interface IPublicationFactoryApprovals {
     function isApprovedImplementation(address implementation) external view returns (bool);
+    function protocolSafe() external view returns (address);
 }
 
 contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
@@ -214,6 +224,7 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     error InvalidFactory(address factory);
     error ImplementationNotApproved(address implementation);
     error AlreadyBackfilled();
+    error ProtocolSafeMismatch(address factorySays, address expected);
 
     modifier onlySafe() {
         if (msg.sender != safe) revert OnlySafe();
@@ -224,8 +235,13 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     /// @param _factory The factory that approves upgrade targets. Must have
     ///        code: the value cannot be corrected after this point, and a
     ///        factory that answers nothing refuses every upgrade for good.
-    constructor(address _factory) {
+    /// @param _protocolSafe The protocol safe that factory names. Checked
+    ///        against the factory's own answer, so this module cannot be bound
+    ///        to a factory the protocol does not control.
+    constructor(address _factory, address _protocolSafe) {
         if (_factory == address(0) || _factory.code.length == 0) revert InvalidFactory(_factory);
+        address answers = IPublicationFactoryApprovals(_factory).protocolSafe();
+        if (answers != _protocolSafe) revert ProtocolSafeMismatch(answers, _protocolSafe);
         FACTORY = _factory;
         _disableInitializers();
     }
@@ -276,7 +292,10 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
      * @dev Only the publication's safe may start an upgrade, and only to an
      *      implementation the protocol safe set on the factory in `FACTORY`.
      *      There is no zero case to fail closed on: the constructor refused it,
-     *      and the constant cannot change.
+     *      and the constant cannot change. The constructor checked that factory
+     *      answers this protocol's safe; that it is still the protocol's factory
+     *      afterwards is the protocol safe's to keep, through the approval set
+     *      this reads.
      */
     function _authorizeUpgrade(address newImplementation) internal onlySafe override {
         if (!IPublicationFactoryApprovals(FACTORY).isApprovedImplementation(newImplementation)) {

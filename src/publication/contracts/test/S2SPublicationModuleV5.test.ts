@@ -40,6 +40,7 @@ const ERRORS = parseAbi([
   'error InvalidFactory(address factory)',
   'error ImplementationNotApproved(address implementation)',
   'error AlreadyBackfilled()',
+  'error ProtocolSafeMismatch(address factorySays, address expected)',
 ]);
 
 const enc = {
@@ -47,6 +48,12 @@ const enc = {
   invalidFactory: (factory: Hex) =>
     encodeErrorResult({ abi: ERRORS, errorName: 'InvalidFactory', args: [factory] }),
   alreadyBackfilled: encodeErrorResult({ abi: ERRORS, errorName: 'AlreadyBackfilled' }),
+  protocolSafeMismatch: (factorySays: Hex, expected: Hex) =>
+    encodeErrorResult({
+      abi: ERRORS,
+      errorName: 'ProtocolSafeMismatch',
+      args: [factorySays, expected],
+    }),
   notApproved: (implementation: Hex) =>
     encodeErrorResult({
       abi: ERRORS,
@@ -130,7 +137,7 @@ async function deploy() {
     v4.address,
     [],
   ]);
-  const v5 = await viem.deployContract('S2SPublicationModuleV5', [factory.address]);
+  const v5 = await viem.deployContract('S2SPublicationModuleV5', [factory.address, caller.address]);
   await approve(caller, factory.address, v5.address);
 
   return { deployer, author, stranger, v4, v5, caller, factory, safe: caller.address };
@@ -226,21 +233,41 @@ describe('S2SPublicationModuleV5 — the factory is a constructor constant', () 
     const [deployer] = await viem.getWalletClients();
 
     await expectRevert(
-      viem.deployContract('S2SPublicationModuleV5', [zeroAddress]),
+      viem.deployContract('S2SPublicationModuleV5', [zeroAddress, deployer.account.address]),
       enc.invalidFactory(zeroAddress),
       'InvalidFactory',
     );
     await expectRevert(
-      viem.deployContract('S2SPublicationModuleV5', [deployer.account.address]),
+      viem.deployContract('S2SPublicationModuleV5', [
+        deployer.account.address,
+        deployer.account.address,
+      ]),
       enc.invalidFactory(deployer.account.address),
       'InvalidFactory',
+    );
+  });
+
+  /**
+   * The factory is an immutable, so a module bound to one the protocol does not
+   * control is one hop from arbitrary code on every proxy that adopts it. The
+   * constructor reads the factory's own `protocolSafe()` and refuses a pair that
+   * disagrees.
+   */
+  it('refuses a protocol safe the factory does not name', async () => {
+    const d = await deploy();
+    const [deployer] = await viem.getWalletClients();
+
+    await expectRevert(
+      viem.deployContract('S2SPublicationModuleV5', [d.factory.address, deployer.account.address]),
+      enc.protocolSafeMismatch(d.safe, deployer.account.address),
+      'ProtocolSafeMismatch',
     );
   });
 
   it('keeps answering the same factory after the proxy is upgraded', async () => {
     const d = await deploy();
     const module = await createModule(d);
-    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address]);
+    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
 
     await approve(d.caller, d.factory.address, next.address);
     await upgradeTo(d, module, next.address);
@@ -257,7 +284,7 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
   it('lets the safe upgrade to an implementation the factory has set', async () => {
     const d = await deploy();
     const module = await createModule(d);
-    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address]);
+    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
 
     await approve(d.caller, d.factory.address, next.address);
     await upgradeTo(d, module, next.address);
@@ -270,7 +297,10 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
     const d = await deploy();
     const module = await createModule(d);
     // A real V5 over the same factory, so the refusal is about approval only.
-    const unapproved = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address]);
+    const unapproved = await viem.deployContract('S2SPublicationModuleV5', [
+      d.factory.address,
+      d.safe,
+    ]);
 
     await expectRevert(
       asSafe(d.caller, module, upgradeToAndCallData(unapproved.address, '0x')),
@@ -282,7 +312,7 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
   it('refuses an upgrade started by anyone but the safe', async () => {
     const d = await deploy();
     const module = await createModule(d);
-    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address]);
+    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
     await approve(d.caller, d.factory.address, next.address);
 
     await expectRevert(

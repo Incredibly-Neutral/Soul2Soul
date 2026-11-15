@@ -5,6 +5,11 @@ export type Abi_S2SPublicationModuleV5 = [
         "internalType": "address",
         "name": "_factory",
         "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_protocolSafe",
+        "type": "address"
       }
     ],
     "stateMutability": "nonpayable",
@@ -90,6 +95,22 @@ export type Abi_S2SPublicationModuleV5 = [
   {
     "inputs": [],
     "name": "OnlySafe",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factorySays",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "expected",
+        "type": "address"
+      }
+    ],
+    "name": "ProtocolSafeMismatch",
     "type": "error"
   },
   {
@@ -1277,6 +1298,11 @@ export const Abi_S2SPublicationModuleV5: Abi_S2SPublicationModuleV5 = [
         "internalType": "address",
         "name": "_factory",
         "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_protocolSafe",
+        "type": "address"
       }
     ],
     "stateMutability": "nonpayable",
@@ -1362,6 +1388,22 @@ export const Abi_S2SPublicationModuleV5: Abi_S2SPublicationModuleV5 = [
   {
     "inputs": [],
     "name": "OnlySafe",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factorySays",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "expected",
+        "type": "address"
+      }
+    ],
+    "name": "ProtocolSafeMismatch",
     "type": "error"
   },
   {

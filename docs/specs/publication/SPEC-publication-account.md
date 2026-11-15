@@ -113,7 +113,7 @@ After batch 2 the flow waits on a human: poll `isModuleEnabled` every 2 s for up
 
 | module | kind | NAME | notes |
 |---|---|---|---|
-| `S2SPublicationModuleV5` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V5"` | per publication; the implementation a publication that already exists upgrades to, including one still running V2. V4's surface and storage prefix minus V4's `factory` slot: the factory that approves upgrades is an immutable constructor argument and is never written to storage. No `__gap`; nothing is declared after the removed slot |
+| `S2SPublicationModuleV5` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V5"` | per publication; the implementation a proxy running V2 or V3 upgrades to. V4's surface and storage prefix minus V4's `factory` slot: the factory that approves upgrades, and the protocol safe it must answer, are immutable constructor arguments and are never written to storage. Slot 119 holds a bool, the backfill sentinel `initialize` sets. No `__gap`; nothing is declared after it |
 | `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | frozen. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards. A proxy upgraded to V4 in place never ran `initialize` as V4, so that slot is zero and its own check reverts `NoFactory()` on every later upgrade — which is why V5 exists |
 | `S2SPublicationModuleV3` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V3"` | frozen: still what publications created under it run, and upgradable only by its own Safe, with no approval check — the pre-V4 right |
 | `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | history; holds agreements + whitelists under the pre-V3 names |
@@ -143,8 +143,13 @@ Two independent upgrade surfaces, and they are not equally guarded.
 no third party reaches the call. The Safe no longer chooses the code. The implementation must be one
 the protocol safe has set: the module asks the factory in its immutable `FACTORY` for
 `isApprovedImplementation(newImplementation)` and reverts `ImplementationNotApproved(address)` when
-the answer is false. V5's constructor refuses a factory with no code, `InvalidFactory(address)`; V4
-kept the same address in a storage slot written by `initialize`. Rollback to an earlier protocol-set implementation is legal, because what the
+the answer is false. V5's constructor refuses a factory with no code, `InvalidFactory(address)`, and
+a factory whose `protocolSafe()` is not its second constructor argument,
+`ProtocolSafeMismatch(address,address)`; V4 kept the same address in a storage slot written by
+`initialize`. That check catches a wrong factory at the only moment it can be caught, before the
+immutable is fixed, and it is not proof that the factory is the protocol's: the binding act is the
+protocol safe's `setImplementation` on that factory, and an implementation it has not recorded is a
+target no proxy can reach. Rollback to an earlier protocol-set implementation is legal, because what the
 factory holds is the whole `implementationHistory`, not the latest entry — approving the whole history
 is sound only because every entry answers `factory()`, which the constructor and `setImplementation`
 check by staticcall before adding one, refusing `ImplementationWithoutUpgradeGate(address)` otherwise.

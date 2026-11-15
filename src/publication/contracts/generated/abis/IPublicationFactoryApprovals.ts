@@ -17,6 +17,19 @@ export type Abi_IPublicationFactoryApprovals = [
     ],
     "stateMutability": "view",
     "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "protocolSafe",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   }
 ];
 export const Abi_IPublicationFactoryApprovals: Abi_IPublicationFactoryApprovals = [
@@ -34,6 +47,19 @@ export const Abi_IPublicationFactoryApprovals: Abi_IPublicationFactoryApprovals 
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "protocolSafe",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",
