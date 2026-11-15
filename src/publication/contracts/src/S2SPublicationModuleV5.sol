@@ -235,9 +235,13 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     /// @param _factory The factory that approves upgrade targets. Must have
     ///        code: the value cannot be corrected after this point, and a
     ///        factory that answers nothing refuses every upgrade for good.
-    /// @param _protocolSafe The protocol safe that factory names. Checked
-    ///        against the factory's own answer, so this module cannot be bound
-    ///        to a factory the protocol does not control.
+    /// @param _protocolSafe The protocol safe this deploy expects the factory to
+    ///        name. The constructor refuses a factory that disagrees about which
+    ///        safe governs it, which catches a wrong address where alone it can be
+    ///        caught, before the immutable is fixed. It is not proof of ownership:
+    ///        a factory answering the same safe and governed by someone else passes
+    ///        it. What binds this implementation to the protocol is the protocol
+    ///        safe's `setImplementation` on that factory.
     constructor(address _factory, address _protocolSafe) {
         if (_factory == address(0) || _factory.code.length == 0) revert InvalidFactory(_factory);
         address answers = IPublicationFactoryApprovals(_factory).protocolSafe();
