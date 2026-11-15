@@ -23,7 +23,9 @@
  * `safe()` with the safe it is registered for, so a proxy minted for another
  * publication cannot be filed under this one. What the contract does not do is
  * read the proxy's ERC-1967 slot — that read is `eth_getStorageAt`, which the
- * proposer does and passes in as `implementation`. A gated implementation pasted
+ * proposer does while the proxy still runs V2/V3 and passes in as
+ * `implementation`. After the upgrade the slot names the V4 implementation, which
+ * the factory refuses as a legacy entry, so the order is read, register, upgrade. A gated implementation pasted
  * into a legacy variable would widen acceptance instead of narrowing it, so the
  * constructor refuses one, and the check below runs before the deploy rather
  * than after it.
@@ -278,9 +280,14 @@ async function main() {
   console.log('');
   console.log('The factory also records which module a publication runs. For an existing publication,');
   console.log('registerModule(safe, module, implementation) is a protocol-safe call:');
-  console.log('  implementation  the V2/V3 address passed here, read from the proxy slot (eth_getStorageAt)');
+  console.log('  implementation  the address the proxy delegated to BEFORE the upgrade, i.e. the V2/V3');
+  console.log('                  address passed here, read with eth_getStorageAt at that time');
   console.log('  module          the proxy the publication already has, which must answer safe() = safe');
   console.log('  safe            the publication Safe');
+  console.log('');
+  console.log('ORDER: read each proxy slot while the proxy still runs V2/V3, register every proxy, and');
+  console.log('only then upgrade those proxies to V4 in place. Afterwards the slot holds this factory\'s V4');
+  console.log('implementation, which the factory refuses as a legacy entry, and the set has no setter.');
   console.log('It refuses a module that answers safe() with another address, and any contract that answers');
   console.log('nothing at all, so a bare implementation address cannot be registered by mistake.');
 }

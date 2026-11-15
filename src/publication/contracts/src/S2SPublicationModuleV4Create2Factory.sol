@@ -89,8 +89,10 @@ interface IPublicationModuleSafe {
  * in most cases upgraded to V4 in place; the same publication re-created at its
  * CREATE2 address would be a different proxy with empty storage, not a move.
  * So the constructor takes the V2 and V3 implementations, and `registerModule`
- * takes the implementation alongside the module and refuses unless it is one of
- * them.
+ * takes the implementation alongside the module: recorded, it is accepted;
+ * approved, it is accepted; anything else is refused. The legacy population has
+ * to be registered before it is upgraded, because afterwards the proxy's slot
+ * names the V4 implementation, which is not a legacy entry.
  *
  * That argument is named by the caller, not read here, and the reason is the
  * EVM: a contract cannot read another account's storage, so this one cannot
@@ -122,10 +124,10 @@ interface IPublicationModuleSafe {
  *     cannot grind a salt to choose where its module lands.
  *   - Because the address is one per safe, `createModule` is idempotent per
  *     safe: if the factory has already created a module for it, or the protocol
- *     safe has adopted one, that module is returned and nothing is deployed. Re-running a route that
- *     creates modules is harmless, and the authors/devs arguments of a repeat
- *     call are ignored rather than silently applied — `initialize` cannot run a
- *     second time on a live proxy.
+ *     safe has adopted one, that module is returned and nothing is deployed.
+ *     Re-running a route that creates modules is harmless, and the authors/devs
+ *     arguments of a repeat call are ignored rather than silently applied —
+ *     `initialize` cannot run a second time on a live proxy.
  *
  * What `setImplementation` does to a module's address. The implementation is
  * part of the init code, so the prediction moves when the implementation does.
@@ -270,7 +272,9 @@ contract S2SPublicationModuleV4Create2Factory {
 
     /**
      * @notice Deploy a publication module proxy for `safe`, at the address
-     *         `moduleAddress(safe)` reported before the call.
+     *         `moduleAddress(safe)` reported before the call, unless a module is
+     *         already recorded for it: then that module is returned, and nothing
+     *         is deployed and nothing is emitted.
      * @dev Callable by `safe` itself, or by the protocol safe on its behalf.
      *      Idempotent per safe: a second call returns the module already
      *      recorded, deploys nothing and emits nothing. An adopted module comes

@@ -178,7 +178,7 @@ only CREATE2 factory in the tree and is not deployed.
 
 | fn | access control | effect |
 |---|---|---|
-| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated` |
+| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | returns the recorded module, deploying and emitting nothing, when the safe already has one — the adopted one first, then the created one; otherwise deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated` |
 | `createModuleEmpty(safe)` | same | same, empty lists |
 | `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, and adds to the approved set; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
 | `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`, and that set holds only implementations carrying the gate: what `_authorizeUpgrade` accepts, which is why rollback is legal |
@@ -279,12 +279,26 @@ the name alone. The slot read is the protocol safe's own, over `eth_getStorageAt
 proposal, and the factory cannot repeat or check it. Only the `factory()` branch ties a module to a
 code path this contract governs.
 
-**The read path has not changed yet.** This is the record, not its use: `moduleAddress` answers as
-before for a safe with no adopted module, `createModule` returns an adopted module instead of
-deploying, and nothing in the tree calls `registerModule`. `resolvePublicationModules` in
-`src/shared/src/authoring/publication.ts` still asks the factory for a prediction and proves it against
-the Safe's enabled list, using a `NAME()` match only when the factory answers nothing. Readers move to
-the adopted entry in a follow-up; until then the prediction remains the address they use.
+The order for the legacy population is read, register, upgrade. The slot is read while the proxy still
+runs V2 or V3, at `0x360894a1…382bbc` with `eth_getStorageAt`, and that address is what the constructor
+records and what `registerModule` is given; the upgrade to V4 in place comes after. Reading the slot
+after the upgrade returns the V4 implementation, and the factory refuses a V4 address as a legacy entry
+— `LegacyImplementationWithUpgradeGate(address)` from the constructor, `ModuleNotRecognised(module)` from
+`registerModule` — so an operator who upgrades first has nothing to register, and the set has no setter,
+so there is no way back.
+
+**A registration is live as soon as it executes.** `readModuleAddress` asks `moduleAddress`, and
+`moduleAddress` prefers `registeredModule`, so every reader holding the `publication_factory` record
+sees the adopted module the moment the write lands: `resolvePublicationModules` in
+`src/shared/src/authoring/publication.ts`, `getProtocolControllerAndModules` in
+`src/shared/src/protocol/index.ts`, the safe-app's `resolveModuleAddress` in
+`src/publication/safe-app/src/lib/publication-init.ts` and `getModuleAdresses` in
+`src/author/neutralpress/src/publication/publication.service.ts` all resolve through it. The adopted
+entry cannot be moved afterwards, so there is no window in which a reader reverts to the old address.
+What has not changed is the proof: a factory answer counts only when the Safe lists that address
+(INV-4), so a registered module the Safe has not enabled is not read, and the `NAME()` match remains
+the fallback for a factory that answers nothing. Nothing in the tree calls `registerModule` yet; the
+write is the protocol safe's to make.
 
 So the trust edge is: **what code a publication runs, at birth and after every upgrade, is set by the
 protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and
