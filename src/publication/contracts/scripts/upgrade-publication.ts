@@ -231,10 +231,13 @@ async function main() {
     refuse(
       `The proxy already runs V4 ("${V4_NAME}").`,
       'V4 reads a factory slot that `initialize` never wrote on an upgraded proxy, so',
-      'its _authorizeUpgrade reverts NoFactory() before any payload runs. Nothing in',
-      'this tree can move it: register-then-upgrade is closed too, because a V5 module',
-      'answers factory() and the factory accepts it as one it governs. A V4 proxy is',
-      'stranded for good, and this script will not print a transaction that will revert.',
+      'its _authorizeUpgrade reverts NoFactory() before any payload runs. Registering it',
+      'does not help and is not a way round: registerModule writes a factory record and',
+      'never touches _authorizeUpgrade, and for this proxy it reverts',
+      'ModuleNotRecognised(address) anyway, because a module running V4 answers factory()',
+      'with zero and is judged on the frozen legacy set, which does not name what a V4',
+      'proxy runs. A V4 proxy is stranded for good, and this script will not print a',
+      'transaction that will revert.',
     );
   }
 
