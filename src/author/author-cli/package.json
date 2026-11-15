@@ -1,19 +1,23 @@
 {
   "name": "@s2s/author-cli",
   "version": "0.1.0",
-  "description": "Headless author CLI for soul2soul — upload / preview / publish / revoke / new. Powers the Neovim plugin (machine-friendly output).",
+  "description": "Headless author CLI for soul2soul \u2014 upload / preview / publish / revoke / new. Powers the Neovim plugin (machine-friendly output).",
   "type": "module",
   "license": "UNLICENSED",
   "private": true,
   "bin": {
     "s2s": "dist/cli.cjs"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "files": [
     "dist",
     "defaults.json"
   ],
   "scripts": {
-    "build": "npm --prefix ../../shared run build --loglevel=error && tsc -noEmit && node esbuild.config.mjs production",
+    "build": "npm --prefix ../../shared run build --loglevel=error && tsc -noEmit && node esbuild.config.mjs production && pnpm pack:cli",
+    "pack:cli": "node scripts/pack-release.mjs",
     "dev": "node esbuild.config.mjs",
     "test": "vitest run --reporter=verbose",
     "typecheck": "tsc -noEmit",

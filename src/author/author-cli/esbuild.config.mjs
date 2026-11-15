@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -84,6 +84,29 @@ function copyDefaults() {
   copyFileSync(paths.defaults, paths.defaultsCopy);
 }
 
+/**
+ * Mirror the finished bundle into the repo-root `dist/cli/`.
+ *
+ * `dist/` at the repo root is where deploy and a manual copy look for built
+ * artefacts (`dist/safe-app/` sits there too). The mirror is a copy, not a
+ * second outfile: `package.json`'s `bin` and the install layout both expect
+ * `<package>/dist/cli.cjs`, so the package build stays canonical and this
+ * directory is the convenience copy. Both files always move together — the
+ * bundle looks for `defaults.json` beside itself.
+ */
+function mirrorToRepoDist() {
+  mkdirSync(paths.repoDist, { recursive: true });
+  copyFileSync(paths.outfile, paths.repoCli);
+  copyFileSync(paths.defaultsCopy, paths.repoDefaults);
+  // The installer travels with the bundle so a copied directory is complete:
+  // `sh dist/cli/install.sh` installs the tarball sitting next to it.
+  copyFileSync(join(here, 'install.sh'), paths.repoInstall);
+  // The shebang is only usable with the exec bit, and the mirror is the copy a
+  // person runs directly: `dist/cli/cli.cjs --version`.
+  chmodSync(paths.repoCli, 0o755);
+  chmodSync(paths.repoInstall, 0o755);
+}
+
 /** @type {esbuild.BuildOptions} */
 const options = {
   entryPoints: [paths.entry],
@@ -103,10 +126,13 @@ const options = {
 if (production) {
   await esbuild.build(options);
   copyDefaults();
+  mirrorToRepoDist();
 } else {
   const ctx = await esbuild.context(options);
   await ctx.watch();
   // The dev bundle reads the same `dist/defaults.json`; re-copying on every run
   // is what keeps `node dist/cli.cjs` honest after an edit to the file.
   copyDefaults();
+  // No repo mirror here: `dist/cli/` is a deploy artefact, and a dev bundle
+  // (inline sourcemap, 25 MB) is not what should be sitting there.
 }

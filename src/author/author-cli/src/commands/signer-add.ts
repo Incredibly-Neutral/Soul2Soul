@@ -4,6 +4,7 @@
 //   s2s signer add 0xSafe…                        # generate a key, propose it
 //   s2s signer add 0xSafe… --key 0x…              # file a key you already hold
 //   s2s signer add 0xSafe… --name zomi --key 0x…  # and name it
+//   s2s signer add 0xSafe… --emit call.json       # write the call an owner posts
 //
 // The Safe already exists and has owners. This command adds the new EOA to that
 // list with `addOwnerWithThreshold(newEoa, threshold)` — the Safe's CURRENT
@@ -18,6 +19,11 @@
 // that holds no owner key for the Safe — the usual case for a machine that is
 // joining — posts nothing and reports the same `{to, data}` call for an owner
 // machine to make.
+//
+// `--emit` writes that call to a file (`core/proposal-file.ts`) so the owner
+// machine posts it without ever seeing this key: `s2s signer propose --file`.
+// The file is written whether or not the proposal queued here, because a record
+// of the call is worth having either way.
 //
 // The key comes from the same resolver `author new` uses (`--key`, `--mnemonic`,
 // a piped line, else a generated BIP39 phrase printed once). It is filed BEFORE
@@ -43,8 +49,10 @@ import { flagString } from '../lib/args';
 import type { StoreCommandSpec } from '../lib/command';
 import { CliError, UsageError } from '../lib/errors';
 import type { CliOut } from '../lib/out';
+import { SCHEMA_VERSION } from '../lib/out';
 import { addSigner, authorEoa, readAuthors } from '../core/authors';
 import { hexKey } from '../core/config';
+import { writeBatch, writeProposal, type ProposalFile } from '../core/proposal-file';
 import {
   addOwnerWithThresholdData,
   computeSafeTxHash,
@@ -111,10 +119,7 @@ export async function runSignerAdd(
   // key the chain does not recognise is how `signer confirm` comes to refuse its
   // own machine's key. The active slot stays where it was; the join is completed
   // by whoever posts the add, not by filing it here.
-  const filed = addSigner(
-    { name, privateKey, safe, activate: false },
-    deps.authorsPath(),
-  );
+  const filed = addSigner({ name, privateKey, safe, activate: false }, deps.authorsPath());
 
   const tx: SafeTxInput = {
     to: safe,
@@ -126,27 +131,50 @@ export async function runSignerAdd(
   };
   const localHash = computeSafeTxHash({ chainId: deps.chainId, safe, tx });
 
-  // The key this process can sign for: an env or project key that is on the
-  // Safe's owner list, because the service files a proposal's signature as its
-  // sender's confirmation and refuses a sender that is not an owner. `signer add`
-  // refuses a key that is already an owner, so a machine joining a Safe it does
-  // not own has no such key — that is the ordinary case for this command.
+  // Written before the service is touched: the file is the handoff, and a
+  // proposal that fails here is exactly the case that needs it.
+  const emit = flagString(args.flags, 'emit');
+  const proposal: ProposalFile = {
+    schemaVersion: SCHEMA_VERSION,
+    action: 'signer.add',
+    safe,
+    chainId: deps.chainId,
+    newOwner: eoa,
+    threshold: chain.threshold,
+    to: tx.to,
+    value: tx.value.toString(),
+    data: tx.data,
+    operation: tx.operation,
+    nonce: tx.nonce,
+    safeTxHash: localHash,
+    createdAt: new Date().toISOString(),
+  };
+  const proposalPath = emit ? writeProposal(emit, proposal) : undefined;
+  // The same call for the Safe web app: an owner imports this and signs, with
+  // no CLI on their machine and no key of theirs on this one.
+  const emitBatch = flagString(args.flags, 'emit-batch');
+  const batchPath = emitBatch ? writeBatch(emitBatch, proposal) : undefined;
+
+  // Who proposes. An owner key wins: one proposal carries the proposer's
+  // signature as that sender's confirmation, so an owner's signature is both the
+  // queue entry and one confirmation. A machine joining a Safe it does not own
+  // has no owner key — there it posts with the key being added, and the service
+  // answers for itself. Whether that answer is a refusal is not decided here:
+  // predicting it was how a joining machine came to make no attempt at all.
   const configKey = hexKey(config.privateKey);
   const configEoa = configKey ? authorEoa(configKey) : undefined;
-  const proposer =
+  const ownerKey =
     configKey && configEoa && chain.owners.some((o) => o.toLowerCase() === configEoa.toLowerCase())
       ? { privateKey: configKey, eoa: configEoa }
       : undefined;
+  const proposer = ownerKey ?? { privateKey, eoa };
+  const proposingAsOwner = ownerKey !== undefined;
 
   let proposed = false;
   let safeTxHash = localHash;
   let note: string | undefined;
   if (config.safeTx.url.trim() === '') {
     note = 'no Safe Transaction Service URL configured (safeTx.url)';
-  } else if (!proposer) {
-    // Decided offline: the service answers "Sender is not an owner" to every
-    // POST this machine could make, and no round trip is spent learning it.
-    note = `no key this machine can sign with is an owner of ${safe}, and the service accepts a proposal only from an owner — an owner machine has to post it [not_owner_key]`;
   } else {
     try {
       const service = deps.service(config);
@@ -158,13 +186,14 @@ export async function runSignerAdd(
       // the Safe, not a default. The field stays unstated until something here
       // can read `isModuleEnabled` for the module address.
       await service.register(safe, { owners: chain.owners, threshold: chain.threshold });
-      // Signed by the owner, because the service files the signature as that
-      // owner's confirmation. Not by `eoa`: the key this run adds is not on the
-      // owner list yet, and a proposal from it is refused.
+      // Signed by the key that posts it. When that is an owner the service also
+      // files the signature as that sender's confirmation; when it is the key
+      // being added, the service keeps the entry and the owners still owe theirs.
       const signature = await privateKeyToAccount(proposer.privateKey as Hex).sign({
         hash: localHash,
       });
-      safeTxHash = (await service.propose({ safe, sender: proposer.eoa, tx, signature })).safeTxHash;
+      safeTxHash = (await service.propose({ safe, sender: proposer.eoa, tx, signature }))
+        .safeTxHash;
       proposed = true;
     } catch (err) {
       note = reasonOf(err);
@@ -188,9 +217,12 @@ export async function runSignerAdd(
       nonce: chain.nonce,
       safeTxHash,
       proposed,
+      ...(proposed ? { sender: proposer.eoa, senderIsOwner: proposingAsOwner } : {}),
       // Always present: the same call the service was given, so a proposal that
       // never reached it can still be made from an owner's wallet.
       safeTx: { to: safe, data: tx.data },
+      ...(proposalPath ? { proposalFile: proposalPath } : {}),
+      ...(batchPath ? { batchFile: batchPath } : {}),
       activated: false,
       file: deps.authorsPath(),
       ...(note ? { note } : {}),
@@ -206,7 +238,7 @@ export async function runSignerAdd(
       `safeTxHash  : ${safeTxHash}`,
       ...(proposed
         ? [
-            `proposal    : queued — ${shortAddress(proposer?.eoa ?? '')} signed it (1 of ${String(chain.threshold)} confirmations)`,
+            `proposal    : queued — ${shortAddress(proposer.eoa)} signed it (${proposingAsOwner ? '1' : '0'} of ${String(chain.threshold)} confirmations)`,
             ...(chain.threshold > 1
               ? [
                   `              the other owners run \`s2s signer confirm ${safeTxHash}\` from their own machines`,
@@ -218,16 +250,27 @@ export async function runSignerAdd(
           ]
         : [
             `proposal    : not queued — ${note ?? 'unknown error'}`,
-            ...(proposer
+            ...(proposingAsOwner || proposalPath || batchPath
               ? []
               : [
-                  `              this machine cannot queue it: the service accepts a proposal only from an owner of ${safe}, and no key it can sign with is one`,
-                  `              an owner has to post this call from their own machine — nothing here retries it`,
+                  `              the service refused this machine's key; an owner can post the same call with \`s2s signer add --emit\` + \`s2s signer propose --file\``,
                 ]),
             `              to    ${safe}`,
             `              data  ${tx.data}`,
             `              nonce ${String(chain.nonce)}`,
           ]),
+      ...(proposalPath
+        ? [
+            `proposalFile : ${proposalPath}`,
+            `              an owner machine posts it with: s2s signer propose --file ${proposalPath}`,
+          ]
+        : []),
+      ...(batchPath
+        ? [
+            `batchFile   : ${batchPath}`,
+            `              or an owner imports it into the Safe app (Transaction Builder) and signs — no CLI, no key of theirs here`,
+          ]
+        : []),
       `store       : ${deps.authorsPath()}`,
       `active      : ${keptActive ?? '(none)'} (unchanged — a joined key is not an owner yet, so it does not take the slot)`,
       ...(source.mnemonic
@@ -259,6 +302,17 @@ export const signerAdd: StoreCommandSpec = {
       type: 'string',
       value: '<words…>',
       summary: 'BIP39 phrase to restore from (or pipe it on stdin)',
+    },
+    emit: {
+      type: 'string',
+      value: '<path>',
+      summary: 'write the call to a file an owner machine posts with `signer propose --file`',
+    },
+    'emit-batch': {
+      type: 'string',
+      value: '<path>',
+      summary:
+        'write the same call as a Safe Transaction Builder batch, for an owner to import and sign',
     },
   },
   async run(out: CliOut, args: ParsedArgs) {

@@ -29,11 +29,23 @@ describe('esbuild paths', () => {
       expect(paths.entry).toBe(join(here, 'src', 'cli.ts'));
       expect(paths.defaultsCopy).toBe(join(here, 'dist', 'defaults.json'));
       for (const path of Object.values(paths)) {
-        expect(path.startsWith(here)).toBe(true);
         expect(path.startsWith(elsewhere)).toBe(false);
+      }
+      for (const path of [paths.dist, paths.outfile, paths.entry, paths.defaults, paths.defaultsCopy]) {
+        expect(path.startsWith(here)).toBe(true);
       }
     } finally {
       process.chdir(original);
     }
+  });
+});
+
+describe('repo dist mirror', () => {
+  it('puts the second copy at the repo-root dist/cli, beside dist/safe-app', () => {
+    const here = '/repo/src/author/author-cli';
+    const paths = buildPaths(here);
+    expect(paths.repoDist).toBe(join('/repo', 'dist', 'cli'));
+    expect(paths.repoCli).toBe(join(paths.repoDist, 'cli.cjs'));
+    expect(paths.repoDefaults).toBe(join(paths.repoDist, 'defaults.json'));
   });
 });

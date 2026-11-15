@@ -5,6 +5,9 @@
 // is invoked from anywhere but the package root. Every path here derives from
 // `here` — the directory this script lives in — so the output lands in the
 // package's own `dist/` regardless of where the build was started.
+//
+// `repoDist` is the second copy: the repo-root `dist/cli/`, beside
+// `dist/safe-app/`, where deploy and manual copying look for built artefacts.
 
 import { join } from 'node:path';
 
@@ -19,5 +22,9 @@ export function buildPaths(here) {
     entry: join(here, 'src', 'cli.ts'),
     defaults: join(here, 'defaults.json'),
     defaultsCopy: join(dist, 'defaults.json'),
+    repoDist: join(here, '..', '..', '..', 'dist', 'cli'),
+    repoCli: join(here, '..', '..', '..', 'dist', 'cli', 'cli.cjs'),
+    repoDefaults: join(here, '..', '..', '..', 'dist', 'cli', 'defaults.json'),
+    repoInstall: join(here, '..', '..', '..', 'dist', 'cli', 'install.sh'),
   };
 }
