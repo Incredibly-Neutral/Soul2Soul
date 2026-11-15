@@ -14,20 +14,28 @@
  *
  *   1. the proxy's current implementation, from the ERC-1967 slot;
  *   2. that implementation's `NAME()`;
- *   3. the proxy's initialisation nonce, slot 0.
+ *   3. the proxy's initialisation nonce, slot 0, and slot 119 — the backfill
+ *      sentinel `initialize` sets.
  *
- *   V2 or V3, nonce < 2   → reinitializeV3(). The backfill of `agreementsHeldBy`
- *                          has not run, and skipping it leaves the counter at
- *                          zero for every live agreement.
- *   anything else         → NAME(). Nonce 2 is already spent, or the proxy runs
- *                          V5, so a backfill would either revert on the
- *                          reinitializer or double counts `_addAgreement` made.
+ *   sentinel zero, nonce < 2  → reinitializeV3(). The backfill has not run, and
+ *                              `reinitializeV3` recomputes each owner's count
+ *                              from `agreementList` rather than adding to it, so
+ *                              it is right on a proxy that arrived from V2 and on
+ *                              one born under V3, whose `_addAgreement` already
+ *                              counted. Nothing here has to tell them apart.
+ *   sentinel set              → NAME(). This proxy is at or past the backfill:
+ *                              it was born as V5 or has already run the call.
  *
- * Two refusals, both by name:
+ * Three refusals, by name:
  *
  *   The proxy runs V4. Its `_authorizeUpgrade` reads a factory slot that
  *   `initialize` never wrote on an upgraded proxy, so it reverts `NoFactory()`
  *   before any payload runs: nothing in this tree can upgrade it.
+ *
+ *   The sentinel is zero and nonce 2 is spent. An earlier `reinitializeV3` ran
+ *   under a module version that wrote no sentinel, so the counts are whatever
+ *   that run left and this call cannot run again to recompute them. Classifying
+ *   that state is not this script's to guess.
  *
  *   The target is not V5. A V4 target is the trap: it is permanently in the
  *   factory's approved set, a V2 or V3 proxy's `onlySafe` accepts it, and the
@@ -95,13 +103,13 @@ type Payload = { call: Hex; label: string; why: string };
 const NAME_CALL: Payload = {
   call: encodeFunctionData({ abi: MODULE_ABI, functionName: 'NAME' }),
   label: 'NAME()',
-  why: 'the backfill is not needed: nonce 2 is spent or the proxy already runs V5',
+  why: 'slot 119 holds the backfill sentinel, so this proxy has already counted its agreements',
 };
 
 const REINIT_V3_CALL: Payload = {
   call: encodeFunctionData({ abi: UPGRADE_ABI, functionName: 'reinitializeV3' }),
   label: 'reinitializeV3()',
-  why: 'a V2/V3 proxy that has not run the backfill of agreementsHeldBy',
+  why: 'slot 119 is zero: the backfill has not run, and it recomputes each count from agreementList',
 };
 
 function usage(message: string): never {
@@ -189,6 +197,15 @@ async function implementationOf(proxy: Hex): Promise<Hex> {
   return getAddress(`0x${word.slice(-40)}`);
 }
 
+/** One storage word, as a number: 0 for an unset slot. */
+async function readSlotWord(address: Hex, slot: number): Promise<bigint> {
+  const word = await publicClient.getStorageAt({
+    address,
+    slot: `0x${slot.toString(16)}`,
+  });
+  return word && word !== '0x' ? BigInt(word) : 0n;
+}
+
 /** OZ `Initializable` keeps the reinitializer nonce in slot 0, low byte. */
 async function nonceOf(proxy: Hex): Promise<number> {
   const word = await publicClient.getStorageAt({ address: proxy, slot: '0x0' });
@@ -203,10 +220,12 @@ async function main() {
   const currentImplementation = await implementationOf(proxy);
   const currentName = await nameOf(currentImplementation);
   const nonce = await nonceOf(proxy);
+  const backfilled = (await readSlotWord(proxy, 119)) !== 0n;
 
   console.error(`Proxy:            ${proxy}`);
   console.error(`Current impl:     ${currentImplementation}  ("${currentName}")`);
   console.error(`Initializer nonce: ${nonce}`);
+  console.error(`Backfill sentinel: ${backfilled ? 'set (slot 119)' : 'zero (slot 119)'}`);
 
   if (currentName === V4_NAME) {
     refuse(
@@ -228,8 +247,17 @@ async function main() {
     );
   }
 
-  const backfillNeeded = (currentName === V2_NAME || currentName === V3_NAME) && nonce < 2;
-  const initializer = backfillNeeded ? REINIT_V3_CALL : NAME_CALL;
+  if (!backfilled && nonce >= 2) {
+    refuse(
+      `Slot 119 is zero but the initializer nonce is ${nonce}: a reinitializeV3 already ran.`,
+      'That run happened under a module version that wrote no sentinel, and it either',
+      'counted from agreementList (V5) or added to what was there (V3). The nonce is',
+      'spent, so this call cannot run again to recompute, and the script will not guess',
+      'which shape the counts are in.',
+    );
+  }
+
+  const initializer = backfilled ? NAME_CALL : REINIT_V3_CALL;
 
   const targetName = await nameOf(implementation);
   if (targetName === V4_NAME) {
