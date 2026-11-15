@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { network } from 'hardhat';
 import {
@@ -34,13 +34,12 @@ import {
 const { viem } = await network.create();
 
 type LayoutEntry = { label: string; slot: string; offset: number; type: string };
+type BuildOutput = {
+  storageLayout?: { storage: LayoutEntry[] };
+  evm?: { deployedBytecode?: { object?: string } };
+};
 type BuildInfo = {
-  output: {
-    contracts?: Record<
-      string,
-      Record<string, { storageLayout?: { storage: LayoutEntry[] } } | undefined>
-    >;
-  };
+  output: { contracts?: Record<string, Record<string, BuildOutput | undefined>> };
 };
 
 /**
@@ -48,19 +47,41 @@ type BuildInfo = {
  * proxies proves only what was written: a variable declared at the removed slot
  * and never used leaves both sides equal while the declaration set has changed.
  * The compiler's own answer is the one that cannot be faked.
+ *
+ * A tree can hold more than one build-info file after incremental compiles, and
+ * an older job describes an older declaration set. The job that is current is the
+ * one whose bytecode is the artifact's, so that is the one read; when no job
+ * matches (a rebuilt artifact with no retained output), the newest job wins.
  */
 function compiledLayout(contract: string): LayoutEntry[] {
-  const dir = fileURLToPath(new URL('../artifacts/build-info', import.meta.url));
+  const root = fileURLToPath(new URL('../artifacts', import.meta.url));
+  const artifact = JSON.parse(
+    readFileSync(`${root}/src/${contract}.sol/${contract}.json`, 'utf8'),
+  ) as { deployedBytecode?: string };
+  const current = (artifact.deployedBytecode ?? '').replace(/^0x/, '');
+
+  const dir = `${root}/build-info`;
+  const candidates: { layout: LayoutEntry[]; code: string; mtime: number }[] = [];
   for (const file of readdirSync(dir)) {
     // Hardhat writes `<id>.json` (input only) beside `<id>.output.json`.
     if (!file.endsWith('.output.json')) continue;
     const build = JSON.parse(readFileSync(`${dir}/${file}`, 'utf8')) as BuildInfo;
     for (const source of Object.values(build.output?.contracts ?? {})) {
-      const found = source[contract]?.storageLayout?.storage;
-      if (found) return found;
+      const found = source[contract];
+      if (!found?.storageLayout) continue;
+      candidates.push({
+        layout: found.storageLayout.storage,
+        code: (found.evm?.deployedBytecode?.object ?? '').replace(/^0x/, ''),
+        mtime: statSync(`${dir}/${file}`).mtimeMs,
+      });
     }
   }
-  throw new Error(`No compiled storageLayout for ${contract} in ${dir}`);
+
+  if (candidates.length === 0)
+    throw new Error(`No compiled storageLayout for ${contract} in ${dir}`);
+  const exact = current ? candidates.filter((candidate) => candidate.code === current) : [];
+  const [chosen] = (exact.length > 0 ? exact : candidates).sort((a, b) => b.mtime - a.mtime);
+  return chosen!.layout;
 }
 
 const publicClient = await viem.getPublicClient();

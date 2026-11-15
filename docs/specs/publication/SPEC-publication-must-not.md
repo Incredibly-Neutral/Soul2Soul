@@ -27,9 +27,9 @@
 > approved set is a fact about the chain, not about this tree. Nothing in this file's upgrade rows has
 > run against a live V5 instance.
 >
-> **Test coverage:** 81 pass in `publication/contracts/test/`: 39 in
+> **Test coverage:** 83 pass in `publication/contracts/test/`: 39 in
 > `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 9 in
-> `S2SPublicationModuleV4.test.ts`, 13 in `S2SPublicationModuleV5.test.ts`, and 4 in
+> `S2SPublicationModuleV4.test.ts`, 15 in `S2SPublicationModuleV5.test.ts`, and 4 in
 > `implementation-gate.test.ts`, which covers the gate check the factory makes on what it approves. At
 > the 2026-11-10 pass the module had no unit test in this tree.
 > Rows that cite a code line and no test name are unproven by a suite, and say so. A row marked
