@@ -27,6 +27,12 @@ const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 //
 // Records has no fallback: its module implements ERC-165 and always has.
 //
+// Before any of that, a call site that already holds the `publication_factory`
+// record asks the factory where the module is: the CREATE2 prediction names the
+// address, and it is taken when the Safe lists it. That shortens the
+// probe path for every publication created through the CREATE2 factory and
+// leaves the path for older ones as it was, NAME() scan included.
+//
 // REQUEST BUDGET. Lit caps a session at 50 HTTP requests, and every eth_call
 // costs one request per RPC URL tried — so a call that reverts costs two and a
 // call that answers costs one. Counts for this file:
@@ -44,6 +50,31 @@ const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 //   nothing answers                  one id probe per module per role, then one
 //                                     NAME() per module; a module with no NAME()
 //                                     reverts, so its NAME() costs two
+//
+// The CREATE2 prediction, when the call site passes a publication factory. It
+// answers where the publication module is, so the probes above are not issued,
+// but only when the predicted address is already on the Safe's module list. One
+// unit per row: requests, one per read that answers and two per read that
+// reverts on two RPC URLs. `count` is implementationCount().
+//
+//   the publication under the        3 — moduleAddress, then the two records
+//   newest implementation            probes; no publication probe, no NAME()
+//   the publication under the        5 — moduleAddress misses, implementation
+//   previous implementation,         Count answers, version count - 1 answers,
+//   count 2 (the version walk's     then the two records probes
+//   newest case)
+//   the publication under an older   moduleAddress, implementationCount, then
+//   version on the list              one version request per generation tried
+//                                    ahead of it, newest first — at most
+//                                    MAX_PREDICTED_VERSIONS (8) — then the two
+//                                    records probes
+//   no version on the list           1 + 1 + at most 8 version requests, then
+//                                    today's publication probes
+//   a factory that answers none of   2, then exactly today's probes — a failed
+//   the three                        read is never retried
+//
+// The call sites that pass a factory also spend one request reading the
+// publication_factory record itself (getPublicationFactory in protocol.factory).
 // ============================================================================
 
 // `type(IS2SRecordsModule).interfaceId` — the XOR of the 14 selectors declared
@@ -183,6 +214,94 @@ export const findModuleByPublicationName = (
   rpcs?: { L1: string[]; L2: string[] },
 ): Promise<string | null> => findModule(candidates, (addr) => answersPublicationName(addr, rpcs));
 
+// The CREATE2 factory's predictions. `moduleAddress` is exact for the next
+// createModule under the current implementation, so it names a publication
+// created now; `setImplementation` moves it, which is why a publication created
+// under an earlier one answers at `moduleAddressForVersion`. A factory deployed
+// before this one answers none of the three, and that is not an error: the read
+// reverts, the catch returns null, and the probes below run as they always did.
+const MODULE_PREDICTION_ABI = [
+  'function moduleAddress(address safe) view returns (address)',
+  'function moduleAddressForVersion(address safe, uint256 version) view returns (address)',
+  'function implementationCount() view returns (uint256)',
+];
+
+// A published factory's implementation list is a handful long. The cap bounds a
+// session's request spend if the count ever answers something absurd; the loop
+// below reads one implementation per request.
+const MAX_PREDICTED_VERSIONS = 8;
+
+const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+// `implementationCount` answers a uint256, so it arrives as an ethers BigNumber,
+// a bigint or a number depending on the path. All three stringify to decimal.
+const toCount = (value: unknown): number => {
+  const n = Number(String(value ?? ''));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+};
+
+/**
+ * The module the factory predicts for `safe`, if and only if `candidates` — the
+ * module list already read from the Safe — holds it. A prediction the Safe does
+ * not enable is not a publication module, so a stale, wrong or zero answer is
+ * discarded rather than trusted.
+ *
+ * null when the factory answers nothing, when a read fails, or when no answer is
+ * on the list. Reads stop at the first failure: a factory without these
+ * functions pays one reverting call, not one per read.
+ */
+export const findModulePredictedByFactory = async (
+  publicationFactory: string,
+  safe: string,
+  candidates: string[],
+  rpcs?: { L1: string[]; L2: string[] },
+): Promise<string | null> => {
+  try {
+    const accept = (predicted: unknown): string | null =>
+      typeof predicted === 'string'
+        ? (candidates.find((addr) => sameAddress(addr, predicted)) ?? null)
+        : null;
+
+    const next = accept(
+      await evmRead(
+        'L2',
+        publicationFactory,
+        MODULE_PREDICTION_ABI,
+        'moduleAddress',
+        [safe],
+        rpcs?.L2,
+      ),
+    );
+    if (next) return next;
+
+    const count = toCount(
+      await evmRead('L2', publicationFactory, MODULE_PREDICTION_ABI, 'implementationCount', [], rpcs?.L2),
+    );
+    // Versions are 1-based over the implementation history and the view reverts
+    // InvalidVersion at 0, so the walk is for the older generations only:
+    // `moduleAddress` already covered the newest one. Count 2 asks version 1.
+    const oldest = Math.max(1, count - MAX_PREDICTED_VERSIONS);
+    for (let version = count - 1; version >= oldest; version--) {
+      const predicted = accept(
+        await evmRead(
+          'L2',
+          publicationFactory,
+          MODULE_PREDICTION_ABI,
+          'moduleAddressForVersion',
+          [safe, version],
+          rpcs?.L2,
+        ),
+      );
+      if (predicted) return predicted;
+    }
+  } catch {
+    // Not a factory that answers these, or a transport failure. Either way the
+    // caller falls through to the probes, which is what it ran before this
+    // existed.
+  }
+  return null;
+};
+
 const getModuleList = async (safe: string, rpcs?: { L1: string[]; L2: string[] }) => {
   const [modules] = await evmRead(
     'L2',
@@ -244,9 +363,19 @@ export const getProtocolControllerAndModules = async (rpcs?: { L1: string[]; L2:
   }
 };
 
+/**
+ * The publication Safe's owner, its records module, and its publication module.
+ *
+ * `publicationFactory` is the `publication_factory` record, passed by call sites
+ * that have already read the protocol records. It buys the CREATE2 prediction:
+ * the factory says where the publication module sits for this Safe, and the
+ * answer is taken when the Safe lists it. Omit it and the discovery is the probe
+ * path alone, as before.
+ */
 export const getDomainOwnerAndModules = async (
   publication: string,
   rpcs?: { L1: string[]; L2: string[] },
+  publicationFactory?: string | null,
 ) => {
   const nameWrapperAddress = await evmRead(
     'L1',
@@ -270,10 +399,16 @@ export const getDomainOwnerAndModules = async (
 
   const configModule = await findModuleWithRole(modules, RECORDS_ROLE_ID, rpcs);
 
-  // Publication: the role id decides when it is answered, and the NAME()
-  // fallback is consulted only when no candidate answered it.
+  // Publication: the factory's prediction decides when it is on the list, the
+  // role id when a candidate answers it, and the NAME() fallback only when
+  // neither did. Every factory read is caught, so an old factory costs its one
+  // failed call and nothing more.
   const rest = modules.filter((addr: string) => addr !== configModule);
+  const predicted = publicationFactory
+    ? await findModulePredictedByFactory(publicationFactory, multisig, rest, rpcs)
+    : null;
   const publicationModule =
+    predicted ??
     (await findModuleWithRole(rest, PUBLICATION_ROLE_ID, rpcs)) ??
     (await findModuleByPublicationName(rest, rpcs));
 

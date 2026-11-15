@@ -217,6 +217,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,
       rpcs,
+      protocolInfo.publicationFactory,
     );
 
     if (multisig == null || configModule == null || publicationModule == null)

@@ -80,7 +80,7 @@ function requirePublicationFactory(): string {
   if (address) return address;
 
   throw new Error(
-    'PUBLICATION_FACTORY_ADDRESS is not set. Deploy S2SPublicationModuleV3Factory ' +
+    'PUBLICATION_FACTORY_ADDRESS is not set. Deploy S2SPublicationModuleV4Create2Factory ' +
       '(cd src/publication/contracts && pnpm deploy:pubfac), put the printed ' +
       'PUBLICATION_FACTORY_ADDRESS in .env, and re-run. Not writing the superseded ' +
       'V2 factory to the publication_factory record: its setImplementation is ' +
@@ -157,7 +157,7 @@ const assertGatedFactory = async (address: string): Promise<void> => {
       `PUBLICATION_FACTORY_ADDRESS ${address} does not answer protocolSafe(). ` +
         "That is the superseded V2 factory, or not a factory. Its setImplementation is " +
         "callable by anyone, so writing it to the record would re-open the hole for every " +
-        "publication created from now on. Deploy S2SPublicationModuleV3Factory " +
+        "publication created from now on. Deploy S2SPublicationModuleV4Create2Factory " +
         "(cd src/publication/contracts && pnpm deploy:pubfac) and use the address it prints."
     );
   }

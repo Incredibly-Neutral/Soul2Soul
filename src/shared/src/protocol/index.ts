@@ -1,7 +1,8 @@
 import { namehash as viemNamehash } from 'viem/ens';
-import { PublicClient, getContract, decodeFunctionResult } from 'viem';
+import { PublicClient, getContract, decodeFunctionResult, type Address } from 'viem';
 import type { S2SProtocolInfo } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
+import { predictPublicationModule } from './factories';
 import { isPublicationModuleName } from './module-name';
 
 export * from './module-name';
@@ -33,11 +34,12 @@ export const getProtocolInfo = async (
   l1Provider: ViemProvider,
   l2Provider: ViemProvider
 ): Promise<S2SProtocolInfo> => {
-  const { multisig, configModule } = await getProtocolControllerAndModules(
-    dev,
-    l1Provider,
-    l2Provider
-  );
+  const {
+    multisig,
+    configModule,
+    publicationModule: scannedPublicationModule,
+    modules,
+  } = await getProtocolControllerAndModules(dev, l1Provider, l2Provider);
 
   const [
     data_gateway,
@@ -81,12 +83,25 @@ export const getProtocolInfo = async (
     l2Provider
   );
 
+  // The factory that answers a module address is itself a record, so the
+  // prediction can only run after the records read. It is given the module list
+  // read above: one `getModulesPaginated`, one records read, either way.
+  const predictedPublicationModule = publication_factory
+    ? await predictPublicationModule(
+        l2Provider,
+        publication_factory as Address,
+        multisig as Address,
+        modules
+      )
+    : undefined;
+
   return {
     gateway: data_gateway,
     ensRegistry: ens_registry,
     ensRecords: ens_records,
     publicationFactory: publication_factory,
     recordsFactory: records_factory,
+    publicationModule: predictedPublicationModule ?? scannedPublicationModule ?? undefined,
     pkp: pkp_ethAddress,
     litActions: {
       prep: lit_action_prep,
@@ -144,6 +159,13 @@ export const getRecords = async (
   return await contract.read.getRecords([keys]);
 };
 
+/**
+ * The controller's modules, resolved by the Safe's own `NAME()` scan.
+ *
+ * Scan-only on purpose: the factory address a prediction needs is itself a
+ * record, and this runs before the records are read. `getProtocolInfo` is where
+ * the prediction happens, once it holds that record.
+ */
 export const getProtocolControllerAndModules = async (
   dev: boolean,
   l1Provider: ViemProvider,
@@ -287,5 +309,7 @@ export const getProtocolControllerAndModules = async (
     multisig: controller,
     configModule,
     publicationModule,
+    /** The Safe's enabled-module list, as read; reused by the prediction. */
+    modules,
   };
 };

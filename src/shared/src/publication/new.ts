@@ -1,6 +1,10 @@
 import type { S2SPublication } from './types';
 import type { TxRunner } from './tx-runner';
-import type { S2SProtocolInfo } from '../protocol';
+import {
+  isPredictedModuleAddress,
+  PUBLICATION_FACTORY_CREATE2_ABI,
+  type S2SProtocolInfo,
+} from '../protocol';
 import type { S2SIPFSMethods } from '../ipfs';
 import { safeAbi, ensSubdomainRegistryAbi } from '../contracts';
 import { AssetsBuilder } from './assets-builder';
@@ -80,6 +84,18 @@ export function buildNewPublicationDeps(input: BuildNewPublicationDepsInput): Ne
 // Main orchestration
 // =============================================================================
 
+/**
+ * Create one publication: register the ENS subdomain on L1, deploy its records
+ * and publication modules on L2, enable them, and write the records.
+ *
+ * When the factory in the protocol record is a CREATE2 factory, the publication
+ * module's address is known before anything is written: it is read first, and
+ * the address `createModule` returns is asserted against it. A disagreement
+ * throws before a module is enabled, rather than after. The recovery path when
+ * the two ever disagree is the safe-app detector
+ * (`safe-app/src/lib/publication-init.ts`), which learns the deployed addresses
+ * from the factory's `ModuleCreated` logs instead of trusting a prediction.
+ */
 export async function newPublicationSafe(
   deps: NewPublicationDeps,
   publication: S2SPublication,
@@ -94,6 +110,17 @@ export async function newPublicationSafe(
   const publicationAddress2 = (await deps.l2.connectToFreshSafe(salt)) as `0x${string}`;
 
   publication.contract = publicationAddress1;
+
+  // The CREATE2 factory answers the address `createModule` is about to deploy
+  // to, so the address is known before anything is written and a factory that
+  // cannot answer is found before the ENS registration and the records module
+  // exist. A V2-generation factory has no `moduleAddress` selector and the read
+  // reverts; the address `createModule` returns stays the only source there.
+  const predictedPublicationModule = await readPredictedPublicationModule(
+    deps.l2,
+    deps.protocolInfo.publicationFactory,
+    publicationAddress2,
+  );
 
   // FIX: recordsModule was incorrectly destructured as [recordsModule] in the
   // original code, slicing the first character off the returned address string.
@@ -130,6 +157,15 @@ export async function newPublicationSafe(
     [publicationAddress2, publication.authors, []],
     true,
   );
+
+  if (
+    predictedPublicationModule &&
+    predictedPublicationModule.toLowerCase() !== publicationModule.toLowerCase()
+  ) {
+    throw new Error(
+      `Publication module address mismatch: factory predicted ${predictedPublicationModule}, createModule returned ${publicationModule}`,
+    );
+  }
 
   console.log('Created modules:', recordsModule, publicationModule);
 
@@ -224,6 +260,31 @@ export async function newPublicationSafe(
 // =============================================================================
 // Helpers (genuinely generic — only use genericRead/genericTx on TxRunner)
 // =============================================================================
+
+/**
+ * `moduleAddress(safe)` from a CREATE2 publication factory: where this Safe's
+ * publication module will be deployed. `undefined` when the factory is older
+ * than the selector (the read reverts) or answers the zero address (it has named
+ * no implementation, so there is nothing to predict).
+ */
+export async function readPredictedPublicationModule(
+  runner: TxRunner,
+  factoryAddress: string,
+  safeAddress: string,
+): Promise<`0x${string}` | undefined> {
+  if (!factoryAddress) return undefined;
+  try {
+    const predicted = await runner.genericRead(
+      factoryAddress as `0x${string}`,
+      JSON.stringify(PUBLICATION_FACTORY_CREATE2_ABI),
+      'moduleAddress',
+      [safeAddress],
+    );
+    return isPredictedModuleAddress(predicted) ? predicted : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function verifyModulesEnabled(
   runner: TxRunner,

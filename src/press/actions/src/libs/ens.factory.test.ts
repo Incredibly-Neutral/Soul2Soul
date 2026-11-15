@@ -24,6 +24,10 @@ import {
 //      publication modules implements ERC-165.
 //   4. A module that answers neither is not accepted, and the accepted-name set
 //      is exactly the pre-ERC-165 one.
+//   5. A supplied `publication_factory` predicts the publication module before
+//      any probe, and its answer is taken only when the Safe already lists the
+//      address. No prediction, a reverting factory, and a prediction the Safe
+//      does not enable all end at the same NAME() scan as before.
 //
 // The 4337 skip survives as an optimisation: that module answers no S2S role.
 // ============================================================================
@@ -36,6 +40,10 @@ const RECORDS = '0x' + '11'.repeat(20);
 const PUBLICATION = '0x' + '22'.repeat(20);
 const STRANGER = '0x' + '33'.repeat(20); // answers neither an id nor a NAME
 const REVERTER = '0x' + '44'.repeat(20); // supportsInterface reverts, NAME answers
+
+// The CREATE2 factory: `publication_factory` on the protocol records.
+const FACTORY = '0x' + '55'.repeat(20);
+const DECOY = '0x' + '66'.repeat(20); // predicted, never enabled on the Safe
 
 // The names the pre-ERC-165 discovery accepted. Asserted end to end below, so a
 // later edit to the predicate that narrows the set fails here.
@@ -70,6 +78,15 @@ const state = vi.hoisted(() => ({
   names: {} as Record<string, string | 'revert'>,
   probes: [] as { address: string; roleId: string }[],
   nameProbes: [] as string[],
+  // The factory's answers. `moduleAddress` is what the next createModule would
+  // deploy; `implementations` is the implementation history that
+  // moduleAddressForVersion indexes, which is 1-BASED: version v is index v - 1,
+  // its length is what implementationCount answers, and version 0 reverts
+  // InvalidVersion exactly as the contract does. 'revert' makes a read fail,
+  // which is what every factory deployed before the CREATE2 one does.
+  factoryModuleAddress: null as string | 'revert' | null,
+  factoryImplementations: 'revert' as string[] | 'revert',
+  factoryProbes: [] as { address: string; method: string; args: unknown[] }[],
 }));
 
 const setAnswers = (address: string, answers: Record<string, Answer>) => {
@@ -81,6 +98,20 @@ const setName = (address: string, name: string | 'revert') => {
 };
 
 const probedAddresses = () => state.probes.map((probe) => probe.address);
+const factoryMethods = () => state.factoryProbes.map((probe) => probe.method);
+const publicationRoleProbes = () =>
+  state.probes.filter((probe) => probe.roleId === PUBLICATION_ROLE_ID);
+
+const setFactory = (answers: { moduleAddress?: string; implementations?: string[] }) => {
+  state.factoryModuleAddress = answers.moduleAddress ?? null;
+  state.factoryImplementations = answers.implementations ?? [];
+};
+
+// What every factory deployed before the CREATE2 one does: no such function.
+const setRevertingFactory = () => {
+  state.factoryModuleAddress = 'revert';
+  state.factoryImplementations = 'revert';
+};
 
 vi.mock('./evm', () => ({
   evmRead: vi.fn(
@@ -113,6 +144,34 @@ vi.mock('./evm', () => ({
           }
           return name;
         }
+        case 'moduleAddress': {
+          state.factoryProbes.push({ address: contractAddress, method, args });
+          if (state.factoryModuleAddress === null || state.factoryModuleAddress === 'revert') {
+            throw new Error('execution reverted: no moduleAddress');
+          }
+          return state.factoryModuleAddress;
+        }
+        case 'implementationCount': {
+          state.factoryProbes.push({ address: contractAddress, method, args });
+          if (state.factoryImplementations === 'revert') {
+            throw new Error('execution reverted: no implementationCount');
+          }
+          return state.factoryImplementations.length;
+        }
+        case 'moduleAddressForVersion': {
+          state.factoryProbes.push({ address: contractAddress, method, args });
+          if (state.factoryImplementations === 'revert') {
+            throw new Error('execution reverted: no moduleAddressForVersion');
+          }
+          const version = Number(args[1]);
+          // 1-based over the history; 0 is not a version the view accepts.
+          if (!Number.isInteger(version) || version < 1) {
+            throw new Error('execution reverted: InvalidVersion');
+          }
+          const implementation = state.factoryImplementations[version - 1];
+          if (!implementation) throw new Error('execution reverted: InvalidVersion');
+          return implementation;
+        }
         default:
           throw new Error('unexpected method ' + method);
       }
@@ -130,6 +189,9 @@ beforeEach(() => {
   state.names = {};
   state.probes = [];
   state.nameProbes = [];
+  state.factoryModuleAddress = null;
+  state.factoryImplementations = 'revert';
+  state.factoryProbes = [];
   setAnswers(RECORDS, { [RECORDS_ROLE_ID]: true });
   setAnswers(PUBLICATION, { [PUBLICATION_ROLE_ID]: true });
   setName(PUBLICATION, 'S2S Publication Module V3');
@@ -251,6 +313,138 @@ describe('getDomainOwnerAndModules — resolves both roles', () => {
     expect(result.publicationModule).toBeNull();
     expect(state.probes).toEqual([]);
     expect(state.nameProbes).toEqual([]);
+  });
+});
+
+describe('getDomainOwnerAndModules — the CREATE2 prediction', () => {
+  it('takes a predicted address the Safe lists, with no publication probe and no NAME() read', async () => {
+    // Answer no role id and reject the NAME, so only the prediction can find it.
+    setAnswers(PUBLICATION, {});
+    setName(PUBLICATION, 'S2S Records Module');
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
+    setFactory({ moduleAddress: PUBLICATION, implementations: [PUBLICATION] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(PUBLICATION);
+    expect(factoryMethods()).toEqual(['moduleAddress']);
+    expect(publicationRoleProbes()).toEqual([]);
+    expect(state.nameProbes).toEqual([]);
+    // One factory call instead of the publication probe or the NAME() read.
+    expect(state.probes.length + state.factoryProbes.length).toBeLessThanOrEqual(3);
+    expect(state.factoryProbes[0].address).toBe(FACTORY);
+  });
+
+  it('resolves a publication created under the previous implementation (count 2, version 1)', async () => {
+    // The case the prediction exists for: the factory's current generation is
+    // not on the list, the previous one is.
+    const older = '0x' + '77'.repeat(20);
+    setAnswers(older, {});
+    setName(older, 'S2S Publication Module V2');
+    state.MODULES = [SAFE_4337, RECORDS, older];
+    setFactory({ moduleAddress: DECOY, implementations: [older, DECOY] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).toBe(older);
+    expect(factoryMethods()).toEqual([
+      'moduleAddress',
+      'implementationCount',
+      'moduleAddressForVersion',
+    ]);
+    // Version 1 is the previous implementation; the walk never asks version 0.
+    expect(state.factoryProbes[2].args).toEqual([expect.any(String), 1]);
+    expect(state.nameProbes).toEqual([]);
+    expect(state.probes.length + state.factoryProbes.length).toBeLessThanOrEqual(5);
+  });
+
+  it('walks older versions newest first and stops above version 1', async () => {
+    const older = '0x' + '77'.repeat(20); // created under version 1
+    const mid = '0x' + '88'.repeat(20); // never enabled on this Safe
+    setAnswers(older, {});
+    setName(older, 'S2S Publication Module V2');
+    state.MODULES = [SAFE_4337, RECORDS, older];
+    setFactory({ moduleAddress: DECOY, implementations: [older, mid, DECOY] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).toBe(older);
+    expect(factoryMethods()).toEqual([
+      'moduleAddress',
+      'implementationCount',
+      'moduleAddressForVersion',
+      'moduleAddressForVersion',
+    ]);
+    // Newest first: version 2 before version 1, and 0 is never asked.
+    expect(state.factoryProbes[2].args).toEqual([expect.any(String), 2]);
+    expect(state.factoryProbes[3].args).toEqual([expect.any(String), 1]);
+    expect(state.nameProbes).toEqual([]);
+  });
+
+  it('reads no version at all when only one implementation was ever set', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
+    setFactory({ moduleAddress: DECOY, implementations: [DECOY] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).toBe(REVERTER);
+    expect(factoryMethods()).toEqual(['moduleAddress', 'implementationCount']);
+    expect(state.nameProbes).toEqual([REVERTER.toLowerCase()]);
+  });
+
+  it('falls back to the NAME() scan when no predicted address is on the list', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
+    setFactory({ moduleAddress: DECOY, implementations: [DECOY] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).toBe(REVERTER);
+    expect(factoryMethods()).toEqual(['moduleAddress', 'implementationCount']);
+    expect(state.nameProbes).toEqual([REVERTER.toLowerCase()]);
+  });
+
+  it('falls through to the probes when the factory read reverts, and stops reading', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
+    setRevertingFactory();
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).toBe(REVERTER);
+    // One failed read, then exactly the path that existed before prediction.
+    expect(factoryMethods()).toEqual(['moduleAddress']);
+    expect(state.nameProbes).toEqual([REVERTER.toLowerCase()]);
+    expect(state.probes.length + state.nameProbes.length).toBeLessThanOrEqual(4);
+  });
+
+  it('does not accept a predicted address the Safe does not enable', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
+    setFactory({ moduleAddress: DECOY, implementations: [DECOY] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.publicationModule).not.toBe(DECOY);
+    expect(result.publicationModule).toBe(REVERTER);
+  });
+
+  it('reads nothing from the factory when no factory is passed', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, PUBLICATION];
+    setFactory({ moduleAddress: PUBLICATION, implementations: [PUBLICATION] });
+
+    const result = await getDomainOwnerAndModules('example.eth');
+
+    expect(result.publicationModule).toBe(PUBLICATION);
+    expect(state.factoryProbes).toEqual([]);
+  });
+
+  it('ignores a prediction that is only the records module', async () => {
+    state.MODULES = [SAFE_4337, RECORDS, REVERTER];
+    setFactory({ moduleAddress: RECORDS, implementations: [RECORDS] });
+
+    const result = await getDomainOwnerAndModules('example.eth', undefined, FACTORY);
+
+    expect(result.configModule).toBe(RECORDS);
+    expect(result.publicationModule).toBe(REVERTER);
   });
 });
 

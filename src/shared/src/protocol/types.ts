@@ -22,6 +22,14 @@ export interface S2SProtocolInfo {
   ensRecords: string; // kept
   publicationFactory: string; // NEW (was neutralpress safe_publication_factory setting)
   recordsFactory: string; // NEW (was neutralpress safe_records_factory setting)
+  /**
+   * The controller's own publication module, resolved from the module list and
+   * the factory above: a CREATE2 factory's prediction first, the `NAME()` scan
+   * when the factory cannot answer. Optional because a caller may have built
+   * this record without resolving modules (`DEV`-injected fixtures, older
+   * settings objects).
+   */
+  publicationModule?: string;
   pkp: string; // flattened to the eth address (was PKP {tokenId,publicKey,ethAddress})
   litActions: {
     prep: string; // was litActionPrep (unchanged)

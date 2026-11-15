@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
 import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
 import { toBytes32Id } from '@s2s/soul2soul-shared';
+import { getAddress } from 'ethers';
 import { SafeIntegration } from '../../src/lib/safe-integration';
 
 // ---------------------------------------------------------------------------
@@ -506,6 +507,156 @@ describe('initialize — module discovery by NAME()', () => {
     const info = await si.initialize();
     expect(info.s2sRecords).toBe(ADOPTED);
     expect(si.hasRecordsModule()).toBe(true);
+  });
+});
+
+describe('initialize — CREATE2 prediction first, NAME() scan as fallback', () => {
+  const FACTORY = '0x' + 'fc'.repeat(20);
+  const PREDICTED = getAddress('0x' + 'bb'.repeat(20));
+
+  /** A factory stub that answers the create2 views. */
+  function factoryStub(answers: {
+    moduleAddress?: string | Error;
+    count?: number | Error;
+    forVersion?: Record<number, string>;
+  }) {
+    const stub: Record<string, any> = {
+      moduleAddress: vi.fn(async () => {
+        if (answers.moduleAddress instanceof Error) throw answers.moduleAddress;
+        return answers.moduleAddress ?? `0x${'0'.repeat(40)}`;
+      }),
+      implementationCount: vi.fn(async () => {
+        if (answers.count instanceof Error || answers.count === undefined) {
+          throw new Error('no such selector');
+        }
+        return BigInt(answers.count);
+      }),
+      moduleAddressForVersion: vi.fn(async (_safe: string, version: bigint) => {
+        const answer = answers.forVersion?.[Number(version)];
+        if (!answer) throw new Error('execution reverted');
+        return answer;
+      }),
+    };
+    eth.contractStubs[FACTORY] = stub;
+    return stub;
+  }
+
+  /** Give an address code, so the prediction counts as confirmed. */
+  function withCode(...addresses: string[]) {
+    const results: Record<string, string> = {};
+    for (const address of addresses) results[address.toLowerCase()] = '0x60806040';
+    eth.codeResults = results;
+  }
+
+  it('takes the factory answer for a listed module, and the NAME() probe still sets the ABI', async () => {
+    const stub = factoryStub({ moduleAddress: PREDICTED });
+    withCode(PREDICTED);
+    eth.contractStubs[PREDICTED] = makePubStub(); // the predicted module answers NAME()
+    // The prediction is only accepted for a module the Safe actually lists:
+    // a disabled module stays deployed but every write to it reverts.
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [...SAFE_DATA.modules, PREDICTED] });
+
+    const si = new SafeIntegration();
+    si.setPublicationFactory(FACTORY);
+    const info = await si.initialize();
+
+    expect(stub.moduleAddress).toHaveBeenCalledWith(SAFE_DATA.safeAddress);
+    expect(info.s2sPublication).toBe(PREDICTED);
+    // The prediction names an address, not a version: NAME() picked V3.
+    expect(eth.contractStubs[PREDICTED].NAME).toHaveBeenCalled();
+    expect(si.hasPublicationModule()).toBe(true);
+  });
+
+  it('walks implementationCount when moduleAddress has no code (a publication from an older implementation)', async () => {
+    const stub = factoryStub({ moduleAddress: PREDICTED, count: 2, forVersion: { 1: P_ADDR } });
+    withCode(P_ADDR);
+    const si = new SafeIntegration();
+    si.setPublicationFactory(FACTORY);
+
+    const info = await si.initialize();
+
+    expect(stub.moduleAddressForVersion).toHaveBeenCalledWith(SAFE_DATA.safeAddress, 1n);
+    expect(info.s2sPublication).toBe(P_ADDR);
+  });
+
+  it('falls back to the NAME() scan when the factory answers no create2 selector', async () => {
+    factoryStub({ moduleAddress: new Error('function selector was not recognized') });
+    const si = new SafeIntegration();
+    si.setPublicationFactory(FACTORY);
+
+    const info = await si.initialize();
+
+    expect(info.s2sPublication).toBe(P_ADDR);
+    expect(pub.NAME).toHaveBeenCalled();
+  });
+
+  it('ignores a prediction the Safe does not list (a disabled module still has code)', async () => {
+    const DISABLED = getAddress('0x' + 'dd'.repeat(20));
+    factoryStub({ moduleAddress: DISABLED });
+    withCode(DISABLED);
+    // Its own stub: `pub` is shared with P_ADDR and the mock's `target` would
+    // then name DISABLED for both.
+    eth.contractStubs[DISABLED] = makePubStub();
+
+    const si = new SafeIntegration();
+    si.setPublicationFactory(FACTORY);
+
+    const info = await si.initialize();
+
+    // Writing to a disabled module reverts, so the scan's answer wins.
+    expect(info.s2sPublication).toBe(P_ADDR);
+  });
+
+  it('keeps the scan tie-break (last publication module listed wins) with no factory', async () => {
+    const P2 = '0x00000000000000000000000000000000000000a2';
+    eth.contractStubs[P2] = makePubStub();
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [...SAFE_DATA.modules, P2] });
+
+    const si = await initInstance();
+
+    expect(si.getSafeInfo().s2sPublication).toBe(P2);
+  });
+
+  it('lets a confirmed prediction beat the scan when the Safe lists two publication modules', async () => {
+    eth.contractStubs[PREDICTED] = makePubStub();
+    // PREDICTED is listed BEFORE P_ADDR, so the scan alone would land on P_ADDR.
+    sdk.getInfo.mockResolvedValue({
+      ...SAFE_DATA,
+      modules: [O_ADDR, R_ADDR, PREDICTED, P_ADDR],
+    });
+    factoryStub({ moduleAddress: PREDICTED });
+    withCode(PREDICTED);
+
+    const si = new SafeIntegration();
+    si.setPublicationFactory(FACTORY);
+    const info = await si.initialize();
+
+    expect(info.s2sPublication).toBe(PREDICTED);
+  });
+
+  it('scans without a factory (nothing set: the pre-create2 path, unchanged)', async () => {
+    const stub = factoryStub({ moduleAddress: PREDICTED });
+    const si = await initInstance();
+    expect(stub.moduleAddress).not.toHaveBeenCalled();
+    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+  });
+
+  it('exposes the prediction helpers for the init flow', async () => {
+    const stub = factoryStub({ moduleAddress: PREDICTED });
+    const si = await initInstance();
+    si.setPublicationFactory(FACTORY);
+    const target = {
+      factory: FACTORY,
+      safeAddress: SAFE_DATA.safeAddress,
+      chainId: SAFE_DATA.chainId,
+    };
+
+    expect(await si.predictNextPublicationModule(target)).toBe(PREDICTED);
+    // No code at it yet, so it is not accepted as an existing module.
+    expect(await si.resolvePublicationModule(target)).toBeUndefined();
+    withCode(PREDICTED);
+    expect(await si.resolvePublicationModule(target)).toBe(PREDICTED);
+    expect(stub.moduleAddress).toHaveBeenCalledWith(SAFE_DATA.safeAddress);
   });
 });
 

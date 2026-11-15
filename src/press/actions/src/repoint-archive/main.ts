@@ -6,7 +6,7 @@ import {
   RepointArchiveData,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { evmWrite, toHexString } from '../libs/evm';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile } from '../libs/ipfs.factory';
 import { getDeals } from '../libs/module.factory';
@@ -75,7 +75,15 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     trace.push(`pub: ${publication}`);
     trace.push(`seed cid: ${archiveCid}`);
 
-    const { publicationModule, multisig } = await getDomainOwnerAndModules(publication, rpcs);
+    // The one `publication_factory` record, so module discovery can use the
+    // factory's prediction; the protocol walk itself stays behind the gate.
+    const publicationFactory = await getPublicationFactory(rpcs);
+
+    const { publicationModule, multisig } = await getDomainOwnerAndModules(
+      publication,
+      rpcs,
+      publicationFactory,
+    );
     if (!publicationModule) throw 'missing publication module';
 
     // STRICT gate: publication Safe owner only (canReset), NOT canPublish.

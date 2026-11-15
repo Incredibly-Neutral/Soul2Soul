@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TxRunner } from './tx-runner';
 import { newPublicationSafe, verifyModulesEnabled, setRecordsWithRetry, buildNewPublicationDeps } from './new';
 import type { S2SPublication } from './types';
+import { safeAbi } from '../contracts';
 
 // =============================================================================
 // Global fetch mock — builders talk to GitHub API + raw.githubusercontent.com.
@@ -386,6 +387,30 @@ describe('newPublicationSafe', () => {
     expect(isEnabledCalls.length).toBe(5);
   });
 
+  it('verifyModulesEnabled reads isModuleEnabled on the publication Safe for each module', async () => {
+    const runner = makeL2Runner();
+    (runner.genericRead as any).mockReset().mockResolvedValue(true);
+
+    const promise = verifyModulesEnabled(
+      runner,
+      'test.soul2soul.eth',
+      PUBLICATION_ADDR_L2,
+      RECORDS_MODULE_ADDR,
+      PUBLICATION_MODULE_ADDR,
+    );
+    await vi.runAllTimersAsync();
+    await promise;
+
+    const calls = (runner.genericRead as any).mock.calls as [string, string, string, string[]][];
+    // Only the Safe is asked, only `isModuleEnabled`, only about the two modules.
+    expect(calls.map(([address, , method, args]) => ({ address, method, args }))).toEqual([
+      { address: PUBLICATION_ADDR_L2, method: 'isModuleEnabled', args: [RECORDS_MODULE_ADDR] },
+      { address: PUBLICATION_ADDR_L2, method: 'isModuleEnabled', args: [PUBLICATION_MODULE_ADDR] },
+    ]);
+    // The ABI is the Safe's, stringified, like every other TxRunner read.
+    expect(calls[0][1]).toBe(JSON.stringify(safeAbi));
+  });
+
   it('setRecordsWithRetry succeeds on first try', async () => {
     const runner = makeL2Runner();
     (runner.genericTx as any).mockReset().mockResolvedValue('0xok');
@@ -542,5 +567,114 @@ describe('buildNewPublicationDeps', () => {
       createFeed: async () => '0xfeed',
     });
     expect(deps.ensRecordsAddress).toBe('');
+  });
+});
+
+// =============================================================================
+// CREATE2 prediction — the factory answers the module address before it exists
+// =============================================================================
+
+describe('newPublicationSafe — CREATE2 module prediction', () => {
+  const PREDICTED_MODULE_ADDR = '0x9999999999999999999999999999999999999999';
+
+  const withPrediction = (answer: () => unknown) => {
+    const deps = makeDeps();
+    (deps.l2.genericRead as any).mockImplementation(
+      (_addr: string, _abi: string, method: string) => {
+        if (method === 'moduleAddress') return answer();
+        return true;
+      },
+    );
+    return deps;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', makeFetchMock());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('reads moduleAddress(safe) from the factory before anything is written', async () => {
+    const deps = withPrediction(() => PUBLICATION_MODULE_ADDR);
+    const promise = newPublicationSafe(deps, makePublication());
+    await vi.runAllTimersAsync();
+    await promise;
+
+    const read = (deps.l2.genericRead as any).mock.calls.find(
+      (call: any[]) => call[2] === 'moduleAddress',
+    );
+    expect(read).toBeDefined();
+    // The factory from the protocol record, asked about this publication's L2 Safe.
+    expect(read[0]).toBe(deps.protocolInfo.publicationFactory);
+    expect(read[3]).toEqual([PUBLICATION_ADDR_L2]);
+    // The ABI is stringified like every other TxRunner call.
+    expect(typeof read[1]).toBe('string');
+    expect(JSON.parse(read[1]).some((entry: any) => entry.name === 'moduleAddress')).toBe(true);
+
+    const readOrder = (deps.l2.genericRead as any).mock.invocationCallOrder.find((_: any, i: number) =>
+      (deps.l2.genericRead as any).mock.calls[i][2] === 'moduleAddress');
+    // Before the records create, the publication create and the ENS registration:
+    // a factory that cannot answer is found before the first write, not after.
+    expect(readOrder).toBeLessThan((deps.l2.genericTx as any).mock.invocationCallOrder[0]);
+    expect(readOrder).toBeLessThan((deps.l2.genericTx as any).mock.invocationCallOrder[1]);
+    expect(readOrder).toBeLessThan((deps.l1.genericTx as any).mock.invocationCallOrder[0]);
+  });
+
+  it('proceeds when the factory answers the address createModule returns', async () => {
+    const deps = withPrediction(() => PUBLICATION_MODULE_ADDR);
+    const pub = makePublication();
+    const promise = newPublicationSafe(deps, pub);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('throws naming both addresses when the factory prediction and the deployment disagree', async () => {
+    const deps = withPrediction(() => PREDICTED_MODULE_ADDR);
+    const pub = makePublication();
+    // Attach the rejection handler before the timers advance: the throw lands
+    // inside runAllTimersAsync, and an unhandled rejection fails the file.
+    const assertion = expect(newPublicationSafe(deps, pub)).rejects.toThrow(
+      new RegExp(`predicted ${PREDICTED_MODULE_ADDR}, createModule returned ${PUBLICATION_MODULE_ADDR}`, 'i'),
+    );
+    await vi.runAllTimersAsync();
+    await assertion;
+    // Nothing is enabled on the Safe for a module that is not the predicted one.
+    expect(deps.l2.batchGenericTx).not.toHaveBeenCalled();
+  });
+
+  it('keeps the unverified path when the factory has no moduleAddress selector', async () => {
+    const deps = withPrediction(() => {
+      throw new Error('execution reverted');
+    });
+    const pub = makePublication();
+    const promise = newPublicationSafe(deps, pub);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBeUndefined();
+
+    const [[batchCalls]] = (deps.l2.batchGenericTx as any).mock.calls;
+    expect(batchCalls[1].args).toEqual([PUBLICATION_MODULE_ADDR]);
+  });
+
+  it('treats a zero-address answer as no prediction', async () => {
+    const deps = withPrediction(() => '0x0000000000000000000000000000000000000000');
+    const pub = makePublication();
+    const promise = newPublicationSafe(deps, pub);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBeUndefined();
+
+    const [[batchCalls]] = (deps.l2.batchGenericTx as any).mock.calls;
+    expect(batchCalls[1].args).toEqual([PUBLICATION_MODULE_ADDR]);
+  });
+
+  it('treats a non-address answer as no answer', async () => {
+    const deps = withPrediction(() => true); // what a permissive mock read returns
+    const pub = makePublication();
+    const promise = newPublicationSafe(deps, pub);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBeUndefined();
   });
 });

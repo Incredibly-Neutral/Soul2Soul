@@ -305,16 +305,22 @@ export class S2SApp extends LitElement {
     this.fetching = true;
 
     try {
+      // Protocol first: the publication factory it carries is what discovery
+      // asks for the module address (CREATE2), so it has to be set before the
+      // first initialize(). Set after, the first pass of every page load pays
+      // for the module-list scan and only a refresh would predict.
+      const protocolInfo = await this.protocolIntegration.initialize();
+      store.setProtocolInfo(protocolInfo);
+      console.log(protocolInfo);
+
+      this.safeIntegration.setPublicationFactory(protocolInfo?.publicationFactory ?? '');
+
       const safeInfo = await this.safeIntegration.initialize();
       store.setSafeInfo(safeInfo);
 
       // If a publication-init session was persisted, surface its progress (or
       // clear it once everything is on-chain).
       this.syncInitProgress(safeInfo);
-
-      const protocolInfo = await this.protocolIntegration.initialize();
-      store.setProtocolInfo(protocolInfo);
-      console.log(protocolInfo);
 
       const [keys, values] = await this.safeIntegration.getAllRecords();
       store.setAllRecords(
