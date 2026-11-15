@@ -5,16 +5,24 @@
  * is `onlySafe`, so only the publication's own Safe can send it — this script
  * never signs anything, it only prints what to paste.
  *
- * The upgrade data is `0x` by default: no initializer runs. Every proxy has
- * already run `initialize`, and `reinitializeV3()` is gated by `reinitializer(2)`,
- * so on a proxy that already ran the backfill that nonce is spent too and
- * attaching it again reverts the whole upgrade. Those V3 proxies are exactly the
- * population being upgraded, which is why the backfill is opt-in rather than the
- * default.
+ * The upgrade data has to name a function. OpenZeppelin 4.9 force-calls the new
+ * implementation even when the payload is empty (`_upgradeToAndCallUUPS(..., true)`),
+ * and this module has no `receive` and no `fallback`, so `0x` reverts the whole
+ * upgrade on a delegatecall to nothing. The `0x` default this script used to print
+ * was wrong for every proxy, and silently so: the transaction reverts at signing
+ * time, not when the batch is built.
  *
- * `--reinit-v3` attaches `reinitializeV3()` for the one case that still needs it:
- * a V2 proxy that has never backfilled the agreement counter. A V3 proxy, or any
- * proxy whose nonce 2 is spent, must be upgraded with plain `0x`.
+ * Neither payload below changes agreement state:
+ *
+ *   NAME()            (0xa3f4df7e) the default. Answers on a proxy running V2,
+ *                     V3, V4 or V5, costs a view call, and leaves the
+ *                     reinitializer nonce alone. Correct for a proxy that has
+ *                     already run the backfill, or never needed to.
+ *
+ *   reinitializeV3()  (--reinit-v3) the one-shot V3 backfill of
+ *                     `agreementsHeldBy`. Only for a V2 proxy that has never run
+ *                     it: `reinitializer(2)` reverts once nonce 2 is spent, and
+ *                     that reverts the whole upgrade.
  *
  * Two output formats, both copy-pasteable:
  *
@@ -32,6 +40,9 @@
  *   # or take the implementation from .env (PUBLICATION_IMPLEMENTATION_ADDRESS)
  *   pnpm upgrade:pub -- <proxy>
  *
+ *   # a V2 proxy that has never backfilled the counter
+ *   pnpm upgrade:pub -- <proxy> --reinit-v3
+ *
  * Read-only: no RPC, no key, no network. It encodes and prints.
  */
 
@@ -44,12 +55,26 @@ config({ path: fileURLToPath(new URL('../../../../.env', import.meta.url)) });
 const UPGRADE_ABI = parseAbi([
   'function upgradeToAndCall(address newImplementation, bytes data) payable',
   'function reinitializeV3()',
+  'function NAME() view returns (string)',
 ]);
 
 const CHAIN_ID = '8453'; // Base
 
-/** No initializer: the honest default for a proxy whose reinitializer nonce is spent. */
-const NO_INITIALIZER = '0x' as const;
+type Payload = { call: `0x${string}`; label: string; why: string };
+
+/** The default: a view call that answers on every module version this repo has. */
+const NAME_CALL: Payload = {
+  call: encodeFunctionData({ abi: UPGRADE_ABI, functionName: 'NAME' }),
+  label: 'NAME()',
+  why: 'nonce 2 spent, or the proxy is not a V2 one',
+};
+
+/** The one-shot backfill, for a V2 proxy that has never run it. */
+const REINIT_V3_CALL: Payload = {
+  call: encodeFunctionData({ abi: UPGRADE_ABI, functionName: 'reinitializeV3' }),
+  label: 'reinitializeV3()',
+  why: 'V2 proxy that has never backfilled agreementsHeldBy',
+};
 
 function usage(message: string): never {
   console.error(`${message}\n`);
@@ -57,7 +82,7 @@ function usage(message: string): never {
     'Usage: pnpm upgrade:pub -- <proxy> [implementation] [--format batch|data] [--reinit-v3]',
   );
   console.error('  implementation defaults to PUBLICATION_IMPLEMENTATION_ADDRESS in .env');
-  console.error('  upgrade data defaults to 0x; --reinit-v3 attaches reinitializeV3() (V2 only)');
+  console.error('  upgrade data is NAME(); --reinit-v3 attaches reinitializeV3() (V2 only)');
   process.exit(1);
 }
 
@@ -73,11 +98,13 @@ for (let i = 0; i < argv.length; i++) {
   if (arg === '--') continue;
   if (arg === '--format') {
     const value = argv[++i];
-    if (value !== 'batch' && value !== 'data') usage(`--format must be batch or data, got ${value}`);
+    if (value !== 'batch' && value !== 'data')
+      usage(`--format must be batch or data, got ${value}`);
     format = value;
   } else if (arg.startsWith('--format=')) {
     const value = arg.slice('--format='.length);
-    if (value !== 'batch' && value !== 'data') usage(`--format must be batch or data, got ${value}`);
+    if (value !== 'batch' && value !== 'data')
+      usage(`--format must be batch or data, got ${value}`);
     format = value;
   } else if (arg === '--reinit-v3') {
     reinitV3 = true;
@@ -101,14 +128,12 @@ const implementation = isAddress(implRaw, { strict: false })
 
 if (proxy === implementation) usage('Proxy and implementation are the same address.');
 
-const initializer = reinitV3
-  ? encodeFunctionData({ abi: UPGRADE_ABI, functionName: 'reinitializeV3' })
-  : NO_INITIALIZER;
+const initializer = reinitV3 ? REINIT_V3_CALL : NAME_CALL;
 
 const data = encodeFunctionData({
   abi: UPGRADE_ABI,
   functionName: 'upgradeToAndCall',
-  args: [implementation, initializer],
+  args: [implementation, initializer.call],
 });
 
 if (format === 'data') {
@@ -116,14 +141,13 @@ if (format === 'data') {
   process.exit(0);
 }
 
-const attached = reinitV3 ? 'reinitializeV3()' : '0x';
 const batch = {
   version: '1.0',
   chainId: CHAIN_ID,
   createdAt: Date.now(),
   meta: {
-    name: `Upgrade publication ${proxy} to ${implementation}${reinitV3 ? ' with reinitializeV3' : ''}`,
-    description: `upgradeToAndCall(${implementation}, ${attached})`,
+    name: `Upgrade publication ${proxy} to ${implementation} with ${initializer.label}`,
+    description: `upgradeToAndCall(${implementation}, ${initializer.label}) — ${initializer.why}`,
     txBuilderVersion: '1.16.5',
     createdFromSafeAddress: proxy,
     createdFromOwnerAddress: '',
@@ -134,4 +158,4 @@ const batch = {
 console.log(JSON.stringify(batch, null, 2));
 console.error(`\nTo:    ${proxy}`);
 console.error(`Data:  ${data}`);
-console.error(`Init:  ${initializer}  (${reinitV3 ? 'reinitializeV3()' : 'none, nonce 2 left alone'})`);
+console.error(`Init:  ${initializer.call}  (${initializer.label} — ${initializer.why})`);
