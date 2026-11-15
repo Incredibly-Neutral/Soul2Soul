@@ -20,9 +20,12 @@
 > `press/actions/src/libs/decrypt.ts`, `publication/safe-app/src/lib/publication-version.ts`. The
 > CREATE2 factory was added on 2026-11-13 as `S2SPublicationModuleV3Create2Factory.sol` and renamed to
 > the V4 factory on 2026-11-14, deploying `S2SPublicationModuleV4`. The CREATE2 factory is deployed,
-> with the legacy set its constructor froze; neither V4 nor V5 is deployed as an implementation, so
-> nothing in this file's factory or upgrade rows has run against a live instance. V5 is the module a
-> proxy running V2 needs, not yet the one the factory deploys.
+> with the legacy set its constructor froze, and so is V4: that constructor refuses an implementation
+> which is codeless or does not answer `factory()`, so its first implementation is a deployed V4, and
+> `isApprovedImplementation[V4]` is set by that constructor and never cleared. V5 is deployed nowhere;
+> a deployed V5 is not approved until the protocol safe runs `setImplementation`, so a V5 in the
+> approved set is a fact about the chain, not about this tree. Nothing in this file's upgrade rows has
+> run against a live V5 instance.
 >
 > **Test coverage:** 81 pass in `publication/contracts/test/`: 39 in
 > `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 9 in
@@ -146,7 +149,8 @@ factory alone, whose constructor and `setImplementation` refuse an implementatio
 `factory()`, so no supported path pairs V4 code with the plain-CREATE factory.
 
 `S2SPublicationModuleV5` changes where the module reads that factory, not the factory itself. The
-CREATE2 factory is unchanged and is still the one both implementations are deployed against. V4
+CREATE2 factory is unchanged and is still the one V4 is deployed against, and the one a V5
+implementation is deployed against when the protocol deploys one. V4
 recorded the factory in its last storage slot, written by `initialize`; V5 takes it as an immutable
 constructor argument and keeps no slot. The rows below are about the factory, so they hold for both;
 `upgrade-only-by-own-safe` and `no-stranded-v2-or-v3-publication` are where the difference lands. The
