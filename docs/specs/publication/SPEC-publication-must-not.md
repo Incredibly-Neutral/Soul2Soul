@@ -24,9 +24,9 @@
 > nothing in this file's factory or upgrade rows has run against a live instance. V5 is the module a
 > proxy running V2 needs, not yet the one the factory deploys.
 >
-> **Test coverage:** 78 pass in `publication/contracts/test/`: 39 in
+> **Test coverage:** 81 pass in `publication/contracts/test/`: 39 in
 > `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 9 in
-> `S2SPublicationModuleV4.test.ts`, 10 in `S2SPublicationModuleV5.test.ts`, and 4 in
+> `S2SPublicationModuleV4.test.ts`, 13 in `S2SPublicationModuleV5.test.ts`, and 4 in
 > `implementation-gate.test.ts`, which covers the gate check the factory makes on what it approves. At
 > the 2026-11-10 pass the module had no unit test in this tree.
 > Rows that cite a code line and no test name are unproven by a suite, and say so. A row marked
