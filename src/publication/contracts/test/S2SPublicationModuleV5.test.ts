@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { network } from 'hardhat';
 import {
   encodeAbiParameters,
@@ -30,6 +32,36 @@ import {
  */
 
 const { viem } = await network.create();
+
+type LayoutEntry = { label: string; slot: string; offset: number; type: string };
+type BuildInfo = {
+  output: {
+    contracts?: Record<
+      string,
+      Record<string, { storageLayout?: { storage: LayoutEntry[] } } | undefined>
+    >;
+  };
+};
+
+/**
+ * The layout solc compiled, not values read back from a proxy. Reading two
+ * proxies proves only what was written: a variable declared at the removed slot
+ * and never used leaves both sides equal while the declaration set has changed.
+ * The compiler's own answer is the one that cannot be faked.
+ */
+function compiledLayout(contract: string): LayoutEntry[] {
+  const dir = fileURLToPath(new URL('../artifacts/build-info', import.meta.url));
+  for (const file of readdirSync(dir)) {
+    // Hardhat writes `<id>.json` (input only) beside `<id>.output.json`.
+    if (!file.endsWith('.output.json')) continue;
+    const build = JSON.parse(readFileSync(`${dir}/${file}`, 'utf8')) as BuildInfo;
+    for (const source of Object.values(build.output?.contracts ?? {})) {
+      const found = source[contract]?.storageLayout?.storage;
+      if (found) return found;
+    }
+  }
+  throw new Error(`No compiled storageLayout for ${contract} in ${dir}`);
+}
 
 const publicClient = await viem.getPublicClient();
 
@@ -485,10 +517,49 @@ describe('S2SPublicationModuleV5 — a V2 proxy upgrades in one hop', () => {
 
 describe('S2SPublicationModuleV5 — storage below the removed slot', () => {
   /**
-   * Both proxies are freshly deployed over the same initializer arguments, so
-   * their storage is comparable slot by slot. V4 appends the factory as its last
-   * declaration; V5 removes it. Nothing below that index may move, and the index
-   * itself must be zero in V5.
+   * V4 appends the factory as its last declaration; V5 replaces that declaration
+   * with the backfill sentinel. Every slot below must keep the same owner, and
+   * nothing may be declared after it. This compares the layouts solc emitted, so
+   * a declaration added and never written fails it.
+   */
+  it('declares V4 layout below the removed slot, and one bool in place of it', () => {
+    const v4 = compiledLayout('S2SPublicationModuleV4');
+    const v5 = compiledLayout('S2SPublicationModuleV5');
+
+    const v4Factory = v4.find((entry) => entry.label === 'factory');
+    assert.ok(v4Factory, 'V4 declares a factory slot');
+    const removed = Number(v4Factory.slot);
+
+    // solc stamps structs with an id local to the compilation unit, so the id
+    // differs between files for the same struct; the name is what matters.
+    const typeOf = (type: string) => type.replace(/(t_struct\([^)]*\))\d+_storage/g, '$1_storage');
+    const same = (entry: LayoutEntry) => ({
+      label: entry.label,
+      slot: entry.slot,
+      offset: entry.offset,
+      type: typeOf(entry.type),
+    });
+    assert.deepEqual(
+      v5.filter((entry) => Number(entry.slot) < removed).map(same),
+      v4.filter((entry) => Number(entry.slot) < removed).map(same),
+      'every slot below the removed one belongs to the same declaration, in the same order',
+    );
+
+    const v5AtRemoved = v5.filter((entry) => Number(entry.slot) === removed);
+    assert.deepEqual(v5AtRemoved.map(same), [
+      { label: '_backfilled', slot: String(removed), offset: 0, type: 't_bool' },
+    ]);
+    assert.equal(v5.length, v4.length, 'V5 declares nothing beyond the removed slot');
+    assert.equal(
+      v5.filter((entry) => Number(entry.slot) > removed).length,
+      v4.filter((entry) => Number(entry.slot) > removed).length,
+      'no new declaration sits above the sentinel',
+    );
+  });
+
+  /**
+   * And the values agree where both are written, which the layout cannot show.
+   * Both proxies are freshly deployed over the same initializer arguments.
    */
   it('matches V4 slot for slot, and leaves the factory slot empty', async () => {
     const d = await deploy();
