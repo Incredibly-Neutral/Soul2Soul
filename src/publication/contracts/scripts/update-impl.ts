@@ -86,6 +86,11 @@ const FACTORY_ABI = parseAbi([
   'function isApprovedImplementation(address implementation) view returns (bool)',
 ]);
 
+const MODULE_ABI = parseAbi(['function NAME() view returns (string)']);
+
+const V5_NAME = 'S2S Publication Module V5';
+const V4_NAME = 'S2S Publication Module V4';
+
 const SAFE_ABI = parseAbi([
   'function getThreshold() view returns (uint256)',
   'function getOwners() view returns (address[])',
@@ -306,6 +311,29 @@ async function main() {
   }
   console.log('');
 
+  // What the factory approves is what a proxy may upgrade to, so the target has
+  // to be the module that can carry that upgrade. V4 is the one to refuse out
+  // loud: it is already in the approved set for good, so approving it again
+  // looks like nothing, and a V2 or V3 proxy that takes it loses its only hop.
+  const implName = await publicClient.readContract({
+    address: impl,
+    abi: MODULE_ABI,
+    functionName: 'NAME',
+  });
+  if (implName === V4_NAME) {
+    console.error(`❌ ${impl} is V4 ("${implName}").`);
+    console.error('   V4 reads a factory slot that initialize never wrote on an upgraded proxy,');
+    console.error('   so a proxy that upgrades to it reverts NoFactory() on every later upgrade:');
+    console.error('   the publication keeps working and can never change implementation again.');
+    console.error('   Approving it as latestImplementation is harmless and pointless; refusing.');
+    process.exit(1);
+  }
+  if (implName !== V5_NAME) {
+    console.error(`❌ ${impl} answers NAME() "${implName}", not "${V5_NAME}".`);
+    console.error('   Only V5 carries the immutable factory that a proxy on V2 or V3 can reach.');
+    process.exit(1);
+  }
+
   const data = encodeFunctionData({
     abi: FACTORY_ABI,
     functionName: 'setImplementation',
@@ -366,7 +394,8 @@ async function main() {
   console.log(` Version count:       ${count}`);
   console.log(`========================================`);
   console.log('\nNew publications (createModule) use the implementation above.');
-  console.log('Existing publications are UUPS — upgrade each proxy separately if needed.');
+  console.log('Existing publications: pnpm upgrade:pub -- <proxy>, which reads each proxy and');
+  console.log('derives the payload (reinitializeV3() on V2/V3, NAME() otherwise).');
 }
 
 main().catch((err) => {
