@@ -59,8 +59,11 @@ backfill instead. A proxy still running V2
 reaches V5 in one hop, with `reinitializeV3()` as the payload, and keeps its agreements, offers and
 whitelists. A publication already running V4 is the exception and cannot take this hop: the right to
 upgrade is checked by the code being replaced, and V4's check reverts `NoFactory()` on the slot state an
-in-place upgrade leaves, so no target reaches it. V4, V3 and V2 stay as frozen implementations, and V5
-is deployed nowhere until the protocol safe has both deployed it and approved it. A reader needs no change: `isPublicationModuleName`
+in-place upgrade leaves, so no target reaches it. V4, V3 and V2 stay as frozen implementations. V5 is
+deployed nowhere today; when it is, the deploy key sends it and the protocol safe is what calls
+`setImplementation`. Those are two acts, and the second is the gate: the implementation exists as soon
+as the deploy transaction lands and no proxy can reach it until the protocol safe approves it, which is
+what makes the deploy key unprivileged. A reader needs no change: `isPublicationModuleName`
 already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
 `publicationBindingFor` binds a later version to the current surface
 (`publication/safe-app/src/lib/publication-version.ts`).
