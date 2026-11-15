@@ -388,6 +388,117 @@ async function v2Proxy(d: Stack) {
   return proxy!;
 }
 
+/**
+ * Same birth path, but the factory was built over V3, which is every publication
+ * created since V3 shipped. Its `initialize` never wrote the backfill sentinel and
+ * `_addAgreement` already counted each agreement, so this proxy arrives with the
+ * sentinel at zero, nonce 1 and counts that are already right — the case an
+ * incrementing backfill doubles, and the reason `reinitializeV3` recomputes.
+ */
+async function v3Proxy(d: Stack) {
+  const v3 = await viem.deployContract('S2SPublicationModuleV3');
+  const birthplace = await viem.deployContract('S2SPublicationModuleV3Factory', [
+    d.caller.address,
+    v3.address,
+  ]);
+  await asSafe(
+    d.caller,
+    birthplace.address,
+    encodeFunctionData({
+      abi: FACTORY_CALLS,
+      functionName: 'createModule',
+      args: [d.safe, [d.author.account.address], []],
+    }),
+  );
+  const [proxy] = await birthplace.read.getModulesForSafe([d.safe]);
+  return proxy!;
+}
+
+describe('S2SPublicationModuleV5 — a V3-born proxy keeps its counts', () => {
+  it('recomputes the count instead of adding to it', async () => {
+    const d = await deploy();
+    const proxy = await v3Proxy(d);
+    const v3At = await viem.getContractAt('S2SPublicationModuleV3', proxy);
+
+    await d.author.writeContract({
+      address: proxy,
+      abi: v3At.abi,
+      functionName: 'makeOffer',
+      args: [genesisOf('v3-born-agreement'), 'cid-v3-born'],
+    });
+
+    assert.equal(await v3At.read.getAgreementCount(), 1n);
+    assert.equal(await v3At.read.ownerHasAgreement([d.author.account.address]), true);
+    assert.equal(await readSlot(proxy, 119), 0n, 'V3 wrote no sentinel');
+    assert.equal(await readSlot(proxy, 0), 1n, 'nonce 1: only initialize has run');
+
+    await asSafe(d.caller, proxy, upgradeToAndCallData(d.v5.address, REINIT_V3));
+
+    const module = await moduleAt(proxy);
+    assert.equal(await module.read.NAME(), 'S2S Publication Module V5');
+    assert.equal(await module.read.getAgreementCount(), 1n);
+    assert.equal(await module.read.ownerHasAgreement([d.author.account.address]), true);
+
+    // The count `_addAgreement` wrote is 1. A backfill that added would leave 2,
+    // and `_removeAgreement` floors at zero, so the extra would outlive the
+    // agreement and `ownerHasAgreement` would answer true for an empty author.
+    const author = d.author.account.address;
+    const counters: bigint[] = [];
+    for (let base = 0; base < 130; base++) {
+      const value = await readSlot(proxy, mappingSlot(author, base));
+      if (value !== 0n) counters.push(value);
+    }
+    assert.equal(counters.length, 1, 'one address-keyed counter for a whitelisted author');
+    assert.equal(counters[0], 1n, 'still one agreement, not two');
+  });
+
+  it('recomputes to the count after one of the author’s two agreements ended', async () => {
+    const d = await deploy();
+    const proxy = await v3Proxy(d);
+    const v3At = await viem.getContractAt('S2SPublicationModuleV3', proxy);
+
+    const kept = genesisOf('v3-kept');
+    const dropped = genesisOf('v3-dropped');
+    for (const [genesis, cid] of [
+      [kept, 'cid-kept'],
+      [dropped, 'cid-dropped'],
+    ] as const) {
+      await d.author.writeContract({
+        address: proxy,
+        abi: v3At.abi,
+        functionName: 'makeOffer',
+        args: [genesis, cid],
+      });
+    }
+    await d.author.writeContract({
+      address: proxy,
+      abi: v3At.abi,
+      functionName: 'retract',
+      args: [dropped],
+    });
+
+    await asSafe(d.caller, proxy, upgradeToAndCallData(d.v5.address, REINIT_V3));
+
+    assert.equal(await (await moduleAt(proxy)).read.getAgreementCount(), 1n);
+    assert.equal(
+      await (await moduleAt(proxy)).read.ownerHasAgreement([d.author.account.address]),
+      true,
+    );
+
+    await d.author.writeContract({
+      address: proxy,
+      abi: (await moduleAt(proxy)).abi,
+      functionName: 'retract',
+      args: [kept],
+    });
+    assert.equal(
+      await (await moduleAt(proxy)).read.ownerHasAgreement([d.author.account.address]),
+      false,
+      'the count unwinds with the last agreement, so nothing was left over',
+    );
+  });
+});
+
 describe('S2SPublicationModuleV5 — a V2 proxy upgrades in one hop', () => {
   it('keeps agreements, offers and whitelists across the jump', async () => {
     const d = await deploy();

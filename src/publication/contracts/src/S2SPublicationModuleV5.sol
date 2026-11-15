@@ -83,8 +83,8 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *     one publication, one reader.
  *
  * Reviewers are an enumerable set capped at `MAX_REVIEWERS`, managed by the
- * safe. A live proxy upgraded from V2 backfills `agreementsHeldBy` through
- * `reinitializeV3`.
+ * safe. A live proxy upgraded from V2 or V3 counts `agreementsHeldBy` once through
+ * `reinitializeV3`, which recomputes each total instead of adding to it.
  *
  * Storage: V3's layout, unchanged, and one bool after it. V4 appended a slot at
  * 119, `factory`, and V5 removes it: the address is a constructor constant now.
@@ -266,25 +266,50 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     }
 
     /**
-     * @dev Run once at upgrade time on a live proxy, so `agreementsHeldBy`
-     *      reflects the agreements struck while the proxy ran V2. The list holds
-     *      unique genesis, so nothing is cleared first.
+     * @dev Count each owner's live agreements from `agreementList` and write the
+     *      total, overwriting what was there. One call from the safe at upgrade
+     *      time, over tens of agreements.
      *
-     *      It increments, so it must not run where the counts are already right.
-     *      `reinitializer(2)` is spent on a proxy that ran it, and `_backfilled`
-     *      is set by `initialize`, so a fresh deployment cannot run it either:
-     *      there `_addAgreement` has already counted every agreement and a
-     *      second pass would double it, which `_removeAgreement` floors at zero
-     *      rather than unwinds, leaving `ownerHasAgreement` true for an author
-     *      holding nothing. On a fresh deployment the call is refused
-     *      `AlreadyBackfilled()`, not accepted as a no-op.
+     *      It recomputes rather than adds, because the state a proxy arrives in
+     *      cannot say which generation wrote its counts. A proxy born under V3
+     *      was initialised by V3's `initialize`, so it never set the sentinel and
+     *      sits at nonce 1, while `_addAgreement` already counted each agreement:
+     *      an incrementing backfill would double them, and `_removeAgreement`
+     *      floors at zero rather than unwinds, leaving `ownerHasAgreement` true
+     *      for an author holding nothing. Adding nothing and writing the measured
+     *      total is correct on that proxy and on one born under V2, so no caller
+     *      has to tell the two apart.
+     *
+     *      One run either way: `reinitializer(2)` is spent on a proxy that ran
+     *      it, and `_backfilled` is set by `initialize`, so a proxy born under a
+     *      module that guard applies to is refused `AlreadyBackfilled()` rather
+     *      than silently recounted.
      */
     function reinitializeV3() external reinitializer(2) onlySafe {
         if (_backfilled) revert AlreadyBackfilled();
         _backfilled = true;
+
         for (uint i = 0; i < agreementList.length; i++) {
             address author = genesisAuthor[agreementList[i]];
-            if (author != address(0)) agreementsHeldBy[author] += 1;
+            if (author == address(0)) continue;
+
+            // The first time this owner appears in the pass is when the total is
+            // written: earlier entries with the same owner are what "already
+            // counted in this run" means, with no marker to store and clear.
+            bool counted = false;
+            for (uint j = 0; j < i; j++) {
+                if (genesisAuthor[agreementList[j]] == author) {
+                    counted = true;
+                    break;
+                }
+            }
+            if (counted) continue;
+
+            uint256 total;
+            for (uint k = 0; k < agreementList.length; k++) {
+                if (genesisAuthor[agreementList[k]] == author) total += 1;
+            }
+            agreementsHeldBy[author] = total;
         }
     }
 
