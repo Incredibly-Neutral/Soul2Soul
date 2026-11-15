@@ -285,7 +285,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 4565,
+        "astId": 4545,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "latestImplementation",
         "offset": 0,
@@ -293,7 +293,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
         "type": "t_address"
       },
       {
-        "astId": 4568,
+        "astId": 4548,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "implementationHistory",
         "offset": 0,
@@ -301,7 +301,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 4573,
+        "astId": 4553,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "safeModules",
         "offset": 0,
@@ -622,7 +622,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
   "storageLayout": {
     "storage": [
       {
-        "astId": 4565,
+        "astId": 4545,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "latestImplementation",
         "offset": 0,
@@ -630,7 +630,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
         "type": "t_address"
       },
       {
-        "astId": 4568,
+        "astId": 4548,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "implementationHistory",
         "offset": 0,
@@ -638,7 +638,7 @@ export const Artifact_S2SPublicationModuleV2Factory: {
         "type": "t_array(t_address)dyn_storage"
       },
       {
-        "astId": 4573,
+        "astId": 4553,
         "contract": "project/src/S2SPublicationModuleV2Factory.sol:S2SPublicationModuleV2Factory",
         "label": "safeModules",
         "offset": 0,

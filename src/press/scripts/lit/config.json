@@ -11,28 +11,33 @@
         },
         {
           "name": "prep",
-          "cid": "QmXUAATDRGSVNf8fuDkAaN4mQon4ybfP3NvP5rfZSFtXpo",
-          "hashedCid": "0x064f83fc6a3f4bba59958d691c3636dbcd60d160e0641073262688d280e83925"
+          "cid": "QmdRXNwKKEUh94mKqXw4semWZu61YPNv7SzYCHXqk3cjKZ",
+          "hashedCid": "0x4f3fbbdbac678adcf6a8b3ff0aa11bfdeb0a9a367811210c8bf9bd720ad85748"
         },
         {
           "name": "render",
-          "cid": "QmdC6P6U5LLFh37ZFqMiSUN1h47YXAPTJvFkWXSV9hvHzK",
-          "hashedCid": "0x4f848ba0f8bafc9fb4d3c2709861d203edc8fb049b9eda185f821e34d55a511b"
+          "cid": "QmUCyL6YiVa4w8FsUc4uSKpbn9wTiqMykQZE9kAJBdXi2S",
+          "hashedCid": "0xfae0c7519251cef337816493a0245758423177de1be07a9ca38a0aead3caa820"
         },
         {
           "name": "update",
-          "cid": "QmUC4iXekZ1JNZpsNJYjug5MR8X5zBRd3SJS4wU2vdvPMW",
-          "hashedCid": "0x54eb12d6ec7406dc0fef7fb87e366c345d3ef1da382dce9585b9cdd8921ef0cc"
+          "cid": "QmactJeDh6qU8c7k5HjWwgcgmCvFkrnDkuFZ2zMGGgooBQ",
+          "hashedCid": "0xd694be621c7013bce7655ac3a904d7f93595acc0a16c4a6c0244e45e498aea48"
         },
         {
           "name": "maintain-cache",
-          "cid": "QmU7woSFvM9w9id27ePrANW4dyuw1ZAR8uFmQ193U2UCaA",
-          "hashedCid": "0x4bc0f6842d45c6d903bb821038caa37e293ef54546ced43c8ff7810df35adfea"
+          "cid": "QmXVnvxJ63S7n3En6fYRLd3zEeyUjhXYfpfyfnRtZ2HGtS",
+          "hashedCid": "0x31abfbd0a66fbbbf2dc1e74f1052e81adbe67c255533630864206c1d584c87ea"
         },
         {
           "name": "repoint-archive",
-          "cid": "QmfY1otJMyZU7Z5bd8nBHQgNPnKX3TnjnAP1yAs4obCFWH",
-          "hashedCid": "0x7e0021e2680d6596106bf4696afac08086baefdce4f8d7e00ce8c5bc3554c9bd"
+          "cid": "QmX4cb7wA9TdyeBS8Y2BK1oKteEiU7KCtsmQYzkK6wm9Jq",
+          "hashedCid": "0x50719d2b13162de01c94e6f9ab200a6d2a7cc74d3ac249568caef1f5dbb0ccb9"
+        },
+        {
+          "name": "decrypt",
+          "cid": "QmdstEb2xYm81WyymHMFNbQ8j16KTLZRKsKBiVfMApzfL5",
+          "hashedCid": "0x9377e5ed0cde26283d9a97cb8bfe893d4e177ec400d2abcd7de1076492606970"
         }
       ],
       "pkps": [

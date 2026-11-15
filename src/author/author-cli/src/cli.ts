@@ -16,6 +16,7 @@
 import { commandHelp, flagBool, parseArgs, parseCommandArgs } from './lib/args';
 import { CliError, UsageError, ActionError, describeError } from './lib/errors';
 import { loadEnvFiles } from './lib/env';
+import { nodeVersionError } from './lib/node-version';
 import { createOut, SCHEMA_VERSION } from './lib/out';
 import { loadConfig } from './core/config';
 import { buildContext } from './core/context';
@@ -290,6 +291,20 @@ function failureEnvelope(err: unknown): string {
     code: 'internal',
     error: describeError(err),
   });
+}
+
+// Name the runtime floor before any config, RPC or argv work. An unsupported
+// node otherwise dies inside a dependency, and the message is the whole point.
+const versionError = nodeVersionError(process.versions.node);
+if (versionError) {
+  if (process.argv.includes('--json')) {
+    process.stdout.write(
+      `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, ok: false, code: 'error', error: versionError })}\n`,
+    );
+  } else {
+    process.stderr.write(`error: ${versionError}\n`);
+  }
+  process.exit(1);
 }
 
 // Layer the env files before anything reads the environment: the user's own

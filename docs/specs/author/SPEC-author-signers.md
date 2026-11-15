@@ -83,18 +83,21 @@ Safe is chosen, because that is where the row that records it is written.
    written.
 5. The proposal is `addOwnerWithThreshold(newEoa, threshold)` where the threshold is the Safe's
    **current** one, read from the chain and never raised: one more owner must not change how many
-   signatures a transaction needs. The nonce is the Safe's, and the proposal is signed by an owner
-   key this machine already signs with (the config/env key on the owner list), never by the key
-   being added — the service files a proposal's signature as its sender's confirmation and refuses
-   a sender that is not an owner. A machine with no such key posts nothing and reports the call —
-   its `{to, data}`, its nonce, and the fact that an owner has to post it from their own machine:
-   nothing in this build queues or retries it.
-6. The service is told about the Safe when it 404s (`register`), then given the proposal.
-
+   signatures a transaction needs. The nonce is the Safe's.
+6. It is posted with the strongest key this machine holds. An owner key (the config/env key on the
+   Safe's owner list) is preferred: the service files a proposal's signature as that sender's
+   confirmation, so the POST is also one confirmation, and at a threshold of 1 the proposal is
+   executable at once. With no owner key — the ordinary case for a machine joining — the POST is
+   made with the key being added, and the service answers for itself. `proposed`, `sender` and
+   `senderIsOwner` report what it said. A refusal is reported, not predicted: deciding offline that
+   the service would refuse meant a joining machine never made the attempt, which is one way to be
+   sure a flow that might work never does.
+7. The service is told about the Safe when it 404s (`register`), then given the proposal.
 **The key survives a failed proposal.** Filing happens before the service is touched. When
 `register` or `propose` fails — unreachable, 4xx, no `safeTx.url` configured — the command reports
-`proposed: false`, a `note` with the reason, and the `{to, data}` pair it would have posted, so the
-call can be made by hand from an owner's wallet. The key is the part that cannot be recovered, so a
+`proposed: false`, a `note` with the service's own refusal, and the `{to, data}` pair it would have
+posted, so the call can still be made from an owner's wallet — or handed over as a file with
+`--emit` / `--emit-batch` (see [SPEC-author-cli](SPEC-author-cli.md#joining-a-safe-from-a-machine-with-no-owner-key)). The key is the part that cannot be recovered, so a
 network failure never costs it.
 
 JSON:
@@ -102,6 +105,7 @@ JSON:
 ```json
 { "action": "signer.add", "name": "signer-2b5ad5", "eoa": "0x…", "safe": "0x…",
   "threshold": 2, "owners": ["0x…"], "nonce": 7, "safeTxHash": "0x…", "proposed": true,
+  "sender": "0x…", "senderIsOwner": true,
   "safeTx": { "to": "0x…", "data": "0x…" }, "file": "…/authors.json", "activated": false,
   "note": "…", "mnemonic": "…", "privateKey": "0x…" }
 ```

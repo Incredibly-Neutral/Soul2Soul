@@ -73,7 +73,8 @@ s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plainte
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain, no append)
 s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
-s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]      # file a key and propose it as one owner of a deployed Safe
+s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--emit <path>] [--emit-batch <path>] [--json]   # file a key and propose it as one owner of a deployed Safe
+s2s signer propose   --file <call.json> [--json]                                                  # post a call written by `signer add --emit`, signing as an owner
 s2s signer rotate    [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--json]             # swap this machine's key on its Safe, threshold untouched
 s2s signer queue     [--json]                                                                    # unexecuted proposals, oldest nonce first, and what this key owes
 s2s signer confirm   <safeTxHash> [--no-execute] [--self-paid] [--json]                          # sign a queued proposal, then execute it at the threshold
@@ -365,6 +366,39 @@ value falls back to `~/.config`) is written mode `0600`, atomically (tmp + renam
 - **No context needed.** The four store actions are dispatched by `cli.ts` *before* `buildContext`
   (the `config` group's contract): no private key, no RPC, no bundler, no Lit keys. Every other
   `author` action still builds a context.
+
+### Joining a Safe from a machine with no owner key
+
+A machine joining an existing Safe holds no key that is on its owner list, and the Safe
+Transaction Service accepts a proposal only from an owner: it stores the proposer's signature as
+that sender's confirmation. So the joining machine cannot post its own admission. It writes the
+call instead.
+
+`s2s signer add <safe> --emit call.json` files the key locally, computes the safeTxHash, and
+writes `call.json`: `schemaVersion`, `action: 'signer.add'`, `safe`, `chainId`, `newOwner`,
+`threshold`, `to`, `value`, `data`, `operation`, `nonce`, `safeTxHash`, `createdAt`. No secret is
+in it — the key stays where it was generated, and the file is the same information the chain
+would show after execution.
+
+`s2s signer propose --file call.json` is the owner-machine half. It recomputes the hash from the
+file's own call and refuses a mismatch (`proposal_mismatch`), a file written for another chain
+(`wrong_chain`), a nonce the Safe has passed (`stale_proposal`), and a machine whose key is not
+on the owner list (`not_owner_key`) — all before signing. It then posts with its owner key, which
+counts as that owner's confirmation; the threshold is unchanged by the add, so a 1-of-1 Safe
+executes with `s2s signer confirm <safeTxHash>`.
+
+`--emit-batch <path>` writes the same transaction as a Safe Transaction Builder batch
+(`version`, `chainId`, `meta.createdFromSafeAddress`, one `transactions` entry). An owner who does
+not run this CLI loads it in the Safe web app and signs there; the batch carries no hash and no
+key, only the call.
+
+Both files are written before the service is touched, so a failed POST never loses the call.
+
+The joining machine also posts, with the key being added, and reports whatever the service answers
+(`sender`, `senderIsOwner`). An accepted entry queues the add with zero owner confirmations, which
+is the flow the command exists for: the new machine queues, the owners confirm, the threshold
+executes. Execution still needs owner signatures — `addOwnerWithThreshold` is `onlySelf` — so an
+accepted proposal shortens the path, it does not replace the confirming owners.
 
 ### The author identity: a counterfactual Safe
 
@@ -1060,7 +1094,7 @@ lists the env names; every one is also settable in a config file as a dotted pat
 | `S2S_BUNDLER_URL` | `new`, `author init` (optional) | — | Escape hatch (`bundler.url`): explicit bundler RPC, overriding the derived Pimlico URL. On its own — no Pimlico key, no `paymaster.url` — it means **no sponsorship** (`paymasterUrl` undefined), never "reuse the bundler URL as the paymaster". |
 | `S2S_PAYMASTER_URL` | (optional) | — | Escape hatch (`paymaster.url`): explicit paymaster RPC, overriding the Pimlico one. Never moves the bundler. |
 | `S2S_ENTRY_POINT` | `new` (override) | `0.7` | EntryPoint version the bundler serves (`0.6`/`0.7`). Not free: it selects the Safe4337Module in each Safe's initializer, so it is part of the Safe's address. Keep `0.7` to match the plugin; `new` warns when overridden. |
-| `S2S_SAFE_TX_URL` | `signer add`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
+| `S2S_SAFE_TX_URL` | `signer add`/`propose`/`rotate`/`queue`/`confirm` | `https://safe-transaction-base.safe.global` | Safe Transaction Service base URL (`safeTx.url`). Unset on a `dev` deployment means those commands refuse with a usage error rather than fetching a relative URL. |
 | `S2S_SAFE_TX_API_KEY` | — (optional) | — | Service API key (`safeTx.key`, secret, masked on read), sent as `Authorization: Bearer`. The public host answers unauthenticated and rate-limits instead. |
 | `S2S_ENV` | — | `prod` | `dev` → dev protocol gateways/factories + dev Lit. |
 
@@ -1244,6 +1278,43 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
 - **new**: requires `--repo` + an ERC-4337 endpoint (`S2S_PIMLICO_KEY`). `createFeed` is a **stub returning the zero
   address** — Lens feed creation is not wired headless (see gaps).
 
+## Distribution
+
+There is no registry in the path. A release is one tarball, one checksum, and the installer:
+
+| File | Contents |
+|---|---|
+| `s2s-<version>-node.tar.gz` | `cli.cjs` and `defaults.json` at the archive root, ~1.2 MB |
+| `s2s-<version>-node.tar.gz.sha256` | `<hash>  <file>`, the `sha256sum -c` shape |
+
+`pnpm pack:cli` (`scripts/pack-release.mjs`) builds, stages the two files, tars them and writes
+the archive plus its checksum into the same repo-root `dist/cli/` the bundle is mirrored to. The archive name carries **no OS or architecture**: the bundle is
+text for node, so one artefact serves every platform. Upload both files to the release tagged
+`v<version>`; `install.sh` derives the URL from that tag.
+
+A production build (`pnpm build`) mirrors `cli.cjs` and `defaults.json` into the repo-root
+`dist/cli/` (mode 755), beside `dist/safe-app/`, because that is where deploy and a manual copy
+look for built artefacts; `pack:cli` then leaves `s2s-<version>-node.tar.gz` and its `.sha256`
+in that same directory. Packing removes only its own two files, never the bundle, and stages in
+the temp dir for that reason. The package `dist/` stays canonical (`bin`, `pack:cli`, the install
+model all point at it); the mirror is a copy and is **not** refreshed by watch mode, so a 25 MB dev
+bundle never lands in a directory meant for shipping.
+
+`install.sh` (`src/author/author-cli/install.sh`, POSIX `sh`, also mirrored into `dist/cli/`)
+checks node ≥ 20, resolves the version (argument, `S2S_VERSION`, a `s2s-<version>-node.tar.gz`
+sitting in the current directory, else the last path segment of the `/releases/latest`
+redirect — which must look like a version, or the "release" is a 404 in disguise), downloads
+both files, verifies the checksum and installs to `$S2S_PREFIX` (default `~/.local`):
+`lib/s2s/{cli.cjs,defaults.json}` plus a `bin/s2s` **symlink** to `cli.cjs`. The symlink rather
+than a wrapper is what keeps `__dirname` pointed at the library directory, so `defaults.json` is
+found beside the bundle (`core/defaults.ts`). `S2S_BASE_URL` swaps the download base for a mirror.
+A checksum mismatch is a hard stop, not a warning.
+
+The source is the first of: `S2S_BASE_URL` (a URL, or a plain path, which becomes `file://`),
+the tarball in the current directory, then the GitHub release for the tag. That middle case is
+why copying `dist/cli/` to another machine is the whole install: `sh install.sh` in that
+directory needs no arguments and no network.
+
 ## Known gaps / follow-ups
 
 - **Lens feed is not wired** for `new` — `createFeed` returns the zero address. The browser hosts
@@ -1263,6 +1334,11 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   graph.
 - **Bin linking**: `s2s` is available via `node dist/cli.cjs`; the `bin` symlink appears when a
   package installs `@s2s/author-cli` (nothing depends on it yet).
+- **Node floor**: `engines.node >= 20` in `package.json`, enforced at the top of `cli.ts` by
+  `lib/node-version.ts` — the bundle's esbuild `target` is node20, and an older node parses the
+  file then fails inside a dependency. The failure is one sentence on stderr (exit `1`), or the
+  `--json` envelope with `code: "error"`. A bundle that will not parse cannot be caught this way:
+  no code runs before the file parses.
 - **The build resolves its own paths**: `esbuild.config.mjs` takes entry, outfile and the
   `defaults.json` copy from `buildPaths(dirname(import.meta.url))` (`esbuild.paths.mjs`), because
   esbuild resolves relative paths against the *process cwd* — `pnpm --filter … build` and a build

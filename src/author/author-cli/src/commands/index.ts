@@ -36,6 +36,7 @@ import { signerRotate } from './signer-rotate';
 import { signerQueue } from './signer-queue';
 import { signerHistory } from './signer-history';
 import { signerConfirm } from './signer-confirm';
+import { signerPropose } from './signer-propose';
 
 /** `s2s author` — content actions on an existing publication. */
 export const authorCommands: CommandSpec[] = [
@@ -73,6 +74,7 @@ export const draftsHelpEntries: readonly { name: string; summary: string; params
 /** `s2s signer` — keys filed as owners of a Safe that already exists. */
 export const signerCommands: readonly StoreCommandSpec[] = [
   signerAdd,
+  signerPropose,
   signerRotate,
   signerQueue,
   signerHistory,
