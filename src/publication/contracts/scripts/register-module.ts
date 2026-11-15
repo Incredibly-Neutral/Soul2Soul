@@ -57,6 +57,7 @@ import {
   http,
   isAddress,
   parseAbi,
+  toFunctionSelector,
 } from 'viem';
 import { config } from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -77,6 +78,26 @@ const MODULE_ABI = parseAbi([
 
 const CHAIN_ID = '8453'; // Base
 const ZERO = '0x0000000000000000000000000000000000000000';
+const ONE_WORD = 66;
+const FACTORY_SELECTOR = toFunctionSelector('function factory() view returns (address)');
+
+/**
+ * Did the call itself revert?
+ *
+ * viem wraps every failure in a `CallExecutionError`, so the class says nothing:
+ * a dead RPC and a revert on the dispatcher arrive as the same type. Only the
+ * cause chain separates them — `ExecutionRevertedError` for a revert,
+ * `HttpRequestError` for a transport failure. Reading the name keeps this free
+ * of a version-pinned constructor identity.
+ */
+function isRevert(error: unknown): boolean {
+  let node: unknown = error;
+  for (let depth = 0; node && depth < 6; depth++) {
+    if (node instanceof Error && node.name === 'ExecutionRevertedError') return true;
+    node = (node as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 function usage(message: string): never {
   console.error(`${message}\n`);
@@ -180,23 +201,43 @@ async function preflight(): Promise<void> {
       }),
     ]);
 
-    // The branch selector. A revert or an empty return means the module answers
-    // nothing, which is the legacy branch; answering a *different* factory also
-    // lands there, because only this factory's own address counts.
+    // The branch selector. Only a revert of this call, an empty or short return,
+    // or the zero address means the module answers nothing, which is the legacy
+    // branch. Answering a *different* factory lands there too, because only this
+    // factory's own address counts. Any other failure decides nothing: that is an
+    // RPC problem, not a fact about the module, so the branch stays undecided
+    // rather than being asserted as the legacy one.
+    let claimsThisFactory: boolean | null = null;
     let namedFactory: `0x${string}` | null = null;
+    let answerKind: 'revert' | 'empty' | 'zero' | 'address' | 'unknown' = 'unknown';
+
     try {
-      namedFactory = await client.readContract({
-        address: module,
-        abi: MODULE_ABI,
-        functionName: 'factory',
-      });
-    } catch {
-      namedFactory = null;
+      const answer = await client.call({ to: module, data: FACTORY_SELECTOR });
+      const raw = answer?.data;
+      if (typeof raw === 'string' && raw.length >= ONE_WORD) {
+        namedFactory = getAddress(`0x${raw.slice(26, 66)}`);
+        if (namedFactory === ZERO) {
+          answerKind = 'zero';
+          claimsThisFactory = false;
+        } else {
+          answerKind = 'address';
+          claimsThisFactory = namedFactory === factory;
+        }
+      } else {
+        answerKind = 'empty';
+        claimsThisFactory = false;
+      }
+    } catch (error) {
+      if (isRevert(error)) {
+        answerKind = 'revert';
+        claimsThisFactory = false;
+      } else {
+        notes.push(
+          'preflight could not answer module.factory(): ' +
+            (error instanceof Error ? error.message.split('\n')[0] : String(error)),
+        );
+      }
     }
-    const claimsThisFactory = namedFactory !== null && getAddress(namedFactory) === factory;
-    const answersAnotherFactory =
-      namedFactory !== null && namedFactory !== ZERO && getAddress(namedFactory) !== factory;
-    const branch = claimsThisFactory ? 'approval' : 'legacy';
 
     if (registered !== ZERO) {
       notes.push(
@@ -210,17 +251,20 @@ async function preflight(): Promise<void> {
       notes.push(`revert SafeMismatch: ${module}.safe() is ${moduleSafe}, not ${safe}`);
     }
 
-    if (!claimsThisFactory && !legacy) {
-      const why = answersAnotherFactory
-        ? `${module}.factory() is ${namedFactory}, not ${factory}`
-        : `${module} does not answer factory()`;
+    if (claimsThisFactory === false && !legacy) {
+      const why =
+        answerKind === 'zero'
+          ? `${module} answers nothing (factory() is the zero address)`
+          : answerKind === 'address'
+            ? `${module}.factory() is ${namedFactory}, not ${factory}`
+            : `${module} does not answer factory()`;
       notes.push(
         `revert ModuleNotRecognised: ${why}, so the legacy branch applies, and ` +
           `${implementation} is not in the legacy set`,
       );
     }
 
-    if (claimsThisFactory && !approved) {
+    if (claimsThisFactory === true && !approved) {
       notes.push(
         `revert ModuleNotRecognised: ${module} answers factory() with ${factory}, so the ` +
           `approval branch applies, and ${implementation} is not in the approval set`,
@@ -231,6 +275,8 @@ async function preflight(): Promise<void> {
       // The constructor refuses a legacy entry that answers factory(), so no
       // implementation should be in both sets. Say which branch wins rather than
       // leaving the reader to guess.
+      const branch =
+        claimsThisFactory === null ? 'undecided' : claimsThisFactory ? 'approval' : 'legacy';
       notes.push(
         `note: ${implementation} is in both sets, so the branch (${branch}) decides whether ` +
           `the call is accepted`,
