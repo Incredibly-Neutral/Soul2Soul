@@ -49,13 +49,18 @@ write itself. Everything a holder does is a Safe transaction; everything a reade
 | look | `mapping.json`, templates, assets, config CID | [look](SPEC-publication-look.md) |
 | site | MFS tree, copies, root, availability, mirror | [storage](SPEC-publication-storage.md) |
 
-V5 is what an existing publication upgrades to: V4's surface and storage prefix, `NAME()` `"S2S
-Publication Module V5"`, and no factory slot — the factory that approves upgrades is an immutable
+V5 is what a publication still running V2 or V3 upgrades to: V4's surface and storage prefix, `NAME()`
+`"S2S Publication Module V5"`, and no factory slot — the factory that approves upgrades is an immutable
 constructor argument, so a proxy that upgrades in place answers it without ever having written it. V4
 recorded the factory in `initialize` and refused every later upgrade with `NoFactory()` when that slot
-was empty, which is the state of any proxy upgraded in place; V5 removes both. A proxy still running V2
+was empty, which is the state of any proxy upgraded in place; V5 reads no slot and never reverts
+`NoFactory()`. Slot 119, the one V4 spent on the factory, holds a bool that guards the one-shot V2
+backfill instead. A proxy still running V2
 reaches V5 in one hop, with `reinitializeV3()` as the payload, and keeps its agreements, offers and
-whitelists. V4, V3 and V2 stay as frozen implementations. A reader needs no change: `isPublicationModuleName`
+whitelists. A publication already running V4 is the exception and cannot take this hop: the right to
+upgrade is checked by the code being replaced, and V4's check reverts `NoFactory()` on the slot state an
+in-place upgrade leaves, so no target reaches it. V4, V3 and V2 stay as frozen implementations, and V5
+is deployed nowhere until the protocol safe has both deployed it and approved it. A reader needs no change: `isPublicationModuleName`
 already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
 `publicationBindingFor` binds a later version to the current surface
 (`publication/safe-app/src/lib/publication-version.ts`).

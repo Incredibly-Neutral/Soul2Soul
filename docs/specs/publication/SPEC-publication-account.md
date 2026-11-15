@@ -160,14 +160,19 @@ V4's `NoFactory()` case is why V5 has no factory slot. A proxy upgraded to V4 in
 `initialize` as V4, so the slot stays zero and every later upgrade reverts `NoFactory()`: the
 publication keeps working and can never change implementation again. V5 answers the factory from its
 code, so a proxy born under V2 gets it on its first hop, and V2's own `onlySafe` right is what carries
-that hop. The factory's legacy set is not consulted on the way in, which matters because it was frozen
+that hop. A proxy already on V4 is stranded: `NoFactory()` comes from the code running at the time, so
+V5 cannot be the implementation it upgrades to. The factory's legacy set is not consulted on the way in, which matters because it was frozen
 at the factory's construction: a V2 publication running an implementation that set does not name
 cannot be registered, and cannot be created again, so the hop is the only route left to it.
 
 Upgrading a V2 proxy means `upgradeToAndCall(V5, reinitializeV3())`. `reinitializeV3()` is
 `reinitializer(2)` (selector `0xbac22bb8`) and backfills `agreementsHeldBy` once; it reverts once that
-nonce is spent, so a proxy that has already run it must be upgraded with a payload that changes
-nothing, `NAME()` (selector `0xa3f4df7e`). An empty payload is not an option on any module in this
+nonce is spent, and also when slot 119 holds the sentinel `initialize` set, because the backfill
+increments counts `_addAgreement` already made. A proxy that has already run it, or was born as V5, is
+upgraded with a payload that changes nothing, `NAME()` (selector `0xa3f4df7e`).
+`scripts/upgrade-publication.ts` reads the proxy's implementation, `NAME()` and initialisation nonce and
+derives which of the two applies; it refuses a V4 target by name, because V4's permanent approval and a
+V2 proxy's `onlySafe` would otherwise let a Safe batch spend the only upgrade on the brick. An empty payload is not an option on any module in this
 tree: OZ 4.9's `upgradeToAndCall` force-calls the implementation even with `0x`, and no module here
 has a `receive` or `fallback`, so the delegatecall reverts and takes the upgrade with it.
 
