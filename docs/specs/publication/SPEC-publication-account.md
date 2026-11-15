@@ -297,8 +297,9 @@ sees the adopted module the moment the write lands: `resolvePublicationModules` 
 entry cannot be moved afterwards, so there is no window in which a reader reverts to the old address.
 What has not changed is the proof: a factory answer counts only when the Safe lists that address
 (INV-4), so a registered module the Safe has not enabled is not read, and the `NAME()` match remains
-the fallback for a factory that answers nothing. Nothing in the tree calls `registerModule` yet; the
-write is the protocol safe's to make.
+the fallback for a factory that answers nothing. Nothing in the tree calls `registerModule` yet:
+`scripts/register-module.ts` encodes the call and prints a Safe batch, and the write stays the
+protocol safe's to make.
 
 So the trust edge is: **what code a publication runs, at birth and after every upgrade, is set by the
 protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and

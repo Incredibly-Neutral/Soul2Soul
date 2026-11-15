@@ -31,7 +31,8 @@
     "deploy:pub": "tsx scripts/update-impl.ts",
     "verify": "tsx scripts/verify-pub.ts",
     "clean": "rm -rf artifacts cache generated",
-    "upgrade:pub": "tsx scripts/upgrade-publication.ts"
+    "upgrade:pub": "tsx scripts/upgrade-publication.ts",
+    "register:module": "tsx scripts/register-module.ts"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.6",
