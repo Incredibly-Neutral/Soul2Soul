@@ -31,7 +31,7 @@ same note/tag/revoke logic.
 | `tags.ts` | `--s2s` publication tags in frontmatter → target publication | neutralpress, author-cli |
 | `links.ts` | publication/site link derivation from resolved config | author-cli (lint/validate paths) |
 | `revoke.ts` | `revokedPathFor` + the locale-prefix fallback | neutralpress (revoke), author-cli |
-| `publication.ts` | `resolvePublicationSafe` / `resolvePublicationModules` / `subdomainOf` — ENS name → Safe, module sniffing | all hosts |
+| `publication.ts` | `resolvePublicationSafe` / `resolvePublicationModules` / `subdomainOf` — ENS name → Safe, then module resolution: a CREATE2 factory's prediction when the `publication_factory` record is passed (the address is read before it is deployed), the Safe's `NAME()` scan otherwise, which is also the only route for a V2-created publication | all hosts |
 
 Reachability rule: `authoring/` is exported **only** from the root barrel (`shared/src/index.ts:8`)
 and deliberately **not** from `./lit-actions` — it pulls `yaml`/`marked`/`slugify`, and the action

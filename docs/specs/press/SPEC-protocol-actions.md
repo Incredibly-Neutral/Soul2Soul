@@ -48,8 +48,8 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | `render/config.ctrl.ts`    | `getConfig`, `getTaskConfig`                                                                                                                                      | live                                                                               |
 | `render/data.ctrlr.ts`     | `initTemplateData`, `fetchCollections`, path helpers                                                                                                              | live                                                                               |
 | `render/metadata.ts`       | `addAndSignMetadata` (provenance)                                                                                                                                 | live (see GAP-1, GAP-2)                                                            |
-| `libs/protocol.factory.ts` | in-action `getProtocolInfo`                                                                                                                                       | live (dup of shared, see Gotchas)                                                  |
-| `libs/ens.factory.ts`      | `getDomainOwnerAndModules`, `getProtocolControllerAndModules`                                                                                                     | live                                                                               |
+| `libs/protocol.factory.ts` | in-action `getProtocolInfo`, `getPublicationFactory` (the one `publication_factory` record)                                                                   | live (dup of shared, see Gotchas)                                                  |
+| `libs/ens.factory.ts`      | `getDomainOwnerAndModules` (factory prediction → role id → `NAME()`), `getProtocolControllerAndModules`                                                          | live                                                                               |
 | `libs/module.factory.ts`   | `getLatestEntry` / `getDeals` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅) | live                                                                               |
 | `libs/evm.ts`              | `evmRead` (catch-all failover + aggregated error), `evmWrite`, `toHexString`                                                                                      | live ⚠ GAP-15 (partly addressed)                                                   |
 | `libs/ipfs.factory.ts`     | IPFS cat/add/dag/MFS + `contenthashToIPFS`                                                                                                                        | live (dag/cbor helpers mostly dead)                                                |
@@ -191,7 +191,7 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 
 1. `extractSignerAddress(hashMessage("lit actions auth"), signature)` → `signerAddress` (INV-1)
 2. `getProtocolInfo(false)` (in-action; re-fetches — unlike prep) → `S2SProtocolInfo`
-3. `getDomainOwnerAndModules(publication)` → `{ multisig, configModule, publicationModule }` (INV-4)
+3. `getDomainOwnerAndModules(publication, rpcs, protocolInfo.publicationFactory)` → `{ multisig, configModule, publicationModule }` (INV-4). The factory prediction runs first, so no publication probe and no `NAME()` read when it names a module the Safe lists; the probes are the fallback.
 4. `fetchById(job.id)` → body
 5. `getConfig(configCid, configModule)` → config
 6. `initTemplateData(...)` → decrypts body if `body.encryption` (gated `canRead`: the publication's
@@ -232,7 +232,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
 
-**Sequence:** recover signer (INV-1) → modules (INV-4) → `getProtocolInfo` →
+**Sequence:** recover signer (INV-1) → `getPublicationFactory` (the one `publication_factory` record, read before the gate so a rejected call pays one request rather than the protocol walk) → modules (INV-4, with that factory) → `getProtocolInfo` →
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
@@ -508,7 +508,8 @@ section is relied upon.
 | fn                                                                                    | in              | out                                                                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `getProtocolInfo(dev)`                                                                | `boolean`       | `S2SProtocolInfo` (camelCase fields + `pkp{}`)                                                                                                                                                                                                                                                              |
-| `getDomainOwnerAndModules(pub)`                                                       | ENS name        | `{ multisig, configModule, publicationModule }` (any may be null)                                                                                                                                                                                                                                           |
+| `getPublicationFactory(rpcs?)`                                                        | RPCs?           | `address \| null` — the `publication_factory` record read on its own in one call at the hardcoded `PROTOCOL_RECORDS_MODULE` (see Gotchas for the degradation), null when absent or unreadable                                                                                                                  |
+| `getDomainOwnerAndModules(pub, rpcs?, factory?)`                                      | ENS name, RPCs?, factory? | `{ multisig, configModule, publicationModule }` (any may be null); the factory param adds the CREATE2 prediction, and omitting it leaves discovery on the role/`NAME()` probes |
 | `getConfig(configCid?, configModule)`                                                 | cid?/addr       | `S2SPublicationConfig` (parsed JSON)                                                                                                                                                                                                                                                                        |
 | `getTaskConfig(config, body)`                                                         | config, body    | `{ templateConfig, rippleConfigs }` (throws if no mapping)                                                                                                                                                                                                                                                  |
 | `fetchById(genesis, pubModule, rpcs, gateway)`                                        | bytes32 genesis | `S2SBody \| undefined` — `getLatest` → IPFS cat → `toBody` (`module.factory`, GAP-10 ✅)                                                                                                                                                                                                                    |
@@ -582,12 +583,25 @@ INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` 
   action bundles. Hand-copy only the needed function fragments into `module.factory.ts` using the
   full JSON `components` format (not human-readable ABI strings — ethers v5 in the Lit runtime can't
   decode struct returns from them). When the contract changes, update fragments in that one file.
-- **Redundant ENS walk (identified 2026-08-06, not fixed):** `getProtocolInfo` and
+- **Redundant ENS walk (identified 2026-08-06):** `getProtocolInfo` and
   `getDomainOwnerAndModules` both walk ENS L1 (`nameWrapper()`→`ownerOf()`→`getModulesPaginated()`→
   module `NAME()` loop) — ~7 duplicated calls. In the render action `getProtocolInfo` is used only
   for `pkp` (+ `gateway` fallback), neither of which needs the full walk since `configModule` is
   already resolved by `getDomainOwnerAndModules`. Both are client-side (`shared/src/`), so it does
-  **not** cost the Lit enclave fetch budget — but it is wasted L1 RPC.
+  **not** cost the Lit enclave fetch budget — but it is wasted L1 RPC. Partly addressed 2026-11-13:
+  the factory prediction replaces the module probes, and the actions that must predict before their
+  authorization gate read the single `publication_factory` record (`getPublicationFactory`, one
+  call) instead of the walk. The walk itself is unchanged.
+- **`publication_factory` read from a hardcoded records module (2026-11-13):** `getPublicationFactory`
+  calls `getRecord("publication_factory")` on `PROTOCOL_RECORDS_MODULE`
+  (`0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29`, `libs/protocol.factory.ts`), the Base records
+  module `update-protocol.ts` and `repoint-record.ts` write to. Every other read of that record
+  finds `configModule` through the ENS walk instead, so this constant is the one place a redeploy
+  can drift: point it at a retired module and `getRecord` answers the empty string on the old
+  address, `getPublicationFactory` returns null, and the prediction **silently degrades** to the
+  role/`NAME()` probes — correct, slower, and visible only in the `publication_factory record
+  unreadable` log line. Change the constant with the records-module redeploy, and keep the value in
+  step with `protocol/scripts/lit/update-protocol.ts` (`RECORDS_MODULE_ADDRESS`).
 - **Lit enclave fetch budget (fixed 2026-08-06):** Lit nodes have an internal fetch budget
   exhausted by **repeated identical RPC calls**, not response size. `getDeals` (dynamic `tuple[]`)
   called 3+ times returned `"missing response"` (empty body) from both DRPC and Alchemy.
