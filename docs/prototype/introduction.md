@@ -20,7 +20,7 @@ Agreements live in EVM contracts on Base, because the core goal is credible neut
 
 A smart contract also keeps the rules with the data. The agreements and the only functions allowed to change them sit in one contract, so there is no off-chain service with its own copy of the rules, slowly drifting.
 
-Why a Layer 2? Offering a manuscript or ending an agreement should be fast and cheap. Base was the obvious choice when the prototype started, but nothing in the contracts depends on it: they run on any EVM chain. Each publication can upgrade its own contract, as long as the prototype is in active development.
+Why a Layer 2? Offering a manuscript or ending an agreement should be fast and cheap. Base was the obvious choice when the prototype started, but nothing in the contracts depends on it: they run on any EVM chain. Each publication moves its own contract to the implementation the protocol's Safe set most recently, and to nothing else. The owners sign the move; the protocol decides which code is available. There is no way back to an older implementation, and the protocol cannot ship a new version for new publications alone: existing ones move to it too, when their owners choose.
 
 ## Storage: IPFS
 
