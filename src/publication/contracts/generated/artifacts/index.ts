@@ -1,11 +1,6 @@
-export {Artifact_S2SPublicationModule as S2SPublicationModule} from './S2SPublicationModule.js';
-export {Artifact_S2SPublicationModuleFactory as S2SPublicationModuleFactory} from './S2SPublicationModuleFactory.js';
-export {Artifact_S2SPublicationModuleV2 as S2SPublicationModuleV2} from './S2SPublicationModuleV2.js';
-export {Artifact_S2SPublicationModuleV2Factory as S2SPublicationModuleV2Factory} from './S2SPublicationModuleV2Factory.js';
-export {Artifact_S2SPublicationModuleV3 as S2SPublicationModuleV3} from './S2SPublicationModuleV3.js';
-export {Artifact_S2SPublicationModuleV3Factory as S2SPublicationModuleV3Factory} from './S2SPublicationModuleV3Factory.js';
-export {Artifact_S2SPublicationModuleV4 as S2SPublicationModuleV4} from './S2SPublicationModuleV4.js';
-export {Artifact_S2SPublicationModuleV4Create2Factory as S2SPublicationModuleV4Create2Factory} from './S2SPublicationModuleV4Create2Factory.js';
-export {Artifact_S2SPublicationModuleV5 as S2SPublicationModuleV5} from './S2SPublicationModuleV5.js';
+export {Artifact_S2SModuleProxy as S2SModuleProxy} from './S2SModuleProxy.js';
+export {Artifact_S2SPublicationModuleV6 as S2SPublicationModuleV6} from './S2SPublicationModuleV6.js';
+export {Artifact_S2SPublicationModulesFactoryV6 as S2SPublicationModulesFactoryV6} from './S2SPublicationModulesFactoryV6.js';
 export {Artifact_S2SRecordsModule as S2SRecordsModule} from './S2SRecordsModule.js';
 export {Artifact_S2SRecordsModuleFactory as S2SRecordsModuleFactory} from './S2SRecordsModuleFactory.js';
+export {Artifact_S2SRecordsModuleV2 as S2SRecordsModuleV2} from './S2SRecordsModuleV2.js';

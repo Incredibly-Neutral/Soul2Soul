@@ -2,12 +2,17 @@ export type Abi_IPublicationFactoryApprovals = [
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
         "internalType": "address",
         "name": "implementation",
         "type": "address"
       }
     ],
-    "name": "isApprovedImplementation",
+    "name": "isApproved",
     "outputs": [
       {
         "internalType": "bool",
@@ -36,12 +41,17 @@ export const Abi_IPublicationFactoryApprovals: Abi_IPublicationFactoryApprovals 
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "kind",
+        "type": "bytes32"
+      },
+      {
         "internalType": "address",
         "name": "implementation",
         "type": "address"
       }
     ],
-    "name": "isApprovedImplementation",
+    "name": "isApproved",
     "outputs": [
       {
         "internalType": "bool",

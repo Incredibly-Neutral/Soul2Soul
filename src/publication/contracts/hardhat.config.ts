@@ -32,6 +32,18 @@ const config: HardhatUserConfig = {
 				runs: 200,
 			},
 			viaIR: true,
+			// tstore/tload (EIP-1153) need Cancun: the factory passes the
+			// implementation to a proxy through transient storage.
+			evmVersion: 'cancun',
+			// No metadata hash. The proxy's creation code is hashed into every
+			// module address, and the hash changes with the compiler build even
+			// when the source does not, which would silently move every address.
+			// Kept global rather than a per-file override: an override compiles
+			// the proxy twice, once for the artifact and once into the factory's
+			// embedded creationCode, and the two would disagree.
+			metadata: {
+				bytecodeHash: 'none',
+			},
 		},
 	},
 	networks: addForkConfiguration(
