@@ -6,5 +6,6 @@ export {Artifact_S2SPublicationModuleV3 as S2SPublicationModuleV3} from './S2SPu
 export {Artifact_S2SPublicationModuleV3Factory as S2SPublicationModuleV3Factory} from './S2SPublicationModuleV3Factory.js';
 export {Artifact_S2SPublicationModuleV4 as S2SPublicationModuleV4} from './S2SPublicationModuleV4.js';
 export {Artifact_S2SPublicationModuleV4Create2Factory as S2SPublicationModuleV4Create2Factory} from './S2SPublicationModuleV4Create2Factory.js';
+export {Artifact_S2SPublicationModuleV5 as S2SPublicationModuleV5} from './S2SPublicationModuleV5.js';
 export {Artifact_S2SRecordsModule as S2SRecordsModule} from './S2SRecordsModule.js';
 export {Artifact_S2SRecordsModuleFactory as S2SRecordsModuleFactory} from './S2SRecordsModuleFactory.js';

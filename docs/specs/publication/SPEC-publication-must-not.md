@@ -9,7 +9,8 @@
 > the receipt. A row opens with a bold slug, not a number: no `INV-` is minted here, and no requirement
 > id is extended. Where a row derives from a requirement, it names the existing one.
 >
-> **Audited against live code:** 2026-11-14 (`S2SPublicationModuleV4.sol`,
+> **Audited against live code:** 2026-11-15 (`S2SPublicationModuleV5.sol` on
+> `agent/v5-immutable-factory`, and `S2SPublicationModuleV4.sol`,
 > `S2SPublicationModuleV4Create2Factory.sol`, both read on `agent/c2-v4-contracts` at `0fb1f71`,
 > including the `factory()` capability check that guards the approved set; and the reader-side check of
 > the same pass, the `factory()` probes in `shared/src/authoring/publication.ts`,
@@ -18,12 +19,19 @@
 > `S2SPublicationModuleV3.sol`, `S2SPublicationModuleV3Factory.sol`, `shared/src/gates/index.ts`,
 > `press/actions/src/libs/decrypt.ts`, `publication/safe-app/src/lib/publication-version.ts`. The
 > CREATE2 factory was added on 2026-11-13 as `S2SPublicationModuleV3Create2Factory.sol` and renamed to
-> the V4 factory on 2026-11-14, deploying `S2SPublicationModuleV4`; neither it nor V4 is deployed, so
-> nothing in this file's factory or upgrade rows has run against a live instance.
+> the V4 factory on 2026-11-14, deploying `S2SPublicationModuleV4`. The CREATE2 factory is deployed,
+> with the legacy set its constructor froze, and so is V4: that constructor refuses an implementation
+> which is codeless or does not answer `factory()`, so its first implementation is a deployed V4, and
+> `isApprovedImplementation[V4]` is set by that constructor and never cleared. V5 is deployed nowhere;
+> a deployed V5 is not approved until the protocol safe runs `setImplementation`, so a V5 in the
+> approved set is a fact about the chain, not about this tree. Nothing in this file's upgrade rows has
+> run against a live V5 instance.
 >
-> **Test coverage:** 43 pass, all in `publication/contracts/test/`: 20 in
-> `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 7 in
-> `S2SPublicationModuleV4.test.ts`. At the 2026-11-10 pass the module had no unit test in this tree.
+> **Test coverage:** 83 pass in `publication/contracts/test/`: 39 in
+> `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 9 in
+> `S2SPublicationModuleV4.test.ts`, 15 in `S2SPublicationModuleV5.test.ts`, and 4 in
+> `implementation-gate.test.ts`, which covers the gate check the factory makes on what it approves. At
+> the 2026-11-10 pass the module had no unit test in this tree.
 > Rows that cite a code line and no test name are unproven by a suite, and say so. A row marked
 > `[GAP]` is a claim the code does not enforce.
 
@@ -138,7 +146,15 @@ second receipt. `upgrade-only-by-own-safe` is no longer inherited unchanged: the
 in the module and V4 extends it with the factory's approval, so its receipt is the module's and the
 factory's together. The V3 factory deploys V3. The V4 implementation is deployed against the CREATE2
 factory alone, whose constructor and `setImplementation` refuse an implementation that does not answer
-`factory()`, so no supported path pairs V4 code with the plain-CREATE factory. The CREATE2 deployment
+`factory()`, so no supported path pairs V4 code with the plain-CREATE factory.
+
+`S2SPublicationModuleV5` changes where the module reads that factory, not the factory itself. The
+CREATE2 factory is unchanged and is still the one V4 is deployed against, and the one a V5
+implementation is deployed against when the protocol deploys one. V4
+recorded the factory in its last storage slot, written by `initialize`; V5 takes it as an immutable
+constructor argument and keeps no slot. The rows below are about the factory, so they hold for both;
+`upgrade-only-by-own-safe` and `no-stranded-v2-or-v3-publication` are where the difference lands. The
+CREATE2 deployment
 adds no state to the safe and weakens nothing here; it does mean a module
 exists at its predicted address before it is enabled, so `safeModules` and the safe's own module list
 can disagree for a while — the safe's list stays the record.
@@ -171,25 +187,66 @@ naming a safe that already has a module".
 the factory has approved. Otherwise one publication could replace the logic running under another's
 address, or the publication's holders could adopt code the protocol never set for them.
 Mechanism: `_authorizeUpgrade` is `onlySafe`, then requires
-`isApprovedImplementation(newImplementation)` from the factory the module recorded in `initialize`
-(`msg.sender` at creation, no setter), and reverts `ImplementationNotApproved(address)` when it
-answers false. With no factory recorded it reverts `NoFactory()` and refuses every upgrade — the
-fail-closed case, and the state of a V3 proxy upgraded to V4 outside a factory create, because
-`initialize` does not run again. The approved set is the factory's `implementationHistory`, appended
-by its constructor and by `setImplementation`, so an earlier protocol-set implementation stays a legal
-target and rollback works. A protocol-set implementation cannot hand the gate back to the publication:
-the factory refuses an implementation that does not answer `factory()` with
-`ImplementationWithoutUpgradeGate(address)`, in the constructor and in `setImplementation`, so the set
-holds nothing whose `_authorizeUpgrade` is the publication-safe check alone.
-Evidence: `_authorizeUpgrade` is `onlySafe` in `S2SPublicationModuleV4.sol`, unchanged from
-`S2SPublicationModuleV3.sol:197`; the approval and `NoFactory` halves are V4's, and
-`S2SPublicationModuleV4.test.ts` covers each path — "lets the safe upgrade to an implementation the
-factory has set", "refuses an implementation the factory never set", "refuses an upgrade started by
-anyone but the safe", "refuses every upgrade once it runs V4 without a factory recorded", "keeps
-version 1 legal after setImplementation, so a module can roll back", "makes a new implementation legal
-for an existing module without moving any address". The gate check is
+`isApprovedImplementation(newImplementation)` from the factory in the module's immutable `FACTORY`,
+which the constructor sets and nothing writes afterwards, and reverts
+`ImplementationNotApproved(address)` when it answers false. The approved set is the factory's
+`implementationHistory`, appended by its constructor and by `setImplementation`, so an earlier
+protocol-set implementation stays a legal target and rollback works. A protocol-set implementation
+cannot hand the gate back to the publication: the factory refuses an implementation that does not
+answer `factory()` with `ImplementationWithoutUpgradeGate(address)`, in the constructor and in
+`setImplementation`, so the set holds nothing whose `_authorizeUpgrade` is the publication-safe check
+alone. V5's constructor refuses a factory with no code, `InvalidFactory(address)`: the address is
+fixed for the life of the implementation, so a wrong one would refuse every upgrade on every proxy
+over it and no later call could correct it. V4 kept the same address in a slot written by
+`initialize` and reverted `NoFactory()` when the slot was zero, which is the state of every proxy
+upgraded to V4 in place, since `initialize` does not run again; V5 drops that slot and that error, and
+the layout below the removed slot is untouched. Slot 119 itself is reused for one bool that guards the
+V2 backfill, which `initialize` sets and `reinitializeV3` requires false: the backfill increments, so a
+second pass would double a count `_addAgreement` already made, and `_removeAgreement` floors at zero,
+leaving `ownerHasAgreement` true for an author holding nothing.
+Evidence: `_authorizeUpgrade` is `onlySafe` in `S2SPublicationModuleV5.sol`, unchanged from
+`S2SPublicationModuleV3.sol:197`; the approval half is V4's, and `S2SPublicationModuleV4.test.ts` still
+covers it on V4 — "lets the safe upgrade to an implementation the factory has set", "refuses an
+implementation the factory never set", "refuses an upgrade started by anyone but the safe", "refuses
+every upgrade once it runs V4 without a factory recorded", "keeps version 1 legal after
+setImplementation, so a module can roll back". `S2SPublicationModuleV5.test.ts` covers V5 —
+"lets the safe upgrade to an implementation the factory has set", "refuses an implementation the
+immutable factory never set", "refuses an upgrade started by anyone but the safe", "refuses a factory
+with no code, which no later call could correct", "refuses a protocol safe the factory does not name",
+"keeps answering the same factory after the proxy is upgraded", "leaves no storage slot holding the
+factory, unlike V4", and "matches V4 slot for slot, and leaves the factory slot empty", which reads
+each module's compiled `storageLayout` and compares it against the other's. The gate check on the set is
 `S2SPublicationModuleV4Create2Factory.test.ts` — "refuses an implementation that carries no upgrade
 gate", "refuses setImplementation of an implementation that carries no upgrade gate".
+
+**`no-stranded-v2-or-v3-publication`** — A publication still running V2 or V3 is never left unable to
+reach the current implementation. The right to upgrade is its own safe's, and it must not depend on a
+record the factory froze before that publication was considered.
+Mechanism: V2 and V3 authorise an upgrade with `onlySafe` alone, so a proxy running either reaches V5
+in one hop, with no factory approval and no legacy registration on the way in —
+`S2SPublicationModuleV5`'s own check runs on the hop after that. The factory a proxy adopts is the
+immutable, so a proxy born under a plain-CREATE factory answers the CREATE2 factory's approval set
+from its first V5 block, which is what the two live V2 publications on Base need: they run an
+implementation the deployed factory's legacy set does not name, so `registerModule` cannot adopt them,
+and `createModule` cannot either, and without this hop they would be stuck on V2 forever.
+
+A proxy already on V4 is outside this row and is stranded for good. The right to upgrade is checked by
+the code being replaced, and V4's check reads a `factory` slot that `initialize` wrote only on a
+proxy the factory itself created: on an upgraded proxy the slot is zero, so `_authorizeUpgrade` reverts
+`NoFactory()` before any payload runs, and no implementation, V5 included, can move it. Registering it
+is closed as well, because it is already registered or because the factory cannot adopt a publication
+whose genesis it does not hold — `registerModule` records an implementation, it does not replace the
+upgrade check. V5 exists so that V2 and V3 proxies never join it. The payload
+is `reinitializeV3()`, which backfills `agreementsHeldBy` once and reverts on a proxy whose nonce 2 is
+spent or whose slot 119 sentinel says the counts are already right; `upgradeToAndCall` with `0x` is not
+an option on any version here, because OZ 4.9 force-calls the implementation and no module in the tree
+has a `receive` or `fallback`. `scripts/upgrade-publication.ts` derives which payload applies from the
+proxy's own implementation, `NAME()` and nonce, and refuses a V4 target by name: V4 is permanently
+approved, a V2 proxy's `onlySafe` would accept it, and the spend is unrecoverable.
+Evidence: `S2SPublicationModuleV5.test.ts` — "keeps agreements, offers and whitelists across the jump",
+"backfills agreementsHeldBy exactly once" (the counter slot holds 2 for two agreements, not 4, and a
+second payload reverts), "refuses the backfill on a proxy whose counts are already right", and
+"answers the factory it was constructed with, through the proxy".
 
 ## Reading
 

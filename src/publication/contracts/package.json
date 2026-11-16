@@ -29,6 +29,7 @@
     "export": "ldenv rocketh-export -e @@MODE @@",
     "deploy:pubfac": "tsx scripts/deploy-publication-factory.ts",
     "deploy:pub": "tsx scripts/update-impl.ts",
+    "deploy:pubimpl": "tsx scripts/deploy-publication-implementation.ts",
     "verify": "tsx scripts/verify-pub.ts",
     "clean": "rm -rf artifacts cache generated",
     "upgrade:pub": "tsx scripts/upgrade-publication.ts",

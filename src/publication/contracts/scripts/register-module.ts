@@ -5,12 +5,16 @@
  * to the proxy, and only the protocol safe can send it (`onlyProtocolSafe`).
  * This script never signs anything: it encodes and prints what to paste.
  *
- * The `implementation` argument is the address the proxy delegated to *before*
- * the upgrade, because the factory cannot read another contract's ERC-1967 slot.
- * The order is read, register, upgrade: read the slot while the proxy still runs
- * V2/V3, register, and only then upgrade in place. A proxy upgraded first names
- * the V4 implementation in its slot, which the factory refuses as a legacy entry
- * with `ModuleNotRecognised(module)`, and the legacy set has no setter.
+ * The factory cannot read another contract's ERC-1967 slot, so `implementation`
+ * is the address the proxy delegated to when the protocol safe signed. The order
+ * is read, register, upgrade: read the slot while the proxy still runs V2 or V3,
+ * register with that implementation, and only then upgrade in place. The factory
+ * picks its branch on `module.factory()`: a module that answers this factory is
+ * judged on the approval set, so a proxy already upgraded to V5 is accepted when
+ * `implementation` names an approved one, and the frozen legacy set is consulted
+ * only for a module that does not answer it — V2 and V3, where the recorded
+ * implementation is the pre-upgrade one and the set is the only record that can
+ * still name it.
  *
  * Two output formats, both copy-pasteable:
  *

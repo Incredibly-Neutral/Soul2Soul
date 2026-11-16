@@ -113,7 +113,8 @@ After batch 2 the flow waits on a human: poll `isModuleEnabled` every 2 s for up
 
 | module | kind | NAME | notes |
 |---|---|---|---|
-| `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | per publication; the implementation new publications get. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards |
+| `S2SPublicationModuleV5` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V5"` | per publication; the implementation a proxy running V2 or V3 upgrades to. V4's surface and storage prefix minus V4's `factory` slot: the factory that approves upgrades, and the protocol safe it must answer, are immutable constructor arguments and are never written to storage. Slot 119 holds a bool, the backfill sentinel `initialize` sets. No `__gap`; nothing is declared after it |
+| `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | frozen. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards. A proxy upgraded to V4 in place never ran `initialize` as V4, so that slot is zero and its own check reverts `NoFactory()` on every later upgrade — which is why V5 exists |
 | `S2SPublicationModuleV3` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V3"` | frozen: still what publications created under it run, and upgradable only by its own Safe, with no approval check — the pre-V4 right |
 | `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | history; holds agreements + whitelists under the pre-V3 names |
 | `S2SRecordsModule` | immutable, v1.1.0 | `"S2S Records Module"` | KV records: `name`, `config`, `repo`, `branch`, `feed`, `ens_records` |
@@ -140,19 +141,40 @@ Two independent upgrade surfaces, and they are not equally guarded.
 **Per publication — guarded, and not by the owners.** `upgradeToAndCall` arrives through
 `UUPSUpgradeable`; `_authorizeUpgrade` is `onlySafe`, so the publication's Safe is `msg.sender` and
 no third party reaches the call. The Safe no longer chooses the code. The implementation must be one
-the protocol safe has set: the module asks the factory it recorded in `initialize` for
+the protocol safe has set: the module asks the factory in its immutable `FACTORY` for
 `isApprovedImplementation(newImplementation)` and reverts `ImplementationNotApproved(address)` when
-the answer is false. Rollback to an earlier protocol-set implementation is legal, because what the
+the answer is false. V5's constructor refuses a factory with no code, `InvalidFactory(address)`, and
+a factory whose `protocolSafe()` is not its second constructor argument,
+`ProtocolSafeMismatch(address,address)`; V4 kept the same address in a storage slot written by
+`initialize`. That check catches a wrong factory at the only moment it can be caught, before the
+immutable is fixed, and it is not proof that the factory is the protocol's: the binding act is the
+protocol safe's `setImplementation` on that factory, and an implementation it has not recorded is a
+target no proxy can reach. Rollback to an earlier protocol-set implementation is legal, because what the
 factory holds is the whole `implementationHistory`, not the latest entry — approving the whole history
 is sound only because every entry answers `factory()`, which the constructor and `setImplementation`
 check by staticcall before adding one, refusing `ImplementationWithoutUpgradeGate(address)` otherwise.
 That check is a presence test, not a proof of what an implementation does with the field. Storage
 layout is append-only (INV-3), so an upgrade cannot reorder what exists.
 
-A module with no factory recorded refuses every upgrade with `NoFactory()`: fail closed, not open.
-That is the state of a proxy upgraded to V4 by an older module's `onlySafe` right, since `initialize`
-does not run again on upgrade and the slot stays zero. Such a module keeps working and cannot change
-implementation.
+V4's `NoFactory()` case is why V5 has no factory slot. A proxy upgraded to V4 in place never runs
+`initialize` as V4, so the slot stays zero and every later upgrade reverts `NoFactory()`: the
+publication keeps working and can never change implementation again. V5 answers the factory from its
+code, so a proxy born under V2 gets it on its first hop, and V2's own `onlySafe` right is what carries
+that hop. A proxy already on V4 is stranded: `NoFactory()` comes from the code running at the time, so
+V5 cannot be the implementation it upgrades to. The factory's legacy set is not consulted on the way in, which matters because it was frozen
+at the factory's construction: a V2 publication running an implementation that set does not name
+cannot be registered, and cannot be created again, so the hop is the only route left to it.
+
+Upgrading a V2 proxy means `upgradeToAndCall(V5, reinitializeV3())`. `reinitializeV3()` is
+`reinitializer(2)` (selector `0xbac22bb8`) and backfills `agreementsHeldBy` once; it reverts once that
+nonce is spent, and also when slot 119 holds the sentinel `initialize` set, because the backfill
+increments counts `_addAgreement` already made. A proxy that has already run it, or was born as V5, is
+upgraded with a payload that changes nothing, `NAME()` (selector `0xa3f4df7e`).
+`scripts/upgrade-publication.ts` reads the proxy's implementation, `NAME()` and initialisation nonce and
+derives which of the two applies; it refuses a V4 target by name, because V4's permanent approval and a
+V2 proxy's `onlySafe` would otherwise let a Safe batch spend the only upgrade on the brick. An empty payload is not an option on any module in this
+tree: OZ 4.9's `upgradeToAndCall` force-calls the implementation even with `0x`, and no module here
+has a `receive` or `fallback`, so the delegatecall reverts and takes the upgrade with it.
 
 **Per deployment — guarded, one address.** `S2SPublicationModuleV3Factory`:
 
@@ -164,14 +186,16 @@ implementation.
 | `implementationHistory` | read | append-only list of former implementations, 1-based |
 | `safeModules` / `getModulesForSafe` | read | the factory's own index |
 
-It deploys V3. Its `setImplementation` takes any address, so a V4 implementation set here would still
-answer `factory()` and still gate upgrades, but nothing would predict the addresses of the modules it
-made. The tree does not construct that pair: the deploy script offers the CREATE2 factory alone, and a
-V4 implementation is deployed against it.
+It deploys V3. Its `setImplementation` takes any address, so a V4 implementation set here
+would still answer `factory()` and still gate upgrades, but nothing would predict the addresses of the
+modules it made. A V5 implementation bound to this factory is worse: it has no approval set to read,
+so its own upgrade check reverts on an absent selector and the proxy can never change implementation.
+The tree does not construct either pair: the deploy script offers the CREATE2 factory alone, and a V4
+or V5 implementation is deployed against it.
 
 **Per deployment — guarded, one predictable address.** `S2SPublicationModuleV4Create2Factory` is the
-same surface, deploying V4, with the same six errors and three views on top of it, plus the module
-index below. It keeps the create2 salt, the prediction views, the protocol-safe gate and the
+same surface, deploying whatever implementation the protocol safe sets — V4 today, V5 once it is
+approved — with the same six errors and three views on top of it, plus the module index below. It keeps the create2 salt, the prediction views, the protocol-safe gate and the
 idempotent `createModule`, and adds the check that an implementation it approves carries the gate: a
 candidate must answer `factory()` to be set, by the protocol safe at construction or later. It is the
 only CREATE2 factory in the tree and is not deployed.
@@ -305,9 +329,11 @@ So the trust edge is: **what code a publication runs, at birth and after every u
 protocol's governance, not by the publication's holders.** The Safe can carry out an upgrade and
 cannot choose what the upgrade contains. Nobody else can change it either. Moving to V4 is not a way
 out of the gate: a V3 module that upgrades to V4 keeps working and can never upgrade again, the
-`NoFactory()` case above. The only route to a gated module is `createModule` on the V4 factory, which
-mints a new proxy at a new address with an empty version log and no offers or agreements. That
-publication starts from nothing, and reads of the old log stop at the old address.
+`NoFactory()` case above. V5 is the way for a publication that already exists: the proxy upgrades in
+place, keeps its log, and the gate applies from that block on, since the factory is in the code and
+nothing has to be written to storage first. For a publication with nothing to keep, `createModule` on
+the CREATE2 factory mints a new proxy at a new address with an empty version log and no offers or
+agreements. That publication starts from nothing, and reads of the old log stop at the old address.
 
 **The gate binds a module, not a publication.** A publication Safe can enable a second proxy that
 answers the publication module's `NAME()`, disable the gated one, and the contract cannot prevent it:

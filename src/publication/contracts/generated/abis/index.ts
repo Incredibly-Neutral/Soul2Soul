@@ -10,6 +10,8 @@ export {Abi_IPublicationModuleInitializer as IPublicationModuleInitializer} from
 export {Abi_IPublicationModuleSafe as IPublicationModuleSafe} from "./IPublicationModuleSafe.js"
 export {Abi_IPublicationModuleUpgradeGate as IPublicationModuleUpgradeGate} from "./IPublicationModuleUpgradeGate.js"
 export {Abi_S2SPublicationModuleV4Create2Factory as S2SPublicationModuleV4Create2Factory} from "./S2SPublicationModuleV4Create2Factory.js"
+export {Abi_IPublicationFactoryApprovals as IPublicationFactoryApprovals} from "./IPublicationFactoryApprovals.js"
+export {Abi_S2SPublicationModuleV5 as S2SPublicationModuleV5} from "./S2SPublicationModuleV5.js"
 export {Abi_IS2SRecordsModule as IS2SRecordsModule} from "./IS2SRecordsModule.js"
 export {Abi_S2SRecordsModule as S2SRecordsModule} from "./S2SRecordsModule.js"
 export {Abi_S2SRecordsModuleFactory as S2SRecordsModuleFactory} from "./S2SRecordsModuleFactory.js"
