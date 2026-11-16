@@ -12,10 +12,10 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *         S2SPublicationModuleV4, which stays frozen.
  *
  * Upgrade authority. V3 let the publication's own safe name any implementation.
- * Here the safe may only choose among implementations the factory has recorded,
- * so a publication's protection is the protocol and its governance rather than
- * the publication's own owner, and a compromised publication safe cannot adopt
- * code of its own choosing.
+ * Here the safe may only choose the newest implementation the factory has
+ * recorded, so a publication's protection is the protocol and its governance
+ * rather than the publication's own owner, and a compromised publication safe
+ * cannot adopt code of its own choosing.
  *
  * Why the factory is immutable. V4 recorded the factory in `initialize`, and
  * `initialize` runs once, on the proxy the factory deploys. Every proxy that
@@ -330,7 +330,15 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
      *      as the bool 1 in slot 119, so installing V4 leaves V4 reading its
      *      factory slot as `address(1)`: its approval check call reverts, and
      *      every later upgrade reverts with it. One transaction from the
-     *      publication's safe freezes the module for good.
+     *      publication's safe freezes a proxy that runs this implementation for
+     *      good. A proxy still running V2 or V3 is outside this check: its own
+     *      `_authorizeUpgrade` is `onlySafe` and accepts any address, so its safe
+     *      can send it straight to V4, freeze it there, and this code never runs.
+     *
+     *      A superseded V5 build does not freeze the proxy on arrival, because it
+     *      reads the same immutable `FACTORY` and accepts any approved
+     *      implementation. It re-opens both hazards instead: from a proxy moved
+     *      to it, V4 is reachable again and the approved set is the only limit.
      *
      *      Requiring the newest set implementation makes the protocol's most
      *      recent act the only forward step, so neither V4 nor a superseded V5
@@ -338,6 +346,13 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
      *      implementation exists: shipping a successor means the protocol safe
      *      calls `setImplementation` first, which it must do anyway before any
      *      proxy can reach it.
+     *
+     *      The approval check stays although it is implied: `setImplementation`
+     *      writes the flag and the pointer together, so the newest implementation
+     *      is always approved. It is kept because the flag is the factory's own
+     *      statement of which addresses it governs, and it gives an address the
+     *      factory never set a distinct `ImplementationNotApproved` rather than
+     *      reporting it as merely out of date.
      *
      *      There is no zero case to fail closed on: the constructor refused it,
      *      and the constant cannot change. The constructor checked that factory

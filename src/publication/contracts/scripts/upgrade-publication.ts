@@ -41,8 +41,11 @@
  *   factory's approved set, a V2 or V3 proxy's `onlySafe` accepts it, and the
  *   result is a proxy whose factory slot is zero for good — the brick V5 exists
  *   to prevent. The target must also be approved on the factory in its own
- *   immutable; until the protocol safe runs `setImplementation`, every upgrade
- *   to it reverts `ImplementationNotApproved`.
+ *   immutable, and it must be the newest implementation that factory set: V5
+ *   refuses anything else with `ImplementationNotLatest`, because the approved
+ *   set never shrinks and a superseded build would let V4 back in. Until the
+ *   protocol safe runs `setImplementation` on this implementation, an upgrade to
+ *   it cannot land.
  *
  * Read-only: view calls against one RPC, no key, no transaction. It reads and
  * prints.
@@ -85,6 +88,7 @@ const MODULE_ABI = parseAbi([
 
 const FACTORY_ABI = parseAbi([
   'function isApprovedImplementation(address implementation) view returns (bool)',
+  'function latestImplementation() view returns (address)',
 ]);
 
 /** `keccak256("eip1967.proxy.implementation") - 1`. */
@@ -126,6 +130,9 @@ function refuse(...lines: string[]): never {
   for (const line of lines.slice(1)) console.error(`   ${line}`);
   process.exit(1);
 }
+
+/** Two addresses are one address regardless of checksum casing. */
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 const argv = process.argv.slice(2);
 let format: 'batch' | 'data' = 'batch';
@@ -290,15 +297,29 @@ async function main() {
     functionName: 'isApprovedImplementation',
     args: [implementation],
   });
+  const newest = await publicClient.readContract({
+    address: approvingFactory,
+    abi: FACTORY_ABI,
+    functionName: 'latestImplementation',
+  });
   console.error(`Target impl:      ${implementation}  ("${targetName}")`);
   console.error(`Approving factory: ${approvingFactory}`);
   console.error(`Approved there:   ${approved ? 'yes' : 'no'}`);
+  console.error(`Newest there:     ${newest}  ${same(newest, implementation) ? '(this target)' : '(not this target)'}`);
   if (!approved) {
     refuse(
       `${approvingFactory} has not approved ${implementation}.`,
       'Its approved set is filled by the protocol safe setImplementation(pnpm deploy:pub).',
       'Until that executes, _authorizeUpgrade reverts ImplementationNotApproved and the',
       'upgrade below cannot land.',
+    );
+  }
+  if (!same(newest, implementation)) {
+    refuse(
+      `${implementation} is approved but superseded: ${approvingFactory} set ${newest} last.`,
+      'A V5 proxy upgrades only to the newest implementation the factory set, and reverts',
+      'ImplementationNotLatest for anything earlier. Run setImplementation on the newer',
+      'implementation first, then print this payload for it.',
     );
   }
 

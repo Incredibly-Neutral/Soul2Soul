@@ -311,10 +311,11 @@ async function main() {
   }
   console.log('');
 
-  // What the factory approves is what a proxy may upgrade to, so the target has
-  // to be the module that can carry that upgrade. V4 is the one to refuse out
-  // loud: it is already in the approved set for good, so approving it again
-  // looks like nothing, and a V2 or V3 proxy that takes it loses its only hop.
+  // A V5 proxy may only upgrade to the newest implementation the factory has
+  // set, so this target has to be the module that can carry that upgrade. V4 is
+  // the one to refuse out loud: approving it as newest would hand every V5 proxy
+  // a target that freezes it, and a V2 or V3 proxy that takes it loses its only
+  // hop.
   const implName = await publicClient.readContract({
     address: impl,
     abi: MODULE_ABI,
@@ -325,7 +326,8 @@ async function main() {
     console.error('   V4 reads a factory slot that initialize never wrote on an upgraded proxy,');
     console.error('   so a proxy that upgrades to it reverts NoFactory() on every later upgrade:');
     console.error('   the publication keeps working and can never change implementation again.');
-    console.error('   Approving it as latestImplementation is harmless and pointless; refusing.');
+    console.error('   Approving it as latestImplementation would make it the only legal target');
+    console.error('   for every V5 proxy, and the first one that takes it is frozen; refusing.');
     process.exit(1);
   }
   if (implName !== V5_NAME) {

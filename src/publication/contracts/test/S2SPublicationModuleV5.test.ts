@@ -183,6 +183,10 @@ const REINIT_V3 = encodeFunctionData({ abi: MODULE_CALLS, functionName: 'reiniti
 
 const genesisOf = (label: string) => keccak256(toHex(label));
 
+/** `keccak256("eip1967.proxy.implementation") - 1`, where a proxy's target lives. */
+const ERC1967_IMPLEMENTATION_SLOT =
+  '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc' as Hex;
+
 /**
  * V4 implementation (version 1) → MockCaller (protocol safe, and publication
  * safe) → V4 create2 factory → V5 implementation, approved on that factory.
@@ -382,6 +386,49 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
       asSafe(d.caller, module, upgradeToAndCallData(d.v4.address, '0x')),
       enc.notLatest(d.v4.address, next.address),
       'ImplementationNotLatest',
+    );
+
+    // The refusal has to leave the proxy where it was, working and upgradable:
+    // reverting is not enough if the attempt already moved it.
+    assert.equal(await (await moduleAt(module)).read.NAME(), 'S2S Publication Module V5');
+    await upgradeTo(d, module, next.address);
+    assert.equal(await (await moduleAt(module)).read.NAME(), 'S2S Publication Module V5');
+  });
+
+  /**
+   * The premise the gate rests on, shown rather than asserted: a proxy born under
+   * V5 holds the backfill sentinel as the bool 1 in slot 119, which is the slot
+   * V4 reads as its factory. Put V4 in the implementation slot by hand and the
+   * module is frozen — V4 asks `address(1)` whether the target is approved, the
+   * call returns nothing, and every later upgrade reverts.
+   */
+  it('shows the freeze is real: a V5-born proxy on V4 refuses every later upgrade', async () => {
+    const d = await deploy();
+    const module = await createModule(d);
+
+    await publicClient.request({
+      method: 'hardhat_setStorageAt',
+      params: [
+        module,
+        ERC1967_IMPLEMENTATION_SLOT,
+        encodeAbiParameters([{ type: 'address' }], [d.v4.address]),
+      ],
+    } as never);
+
+    assert.equal(await (await moduleAt(module)).read.NAME(), 'S2S Publication Module V4');
+    assert.equal(await readSlot(module, 119), 1n, 'slot 119 holds the sentinel, not a factory');
+
+    let reverted: unknown;
+    try {
+      await asSafe(d.caller, module, upgradeToData(d.v4.address));
+    } catch (error) {
+      reverted = error;
+    }
+    assert.ok(reverted, 'a proxy sitting on V4 must refuse every later upgrade');
+    assert.equal(
+      await (await moduleAt(module)).read.NAME(),
+      'S2S Publication Module V4',
+      'the proxy stays on V4, which is the freeze: no implementation is reachable',
     );
   });
 
