@@ -149,6 +149,8 @@ const protocolInfo = {
   gateway: 'https://ipfs.example',
   pkp: '0xpkp',
   ensRecords: '0xens',
+  publicationFactory: '0x' + '88'.repeat(20), // the getRecords copy; render reads moduleFactory
+  moduleFactory: '0x' + '77'.repeat(20),
   litActions: { prep: PREP_CID, render: RENDER_CID, update: UPDATE_CID },
 };
 

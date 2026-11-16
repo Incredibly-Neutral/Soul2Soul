@@ -98,7 +98,7 @@ const waitForReceipt = async (provider: any, txHash: string): Promise<any> => {
     }
 };
 
-const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: string) => {
+const evmProvider = (chain: string, rpcUrl?: string) => {
 
     const url = rpcUrl;
     const network = NETWORK_CONFIG[chain];
@@ -107,7 +107,12 @@ const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: str
     // instead of ethers v5's ~120s default. The timeout must be part of the
     // ConnectionInfo passed at construction — ethers v5 freezes `provider.connection`,
     // so it can't be set afterwards.
-    const provider = new ethers.providers.StaticJsonRpcProvider({ url, timeout: READ_TIMEOUT_MS }, network);
+    return new ethers.providers.StaticJsonRpcProvider({ url, timeout: READ_TIMEOUT_MS }, network);
+};
+
+const evmSetup = (contractAddress: string, abi: any, chain: string, rpcUrl?: string) => {
+
+    const provider = evmProvider(chain, rpcUrl);
 
     const contract = new ethers.Contract(contractAddress, abi, provider);
 
@@ -255,6 +260,40 @@ export const evmRead = async (
             failures.push(msg);
             console.log(msg);
             lastError = error;
+        }
+    }
+
+    const aggregated = new Error(failures.join(" | "));
+    (aggregated as any).failures = failures;
+    throw aggregated;
+};
+
+/**
+ * Read the code deployed at `address`, FAILING FAST in exactly the way evmRead
+ * does: one request per RPC URL, failover to the next URL, no in-session retry,
+ * and an aggregated error carrying `.failures` when every URL fails.
+ *
+ * One request per call, which matters because this is how a module answer is
+ * checked for code inside the Lit session's 50-request cap. A zero address
+ * answers `'0x'` — no code — so callers get one uniform test for "not deployed".
+ */
+export const evmGetCode = async (
+    chain: string,
+    address: string,
+    rpcs?: string[],
+): Promise<string> => {
+    const urls = rpcs || [];
+    if (urls.length === 0) throw "evmGetCode: rpcs array is empty or missing";
+    const failures: string[] = [];
+
+    for (const url of urls) {
+        try {
+            const provider = evmProvider(chain, url);
+            return await provider.getCode(address);
+        } catch (error: any) {
+            const msg = `RPC getCode to ${url} failed: ${error?.message || String(error)}`;
+            failures.push(msg);
+            console.log(msg);
         }
     }
 

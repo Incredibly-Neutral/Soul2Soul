@@ -70,6 +70,14 @@ export async function isRevokedByDealState(
 // write (setText), so setText is intentionally not included here.
 const RECORDS_CONTRACT_ABI = ['function getText(bytes32 node, string key) view returns (string)'];
 
+// Why a publication with an unresolved module is refused. One sentence, because
+// the two outcomes are one refusal to the caller: the factory answered and named
+// nothing with code at it, or it did not answer at all (a factory older than
+// V6 has no `moduleAddress`). A failed read is not classified here — see
+// libs/ens.factory.ts and GAP-15 — so the RPC cause is appended, not interpreted.
+const MODULES_UNRESOLVED =
+  'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused';
+
 type AuthorProof = NonNullable<NonNullable<S2SContentInfo['author']>['proof']>;
 
 /**
@@ -214,14 +222,16 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       maintainCache,
     });
 
-    const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
-      publication,
-      rpcs,
-      protocolInfo.publicationFactory,
-    );
+    let modules: Awaited<ReturnType<typeof getDomainOwnerAndModules>>;
+    try {
+      modules = await getDomainOwnerAndModules(publication, rpcs, protocolInfo.moduleFactory);
+    } catch (error) {
+      throw `${MODULES_UNRESOLVED}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const { multisig, configModule, publicationModule } = modules;
 
     if (multisig == null || configModule == null || publicationModule == null)
-      throw 'Failed to resolve publication modules';
+      throw MODULES_UNRESOLVED;
 
     let body: any | undefined | null = await fetchById(
       job.id,

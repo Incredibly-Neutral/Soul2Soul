@@ -13,6 +13,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { isRevokedByDealState } from './main';
 import { evmRead } from '../libs/evm';
 
+// render/main.ts imports ens.factory, which computes the two module kinds from
+// the bundle's runtime `ethers` global at module load.
+vi.hoisted(() => {
+  (globalThis as any).ethers = {
+    utils: {
+      id: (text: string) =>
+        text === 's2s.module.publication' ? '0x' + '93'.repeat(32) : '0x' + '32'.repeat(32),
+      namehash: () => '0x' + 'ab'.repeat(32),
+    },
+  };
+});
+
 vi.mock('../libs/evm', () => ({
   evmRead: vi.fn(),
   evmWrite: vi.fn(),

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { evmRead, evmWrite, toHexString } from './evm';
+import { evmRead, evmGetCode, evmWrite, toHexString } from './evm';
 import { decodeContenthashWrapped } from '@s2s/soul2soul-shared/lit-actions';
 
 // ============================================================================
@@ -346,6 +346,69 @@ describe('evmRead fail-fast (single pass, no in-session retry)', () => {
       await evmRead('L2', '0xaddr', ABI, 'NAME', [], RPC_URLS, tag);
       expect(calls[0].args).toEqual([]);
     }
+  });
+});
+
+// ============================================================================
+// evmGetCode — the same fail-fast transport contract as evmRead, one request
+// per URL and no retry. Discovery uses it to tell a recorded module from a
+// CREATE2 prediction with nothing deployed at it.
+// ============================================================================
+
+describe('evmGetCode fail-fast (single pass, no in-session retry)', () => {
+  beforeEach(() => {
+    delete (globalThis as any).ethers;
+  });
+
+  it('fails over to the second URL within the single pass and returns its code', async () => {
+    const seenPerUrl: Record<string, number> = {};
+    class PerUrlProvider {
+      connection: any;
+      constructor(connection: any) {
+        this.connection = connection;
+        const myUrl = connection.url;
+        seenPerUrl[myUrl] = (seenPerUrl[myUrl] || 0) + 1;
+        this.url = myUrl;
+      }
+      url: string;
+      async getCode() {
+        if (this.url === 'https://a.example') throw new Error('missing response');
+        return '0x6080';
+      }
+    }
+    (globalThis as any).ethers = { providers: { StaticJsonRpcProvider: PerUrlProvider } };
+
+    const code = await evmGetCode('L2', '0x' + '11'.repeat(20), [
+      'https://a.example',
+      'https://b.example',
+    ]);
+
+    expect(code).toBe('0x6080');
+    expect(seenPerUrl['https://a.example']).toBe(1);
+    expect(seenPerUrl['https://b.example']).toBe(1);
+  });
+
+  it('throws an aggregated error when every URL fails', async () => {
+    class AlwaysFailProvider {
+      connection: any;
+      constructor(connection: any) {
+        this.connection = connection;
+      }
+      async getCode() {
+        throw new Error('missing response');
+      }
+    }
+    (globalThis as any).ethers = { providers: { StaticJsonRpcProvider: AlwaysFailProvider } };
+
+    const err: any = await evmGetCode('L2', '0x' + '11'.repeat(20), [
+      'https://a.example',
+      'https://b.example',
+    ]).catch((e) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.failures.length).toBe(2); // one failure per URL, no retries
+    expect(err.message).toContain('https://a.example');
+    expect(err.message).toContain('https://b.example');
   });
 });
 

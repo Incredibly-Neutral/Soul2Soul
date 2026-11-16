@@ -120,6 +120,8 @@ function setupHappyDeps() {
   vi.mocked(extractSignerAddress).mockReturnValue('0xSigner');
   vi.mocked(getProtocolInfo).mockResolvedValue({
     gateway: 'https://ipfs.example.com',
+    publicationFactory: '0x' + '88'.repeat(20), // the getRecords copy; render reads moduleFactory
+    moduleFactory: '0x' + '77'.repeat(20),
     pkp: { ethAddress: '0xPKP', publicKey: 'pk', tokenId: '1' },
     ensRecords: '0xENS',
     litActions: { prep: 'cid1', render: 'cid2', update: 'cid3' },

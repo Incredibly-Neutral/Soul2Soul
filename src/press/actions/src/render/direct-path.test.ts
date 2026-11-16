@@ -202,7 +202,8 @@ function setupHappyDeps() {
     gateway: 'https://ipfs.example',
     ensRegistry: '0xensRegistry',
     ensRecords: '0xens',
-    publicationFactory: '0xpubFactory',
+    publicationFactory: '0x' + '88'.repeat(20), // the getRecords copy; render reads moduleFactory
+    moduleFactory: '0x' + '77'.repeat(20),
     recordsFactory: '0xrecords',
     pkp: '0xpkp',
     litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },

@@ -1,14 +1,23 @@
 import { evmRead } from "./evm";
-import { getProtocolControllerAndModules } from "./ens.factory";
 import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule'
 
 // The protocol's records module on Base: `configModule` for soul2soul.eth, the
-// address update-protocol.ts and repoint-record.ts write to. Held here so the
-// one record the module prediction needs costs one call — discovering the same
-// module through ENS would cost the five-request walk getProtocolInfo pays.
+// address update-protocol.ts and repoint-record.ts write to — and the module
+// `getProtocolInfo` reads its records from.
+//
+// This is the bootstrap root, and no factory resolves it: it holds the
+// `publication_factory` record, so this address is where the factory address
+// comes from, and asking the factory for it would be circular. The deployment
+// is a plain CREATE, which no factory made, so no factory knows it either. It
+// is not one of the two kinds `ens.factory` reads from that factory, and it is
+// not the author-side path either; it is this record's own module, held as a
+// constant and read directly, for that reason — not as a request-budget
+// shortcut.
+//
 // A redeploy of the records module makes this constant stale without error: the
-// read answers empty on the old address and the prediction degrades to the
-// probes. See SPEC-protocol-actions.md, Gotchas.
+// read answers empty on the old address, so getProtocolInfo throws for want of
+// the `publication_factory` record rather than discovering a module it cannot
+// identify. See SPEC-protocol-actions.md, Gotchas.
 const PROTOCOL_RECORDS_MODULE = '0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29';
 
 const RECORD_ABI = ['function getRecord(string key) view returns (string)'];
@@ -16,11 +25,11 @@ const RECORD_ABI = ['function getRecord(string key) view returns (string)'];
 /**
  * The `publication_factory` record on its own: one eth_call, no ENS walk.
  *
- * Read before an action's authorization gate so module discovery can use the
- * factory's CREATE2 prediction, and cheap enough that a call the gate then
- * rejects has spent one request rather than the protocol walk. null when the
- * record is absent or unreadable; callers pass that on and get the probe path
- * they ran before, unchanged.
+ * Read before an action's authorization gate so module discovery can ask the
+ * factory which modules this Safe owns, and cheap enough that a call the gate
+ * then rejects has spent one request rather than the protocol walk. null when
+ * the record is absent or unreadable, which every caller treats as a failure:
+ * discovery has no other source.
  */
 export const getPublicationFactory = async (rpcs?: { L1: string[]; L2: string[] }): Promise<string | null> => {
   try {
@@ -33,25 +42,49 @@ export const getPublicationFactory = async (rpcs?: { L1: string[]; L2: string[] 
   }
 };
 
-export const getProtocolInfo = async (dev: boolean, rpcs?: { L1: string[]; L2: string[] }) => {
+/**
+ * Every record an action needs, plus the factory discovery was built from.
+ *
+ * Costs one `getRecord` (unless the caller passes the factory) plus one
+ * `getRecords`: the records module is held as a constant, so no ENS walk is paid
+ * to find it, and there is no walk output to null-check.
+ *
+ * The `publication_factory` record is read once: a call with no
+ * `publicationFactory` argument spends one read here, a call that passes one
+ * (the gating actions, which read it before their authorization gate so a
+ * rejected call pays one request instead of the walk) spends none. A null
+ * argument is a failure, not a skip: discovery has no other source.
+ *
+ * Two factory fields are returned because S2SProtocolInfo declares both and
+ * both are the same record: `moduleFactory` is the value discovery actually
+ * used, `publicationFactory` the copy `configModule` publishes in getRecords.
+ */
+export const getProtocolInfo = async (
+  dev: boolean,
+  rpcs?: { L1: string[]; L2: string[] },
+  publicationFactory?: string | null,
+) => {
 
   try {
 
-  const { multisig, configModule } = await getProtocolControllerAndModules(rpcs);
+  const factoryForDiscovery = publicationFactory === undefined
+    ? await getPublicationFactory(rpcs)
+    : publicationFactory;
+  if (!factoryForDiscovery) {
+    throw new Error("Failed to read the publication_factory record; module discovery needs it");
+  }
 
-  console.log(multisig, configModule)
-
-    if (multisig == null || configModule == null ) {
-        throw new Error("Failed to get multisig or configModule from ENS");
-    }
-
-    const [dataGateway, ensRecords, ensRegistry, publicationFactory, recordsFactory, pkpEthAddress, litActionPrep, litActionRender, litActionUpdate ] = await evmRead("L2", configModule, Abi_S2SRecordsModule, "getRecords", [["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress", "lit_action_prep", "lit_action_render", "lit_action_update"]], rpcs?.L2);
+  // The records module is the protocol's root, held above as a constant: it is
+  // the module the `publication_factory` record was read from, so it cannot be
+  // discovered through the factory it bootstraps.
+  const [dataGateway, ensRecords, ensRegistry, publicationFactoryRecord, recordsFactory, pkpEthAddress, litActionPrep, litActionRender, litActionUpdate ] = await evmRead("L2", PROTOCOL_RECORDS_MODULE, Abi_S2SRecordsModule, "getRecords", [["data_gateway","ens_records","ens_registry","publication_factory","records_factory","pkp_ethAddress", "lit_action_prep", "lit_action_render", "lit_action_update"]], rpcs?.L2);
 
     return {
       gateway: dataGateway,
       ensRegistry: ensRegistry,
       ensRecords,
-      publicationFactory,
+      publicationFactory: publicationFactoryRecord,
+      moduleFactory: factoryForDiscovery,
       recordsFactory,
       pkp: pkpEthAddress,
       litActions: {
