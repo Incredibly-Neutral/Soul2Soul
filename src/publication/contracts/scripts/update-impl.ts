@@ -86,10 +86,17 @@ const FACTORY_ABI = parseAbi([
   'function isApprovedImplementation(address implementation) view returns (bool)',
 ]);
 
-const MODULE_ABI = parseAbi(['function NAME() view returns (string)']);
+const MODULE_ABI = parseAbi([
+  'function NAME() view returns (string)',
+  'function factory() view returns (address)',
+]);
 
-const V5_NAME = 'S2S Publication Module V5';
 const V4_NAME = 'S2S Publication Module V4';
+const V3_NAME = 'S2S Publication Module V3';
+const V2_NAME = 'S2S Publication Module V2';
+
+/** Names no target may carry: each one strands every proxy that upgrades to it. */
+const FROZEN_NAMES = [V2_NAME, V3_NAME, V4_NAME];
 
 const SAFE_ABI = parseAbi([
   'function getThreshold() view returns (uint256)',
@@ -311,28 +318,50 @@ async function main() {
   }
   console.log('');
 
-  // A V5 proxy may only upgrade to the newest implementation the factory has
-  // set, so this target has to be the module that can carry that upgrade. V4 is
-  // the one to refuse out loud: approving it as newest would hand every V5 proxy
-  // a target that freezes it, and a V2 or V3 proxy that takes it loses its only
-  // hop.
+  // A proxy that carries the gate may only upgrade to the newest implementation
+  // the factory has set, so the target must be code that gate can carry and the
+  // factory will accept. The name decides nothing: a successor is new code with a
+  // new label, and a superseded build still answers a name this tree knows. What is
+  // refused is a frozen name, whose install freezes the proxy, and code with no
+  // gate, which setImplementation refuses.
   const implName = await publicClient.readContract({
     address: impl,
     abi: MODULE_ABI,
     functionName: 'NAME',
   });
-  if (implName === V4_NAME) {
-    console.error(`❌ ${impl} is V4 ("${implName}").`);
-    console.error('   V4 reads a factory slot that initialize never wrote on an upgraded proxy,');
-    console.error('   so a proxy that upgrades to it reverts NoFactory() on every later upgrade:');
-    console.error('   the publication keeps working and can never change implementation again.');
-    console.error('   Approving it as latestImplementation would make it the only legal target');
-    console.error('   for every V5 proxy, and the first one that takes it is frozen; refusing.');
+  console.log(`   Target name: ${implName}`);
+  if (FROZEN_NAMES.includes(implName)) {
+    console.error(`❌ ${impl} is "${implName}", which no proxy may upgrade to.`);
+    console.error('   V4 reads its factory from slot 119: zero on a proxy that upgraded in from');
+    console.error('   V2 or V3, so every later upgrade reverts NoFactory(); the backfill bool on');
+    console.error('   one born under V5, so V4 reads address(1) and its approval read cannot');
+    console.error('   answer. Either way the publication keeps working and never upgrades again,');
+    console.error('   and making it the newest implementation hands that target to every proxy;');
+    console.error('   refusing.');
     process.exit(1);
   }
-  if (implName !== V5_NAME) {
-    console.error(`❌ ${impl} answers NAME() "${implName}", not "${V5_NAME}".`);
-    console.error('   Only V5 carries the immutable factory that a proxy on V2 or V3 can reach.');
+
+  // The factory refuses a target that does not answer factory(): that gate is what
+  // makes an approved implementation safe to install. Checking it here prints the
+  // refusal instead of a payload the factory reverts.
+  let targetFactory: `0x${string}`;
+  try {
+    targetFactory = await publicClient.readContract({
+      address: impl,
+      abi: MODULE_ABI,
+      functionName: 'factory',
+    });
+  } catch {
+    console.error(`❌ ${impl} answers no factory(): it carries no upgrade gate.`);
+    console.error('   setImplementation refuses it, and a proxy upgraded to it would not');
+    console.error('   consult this factory at all. Refusing.');
+    process.exit(1);
+  }
+  console.log(`   Target factory: ${targetFactory}`);
+  if (getAddress(targetFactory) !== getAddress(factory)) {
+    console.error(`❌ ${impl} is governed by ${targetFactory}, not ${factory}.`);
+    console.error('   Its proxies check that factory for approval, so the publications here would');
+    console.error('   be checking a set this deploy does not name. Refusing.');
     process.exit(1);
   }
 

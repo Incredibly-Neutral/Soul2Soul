@@ -327,9 +327,10 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
      *      The factory's approved set is append-only, so an implementation
      *      approved earlier stays legal for good, and V4 — construction version
      *      1 — is still in it. A proxy born under V5 holds the backfill sentinel
-     *      as the bool 1 in slot 119, so installing V4 leaves V4 reading its
-     *      factory slot as `address(1)`: its approval check call reverts, and
-     *      every later upgrade reverts with it. One transaction from the
+     *      as the bool 1 in slot 119, so installing V4 leaves V4 reading that
+     *      slot as its factory address, `address(1)`. V4's approval read on an
+     *      address with no code cannot answer, and the upgrade reverts. Every
+     *      later upgrade reverts the same way, so one transaction from the
      *      publication's safe freezes a proxy that runs this implementation for
      *      good. A proxy still running V2 or V3 is outside this check: its own
      *      `_authorizeUpgrade` is `onlySafe` and accepts any address, so its safe
@@ -340,12 +341,16 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
      *      implementation. It re-opens both hazards instead: from a proxy moved
      *      to it, V4 is reachable again and the approved set is the only limit.
      *
-     *      Requiring the newest set implementation makes the protocol's most
-     *      recent act the only forward step, so neither V4 nor a superseded V5
-     *      can be installed. The cost is that no rollback to an older
-     *      implementation exists: shipping a successor means the protocol safe
-     *      calls `setImplementation` first, which it must do anyway before any
-     *      proxy can reach it.
+     *      So a proxy can name nothing but the newest set implementation. The
+     *      protocol safe can still put an earlier one back at the front with
+     *      `setImplementation`, which the factory accepts because it only appends
+     *      to its history. That is the protocol's own authority, not a
+     *      publication's: it is a decision no publication safe can make on its
+     *      own, and it applies to every proxy at once rather than one. The cost
+     *      is that no rollback to an older implementation exists for a
+     *      publication: shipping a successor means the protocol safe calls
+     *      `setImplementation` first, which it must do anyway before any proxy
+     *      can reach it.
      *
      *      The approval check stays although it is implied: `setImplementation`
      *      writes the flag and the pointer together, so the newest implementation

@@ -399,8 +399,8 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
    * The premise the gate rests on, shown rather than asserted: a proxy born under
    * V5 holds the backfill sentinel as the bool 1 in slot 119, which is the slot
    * V4 reads as its factory. Put V4 in the implementation slot by hand and the
-   * module is frozen — V4 asks `address(1)` whether the target is approved, the
-   * call returns nothing, and every later upgrade reverts.
+   * module is frozen — V4 reads its factory as `address(1)`, its approval read on
+   * an address with no code cannot answer, and every later upgrade reverts.
    */
   it('shows the freeze is real: a V5-born proxy on V4 refuses every later upgrade', async () => {
     const d = await deploy();
@@ -430,6 +430,27 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
       'S2S Publication Module V4',
       'the proxy stays on V4, which is the freeze: no implementation is reachable',
     );
+  });
+
+  /**
+   * The gate's limit, stated rather than implied: the factory only appends to its
+   * history, so the protocol safe can set an earlier implementation again. That is
+   * the protocol's authority, not a publication's, and it makes V4 the only legal
+   * target for every proxy at once.
+   */
+  it('lets the protocol safe make V4 newest again, which freezes the proxy', async () => {
+    const d = await deploy();
+    const module = await createModule(d);
+
+    await approve(d.caller, d.factory.address, d.v4.address);
+    assert.equal(
+      (await d.factory.read.latestImplementation()).toLowerCase(),
+      d.v4.address.toLowerCase(),
+      'the set only appends, so an earlier implementation can be set again',
+    );
+
+    await upgradeTo(d, module, d.v4.address);
+    assert.equal(await (await moduleAt(module)).read.NAME(), 'S2S Publication Module V4');
   });
 
   it('refuses a superseded V5', async () => {

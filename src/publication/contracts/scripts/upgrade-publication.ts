@@ -28,24 +28,38 @@
  *
  * Three refusals, by name:
  *
- *   The proxy runs V4. Its `_authorizeUpgrade` reads a factory slot that
- *   `initialize` never wrote on an upgraded proxy, so it reverts `NoFactory()`
- *   before any payload runs: nothing in this tree can upgrade it.
+ *   The proxy runs V4. V4 reads its factory from slot 119, and what is there
+ *   depends on the lineage: zero on a proxy that upgraded in from V2 or V3, so V4
+ *   reverts `NoFactory()`; the backfill bool on a proxy born under V5, so V4 reads
+ *   `address(1)` and its approval read cannot answer. Either way nothing in this
+ *   tree can upgrade it.
  *
- *   The sentinel is zero and nonce 2 is spent. An earlier `reinitializeV3` ran
- *   under a module version that wrote no sentinel, so the counts are whatever
- *   that run left and this call cannot run again to recompute them. Classifying
- *   that state is not this script's to guess.
+ *   The target is a frozen name. V2, V3 and V4 are refused outright. V4 is the
+ *   trap: it is permanently in the factory's approved set, a V2 or V3 proxy's
+ *   `onlySafe` accepts it, and the result is a proxy whose own upgrades can never
+ *   pass — slot 119 is zero and V4 reverts `NoFactory()`, or slot 119 holds the
+ *   backfill sentinel and V4 reads `address(1)`, which cannot answer its approval
+ *   read. That is the brick V5 exists to prevent. Any other name is a target this
+ *   script does not have to know: a successor is new code with a new label, and
+ *   the checks below are the ones that decide, not the name.
  *
- *   The target is not V5. A V4 target is the trap: it is permanently in the
- *   factory's approved set, a V2 or V3 proxy's `onlySafe` accepts it, and the
- *   result is a proxy whose factory slot is zero for good — the brick V5 exists
- *   to prevent. The target must also be approved on the factory in its own
- *   immutable, and it must be the newest implementation that factory set: V5
- *   refuses anything else with `ImplementationNotLatest`, because the approved
- *   set never shrinks and a superseded build would let V4 back in. Until the
- *   protocol safe runs `setImplementation` on this implementation, an upgrade to
- *   it cannot land.
+ *   The target is not approved and newest on the authorising factory. Approval is
+ *   necessary and not sufficient: the factory's set is append-only, so a
+ *   superseded build stays approved, and a module that carries the gate reverts
+ *   `ImplementationNotLatest` for it. Until the protocol safe runs
+ *   `setImplementation` on this implementation, an upgrade to it cannot land.
+ *
+ *   The authorising factory is the one the proxy's *current* implementation
+ *   answers, because the module that runs `_authorizeUpgrade` is the one the proxy
+ *   runs now. Two factories naming one protocol safe keep different sets and
+ *   different newest implementations, so judging the target by its own `factory()`
+ *   would print a payload the proxy reverts, or refuse one it accepts. A proxy on
+ *   V2 or V3 answers no `factory()` at all: its own `onlySafe` decides the hop, so
+ *   both checks are skipped and the payload is printed with that said out loud.
+ *
+ * A proxy running a version this script does not know is not refused. The payload
+ * is derived from slot 0 and slot 119, not from the name, and the printed line says
+ * the name is unrecognised so nobody reads the batch as a checked one.
  *
  * Read-only: view calls against one RPC, no key, no transaction. It reads and
  * prints.
@@ -101,6 +115,9 @@ const V5_NAME = 'S2S Publication Module V5';
 const V4_NAME = 'S2S Publication Module V4';
 const V3_NAME = 'S2S Publication Module V3';
 const V2_NAME = 'S2S Publication Module V2';
+
+/** Names no upgrade may install, on any lineage: each one strands the proxy. */
+const FROZEN_NAMES = [V2_NAME, V3_NAME, V4_NAME];
 
 type Payload = { call: Hex; label: string; why: string };
 
@@ -204,6 +221,21 @@ async function implementationOf(proxy: Hex): Promise<Hex> {
   return getAddress(`0x${word.slice(-40)}`);
 }
 
+/** The factory an implementation answers, or null when it has no `factory()`. */
+async function factoryOf(implementation: Hex): Promise<Hex | null> {
+  try {
+    return getAddress(
+      await publicClient.readContract({
+        address: implementation,
+        abi: MODULE_ABI,
+        functionName: 'factory',
+      }),
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** One storage word, as a number: 0 for an unset slot. */
 async function readSlotWord(address: Hex, slot: number): Promise<bigint> {
   const word = await publicClient.getStorageAt({
@@ -237,23 +269,24 @@ async function main() {
   if (currentName === V4_NAME) {
     refuse(
       `The proxy already runs V4 ("${V4_NAME}").`,
-      'V4 reads a factory slot that `initialize` never wrote on an upgraded proxy, so',
-      'its _authorizeUpgrade reverts NoFactory() before any payload runs. Registering it',
-      'does not help and is not a way round: registerModule writes a factory record and',
-      'never touches _authorizeUpgrade, and for this proxy it reverts',
-      'ModuleNotRecognised(address) anyway, because a module running V4 answers factory()',
-      'with zero and is judged on the frozen legacy set, which does not name what a V4',
-      'proxy runs. A V4 proxy is stranded for good, and this script will not print a',
-      'transaction that will revert.',
+      'V4 reads its factory from slot 119, and what is there depends on the lineage: a',
+      'proxy that upgraded in from V2 or V3 left it zero and V4 reverts NoFactory(); one',
+      'born under V5 left the backfill bool there, V4 reads address(1), and its approval',
+      'read cannot answer. Neither proxy upgrades again. Registering it does not help',
+      'and is not a way round: registerModule writes a factory record and never touches',
+      '_authorizeUpgrade, and it reverts ModuleNotRecognised(address) for this proxy',
+      'anyway, because a module running V4 is judged on the factory record in slot 119',
+      'and the frozen legacy set, neither of which names what the proxy runs. The script',
+      'will not print a transaction that reverts.',
     );
   }
 
-  const known = [V2_NAME, V3_NAME, V5_NAME].includes(currentName);
-  if (!known) {
-    refuse(
-      `The proxy runs "${currentName}", which is not a module version this script knows.`,
-      `Expected one of "${V2_NAME}", "${V3_NAME}", "${V5_NAME}".`,
-      'Decide the payload by hand before upgrading.',
+  if (![V2_NAME, V3_NAME, V5_NAME].includes(currentName)) {
+    console.error(
+      `\u26a0\ufe0f  The proxy runs "${currentName}", a version this script does not know.`,
+    );
+    console.error(
+      '   The payload is read from storage, not from the name; check it against that module.',
     );
   }
 
@@ -270,57 +303,62 @@ async function main() {
   const initializer = backfilled ? NAME_CALL : REINIT_V3_CALL;
 
   const targetName = await nameOf(implementation);
-  if (targetName === V4_NAME) {
+  console.error(`Target impl:      ${implementation}  ("${targetName}")`);
+  if (FROZEN_NAMES.includes(targetName)) {
     refuse(
-      `The target ${implementation} is V4 ("${V4_NAME}").`,
+      `The target ${implementation} is "${targetName}", which no upgrade may install.`,
       'V4 is permanently in the factory approved set, so a V2 or V3 proxy would accept it',
-      'and spend its only upgrade on a module whose own upgrades revert NoFactory():',
-      'that is the brick V5 exists to prevent. Refusing.',
-    );
-  }
-  if (targetName !== V5_NAME) {
-    refuse(
-      `The target ${implementation} answers NAME() "${targetName}", not "${V5_NAME}".`,
-      'Only a V5 module can take the proxy from here: it reads the approving factory',
-      'from its code, so a proxy that never recorded one still passes its check.',
+      'and spend its only upgrade on a module whose own upgrades cannot pass: where slot',
+      '119 is zero V4 reverts NoFactory(), and where it holds the backfill sentinel V4',
+      'reads address(1), which cannot answer its approval read. Either way the',
+      'publication never changes implementation again. V2 and V3 freeze the same way,',
+      'one hop later. Refusing.',
     );
   }
 
-  const approvingFactory = await publicClient.readContract({
-    address: implementation,
-    abi: MODULE_ABI,
-    functionName: 'factory',
-  });
-  const approved = await publicClient.readContract({
-    address: approvingFactory,
-    abi: FACTORY_ABI,
-    functionName: 'isApprovedImplementation',
-    args: [implementation],
-  });
-  const newest = await publicClient.readContract({
-    address: approvingFactory,
-    abi: FACTORY_ABI,
-    functionName: 'latestImplementation',
-  });
-  console.error(`Target impl:      ${implementation}  ("${targetName}")`);
-  console.error(`Approving factory: ${approvingFactory}`);
-  console.error(`Approved there:   ${approved ? 'yes' : 'no'}`);
-  console.error(`Newest there:     ${newest}  ${same(newest, implementation) ? '(this target)' : '(not this target)'}`);
-  if (!approved) {
-    refuse(
-      `${approvingFactory} has not approved ${implementation}.`,
-      'Its approved set is filled by the protocol safe setImplementation(pnpm deploy:pub).',
-      'Until that executes, _authorizeUpgrade reverts ImplementationNotApproved and the',
-      'upgrade below cannot land.',
+  // The module that authorises this upgrade is the one the proxy runs now, so
+  // its factory is the one to judge the target by. Two factories naming the same
+  // protocol safe answer different newest implementations, and judging by the
+  // target's own factory would print a payload the proxy reverts.
+  const authorisingFactory = await factoryOf(currentImplementation);
+  if (!authorisingFactory) {
+    console.error(
+      `Approving factory: none — ${currentName} answers no factory(); its own onlySafe`,
     );
-  }
-  if (!same(newest, implementation)) {
-    refuse(
-      `${implementation} is approved but superseded: ${approvingFactory} set ${newest} last.`,
-      'A V5 proxy upgrades only to the newest implementation the factory set, and reverts',
-      'ImplementationNotLatest for anything earlier. Run setImplementation on the newer',
-      'implementation first, then print this payload for it.',
+    console.error('                  decides the hop, so no approval or newest check applies.');
+  } else {
+    const approved = await publicClient.readContract({
+      address: authorisingFactory,
+      abi: FACTORY_ABI,
+      functionName: 'isApprovedImplementation',
+      args: [implementation],
+    });
+    const newest = await publicClient.readContract({
+      address: authorisingFactory,
+      abi: FACTORY_ABI,
+      functionName: 'latestImplementation',
+    });
+    console.error(`Approving factory: ${authorisingFactory}`);
+    console.error(`Approved there:   ${approved ? 'yes' : 'no'}`);
+    console.error(
+      `Newest there:     ${newest}  ${same(newest, implementation) ? '(this target)' : '(not this target)'}`,
     );
+    if (!approved) {
+      refuse(
+        `${authorisingFactory} has not approved ${implementation}.`,
+        'Its approved set is filled by the protocol safe setImplementation(pnpm deploy:pub).',
+        'Until that executes, _authorizeUpgrade reverts ImplementationNotApproved and the',
+        'upgrade below cannot land.',
+      );
+    }
+    if (!same(newest, implementation)) {
+      refuse(
+        `${implementation} is approved but superseded: ${authorisingFactory} set ${newest} last.`,
+        'A module that carries the gate upgrades only to the newest implementation its',
+        'factory set, and reverts ImplementationNotLatest for anything earlier. Run',
+        'setImplementation on the newer implementation first, then print for it.',
+      );
+    }
   }
 
   const data = encodeFunctionData({
