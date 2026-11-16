@@ -719,6 +719,12 @@ importers:
       '@openzeppelin/contracts-upgradeable':
         specifier: ^4.9.6
         version: 4.9.6
+      '@safe-global/api-kit':
+        specifier: ^3.0.2
+        version: 3.0.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      '@safe-global/protocol-kit':
+        specifier: ^6.1.2
+        version: 6.1.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
@@ -16773,6 +16779,19 @@ snapshots:
       - utf-8-validate
       - zod
 
+  '@safe-global/api-kit@3.0.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)':
+    dependencies:
+      '@safe-global/protocol-kit': 6.1.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      '@safe-global/types-kit': 2.0.1(typescript@5.9.3)(zod@4.4.3)
+      node-fetch: 2.7.0
+      viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+    transitivePeerDependencies:
+      - bufferutil
+      - encoding
+      - typescript
+      - utf-8-validate
+      - zod
+
   '@safe-global/api-kit@3.0.2(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@3.25.76)':
     dependencies:
       '@safe-global/protocol-kit': 6.1.2(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@3.25.76)
@@ -16827,6 +16846,23 @@ snapshots:
       abitype: 1.2.4(typescript@5.9.3)(zod@3.25.76)
       semver: 7.7.4
       viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+    optionalDependencies:
+      '@noble/curves': 1.9.7
+      '@peculiar/asn1-schema': 2.6.0
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
+  '@safe-global/protocol-kit@6.1.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)':
+    dependencies:
+      '@safe-global/safe-deployments': 1.37.56
+      '@safe-global/safe-modules-deployments': 2.2.25
+      '@safe-global/types-kit': 3.1.0(typescript@5.9.3)(zod@4.4.3)
+      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.3)
+      semver: 7.7.4
+      viem: 2.48.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     optionalDependencies:
       '@noble/curves': 1.9.7
       '@peculiar/asn1-schema': 2.6.0
@@ -16966,6 +17002,13 @@ snapshots:
       - typescript
       - zod
 
+  '@safe-global/types-kit@2.0.1(typescript@5.9.3)(zod@4.4.3)':
+    dependencies:
+      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.3)
+    transitivePeerDependencies:
+      - typescript
+      - zod
+
   '@safe-global/types-kit@2.0.1(typescript@7.0.2)(zod@3.25.76)':
     dependencies:
       abitype: 1.2.4(typescript@7.0.2)(zod@3.25.76)
@@ -16976,6 +17019,13 @@ snapshots:
   '@safe-global/types-kit@3.1.0(typescript@5.9.3)(zod@3.25.76)':
     dependencies:
       abitype: 1.2.4(typescript@5.9.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - typescript
+      - zod
+
+  '@safe-global/types-kit@3.1.0(typescript@5.9.3)(zod@4.4.3)':
+    dependencies:
+      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.3)
     transitivePeerDependencies:
       - typescript
       - zod
