@@ -7,10 +7,11 @@
 // the name while the flow is running; a publication that is already live never
 // runs it. This module supplies the two pure decisions that surface enables:
 //
-//   - findPublicationName() reads the publication name from the Safe's modules
-//     on Base, independently of the chain this page's Safe is connected to.
-//     That is what makes the step reachable on the L1 Safe too (whose module
-//     list is empty — the modules live on Base).
+//   - findPublicationName() reads the publication name from the Safe's records
+//     module on Base, independently of the chain this page's Safe is connected
+//     to. The module is the one the factory keeps for (safe, records kind), so
+//     the read is a single `moduleAddress` answer instead of a walk over the
+//     Safe's module list.
 //   - ensStepView() turns the L1 registration read into a small card state:
 //     hidden / needs-registration / waiting / done / error, plus whether THIS
 //     page can propose the call (only on chain 1).
@@ -26,30 +27,38 @@
 
 import { buildRegisterSubdomainCall, type EnsRegistrationState } from './ens-registration';
 import { ENS_L1_CHAIN_ID, ZERO_ADDRESS, type EvmReadFn } from './domain-validation';
+import { ModuleAddressRefusalError, moduleAddressFor } from './publication-init';
+import { S2S_MODULE_KIND_RECORDS } from '@s2s/soul2soul-shared/safe-app';
 
 /** The chain the publication's modules (and its name record) live on. */
 export const BASE_CHAIN_ID = 8453;
 
-/** NAME() of the records module whose `getRecord('name')` holds the publication. */
-export const RECORDS_MODULE_NAME = 'S2S Records Module';
-
-/** Safe's module linked-list sentinel: the `start` value for the first page and
- *  the `next` value after the last one. */
-const MODULE_SENTINEL = '0x0000000000000000000000000000000000000001';
-
-const SAFE_MODULES_ABI = [
-  'function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)',
-];
-const NAME_ABI = ['function NAME() view returns (string)'];
 const GET_RECORD_ABI = ['function getRecord(string key) view returns (string)'];
 
+/**
+ * The Safe has no records module on Base to read the name from. The factory is
+ * the only authority on that address, and it answered zero: there is nothing to
+ * read and nothing to write, so the card says so instead of naming a guess.
+ */
+export class NoRecordsModuleError extends Error {
+  constructor(safeAddress: string, factory: string, cause?: unknown) {
+    super(
+      factory
+        ? `The module factory ${factory} names no records module for ${safeAddress} on Base (${BASE_CHAIN_ID}), so this Safe has no module to read or record the publication name.`
+        : `The protocol record names no module factory, so this Safe's records module on Base (${BASE_CHAIN_ID}) is unknown and the publication name cannot be read.`,
+    );
+    this.name = 'NoRecordsModuleError';
+    this.cause = cause;
+  }
+}
+
 export interface FindPublicationNameOptions {
+  /** The one module factory (`publication_factory` in the protocol record).
+   *  It answers where this Safe's records module is; without it there is no
+   *  module to read, and the read refuses rather than searching the Safe. */
+  moduleFactory: string;
   /** Chain the publication lives on; defaults to Base (8453). */
   chainId?: number;
-  /** Safe.getModulesPaginated page size; defaults to 20. */
-  pageSize?: number;
-  /** Hard cap on pages walked, so a malformed list can never loop forever. */
-  maxPages?: number;
   /** The name the app itself reads from its adopted records module. When set,
    *  a module holding a DIFFERENT name is not accepted: a Safe with two
    *  enabled records modules must not register the wrong (write-once) label. */
@@ -59,127 +68,66 @@ export interface FindPublicationNameOptions {
   throwOnError?: boolean;
 }
 
-/** Split Safe.getModulesPaginated's `(address[] array, address next)` result,
- *  tolerating both an ethers Result (an Array) and a plain named object. */
-function splitModulesPage(result: unknown): { modules: string[]; next: string } {
-  if (Array.isArray(result)) {
-    const modules = Array.isArray(result[0]) ? (result[0] as unknown[]).map(String) : [];
-    return { modules, next: result[1] ? String(result[1]) : '' };
-  }
-  const named = result as { array?: unknown; next?: unknown } | null | undefined;
-  const modules = Array.isArray(named?.array) ? (named!.array as unknown[]).map(String) : [];
-  return { modules, next: named?.next ? String(named.next) : '' };
-}
-
-/** A revert / undecodable reply means "this module has no NAME()", not a
- *  transport failure. Any other error is passed through when the caller asked
- *  for failures, so a 429 on a NAME probe cannot look like "no publication". */
-function isContractReplyError(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null | undefined)?.code;
-  return code === 'CALL_EXCEPTION' || code === 'BAD_DATA';
-}
-
-/** Does `module` identify itself as the S2S records module? A probe that throws
- *  (no NAME, not a module) is simply a "no", never an error for the caller. */
-async function isRecordsModule(
-  evmRead: EvmReadFn,
-  chainId: number,
-  module: string,
-  throwOnError = false,
-): Promise<boolean> {
-  try {
-    const name = await evmRead(chainId, module, NAME_ABI, 'NAME', []);
-    return String(name) === RECORDS_MODULE_NAME;
-  } catch (err) {
-    if (throwOnError && !isContractReplyError(err)) throw err;
-    return false;
-  }
-}
-
 /**
- * Read the publication's `name` record from the Safe's modules on Base.
+ * Read the publication's `name` record from the Safe's records module on Base.
  *
  * Deliberately NOT tied to the page's Safe chain: opening this app on the L1
  * twin Safe (to propose the registration) presents an empty module list on that
  * chain, but the publication still lives on Base at the same Safe address.
  *
- * Returns '' when no records module answers (no publication, a failed read, or
- * a module that does not identify itself) — callers stay silent rather than
- * guessing a name. With `expectedName`, only an exact match is returned, so a
- * second records module cannot make the card register the wrong label. Never
- * loops on a bad module. `throwOnError` opts a caller (the host) into seeing
- * transport failures so it can retry instead of suppressing the step.
+ * The module comes from the factory, one `moduleAddress(safe, records kind)`
+ * read. A factory answer of address zero is a refusal (`NoRecordsModuleError`),
+ * not an empty search: no module exists for this Safe, so there is no name and
+ * nothing to write. A module whose `getRecord('name')` reverts or returns
+ * nothing is "no name yet" and returns ''. With `expectedName`, only an exact
+ * match is returned, so a stale record cannot make the card register a label
+ * the app is not looking at. `throwOnError` opts a caller (the host) into
+ * seeing transport failures so it can retry instead of suppressing the step.
  */
 export async function findPublicationName(
   evmRead: EvmReadFn,
   safeAddress: string,
-  opts: FindPublicationNameOptions = {},
+  opts: FindPublicationNameOptions,
 ): Promise<string> {
   if (!safeAddress) return '';
   const chainId = opts.chainId ?? BASE_CHAIN_ID;
-  const pageSize = opts.pageSize ?? 20;
-  const maxPages = opts.maxPages ?? 10;
   const expectedName = (opts.expectedName ?? '').trim().toLowerCase();
+  const moduleFactory = opts.moduleFactory;
 
-  const modules: string[] = [];
-  const seenModule = new Set<string>();
+  if (!moduleFactory) throw new NoRecordsModuleError(safeAddress, '');
+
+  let module: string;
   try {
-    let cursor = MODULE_SENTINEL;
-    const seenCursor = new Set<string>();
-    for (let page = 0; page < maxPages; page++) {
-      const cursorKey = cursor.toLowerCase();
-      if (seenCursor.has(cursorKey)) break;
-      seenCursor.add(cursorKey);
-
-      const result = await evmRead(chainId, safeAddress, SAFE_MODULES_ABI, 'getModulesPaginated', [
-        cursor,
-        pageSize,
-      ]);
-      const pageResult = splitModulesPage(result);
-      for (const module of pageResult.modules) {
-        if (!module || module === ZERO_ADDRESS) continue;
-        const key = module.toLowerCase();
-        if (seenModule.has(key)) continue;
-        seenModule.add(key);
-        modules.push(module);
-      }
-
-      const next = pageResult.next;
-      if (!next || next.toLowerCase() === MODULE_SENTINEL || next.toLowerCase() === ZERO_ADDRESS) {
-        break;
-      }
-      cursor = next;
-    }
+    module = await moduleAddressFor(
+      { read: (factory, abi, method, args) => evmRead(chainId, factory, abi, method, args) },
+      moduleFactory,
+      safeAddress,
+      S2S_MODULE_KIND_RECORDS,
+    );
   } catch (err) {
+    // Address zero (or a non-address) is the refusal this card must show. Any
+    // other failure is a transport failure and stays a transport failure: it is
+    // never cached as "this Safe has no publication".
+    if (err instanceof ModuleAddressRefusalError) {
+      throw new NoRecordsModuleError(safeAddress, moduleFactory, err);
+    }
     if (opts.throwOnError) throw err;
     return '';
   }
 
-  let fallback = '';
-  let readError: unknown;
-  for (const module of modules) {
-    if (!(await isRecordsModule(evmRead, chainId, module, opts.throwOnError))) continue;
-    let name: string;
-    try {
-      const raw = await evmRead(chainId, module, GET_RECORD_ABI, 'getRecord', ['name']);
-      name = typeof raw === 'string' ? raw : '';
-    } catch (err) {
-      readError ??= err;
-      continue;
-    }
-    if (!expectedName) return name;
-    if (name.trim().toLowerCase() === expectedName) return name;
-    fallback ||= name;
-  }
-
-  // With an expected publication name, never fall back to a different module's
-  // name: registering the wrong label is write-once and unrecoverable.
-  if (expectedName) {
-    if (opts.throwOnError && readError) throw readError;
+  let raw: unknown;
+  try {
+    raw = await evmRead(chainId, module, GET_RECORD_ABI, 'getRecord', ['name']);
+  } catch (err) {
+    if (opts.throwOnError) throw err;
     return '';
   }
-  if (opts.throwOnError && readError && !fallback) throw readError;
-  return fallback;
+  const name = typeof raw === 'string' ? raw : '';
+
+  // With an expected publication name, never accept a different one:
+  // registering the wrong label is write-once and unrecoverable.
+  if (expectedName && name.trim().toLowerCase() !== expectedName) return '';
+  return name;
 }
 
 export interface EnsStepSafe {
@@ -190,6 +138,9 @@ export interface EnsStepSafe {
 export interface EnsStepOptions {
   /** A registration was already proposed from this Safe (persisted flag). */
   proposed?: boolean;
+  /** The Safe has no records module to read or write on Base. The card reports
+   *  that instead of a registration for a name that was never read. */
+  moduleMissing?: string;
 }
 
 export type EnsStepKind = 'hidden' | 'needs-registration' | 'waiting' | 'done' | 'error';
@@ -227,6 +178,18 @@ export function ensStepView(
   opts: EnsStepOptions = {},
 ): EnsStepView {
   const chain: 'l1' | 'other' = safe.chainId === ENS_L1_CHAIN_ID ? 'l1' : 'other';
+
+  // No module, no name: this outranks every registry answer, because nothing
+  // here could be registered into a publication that has no records module.
+  if (opts.moduleMissing) {
+    return {
+      kind: 'error',
+      chain,
+      canPropose: false,
+      reason: opts.moduleMissing,
+    };
+  }
+
   if (!state) return { kind: 'hidden', chain, canPropose: false };
 
   const name = state.name;

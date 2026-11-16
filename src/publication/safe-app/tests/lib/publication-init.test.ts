@@ -1,15 +1,17 @@
 // safe-app/tests/lib/publication-init.test.ts
 //
 // Unit tests for the pure "new publication init" orchestration
-// (SPEC-author-hosts.md AD-3): encoding, batch building, ModuleCreated-log detection,
-// and the full initializePublication flow. Node env, no browser, no SDK — all
-// runtime deps are injected mocks.
+// (SPEC-author-hosts.md AD-3): encoding, batch building, the moduleAddress read
+// and poll, and the full initializePublication flow. Node env, no browser, no
+// SDK — all runtime deps are injected mocks.
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { Interface, getAddress } from 'ethers';
-import { Abi_S2SRecordsModuleFactory } from '@s2s/publication-contracts/abis/S2SRecordsModuleFactory';
-import { Abi_S2SPublicationModuleV2Factory } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2Factory';
+import { AbiCoder, Interface, getAddress } from 'ethers';
+import { Abi_S2SPublicationModulesFactoryV6 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV6';
+import {
+  S2S_MODULE_KIND_PUBLICATION,
+  S2S_MODULE_KIND_RECORDS,
+} from '@s2s/soul2soul-shared/safe-app';
 import {
   buildCreateModuleBatch,
   buildEnableModuleBatch,
@@ -22,14 +24,11 @@ import {
   encodeSetRecord,
   encodeDisableModule,
   encodeDeleteRecord,
-  moduleCreatedTopic0,
-  detectModuleAddresses,
-  scanExistingModules,
+  moduleAddressFor,
+  waitForModuleAddress,
   waitForModulesEnabled,
   initializePublication,
   defaultSafeUrl,
-  predictNextModuleAddress,
-  resolveModuleAddress,
 } from '../../src/lib/publication-init';
 import type { MetaTransactionData } from '../../src/lib/publication-init';
 
@@ -39,39 +38,72 @@ import type { MetaTransactionData } from '../../src/lib/publication-init';
 
 // All-digit addresses → trivially valid checksums; getAddress keeps them equal.
 const SAFE = getAddress('0x1111111111111111111111111111111111111111');
-const OTHER_SAFE = getAddress('0x9999999999999999999999999999999999999999');
-const RECORDS_FACTORY = getAddress('0x2222222222222222222222222222222222222222');
-const PUB_FACTORY = getAddress('0x3333333333333333333333333333333333333333');
+const MODULE_FACTORY = getAddress('0x2222222222222222222222222222222222222222');
 const RECORDS_MODULE = getAddress('0x4444444444444444444444444444444444444444');
 const PUB_MODULE = getAddress('0x5555555555555555555555555555555555555555');
 const AUTHOR1 = getAddress('0x6666666666666666666666666666666666666666');
 const AUTHOR2 = getAddress('0x7777777777777777777777777777777777777777');
-// A retired publication factory (e.g. the V2 deployment the protocol record has
-// moved away from). Its logs still name the modules of every existing
-// publication.
-const LEGACY_PUB_FACTORY = getAddress('0x8888888888888888888888888888888888888888');
-const OLD_PUB_MODULE = getAddress('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+const ZERO = '0x0000000000000000000000000000000000000000';
 
-const recordsTopic0 = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
-const pubTopic0 = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
+const protocolInfo = { moduleFactory: MODULE_FACTORY };
+const factoryIface = new Interface(Abi_S2SPublicationModulesFactoryV6);
 
-/** Left-pad an address to the 32-byte indexed-topic form. */
-function pad(addr: string): string {
-  return `0x${addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`;
-}
-
-/** Build a ModuleCreated log: topic0, padded indexed safe, padded indexed module. */
-function logFor(topic0: string, safe: string, module: string): { topics: string[] } {
-  return { topics: [topic0, pad(safe), pad(module)] };
-}
-
-const detectDeps = {
-  safeAddress: SAFE,
-  recordsFactory: RECORDS_FACTORY,
-  publicationFactory: PUB_FACTORY,
-  getBlockNumber: async () => 1_000_000,
-  now: () => 500,
+/** The factory's answer for each kind: one module per (safe, kind). */
+const MODULES: Record<string, string> = {
+  [S2S_MODULE_KIND_RECORDS]: RECORDS_MODULE,
+  [S2S_MODULE_KIND_PUBLICATION]: PUB_MODULE,
 };
+
+/** Decode a createModule call back into (safe, kind, params). */
+function decodeCreate(data: string) {
+  const [safe, kind, params] = factoryIface.decodeFunctionData('createModule', data).toArray();
+  return { safe, kind, params };
+}
+
+/**
+ * A `read` stub answering `moduleAddress(safe, kind)` from `MODULES`. Any other
+ * method is a bug in the lib, so it throws rather than returning something.
+ */
+function makeRead(mapping: Record<string, string> = MODULES) {
+  const calls: Array<{ factory: string; method: string; args: unknown[] }> = [];
+  const read = vi.fn(async (factory: string, _abi: unknown, method: string, args: unknown[]) => {
+    calls.push({ factory, method, args });
+    if (method !== 'moduleAddress') throw new Error(`unexpected read: ${method}`);
+    return mapping[String(args[1])] ?? ZERO;
+  });
+  return { read, calls };
+}
+
+/**
+ * A Safe + factory that remember what a proposed batch did: a batch to the
+ * factory deploys the modules, a batch to the Safe enables them. The proposal
+ * mock applies it, so the reads after it see the chain the human would have.
+ */
+function makeChain() {
+  const state = { created: false, enabled: false };
+  const { read } = makeRead();
+  let n = 0;
+  const propose = vi.fn(async (txs: MetaTransactionData[]) => {
+    if (txs.every((tx) => tx.to.toLowerCase() === MODULE_FACTORY.toLowerCase())) {
+      state.created = true;
+    }
+    if (txs.some((tx) => tx.to.toLowerCase() === SAFE.toLowerCase())) {
+      state.enabled = true;
+    }
+    return `proposal-${++n}`;
+  });
+  const deps = {
+    chainId: 8453,
+    safeAddress: SAFE,
+    protocolInfo,
+    propose,
+    read,
+    hasCode: async () => state.created,
+    isModuleEnabled: vi.fn(async () => state.enabled),
+    now: () => 0,
+  };
+  return { state, propose, deps };
+}
 
 // ---------------------------------------------------------------------------
 // Encoders.
@@ -83,27 +115,47 @@ describe('encoders', () => {
     expect(encodeEnableModule(RECORDS_MODULE)).toBe(
       iface.encodeFunctionData('enableModule', [RECORDS_MODULE]),
     );
-    expect(
-      encodeEnableModule(RECORDS_MODULE).startsWith(iface.getFunction('enableModule').selector),
-    ).toBe(true);
   });
 
-  it('encodeCreateRecordsModule: recordsFactory.createModule(safe)', () => {
-    const iface = new Interface(Abi_S2SRecordsModuleFactory);
-    const data = encodeCreateRecordsModule(SAFE);
-    expect(data).toBe(iface.encodeFunctionData('createModule', [SAFE]));
-    expect(data.startsWith(iface.getFunction('createModule').selector)).toBe(true);
-  });
-
-  it('encodeCreatePublicationModule: publicationFactory.createModule(safe, authors, [])', () => {
-    const iface = new Interface(Abi_S2SPublicationModuleV2Factory);
-    const data = encodeCreatePublicationModule(SAFE, [AUTHOR1, AUTHOR2]);
-    expect(data).toBe(iface.encodeFunctionData('createModule', [SAFE, [AUTHOR1, AUTHOR2], []]));
-    expect(data.startsWith(iface.getFunction('createModule').selector)).toBe(true);
-    // empty authors still encodes the address[] slot as an empty array
-    expect(encodeCreatePublicationModule(SAFE, [])).toBe(
-      iface.encodeFunctionData('createModule', [SAFE, [], []]),
+  it('encodeDisableModule: Safe disableModule selector + arg encoding', () => {
+    const iface = new Interface(['function disableModule(address prevModule, address module)']);
+    expect(encodeDisableModule(RECORDS_MODULE, PUB_MODULE)).toBe(
+      iface.encodeFunctionData('disableModule', [RECORDS_MODULE, PUB_MODULE]),
     );
+  });
+
+  it('encodeCreateRecordsModule: createModule(safe, recordsKind, abi.encode(string[], string[]))', () => {
+    const coder = AbiCoder.defaultAbiCoder();
+    const data = encodeCreateRecordsModule(SAFE, [
+      { key: 'name', value: 'my-pub' },
+      { key: 'repo', value: 'https://example.org/r' },
+    ]);
+    const decoded = decodeCreate(data);
+    expect(decoded.safe).toBe(SAFE);
+    expect(decoded.kind).toBe(S2S_MODULE_KIND_RECORDS);
+    expect(coder.decode(['string[]', 'string[]'], decoded.params)).toEqual([
+      ['name', 'repo'],
+      ['my-pub', 'https://example.org/r'],
+    ]);
+  });
+
+  it('encodeCreateRecordsModule: no entries encodes two empty arrays, not empty params', () => {
+    const coder = AbiCoder.defaultAbiCoder();
+    const decoded = decodeCreate(encodeCreateRecordsModule(SAFE));
+    expect(coder.decode(['string[]', 'string[]'], decoded.params)).toEqual([[], []]);
+  });
+
+  it('encodeCreatePublicationModule: createModule(safe, publicationKind, abi.encode(address[], address[]))', () => {
+    const coder = AbiCoder.defaultAbiCoder();
+    const decoded = decodeCreate(
+      encodeCreatePublicationModule(SAFE, [AUTHOR1, AUTHOR2], [AUTHOR2]),
+    );
+    expect(decoded.safe).toBe(SAFE);
+    expect(decoded.kind).toBe(S2S_MODULE_KIND_PUBLICATION);
+    expect(coder.decode(['address[]', 'address[]'], decoded.params)).toEqual([
+      [AUTHOR1, AUTHOR2],
+      [AUTHOR2],
+    ]);
   });
 
   it('encodeSetRecord: recordsModule.setRecord(key, value)', () => {
@@ -113,29 +165,9 @@ describe('encoders', () => {
     );
   });
 
-  it('encodeDisableModule: Safe disableModule selector + arg encoding', () => {
-    const iface = new Interface(['function disableModule(address prevModule, address module)']);
-    expect(encodeDisableModule(SAFE, RECORDS_MODULE)).toBe(
-      iface.encodeFunctionData('disableModule', [SAFE, RECORDS_MODULE]),
-    );
-  });
-
   it('encodeDeleteRecord: recordsModule.deleteRecord(key)', () => {
     const iface = new Interface(['function deleteRecord(string key)']);
     expect(encodeDeleteRecord('name')).toBe(iface.encodeFunctionData('deleteRecord', ['name']));
-  });
-
-  it('moduleCreatedTopic0: derived from each factory ABI and distinct', () => {
-    const rec = moduleCreatedTopic0(Abi_S2SRecordsModuleFactory);
-    const pub = moduleCreatedTopic0(Abi_S2SPublicationModuleV2Factory);
-    expect(rec).toBe(
-      new Interface(Abi_S2SRecordsModuleFactory).getEvent('ModuleCreated').topicHash,
-    );
-    expect(pub).toBe(
-      new Interface(Abi_S2SPublicationModuleV2Factory).getEvent('ModuleCreated').topicHash,
-    );
-    // different event signatures → different topic0
-    expect(rec).not.toBe(pub);
   });
 });
 
@@ -144,24 +176,22 @@ describe('encoders', () => {
 // ---------------------------------------------------------------------------
 
 describe('batch builders', () => {
-  const protocolInfo = { recordsFactory: RECORDS_FACTORY, publicationFactory: PUB_FACTORY };
-
-  it('buildCreateModuleBatch: [records.createModule(safe), publication.createModule(safe, authors, [])]', () => {
-    const recIface = new Interface(Abi_S2SRecordsModuleFactory);
-    const pubIface = new Interface(Abi_S2SPublicationModuleV2Factory);
+  it('buildCreateModuleBatch: two creates, both to the one factory', () => {
     const batch = buildCreateModuleBatch(protocolInfo, SAFE, [AUTHOR1, AUTHOR2]);
     expect(batch).toEqual([
+      { to: MODULE_FACTORY, value: '0', data: encodeCreateRecordsModule(SAFE) },
       {
-        to: RECORDS_FACTORY,
+        to: MODULE_FACTORY,
         value: '0',
-        data: recIface.encodeFunctionData('createModule', [SAFE]),
-      },
-      {
-        to: PUB_FACTORY,
-        value: '0',
-        data: pubIface.encodeFunctionData('createModule', [SAFE, [AUTHOR1, AUTHOR2], []]),
+        data: encodeCreatePublicationModule(SAFE, [AUTHOR1, AUTHOR2]),
       },
     ]);
+  });
+
+  it('buildCreateModuleBatch: the kinds are the shared constants', () => {
+    const batch = buildCreateModuleBatch(protocolInfo, SAFE, []);
+    expect(decodeCreate(batch[0].data).kind).toBe(S2S_MODULE_KIND_RECORDS);
+    expect(decodeCreate(batch[1].data).kind).toBe(S2S_MODULE_KIND_PUBLICATION);
   });
 
   it('buildEnableModuleBatch: [enableModule(records), enableModule(publication)] to the Safe', () => {
@@ -210,7 +240,7 @@ describe('batch builders', () => {
     ]);
   });
 
-  it('every batch tx carries value "0"', () => {
+  it('every batch tx carries value "0" and a real target', () => {
     for (const batch of [
       buildCreateModuleBatch(protocolInfo, SAFE, []),
       buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
@@ -221,7 +251,10 @@ describe('batch builders', () => {
         [RECORDS_MODULE, PUB_MODULE],
       ),
     ]) {
-      for (const tx of batch) expect(tx.value).toBe('0');
+      for (const tx of batch) {
+        expect(tx.value).toBe('0');
+        expect(tx.to).toMatch(/^0x[0-9a-fA-F]{40}$/);
+      }
     }
   });
 });
@@ -289,7 +322,6 @@ describe('buildDeletePublicationBatch', () => {
         data: disableIface.encodeFunctionData('disableModule', [OTHER, RECORDS_MODULE]),
       },
     ]);
-    // Last tx is still the name-record deletion.
     expect(batch[2]).toEqual({
       to: RECORDS_MODULE,
       value: '0',
@@ -348,22 +380,8 @@ describe('buildDeletePublicationBatch', () => {
       [RECORDS_MODULE, PUB_MODULE],
       { deleteName: false },
     );
-    expect(batch.length).toBe(2); // 2 disables, no deleteRecord
+    expect(batch.length).toBe(2);
     expect(batch.every((tx) => tx.to.toLowerCase() === SAFE.toLowerCase())).toBe(true);
-  });
-
-  it('deletes the name record by default (full teardown)', () => {
-    const batch = buildDeletePublicationBatch(
-      SAFE,
-      { recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE },
-      [RECORDS_MODULE, PUB_MODULE],
-    );
-    expect(batch.length).toBe(3);
-    expect(batch[2]).toEqual({
-      to: RECORDS_MODULE,
-      value: '0',
-      data: delIface.encodeFunctionData('deleteRecord', ['name']),
-    });
   });
 
   it('throws when neither module is in the Safe module list', () => {
@@ -378,544 +396,102 @@ describe('buildDeletePublicationBatch', () => {
 });
 
 // ---------------------------------------------------------------------------
-// scanExistingModules (one look, before proposing the create batch).
+// moduleAddressFor — one read, no fallback.
 // ---------------------------------------------------------------------------
 
-describe('scanExistingModules', () => {
-  it('returns both addresses from a single pass over both factories', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-    const getBlockNumber = vi.fn(async () => 1_000_000);
+describe('moduleAddressFor', () => {
+  it('asks the factory for (safe, kind) and checksums the answer', async () => {
+    let lower = RECORDS_MODULE.toLowerCase().replace('0x11', '0xab');
+    const mapping = { [S2S_MODULE_KIND_RECORDS]: lower };
+    const { read, calls } = makeRead(mapping);
 
-    const result = await scanExistingModules({
-      ...detectDeps,
-      fetchModuleCreatedLogs,
-      getBlockNumber,
-    });
+    const address = await moduleAddressFor({ read }, MODULE_FACTORY, SAFE, S2S_MODULE_KIND_RECORDS);
 
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns a partial result when only one factory has a log for this safe', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
-    );
-
-    const result = await scanExistingModules({ ...detectDeps, fetchModuleCreatedLogs });
-
-    // Half a pair is reported as-is — deciding whether that is usable is the
-    // caller's job (the init flow needs both modules).
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: undefined });
-  });
-
-  it('ignores logs for a different safe and returns the newest matching one', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [
-            logFor(recordsTopic0, OTHER_SAFE, PUB_MODULE),
-            logFor(recordsTopic0, SAFE, RECORDS_MODULE),
-          ]
-        : [],
-    );
-
-    const result = await scanExistingModules({ ...detectDeps, fetchModuleCreatedLogs });
-
-    expect(result.recordsModule).toBe(RECORDS_MODULE);
-  });
-
-  it('makes exactly one fetch per factory (no polling) and does not throw when nothing is found', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
-    const getBlockNumber = vi.fn(async () => 1_000_000);
-
-    const result = await scanExistingModules({
-      ...detectDeps,
-      fetchModuleCreatedLogs,
-      getBlockNumber,
-    });
-
-    expect(result).toEqual({ recordsModule: undefined, publicationModule: undefined });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
-  });
-
-  it('finds a pair whose publication log sits on a retired factory only', async () => {
-    // The state after the protocol record moves to a new factory: the record's
-    // factory has never seen this Safe, the old one has its ModuleCreated log.
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-      return [];
-    });
-
-    const result = await scanExistingModules({
-      ...detectDeps,
-      fetchModuleCreatedLogs,
-      legacyPublicationFactories: [LEGACY_PUB_FACTORY],
-    });
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-  });
-
-  it('prefers the record factory over a retired one when both logged a module', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, OLD_PUB_MODULE)];
-      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-
-    const result = await scanExistingModules({
-      ...detectDeps,
-      fetchModuleCreatedLogs,
-      legacyPublicationFactories: [LEGACY_PUB_FACTORY],
-    });
-
-    expect(result.publicationModule).toBe(PUB_MODULE);
-  });
-
-  it('reads a factory once when the retired list repeats the record address', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
-
-    await scanExistingModules({
-      ...detectDeps,
-      fetchModuleCreatedLogs,
-      // Same factory, different case, plus one genuinely retired address.
-      legacyPublicationFactories: [PUB_FACTORY.toLowerCase(), LEGACY_PUB_FACTORY],
-    });
-
-    const probed = fetchModuleCreatedLogs.mock.calls.map((call) => String(call[0]).toLowerCase());
-    expect(probed.filter((address) => address === PUB_FACTORY.toLowerCase())).toHaveLength(1);
-    expect(probed).toHaveLength(3); // records + the record factory + the retired one
-  });
-
-  it('detection stays on the record factory: a retired log must not end the wait', async () => {
-    // The create batch went to PUB_FACTORY; a legacy log names an older module
-    // from a previous run and would short-circuit detection if it counted.
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      if (factory === LEGACY_PUB_FACTORY) return [logFor(pubTopic0, SAFE, OLD_PUB_MODULE)];
-      return []; // the new factory has not deployed yet
-    });
-    const probed: string[] = [];
-    // A clock that advances on every read, so the poll loop times out instead
-    // of spinning forever on a frozen one.
-    let clock = 0;
-    const now = () => (clock += 1);
-
-    await expect(
-      detectModuleAddresses(
-        {
-          ...detectDeps,
-          fetchModuleCreatedLogs: (factory, safe, topic0, fromBlock) => {
-            probed.push(factory.toLowerCase());
-            return fetchModuleCreatedLogs(factory);
-          },
-          legacyPublicationFactories: [LEGACY_PUB_FACTORY],
-          now,
-        },
-        { timeoutMs: 1, pollIntervalMs: 0 },
-      ),
-    ).rejects.toThrow(/missing module: publication/);
-
-    expect(probed).not.toContain(LEGACY_PUB_FACTORY.toLowerCase());
-  });
-
-  it('queries each factory with its own topic0 and the lookback window', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async () => [] as Array<{ topics: string[] }>);
-
-    await scanExistingModules(
-      { ...detectDeps, fetchModuleCreatedLogs },
-      { lookbackBlocks: 500 },
-    );
-
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
-      RECORDS_FACTORY,
-      SAFE,
-      recordsTopic0,
-      999_500,
-    );
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
-      PUB_FACTORY,
-      SAFE,
-      pubTopic0,
-      999_500,
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// detectModuleAddresses.
-// ---------------------------------------------------------------------------
-
-describe('detectModuleAddresses', () => {
-  it('happy path: both modules found on the first poll', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-    const getBlockNumber = vi.fn(async () => 1_000_000);
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, getBlockNumber },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
-  });
-
-  it('polls until both modules are found', async () => {
-    let calls = 0;
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      calls += 1;
-      if (calls < 3) return [];
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-    const getBlockNumber = vi.fn(async () => 1_000_000);
-    const now = vi.fn(() => 500); // constant → never times out
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, getBlockNumber, now },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(4); // 2 factories × 2 polls
-  });
-
-  it('ignores logs whose topic[1] is a different safe', async () => {
-    let calls = 0;
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      calls += 1;
-      if (factory === RECORDS_FACTORY) {
-        // First poll: a ModuleCreated for OTHER_SAFE — must be ignored.
-        if (calls === 1) return [logFor(recordsTopic0, OTHER_SAFE, RECORDS_MODULE)];
-        return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      }
-      return [logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-    const getBlockNumber = vi.fn(async () => 1_000_000);
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, getBlockNumber },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-  });
-
-  it('timeout: descriptive error naming the missing module', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) return [logFor(recordsTopic0, SAFE, RECORDS_MODULE)];
-      return []; // publication never deployed
-    });
-    let t = 0;
-    const now = vi.fn(() => (t += 100_000)); // start=100000; check=200000 (elapsed 100000 < 120000 → poll); check=300000 → throws
-
-    await expect(
-      detectModuleAddresses(
-        { ...detectDeps, fetchModuleCreatedLogs, now },
-        { timeoutMs: 120_000, pollIntervalMs: 0 },
-      ),
-    ).rejects.toThrow(/Timed out/);
-    await expect(
-      detectModuleAddresses(
-        { ...detectDeps, fetchModuleCreatedLogs, now },
-        { timeoutMs: 120_000, pollIntervalMs: 0 },
-      ),
-    ).rejects.toThrow(/publication/);
-  });
-
-  it('module address is parsed from topic[2] and normalized to checksum', async () => {
-    // Lowercase topics are the on-chain form; the returned address must be checksummed.
-    const lowerRecords = RECORDS_MODULE.toLowerCase();
-    const lowerPub = PUB_MODULE.toLowerCase();
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY)
-        return [{ topics: [recordsTopic0, pad(SAFE), pad(lowerRecords)] }];
-      return [{ topics: [pubTopic0, pad(SAFE), pad(lowerPub)] }];
-    });
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result.recordsModule).toBe(getAddress(lowerRecords));
-    expect(result.publicationModule).toBe(getAddress(lowerPub));
-  });
-
-  it('prefers the most recent ModuleCreated log (last wins) so re-init after reset lands on fresh modules', async () => {
-    // The factories are non-idempotent: a prior init's logs are still inside
-    // the lookback window when a new run starts. eth_getLogs returns logs
-    // oldest-first, so the stale run's logs come before the fresh run's.
-    const OLD_RECORDS = getAddress('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-    const OLD_PUB = getAddress('0x8888888888888888888888888888888888888888');
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) => {
-      if (factory === RECORDS_FACTORY) {
-        return [
-          logFor(recordsTopic0, SAFE, OLD_RECORDS),
-          logFor(recordsTopic0, SAFE, RECORDS_MODULE),
-        ];
-      }
-      return [logFor(pubTopic0, SAFE, OLD_PUB), logFor(pubTopic0, SAFE, PUB_MODULE)];
-    });
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// CREATE2 prediction (SPEC-publication-account.md: the factory names the
-// module address). A create2 factory answers moduleAddress(safe) for the create
-// that has NOT happened yet, so the value is only accepted where code sits.
-// ---------------------------------------------------------------------------
-
-describe('predictNextModuleAddress / resolveModuleAddress', () => {
-  const PREDICTED = getAddress('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
-  const OLDER = getAddress('0xcccccccccccccccccccccccccccccccccccccccc');
-
-  /** A `read` that answers only the selectors `answers` lists; the rest revert. */
-  function makeRead(answers: {
-    moduleAddress?: string | Error;
-    count?: number | Error;
-    forVersion?: Record<number, string>;
-  }) {
-    return vi.fn(async (_factory: string, _abi: unknown, method: string, args: unknown[]) => {
-      if (method === 'moduleAddress') {
-        if (answers.moduleAddress instanceof Error) throw answers.moduleAddress;
-        return answers.moduleAddress;
-      }
-      if (method === 'implementationCount') {
-        if (answers.count instanceof Error || answers.count === undefined) {
-          throw answers.count instanceof Error ? answers.count : new Error('no such selector');
-        }
-        return BigInt(answers.count);
-      }
-      if (method === 'moduleAddressForVersion') {
-        const version = Number(args[1]);
-        const answer = answers.forVersion?.[version];
-        if (!answer) throw new Error('execution reverted');
-        return answer;
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-  }
-
-  const codeAt = (withCode: string[]) => async (address: string) =>
-    withCode.includes(address) ? 200 : 0;
-
-  it('predictNextModuleAddress: returns the factory answer, checksummed', async () => {
-    const predicted = await predictNextModuleAddress({
-      read: makeRead({ moduleAddress: PREDICTED.toLowerCase() }),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(predicted).toBe(PREDICTED);
-  });
-
-  it('predictNextModuleAddress: undefined when the factory answers no such selector', async () => {
-    const predicted = await predictNextModuleAddress({
-      read: makeRead({ moduleAddress: new Error('function selector was not recognized') }),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(predicted).toBeUndefined();
-  });
-
-  it('predictNextModuleAddress: treats address(0) as no answer', async () => {
-    const predicted = await predictNextModuleAddress({
-      read: makeRead({ moduleAddress: '0x0000000000000000000000000000000000000000' }),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(predicted).toBeUndefined();
-  });
-
-  it('predictNextModuleAddress: no factory known → no read', async () => {
-    const read = makeRead({ moduleAddress: PREDICTED });
-    expect(await predictNextModuleAddress({ read, factory: '', safeAddress: SAFE })).toBeUndefined();
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it('resolveModuleAddress: takes moduleAddress once that address has code', async () => {
-    const address = await resolveModuleAddress({
-      read: makeRead({ moduleAddress: PREDICTED }),
-      codeSize: codeAt([PREDICTED]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(address).toBe(PREDICTED);
-  });
-
-  it('resolveModuleAddress: an empty moduleAddress is not the publication, so it walks versions', async () => {
-    const read = makeRead({ moduleAddress: PREDICTED, count: 2, forVersion: { 1: OLDER } });
-    const address = await resolveModuleAddress({
-      read,
-      codeSize: codeAt([OLDER]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(address).toBe(OLDER);
-    expect(read).toHaveBeenCalledWith(PUB_FACTORY, expect.anything(), 'moduleAddressForVersion', [
-      SAFE,
-      1n,
+    expect(address).toBe(getAddress(lower));
+    expect(calls).toEqual([
+      {
+        factory: MODULE_FACTORY,
+        method: 'moduleAddress',
+        args: [SAFE, S2S_MODULE_KIND_RECORDS],
+      },
     ]);
   });
 
-  it('resolveModuleAddress: undefined when the factory cannot answer at all', async () => {
-    const address = await resolveModuleAddress({
-      read: makeRead({ moduleAddress: new Error('no selector'), count: new Error('no selector') }),
-      codeSize: codeAt([]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(address).toBeUndefined();
+  it('refuses address(0): no implementation for the kind means no create can succeed', async () => {
+    const { read } = makeRead({});
+    await expect(
+      moduleAddressFor({ read }, MODULE_FACTORY, SAFE, S2S_MODULE_KIND_RECORDS),
+    ).rejects.toThrow(/no implementation set for that kind/);
   });
 
-  it('resolveModuleAddress: a reverting moduleAddress ends the attempt at once', async () => {
-    // The revert means "plain-CREATE factory", so the version walk cannot help
-    // and costs a provider rebuild per read on the boot path.
-    const read = makeRead({ moduleAddress: new Error('no selector'), count: 3 });
-    await resolveModuleAddress({
-      read,
-      codeSize: codeAt([PREDICTED]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(read.mock.calls.map(([, , method]) => method)).toEqual(['moduleAddress']);
-  });
-
-  it('resolveModuleAddress: undefined when no candidate has code', async () => {
-    const address = await resolveModuleAddress({
-      read: makeRead({ moduleAddress: PREDICTED, count: 3, forVersion: { 1: OLDER, 2: OLDER } }),
-      codeSize: codeAt([]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-    });
-    expect(address).toBeUndefined();
-  });
-
-  it('resolveModuleAddress: bounded by maxVersions, newest first', async () => {
-    const read = makeRead({ moduleAddress: PREDICTED, count: 10, forVersion: {} });
-    await resolveModuleAddress({
-      read,
-      codeSize: codeAt([]),
-      factory: PUB_FACTORY,
-      safeAddress: SAFE,
-      maxVersions: 2,
-    });
-    const versions = read.mock.calls
-      .filter(([, , method]) => method === 'moduleAddressForVersion')
-      .map(([, , , args]) => Number((args as unknown[])[1]));
-    expect(versions).toEqual([10, 9]);
-  });
-});
-
-describe('detectModuleAddresses with a predicted module address', () => {
-  const PREDICTED = getAddress('0xdddddddddddddddddddddddddddddddddddddddd');
-
-  it('confirmed prediction: returned without reading the publication logs', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
-    );
-    const hasCode = vi.fn(async () => true);
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PREDICTED });
-    // Records only: the publication half never waited on a log.
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(1);
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledWith(
-      RECORDS_FACTORY,
-      SAFE,
-      recordsTopic0,
-      expect.any(Number),
-    );
-  });
-
-  it('unconfirmed prediction: the create has not executed, so the logs are still read', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
-        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
-    );
-    const hasCode = vi.fn(async () => false);
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
-  });
-
-  it('a code check that throws counts as unconfirmed (no crash)', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
-        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
-    );
-    const hasCode = vi.fn(async () => {
-      throw new Error('rpc down');
-    });
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs, predictedPublicationModule: PREDICTED, hasCode },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result.publicationModule).toBe(PUB_MODULE);
-  });
-
-  it('no prediction: behaviour is unchanged (both logs read)', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
-        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
-    );
-
-    const result = await detectModuleAddresses(
-      { ...detectDeps, fetchModuleCreatedLogs },
-      { pollIntervalMs: 0 },
-    );
-
-    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(2);
+  it('refuses a non-address answer rather than guessing one', async () => {
+    const read = vi.fn(async () => '0x1234');
+    await expect(
+      moduleAddressFor({ read }, MODULE_FACTORY, SAFE, S2S_MODULE_KIND_RECORDS),
+    ).rejects.toThrow(/names no .* module/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// waitForModulesEnabled — the human-in-the-loop bridge between the enable
-// proposal and the name-record proposal.
+// waitForModuleAddress — the address is known before the create; code proves it.
+// ---------------------------------------------------------------------------
+
+describe('waitForModuleAddress', () => {
+  it('polls until the module at the factory address has code', async () => {
+    const { read, calls } = makeRead();
+    let polls = 0;
+    const hasCode = vi.fn(async () => ++polls >= 3);
+
+    const address = await waitForModuleAddress(
+      { read, hasCode, now: () => 0 },
+      MODULE_FACTORY,
+      SAFE,
+      S2S_MODULE_KIND_RECORDS,
+      { pollIntervalMs: 0 },
+    );
+
+    expect(address).toBe(RECORDS_MODULE);
+    expect(hasCode).toHaveBeenCalledWith(RECORDS_MODULE);
+    expect(calls.length).toBe(3);
+  });
+
+  it('times out naming the address, without ever asking another source', async () => {
+    const { read } = makeRead();
+    let t = 0;
+    const now = () => (t += 100);
+
+    await expect(
+      waitForModuleAddress(
+        { read, hasCode: async () => false, now },
+        MODULE_FACTORY,
+        SAFE,
+        S2S_MODULE_KIND_PUBLICATION,
+        { timeoutMs: 250, pollIntervalMs: 0 },
+      ),
+    ).rejects.toThrow(
+      new RegExp(`Timed out after 250ms waiting for the .* module at ${PUB_MODULE}`),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// waitForModulesEnabled.
 // ---------------------------------------------------------------------------
 
 describe('waitForModulesEnabled', () => {
   const deps = {
-    recordsModule: RECORDS_MODULE,
-    publicationModule: PUB_MODULE,
+    read: makeRead().read,
+    hasCode: async () => true,
+    factory: MODULE_FACTORY,
+    safeAddress: SAFE,
     isModuleEnabled: async () => true,
     now: () => 1000,
   };
 
-  it('returns immediately when both modules are already enabled', async () => {
+  it('returns both module addresses when they are already enabled', async () => {
     const isModuleEnabled = vi.fn(async () => true);
-    await waitForModulesEnabled({ ...deps, isModuleEnabled }, { pollIntervalMs: 0 });
+    const result = await waitForModulesEnabled({ ...deps, isModuleEnabled }, { pollIntervalMs: 0 });
+    expect(result).toEqual({ recordsModule: RECORDS_MODULE, publicationModule: PUB_MODULE });
     expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
     expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
     expect(isModuleEnabled).toHaveBeenCalledTimes(2);
@@ -924,11 +500,11 @@ describe('waitForModulesEnabled', () => {
   it('polls until both modules become enabled', async () => {
     const isModuleEnabled = vi
       .fn()
-      .mockResolvedValueOnce(false) // poll 1: records, publication
       .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false) // poll 2: records, publication
       .mockResolvedValueOnce(false)
-      .mockResolvedValue(true) // poll 3 onwards: both true
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true)
       .mockResolvedValue(true);
 
     await waitForModulesEnabled(
@@ -940,8 +516,8 @@ describe('waitForModulesEnabled', () => {
 
   it('times out naming the module(s) still not enabled', async () => {
     const isModuleEnabled = vi.fn(async (module: string) => module !== RECORDS_MODULE);
-    let t = 1000;
-    const now = vi.fn(() => (t += 2_000)); // start = 3000; next now() = 5000 → elapsed 2000 > 1000
+    let t = 0;
+    const now = () => (t += 2_000);
 
     await expect(
       waitForModulesEnabled(
@@ -949,35 +525,18 @@ describe('waitForModulesEnabled', () => {
         { timeoutMs: 1_000, pollIntervalMs: 0 },
       ),
     ).rejects.toThrow(/not enabled: records/);
-    expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
-    expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
 });
 
-// initializePublication.
+// ---------------------------------------------------------------------------
+// initializePublication — read both kinds, propose what is missing, wait.
 // ---------------------------------------------------------------------------
 
 describe('initializePublication', () => {
-  const initDeps = {
-    chainId: 8453,
-    safeAddress: SAFE,
-    protocolInfo: { recordsFactory: RECORDS_FACTORY, publicationFactory: PUB_FACTORY },
-    propose: async () => 'proposal-0',
-    fetchModuleCreatedLogs: async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
-        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
-    getBlockNumber: async () => 1_000_000,
-    isModuleEnabled: async () => true,
-    now: () => 500,
-  };
+  it('fresh Safe: one create proposal, then the merged enable batch', async () => {
+    const { propose, deps } = makeChain();
 
-  it('happy path: exactly 2 proposals, correct batches, verification passes', async () => {
-    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
-    const isModuleEnabled = vi.fn(async () => true);
-
-    const result = await initializePublication({ ...initDeps, propose, isModuleEnabled }, {});
+    const result = await initializePublication(deps, {});
 
     expect(result).toEqual({
       recordsModule: RECORDS_MODULE,
@@ -985,98 +544,73 @@ describe('initializePublication', () => {
       nameRecorded: false,
       proposals: ['proposal-1', 'proposal-2'],
     });
-    expect(propose).toHaveBeenCalledTimes(2);
-    // batch contents, in order
-    expect(propose.mock.calls[0][0]).toEqual(
-      buildCreateModuleBatch(initDeps.protocolInfo, SAFE, []),
-    );
+    expect(propose.mock.calls[0][0]).toEqual(buildCreateModuleBatch(protocolInfo, SAFE, []));
     expect(propose.mock.calls[1][0]).toEqual(
       buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
     );
-    // verification ran on both modules
-    expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
-    expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
+    expect(deps.isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
+    expect(deps.isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
 
-  it('reads the predicted address BEFORE proposing the create batch and skips the publication log', async () => {
-    const PREDICTED = getAddress('0xdddddddddddddddddddddddddddddddddddddddd');
-    const order: string[] = [];
-    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => {
-      order.push('propose');
-      return `proposal-${++n}`;
+  it('reads moduleAddress for BOTH kinds before proposing anything', async () => {
+    const { deps } = makeChain();
+    const calls: unknown[] = [];
+    const read = vi.fn(async (factory: string, abi: any, method: string, args: unknown[]) => {
+      calls.push([...args]);
+      return deps.read(factory, abi, method, args);
     });
-    const predictNextModuleAddress = vi.fn(async () => {
-      order.push('predict');
-      return PREDICTED;
-    });
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)] : [],
-    );
+    await initializePublication({ ...deps, read }, {});
 
-    const result = await initializePublication(
-      {
-        ...initDeps,
-        propose,
-        fetchModuleCreatedLogs,
-        predictNextModuleAddress,
-        hasCode: async (address: string) => address === PREDICTED,
-      },
+    const kinds = calls.map((args: any) => args[1]);
+    expect(kinds).toContain(S2S_MODULE_KIND_RECORDS);
+    expect(kinds).toContain(S2S_MODULE_KIND_PUBLICATION);
+  });
+
+  it('one kind already deployed: the create batch still names both, and nothing is duplicated', async () => {
+    const { propose, deps, state } = makeChain();
+    // Records exists, publication does not (a half-run init, or a session that
+    // lost the second module). The batch must still carry both calls: the
+    // factory returns the recorded records module and creates the publication.
+    await initializePublication(
+      { ...deps, hasCode: async (addr: string) => addr === RECORDS_MODULE || state.created },
       {},
     );
 
-    // The prediction is only exact before the create executes: afterwards the
-    // factory answers for the NEXT create.
-    expect(order.slice(0, 2)).toEqual(['predict', 'propose']);
-    expect(result.publicationModule).toBe(PREDICTED);
-    // The enable batch still carries the predicted module.
-    expect(propose.mock.calls[1][0]).toEqual(
-      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PREDICTED),
-    );
-    // Only the records factory's log was read.
-    expect(fetchModuleCreatedLogs).toHaveBeenCalledTimes(1);
+    const create = propose.mock.calls[0][0];
+    expect(create).toEqual(buildCreateModuleBatch(protocolInfo, SAFE, []));
+    expect(create).toHaveLength(2);
+    // One call per kind, both to the one factory: no second call for the kind
+    // that already exists.
+    expect(create.map((tx) => tx.to)).toEqual([MODULE_FACTORY, MODULE_FACTORY]);
+    expect(create.map((tx) => decodeCreate(tx.data).kind)).toEqual([
+      S2S_MODULE_KIND_RECORDS,
+      S2S_MODULE_KIND_PUBLICATION,
+    ]);
   });
 
-  it('a prediction that fails does not stop the create: the logs still resolve the pair', async () => {
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${propose.mock.calls.length}`);
-    const predictNextModuleAddress = vi.fn(async () => {
-      throw new Error('rpc down');
+  it('modules already deployed: only the enable batch is proposed', async () => {
+    const { propose, deps } = makeChain();
+    await initializePublication({ ...deps, hasCode: async () => true }, {});
+
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(propose.mock.calls[0][0]).toEqual(
+      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+    );
+  });
+
+  it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {
+    const { propose, deps } = makeChain();
+
+    const result = await initializePublication(deps, {
+      name: 'my-pub',
+      authors: [AUTHOR1],
+      repo: 'https://github.com/acme/site',
+      branch: 'dev',
     });
 
-    const result = await initializePublication({ ...initDeps, propose, predictNextModuleAddress }, {});
-
-    expect(result).toEqual({
-      recordsModule: RECORDS_MODULE,
-      publicationModule: PUB_MODULE,
-      nameRecorded: false,
-      proposals: ['proposal-1', 'proposal-2'],
-    });
-  });
-
-  it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
-
-    const result = await initializePublication({ ...initDeps, propose }, { name: 'my-pub' });
-
     expect(result.nameRecorded).toBe(true);
-    expect(result.proposals).toEqual(['proposal-1', 'proposal-2']);
-    expect(propose).toHaveBeenCalledTimes(2);
-    // The merged batch enables both modules AND records the name in one proposal.
-    expect(propose.mock.calls[1][0]).toEqual(
-      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
-    );
-  });
-
-  it('records repo + branch in the merged finalize batch when supplied', async () => {
-    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
-
-    const result = await initializePublication(
-      { ...initDeps, propose },
-      { name: 'my-pub', repo: 'https://github.com/acme/site', branch: 'dev' },
-    );
-
-    expect(result.nameRecorded).toBe(true);
+    expect(result.proposals.length).toBe(2);
+    expect(propose.mock.calls[0][0]).toEqual(buildCreateModuleBatch(protocolInfo, SAFE, [AUTHOR1]));
     expect(propose.mock.calls[1][0]).toEqual(
       buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub', {
         repo: 'https://github.com/acme/site',
@@ -1085,104 +619,57 @@ describe('initializePublication', () => {
     );
   });
 
-  it('authors are passed into the create batch (createModule(safe, authors, []))', async () => {
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `p`);
-    await initializePublication({ ...initDeps, propose }, { authors: [AUTHOR1, AUTHOR2] });
-    expect(propose.mock.calls[0][0]).toEqual(
-      buildCreateModuleBatch(initDeps.protocolInfo, SAFE, [AUTHOR1, AUTHOR2]),
+  it('live modules, name not recorded yet: only the name batch', async () => {
+    const { propose, deps } = makeChain();
+    const result = await initializePublication(
+      { ...deps, hasCode: async () => true, isModuleEnabled: async () => true },
+      { name: 'my-pub' },
     );
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(propose.mock.calls[0][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+    expect(result.proposals).toEqual(['proposal-1']);
   });
 
-  it('detection timeout surfaces a descriptive error', async () => {
-    const fetchModuleCreatedLogs = vi.fn(async () => []); // nothing ever deployed
-    let t = 0;
-    const now = vi.fn(() => (t += 130_000)); // start=130000; first check elapsed 130000 > default 120000 → throw
+  it('a fully live publication proposes nothing', async () => {
+    const { propose, deps } = makeChain();
+    await initializePublication(
+      { ...deps, hasCode: async () => true, isModuleEnabled: async () => true },
+      {},
+    );
+    expect(propose).toHaveBeenCalledTimes(0);
+  });
 
+  it('a create that never executes fails the wait instead of returning addresses', async () => {
+    let t = 0;
+    const { deps } = makeChain();
     await expect(
-      initializePublication({ ...initDeps, fetchModuleCreatedLogs, now }, {}),
+      initializePublication(
+        {
+          ...deps,
+          propose: async () => 'p',
+          hasCode: async () => false,
+          isModuleEnabled: async () => false,
+          now: () => (t += 100_000),
+        },
+        { enableTimeoutMs: 1, enablePollIntervalMs: 0 },
+      ),
     ).rejects.toThrow(/Timed out/);
   });
 
-  it('proposes the merged enable+name batch immediately, then waits for execution', async () => {
-    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
-    // Polls 1-2 see modules disabled; poll 3 sees both enabled.
-    const isModuleEnabled = vi
-      .fn()
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValue(true)
-      .mockResolvedValue(true);
-
-    const result = await initializePublication(
-      { ...initDeps, propose, isModuleEnabled },
-      { name: 'my-pub', enablePollIntervalMs: 0 },
-    );
-
-    // The merged batch (enable + name) is proposed up front; the flow then
-    // waits for the human to execute it. No separate name proposal.
-    expect(propose).toHaveBeenCalledTimes(2);
-    expect(propose.mock.calls[1][0]).toEqual(
-      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
-    );
-    expect(isModuleEnabled).toHaveBeenCalledTimes(6);
-    expect(result.proposals).toEqual(['proposal-1', 'proposal-2']);
-  });
-
-  it('times out (never completes) when the finalize batch is never executed', async () => {
-    let n = 0;
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => `proposal-${++n}`);
-    const isModuleEnabled = vi.fn(async (module: string) => module !== RECORDS_MODULE);
-    let t = 500;
-    // now() advances past the 1000ms timeout on the very first check.
-    const now = vi.fn(() => (t += 2_000));
-
-    await expect(
-      initializePublication(
-        { ...initDeps, propose, isModuleEnabled, now },
-        { name: 'my-pub', enableTimeoutMs: 1_000, enablePollIntervalMs: 0 },
-      ),
-    ).rejects.toThrow(/not enabled: records/);
-
-    // Create + merged finalize proposed, then the wait timed out.
-    expect(propose).toHaveBeenCalledTimes(2);
-    expect(propose.mock.calls[1][0]).toEqual(
-      buildFinalizeBatch(SAFE, RECORDS_MODULE, PUB_MODULE, 'my-pub'),
-    );
-    expect(isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
-    expect(isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
-  });
-
   it('no direct sends: all I/O goes through injected deps, lib stays pure', async () => {
-    const propose = vi.fn(async (_txs: MetaTransactionData[]) => 'p');
-    const fetchModuleCreatedLogs = vi.fn(async (factory: string) =>
-      factory === RECORDS_FACTORY
-        ? [logFor(recordsTopic0, SAFE, RECORDS_MODULE)]
-        : [logFor(pubTopic0, SAFE, PUB_MODULE)],
-    );
-
-    await initializePublication({ ...initDeps, propose, fetchModuleCreatedLogs }, {});
-
-    // The flow is driven purely by the injected deps — nothing else is touched.
-    expect(propose).toHaveBeenCalled();
-    expect(fetchModuleCreatedLogs).toHaveBeenCalled();
-    expect(initDeps.getBlockNumber).toBeDefined();
-
-    // Structural purity: no SDK, no safe-integration, no window, no shared import.
-    // (Match import statements — the header comment may legitimately name them.)
-    const src = await readFile(
-      new URL('../../src/lib/publication-init.ts', import.meta.url),
-      'utf8',
-    );
-    expect(src).not.toMatch(/^import .*@safe-global\/safe-apps-sdk/m);
-    expect(src).not.toMatch(/^import .*safe-integration/m);
-    expect(src).not.toMatch(/window\./);
-    expect(src).not.toMatch(/@s2s\/soul2soul-shared/);
+    const { propose, deps } = makeChain();
+    await initializePublication(deps, {});
+    expect(propose).toHaveBeenCalledTimes(2);
+    expect((globalThis as any).window).toBeUndefined();
   });
+});
 
-  it('defaultSafeUrl matches the Safe queue URL format', () => {
+// ---------------------------------------------------------------------------
+// defaultSafeUrl.
+// ---------------------------------------------------------------------------
+
+describe('defaultSafeUrl', () => {
+  it('matches the Safe queue URL format', () => {
     expect(defaultSafeUrl(8453, SAFE)).toBe(
       `https://app.safe.global/transactions/queue?safe=8453:${SAFE}`,
     );

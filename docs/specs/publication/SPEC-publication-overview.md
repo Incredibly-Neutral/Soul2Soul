@@ -33,21 +33,21 @@ A publication is **an account that can say yes**. It is a Safe, deterministicall
 and living at one address on two chains, carrying two modules on Base: one that holds agreements, and one
 that holds a handful of string records. A work arrives as a **signed object** (an author's `genesis` plus
 a CID); the publication either already agreed to it (**deal**) or has not decided (**offer**), and only
-the Safe can move a work from one to the other. What the publication *is*, visually, is a repo of templates
-compiled to a CID and referenced by a record; what it *publishes* is a tree of rendered HTML under a root
+the Safe can move a work from one to the other. What the publication _is_, visually, is a repo of templates
+compiled to a CID and referenced by a record; what it _publishes_ is a tree of rendered HTML under a root
 CID, whose only authoritative pointer is an ENS `contenthash_wrapped` record that the publication cannot
 write itself. Everything a holder does is a Safe transaction; everything a reader sees is a CID.
 
 ## Anatomy
 
-| piece | what it is | child |
-|---|---|---|
-| account | Safe + `S2SPublicationModuleV5` (proxy) + `S2SRecordsModule` (immutable) | [account](SPEC-publication-account.md) |
-| agreements | offer/deal sets, version log, whitelists | [agreements](SPEC-publication-agreements.md) |
-| read gate | who may decrypt a pending offer | [review](SPEC-publication-review.md) |
-| surface | `safe-app` — the five tabs, proposals, config build | [admin-app](SPEC-publication-admin-app.md) |
-| look | `mapping.json`, templates, assets, config CID | [look](SPEC-publication-look.md) |
-| site | MFS tree, copies, root, availability, mirror | [storage](SPEC-publication-storage.md) |
+| piece      | what it is                                                               | child                                        |
+| ---------- | ------------------------------------------------------------------------ | -------------------------------------------- |
+| account    | Safe + `S2SPublicationModuleV5` (proxy) + `S2SRecordsModule` (immutable) | [account](SPEC-publication-account.md)       |
+| agreements | offer/deal sets, version log, whitelists                                 | [agreements](SPEC-publication-agreements.md) |
+| read gate  | who may decrypt a pending offer                                          | [review](SPEC-publication-review.md)         |
+| surface    | `safe-app` — the five tabs, proposals, config build                      | [admin-app](SPEC-publication-admin-app.md)   |
+| look       | `mapping.json`, templates, assets, config CID                            | [look](SPEC-publication-look.md)             |
+| site       | MFS tree, copies, root, availability, mirror                             | [storage](SPEC-publication-storage.md)       |
 
 V5 is what a publication still running V2 or V3 upgrades to: V4's surface and storage prefix, `NAME()`
 `"S2S Publication Module V5"`, and no factory slot — the factory that approves upgrades is an immutable
@@ -64,16 +64,17 @@ deployed nowhere today; when it is, the deploy key sends it and the protocol saf
 `setImplementation`. Those are two acts, and the second is the gate: the implementation exists as soon
 as the deploy transaction lands and no proxy can reach it until the protocol safe approves it, which is
 what makes the deploy key unprivileged. A reader needs no change: `isPublicationModuleName`
-already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
-`publicationBindingFor` binds a later version to the current surface
-(`publication/safe-app/src/lib/publication-version.ts`).
+already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`), and a module
+the app binds is addressed by kind — `moduleAddress(safe, kind)` on the factory, the same answer before
+and after a create — so no version read stands between the record and the module.
 
 ## Lifecycle
 
 1. **Created** — by CLI (`newPublicationSafe`, salt `'publication_safe_' + name`, L1 subname, two modules,
-   owners added, deployer removed → **N-of-N**) or by the app for an existing Safe (two batches, addresses
-   read back from `ModuleCreated` logs, then a 10-minute wait for a human to enable). See
-   [account](SPEC-publication-account.md).
+   owners added, deployer removed → **N-of-N**) or by the app for an existing Safe (two batches: one
+   `createModule(safe, kind, params)` per kind to the factory, then the enable+name batch; each address
+   read back from `moduleAddress(safe, kind)` and accepted only once it has code, then a 10-minute wait
+   for a human to enable). See [account](SPEC-publication-account.md).
 2. **Configured** — `name`, `repo`, `branch`, optional `feed`, and `config` written as records; `config` is
    a CID built from a GitHub repo. See [look](SPEC-publication-look.md).
 3. **Fed** — authors append versions (`makeOffer`); entitled callers become deals, everyone else becomes an
@@ -90,18 +91,18 @@ already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-n
 
 The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 
-| target | `onlySafe` | also allowed |
-|---|---|---|
-| records: `setRecord`, `setRecords`, `deleteRecord` | ✓ | — |
-| `admit` | ✓ | — (`acceptOffer` is the deprecated alias of the same write) |
-| `reject` | ✓ (demote deal → offer, or decline an offer — reversible) | — |
-| `retract` | ✗ (`NotAuthorized()` for the Safe) | the **genesis author** only, and terminal: ends the genesis |
-| `makeOffer` | ✓ (lands as a deal) | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer |
-| whitelist add/remove | ✓ | — |
-| `upgradeToAndCall` | ✓ (`msg.sender` is the safe) | an implementation the protocol safe has set on the factory in the module's immutable, and no other — the holders carry out the upgrade, they do not choose the code |
-| factory `createModule` / `createModuleEmpty` | ✓ (the safe it names) | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
-| factory `setImplementation` | **not the publication** | the protocol safe only, fixed at construction |
-| ENS `contenthash_wrapped` | **not the publication** | the PKP (INV-12), granted by the protocol |
+| target                                             | `onlySafe`                                                | also allowed                                                                                                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records: `setRecord`, `setRecords`, `deleteRecord` | ✓                                                         | —                                                                                                                                                                   |
+| `admit`                                            | ✓                                                         | — (`acceptOffer` is the deprecated alias of the same write)                                                                                                         |
+| `reject`                                           | ✓ (demote deal → offer, or decline an offer — reversible) | —                                                                                                                                                                   |
+| `retract`                                          | ✗ (`NotAuthorized()` for the Safe)                        | the **genesis author** only, and terminal: ends the genesis                                                                                                         |
+| `makeOffer`                                        | ✓ (lands as a deal)                                       | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer                                 |
+| whitelist add/remove                               | ✓                                                         | —                                                                                                                                                                   |
+| `upgradeToAndCall`                                 | ✓ (`msg.sender` is the safe)                              | an implementation the protocol safe has set on the factory in the module's immutable, and no other — the holders carry out the upgrade, they do not choose the code |
+| factory `createModule` / `createModuleEmpty`       | ✓ (the safe it names)                                     | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability)                                                       |
+| factory `setImplementation`                        | **not the publication**                                   | the protocol safe only, fixed at construction                                                                                                                       |
+| ENS `contenthash_wrapped`                          | **not the publication**                                   | the PKP (INV-12), granted by the protocol                                                                                                                           |
 
 ## Invariants across the tree
 
@@ -119,15 +120,15 @@ The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 
 Recorded because the folded text was read by people who may still quote it.
 
-| folded claim | code |
-|---|---|
-| `safe-app` workflow uses `grantLicense` / `acceptLicense` / `revokeLicense` | `makeOffer` / `admit` / `reject` — V2 renamed the trio, V3 split the ending in two (see [agreements](SPEC-publication-agreements.md#corrections-to-the-folded-spec)) |
-| "the offer path is only reachable through the publication Safe" | false: a whitelisted **developer** passes `canPublish` and their genesis becomes an offer |
-| `retract` "author withdraws fully, safe demotes" listed under one row of `onlySafe` | V2: the function has no modifier, the branch is on `msg.sender`. V3: two functions — `reject` is `onlySafe` and reversible, `retract` is the genesis author's and terminal |
-| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | both true now: every site uses one predicate that accepts any version. The app binds the surface the version it found actually implements — V3 `admit`/`reject`, V2 `acceptOffer`/`retract`, V1 nothing |
-| `ConfigBuilder` "fetch `mapping.json` verbatim" as *the* description | still verbatim, but the build also pins the commit, `dagPut`s a template DAG with real IPLD links, and mirrors to two providers |
-| `website-starter` "legacy local render loop" | replaced: the dev loop drives the real render action through `S2S_RUNNER_URL`, with `contract-pull` as a mode |
-| `templateConfig` "filters" implied to work | `templateConfig[].filters` is read by nothing |
+| folded claim                                                                              | code                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `safe-app` workflow uses `grantLicense` / `acceptLicense` / `revokeLicense`               | `makeOffer` / `admit` / `reject` — V2 renamed the trio, V3 split the ending in two (see [agreements](SPEC-publication-agreements.md#corrections-to-the-folded-spec))                                                                       |
+| "the offer path is only reachable through the publication Safe"                           | false: a whitelisted **developer** passes `canPublish` and their genesis becomes an offer                                                                                                                                                  |
+| `retract` "author withdraws fully, safe demotes" listed under one row of `onlySafe`       | V2: the function has no modifier, the branch is on `msg.sender`. V3: two functions — `reject` is `onlySafe` and reversible, `retract` is the genesis author's and terminal                                                                 |
+| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | still true of the reader, which matches any `S2S Publication Module V<n>`; the admin app no longer probes. It asks `moduleAddress(safe, kind)`, binds `S2SPublicationModuleV6` for the publication kind and calls `admit`/`reject` by name |
+| `ConfigBuilder` "fetch `mapping.json` verbatim" as _the_ description                      | still verbatim, but the build also pins the commit, `dagPut`s a template DAG with real IPLD links, and mirrors to two providers                                                                                                            |
+| `website-starter` "legacy local render loop"                                              | replaced: the dev loop drives the real render action through `S2S_RUNNER_URL`, with `contract-pull` as a mode                                                                                                                              |
+| `templateConfig` "filters" implied to work                                                | `templateConfig[].filters` is read by nothing                                                                                                                                                                                              |
 
 ## Deliberately not here
 
@@ -138,12 +139,12 @@ a reviewer role and pre-decision read gate (nothing written yet — the gap is d
 
 ## Old → new paths
 
-| was | now |
-|---|---|
-| `brain/specs/SPEC-contracts-publication.md` | `brain/specs/publication/SPEC-publication-account.md` + `…-agreements.md` |
-| `brain/specs/SPEC-safe-app.md` | `brain/specs/publication/SPEC-publication-admin-app.md` (+ `…-storage.md` for the tree/availability half) |
-| `brain/specs/SPEC-website-starter.md` | `brain/specs/publication/SPEC-publication-look.md` |
-| `brain/specs/SPEC-contracts.md` (the split router) | this file, §Anatomy |
+| was                                                | now                                                                                                       |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `brain/specs/SPEC-contracts-publication.md`        | `brain/specs/publication/SPEC-publication-account.md` + `…-agreements.md`                                 |
+| `brain/specs/SPEC-safe-app.md`                     | `brain/specs/publication/SPEC-publication-admin-app.md` (+ `…-storage.md` for the tree/availability half) |
+| `brain/specs/SPEC-website-starter.md`              | `brain/specs/publication/SPEC-publication-look.md`                                                        |
+| `brain/specs/SPEC-contracts.md` (the split router) | this file, §Anatomy                                                                                       |
 
 Live references (`SPEC-00`, `SPEC-shared`, `SPEC-author`, `SPEC-protocol-actions`, `SPEC-contracts-ens`,
 `SPEC-summary`, `AGENTS.md`, `docs/code-map/MAP.md`, RFC headers) were updated with the move.

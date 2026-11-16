@@ -10,6 +10,7 @@ import {
   type InitPhase,
   type InitSession,
 } from '../../src/lib/init-session';
+import { S2S_MODULE_KIND_RECORDS } from '@s2s/soul2soul-shared/safe-app';
 import { mountLit } from '../helpers/mount';
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,8 @@ import { mountLit } from '../helpers/mount';
 // one of them so mounting <s2s-app> never touches an iframe, wallet, network
 // or the real child tab modules (owned by another worker's spec).
 // ---------------------------------------------------------------------------
+
+const MODULE_FACTORY = '0x00000000000000000000000000000000000000f2';
 
 const SAFE_INFO = {
   address: '0x1111111111111111111111111111111111111111',
@@ -43,13 +46,12 @@ const safeIntMocks = vi.hoisted(() => ({
   getSafeInfo: vi.fn(),
   getRecord: vi.fn(),
   readIsModuleEnabled: vi.fn(),
-  fetchFactoryModuleCreatedLogs: vi.fn(),
   contractCodeSize: vi.fn(),
   getProvider: vi.fn(),
   adoptModules: vi.fn(),
   evmRead: vi.fn(),
-  setPublicationFactory: vi.fn(),
-  predictNextPublicationModule: vi.fn(),
+  setModuleFactory: vi.fn(),
+  moduleAddress: vi.fn(),
 }));
 
 const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
@@ -178,13 +180,12 @@ vi.mock('@/lib/safe-integration.js', () => ({
     getSafeInfo = safeIntMocks.getSafeInfo;
     getRecord = safeIntMocks.getRecord;
     readIsModuleEnabled = safeIntMocks.readIsModuleEnabled;
-    fetchFactoryModuleCreatedLogs = safeIntMocks.fetchFactoryModuleCreatedLogs;
     contractCodeSize = safeIntMocks.contractCodeSize;
     getProvider = safeIntMocks.getProvider;
     adoptModules = safeIntMocks.adoptModules;
     evmRead = safeIntMocks.evmRead;
-    setPublicationFactory = safeIntMocks.setPublicationFactory;
-    predictNextPublicationModule = safeIntMocks.predictNextPublicationModule;
+    setModuleFactory = safeIntMocks.setModuleFactory;
+    moduleAddress = safeIntMocks.moduleAddress;
   },
 }));
 
@@ -197,9 +198,8 @@ vi.mock('@/lib/protocol-integration.js', () => ({
 vi.mock('@s2s/soul2soul-shared', async () => {
   // pet-name reads an author through the shared helper; provide the real one
   // rather than a stub, so the mock does not have to know the form.
-  const { authorAddress } = await import(
-    '../../../../shared/src/manuscript/identity/author-address.js'
-  );
+  const { authorAddress } =
+    await import('../../../../shared/src/manuscript/identity/author-address.js');
   return { LitService: class {}, authorAddress };
 });
 
@@ -290,8 +290,8 @@ async function flush(): Promise<void> {
 }
 
 /** Make the publication live with an ENS name that is free on L1.
- *  `modulesThrow` is consulted on every module-list read, so a test can fail
- *  the first read and let the next one succeed. */
+ *  `modulesThrow` is consulted on every `moduleAddress` read on the factory, so
+ *  a test can fail the first read and let the next one succeed. */
 function mockLiveUnregisteredEns(
   options: { modulesThrow?: () => boolean; name?: string } = {},
 ): void {
@@ -300,11 +300,9 @@ function mockLiveUnregisteredEns(
   safeIntMocks.evmRead.mockImplementation(
     async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
       switch (method) {
-        case 'getModulesPaginated':
+        case 'moduleAddress':
           if (options.modulesThrow?.()) throw new Error('429 Too Many Requests');
-          return [[RECORDS_MODULE], MODULE_SENTINEL];
-        case 'NAME':
-          return 'S2S Records Module';
+          return RECORDS_MODULE;
         case 'getRecord':
           return name;
         case 'parentNode':
@@ -406,7 +404,6 @@ describe('s2s-app (shell)', () => {
     );
     safeIntMocks.getRecord.mockResolvedValue('');
     safeIntMocks.readIsModuleEnabled.mockResolvedValue(false);
-    safeIntMocks.fetchFactoryModuleCreatedLogs.mockResolvedValue([]);
     // The factories have code on the Safe's chain: the create/detect paths reach
     // their own logic instead of failing the "factory has no code" guard (which
     // would hide a duplicate create batch behind an unrelated error).
@@ -415,10 +412,13 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.getProvider.mockResolvedValue({ getBlockNumber: vi.fn(async () => 12_000_000) });
     safeIntMocks.adoptModules.mockReset();
     safeIntMocks.adoptModules.mockResolvedValue(undefined);
-    // No CREATE2 prediction by default: the init flow falls back to the
-    // ModuleCreated log, which is the path these tests were written against.
-    safeIntMocks.predictNextPublicationModule.mockReset();
-    safeIntMocks.predictNextPublicationModule.mockResolvedValue(undefined);
+    // The factory answers an address for each kind; nothing is deployed there
+    // until a create in the flow executes.
+    safeIntMocks.moduleAddress.mockReset();
+    safeIntMocks.moduleAddress.mockImplementation(async (_safe: string, kind: string) =>
+      kind === S2S_MODULE_KIND_RECORDS ? SAFE_INFO.s2sRecords : SAFE_INFO.s2sPublication,
+    );
+    safeIntMocks.setModuleFactory.mockReset();
     // L1 ENS reads: default = the subnode is registered to THIS Safe, i.e. the
     // publication's ENS step is already done (the repair path stays quiet).
     safeIntMocks.evmRead.mockReset();
@@ -477,24 +477,22 @@ describe('s2s-app (shell)', () => {
     }
   });
 
-  it('sets the publication factory before the first module discovery, so the first pass predicts', async () => {
-    // Discovery asks the factory for the module address, so the factory has to
+  it('sets the module factory before the first module discovery, so the first pass can bind', async () => {
+    // Discovery asks the factory for each module address, so the factory has to
     // be in place for EVERY pass, including the first one of a page load. Set
-    // after initialize(), the CREATE2 prediction is skipped on load and only a
-    // later refresh would use it.
-    const PUBLICATION_FACTORY = '0x00000000000000000000000000000000000000f2';
-    safeIntMocks.setPublicationFactory.mockReset();
+    // after initialize(), the first pass discovers nothing at all.
+    safeIntMocks.setModuleFactory.mockReset();
     const order: string[] = [];
     protocolMocks.initialize.mockImplementation(async () => {
       order.push('protocol');
-      return { ensRegistry: ENS_REGISTRY, publicationFactory: PUBLICATION_FACTORY };
+      return { ensRegistry: ENS_REGISTRY, moduleFactory: MODULE_FACTORY };
     });
-    safeIntMocks.setPublicationFactory.mockImplementation((factory: string) => {
+    safeIntMocks.setModuleFactory.mockImplementation((factory: string) => {
       order.push(`factory:${factory}`);
     });
     safeIntMocks.initialize.mockImplementation(async () => {
       // What the integration sees at discovery time is the whole point.
-      order.push(`initialize:${safeIntMocks.setPublicationFactory.mock.lastCall?.[0] ?? 'unset'}`);
+      order.push(`initialize:${safeIntMocks.setModuleFactory.mock.lastCall?.[0] ?? 'unset'}`);
       return SAFE_INFO;
     });
 
@@ -503,8 +501,8 @@ describe('s2s-app (shell)', () => {
 
     expect(order.slice(0, 3)).toEqual([
       'protocol',
-      `factory:${PUBLICATION_FACTORY}`,
-      `initialize:${PUBLICATION_FACTORY}`,
+      `factory:${MODULE_FACTORY}`,
+      `initialize:${MODULE_FACTORY}`,
     ]);
     // Every discovery pass of this load, not just the first: a pass that ran
     // before the factory was set is exactly the regression.
@@ -553,6 +551,7 @@ describe('s2s-app (shell)', () => {
   it('renders the publication init as the whole screen when no modules are installed', async () => {
     safeIntMocks.hasPublicationModule.mockReturnValue(false);
     safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    protocolMocks.initialize.mockResolvedValue({ moduleFactory: MODULE_FACTORY });
 
     const el = await mountLit<S2SApp>('s2s-app', {});
     await vi.waitFor(() =>
@@ -563,6 +562,14 @@ describe('s2s-app (shell)', () => {
     // The heading lives in the child component's own shadow root.
     const init = el.shadowRoot?.querySelector('s2s-publication-init') as any;
     await vi.waitFor(() => expect(init.shadowRoot?.textContent).toContain('New publication'));
+    // The form says which factory the app asked, and that an earlier factory's
+    // publication is out of scope here — the consequence of not looking for one.
+    const note = (init.shadowRoot?.querySelector('#init-factory-note')?.textContent ?? '').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(note).toContain(MODULE_FACTORY);
+    expect(note).toContain('created by an earlier factory is not managed here');
 
     // With no modules the shell chrome (web-status + tabs) is hidden — the
     // init flow owns the whole screen.
@@ -572,6 +579,25 @@ describe('s2s-app (shell)', () => {
     for (const id of ['deals-tab', 'storage-tab']) {
       expect(el.shadowRoot?.querySelector(`#${id}`)).toBeNull();
     }
+  });
+
+  it('says which factory it asked when the Safe has no records module', async () => {
+    safeIntMocks.hasRecordsModule.mockReturnValue(false);
+    protocolMocks.initialize.mockResolvedValue({ moduleFactory: MODULE_FACTORY });
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+    // Reached by a host-driven tab write (a dismiss lands here), not by the
+    // disabled tab button: the tab still has to say something.
+    (el as unknown as { currentTab: string }).currentTab = 'records';
+    await el.updateComplete;
+
+    const note = (el.shadowRoot?.querySelector('#records-no-module')?.textContent ?? '').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(note).toContain(MODULE_FACTORY);
+    expect(note).toContain('created by an earlier factory is not managed here');
   });
 
   it('renders the module status pills and the root CID from the store', async () => {
@@ -999,23 +1025,23 @@ describe('s2s-app (shell)', () => {
   });
 
   it('shows the standalone ENS step for a live publication whose L1 subnode is unregistered', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     const recordsModule = RECORDS_MODULE;
-    const moduleSentinel = MODULE_SENTINEL;
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
       key === 'name' ? 'polyphony.soul2soul.eth' : '',
     );
     safeIntMocks.evmRead.mockImplementation(
       async (chainId: number, contract: string, _abi: unknown, method: string) => {
         switch (method) {
-          // Publication lookup: the name record lives on the Base modules, even
-          // when this page's Safe is on chain 1.
-          case 'getModulesPaginated':
+          // Publication lookup: the factory names the records module on Base,
+          // even when this page's Safe is on chain 1.
+          case 'moduleAddress':
             expect(chainId).toBe(8453);
-            expect(contract).toBe(SAFE_INFO.safeAddress);
-            return [[recordsModule], moduleSentinel];
-          case 'NAME':
-            return 'S2S Records Module';
+            expect(contract).toBe(MODULE_FACTORY);
+            return recordsModule;
           case 'getRecord':
             return 'polyphony.soul2soul.eth';
           // L1 registration read: free subnode.
@@ -1053,8 +1079,40 @@ describe('s2s-app (shell)', () => {
     ).toBe(false);
   });
 
+  it('says the Safe has no records module instead of offering a registration', async () => {
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
+    // The factory keeps no records module for this Safe (address zero).
+    safeIntMocks.getRecord.mockResolvedValue('');
+    safeIntMocks.evmRead.mockImplementation(
+      async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
+        if (method === 'moduleAddress') return '0x0000000000000000000000000000000000000000';
+        throw new Error(`unexpected EVM read: ${method}`);
+      },
+    );
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('#deals-tab')).toBeTruthy());
+
+    const step = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep;
+    await vi.waitFor(() =>
+      expect(step?.shadowRoot?.querySelector('#ens-step .reason')?.textContent).toContain(
+        `names no records module for ${SAFE_INFO.safeAddress}`,
+      ),
+    );
+    // Nothing to register against: no name, no call, no action.
+    expect(step.shadowRoot?.querySelector('#ens-name')).toBeNull();
+    expect(step.shadowRoot?.querySelector('.call')).toBeNull();
+    expect(step.shadowRoot?.querySelector('#ens-propose')).toBeNull();
+  });
+
   it('clears the standalone step when the card reports done', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
@@ -1067,7 +1125,10 @@ describe('s2s-app (shell)', () => {
   });
 
   it('keeps the step dismissed after a publication-scope change', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     mockLiveUnregisteredEns();
 
     const el = await mountLit<S2SApp>('s2s-app', {});
@@ -1093,7 +1154,10 @@ describe('s2s-app (shell)', () => {
   });
 
   it('proposes the ENS registration from a chain-1 Safe', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     safeIntMocks.initialize.mockResolvedValue({ ...SAFE_INFO, chainId: 1 });
     mockLiveUnregisteredEns();
 
@@ -1117,7 +1181,10 @@ describe('s2s-app (shell)', () => {
   });
 
   it('does not cache a failed name read as "no publication"', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     let throwOnce = true;
     mockLiveUnregisteredEns({
       modulesThrow: () => {
@@ -1162,13 +1229,16 @@ describe('s2s-app (shell)', () => {
   });
 
   it('loads the publication records without waiting for the ENS lookup', async () => {
-    protocolMocks.initialize.mockResolvedValue({ ensRegistry: ENS_REGISTRY });
+    protocolMocks.initialize.mockResolvedValue({
+      ensRegistry: ENS_REGISTRY,
+      moduleFactory: MODULE_FACTORY,
+    });
     mockLiveUnregisteredEns();
     safeIntMocks.getAllRecords.mockResolvedValue([['name'], [LIVE_NAME]]);
-    // Never answer the module list: the optional ENS step must not hold paint.
+    // Never answer the factory: the optional ENS step must not hold paint.
     safeIntMocks.evmRead.mockImplementation(
       async (_chainId: number, _contract: string, _abi: unknown, method: string) => {
-        if (method === 'getModulesPaginated') return new Promise<never>(() => {});
+        if (method === 'moduleAddress') return new Promise<never>(() => {});
         throw new Error(`unexpected EVM read: ${method}`);
       },
     );
@@ -1277,8 +1347,7 @@ describe('s2s-app (shell)', () => {
     protocolMocks.initialize.mockResolvedValue({
       ensRegistry: ENS_REGISTRY,
       ensRecords: '0x00000000000000000000000000000000000000ee',
-      recordsFactory: '0x00000000000000000000000000000000000000f1',
-      publicationFactory: '0x00000000000000000000000000000000000000f2',
+      moduleFactory: MODULE_FACTORY,
     });
     let ownerReads = 0;
     safeIntMocks.evmRead.mockImplementation(
@@ -1359,8 +1428,7 @@ describe('s2s-app (shell)', () => {
     protocolMocks.initialize.mockResolvedValue({
       ensRegistry: CUSTOM_REGISTRY,
       ensRecords: '0x00000000000000000000000000000000000000ee',
-      recordsFactory: '0x00000000000000000000000000000000000000f1',
-      publicationFactory: '0x00000000000000000000000000000000000000f2',
+      moduleFactory: MODULE_FACTORY,
     });
     safeIntMocks.getRecord.mockImplementation(async (key: string) =>
       key === 'name' ? 'polyphony.soul2soul.eth' : '',

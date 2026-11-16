@@ -18,8 +18,9 @@
 //                            but the registry lives on L1 ONLY, so this is its
 //                            OWN Safe tx, proposed from the L1 twin Safe and
 //                            never batched with the Base module txs.
-//   2. Create modules      — module addresses are unknowable until the create
-//                            batch executes (the factories use plain CREATE).
+//   2. Create modules      — `moduleAddress(safe, kind)` names the address
+//                            before the create as well as after it, so what the
+//                            batch adds is the module's CODE, not its address.
 //   3. Enable + record name — once the addresses are known these are merged
 //                            into ONE atomic batch (setRecord is onlySafe on the
 //                            records module and does not need it enabled, so
@@ -102,19 +103,13 @@ export interface InitSession {
   /** Learned on-chain module addresses (set once the create batch executed). */
   recordsModule?: string;
   publicationModule?: string;
-  /** The publication module address the create batch was expected to deploy, read
-   *  from `moduleAddress(safe)` BEFORE that batch was proposed.
-   *
-   *  It cannot be recomputed later — once the create executes the factory answers
-   *  for the next one — so it is persisted with the proposal. It is only a hint:
-   *  detection accepts it once that address has code, and reads the
-   *  ModuleCreated log for everything else. */
-  predictedPublicationModule?: string;
   /** Step 1's L1 `registerSubdomain` tx was proposed (or its `to`/`data` was
    *  surfaced for a manual registration). Kept SEPARATE from `phase`: step 1
    *  can re-enter from a later phase (the name was released/transferred on L1
    *  mid-flow), and a phase write must never erase the fact that the create
-   *  batch is already queued — the factories use plain CREATE.
+   *  batch is already queued: the factory returns the module it recorded for
+   *  (safe, kind) and ignores the params, so a second create is a transaction
+   *  whose initializer never runs.
    *
    *  It is read together with the Safe's chain: on a chain-1 Safe it means "the
    *  tx is in this Safe's queue", so no manual to/data is rebuilt. From another
@@ -188,8 +183,8 @@ export function isInitPhase(value: unknown): value is InitPhase {
  * step-1 ENS action can run from a phase it has already passed (a name that was
  * released/transferred on L1 mid-flow, or a registry read that disagreed with
  * the earlier mount), and writing 'awaiting-ens' over 'detecting' would erase
- * "the create batch is already queued". The next plan would then propose a
- * second, non-idempotent create batch.
+ * "the create batch is already queued". The next plan would then queue a second
+ * create for a module the factory already has.
  */
 export function maxPhase(a: InitPhase, b: InitPhase): InitPhase {
   return PHASE_ORDER.indexOf(a) >= PHASE_ORDER.indexOf(b) ? a : b;
@@ -391,10 +386,6 @@ export function loadInitSession(storage: InitSessionStorage, key: string): InitS
       recordsModule: typeof parsed.recordsModule === 'string' ? parsed.recordsModule : undefined,
       publicationModule:
         typeof parsed.publicationModule === 'string' ? parsed.publicationModule : undefined,
-      predictedPublicationModule:
-        typeof parsed.predictedPublicationModule === 'string'
-          ? parsed.predictedPublicationModule
-          : undefined,
       // Step-1 flags. A session written before they existed tells us the same
       // thing through its phase: 'awaiting-ens' means the L1 tx was proposed.
       ...(parsed.ensProposed === true || parsed.phase === 'awaiting-ens'

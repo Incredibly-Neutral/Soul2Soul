@@ -234,6 +234,8 @@ describe('getProtocolInfo', () => {
 
     expect(info.publicationModule).toBe(PUBLICATION);
     expect(info.publicationFactory.toLowerCase()).toBe(FACTORY);
+    // The kind model's factory is the same record: one factory, every kind.
+    expect(info.moduleFactory.toLowerCase()).toBe(FACTORY);
     // The factory is read from the record, so the prediction cannot come first.
     expect(calls.lastIndexOf('getRecords')).toBeLessThan(calls.indexOf('moduleAddress'));
     // One module list, one records read: the prediction reuses both.

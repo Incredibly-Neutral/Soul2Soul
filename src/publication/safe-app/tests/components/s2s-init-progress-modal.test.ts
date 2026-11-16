@@ -172,14 +172,29 @@ describe('s2s-init-progress-modal', () => {
 
     expect(el.shadowRoot?.querySelector('#init-progress-message')).toBeNull();
     expect(el.shadowRoot?.querySelector('.message')).toBeNull();
-    // The checklist is the only progress surface while the step is healthy:
-    // no error block, no actions.
+    // The checklist is the progress surface while the step is healthy: no error
+    // block, no actions. The factory line is the one static statement.
     const dialog = el.shadowRoot?.querySelector('.dialog') as HTMLElement;
-    expect(dialog.children.length).toBe(2); // headline + steps
+    expect(dialog.children.length).toBe(3); // headline + steps + factory
     expect(el.shadowRoot?.querySelector('#init-progress-error')).toBeNull();
     expect(el.shadowRoot?.querySelector('#init-retry')).toBeNull();
     // It never renders a URL — the proposals live in the Safe queue on this page.
     expect(text(el)).not.toContain('http');
+  });
+
+  it('names the factory it reads modules from, and says an earlier factory is out of scope', async () => {
+    const el = await mountLit<S2SInitProgressModal>('s2s-init-progress-modal', {
+      open: true,
+      phase: 'detecting',
+      moduleFactory: '0x00000000000000000000000000000000000000f2',
+    });
+
+    const note = (el.shadowRoot?.querySelector('#init-factory-note')?.textContent ?? '').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(note).toContain('0x00000000000000000000000000000000000000f2');
+    expect(note).toContain('created by an earlier factory is not managed here');
   });
 
   it('renders the error in the red init-error block and a Retry action that dispatches s2s-init-retry', async () => {

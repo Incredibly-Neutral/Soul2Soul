@@ -26,7 +26,7 @@ import {
   suffixOfPublicationName,
   type EnsRegistrationState,
 } from '../lib/ens-registration.js';
-import { findPublicationName } from '../lib/ens-step.js';
+import { findPublicationName, NoRecordsModuleError } from '../lib/ens-step.js';
 import { ENS_REGISTRY_ADDRESS } from '../lib/domain-validation.js';
 import {
   INIT_SESSION_KEY,
@@ -204,6 +204,9 @@ export class S2SApp extends LitElement {
   private ensStepClaimed = false;
   /** The user closed the card: keep it closed for the rest of this page load. */
   private ensStepDismissed = false;
+  /** Set when the module factory names no records module for this Safe, so the
+   *  card reports that instead of offering a registration it cannot record. */
+  @state() private ensStepModuleMissing = '';
 
   private unsubscribers: Array<() => void> = [];
 
@@ -305,15 +308,14 @@ export class S2SApp extends LitElement {
     this.fetching = true;
 
     try {
-      // Protocol first: the publication factory it carries is what discovery
-      // asks for the module address (CREATE2), so it has to be set before the
-      // first initialize(). Set after, the first pass of every page load pays
-      // for the module-list scan and only a refresh would predict.
+      // Protocol first: the module factory it carries is the only thing
+      // discovery asks for a module address, so it has to be set before the
+      // first initialize(). Without it the first pass finds no module at all.
       const protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
       console.log(protocolInfo);
 
-      this.safeIntegration.setPublicationFactory(protocolInfo?.publicationFactory ?? '');
+      this.safeIntegration.setModuleFactory(protocolInfo?.moduleFactory ?? '');
 
       const safeInfo = await this.safeIntegration.initialize();
       store.setSafeInfo(safeInfo);
@@ -691,13 +693,28 @@ export class S2SApp extends LitElement {
         (chainId, contractAddress, abi, method, args) =>
           this.safeIntegration.evmRead(chainId, contractAddress, abi, method, args),
         safeInfo.safeAddress,
-        { expectedName, throwOnError: true },
+        {
+          moduleFactory: store.protocolInfo?.moduleFactory ?? '',
+          expectedName,
+          throwOnError: true,
+        },
       );
     } catch (e) {
+      if (e instanceof NoRecordsModuleError) {
+        // The factory names no records module for this Safe: there is nothing
+        // to read the name from and nothing to record it in. Say so on the
+        // card; never offer a registration for a name nobody answered.
+        this.ensStepChecked.add(key);
+        this.ensStepClaimed = true;
+        this.ensStepModuleMissing = e.message;
+        console.log(`[app] ens step: no records module (${describeError(e)})`);
+        return;
+      }
       // Do NOT record the key: a later refresh may get a clean read.
       console.log(`[app] ens step skipped: publication name read failed (${describeError(e)})`);
       return;
     }
+    this.ensStepModuleMissing = '';
 
     publicationName = (publicationName ?? '').trim();
     if (!publicationName) {
@@ -884,9 +901,10 @@ export class S2SApp extends LitElement {
       proposals: [],
       // The modules are already DEPLOYED — that is the whole premise of this
       // repair. Seed their addresses, or the seeded session plans step 2 and
-      // the factories (plain CREATE, non-idempotent) would deploy a SECOND pair
-      // over a live publication. Detection cannot recover them either: a
-      // deployed-but-not-yet-enabled module is invisible to
+      // queues a create for the pair that already exists: `createModule` then
+      // returns the recorded module and ignores the params, so the human
+      // executes a transaction that does nothing. Detection cannot recover them
+      // either: a deployed-but-not-yet-enabled module is invisible to
       // `hasRecordsModule()`/the Safe's enabled-module list.
       ...(safeInfo.s2sRecords ? { recordsModule: safeInfo.s2sRecords } : {}),
       ...(safeInfo.s2sPublication ? { publicationModule: safeInfo.s2sPublication } : {}),
@@ -1411,6 +1429,8 @@ export class S2SApp extends LitElement {
           ? html`<s2s-whitelist-tab .safeIntegration=${this.safeIntegration}></s2s-whitelist-tab>`
           : html``;
       case 'records':
+        // No records module: the tab has nothing to read, so it says what it
+        // asked and stops rather than rendering an empty table.
         return this.safeIntegration.hasRecordsModule()
           ? html`<s2s-records-tab
               .safeIntegration=${this.safeIntegration}
@@ -1418,7 +1438,13 @@ export class S2SApp extends LitElement {
               .lit=${this.lit}
               .storage=${this.filecoinStorage}
             ></s2s-records-tab>`
-          : html``;
+          : html`<div class="section" id="records-no-module">
+              <p>
+                The factory <code>${store.protocolInfo?.moduleFactory ?? ''}</code> names no records
+                module for this Safe: a publication created by an earlier factory is not managed
+                here.
+              </p>
+            </div>`;
       case 'storage':
         return html`<s2s-storage-tab
           .storage=${this.filecoinStorage}
@@ -1551,6 +1577,7 @@ export class S2SApp extends LitElement {
           ? html`
               <s2s-ens-step
                 .state=${this.ensStepState}
+                .moduleMissing=${this.ensStepModuleMissing}
                 .safeInfo=${safeInfo}
                 .safeIntegration=${this.safeIntegration}
                 .appUrl=${this.ensStepAppUrl}
@@ -1639,6 +1666,7 @@ export class S2SApp extends LitElement {
       <s2s-init-progress-modal
         .open=${this.initModalOpen}
         .phase=${this.initPhase ?? 'creating'}
+        .moduleFactory=${store.protocolInfo?.moduleFactory ?? ''}
         .error=${this.initError}
         .ensCall=${this.ensCall}
         .canDismiss=${this.initPhase === 'configuring' && this.configDismissible}

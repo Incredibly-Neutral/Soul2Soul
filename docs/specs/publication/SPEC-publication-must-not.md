@@ -17,7 +17,7 @@
 > `shared/src/protocol/index.ts`, `publication/safe-app/src/lib/publication-init.ts` and
 > `author/neutralpress/src/publication/publication.service.ts`). The 2026-11-10 pass read
 > `S2SPublicationModuleV3.sol`, `S2SPublicationModuleV3Factory.sol`, `shared/src/gates/index.ts`,
-> `press/actions/src/libs/decrypt.ts`, `publication/safe-app/src/lib/publication-version.ts`. The
+> `press/actions/src/libs/decrypt.ts`, `publication/safe-app/src/lib/safe-integration.ts`. The
 > CREATE2 factory was added on 2026-11-13 as `S2SPublicationModuleV3Create2Factory.sol` and renamed to
 > the V4 factory on 2026-11-14, deploying `S2SPublicationModuleV4`. The CREATE2 factory is deployed,
 > with the legacy set its constructor froze, and so is V4: that constructor refuses an implementation
@@ -84,10 +84,11 @@ cleared. `retract` makes exactly two writes: the flag, and the tombstone on the 
 act alone; no author can let themselves in.
 Mechanism: `admit` and `reject` are `onlySafe` (`:240`, `:277`); `acceptOffer` is a deprecated alias
 that goes through `admit` and carries the same modifier (`:249`). Evidence: `onlySafe` reverts
-`OnlySafe()` at `:155-157`; the app binds the verb per module version
-(`src/publication/safe-app/src/lib/publication-version.ts:35`), tested in
-`src/publication/safe-app/tests/lib/publication-version.test.ts` — "binds V3 to admit/reject with the
-V3 ABI".
+`OnlySafe()` at `:155-157`; the app binds a module by its KIND, not by a probed version: the
+publication kind gets `S2SPublicationModuleV6` and is called `admit`/`reject` by name
+(`src/publication/safe-app/src/lib/safe-integration.ts`, `moduleWrapper`), tested in
+`src/publication/safe-app/tests/lib/safe-integration.test.ts` — "binds the V6 publication and V2
+records ABIs" and "never probes NAME(): the kind, not a string, decides the ABI".
 
 **`no-self-made-offer`** — A publication can never create the offer it then accepts. If it could, an
 admission would be a formality over a version the safe itself wrote.

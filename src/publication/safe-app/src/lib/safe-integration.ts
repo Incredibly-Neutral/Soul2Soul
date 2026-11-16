@@ -1,15 +1,14 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
+import { Abi_S2SRecordsModuleV2 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV2';
+import { Abi_S2SPublicationModuleV6 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV6';
 
 import { toBytes32Id } from '@s2s/soul2soul-shared';
-import { isPublicationModuleName } from '@s2s/soul2soul-shared/protocol';
-
-import { publicationBindingFor, type PublicationBinding } from './publication-version';
 import {
-  predictNextModuleAddress,
-  resolveModuleAddress,
-  type Create2Read,
-} from './publication-init';
+  S2S_MODULE_KIND_PUBLICATION,
+  S2S_MODULE_KIND_RECORDS,
+} from '@s2s/soul2soul-shared/safe-app';
+
+import { moduleAddressFor, type FactoryRead } from './publication-init';
 
 import type { SafeInfo, EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
@@ -30,14 +29,32 @@ function contractAddress(module: unknown): string {
   return typeof target === 'string' ? target : '';
 }
 
-/** Which factory, Safe and chain a CREATE2 prediction is for. */
-export interface PublicationFactoryTarget {
-  /** Defaults to the factory recorded by setPublicationFactory. */
-  factory?: string;
-  /** Defaults to the initialized Safe. */
-  safeAddress?: string;
-  /** Defaults to the Safe's chain. */
-  chainId?: number;
+/**
+ * The wrapper for the address the factory answered for one kind, given whatever
+ * wrapper discovery already had.
+ *
+ * - The Safe lists the address: bind it. That is the module this Safe runs.
+ * - The Safe used to list the address we had and no longer does: drop it. A
+ *   reset removed the module, and a wrapper the Safe no longer runs makes
+ *   `hasRecordsModule()` lie and every write revert.
+ * - Otherwise keep what we had, including the address the factory answers
+ *   before the enable lands: the create executed and the enable has not, which
+ *   is exactly the state the init flow proposes both out of.
+ */
+function moduleWrapper(
+  existing: EthersContract | null,
+  address: string,
+  abi: unknown,
+  provider: unknown,
+  isListed: (address: string) => boolean,
+  wasListed: (address: string) => boolean,
+): EthersContract | null {
+  const known = contractAddress(existing);
+  if (isListed(address)) {
+    return new window.ethers.Contract(address, abi, provider) as EthersContract;
+  }
+  if (known && wasListed(known) && !isListed(known)) return null;
+  return existing;
 }
 
 export class SafeIntegration {
@@ -45,18 +62,14 @@ export class SafeIntegration {
   public recordsModule: EthersContract | null = null;
   public publicationModule: any | null = null;
   /**
-   * Which verbs this publication's module implements, decided once from its
-   * NAME() when the wrapper is constructed. `null` while no module is bound.
-   * Every mutation reads it; nothing else in the app inspects a version.
+   * `publication_factory` from the protocol record — the one factory every
+   * module of every kind is created through, set once the record is read.
+   *
+   * It is the only source of a module address. While it is empty no module is
+   * discovered at all: there is no scan of the Safe's module list, no NAME()
+   * probe and no second factory to fall back to.
    */
-  private publicationBinding: PublicationBinding | null = null;
-  /**
-   * `publication_factory` from the protocol record, set once it has been read.
-   * While set, module discovery asks it for the address it will deploy (a CREATE2
-   * factory can answer) before falling back to probing the Safe's module list
-   * with NAME(). Empty means "not known yet": discovery scans, exactly as before.
-   */
-  private publicationFactory = '';
+  private moduleFactory = '';
   private safeInfo: SafeInfo = {
     safeAddress: '',
     s2sRecords: '',
@@ -77,22 +90,29 @@ export class SafeIntegration {
    *
    * This is the fix for the step-3 crash: `initialize()` used to write
    * `safeInfo = { s2sRecords: '', s2sPublication: '', ... }` up front and fill
-   * the addresses in inside the awaited NAME() loop, so any read that landed in
-   * that window (`setRecord`'s `to:`, a second overlapping `fetchFreshData`, the
-   * page's very first records fetch) saw a known module with an empty address
-   * and proposed a tx to `''`. Overlapping calls are now harmless: each computes
-   * a complete snapshot and publishes it whole.
+   * the addresses in inside the awaited discovery loop, so any read that landed
+   * in that window (`setRecord`'s `to:`, a second overlapping `fetchFreshData`,
+   * the page's very first records fetch) saw a known module with an empty
+   * address and proposed a tx to `''`. Overlapping calls are now harmless: each
+   * computes a complete snapshot and publishes it whole.
    *
-   * Non-destructive in the second sense too: a discovery pass that fails to find
-   * a module (e.g. NAME() reverting under RPC pressure) keeps the address we
-   * already know rather than blanking it. The one case that DOES clear a module
-   * is the module genuinely leaving the Safe's module list (a reset): it is
-   * dropped so `hasRecordsModule()` stops lying. A module the Safe never listed
-   * — adopted mid-init from the factory logs, deployed but not yet enabled — is
-   * deliberately kept: the enable tx has not run yet, and clearing it would
-   * strand the init flow's own recovery (see `adoptModules`). For the same
-   * reason the publish merges: a wrapper adopted while this pass was awaiting a
-   * NAME() probe is newer than the one we captured and wins.
+   * DISCOVERY IS TWO READS. The factory derives a module's address from
+   * (factory, safe, kind), so the address of each kind is asked for, not
+   * searched for:
+   *
+   *   moduleAddress(safe, publicationKind)
+   *   moduleAddress(safe, recordsKind)
+   *
+   * No module list scan, no NAME() probe, no factory log filter, no second
+   * factory. A module is bound when the Safe LISTS the address it was given
+   * (anything else would be a wrapper whose every write reverts). One case
+   * keeps an existing wrapper: an address this factory answered before and the
+   * Safe does not list yet — the create ran and the enable has not, which is
+   * the init flow's own in-between state (see `adoptModules`).
+   *
+   * With no module factory known, nothing is discovered and nothing is cleared:
+   * the record has not been read yet, or this deployment predates the factory.
+   * Guessing here is what the deleted NAME() scan did.
    */
   async initialize(): Promise<SafeInfo> {
     try {
@@ -116,131 +136,50 @@ export class SafeIntegration {
         prevModules.some((m) => (m ?? '').toLowerCase() === address.toLowerCase());
 
       // Discovery locals — `this` is untouched until the end.
-      // Captured so the publish below can tell whether an out-of-band adoption
-      // (`adoptModules`, which can land while a NAME() probe is awaiting)
-      // replaced the field under us.
-      const capturedRecords = this.recordsModule;
-      const capturedPublication = this.publicationModule;
-      const capturedBinding = this.publicationBinding;
-      let recordsModule: EthersContract | null = capturedRecords;
-      let publicationModule: any | null = capturedPublication;
-      let publicationBinding: PublicationBinding | null = capturedBinding;
-
-      // Drop a module the Safe used to list and no longer does (reset), so
-      // hasRecordsModule()/hasPublicationModule() cannot keep claiming it.
-      const knownRecords = contractAddress(recordsModule);
-      if (knownRecords && wasListed(knownRecords) && !isListed(knownRecords)) {
-        console.log('Records module is gone from the Safe, clearing it:', knownRecords);
-        recordsModule = null;
-      }
-      const knownPublication = contractAddress(publicationModule);
-      if (knownPublication && wasListed(knownPublication) && !isListed(knownPublication)) {
-        console.log('Publication module is gone from the Safe, clearing it:', knownPublication);
-        publicationModule = null;
-        publicationBinding = null;
-      }
+      let recordsModule: EthersContract | null = this.recordsModule;
+      let publicationModule: any | null = this.publicationModule;
 
       const rpcUrl = getRpcUrl(safeData.chainId);
       const provider = new window.ethers.JsonRpcProvider(rpcUrl);
 
-      // Prediction first: a CREATE2 factory names the module this Safe's
-      // publication lives at, so the answer does not depend on the module list
-      // being readable. Accepted only when the Safe still LISTS it (a module
-      // disabled by a teardown stays deployed, and every write to it would
-      // revert) and the NAME() probe still decides the ABI version — the factory
-      // answers addresses, not versions.
-      // The accepted prediction is held aside and applied AFTER the scan: the
-      // scan keeps its own tie-break (last publication module listed wins), so a
-      // prediction must not change what an unfactored Safe resolves to, and it
-      // must not be overwritten by the scan either.
-      let predictedModule: EthersContract | null = null;
-      let predictedBinding: PublicationBinding | null = null;
-      if (!contractAddress(publicationModule)) {
-        try {
-          const predicted = await this.resolvePublicationModule({
-            factory: this.publicationFactory,
-            safeAddress: safeData.safeAddress,
-            chainId: safeData.chainId,
-          });
-          if (predicted && isListed(predicted)) {
-            const binding = await this.readPublicationBinding(predicted, provider);
-            if (binding) {
-              predictedModule = new window.ethers.Contract(predicted, binding.abi, provider);
-              predictedBinding = binding;
-              console.log(`[si] publication module resolved by prediction: ${predicted}`);
-            }
-          }
-        } catch (error) {
-          console.log('[si] publication module prediction failed, scanning the module list', error);
-        }
-      }
+      if (this.moduleFactory && safeData.safeAddress) {
+        const read = this.factoryRead(safeData.chainId);
+        const [recordsAddress, publicationAddress] = await Promise.all([
+          moduleAddressFor(
+            { read },
+            this.moduleFactory,
+            safeData.safeAddress,
+            S2S_MODULE_KIND_RECORDS,
+          ),
+          moduleAddressFor(
+            { read },
+            this.moduleFactory,
+            safeData.safeAddress,
+            S2S_MODULE_KIND_PUBLICATION,
+          ),
+        ]);
 
-      // Find both modules
-      const NAME_ABI = ['function NAME() view returns (string)'];
-
-      for (const moduleAddress of modules) {
-        try {
-          // Check for NAME function with minimal ABI
-          const moduleChecker = new window.ethers.Contract(moduleAddress, NAME_ABI, provider);
-
-          const name = await moduleChecker.NAME();
-          console.log(`Module ${moduleAddress} has NAME:`, name);
-
-          if (name === 'S2S Records Module') {
-            // Create full contract instance with complete ABI
-            recordsModule = new window.ethers.Contract(
-              moduleAddress,
-              Abi_S2SRecordsModule,
-              provider,
-            );
-            console.log('Found Records Module:', moduleAddress);
-          } else if (isPublicationModuleName(name)) {
-            // The version decides the ABI and the verbs: V3 has
-            // admit/reject, V2 has acceptOffer/retract, V1 has no agreements
-            // surface and is left unbound (the app then shows "no publication
-            // module", exactly as before agreements existed).
-            const binding = publicationBindingFor(name);
-            if (binding) {
-              publicationModule = new window.ethers.Contract(
-                moduleAddress,
-                binding.abi,
-                provider,
-              );
-              publicationBinding = binding;
-              console.log(
-                `Found Publication Module (${name}, ${binding.accept}/${binding.reject}):`,
-                moduleAddress,
-              );
-            } else {
-              console.log(`Publication Module ${moduleAddress} (${name}) has no agreements surface`);
-            }
-          }
-        } catch (error) {
-          // Module doesn't have NAME() function, skip it. The previously known
-          // contract (if any) is kept — see the non-destructive note above.
-          console.log(`Module ${moduleAddress} doesn't have NAME(), skipping`);
-        }
-      }
-
-      // Merge with anything adopted while this pass was awaiting a probe. The
-      // field having changed means a NEWER wrapper exists (adoptModules is the
-      // only mid-pass writer: it runs when the init flow learns the addresses
-      // from factory logs), so keep it — publishing our older local would
-      // discard it, and hasRecordsModule() would then be false for the rest of
-      // the page (Config tab gone, a config session dropped).
-      if (this.recordsModule && this.recordsModule !== capturedRecords) {
-        recordsModule = this.recordsModule;
-      }
-      if (this.publicationModule && this.publicationModule !== capturedPublication) {
-        publicationModule = this.publicationModule;
-        publicationBinding = this.publicationBinding;
-      }
-
-      // A confirmed prediction is exact for this Safe, so it beats whatever the
-      // list scan landed on (including a stale second publication module).
-      if (predictedModule && predictedBinding) {
-        publicationModule = predictedModule;
-        publicationBinding = predictedBinding;
+        recordsModule = moduleWrapper(
+          recordsModule,
+          recordsAddress,
+          Abi_S2SRecordsModuleV2,
+          provider,
+          isListed,
+          wasListed,
+        );
+        publicationModule = moduleWrapper(
+          publicationModule,
+          publicationAddress,
+          Abi_S2SPublicationModuleV6,
+          provider,
+          isListed,
+          wasListed,
+        );
+        console.log(
+          `[si] modules by factory ${this.moduleFactory}: records ${recordsModule ? recordsAddress : 'none'}, publication ${publicationModule ? publicationAddress : 'none'}`,
+        );
+      } else {
+        console.log('[si] no module factory known — no module discovered');
       }
 
       // Single, complete publication of the discovery result. The addresses in
@@ -248,7 +187,6 @@ export class SafeIntegration {
       // address" is not representable.
       this.recordsModule = recordsModule;
       this.publicationModule = publicationModule;
-      this.publicationBinding = publicationBinding;
       this.safeInfo = {
         safeAddress: safeData.safeAddress,
         s2sRecords: contractAddress(recordsModule),
@@ -320,82 +258,44 @@ export class SafeIntegration {
   }
 
   /**
-   * Record the publication factory (the `publication_factory` protocol record).
-   * Called by the host as soon as the record is read; discovery run before that
-   * point simply scans, and the next initialize() uses the factory.
+   * Record the module factory — `publication_factory` in the protocol record.
+   * Called by the host as soon as the record is read. Before that point there
+   * is no factory, so discovery finds nothing (it does not guess); every later
+   * initialize() asks this factory.
    */
-  setPublicationFactory(factory: string): void {
-    this.publicationFactory = factory ?? '';
+  setModuleFactory(factory: string): void {
+    this.moduleFactory = factory ?? '';
   }
 
-  /** A view read on a contract on a given chain, in the shape the CREATE2 helpers take. */
-  private create2Read(chainId: number): Create2Read {
+  /** The module factory discovery reads, or '' while the record is unread. */
+  getModuleFactory(): string {
+    return this.moduleFactory;
+  }
+
+  /** A view read on a contract on a given chain, in the shape the lib takes. */
+  private factoryRead(chainId: number): FactoryRead {
     return (factory, abi, method, args) => this.evmRead(chainId, factory, abi, method, args);
   }
 
   /**
-   * The address the next `createModule(safe, …)` on the publication factory will
-   * deploy, or `undefined` when that factory predates CREATE2 (it answers no such
-   * selector). Read it BEFORE the create batch is proposed: once that executes
-   * the factory answers for the following create.
+   * The module this factory has for (safe, kind): the deployed one, or the
+   * address a create deploys at. One read of `moduleAddress`, no probing.
    *
-   * Every input defaults to the initialized state and can be passed explicitly,
-   * because a discovery pass runs before `safeInfo` is published.
+   * `safeAddress` defaults to the initialized Safe and `chainId` to its chain,
+   * because the init flow asks before `safeInfo` is published in some paths.
    */
-  async predictNextPublicationModule(
-    target: PublicationFactoryTarget = {},
-  ): Promise<string | undefined> {
-    const factory = target.factory ?? this.publicationFactory;
-    const safeAddress = target.safeAddress ?? this.safeInfo.safeAddress;
-    const chainId = target.chainId ?? this.safeInfo.chainId;
-    if (!factory || !safeAddress || !chainId) return undefined;
-    return predictNextModuleAddress({
-      read: this.create2Read(chainId),
-      factory,
-      safeAddress,
-    });
-  }
-
-  /**
-   * The module an ALREADY CREATED publication lives at, per the factory, or
-   * `undefined` when the factory cannot answer for this Safe (pre-CREATE2, or a
-   * module made by the plain-CREATE factories). Candidates without code are
-   * rejected here, so the caller keeps its NAME() scan for everything else.
-   */
-  async resolvePublicationModule(
-    target: PublicationFactoryTarget = {},
-  ): Promise<string | undefined> {
-    const factory = target.factory ?? this.publicationFactory;
-    const safeAddress = target.safeAddress ?? this.safeInfo.safeAddress;
-    const chainId = target.chainId ?? this.safeInfo.chainId;
-    if (!factory || !safeAddress || !chainId) return undefined;
-    return resolveModuleAddress({
-      read: this.create2Read(chainId),
-      codeSize: (address: string) => this.contractCodeSize(address, chainId),
-      factory,
-      safeAddress,
-    });
-  }
-
-  /**
-   * Fetch raw factory `ModuleCreated` logs for a given safe address.
-   * topic[1] is the padded indexed safe address (bytes32). Returns the raw
-   * log objects, which carry `.topics`.
-   */
-  async fetchFactoryModuleCreatedLogs(
-    factoryAddress: string,
-    safeAddress: string,
-    topic0: string,
-    fromBlock: number,
-  ): Promise<Array<{ topics: string[] }>> {
-    const provider = this.getProvider();
-    const paddedSafe = '0x' + safeAddress.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    return await provider.getLogs({
-      address: factoryAddress,
-      topics: [topic0, paddedSafe],
-      fromBlock,
-      toBlock: 'latest',
-    });
+  async moduleAddress(safeAddress?: string, kind?: string, chainId?: number): Promise<string> {
+    const factory = this.moduleFactory;
+    const safe = safeAddress ?? this.safeInfo.safeAddress;
+    const chain = chainId ?? this.safeInfo.chainId;
+    if (!factory) {
+      throw new Error(
+        'No module factory is known — the publication_factory record has not been read.',
+      );
+    }
+    if (!safe) throw new Error('No Safe address to ask the module factory about.');
+    if (!kind) throw new Error('A module kind is required to ask the module factory.');
+    return moduleAddressFor({ read: this.factoryRead(chain) }, factory, safe, kind);
   }
 
   /**
@@ -423,16 +323,19 @@ export class SafeIntegration {
   }
 
   /**
-   * Adopt freshly-created module addresses mid-flow. `initialize()` only
-   * finds modules already in the Safe's module list; during a fresh init they
-   * are deployed AFTER that snapshot, so recordsModule/publicationModule stay
-   * null on this page and the live finish-poll's getRecord would keep throwing
-   * ("Records module not initialized") until a reload. Once the init component
-   * learns the addresses (detection or a resumed session) it hands them back
-   * here: this re-creates the contract wrappers so getRecord and the live
-   * finish detection work without a reload, and flips
-   * hasRecordsModule/hasPublicationModule so the app switches to its normal
-   * UI.
+   * Adopt freshly-created module addresses mid-flow. `initialize()` binds only
+   * what the Safe lists; during a fresh init the modules are deployed AFTER
+   * that snapshot, so recordsModule/publicationModule stay null on this page
+   * and the live finish-poll's getRecord would keep throwing ("Records module
+   * not initialized") until a reload. Once the init flow learns the addresses
+   * (a resumed session, or the `moduleAddress` poll) it hands them back here:
+   * the wrappers are re-created so getRecord and the live finish detection work
+   * without a reload, and hasRecordsModule/hasPublicationModule flip so the app
+   * switches to its normal UI.
+   *
+   * The ABI is the kind's ABI — V6 for the publication module, V2 for records —
+   * with no NAME() probe: a module deployed by the factory over `kind` is that
+   * kind, and its kind is what the factory was asked for.
    */
   async adoptModules(recordsModule?: string, publicationModule?: string): Promise<void> {
     console.log(
@@ -441,60 +344,18 @@ export class SafeIntegration {
     if (recordsModule && !this.recordsModule) {
       this.recordsModule = new window.ethers.Contract(
         recordsModule,
-        Abi_S2SRecordsModule,
+        Abi_S2SRecordsModuleV2,
         this.getProvider(),
       );
       if (this.safeInfo) this.safeInfo.s2sRecords = recordsModule;
     }
     if (publicationModule && !this.publicationModule) {
-      // Adoption hands over an address with no name, and the version decides
-      // the ABI. Probe it exactly as initialize() does, and degrade the same
-      // way when it cannot be known: an unbound module means the deals tab
-      // disappears, which beats encoding a selector that may not exist.
-      const binding = await this.readPublicationBinding(publicationModule);
-      if (!binding) {
-        console.log(
-          `[si] not adopting publication module ${publicationModule}: its version could not be determined`,
-        );
-      } else {
-        this.publicationModule = new window.ethers.Contract(
-          publicationModule,
-          binding.abi,
-          this.getProvider(),
-        );
-        this.publicationBinding = binding;
-        if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
-      }
-    }
-  }
-
-  /**
-   * NAME() a publication module address and return the surface it implements,
-   * or `undefined` when that cannot be known: the probe failed (RPC pressure, a
-   * module still mid-deploy) or the module is V1, which has no agreements
-   * surface to bind.
-   *
-   * No fallback on purpose. This is the path taken by every publication that
-   * already exists — the legacy-factory scan feeds it an address with no name —
-   * and both versions answer reads through the same selectors, so a guessed
-   * V3 binding looks healthy until the first Accept or Refuse fails
-   * client-side, with no transaction to inspect.
-   */
-  private async readPublicationBinding(
-    address: string,
-    provider = this.getProvider(),
-  ): Promise<PublicationBinding | undefined> {
-    try {
-      const probe = new window.ethers.Contract(address, ['function NAME() view returns (string)'], provider);
-      const name = (await probe.NAME()) as string;
-      const binding = publicationBindingFor(name);
-      if (!binding) {
-        console.log(`Publication module ${address} (${name}) has no agreements surface`);
-      }
-      return binding;
-    } catch (error) {
-      console.log(`Publication module ${address} NAME() failed, version unknown`, error);
-      return undefined;
+      this.publicationModule = new window.ethers.Contract(
+        publicationModule,
+        Abi_S2SPublicationModuleV6,
+        this.getProvider(),
+      );
+      if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
     }
   }
 
@@ -533,31 +394,6 @@ export class SafeIntegration {
       throw new Error('records module not found on this Safe');
     }
     return module;
-  }
-
-  /**
-   * The binding a write has to encode through. A wrapper without one is a bug
-   * (the module was bound without a version), and the one thing it must not do
-   * is pick a verb anyway.
-   */
-  private requirePublicationBinding(): PublicationBinding {
-    const binding = this.publicationBinding;
-    if (!binding) {
-      throw new Error(
-        'publication module version unknown — could not determine which accept/reject verbs it implements, so no transaction was proposed',
-      );
-    }
-    return binding;
-  }
-
-  /** The accept verb of the bound module (`admit` on V3, `acceptOffer` on V2). */
-  private acceptVerb(): string {
-    return this.requirePublicationBinding().accept;
-  }
-
-  /** The reversible takedown verb (`reject` on V3, `retract` on V2). */
-  private rejectVerb(): string {
-    return this.requirePublicationBinding().reject;
   }
 
   /** Same contract for the publication module. */
@@ -630,46 +466,41 @@ export class SafeIntegration {
   }
 
   /**
-   * Admit a pending offer → agreement. The publication's accept verb, which is
-   * `admit` on V3 and `acceptOffer` on V2 — encoded through the ABI bound to
-   * this module, so the selector always exists on the implementation.
+   * Admit a pending offer → agreement. `admit` is the V6 publication module's
+   * own verb; there is no second name for it to pick between.
    */
   async admit(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData(this.acceptVerb(), [
-      toBytes32Id(genesis),
-    ]);
+    const txData = publicationModule.interface.encodeFunctionData('admit', [toBytes32Id(genesis)]);
     await this.safeSdk.txs.send({
       txs: [{ to: contractAddress(publicationModule), value: '0', data: txData }],
     });
   }
 
   /**
-   * Reject — the publication's reversible takedown: `reject` on V3,
-   * `retract` on V2. An agreement returns to the pending offer set and an
-   * offer is declined; either may be admitted again, unless the genesis author
-   * has since ended the publication (`retract` by the author is terminal, and
-   * `admit` then reverts `Ended()`).
+   * Reject — the Safe's reversible takedown. An agreement returns to the
+   * pending offer set and an offer is declined; either may be admitted again,
+   * unless the genesis author has since ended the publication (`retract` is the
+   * author's own verb and is terminal, and `admit` then reverts `Ended()`).
    */
   async reject(genesis: string): Promise<void> {
     if (!this.safeSdk) {
       throw new Error('Safe SDK not initialized');
     }
     const publicationModule = this.requirePublicationModule();
-    const txData = publicationModule.interface.encodeFunctionData(this.rejectVerb(), [
-      toBytes32Id(genesis),
-    ]);
+    const txData = publicationModule.interface.encodeFunctionData('reject', [toBytes32Id(genesis)]);
     await this.safeSdk.txs.send({
       txs: [{ to: contractAddress(publicationModule), value: '0', data: txData }],
     });
   }
 
+  /** Is `genesis` an agreement (not merely an offer)? V6: `hasAgreement`. */
   async hasDeal(genesis: string): Promise<boolean> {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
-    return await this.publicationModule.hasDeal(toBytes32Id(genesis));
+    return await this.publicationModule.hasAgreement(toBytes32Id(genesis));
   }
 
   async getDeals(
@@ -684,7 +515,7 @@ export class SafeIntegration {
     }>
   > {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
-    return await this.publicationModule.getDeals(offset, limit);
+    return await this.publicationModule.getAgreements(offset, limit);
   }
 
   async getOffers(
@@ -721,7 +552,7 @@ export class SafeIntegration {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
     try {
       const [rawDeals, rawOffers] = await Promise.all([
-        this.publicationModule.getDeals(0, 200),
+        this.publicationModule.getAgreements(0, 200),
         this.publicationModule.getOffers(0, 200),
       ]);
       const deals = rawDeals.map((e: any) => ({

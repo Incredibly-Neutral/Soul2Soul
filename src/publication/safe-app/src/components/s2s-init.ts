@@ -6,19 +6,15 @@
 // pure lib, PR #147):
 //
 //   1. propose create-batch  (buildCreateModuleBatch)      → Safe queue
-//      — SKIPPED when a scan of the ModuleCreated logs finds both modules for
-//      this Safe already (scanExistingModules): the factory is plain CREATE, so
-//      re-proposing would deploy a duplicate pair. The scan reads the factory in
-//      the protocol record AND the retired factories
-//      (LEGACY_PUBLICATION_FACTORIES), because a publication made before the
-//      record moved to a new factory has its log on the old one only. It
-//      escalates once — default 10k-block window, then 250k, because the pair
-//      is often days old; a failed wide scan just means "no answer". On a hit
-//      it adopts the existing addresses and jumps straight to the enable+name
-//      batch below (or to done when they are already enabled and the name is
-//      recorded). A half-present pair is never adopted on its own — the flow
-//      needs both modules, so a partial narrow hit also triggers the wide pass.
-//   2. await execution, detect module addresses           (detectModuleAddresses)
+//      — SKIPPED when the factory already has both modules for this Safe. The
+//      factory keeps one module per (safe, kind) and answers `moduleAddress`
+//      for each kind before and after a create, so "does this Safe already
+//      have its modules" is two reads plus a code check at each answer — no
+//      log scan, no lookback window, no retired factory to union in. On a hit
+//      it adopts the addresses and jumps straight to the enable+name batch
+//      below (or to done when they are already enabled and the name is
+//      recorded).
+//   2. await execution, poll moduleAddress(safe, kind)     (waitForModuleAddress)
 //   3. propose the MERGED enable+name batch (buildFinalizeBatch) → Safe queue
 //   4. await execution (modules enabled AND name recorded) → hand over
 //
@@ -33,9 +29,9 @@
 // finalize batch executes the modules are live, so <s2s-app> takes over, drives
 // the build + proposal through <s2s-records-tab>.updateConfig() and waits for
 // it (see the step-3 section of init-session.ts). The module addresses are
-// unknowable until the create batch executes (plain CREATE, non-idempotent
-// factories), so a single-proposal init is impossible without a protocol
-// change; the merged finalize batch is the floor for the safe-app-only flow.
+// known before the create is proposed (the factory derives them), but the
+// module only exists once that batch executes, so the two-proposal sequence
+// stands: create, then enable + name.
 //
 // The component deliberately drives its own steps itself (rather than calling
 // the single-shot initializePublication) so each Safe-proposal queue URL can be
@@ -43,21 +39,19 @@
 // execute each proposal before the next step can run.
 //
 // It depends on the SafeIntegration only through a small duck-typed surface
-// (proposeBatch / getProvider / fetchFactoryModuleCreatedLogs /
-// readIsModuleEnabled / getRecord) so component tests can hand-roll a mock —
-// the same pattern as the other tabs.
+// (proposeBatch / moduleAddress / readIsModuleEnabled / getRecord) so component
+// tests can hand-roll a mock — the same pattern as the other tabs.
 //
 // # Chain guard
 //
-// `protocolInfo.recordsFactory` / `publicationFactory` are read from on-chain
-// protocol state through the L2 provider (shared/src/protocol), i.e. they are
-// Base (8453) deployments. On any other chain createModule targets an address
-// with no code: the Safe tx SUCCEEDS as a no-op, nothing is deployed, no
-// ModuleCreated log is emitted, and detection polls a filter that can never
-// match — a live mainnet-Safe bug that looked like "modules never appear".
-// Both the create and the detect step therefore check that both factories have
-// code on the Safe's chain FIRST and throw a real error instead (before any
-// proposal is sent, and before a pointless timeout wait).
+// `protocolInfo.moduleFactory` is read from on-chain protocol state through the
+// L2 provider (shared/src/protocol), i.e. it is a Base (8453) deployment. On
+// any other chain createModule targets an address with no code: the Safe tx
+// SUCCEEDS as a no-op, nothing is deployed, and the address poll would wait out
+// its timeout for a module that can never appear. Both the create and the detect
+// step therefore check that the factory has code on the Safe's chain FIRST and
+// throw a real error instead (before any proposal is sent, and before a
+// pointless timeout wait).
 //
 // # Crash-safe resume (init-session.ts)
 //
@@ -82,8 +76,11 @@
 // already proposed. "Try again" therefore *retries* — it re-enters the plan
 // loop with the existing session, so `planNextAction` resumes from the
 // persisted phase and (for phases 'detecting' and 'awaiting-finalize') does
-// not re-propose a batch that is already in the Safe queue: a second create
-// batch would deploy a duplicate module pair.
+// not re-propose a batch that is already in the Safe queue. `createModule` is
+// idempotent per (safe, kind) — it returns the module already recorded for the
+// pair and ignores `params` — so a second batch cannot deploy a duplicate. It
+// would instead queue a transaction whose initializer never runs: the human
+// executes it, the flow reads as finished, and the module keeps its old state.
 //
 // One failure mode is NOT covered: phase 'creating' means "a create proposal
 // is being sent", and `proposalProgress('creating')` reports no proposal yet.
@@ -106,15 +103,17 @@ import { ICON_SIZE, ICON_WEIGHT } from '@/components/icon.js';
 import {
   buildCreateModuleBatch,
   buildFinalizeBatch,
-  detectModuleAddresses,
-  scanExistingModules,
+  waitForModuleAddress,
   waitForModulesEnabled,
   type MetaTransactionData,
   type ProtocolInfo,
 } from '../lib/publication-init.js';
 // Narrow entry, not the package root: the root graph drags in
 // rendering/sequence.ts, which touches `global` and breaks the browser bundle.
-import { LEGACY_PUBLICATION_FACTORIES } from '@s2s/soul2soul-shared/protocol';
+import {
+  S2S_MODULE_KIND_PUBLICATION,
+  S2S_MODULE_KIND_RECORDS,
+} from '@s2s/soul2soul-shared/safe-app';
 import { ENS_L1_CHAIN_ID, ENS_REGISTRY_ADDRESS, ZERO_ADDRESS } from '../lib/domain-validation.js';
 import {
   buildRegisterSubdomainCall,
@@ -149,27 +148,16 @@ import type { SafeInfo } from '@/types/index.js';
  */
 interface InitSafeIntegration {
   proposeBatch(txs: MetaTransactionData[]): Promise<string>;
-  getProvider(): { getBlockNumber(): Promise<number> };
-  fetchFactoryModuleCreatedLogs(
-    factoryAddress: string,
-    safeAddress: string,
-    topic0: string,
-    fromBlock: number,
-  ): Promise<{ topics: string[] }[]>;
   readIsModuleEnabled(moduleAddress: string): Promise<boolean>;
   getRecord(key: string): Promise<string>;
   /** Byte size of the code at an address on the Safe's chain (0 = no contract). */
   contractCodeSize(address: string): Promise<number>;
   /**
-   * `moduleAddress(safe)` on the publication factory: the address its next
-   * create deploys. Absent/undefined on a factory that predates CREATE2, in which
-   * case detection reads the ModuleCreated log exactly as before.
+   * `moduleAddress(safe, kind)` on the module factory: the module this Safe has
+   * for that kind, or the address its create deploys at. The one read the flow
+   * uses to learn where its modules are.
    */
-  predictNextPublicationModule?(target: {
-    factory: string;
-    safeAddress: string;
-    chainId: number;
-  }): Promise<string | undefined>;
+  moduleAddress(safeAddress: string, kind: string): Promise<string>;
   /** Make getRecord / module reads work for freshly-created modules. */
   adoptModules(recordsModule?: string, publicationModule?: string): void | Promise<void>;
   /** Raw chain read (src/lib/evm). The ENS step reads the L1 registry through it. */
@@ -191,15 +179,6 @@ type InitProtocolInfo = ProtocolInfo & { ensRegistry?: string };
 /** How long to keep polling for the create-batch execution (human-in-the-loop). */
 const DEFAULT_DETECTION_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_LOOKBACK_BLOCKS = 10_000;
-/**
- * Second, wider window for the pre-create module scan. Iterating users hit
- * "the modules already exist" days after they were deployed — far outside the
- * default ~14h (5s blocks) window — so the scan escalates once instead of
- * re-proposing a duplicate create batch. Not used for post-create detection
- * (those logs are seconds old).
- */
-const WIDE_SCAN_LOOKBACK_BLOCKS = 250_000;
 
 /** How long to wait for the enable batch to be executed in the Safe app. */
 const DEFAULT_ENABLE_TIMEOUT_MS = 10 * 60_000;
@@ -255,13 +234,13 @@ export class S2SPublicationInit extends LitElement {
   /** Duck-typed SafeIntegration (see InitSafeIntegration). */
   @property({ attribute: false }) safeIntegration?: InitSafeIntegration;
 
-  /** Deployed factory addresses (recordsFactory + publicationFactory) + the L1
-   *  ENS registry step 1 reads and proposes against. */
+  /** The module factory, plus the L1 ENS registry step 1 reads and proposes
+   *  against. */
   @property({ attribute: false }) protocolInfo?: InitProtocolInfo;
 
-  /** How long to poll for the create batch's ModuleCreated logs. */
+  /** How long to poll for code at the module address a create answers. */
   @property({ type: Number }) detectionTimeoutMs = DEFAULT_DETECTION_TIMEOUT_MS;
-  /** Poll interval while waiting for the create batch's ModuleCreated logs. */
+  /** Poll interval while waiting for the create's module to have code. */
   @property({ type: Number }) detectionPollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
 
   /** How long to wait for the enable batch to be executed in the Safe app. */
@@ -383,6 +362,17 @@ export class S2SPublicationInit extends LitElement {
         margin-top: 0.35rem;
         font-size: 0.8rem;
         color: #ffb4b4;
+      }
+
+      .init__note {
+        margin: 0 0 1rem;
+        font-size: 0.85rem;
+        color: var(--gray-400);
+      }
+
+      .init__note code {
+        font-family: var(--font-mono);
+        word-break: break-all;
       }
 
       .alias-pills {
@@ -617,7 +607,8 @@ export class S2SPublicationInit extends LitElement {
    * The phase is MONOTONIC (`maxPhase`): step 1 can re-enter from a later phase
    * (the name was released/transferred on L1 mid-flow), and writing
    * 'awaiting-ens' over 'detecting' would erase "the create batch is queued" —
-   * the next plan would then propose a second, non-idempotent create batch. */
+   * the next plan would then queue a second create, whose params the factory
+   * drops for the module it already has. */
   private persist(phase: InitPhase, extra: Partial<InitSession> = {}): void {
     if (!this.session) return;
     const next = maxPhase(this.session.phase, phase);
@@ -1034,130 +1025,36 @@ export class S2SPublicationInit extends LitElement {
         this.persist('creating');
         this.dispatchProgress();
 
-        // The module factories are plain CREATE (non-idempotent), so proposing
-        // the create batch for a Safe that ALREADY has the pair deploys a
-        // duplicate — the modules the user has been building on get replaced by
-        // two new empty ones. That state is normal while iterating (an earlier
-        // run created them, the session was lost), so look before proposing.
-        const scanDeps = {
-          fetchModuleCreatedLogs: (
-            factoryAddress: string,
-            safe: string,
-            topic0: string,
-            fromBlock: number,
-          ) => si.fetchFactoryModuleCreatedLogs(factoryAddress, safe, topic0, fromBlock),
-          safeAddress,
-          recordsFactory: info.recordsFactory,
-          publicationFactory: info.publicationFactory,
-          // A publication created before `publication_factory` moved to the V3
-          // deployment has its ModuleCreated log on the retired factory only;
-          // without these the scan sees "no pair" and proposes a duplicate.
-          legacyPublicationFactories: LEGACY_PUBLICATION_FACTORIES,
-          getBlockNumber: () => si.getProvider().getBlockNumber(),
-        };
-        const scanAt = (lookbackBlocks: number) =>
-          scanExistingModules(scanDeps, { lookbackBlocks });
-        const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
+        const chainId = this.safeInfo?.chainId ?? session.chainId;
 
-        // Ask the factory for this Safe's module first: `moduleAddress(safe)` is
-        // the module it recorded when the Safe has one, and the address the next
-        // create would land at otherwise. Code at that address is proof the
-        // publication exists, however long ago it was deployed — the log scan
-        // below only looks back DEFAULT/WIDE windows, so a pair older than the
-        // window would be re-created (the records factory is non-idempotent).
-        // Read once, before anything is proposed: after the create executes the
-        // factory answers for the NEXT create. Failures are not fatal; the log
-        // scan is the fallback either way.
-        let factoryModule: string | undefined;
-        try {
-          factoryModule = await si.predictNextPublicationModule?.({
-            factory: info.publicationFactory,
-            safeAddress,
-            chainId: this.safeInfo?.chainId ?? session.chainId,
-          });
-        } catch (e) {
-          console.log(`[init] create: module address prediction unavailable (${reason(e)})`);
-        }
+        // The factory is read from on-chain protocol state through the Base
+        // provider (shared/src/protocol), i.e. it is a Base (8453) deployment.
+        // On any other chain createModule is a call to an address with no code:
+        // the Safe tx SUCCEEDS as a no-op, nothing is deployed, and the poll
+        // below would wait ten minutes for a module that can never appear.
+        // Refuse to propose that no-op tx.
+        await this.assertFactoryHasCode(si, info, chainId, 'create');
 
-        let factoryModuleExists = false;
-        if (factoryModule) {
-          try {
-            factoryModuleExists = (await si.contractCodeSize(factoryModule)) > 0;
-          } catch {
-            factoryModuleExists = false;
-          }
-        }
-        if (factoryModuleExists) {
-          console.log(`[init] create: factory reports an existing module at ${factoryModule}`);
-        }
+        // One module per (safe, kind): the factory names the address for each
+        // kind whether or not it has deployed it yet, so "the pair already
+        // exists" is a code check at those two answers. This replaces the
+        // ModuleCreated log scan entirely — it cannot miss a pair deployed long
+        // ago, and it costs two reads instead of a block-range filter.
+        const recordsAddress = await si.moduleAddress(safeAddress, S2S_MODULE_KIND_RECORDS);
+        const publicationAddress = await si.moduleAddress(safeAddress, S2S_MODULE_KIND_PUBLICATION);
+        const [recordsExists, publicationExists] = await Promise.all([
+          si.contractCodeSize(recordsAddress).then((size) => size > 0),
+          si.contractCodeSize(publicationAddress).then((size) => size > 0),
+        ]);
 
-        let existing: { recordsModule?: string; publicationModule?: string } = factoryModuleExists
-          ? { publicationModule: factoryModule }
-          : {};
-        let narrowScanFailed = false;
-        try {
-          // A log hit wins per module (it is the record of what the factory
-          // did); the factory's answer fills a module the window missed.
-          const scanned = await scanAt(DEFAULT_LOOKBACK_BLOCKS);
-          existing = {
-            recordsModule: scanned.recordsModule ?? existing.recordsModule,
-            publicationModule: scanned.publicationModule ?? existing.publicationModule,
-          };
-        } catch (err) {
-          // A failed scan must never block the flow: without an answer we are
-          // back to the pre-scan behaviour (propose the create batch). No
-          // widening either — an RPC that just failed will fail again.
-          narrowScanFailed = true;
+        if (recordsExists && publicationExists) {
           console.log(
-            `[init] create: module scan failed (${reason(err)}), proposing the create batch`,
+            `[init] create: modules already exist for this Safe, skipping the create batch (records=${recordsAddress} publication=${publicationAddress})`,
           );
-        }
-
-        if (!narrowScanFailed && !(existing.recordsModule && existing.publicationModule)) {
-          // A pair deployed a while ago is invisible to the default window
-          // (10k blocks ≈ 14h on a 5s chain) — "I created them earlier" is the
-          // normal iterating state, so escalate once before re-creating. This
-          // also covers a partial narrow hit: the missing module may predate
-          // the window. Prefer the narrow value per module, fill gaps from the
-          // wide pass.
-          console.log(
-            `[init] create: no complete pair in the last ${DEFAULT_LOOKBACK_BLOCKS} blocks, widening the scan to 250k`,
-          );
-          try {
-            const wide = await scanAt(WIDE_SCAN_LOOKBACK_BLOCKS);
-            existing = {
-              recordsModule: existing.recordsModule ?? wide.recordsModule,
-              publicationModule: existing.publicationModule ?? wide.publicationModule,
-            };
-          } catch (err) {
-            // Public RPCs commonly cap getLogs ranges; a failed wide scan is
-            // just "no answer", never a reason to stop the flow.
-            console.log(`[init] create: wide scan failed (${reason(err)})`);
-          }
-        }
-
-        // The factories are read from on-chain protocol state through the Base
-        // provider (shared/src/protocol), i.e. they are Base (8453)
-        // deployments. On any other chain the create batch is a call to an
-        // address with no code: the Safe tx SUCCEEDS as a no-op, nothing is
-        // deployed, no ModuleCreated log is ever emitted and detection polls a
-        // filter that can never match. Refuse to propose that no-op tx — and
-        // do it before the fields are used by the finalize batch below too.
-        await this.assertFactoriesHaveCode(
-          si,
-          info,
-          this.safeInfo?.chainId ?? session.chainId,
-          'create',
-        );
-
-        if (existing.recordsModule && existing.publicationModule) {
-          console.log(
-            `[init] create: modules already exist for this Safe, skipping the create batch (records=${existing.recordsModule} publication=${existing.publicationModule})`,
-          );
-          await si.adoptModules(existing.recordsModule, existing.publicationModule);
+          await si.adoptModules(recordsAddress, publicationAddress);
           this.persist('finalizing', {
-            recordsModule: existing.recordsModule,
-            publicationModule: existing.publicationModule,
+            recordsModule: recordsAddress,
+            publicationModule: publicationAddress,
           });
           // The loop re-plans from 'finalizing': straight to the enable+name
           // batch, or straight to done when the pair is already live.
@@ -1165,20 +1062,17 @@ export class S2SPublicationInit extends LitElement {
         }
 
         console.log(
-          `[init] create: no complete module pair found (records=${existing.recordsModule ?? 'none'} publication=${existing.publicationModule ?? 'none'}), proposing the create batch`,
+          `[init] create: no module pair yet (records=${recordsExists ? recordsAddress : 'missing'} publication=${publicationExists ? publicationAddress : 'missing'}), proposing the create batch`,
         );
 
-        // The address this batch's publication create lands at, if the factory
-        // can name it: read above, before the proposal, because after the batch
-        // executes the factory answers for the NEXT create. A create2 factory
-        // re-creating a module the Safe already has is idempotent, so a module
-        // confirmed there before the batch is still the one detection finds.
-        const predictedPublicationModule: string | undefined = factoryModule;
-
+        // The create batch is idempotent per (safe, kind), so a second proposal
+        // for a pair that already exists cannot deploy a duplicate: the factory
+        // returns what it recorded. That is why this step needs no "did I
+        // already propose it" bookkeeping beyond the persisted phase.
         const createBatch = buildCreateModuleBatch(info, safeAddress, this.authors);
         const createUrl = await si.proposeBatch(createBatch);
         this.proposals = [createUrl];
-        this.persist('detecting', { proposals: [createUrl], predictedPublicationModule });
+        this.persist('detecting', { proposals: [createUrl] });
         this.step = 'detecting';
         this.dispatchProgress();
         return false;
@@ -1189,67 +1083,41 @@ export class S2SPublicationInit extends LitElement {
         this.dispatchProgress();
         const chainId = this.safeInfo?.chainId ?? session.chainId;
 
-        // Same chain check as create, run ONCE before the polling loop (never
-        // per poll): when a factory has no code here the create batch was a
-        // no-op and no ModuleCreated log can ever appear, so polling would
-        // just hang for the whole timeout. Fail now, with the actionable
+        // Same chain check as create, run ONCE before the polling loop: when the
+        // factory has no code here the create batch was a no-op, so polling
+        // would just hang for the whole timeout. Fail now, with the actionable
         // message instead.
-        await this.assertFactoriesHaveCode(si, info, chainId, 'detect');
+        await this.assertFactoryHasCode(si, info, chainId, 'detect');
 
-        // Last observed poll, carried into the timeout message: "polls until
-        // it gives up" is far easier to diagnose when the error names the
-        // chain, the factories, the block window and the log counts.
-        const lastPoll = { block: 0, fromBlock: 0, counts: new Map<string, number>() };
-        const detectDeps = {
-          fetchModuleCreatedLogs: async (
-            factoryAddress: string,
-            safe: string,
-            topic0: string,
-            fromBlock: number,
-          ) => {
-            const logs = await si.fetchFactoryModuleCreatedLogs(
-              factoryAddress,
-              safe,
-              topic0,
-              fromBlock,
-            );
-            lastPoll.fromBlock = fromBlock;
-            lastPoll.counts.set(factoryAddress.toLowerCase(), logs.length);
-            return logs;
-          },
-          safeAddress,
-          recordsFactory: info.recordsFactory,
-          publicationFactory: info.publicationFactory,
-          // The create batch is this Safe's next one on this factory, so its
-          // address was known before it was proposed. Detection confirms it by
-          // code instead of waiting for this factory's log; the records module
-          // has no prediction (plain-CREATE factory) and is still read from its
-          // log.
-          predictedPublicationModule: session.predictedPublicationModule,
+        const pollDeps = {
+          read: (factory: string, abi: any, method: string, args: unknown[]) =>
+            si.evmRead(chainId, factory, abi, method, args),
           hasCode: async (address: string) => (await si.contractCodeSize(address)) > 0,
-          getBlockNumber: async () => {
-            const block = await si.getProvider().getBlockNumber();
-            lastPoll.block = block;
-            return block;
-          },
         };
 
         let detected: { recordsModule: string; publicationModule: string };
         try {
-          detected = await detectModuleAddresses(detectDeps, {
-            timeoutMs: this.detectionTimeoutMs,
-            pollIntervalMs: this.detectionPollIntervalMs,
-            lookbackBlocks: DEFAULT_LOOKBACK_BLOCKS,
-          });
+          const recordsModule = await waitForModuleAddress(
+            pollDeps,
+            info.moduleFactory,
+            safeAddress,
+            S2S_MODULE_KIND_RECORDS,
+            { timeoutMs: this.detectionTimeoutMs, pollIntervalMs: this.detectionPollIntervalMs },
+          );
+          const publicationModule = await waitForModuleAddress(
+            pollDeps,
+            info.moduleFactory,
+            safeAddress,
+            S2S_MODULE_KIND_PUBLICATION,
+            { timeoutMs: this.detectionTimeoutMs, pollIntervalMs: this.detectionPollIntervalMs },
+          );
+          detected = { recordsModule, publicationModule };
         } catch (e) {
-          throw this.describeDetectFailure(e, {
-            chainId,
-            recordsFactory: info.recordsFactory,
-            publicationFactory: info.publicationFactory,
-            block: lastPoll.block,
-            fromBlock: lastPoll.fromBlock,
-            counts: lastPoll.counts,
-          });
+          const message = e instanceof Error ? e.message : String(e);
+          this.fail(
+            `${message} The create proposal is in the Safe queue (chain ${chainId}, factory ${info.moduleFactory}); execute it there and the app will resume.`,
+          );
+          throw new InitTimeoutError(message);
         }
 
         const { recordsModule, publicationModule } = detected;
@@ -1284,7 +1152,12 @@ export class S2SPublicationInit extends LitElement {
         this.step = 'awaiting-finalize';
         this.dispatchProgress();
         const { recordsModule, publicationModule } = this.requireModules(session);
-        await this.waitForEnabled(si, recordsModule, publicationModule);
+        await this.waitForEnabled(
+          si,
+          recordsModule,
+          publicationModule,
+          this.safeInfo?.chainId ?? session.chainId,
+        );
         await this.waitForNameRecord(si);
         return false;
       }
@@ -1414,75 +1287,38 @@ export class S2SPublicationInit extends LitElement {
   }
 
   /**
-   * Refuse to use the module factories on a chain where they do not exist.
+   * Refuse to use the module factory on a chain where it does not exist.
    *
-   * `protocolInfo.recordsFactory` / `publicationFactory` come from on-chain
-   * protocol state read through the L2 provider (shared/src/protocol
-   * getProtocolInfo), i.e. they are Base (8453) deployments. On any other chain
-   * a createModule call to them hits an address with no code: the Safe tx
-   * SUCCEEDS as a no-op, no module is deployed, no ModuleCreated log is emitted
-   * — and the flow used to poll a filter that could never match for ten
-   * minutes. Throwing here (before any proposeBatch) is the guard.
+   * `protocolInfo.moduleFactory` comes from on-chain protocol state read through
+   * the L2 provider (shared/src/protocol getProtocolInfo), i.e. it is a Base
+   * (8453) deployment. On any other chain a createModule call to it hits an
+   * address with no code: the Safe tx SUCCEEDS as a no-op and no module is ever
+   * deployed, so the flow would poll `moduleAddress` for ten minutes for code
+   * that can never appear. Throwing here (before any proposeBatch) is the guard.
    *
    * `phase` is only used for the log line, so a create run and a detect run are
    * distinguishable in the console.
    */
-  private async assertFactoriesHaveCode(
+  private async assertFactoryHasCode(
     si: InitSafeIntegration,
     info: ProtocolInfo,
     chainId: number,
     phase: 'create' | 'detect',
   ): Promise<void> {
-    const [recordsBytes, publicationBytes] = await Promise.all([
-      si.contractCodeSize(info.recordsFactory),
-      si.contractCodeSize(info.publicationFactory),
-    ]);
-    console.log(
-      `[init] ${phase}: factory code records=${recordsBytes} publication=${publicationBytes} chain=${chainId}`,
-    );
+    const factory = info.moduleFactory;
+    if (!factory) {
+      throw new Error(
+        'The protocol record names no module factory (publication_factory), so no module can be created for this Safe.',
+      );
+    }
+    const factoryBytes = await si.contractCodeSize(factory);
+    console.log(`[init] ${phase}: factory code ${factoryBytes} chain=${chainId}`);
 
-    const missing =
-      recordsBytes === 0
-        ? info.recordsFactory
-        : publicationBytes === 0
-          ? info.publicationFactory
-          : '';
-    if (!missing) return;
+    if (factoryBytes > 0) return;
 
     throw new Error(
-      `The S2S module factories have no code on this Safe's chain (${chainId}): ${missing}. They are deployed on Base (8453) — this Safe must be on chain 8453 for the publication init to work.`,
+      `The S2S module factory has no code on this Safe's chain (${chainId}): ${factory}. It is deployed on Base (8453) — this Safe must be on chain 8453 for the publication init to work.`,
     );
-  }
-
-  /**
-   * Append the polling context to a detection timeout.
-   *
-   * The message itself is built by detectModuleAddresses (publication-init, a
-   * pure lib this component must not own), so the diagnostics are appended at
-   * the call site: the original prefix is preserved verbatim, and only real
-   * detection timeouts are rewritten — any other failure propagates untouched.
-   */
-  private describeDetectFailure(
-    error: unknown,
-    ctx: {
-      chainId: number;
-      recordsFactory: string;
-      publicationFactory: string;
-      block: number;
-      fromBlock: number;
-      counts: Map<string, number>;
-    },
-  ): unknown {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.startsWith('Timed out after ') || !message.includes('module deployment logs')) {
-      return error;
-    }
-    const count = (factory: string) => ctx.counts.get(factory.toLowerCase()) ?? 0;
-    const detail =
-      `(chain ${ctx.chainId}, factories ${ctx.recordsFactory}/${ctx.publicationFactory}, ` +
-      `blocks ${ctx.fromBlock}-${ctx.block}, ` +
-      `last poll: ${count(ctx.recordsFactory)}/${count(ctx.publicationFactory)} logs)`;
-    return new Error(`${message} ${detail}`);
   }
 
   /**
@@ -1507,12 +1343,16 @@ export class S2SPublicationInit extends LitElement {
     si: InitSafeIntegration,
     recordsModule: string,
     publicationModule: string,
+    chainId: number,
   ): Promise<void> {
     try {
       await waitForModulesEnabled(
         {
-          recordsModule,
-          publicationModule,
+          read: (factory: string, abi: any, method: string, args: unknown[]) =>
+            si.evmRead(chainId, factory, abi, method, args),
+          hasCode: async (address: string) => (await si.contractCodeSize(address)) > 0,
+          factory: this.protocolInfo?.moduleFactory ?? '',
+          safeAddress: this.safeAddress,
           isModuleEnabled: async (module) => {
             const on = await si.readIsModuleEnabled(module);
             console.log(`[init] waitForEnabled poll ${module.slice(0, 10)}... -> ${String(on)}`);
@@ -1562,13 +1402,27 @@ export class S2SPublicationInit extends LitElement {
     }
   }
 
+  /**
+   * Which factory the app asks, and the consequence of asking only that one.
+   * Rendered on every state of the flow — form, working, failed — because a
+   * resume lands straight in 'working' and a Safe whose modules came from an
+   * earlier factory must learn that here, not from an address that stays blank.
+   */
+  private renderFactoryNote(): unknown {
+    return html`
+      <p class="init__note" id="init-factory-note">
+        Modules are read from the factory <code>${this.protocolInfo?.moduleFactory ?? ''}</code>: a
+        publication created by an earlier factory is not managed here.
+      </p>
+    `;
+  }
+
   private renderWorking(): unknown {
     if (!this.isWorkingStep(this.step)) return '';
     // Progress is surfaced by the progress modal and the native Safe queue on
-    // this page; the init component itself renders nothing while working so no
-    // redundant "tx queue" block sits at the bottom of the page. Error and
-    // done states render below (the modal closes on those).
-    return '';
+    // this page, so no "tx queue" block sits at the bottom. The factory note
+    // stays: a resumed flow starts here with no form and no modal line else.
+    return this.renderFactoryNote();
   }
 
   render() {
@@ -1582,6 +1436,7 @@ export class S2SPublicationInit extends LitElement {
     if (this.step === 'error') {
       return html`
         <h2>Initialization failed</h2>
+        ${this.renderFactoryNote()}
         <div class="init__error">${this.error}</div>
         <div class="init__actions">
           <s2s-button type="primary" id="init-retry" @click=${this.retry}>Try again</s2s-button>
@@ -1598,6 +1453,8 @@ export class S2SPublicationInit extends LitElement {
 
     return html`
       <h2>New publication</h2>
+
+      ${this.renderFactoryNote()}
 
       <div class="init__field">
         <label class="init__label" for="init-name">Publication name</label>

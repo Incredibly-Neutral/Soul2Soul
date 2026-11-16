@@ -4,6 +4,7 @@
 export type { S2SProtocolInfo } from './protocol/types';
 export { getProtocolInfo } from './protocol/index';
 export { ENS_NAMEWRAPPER } from './protocol/constants';
+export { S2S_MODULE_KIND_PUBLICATION, S2S_MODULE_KIND_RECORDS } from './protocol/constants';
 export type { S2SPublicationConfig } from './publication';
 export { LitService } from './lit';
 

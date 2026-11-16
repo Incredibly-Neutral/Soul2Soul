@@ -65,6 +65,9 @@ export class S2SEnsStep extends LitElement {
   /** This app's own URL, for the Safe-on-mainnet deep link. */
   @property() appUrl = '';
   /** Storage for the one-proposal-per-Safe flag; defaults to localStorage. */
+  /** Set by the host when the Safe has no records module on Base: the card
+   *  reports that instead of a registration it could never record. */
+  @property({ attribute: false }) moduleMissing = '';
   @property({ attribute: false }) storage: EnsStepStorage | null = null;
   /** How often to re-read the L1 subnode owner while waiting. */
   @property({ type: Number }) pollIntervalMs = 5_000;
@@ -392,7 +395,10 @@ export class S2SEnsStep extends LitElement {
 
   private get view(): EnsStepView {
     if (!this.safeInfo) return { kind: 'hidden', chain: 'other', canPropose: false };
-    return ensStepView(this.state, this.safeInfo, { proposed: this.proposed });
+    return ensStepView(this.state, this.safeInfo, {
+      proposed: this.proposed,
+      moduleMissing: this.moduleMissing,
+    });
   }
 
   /** Keep the poll in sync with the view: wait while a proposal is pending,
