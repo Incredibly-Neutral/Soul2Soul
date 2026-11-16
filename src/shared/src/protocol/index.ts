@@ -7,9 +7,16 @@ import { isPublicationModuleName } from './module-name';
 
 export * from './module-name';
 export * from './factories';
+export { S2S_MODULE_KIND_PUBLICATION, S2S_MODULE_KIND_RECORDS } from './constants';
 
 export type { S2SProtocolInfo };
-export type { Metered, S2SSignerSecrets, S2SPublishSecrets, StorageCredential, FilecoinSessionKeyData } from './types';
+export type {
+  Metered,
+  S2SSignerSecrets,
+  S2SPublishSecrets,
+  StorageCredential,
+  FilecoinSessionKeyData,
+} from './types';
 export { useMetered } from './types';
 
 // Viem public client type (equivalent to ethers Provider)
@@ -32,7 +39,7 @@ export type ViemProvider = PublicClient;
 export const getProtocolInfo = async (
   dev = false,
   l1Provider: ViemProvider,
-  l2Provider: ViemProvider
+  l2Provider: ViemProvider,
 ): Promise<S2SProtocolInfo> => {
   const {
     multisig,
@@ -80,7 +87,7 @@ export const getProtocolInfo = async (
       'lit_action_decrypt',
       'pkp_ethAddress',
     ],
-    l2Provider
+    l2Provider,
   );
 
   // The factory that answers a module address is itself a record, so the
@@ -91,7 +98,7 @@ export const getProtocolInfo = async (
         l2Provider,
         publication_factory as Address,
         multisig as Address,
-        modules
+        modules,
       )
     : undefined;
 
@@ -101,6 +108,9 @@ export const getProtocolInfo = async (
     ensRecords: ens_records,
     publicationFactory: publication_factory,
     recordsFactory: records_factory,
+    // One factory for every kind. The record key is unchanged, so a deployment
+    // that predates the kind model names nothing useful here and reads back ''.
+    moduleFactory: publication_factory ?? '',
     publicationModule: predictedPublicationModule ?? scannedPublicationModule ?? undefined,
     pkp: pkp_ethAddress,
     litActions: {
@@ -128,7 +138,7 @@ export const publicKeyFromBytes = (bytes: string): string => {
 export const getRecords = async (
   moduleAddress: string,
   keys: string[],
-  ethersProvider: ViemProvider
+  ethersProvider: ViemProvider,
 ) => {
   const contract = getContract({
     address: moduleAddress as `0x${string}`,
@@ -169,7 +179,7 @@ export const getRecords = async (
 export const getProtocolControllerAndModules = async (
   dev: boolean,
   l1Provider: ViemProvider,
-  l2Provider: ViemProvider
+  l2Provider: ViemProvider,
 ) => {
   const ensName = dev ? 'dev.soul2soul.eth' : 'soul2soul.eth';
 
@@ -201,9 +211,7 @@ export const getProtocolControllerAndModules = async (
 
   const subdomainNode = BigInt(viemNamehash(ensName));
 
-  const customRegistryContract = (await nameWrapper.read.ownerOf([
-    subdomainNode,
-  ])) as `0x${string}`;
+  const customRegistryContract = (await nameWrapper.read.ownerOf([subdomainNode])) as `0x${string}`;
 
   const registry = getContract({
     address: customRegistryContract,

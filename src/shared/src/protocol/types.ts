@@ -23,6 +23,13 @@ export interface S2SProtocolInfo {
   publicationFactory: string; // NEW (was neutralpress safe_publication_factory setting)
   recordsFactory: string; // NEW (was neutralpress safe_records_factory setting)
   /**
+   * The module factory: `publication_factory` in the protocol record. One
+   * factory deploys every kind of module, keyed by (safe, kind), and answers
+   * `moduleAddress(safe, kind)` for each of them. Empty string when the record
+   * does not name one, which is a deployment no Safe app can create modules on.
+   */
+  moduleFactory: string;
+  /**
    * The controller's own publication module, resolved from the module list and
    * the factory above: a CREATE2 factory's prediction first, the `NAME()` scan
    * when the factory cannot answer. Optional because a caller may have built

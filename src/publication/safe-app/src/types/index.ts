@@ -12,7 +12,7 @@ export interface SafeInfo {
   owners: string[];
   threshold: number;
   s2sRecords?: string;
-  s2sPublication?: string; 
+  s2sPublication?: string;
 }
 
 export interface SafeAppsSDK {
@@ -38,8 +38,6 @@ export interface EthersContract {
   deleteRecord(key: string): Promise<any>;
   getRecord(key: string): Promise<string>;
   recordExists(key: string): Promise<boolean>;
-  NAME(): Promise<string>;
-  VERSION(): Promise<string>;
   getRecordCount(): Promise<number>;
 }
 
@@ -57,17 +55,16 @@ export interface CancelEditEvent extends CustomEvent {
 }
 
 export interface Deal {
-  genesis: string,          // bytes32 hex — the document's permanent on-chain identity
-  cid: string,              // latest IPFS CID for this genesis
-  author: string,
-  status: 'deal' | 'offer',
-  creationDate?: Date,
-  modifiedDate?: Date,
-  postType?: string,
-  encryption?: boolean,
-  title?: string,
-  label?: string,          // public.label off the stored item — unsigned, never verified; absent = no label
-  position?: number,
-  tags?: string[]
+  genesis: string; // bytes32 hex — the document's permanent on-chain identity
+  cid: string; // latest IPFS CID for this genesis
+  author: string;
+  status: 'deal' | 'offer';
+  creationDate?: Date;
+  modifiedDate?: Date;
+  postType?: string;
+  encryption?: boolean;
+  title?: string;
+  label?: string; // public.label off the stored item — unsigned, never verified; absent = no label
+  position?: number;
+  tags?: string[];
 }
-

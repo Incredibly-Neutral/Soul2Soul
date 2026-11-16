@@ -8,8 +8,8 @@ import {
   findPublicationName,
   hasEnsProposal,
   markEnsProposal,
+  NoRecordsModuleError,
   pollBackoffMs,
-  RECORDS_MODULE_NAME,
   safeAppUrl,
   type EnsStepStorage,
 } from '../../src/lib/ens-step';
@@ -25,12 +25,12 @@ import {
   ZERO_ADDRESS,
   type EvmReadFn,
 } from '../../src/lib/domain-validation';
+import { S2S_MODULE_KIND_RECORDS } from '@s2s/soul2soul-shared/safe-app';
 
 const SAFE = '0x79dedb19353F7909CDc68504839EF88a7498aaf2';
 const OTHER_OWNER = '0x000000000000000000000000000000000000dEaD';
 const RECORDS = '0x1111111111111111111111111111111111111111';
-const OTHER_MODULE = '0x2222222222222222222222222222222222222222';
-const SENTINEL = '0x0000000000000000000000000000000000000001';
+const FACTORY = '0x3333333333333333333333333333333333333333';
 const NODE = '0x' + '1'.repeat(64);
 
 interface ReadCall {
@@ -40,224 +40,120 @@ interface ReadCall {
   args: any[];
 }
 
-/** A fake chain whose Safe module list + records module are injectable. */
+/**
+ * A fake chain: the factory answers `moduleAddress(safe, records kind)`, and the
+ * module it names answers `getRecord('name')`. Any other read is a bug, so it
+ * throws instead of inventing an answer.
+ */
 function makeChainRead(options: {
-  modules?: string[];
-  next?: string;
-  /** Explicit pages, walked in order (for multi-page / maxPages tests). */
-  pages?: Array<{ modules: string[]; next?: string }>;
+  /** What the factory answers; ZERO_ADDRESS by default (no module). */
+  module?: string;
   name?: string;
-  /** Per-module `name` record, when a Safe has more than one records module. */
-  names?: Record<string, string>;
-  recordsModule?: string;
-  recordsModules?: string[];
-  nameThrowsOn?: string[];
+  moduleThrows?: boolean;
   getRecordThrows?: boolean;
-  getRecordThrowsOn?: string[];
-  modulesThrows?: boolean;
   calls?: ReadCall[];
 }): EvmReadFn {
   const calls = options.calls;
-  let pageIndex = 0;
   return async (chainId, contractAddress, _abi, method, args) => {
     calls?.push({ chainId, contract: String(contractAddress), method, args });
     switch (method) {
-      case 'getModulesPaginated': {
-        if (options.modulesThrows) throw new Error('rpc down');
-        if (options.pages) {
-          const page = options.pages[Math.min(pageIndex++, options.pages.length - 1)];
-          return [page.modules, page.next ?? SENTINEL];
-        }
-        return [options.modules ?? [], options.next ?? SENTINEL];
-      }
-      case 'NAME': {
-        const module = String(contractAddress);
-        if (options.nameThrowsOn?.includes(module)) throw new Error('no NAME');
-        return (options.recordsModules ?? [options.recordsModule ?? RECORDS]).includes(module)
-          ? RECORDS_MODULE_NAME
-          : 'Other Module';
-      }
+      case 'moduleAddress':
+        if (options.moduleThrows) throw new Error('rpc down');
+        return options.module ?? ZERO_ADDRESS;
       case 'getRecord':
-        if (options.getRecordThrows || options.getRecordThrowsOn?.includes(String(contractAddress)))
-          throw new Error('rpc down');
-        return options.names?.[String(contractAddress)] ?? options.name ?? '';
+        if (options.getRecordThrows) throw new Error('rpc down');
+        return options.name ?? '';
       default:
         throw new Error(`unexpected read ${method}`);
     }
   };
 }
 
+const RECORDS_MODULE = { moduleFactory: FACTORY, module: RECORDS };
+
 describe('findPublicationName', () => {
-  it('reads name from the records module on Base, walking the Safe module list', async () => {
+  it('asks the factory for the records module, then reads its name record on Base', async () => {
     const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({
-      modules: [OTHER_MODULE, RECORDS],
-      name: 'polyphony.soul2soul.eth',
-      calls,
-    });
+    const evmRead = makeChainRead({ ...RECORDS_MODULE, name: 'polyphony.soul2soul.eth', calls });
 
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('polyphony.soul2soul.eth');
+    await expect(findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY })).resolves.toBe(
+      'polyphony.soul2soul.eth',
+    );
 
-    const page = calls.find((c) => c.method === 'getModulesPaginated');
-    expect(page?.chainId).toBe(BASE_CHAIN_ID);
-    expect(page?.contract).toBe(SAFE);
-    expect(page?.args).toEqual([SENTINEL, 20]);
+    const ask = calls.find((c) => c.method === 'moduleAddress');
+    expect(ask?.chainId).toBe(BASE_CHAIN_ID);
+    expect(ask?.contract).toBe(FACTORY);
+    expect(ask?.args).toEqual([SAFE, S2S_MODULE_KIND_RECORDS]);
     const record = calls.find((c) => c.method === 'getRecord');
     expect(record?.chainId).toBe(BASE_CHAIN_ID);
     expect(record?.contract).toBe(RECORDS);
     expect(record?.args).toEqual(['name']);
   });
 
-  it('returns "" when no module identifies itself as the records module', async () => {
-    const evmRead = makeChainRead({ modules: [OTHER_MODULE], recordsModule: '0xnot-here' });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('');
-  });
-
-  it('skips a module whose NAME() reverts and still finds the records module', async () => {
-    const evmRead = makeChainRead({
-      modules: [OTHER_MODULE, RECORDS],
-      nameThrowsOn: [OTHER_MODULE],
-      name: 'polyphony.soul2soul.eth',
-    });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('polyphony.soul2soul.eth');
-  });
-
-  it('returns "" for a publication with no name record', async () => {
-    const evmRead = makeChainRead({ modules: [RECORDS], name: '' });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('');
-  });
-
-  it('returns "" and never throws when the module list read fails (429/transport)', async () => {
-    const evmRead = makeChainRead({ modulesThrows: true });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('');
-  });
-
-  it('returns "" when the records module name read fails', async () => {
-    const evmRead = makeChainRead({ modules: [RECORDS], getRecordThrows: true });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('');
-  });
-
-  it('walks a real second page', async () => {
-    const NEXT = '0x' + '9'.repeat(40);
+  it('never reads the Safe module list or probes NAME()', async () => {
     const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({
-      pages: [
-        { modules: [OTHER_MODULE], next: NEXT },
-        { modules: [RECORDS], next: SENTINEL },
-      ],
-      name: 'polyphony.soul2soul.eth',
-      calls,
+    await findPublicationName(makeChainRead({ ...RECORDS_MODULE, calls }), SAFE, {
+      moduleFactory: FACTORY,
     });
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('polyphony.soul2soul.eth');
-    const pages = calls.filter((c) => c.method === 'getModulesPaginated');
-    expect(pages.map((c) => c.args[0])).toEqual([SENTINEL, NEXT]);
+    expect(calls.map((c) => c.method)).toEqual(['moduleAddress', 'getRecord']);
   });
 
-  it('stops at maxPages even when every page advertises another', async () => {
+  it('refuses with NoRecordsModuleError when the factory names no module', async () => {
     const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({
-      pages: [
-        { modules: [], next: '0x' + '9'.repeat(40) },
-        { modules: [], next: '0x' + '8'.repeat(40) },
-        { modules: [], next: '0x' + '7'.repeat(40) },
-        { modules: [], next: '0x' + '6'.repeat(40) },
-      ],
-      calls,
-    });
-    await findPublicationName(evmRead, SAFE, { maxPages: 3 });
-    expect(calls.filter((c) => c.method === 'getModulesPaginated')).toHaveLength(3);
+    const evmRead = makeChainRead({ module: ZERO_ADDRESS, calls });
+
+    await expect(
+      findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY }),
+    ).rejects.toBeInstanceOf(NoRecordsModuleError);
+    // A refusal is not a search: nothing else is read.
+    expect(calls.map((c) => c.method)).toEqual(['moduleAddress']);
   });
 
-  it('does not loop forever when a page returns the previous cursor again', async () => {
-    const NEXT = '0x' + '9'.repeat(40);
+  it('refuses before any read when the protocol record names no factory', async () => {
     const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({
-      pages: [
-        { modules: [], next: NEXT },
-        { modules: [], next: NEXT },
-      ],
-      calls,
-    });
-    await findPublicationName(evmRead, SAFE);
-    expect(calls.filter((c) => c.method === 'getModulesPaginated')).toHaveLength(2);
+    await expect(
+      findPublicationName(makeChainRead({ ...RECORDS_MODULE, calls }), SAFE, { moduleFactory: '' }),
+    ).rejects.toBeInstanceOf(NoRecordsModuleError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('returns "" for a publication whose name record is not written yet', async () => {
+    const evmRead = makeChainRead({ ...RECORDS_MODULE, name: '' });
+    await expect(findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY })).resolves.toBe('');
+  });
+
+  it('returns "" when the name read fails, and propagates it when asked', async () => {
+    const evmRead = makeChainRead({ ...RECORDS_MODULE, getRecordThrows: true });
+    await expect(findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY })).resolves.toBe('');
+    await expect(
+      findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY, throwOnError: true }),
+    ).rejects.toThrow('rpc down');
   });
 
   it('returns "" without any read for an empty Safe address', async () => {
     const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({ modules: [RECORDS], calls });
-    await expect(findPublicationName(evmRead, '')).resolves.toBe('');
+    const evmRead = makeChainRead({ ...RECORDS_MODULE, calls });
+    await expect(findPublicationName(evmRead, '', { moduleFactory: FACTORY })).resolves.toBe('');
     expect(calls).toHaveLength(0);
   });
 
-  it('accepts only the expected publication name when two records modules disagree', async () => {
-    const SECOND_RECORDS = '0x3333333333333333333333333333333333333333';
-    const calls: ReadCall[] = [];
-    const evmRead = makeChainRead({
-      modules: [RECORDS, SECOND_RECORDS],
-      recordsModules: [RECORDS, SECOND_RECORDS],
-      names: { [RECORDS]: 'stale.soul2soul.eth', [SECOND_RECORDS]: 'polyphony.soul2soul.eth' },
-      calls,
-    });
-
+  it('returns "" rather than a different name when the expected name is absent', async () => {
+    const evmRead = makeChainRead({ ...RECORDS_MODULE, name: 'stale.soul2soul.eth' });
     await expect(
-      findPublicationName(evmRead, SAFE, { expectedName: 'polyphony.soul2soul.eth' }),
-    ).resolves.toBe('polyphony.soul2soul.eth');
-    // Without the hint, the first records module wins (legacy behaviour).
-    await expect(findPublicationName(evmRead, SAFE)).resolves.toBe('stale.soul2soul.eth');
-  });
-
-  it('returns "" rather than a different module name when the expected name is absent', async () => {
-    const evmRead = makeChainRead({ modules: [RECORDS], name: 'stale.soul2soul.eth' });
-    await expect(
-      findPublicationName(evmRead, SAFE, { expectedName: 'polyphony.soul2soul.eth' }),
+      findPublicationName(evmRead, SAFE, {
+        moduleFactory: FACTORY,
+        expectedName: 'polyphony.soul2soul.eth',
+      }),
     ).resolves.toBe('');
   });
 
-  it('distinguishes a missing NAME() from a transport failure when asked', async () => {
-    const base = makeChainRead({
-      modules: [OTHER_MODULE, RECORDS],
-      name: 'polyphony.soul2soul.eth',
-    });
-    const evmRead: EvmReadFn = async (...args) => {
-      if (args[3] === 'NAME' && String(args[1]) === OTHER_MODULE) {
-        const err = new Error('execution reverted') as Error & { code: string };
-        err.code = 'CALL_EXCEPTION';
-        throw err;
-      }
-      return base(...args);
-    };
-    await expect(findPublicationName(evmRead, SAFE, { throwOnError: true })).resolves.toBe(
-      'polyphony.soul2soul.eth',
-    );
-  });
-
-  it('propagates a non-revert NAME() failure when asked', async () => {
-    const base = makeChainRead({ modules: [RECORDS] });
-    const evmRead: EvmReadFn = async (...args) => {
-      if (args[3] === 'NAME') {
-        const err = new Error('429 Too Many Requests') as Error & { code: string };
-        err.code = 'SERVER_ERROR';
-        throw err;
-      }
-      return base(...args);
-    };
+  it('propagates a transport failure of the factory read so the host does not cache it', async () => {
+    const evmRead = makeChainRead({ moduleThrows: true });
+    // A 429 is not a refusal: without throwOnError it reads as "no name yet",
+    // with it the host retries instead of hiding the card for the page load.
+    await expect(findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY })).resolves.toBe('');
     await expect(
-      findPublicationName(evmRead, SAFE, {
-        expectedName: 'polyphony.soul2soul.eth',
-        throwOnError: true,
-      }),
-    ).rejects.toThrow('429');
-  });
-
-  it('can propagate read failures so the host does not cache a failed read', async () => {
-    await expect(
-      findPublicationName(makeChainRead({ modulesThrows: true }), SAFE, { throwOnError: true }),
-    ).rejects.toThrow('rpc down');
-    await expect(
-      findPublicationName(makeChainRead({ modules: [RECORDS], getRecordThrows: true }), SAFE, {
-        expectedName: 'polyphony.soul2soul.eth',
-        throwOnError: true,
-      }),
+      findPublicationName(evmRead, SAFE, { moduleFactory: FACTORY, throwOnError: true }),
     ).rejects.toThrow('rpc down');
   });
 });
@@ -350,6 +246,15 @@ describe('ensStepView', () => {
     expect(view.canPropose).toBe(false);
     expect(view.call).toBeUndefined();
     expect(view.reason).toContain(OTHER_OWNER.toLowerCase());
+  });
+
+  it('reports a missing records module instead of a registration to make', () => {
+    const view = ensStepView(null, BASE_SAFE, { moduleMissing: 'no records module' });
+    expect(view.kind).toBe('error');
+    expect(view.canPropose).toBe(false);
+    expect(view.call).toBeUndefined();
+    // The server's own words, not a guessed name.
+    expect(view.reason).toBe('no records module');
   });
 
   it('is an error for the desynced half-written registry state', () => {

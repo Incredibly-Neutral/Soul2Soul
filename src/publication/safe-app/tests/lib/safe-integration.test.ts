@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Abi_S2SPublicationModuleV2 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV2';
-import { Abi_S2SPublicationModuleV3 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV3';
+import { Abi_S2SPublicationModuleV6 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV6';
+import { Abi_S2SRecordsModuleV2 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV2';
 import { toBytes32Id } from '@s2s/soul2soul-shared';
+import {
+  S2S_MODULE_KIND_PUBLICATION,
+  S2S_MODULE_KIND_RECORDS,
+} from '@s2s/soul2soul-shared/safe-app';
 import { getAddress } from 'ethers';
 import { SafeIntegration } from '../../src/lib/safe-integration';
 
@@ -17,9 +21,11 @@ import { SafeIntegration } from '../../src/lib/safe-integration';
 //    never invoked on the contract instance.
 // ---------------------------------------------------------------------------
 
-const R_ADDR = '0x0000000000000000000000000000000000000R00';
-const P_ADDR = '0x0000000000000000000000000000000000000P00';
-const O_ADDR = '0x0000000000000000000000000000000000000O00';
+const R_ADDR = getAddress('0x' + '11'.repeat(20));
+const P_ADDR = getAddress('0x' + '22'.repeat(20));
+const O_ADDR = getAddress('0x' + '33'.repeat(20));
+/** The one module factory every module is created through. */
+const FACTORY = getAddress('0x' + 'fc'.repeat(20));
 
 const SAFE_DATA = {
   safeAddress: '0xSafeAddress',
@@ -98,14 +104,30 @@ const eth = vi.hoisted(() => {
     });
   }
   return {
-    contractStubs, directCalls, rpcUrls, contractCtorArgs, browserProviderCalls, getLogsCalls,
-    getCodeCalls, JsonRpcProvider, BrowserProvider, Contract,
+    contractStubs,
+    directCalls,
+    rpcUrls,
+    contractCtorArgs,
+    browserProviderCalls,
+    getLogsCalls,
+    getCodeCalls,
+    JsonRpcProvider,
+    BrowserProvider,
+    Contract,
     // Accessors so tests can set the result the getLogs mock will return.
-    get getLogsResult() { return getLogsResult; },
-    set getLogsResult(v: unknown) { getLogsResult = v; },
+    get getLogsResult() {
+      return getLogsResult;
+    },
+    set getLogsResult(v: unknown) {
+      getLogsResult = v;
+    },
     // Accessors for the eth_getCode mock (address → hex code).
-    get codeResults() { return codeResults; },
-    set codeResults(v: Record<string, string>) { codeResults = v; },
+    get codeResults() {
+      return codeResults;
+    },
+    set codeResults(v: Record<string, string>) {
+      codeResults = v;
+    },
   };
 });
 
@@ -124,11 +146,10 @@ function makeRecordsStub() {
 
 function makePubStub() {
   return {
-    // The live deployment. Tests that care about an earlier version override it.
-    NAME: vi.fn(async () => 'S2S Publication Module V3'),
+    NAME: vi.fn(async () => 'S2S Publication Module V6'),
     interface: makeInterface(),
-    hasDeal: vi.fn(),
-    getDeals: vi.fn(),
+    hasAgreement: vi.fn(),
+    getAgreements: vi.fn(),
     getOffers: vi.fn(),
     getWhitelistedAuthors: vi.fn(),
     getWhitelistedDevs: vi.fn(),
@@ -136,20 +157,41 @@ function makePubStub() {
   };
 }
 
+/**
+ * The factory's answers: one module per (safe, kind). `moduleAddress` is the
+ * only selector discovery reads, so anything else on this stub is a bug.
+ */
+function makeFactoryStub(answer: Record<string, string> = {}) {
+  const stub = {
+    moduleAddress: vi.fn(async (_safe: string, kind: string) => {
+      const address = answer[kind] ?? (kind === S2S_MODULE_KIND_RECORDS ? R_ADDR : P_ADDR);
+      return address;
+    }),
+  };
+  eth.contractStubs[FACTORY] = stub;
+  return stub;
+}
+
 let records: ReturnType<typeof makeRecordsStub>;
 let pub: ReturnType<typeof makePubStub>;
 let other: { NAME: ReturnType<typeof vi.fn> };
+let factory: ReturnType<typeof makeFactoryStub>;
 
 beforeEach(() => {
   // Deterministic DRPC URLs regardless of the local root .env.
   vi.stubEnv('VITE_DRPC_API_KEY', 'testkey');
   records = makeRecordsStub();
   pub = makePubStub();
-  other = { NAME: vi.fn(async () => { throw new Error('no NAME()'); }) };
+  other = {
+    NAME: vi.fn(async () => {
+      throw new Error('no NAME()');
+    }),
+  };
 
   eth.contractStubs[R_ADDR] = records;
   eth.contractStubs[P_ADDR] = pub;
   eth.contractStubs[O_ADDR] = other;
+  factory = makeFactoryStub();
   eth.rpcUrls.length = 0;
   eth.contractCtorArgs.length = 0;
   eth.browserProviderCalls.length = 0;
@@ -170,17 +212,31 @@ beforeEach(() => {
 /** Construct + initialize a SafeIntegration, asserting the discovery result. */
 async function initInstance(): Promise<SafeIntegration> {
   const si = new SafeIntegration();
+  si.setModuleFactory(FACTORY);
   const info = await si.initialize();
   expect(info.safeAddress).toBe(SAFE_DATA.safeAddress);
   expect(info.chainId).toBe(SAFE_DATA.chainId);
   return si;
 }
 
-describe('initialize — module discovery by NAME()', () => {
-  it('discovers the Records and Publication modules by NAME() and fills safeInfo', async () => {
+describe('initialize — module discovery through the module factory', () => {
+  /** The ABI a wrapper for `address` was constructed with (not a read probe). */
+  function boundAbi(address: string): unknown {
+    const args = eth.contractCtorArgs.filter(([addr]) => addr === address).pop();
+    return args?.[1];
+  }
+
+  it('binds both kinds from moduleAddress and fills safeInfo', async () => {
     const si = await initInstance();
-    expect(records.NAME).toHaveBeenCalled();
-    expect(pub.NAME).toHaveBeenCalled();
+
+    expect(factory.moduleAddress).toHaveBeenCalledWith(
+      SAFE_DATA.safeAddress,
+      S2S_MODULE_KIND_RECORDS,
+    );
+    expect(factory.moduleAddress).toHaveBeenCalledWith(
+      SAFE_DATA.safeAddress,
+      S2S_MODULE_KIND_PUBLICATION,
+    );
 
     const info = si.getSafeInfo();
     expect(info.s2sRecords).toBe(R_ADDR);
@@ -195,88 +251,40 @@ describe('initialize — module discovery by NAME()', () => {
     expect(si.hasPublicationModule()).toBe(true);
   });
 
-  /**
-   * The ABI the wrapper for P_ADDR was constructed with. The NAME() probe also
-   * constructs a Contract for that address with a minimal ABI, so ignore that
-   * one: a real binding carries more than the single NAME fragment.
-   */
-  function boundPublicationAbi(): unknown {
-    const args = eth.contractCtorArgs
-      .filter(([addr]) => addr === P_ADDR)
-      .filter(([, abi]) => Array.isArray(abi) && abi.length > 1)
-      .pop();
-    return args?.[1];
-  }
+  it('never probes NAME(): the kind, not a string, decides the ABI', async () => {
+    await initInstance();
+    expect(records.NAME).not.toHaveBeenCalled();
+    expect(pub.NAME).not.toHaveBeenCalled();
+    expect(other.NAME).not.toHaveBeenCalled();
+  });
 
-  it('binds the V3 ABI to a V3 publication, so admit/reject exist', async () => {
-    pub.NAME.mockImplementation(async () => 'S2S Publication Module V3');
+  it('binds the V6 publication and V2 records ABIs', async () => {
     const si = await initInstance();
-    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
     expect(si.hasPublicationModule()).toBe(true);
-    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV3);
-
-    await si.admit(`0x${'c'.repeat(64)}`);
-    await si.reject(`0x${'c'.repeat(64)}`);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('admit', [expect.anything()]);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('reject', [expect.anything()]);
-  });
-
-  // V2 implements acceptOffer/retract, not admit/reject. Binding the V3 ABI to
-  // it made every Accept/Refuse revert on the live V2 publications.
-  it('binds the V2 ABI to a V2 publication, so accept and refuse still work', async () => {
-    pub.NAME.mockImplementation(async () => 'S2S Publication Module V2');
-    const si = await initInstance();
-    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
-    expect(boundPublicationAbi()).toBe(Abi_S2SPublicationModuleV2);
-
-    const genesis = `0x${'d'.repeat(64)}`;
-    await si.admit(genesis);
-    await si.reject(genesis);
-
-    // The selectors the V2 proxy actually implements.
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
-    // ... and not the V3 verbs it does not have.
-    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
-    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
-    // Same tx path: the Safe proposes, nothing is sent directly.
-    expect(sdk.txsSend).toHaveBeenCalledTimes(2);
-    expect(eth.directCalls[P_ADDR]?.['acceptOffer']).toBeUndefined();
-    expect(eth.directCalls[P_ADDR]?.['retract']).toBeUndefined();
-  });
-
-  // V1 (bare name) has no getDeals/getOffers/hasDeal at all, so there is no
-  // agreements surface to bind. It is left unadopted, which is what the app did
-  // before V3: the deals tab degrades to "no publication module" instead of
-  // calling functions the module does not implement.
-  it('leaves a V1 publication (bare name) unadopted rather than binding a deals surface', async () => {
-    pub.NAME.mockImplementation(async () => 'S2S Publication Module');
-    const si = await initInstance();
-    expect(si.getSafeInfo().s2sPublication).toBe('');
-    expect(si.hasPublicationModule()).toBe(false);
-    expect(boundPublicationAbi()).toBeUndefined();
-
-    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
-    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
-    await expect(si.getAllDealsAndOffers()).rejects.toThrow(/[Pp]ublication module not/);
+    expect(boundAbi(P_ADDR)).toEqual(Abi_S2SPublicationModuleV6);
+    expect(boundAbi(R_ADDR)).toEqual(Abi_S2SRecordsModuleV2);
   });
 
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {
     await initInstance();
-    expect(eth.rpcUrls).toEqual(['https://lb.drpc.live/base/testkey']);
+    expect(eth.rpcUrls.length).toBeGreaterThan(0);
+    expect(new Set(eth.rpcUrls)).toEqual(new Set(['https://lb.drpc.live/base/testkey']));
   });
 
-  it('skips modules that throw on NAME() (no NAME function)', async () => {
-    const si = await initInstance();
-    expect(other.NAME).toHaveBeenCalled();
-    // O_ADDR was never assigned as a known module.
-    expect(si.getSafeInfo().s2sRecords).toBe(R_ADDR);
-    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+  it('discovers nothing when no factory is known: there is no scan to fall back on', async () => {
+    const si = new SafeIntegration();
+    const info = await si.initialize();
+    expect(info.s2sRecords).toBe('');
+    expect(info.s2sPublication).toBe('');
+    expect(si.hasRecordsModule()).toBe(false);
+    expect(si.hasPublicationModule()).toBe(false);
+    expect(factory.moduleAddress).not.toHaveBeenCalled();
   });
 
   it('returns safeInfo with empty module addresses when initialize fails early', async () => {
     sdk.getInfo.mockRejectedValue(new Error('no wallet'));
     const si = new SafeIntegration();
+    si.setModuleFactory(FACTORY);
     const info = await si.initialize();
     expect(info.s2sRecords).toBe('');
     expect(info.s2sPublication).toBe('');
@@ -286,14 +294,13 @@ describe('initialize — module discovery by NAME()', () => {
 
   // --- step-3 race (`to: ''` → invalid address) ---------------------------
 
-  it('a second initialize() whose NAME() probes revert keeps the known addresses (the step-3 repro)', async () => {
+  it('a second initialize() whose factory read reverts keeps the known addresses (the step-3 repro)', async () => {
     const si = await initInstance();
 
     // The live repro: an overlapping fetchFreshData() calls initialize() again
-    // while the RPC is unhappy, so every NAME() probe reverts. The Safe still
-    // LISTS both modules — it just could not tell us their names this time.
-    records.NAME.mockRejectedValue(new Error('revert'));
-    pub.NAME.mockRejectedValue(new Error('revert'));
+    // while the RPC is unhappy. The Safe still LISTS both modules — discovery
+    // just could not ask the factory this time.
+    factory.moduleAddress.mockRejectedValue(new Error('revert'));
 
     const info = await si.initialize();
 
@@ -315,18 +322,16 @@ describe('initialize — module discovery by NAME()', () => {
     let releasePub!: () => void;
     const recordsGate = new Promise<void>((r) => (releaseRecords = r));
     const pubGate = new Promise<void>((r) => (releasePub = r));
-    records.NAME.mockImplementation(async () => {
-      await recordsGate;
-      return 'S2S Records Module';
-    });
-    pub.NAME.mockImplementation(async () => {
+    factory.moduleAddress.mockImplementation(async (_safe: string, kind: string) => {
+      if (kind === S2S_MODULE_KIND_RECORDS) {
+        await recordsGate;
+        return R_ADDR;
+      }
       await pubGate;
-      return 'S2S Publication Module V2';
+      return P_ADDR;
     });
 
-    // Count only this pair of calls (initInstance above already probed NAME()).
-    records.NAME.mockClear();
-    pub.NAME.mockClear();
+    factory.moduleAddress.mockClear();
 
     // Two overlapping initializations, exactly like the two fetchFreshData()
     // calls in the live crash.
@@ -341,14 +346,14 @@ describe('initialize — module discovery by NAME()', () => {
       if (si.hasPublicationModule()) expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
     };
 
-    // Both calls are parked on the records NAME() probe. Nothing may have been
-    // published yet — in particular safeInfo must NOT have been blanked.
-    await vi.waitFor(() => expect(records.NAME).toHaveBeenCalledTimes(2));
+    // Both calls are parked on the two reads. Nothing may have been published
+    // yet — in particular safeInfo must NOT have been blanked.
+    await vi.waitFor(() => expect(factory.moduleAddress).toHaveBeenCalledTimes(4));
     assertWhole();
 
-    // Records rediscovered, publication still probing: still no asymmetry.
+    // Records rediscovered, publication still reading: still no asymmetry.
     releaseRecords();
-    await vi.waitFor(() => expect(pub.NAME).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
     assertWhole();
 
     releasePub();
@@ -360,27 +365,25 @@ describe('initialize — module discovery by NAME()', () => {
     assertWhole();
   });
 
-  it('keeps a module adopted while initialize() is suspended on a NAME() probe (no lost update)', async () => {
+  it('keeps a module adopted while initialize() is suspended on the factory read (no lost update)', async () => {
     // N3: the publish used to write back the wrapper captured at entry, so an
     // adoptModules() landing mid-pass was discarded — hasRecordsModule() false
     // for the rest of the page, Config tab gone, config session dropped.
-    const ADOPTED = '0xAdoptedMidPass';
-    const GATE = '0xGateModule';
+    const ADOPTED = getAddress('0x' + 'a1'.repeat(20));
     eth.contractStubs[ADOPTED] = makeRecordsStub();
+
     let releaseGate!: () => void;
     const gate = new Promise<void>((r) => (releaseGate = r));
-    const gateName = vi.fn(async () => {
+    factory.moduleAddress.mockImplementation(async () => {
       await gate;
-      return 'Some Other Module';
+      return '0x0000000000000000000000000000000000000000';
     });
-    eth.contractStubs[GATE] = { NAME: gateName };
 
     const si = new SafeIntegration();
-    // The Safe lists only an unrelated module, so this pass discovers nothing.
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [GATE] });
+    si.setModuleFactory(FACTORY);
 
     const pending = si.initialize();
-    await vi.waitFor(() => expect(gateName).toHaveBeenCalled());
+    await vi.waitFor(() => expect(factory.moduleAddress).toHaveBeenCalled());
 
     // The init flow learns the freshly-deployed module and adopts it now.
     await si.adoptModules(ADOPTED);
@@ -414,249 +417,69 @@ describe('initialize — module discovery by NAME()', () => {
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
   });
 
-  // Adoption is the path an EXISTING publication takes: the init flow learned the
-  // address from factory logs and has no name to hand over. The version decides
-  // the verbs, and a V2 proxy does not implement admit/reject.
-  it('adopts a V2 publication with the V2 ABI, so accept and refuse work', async () => {
-    const ADOPTED_PUB = '0xAdoptedPublicationV2';
-    eth.contractStubs[ADOPTED_PUB] = makePubStub();
-    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
-      async () => 'S2S Publication Module V2',
-    );
-
-    const si = new SafeIntegration();
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
-    await si.initialize();
-    expect(si.hasPublicationModule()).toBe(false);
-
-    await si.adoptModules(undefined, ADOPTED_PUB);
-    expect(si.hasPublicationModule()).toBe(true);
-
-    const abi = eth.contractCtorArgs
-      .filter(([addr]) => addr === ADOPTED_PUB)
-      .filter(([, a]) => Array.isArray(a) && a.length > 1)
-      .pop()?.[1];
-    expect(abi).toBe(Abi_S2SPublicationModuleV2);
-
-    const genesis = `0x${'e'.repeat(64)}`;
-    await si.admit(genesis);
-    await si.reject(genesis);
-    const iface = (eth.contractStubs[ADOPTED_PUB] as any).interface;
-    expect(iface.encodeFunctionData).toHaveBeenCalledWith('acceptOffer', [toBytes32Id(genesis)]);
-    expect(iface.encodeFunctionData).toHaveBeenCalledWith('retract', [toBytes32Id(genesis)]);
-    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('admit', expect.anything());
-    expect(iface.encodeFunctionData).not.toHaveBeenCalledWith('reject', expect.anything());
-  });
-
-  // A probe that fails is not a version. Guessing V3 here bound an ABI the (V2)
-  // module does not implement, and the failure only showed on the first write.
-  it('does not adopt a publication whose version cannot be probed', async () => {
-    const ADOPTED_PUB = '0xAdoptedPublicationUnprobeable';
-    eth.contractStubs[ADOPTED_PUB] = {
-      NAME: vi.fn(async () => {
-        throw new Error('RPC unavailable');
-      }),
-      interface: makeInterface(),
-    };
-
-    const si = new SafeIntegration();
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
-    await si.initialize();
-
-    await si.adoptModules(undefined, ADOPTED_PUB);
-    expect(si.hasPublicationModule()).toBe(false);
-    expect(si.getSafeInfo().s2sPublication).toBe('');
-    // Nothing bound, so nothing is encoded: no guessed selector is ever sent.
-    await expect(si.admit('0x1')).rejects.toThrow(/publication module not found/);
-    await expect(si.reject('0x1')).rejects.toThrow(/publication module not found/);
-    expect(eth.directCalls[ADOPTED_PUB]?.['admit']).toBeUndefined();
-    expect(eth.directCalls[ADOPTED_PUB]?.['reject']).toBeUndefined();
-  });
-
-  it('does not adopt a V1 publication, which has no agreements surface to bind', async () => {
-    const ADOPTED_PUB = '0xAdoptedPublicationV1';
-    eth.contractStubs[ADOPTED_PUB] = makePubStub();
-    (eth.contractStubs[ADOPTED_PUB] as any).NAME.mockImplementation(
-      async () => 'S2S Publication Module',
-    );
-
-    const si = new SafeIntegration();
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
-    await si.initialize();
-
-    await si.adoptModules(undefined, ADOPTED_PUB);
-    expect(si.hasPublicationModule()).toBe(false);
-  });
-
   it('keeps a module adopted mid-init that the Safe does not list yet (deployed, enable tx pending)', async () => {
-    const ADOPTED = '0xAdoptedRecordsModule';
-    eth.contractStubs[ADOPTED] = makeRecordsStub();
-
-    const si = new SafeIntegration();
-    // Fresh Safe: no modules installed yet.
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [] });
-    await si.initialize();
-    expect(si.hasRecordsModule()).toBe(false);
-
-    // The init flow deploys the contracts and adopts them (factory logs) BEFORE
-    // the enableModule proposal executes; a concurrent initialize() must not
-    // wipe that recovery handle.
-    await si.adoptModules(ADOPTED);
-    expect(si.hasRecordsModule()).toBe(true);
-
-    const info = await si.initialize();
-    expect(info.s2sRecords).toBe(ADOPTED);
-    expect(si.hasRecordsModule()).toBe(true);
-  });
-});
-
-describe('initialize — CREATE2 prediction first, NAME() scan as fallback', () => {
-  const FACTORY = '0x' + 'fc'.repeat(20);
-  const PREDICTED = getAddress('0x' + 'bb'.repeat(20));
-
-  /** A factory stub that answers the create2 views. */
-  function factoryStub(answers: {
-    moduleAddress?: string | Error;
-    count?: number | Error;
-    forVersion?: Record<number, string>;
-  }) {
-    const stub: Record<string, any> = {
-      moduleAddress: vi.fn(async () => {
-        if (answers.moduleAddress instanceof Error) throw answers.moduleAddress;
-        return answers.moduleAddress ?? `0x${'0'.repeat(40)}`;
-      }),
-      implementationCount: vi.fn(async () => {
-        if (answers.count instanceof Error || answers.count === undefined) {
-          throw new Error('no such selector');
-        }
-        return BigInt(answers.count);
-      }),
-      moduleAddressForVersion: vi.fn(async (_safe: string, version: bigint) => {
-        const answer = answers.forVersion?.[Number(version)];
-        if (!answer) throw new Error('execution reverted');
-        return answer;
-      }),
-    };
-    eth.contractStubs[FACTORY] = stub;
-    return stub;
-  }
-
-  /** Give an address code, so the prediction counts as confirmed. */
-  function withCode(...addresses: string[]) {
-    const results: Record<string, string> = {};
-    for (const address of addresses) results[address.toLowerCase()] = '0x60806040';
-    eth.codeResults = results;
-  }
-
-  it('takes the factory answer for a listed module, and the NAME() probe still sets the ABI', async () => {
-    const stub = factoryStub({ moduleAddress: PREDICTED });
-    withCode(PREDICTED);
-    eth.contractStubs[PREDICTED] = makePubStub(); // the predicted module answers NAME()
-    // The prediction is only accepted for a module the Safe actually lists:
-    // a disabled module stays deployed but every write to it reverts.
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [...SAFE_DATA.modules, PREDICTED] });
-
-    const si = new SafeIntegration();
-    si.setPublicationFactory(FACTORY);
-    const info = await si.initialize();
-
-    expect(stub.moduleAddress).toHaveBeenCalledWith(SAFE_DATA.safeAddress);
-    expect(info.s2sPublication).toBe(PREDICTED);
-    // The prediction names an address, not a version: NAME() picked V3.
-    expect(eth.contractStubs[PREDICTED].NAME).toHaveBeenCalled();
-    expect(si.hasPublicationModule()).toBe(true);
-  });
-
-  it('walks implementationCount when moduleAddress has no code (a publication from an older implementation)', async () => {
-    const stub = factoryStub({ moduleAddress: PREDICTED, count: 2, forVersion: { 1: P_ADDR } });
-    withCode(P_ADDR);
-    const si = new SafeIntegration();
-    si.setPublicationFactory(FACTORY);
-
-    const info = await si.initialize();
-
-    expect(stub.moduleAddressForVersion).toHaveBeenCalledWith(SAFE_DATA.safeAddress, 1n);
-    expect(info.s2sPublication).toBe(P_ADDR);
-  });
-
-  it('falls back to the NAME() scan when the factory answers no create2 selector', async () => {
-    factoryStub({ moduleAddress: new Error('function selector was not recognized') });
-    const si = new SafeIntegration();
-    si.setPublicationFactory(FACTORY);
-
-    const info = await si.initialize();
-
-    expect(info.s2sPublication).toBe(P_ADDR);
-    expect(pub.NAME).toHaveBeenCalled();
-  });
-
-  it('ignores a prediction the Safe does not list (a disabled module still has code)', async () => {
-    const DISABLED = getAddress('0x' + 'dd'.repeat(20));
-    factoryStub({ moduleAddress: DISABLED });
-    withCode(DISABLED);
-    // Its own stub: `pub` is shared with P_ADDR and the mock's `target` would
-    // then name DISABLED for both.
-    eth.contractStubs[DISABLED] = makePubStub();
-
-    const si = new SafeIntegration();
-    si.setPublicationFactory(FACTORY);
-
-    const info = await si.initialize();
-
-    // Writing to a disabled module reverts, so the scan's answer wins.
-    expect(info.s2sPublication).toBe(P_ADDR);
-  });
-
-  it('keeps the scan tie-break (last publication module listed wins) with no factory', async () => {
-    const P2 = '0x00000000000000000000000000000000000000a2';
-    eth.contractStubs[P2] = makePubStub();
-    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [...SAFE_DATA.modules, P2] });
-
-    const si = await initInstance();
-
-    expect(si.getSafeInfo().s2sPublication).toBe(P2);
-  });
-
-  it('lets a confirmed prediction beat the scan when the Safe lists two publication modules', async () => {
-    eth.contractStubs[PREDICTED] = makePubStub();
-    // PREDICTED is listed BEFORE P_ADDR, so the scan alone would land on P_ADDR.
-    sdk.getInfo.mockResolvedValue({
-      ...SAFE_DATA,
-      modules: [O_ADDR, R_ADDR, PREDICTED, P_ADDR],
+    const ADOPTED_RECORDS = getAddress('0x' + 'a2'.repeat(20));
+    const ADOPTED_PUB = getAddress('0x' + 'a3'.repeat(20));
+    eth.contractStubs[ADOPTED_RECORDS] = makeRecordsStub();
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+    factory = makeFactoryStub({
+      [S2S_MODULE_KIND_RECORDS]: ADOPTED_RECORDS,
+      [S2S_MODULE_KIND_PUBLICATION]: ADOPTED_PUB,
     });
-    factoryStub({ moduleAddress: PREDICTED });
-    withCode(PREDICTED);
 
     const si = new SafeIntegration();
-    si.setPublicationFactory(FACTORY);
+    si.setModuleFactory(FACTORY);
+    // The create has executed; the enable proposal has not.
+    sdk.getInfo.mockResolvedValue({ ...SAFE_DATA, modules: [O_ADDR] });
+
+    await si.adoptModules(ADOPTED_RECORDS, ADOPTED_PUB);
     const info = await si.initialize();
 
-    expect(info.s2sPublication).toBe(PREDICTED);
+    expect(info.s2sRecords).toBe(ADOPTED_RECORDS);
+    expect(info.s2sPublication).toBe(ADOPTED_PUB);
+    expect(si.hasRecordsModule()).toBe(true);
   });
 
-  it('scans without a factory (nothing set: the pre-create2 path, unchanged)', async () => {
-    const stub = factoryStub({ moduleAddress: PREDICTED });
-    const si = await initInstance();
-    expect(stub.moduleAddress).not.toHaveBeenCalled();
-    expect(si.getSafeInfo().s2sPublication).toBe(P_ADDR);
+  it('adoptModules binds the V6 publication and V2 records ABIs, with no NAME probe', async () => {
+    const ADOPTED_RECORDS = getAddress('0x' + 'a4'.repeat(20));
+    const ADOPTED_PUB = getAddress('0x' + 'a5'.repeat(20));
+    eth.contractStubs[ADOPTED_RECORDS] = makeRecordsStub();
+    eth.contractStubs[ADOPTED_PUB] = makePubStub();
+
+    const si = new SafeIntegration();
+    si.setModuleFactory(FACTORY);
+    await si.adoptModules(ADOPTED_RECORDS, ADOPTED_PUB);
+
+    expect(boundAbi(ADOPTED_RECORDS)).toEqual(Abi_S2SRecordsModuleV2);
+    expect(boundAbi(ADOPTED_PUB)).toEqual(Abi_S2SPublicationModuleV6);
+    expect(pub.NAME).not.toHaveBeenCalled();
   });
 
-  it('exposes the prediction helpers for the init flow', async () => {
-    const stub = factoryStub({ moduleAddress: PREDICTED });
+  it('moduleAddress(safe, kind) asks the factory and checksums the answer', async () => {
     const si = await initInstance();
-    si.setPublicationFactory(FACTORY);
-    const target = {
-      factory: FACTORY,
-      safeAddress: SAFE_DATA.safeAddress,
-      chainId: SAFE_DATA.chainId,
+    const answer = await si.moduleAddress(SAFE_DATA.safeAddress, S2S_MODULE_KIND_RECORDS);
+    expect(answer).toBe(R_ADDR);
+  });
+
+  it('moduleAddress refuses with no factory set instead of scanning for one', async () => {
+    const si = new SafeIntegration();
+    await expect(si.moduleAddress(SAFE_DATA.safeAddress, S2S_MODULE_KIND_RECORDS)).rejects.toThrow(
+      /module factory/i,
+    );
+  });
+
+  it('setModuleFactory replaces the address every later read uses', async () => {
+    const OTHER_FACTORY = getAddress('0x' + 'fe'.repeat(20));
+    const MOVED = getAddress('0x' + 'a6'.repeat(20));
+    eth.contractStubs[MOVED] = makeRecordsStub();
+    eth.contractStubs[OTHER_FACTORY] = {
+      moduleAddress: vi.fn(async () => MOVED),
     };
 
-    expect(await si.predictNextPublicationModule(target)).toBe(PREDICTED);
-    // No code at it yet, so it is not accepted as an existing module.
-    expect(await si.resolvePublicationModule(target)).toBeUndefined();
-    withCode(PREDICTED);
-    expect(await si.resolvePublicationModule(target)).toBe(PREDICTED);
-    expect(stub.moduleAddress).toHaveBeenCalledWith(SAFE_DATA.safeAddress);
+    const si = await initInstance();
+    si.setModuleFactory(OTHER_FACTORY);
+    expect(si.getModuleFactory()).toBe(OTHER_FACTORY);
+    expect(await si.moduleAddress(SAFE_DATA.safeAddress, S2S_MODULE_KIND_RECORDS)).toBe(MOVED);
   });
 });
 
@@ -665,13 +488,14 @@ describe('setRecord — proposes via safeSdk.txs.send, never a direct send', () 
     const si = await initInstance();
     const safeUrl = await si.setRecord('key1', 'value1');
 
-    expect(records.interface.encodeFunctionData).toHaveBeenCalledWith('setRecord', ['key1', 'value1']);
+    expect(records.interface.encodeFunctionData).toHaveBeenCalledWith('setRecord', [
+      'key1',
+      'value1',
+    ]);
     expect(sdk.txsSend).toHaveBeenCalledWith({
       txs: [{ to: R_ADDR, value: '0', data: '0xsetRecord' }],
     });
-    expect(safeUrl).toBe(
-      `https://app.safe.global/transactions/queue?safe=8453:0xSafeAddress`,
-    );
+    expect(safeUrl).toBe(`https://app.safe.global/transactions/queue?safe=8453:0xSafeAddress`);
 
     // NEVER a direct send: the contract's own setRecord method was not invoked.
     expect(eth.directCalls[R_ADDR]?.['setRecord']).toBeUndefined();
@@ -743,9 +567,7 @@ describe('proposeBatch — generic batch proposal (module-install init flow, AD-
     const safeUrl = await si.proposeBatch(batch);
 
     expect(sdk.txsSend).toHaveBeenCalledWith({ txs: batch });
-    expect(safeUrl).toBe(
-      `https://app.safe.global/transactions/queue?safe=8453:0xSafeAddress`,
-    );
+    expect(safeUrl).toBe(`https://app.safe.global/transactions/queue?safe=8453:0xSafeAddress`);
 
     // NEVER a direct send: nothing was invoked on any contract instance.
     for (const k of Object.keys(eth.directCalls)) {
@@ -755,8 +577,9 @@ describe('proposeBatch — generic batch proposal (module-install init flow, AD-
 
   it('throws when the Safe SDK is missing', async () => {
     const si = new SafeIntegration();
-    await expect(si.proposeBatch([{ to: R_ADDR, value: '0', data: '0x00' }]))
-      .rejects.toThrow('Safe SDK not initialized');
+    await expect(si.proposeBatch([{ to: R_ADDR, value: '0', data: '0x00' }])).rejects.toThrow(
+      'Safe SDK not initialized',
+    );
     expect(sdk.txsSend).not.toHaveBeenCalled();
   });
 });
@@ -766,28 +589,6 @@ describe('getProvider — JSON-RPC provider for the Safe chain', () => {
     const si = await initInstance();
     const provider = si.getProvider();
     expect(provider.url).toBe('https://lb.drpc.live/base/testkey');
-  });
-});
-
-describe('fetchFactoryModuleCreatedLogs — factory ModuleCreated log reads', () => {
-  it('calls provider.getLogs with address + padded safe topic and returns the logs', async () => {
-    const si = await initInstance();
-    const factory = '0xFactory'; 
-    const safeAddress = '0xAbCdef1234567890AbCdef1234567890AbCdef12'; // 40 hex chars
-    const topic0 = '0x' + '0'.repeat(64);
-    const paddedSafe = '0x' + '0'.repeat(24) + 'abcdef1234567890abcdef1234567890abcdef12';
-    const log = { topics: [topic0, paddedSafe], data: '0x' };
-    eth.getLogsResult = [log];
-
-    const result = await si.fetchFactoryModuleCreatedLogs(factory, safeAddress, topic0, 12345);
-
-    expect(eth.getLogsCalls).toEqual([{
-      address: factory,
-      topics: [topic0, paddedSafe],
-      fromBlock: 12345,
-      toBlock: 'latest',
-    }]);
-    expect(result).toEqual([log]);
   });
 });
 
@@ -842,7 +643,10 @@ describe('publication mutations — makeOffer / admit / reject / whitelists', ()
     const genesis = `0x${'a'.repeat(64)}`;
     await si.makeOffer(genesis, 'bafyCid');
 
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('makeOffer', [toBytes32Id(genesis), 'bafyCid']);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('makeOffer', [
+      toBytes32Id(genesis),
+      'bafyCid',
+    ]);
     expect(sdk.txsSend).toHaveBeenCalledWith({
       txs: [{ to: P_ADDR, value: '0', data: '0xmakeOffer' }],
     });
@@ -863,7 +667,10 @@ describe('publication mutations — makeOffer / admit / reject / whitelists', ()
     // The publication Safe has no authority to `retract`: V3 reserves it for the
     // genesis author and reverts NotAuthorized() for anyone else.
     expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('retract', expect.anything());
-    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith('acceptOffer', expect.anything());
+    expect(pub.interface.encodeFunctionData).not.toHaveBeenCalledWith(
+      'acceptOffer',
+      expect.anything(),
+    );
   });
 
   it('whitelistAuthor / removeWhitelistedAuthor / whitelistDev / removeWhitelistedDev', async () => {
@@ -874,9 +681,13 @@ describe('publication mutations — makeOffer / admit / reject / whitelists', ()
     await si.removeWhitelistedDev('0xDev');
 
     expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('whitelistAuthor', ['0xAuthor']);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('removeWhitelistedAuthor', ['0xAuthor']);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('removeWhitelistedAuthor', [
+      '0xAuthor',
+    ]);
     expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('whitelistDev', ['0xDev']);
-    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('removeWhitelistedDev', ['0xDev']);
+    expect(pub.interface.encodeFunctionData).toHaveBeenCalledWith('removeWhitelistedDev', [
+      '0xDev',
+    ]);
     expect(sdk.txsSend).toHaveBeenCalledTimes(4);
     // All four target the publication module.
     for (const call of sdk.txsSend.mock.calls) {
@@ -926,20 +737,20 @@ describe('read paths (direct contract reads, no sends)', () => {
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
   });
 
-  it('hasDeal / getDeals / getOffers delegate with bytes32 genesis and default pagination', async () => {
+  it('hasDeal / getDeals / getOffers delegate to the V6 hasAgreement/getAgreements', async () => {
     const si = await initInstance();
     const genesis = `0x${'c'.repeat(64)}`;
-    pub.hasDeal.mockResolvedValue(true);
-    pub.getDeals.mockResolvedValue([{ genesis, author: '0xA', cid: 'c1', timestamp: 1n }]);
+    pub.hasAgreement.mockResolvedValue(true);
+    pub.getAgreements.mockResolvedValue([{ genesis, author: '0xA', cid: 'c1', timestamp: 1n }]);
     pub.getOffers.mockResolvedValue([]);
 
     await expect(si.hasDeal(genesis)).resolves.toBe(true);
-    expect(pub.hasDeal).toHaveBeenCalledWith(toBytes32Id(genesis));
+    expect(pub.hasAgreement).toHaveBeenCalledWith(toBytes32Id(genesis));
 
     await si.getDeals();
-    expect(pub.getDeals).toHaveBeenCalledWith(0, 50);
+    expect(pub.getAgreements).toHaveBeenCalledWith(0, 50);
     await si.getDeals(5, 10);
-    expect(pub.getDeals).toHaveBeenCalledWith(5, 10);
+    expect(pub.getAgreements).toHaveBeenCalledWith(5, 10);
 
     await si.getOffers();
     expect(pub.getOffers).toHaveBeenCalledWith(0, 50);
@@ -949,17 +760,17 @@ describe('read paths (direct contract reads, no sends)', () => {
     const si = await initInstance();
     const deal = { genesis: '0xgen', author: '0xA', cid: 'c1', timestamp: 1n };
     const offer = { genesis: '0xgen', author: '0xB', cid: 'c2', timestamp: 2n };
-    pub.getDeals.mockResolvedValue([deal]);
+    pub.getAgreements.mockResolvedValue([deal]);
     pub.getOffers.mockResolvedValue([offer]);
 
     const all = await si.getAllDealsAndOffers();
     expect(all.deals).toEqual([{ ...deal, status: 'deal' }]);
     expect(all.offers).toEqual([{ ...offer, status: 'offer' }]);
-    expect(pub.getDeals).toHaveBeenCalledWith(0, 200);
+    expect(pub.getAgreements).toHaveBeenCalledWith(0, 200);
     expect(pub.getOffers).toHaveBeenCalledWith(0, 200);
 
     // On read failure it coalesces to empty lists (never throws).
-    pub.getDeals.mockRejectedValue(new Error('boom'));
+    pub.getAgreements.mockRejectedValue(new Error('boom'));
     await expect(si.getAllDealsAndOffers()).resolves.toEqual({ deals: [], offers: [] });
   });
 

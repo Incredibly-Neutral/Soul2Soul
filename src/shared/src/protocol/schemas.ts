@@ -10,6 +10,9 @@ export const protocolSchema = z.object({
   ensRecords: z.string(),
   publicationFactory: z.string(),
   recordsFactory: z.string(),
+  // The one factory every module of every kind is created through. Required:
+  // a record that names no factory cannot be used to find a module at all.
+  moduleFactory: z.string(),
   pkp: z.string(),
   litActions: z.object({
     prep: z.string(),

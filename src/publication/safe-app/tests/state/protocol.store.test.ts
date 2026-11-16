@@ -9,6 +9,7 @@ const INFO: S2SProtocolInfo = {
   ensRecords: '0x2',
   publicationFactory: '0x3',
   recordsFactory: '0x4',
+  moduleFactory: '0x6',
   pkp: '0x5',
   litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
 };

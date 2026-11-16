@@ -4,7 +4,7 @@
 > **Sibling (agreements):** [SPEC-publication-agreements](SPEC-publication-agreements.md) — the offer/deal
 > state machine these modules host. **Sibling (naming):** [SPEC-contracts-ens](SPEC-contracts-ens.md).
 >
-> **Type:** component spec. It owns *existence*: how a publication's account comes to be, what is hung
+> **Type:** component spec. It owns _existence_: how a publication's account comes to be, what is hung
 > on it, who can change the code behind it, and how it is taken apart. It does **not** own what the
 > modules do (that is the agreements child) or the ENS layer.
 >
@@ -30,13 +30,13 @@ or a CID. This spec covers:
 
 ## Address determinism
 
-| | value |
-|---|---|
-| salt | `'publication_safe_' + name` |
-| saltNonce | `keccak256(salt)` |
-| Safe implementation | SafeL2 v1.4.1 |
-| EntryPoint | v0.7 (part of the address, via the 4337 module) |
-| consequence | `publicationAddress1 === publicationAddress2` — asserted in `shared/src/publication/new.ts` |
+|                     | value                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| salt                | `'publication_safe_' + name`                                                                |
+| saltNonce           | `keccak256(salt)`                                                                           |
+| Safe implementation | SafeL2 v1.4.1                                                                               |
+| EntryPoint          | v0.7 (part of the address, via the 4337 module)                                             |
+| consequence         | `publicationAddress1 === publicationAddress2` — asserted in `shared/src/publication/new.ts` |
 
 The name is the only input. Two publications cannot share a name and a salt, which is why the name is
 also the ENS label (`<name>.eth`, or a subname of the protocol's parent) and the record key
@@ -68,10 +68,10 @@ safety default (no single signer can act) and a UX cliff, in that order.
 
 For an **existing** Safe that is not yet a publication (`safe-app/src/lib/publication-init.ts`). Two proposals, not three:
 
-| batch | contents | on |
-|---|---|---|
-| 1 | `recordsFactory.createModule(safe)`, `publicationFactory.createModule(safe, authors, [])` | Base |
-| 2 | `enableModule(records)`, `enableModule(publication)`, `setRecord("name")`, `setRecord("repo")?`, `setRecord("branch")?` | Base |
+| batch | contents                                                                                                                | on   |
+| ----- | ----------------------------------------------------------------------------------------------------------------------- | ---- |
+| 1     | `recordsFactory.createModule(safe)`, `publicationFactory.createModule(safe, authors, [])`                               | Base |
+| 2     | `enableModule(records)`, `enableModule(publication)`, `setRecord("name")`, `setRecord("repo")?`, `setRecord("branch")?` | Base |
 
 Batch 2 is atomic for a reason worth recording: `setRecord` is `onlySafe` and does **not** require the
 module to be enabled, so the whole finalisation fits one MultiSend and the half-initialised state
@@ -111,17 +111,17 @@ After batch 2 the flow waits on a human: poll `isModuleEnabled` every 2 s for up
 
 ## What is hung on the Safe
 
-| module | kind | NAME | notes |
-|---|---|---|---|
+| module                   | kind                                                    | NAME                          | notes                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `S2SPublicationModuleV5` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V5"` | per publication; the implementation a proxy running V2 or V3 upgrades to. V4's surface and storage prefix minus V4's `factory` slot: the factory that approves upgrades, and the protocol safe it must answer, are immutable constructor arguments and are never written to storage. Slot 119 holds a bool, the backfill sentinel `initialize` sets. No `__gap`; nothing is declared after it |
-| `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | frozen. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards. A proxy upgraded to V4 in place never ran `initialize` as V4, so that slot is zero and its own check reverts `NoFactory()` on every later upgrade — which is why V5 exists |
-| `S2SPublicationModuleV3` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V3"` | frozen: still what publications created under it run, and upgradable only by its own Safe, with no approval check — the pre-V4 right |
-| `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | history; holds agreements + whitelists under the pre-V3 names |
-| `S2SRecordsModule` | immutable, v1.1.0 | `"S2S Records Module"` | KV records: `name`, `config`, `repo`, `branch`, `feed`, `ens_records` |
-| ERC-4337 module | installed by the Safe host | n/a | the only module on the **author** Safe; a publication Safe created by route A may carry it too |
+| `S2SPublicationModuleV4` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V4"` | frozen. V3's surface and storage prefix, plus one appended slot for the factory address, written in `initialize` from `msg.sender` and never settable afterwards. A proxy upgraded to V4 in place never ran `initialize` as V4, so that slot is zero and its own check reverts `NoFactory()` on every later upgrade — which is why V5 exists                                                  |
+| `S2SPublicationModuleV3` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V3"` | frozen: still what publications created under it run, and upgradable only by its own Safe, with no approval check — the pre-V4 right                                                                                                                                                                                                                                                          |
+| `S2SPublicationModuleV2` | `ERC1967Proxy` → `Initializable + UUPSUpgradeable` impl | `"S2S Publication Module V2"` | history; holds agreements + whitelists under the pre-V3 names                                                                                                                                                                                                                                                                                                                                 |
+| `S2SRecordsModule`       | immutable, v1.1.0                                       | `"S2S Records Module"`        | KV records: `name`, `config`, `repo`, `branch`, `feed`, `ens_records`                                                                                                                                                                                                                                                                                                                         |
+| ERC-4337 module          | installed by the Safe host                              | n/a                           | the only module on the **author** Safe; a publication Safe created by route A may carry it too                                                                                                                                                                                                                                                                                                |
 
 `S2SRecordsModule` is enabled as a module purely for **discovery** (INV-4 — an app enumerates
-`getModulesPaginated` and matches `NAME()`); functionally the Safe *calls into* it, and every write is
+`getModulesPaginated` and matches `NAME()`); functionally the Safe _calls into_ it, and every write is
 `onlySafe`.
 
 **Discovery accepts two names, asymmetrically.** `shared/src/authoring/publication.ts:118` and
@@ -178,13 +178,13 @@ has a `receive` or `fallback`, so the delegatecall reverts and takes the upgrade
 
 **Per deployment — guarded, one address.** `S2SPublicationModuleV3Factory`:
 
-| fn | access control | effect |
-|---|---|---|
-| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | deploys a proxy; emits `ModuleCreated` |
-| `createModuleEmpty(safe)` | same | same, empty lists |
-| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get |
-| `implementationHistory` | read | append-only list of former implementations, 1-based |
-| `safeModules` / `getModulesForSafe` | read | the factory's own index |
+| fn                                      | access control                                     | effect                                              |
+| --------------------------------------- | -------------------------------------------------- | --------------------------------------------------- |
+| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | deploys a proxy; emits `ModuleCreated`              |
+| `createModuleEmpty(safe)`               | same                                               | same, empty lists                                   |
+| `setImplementation(address)`            | **the protocol safe only**                         | changes what _future_ publications get              |
+| `implementationHistory`                 | read                                               | append-only list of former implementations, 1-based |
+| `safeModules` / `getModulesForSafe`     | read                                               | the factory's own index                             |
 
 It deploys V3. Its `setImplementation` takes any address, so a V4 implementation set here
 would still answer `factory()` and still gate upgrades, but nothing would predict the addresses of the
@@ -200,20 +200,20 @@ idempotent `createModule`, and adds the check that an implementation it approves
 candidate must answer `factory()` to be set, by the protocol safe at construction or later. It is the
 only CREATE2 factory in the tree and is not deployed.
 
-| fn | access control | effect |
-|---|---|---|
-| `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | returns the recorded module, deploying and emitting nothing, when the safe already has one — the adopted one first, then the created one; otherwise deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated` |
-| `createModuleEmpty(safe)` | same | same, empty lists |
-| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, and adds to the approved set; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
-| `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`, and that set holds only implementations carrying the gate: what `_authorizeUpgrade` accepts, which is why rollback is legal |
-| `moduleAddress(safe)` | read | the module `safe` runs, in the order the record is read: the adopted module (`registeredModule`), else the one `createModule` deployed, else the prediction under `latestImplementation` |
-| `moduleAddressForVersion(safe, version)` | read | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range |
-| `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read | append-only, 1-based |
-| `registerModule(safe, module, implementation)` | **the protocol safe only** | adopts `module` as the module `safe` runs, so `moduleAddress(safe)` answers it; refuses a zero safe, zero module or zero implementation (`ZeroAddress`), a module without code (`NotAContract`), a module whose `safe()` is not `safe` (`SafeMismatch(safe, moduleSafe)`), a different module for a safe that already has one adopted (`AlreadyRegistered(safe, existing)`), and an implementation the branch does not admit: not approved when the module answers `factory()` with this factory, not legacy when it does not (`ModuleNotRecognised(module)`); identical re-register returns quietly; emits `ModuleRegistered(safe, module, implementation)` |
-| `isLegacyImplementation(address)` | read | true for each implementation the constructor recorded as V2/V3; written once, no setter; refuses an entry that answers `factory()` with `LegacyImplementationWithUpgradeGate(address)` |
-| `safeModules` | read | the created half of the record: at most one proxy per safe, written by `createModule` and never overwritten |
-| `registeredModule` | read | the adopted half: one module per safe or the zero address, written by `registerModule` and nothing else |
-| `getModulesForSafe` | read | one address per safe: the adopted module if there is one, else the created one, else nothing |
+| fn                                                                             | access control                                     | effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `createModule(safe, authors[], devs[])`                                        | the named safe, or the protocol safe on its behalf | returns the recorded module, deploying and emitting nothing, when the safe already has one — the adopted one first, then the created one; otherwise deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated`                                                                                                                                                                                                                                                                                                                                                       |
+| `createModuleEmpty(safe)`                                                      | same                                               | same, empty lists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `setImplementation(address)`                                                   | **the protocol safe only**                         | changes what _future_ publications get, and adds to the approved set; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `isApprovedImplementation(address)`                                            | read                                               | true for every implementation in `implementationHistory`, and that set holds only implementations carrying the gate: what `_authorizeUpgrade` accepts, which is why rollback is legal                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `moduleAddress(safe)`                                                          | read                                               | the module `safe` runs, in the order the record is read: the adopted module (`registeredModule`), else the one `createModule` deployed, else the prediction under `latestImplementation`                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `moduleAddressForVersion(safe, version)`                                       | read                                               | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read                                               | append-only, 1-based                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `registerModule(safe, module, implementation)`                                 | **the protocol safe only**                         | adopts `module` as the module `safe` runs, so `moduleAddress(safe)` answers it; refuses a zero safe, zero module or zero implementation (`ZeroAddress`), a module without code (`NotAContract`), a module whose `safe()` is not `safe` (`SafeMismatch(safe, moduleSafe)`), a different module for a safe that already has one adopted (`AlreadyRegistered(safe, existing)`), and an implementation the branch does not admit: not approved when the module answers `factory()` with this factory, not legacy when it does not (`ModuleNotRecognised(module)`); identical re-register returns quietly; emits `ModuleRegistered(safe, module, implementation)` |
+| `isLegacyImplementation(address)`                                              | read                                               | true for each implementation the constructor recorded as V2/V3; written once, no setter; refuses an entry that answers `factory()` with `LegacyImplementationWithUpgradeGate(address)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `safeModules`                                                                  | read                                               | the created half of the record: at most one proxy per safe, written by `createModule` and never overwritten                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `registeredModule`                                                             | read                                               | the adopted half: one module per safe or the zero address, written by `registerModule` and nothing else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `getModulesForSafe`                                                            | read                                               | one address per safe: the adopted module if there is one, else the created one, else nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 The salt is `keccak256(abi.encode(keccak256("s2s.publication.module"), safe))`: fixed per safe, no
 counter and no caller input, so one publication has one module address and nobody can grind a salt.
@@ -315,13 +315,15 @@ so there is no way back.
 `moduleAddress` prefers `registeredModule`, so every reader holding the `publication_factory` record
 sees the adopted module the moment the write lands: `resolvePublicationModules` in
 `src/shared/src/authoring/publication.ts`, `getProtocolControllerAndModules` in
-`src/shared/src/protocol/index.ts`, the safe-app's `resolveModuleAddress` in
+`src/shared/src/protocol/index.ts`, the safe-app's `moduleAddressFor` in
 `src/publication/safe-app/src/lib/publication-init.ts` and `getModuleAdresses` in
 `src/author/neutralpress/src/publication/publication.service.ts` all resolve through it. The adopted
 entry cannot be moved afterwards, so there is no window in which a reader reverts to the old address.
-What has not changed is the proof: a factory answer counts only when the Safe lists that address
-(INV-4), so a registered module the Safe has not enabled is not read, and the `NAME()` match remains
-the fallback for a factory that answers nothing. Nothing in the tree calls `registerModule` yet:
+What has not changed is the proof: outside the app a factory answer counts only when the Safe lists
+that address (INV-4), so a registered module the Safe has not enabled is not read, and there the
+`NAME()` match remains the fallback for a factory that answers nothing. The app does not take that
+fallback: it reads `moduleAddress(safe, kind)` and refuses when the answer is zero, because a kind
+names exactly one module. Nothing in the tree calls `registerModule` yet:
 `scripts/register-module.ts` encodes the call and prints a Safe batch, and the write stays the
 protocol safe's to make.
 
@@ -342,8 +344,9 @@ rely on is precedence, not a probe. `resolvePublicationModules` in
 `src/shared/src/authoring/publication.ts` takes the factory's prediction and keeps it only when the Safe
 lists that address, and uses a `NAME()` match only when the factory answers nothing (the same proof of
 the prediction, against the Safe's list, is in `getProtocolControllerAndModules` in
-`src/shared/src/protocol/index.ts`, in the safe-app's `resolveModuleAddress` in
-`src/publication/safe-app/src/lib/publication-init.ts`, where the proof is code at the address, and in
+`src/shared/src/protocol/index.ts`, in the safe-app's `moduleAddressFor` in
+`src/publication/safe-app/src/lib/publication-init.ts`, where the proof is code at the address and a
+refusal takes the place of the name fallback, and in
 `getModuleAdresses` in `src/author/neutralpress/src/publication/publication.service.ts`). None of them
 asks a module for `factory()`. A substituted proxy the factory would not predict is therefore not
 served while the prediction stands, and the app cannot be pointed at an ungated copy of the current
@@ -364,13 +367,13 @@ also the upgrade model, and why removing upgradeability changes the app as well 
 ## Teardown
 
 `buildDeletePublicationBatch` proposes `[disableModule(prev, later), disableModule(prev, earlier),
-deleteRecord("name")]`, in **descending** list order because `disableModule` takes the *previous*
+deleteRecord("name")]`, in **descending** list order because `disableModule` takes the _previous_
 module in the linked list (sentinel `0x…001`). The name record is deleted only when it is known and
 not suppressed — deleting an unwritten key reverts `KeyNotFound`, which would blow up the gas estimate
 for the whole batch.
 
 What teardown does **not** do: unpin any CID, re-render or remove any page, unregister the ENS subname,
-or delete the Safe. It removes the publication's *ability to act*, and leaves the site standing.
+or delete the Safe. It removes the publication's _ability to act_, and leaves the site standing.
 
 The init run that follows a teardown cannot start over: the publication module is still deployed, so the
 CREATE2 factory returns the module it already made for that Safe and the run re-enables it with its

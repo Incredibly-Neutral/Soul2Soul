@@ -41,6 +41,13 @@ export class S2SInitProgressModal extends LitElement {
   @property({ type: Boolean }) canDismiss = false;
 
   /**
+   * The factory the app reads module addresses from. Bound by the host so the
+   * dialog can state, for the whole of a resumed flow, that a publication
+   * created by an earlier factory is not managed here.
+   */
+  @property() moduleFactory = '';
+
+  /**
    * Step 1's write, when the human has to execute it themselves: the ENS
    * registry lives on Ethereum L1 only. When this app is embedded in a Safe on
    * another chain it cannot propose the transaction, so it hands the ready-to-
@@ -88,6 +95,17 @@ export class S2SInitProgressModal extends LitElement {
         margin: 0 0 1rem;
         padding: 0;
         list-style: none;
+      }
+
+      .factory {
+        margin: 0 0 1rem;
+        font-size: 0.8rem;
+        color: var(--gray-400, #8f8574);
+      }
+
+      .factory code {
+        font-family: var(--font-mono);
+        word-break: break-all;
       }
 
       .step {
@@ -295,6 +313,11 @@ export class S2SInitProgressModal extends LitElement {
           <ul class="steps">
             ${INIT_STEPS.map((row) => this.renderStep(row.index, row.title))}
           </ul>
+
+          <p class="factory" id="init-factory-note">
+            Modules are read from the factory <code>${this.moduleFactory}</code>: a publication
+            created by an earlier factory is not managed here.
+          </p>
 
           ${this.ensCall
             ? html`

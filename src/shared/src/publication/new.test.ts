@@ -178,6 +178,7 @@ function makeDeps(
       ensRegistry: '0xensRegistry0000000000000000000000000001',
       ensRecords: '0xmockEnsRecords',
       publicationFactory: '0xpubFactory0000000000000000000000000001',
+      moduleFactory: '0xpubFactory0000000000000000000000000001',
       recordsFactory: '0xrecordsFactory000000000000000000000001',
       pkp: '0xmockPkp',
       litActions: { prep: 'mock-prep', render: 'mock-render', update: 'mock-update' },
