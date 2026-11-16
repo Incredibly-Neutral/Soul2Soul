@@ -9,8 +9,8 @@
 > the receipt. A row opens with a bold slug, not a number: no `INV-` is minted here, and no requirement
 > id is extended. Where a row derives from a requirement, it names the existing one.
 >
-> **Audited against live code:** 2026-11-16 (`S2SPublicationModuleV5.sol` on `agent/v5-latest-gate`
-> at `2193027`, where `_authorizeUpgrade` reads the approval set and then `latestImplementation()`;
+> **Audited against live code:** 2026-11-16 (`S2SPublicationModuleV5.sol` on `agent/v5-latest-gate`,
+> where `_authorizeUpgrade` reads the approval set and then `latestImplementation()`;
 > `S2SPublicationModuleV4.sol`,
 > `S2SPublicationModuleV4Create2Factory.sol`, both read on `agent/c2-v4-contracts` at `0fb1f71`,
 > including the `factory()` capability check that guards the approved set; and the reader-side check of
@@ -28,9 +28,9 @@
 > approved set is a fact about the chain, not about this tree. Nothing in this file's upgrade rows has
 > run against a live V5 instance.
 >
-> **Test coverage:** 85 pass in `publication/contracts/test/`: 39 in
+> **Test coverage:** 86 pass in `publication/contracts/test/`: 39 in
 > `S2SPublicationModuleV4Create2Factory.test.ts`, 16 in `S2SPublicationModuleV3Factory.test.ts`, 9 in
-> `S2SPublicationModuleV4.test.ts`, 17 in `S2SPublicationModuleV5.test.ts`, and 4 in
+> `S2SPublicationModuleV4.test.ts`, 18 in `S2SPublicationModuleV5.test.ts`, and 4 in
 > `implementation-gate.test.ts`, which covers the gate check the factory makes on what it approves. At
 > the 2026-11-10 pass the module had no unit test in this tree.
 > Rows that cite a code line and no test name are unproven by a suite, and say so. A row marked
