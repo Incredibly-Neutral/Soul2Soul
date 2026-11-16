@@ -67,10 +67,14 @@ what makes the deploy key unprivileged. A set does two things at once: it change
 and it becomes `latestImplementation()`, the only target a V5 upgrade may name, so setting a successor
 withdraws every earlier implementation from every proxy running V5. V5's `_authorizeUpgrade` reads
 the approval set first and that view second, reverting `ImplementationNotApproved(address)` or
-`ImplementationNotLatest(implementation, latest)`. The costs are that no proxy running V5 can roll
-back to an older implementation, and that `createModule` deploys at `latestImplementation` while the
-gate demands the same address, so an upgrade a publication has queued reverts if the protocol safe
-sets a successor first. A reader needs no change: `isPublicationModuleName` already matches any
+`ImplementationNotLatest(implementation, latest)`. The remaining trust is the protocol safe's own:
+`setImplementation` accepts an address already in `implementationHistory`, so setting an earlier
+implementation again puts it at the front and makes it the only target for every proxy at once, V4
+included. A publication cannot do that on its own, and its Safe cannot reach the freeze without the
+protocol making the freezing code the legal target first. The costs to a publication are that it
+cannot roll back on its own, and that `createModule` deploys at `latestImplementation` while the gate
+demands the same address, so an upgrade a publication has queued reverts if the protocol safe sets a
+different implementation first. A reader needs no change: `isPublicationModuleName` already matches any
 `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
 `publicationBindingFor` binds a later version to the current surface
 (`publication/safe-app/src/lib/publication-version.ts`).

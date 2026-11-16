@@ -202,16 +202,25 @@ The factory's approved set stays append-only: its constructor and every `setImpl
 `implementationHistory` and nothing clears an entry, so V4 stays approved forever. Membership is no
 longer enough on V5. Legality is the `latestImplementation()` comparison; the reason for it is the
 storage layout. A proxy born as V5 holds the bool `1` in slot 119; V4 reads that slot as its factory
-address, so a proxy moved to V4 sends its approval read to `address(1)`, which has no code, and the
-call reverts with no data. Every later upgrade on that proxy reverts, the safe has spent its one
-upgrade, and the module can never change again. An earlier V5 build has no latest read and accepts
-any approved implementation, so a proxy moved back to one is governed by the approval rule alone: V4
-is reachable again, and so is every other approved build. Accepting only the newest set
-implementation makes the protocol safe's latest `setImplementation` the only target a V5 proxy may
-name. The cost is plain: no rollback to an older implementation, and `createModule` deploys at
-`latestImplementation` while the gate demands the same address, so publishing and upgrading cannot
-diverge, and an upgrade a publication queued reverts `ImplementationNotLatest` if the protocol safe
-sets a successor first.
+address, so on a proxy sitting on V4 the approval read goes to `address(1)`. That address has no
+code, the call returns nothing, and the read cannot answer, so the upgrade reverts. Every later
+upgrade on that proxy reverts the same way, the safe has spent its one upgrade, and the module can
+never change again. An earlier V5 build has no latest read and accepts any approved implementation,
+so once the protocol safe sets one again, a proxy moved to it is governed by the approval rule alone:
+V4 is reachable again, and so is every other approved build. A proxy still running V2 or V3 is
+outside the check entirely: its own safe can send it to V4 in one hop, where it freezes, and V5 never
+runs.
+
+So a proxy can name nothing but the newest implementation the factory set. The protocol safe can put
+an earlier one back at the front: `setImplementation` accepts an address already in
+`implementationHistory`, appends it again and moves `latestImplementation` to it, because the factory
+only appends to that history. That is the protocol's own authority, not a publication's, and it acts
+on every proxy at once rather than one. It is the remaining trust in this gate, not a hole in it: a
+publication's Safe cannot reach the freeze without the protocol first making the freezing code the
+legal target. The cost to a publication is that it cannot roll back on its own, and that
+`createModule` deploys at `latestImplementation` while the gate demands the same address, so
+publishing and upgrading cannot diverge, and an upgrade a publication queued reverts
+`ImplementationNotLatest` if the protocol safe sets a different implementation first.
 
 A protocol-set implementation cannot hand the gate back to the publication: the factory refuses an
 implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)`, in
@@ -241,7 +250,13 @@ factory does not name", "keeps answering the same factory after the proxy is upg
 storage slot holding the factory, unlike V4", and "matches V4 slot for slot, and leaves the factory
 slot empty", which reads each module's compiled `storageLayout` and compares it against the other's.
 The latest read is carried by two V5 tests: "refuses V4 even though the factory approved it at
-construction" and "refuses a superseded V5", both asserting `ImplementationNotLatest`. The gate check
+construction" and "refuses a superseded V5", both asserting `ImplementationNotLatest`. The freeze
+itself rests on one premise, and one test shows it rather than asserting it: "shows the freeze is
+real: a V5-born proxy on V4 refuses every later upgrade" writes V4 into the ERC-1967 implementation
+slot with `hardhat_setStorageAt`, asserts slot 119 reads `1n`, then asserts the next upgrade from the
+safe reverts and the proxy still reports `S2S Publication Module V4`. The protocol safe's power to
+reinstate V4 is shown by "lets the protocol safe make V4 newest again, which freezes the proxy",
+which sets V4 after V5 and upgrades onto it. The gate check
 on the set is `S2SPublicationModuleV4Create2Factory.test.ts` — "refuses an implementation that
 carries no upgrade gate", "refuses setImplementation of an implementation that carries no upgrade
 gate".
