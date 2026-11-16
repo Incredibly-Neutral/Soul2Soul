@@ -20,16 +20,23 @@
  * with one line: setting it again writes the same pointer and emits an event
  * that would look like a deploy.
  *
- * The signing key only decides how the call travels. When it is not the protocol
- * Safe, this prints the call and stops; nothing changes until that Safe executes
- * it, and a `createModule` for an affected kind reverts `NoImplementation(kind)`
- * in the meantime. When the key is the Safe, each call is sent and then verified
- * against `latestImplementation` and `isApproved`.
+ * The signing key only decides how the call travels. When it is the protocol
+ * Safe, each call is sent and then verified against `latestImplementation` and
+ * `isApproved`. Otherwise the calls are proposed to the Safe service as one
+ * batch, so the owners confirm once in the Safe app: the safeTxHash is printed
+ * and nothing changes until that Safe executes it. A `createModule` for an
+ * affected kind reverts `NoImplementation(kind)` in the meantime.
+ *
+ * Whether a key may propose is the service's answer, not a local check: the
+ * proposal is attempted, as update-protocol.ts does with the same key. A refusal
+ * prints the batch and the service's own message, so the call still reaches an
+ * owner.
  *
  * Output is split. The narrative goes to stderr, so stdout carries only what a
  * machine can paste: the Safe Transaction Builder batch (`--format batch`) or the
- * calldata (`--format data`). The default is text, which prints the narrative and
- * nothing on stdout.
+ * calldata (`--format data`). `--dry-run` is the batch, without proposing. Either
+ * shape prints instead of proposing or sending, whoever holds the key. The default
+ * is text, which proposes and prints only the narrative.
  *
  * This is the V6 pair only. The V4/V5 scripts beside it encode different
  * selectors against different factories and cannot be adapted by changing an
@@ -37,10 +44,10 @@
  *
  * Usage:
  *   cd src/publication/contracts
- *   pnpm set:impl [--kind publication|records] [--format text|batch|data]
+ *   pnpm set:impl [--kind publication|records] [--format text|batch|data] [--dry-run]
  *
  * Requires in .env:
- *   PROTOCOL_PRIVATE_KEY               key that prints or sends the call
+ *   PROTOCOL_PRIVATE_KEY               key that proposes or sends the call
  *   PROTOCOL_SAFE_ADDRESS              the safe the factory must answer
  *   PUBLICATION_FACTORY_ADDRESS        the V6 factory, as printed by pnpm deploy:factory
  *   PUBLICATION_IMPLEMENTATION_ADDRESS optional: the publication-kind module
@@ -69,6 +76,8 @@ import {
 import type { Account, Abi, HttpTransport, PublicClient, WalletClient } from 'viem';
 import { base } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
+import Safe from '@safe-global/protocol-kit';
+import SafeApiKit from '@safe-global/api-kit';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -106,6 +115,9 @@ const RECORDS_KIND = keccak256(toHex('s2s.module.records'));
 type KindName = 'publication' | 'records';
 type Format = 'text' | 'batch' | 'data';
 
+/** Where the calls go, once the key has decided. */
+type Print = 'batch' | 'data' | null;
+
 interface Target {
   name: KindName;
   kind: `0x${string}`;
@@ -118,6 +130,19 @@ interface Proposed {
   data: `0x${string}`;
 }
 
+/**
+ * The RPC key rides in the last path segment. Nothing printed may carry it into
+ * terminal scrollback, so only scheme, host and the provider's path prefix stay.
+ */
+function redactRpc(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/[^/]+$/, '***')}`;
+  } catch {
+    return 'the configured RPC';
+  }
+}
+
 /** One refusal, one sentence, no stack trace. */
 function refuse(sentence: string): never {
   console.error(`❌ ${sentence}`);
@@ -126,10 +151,13 @@ function refuse(sentence: string): never {
 
 function usage(message: string): never {
   console.error(`${message}\n`);
-  console.error('Usage: pnpm set:impl [--kind publication|records] [--format text|batch|data]');
+  console.error(
+    'Usage: pnpm set:impl [--kind publication|records] [--format text|batch|data] [--dry-run]',
+  );
   console.error('  the factory is PUBLICATION_FACTORY_ADDRESS in .env');
   console.error('  the implementations are PUBLICATION_IMPLEMENTATION_ADDRESS and');
   console.error('  RECORDS_IMPLEMENTATION_ADDRESS; a kind with no address is skipped');
+  console.error('  --format batch|data or --dry-run prints the calls and proposes nothing');
   process.exit(1);
 }
 
@@ -153,6 +181,12 @@ function isRevert(error: unknown): boolean {
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message.split('\n')[0] : String(error);
+}
+
+/** The service's own words, on one line: its messages arrive folded and padded. */
+function serviceMessage(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 /** Hardhat writes `<artifactRoot>/<sourceDir>/<Name>.sol/<Name>.json`. */
@@ -179,13 +213,19 @@ function factoryAbi(name: string): Abi {
   return artifact.abi as Abi;
 }
 
-function parseArgs(argv: string[]): { kind: KindName | null; format: Format } {
+function parseArgs(argv: string[]): { kind: KindName | null; format: Format; dryRun: boolean } {
   let kind: KindName | null = null;
   let format: Format = 'text';
+  let dryRun = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') continue;
+
+    if (arg === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
 
     if (arg === '--kind' || arg.startsWith('--kind=')) {
       const value = arg.includes('=') ? arg.split('=')[1] : argv[++i];
@@ -208,7 +248,7 @@ function parseArgs(argv: string[]): { kind: KindName | null; format: Format } {
     usage(`Unknown argument ${arg}.`);
   }
 
-  return { kind, format };
+  return { kind, format, dryRun };
 }
 
 async function safeFacts(
@@ -230,7 +270,7 @@ async function safeFacts(
 }
 
 async function main() {
-  const { kind: kindFilter, format } = parseArgs(process.argv.slice(2));
+  const { kind: kindFilter, format, dryRun } = parseArgs(process.argv.slice(2));
 
   // stdout carries only machine output: the batch or the calldata. Every line a
   // person reads goes here.
@@ -302,7 +342,7 @@ async function main() {
   const publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) });
 
   note(`Signer: ${account.address}`);
-  note(`   RPC:           ${rpcUrl}`);
+  note(`   RPC:           ${redactRpc(rpcUrl)}`);
   note(`   Factory:       ${factory}`);
   note(`   Protocol safe: ${expectedSafe}`);
   note('');
@@ -491,49 +531,114 @@ async function main() {
 
   const signerIsSafe = account.address.toLowerCase() === expectedSafe.toLowerCase();
 
+  // One batch, every call: the owners confirm once, the way update-protocol.ts
+  // does for the whole protocol. `--format` and `--dry-run` print instead of
+  // proposing; `--format data` wins when both name a shape.
+  const printAs: Print = format === 'data' ? 'data' : format === 'batch' || dryRun ? 'batch' : null;
+
+  const printBatch = (): void => {
+    const batch = {
+      version: '1.0',
+      chainId: String(base.id),
+      createdAt: Date.now(),
+      meta: {
+        name: `Set S2S module implementation (${proposals.map((p) => p.target.name).join(', ')})`,
+        description: proposals
+          .map((p) => `setImplementation(${p.target.kind}, ${p.target.impl})`)
+          .join('; '),
+        txBuilderVersion: '1.16.5',
+        createdFromSafeAddress: expectedSafe,
+        createdFromOwnerAddress: '',
+      },
+      transactions: proposals.map((proposal) => ({
+        to: factory,
+        value: '0',
+        data: proposal.data,
+      })),
+    };
+    console.log(JSON.stringify(batch, null, 2));
+  };
+
+  const printData = (): void => {
+    for (const proposal of proposals) console.log(proposal.data);
+  };
+
+  if (printAs) {
+    if (printAs === 'data') printData();
+    else printBatch();
+
+    const facts = await safeFacts(expectedSafe, publicClient);
+    note(
+      signerIsSafe
+        ? 'Nothing is sent: the run asked for the calls alone.'
+        : 'The signer is not the protocol safe, so nothing is sent.',
+    );
+    note(`   chain id:  ${base.id}`);
+    note(`   safe:      ${expectedSafe}`);
+    note(`   threshold: ${facts.threshold}`);
+    note(`   owners:    ${facts.owners}`);
+    note('\nNothing changes until that safe executes it.');
+    note(
+      `Until then a createModule for ${
+        proposals.length === 1 ? 'that kind' : 'those kinds'
+      } reverts NoImplementation(kind) wherever no implementation is set yet.`,
+    );
+    return;
+  }
+
   if (!signerIsSafe) {
-    if (format === 'batch') {
-      const batch = {
-        version: '1.0',
-        chainId: String(base.id),
-        createdAt: Date.now(),
-        meta: {
-          name: `Set S2S module implementation (${proposals.map((p) => p.target.name).join(', ')})`,
-          description: proposals
-            .map((p) => `setImplementation(${p.target.kind}, ${p.target.impl})`)
-            .join('; '),
-          txBuilderVersion: '1.16.5',
-          createdFromSafeAddress: expectedSafe,
-          createdFromOwnerAddress: '',
-        },
+    note('The signer is not the protocol safe, so the calls are proposed to it.');
+    for (const proposal of proposals) {
+      note(`   ${proposal.target.name}: to ${factory}`);
+      note(`   data: ${proposal.data}`);
+    }
+    note('');
+
+    const protocolKit = await Safe.init({
+      provider: rpcUrl,
+      signer: payerHex,
+      safeAddress: expectedSafe,
+    }).catch((error) =>
+      refuse(
+        `The Safe kit could not open ${expectedSafe} over ${redactRpc(rpcUrl)}: ${serviceMessage(error)}`,
+      ),
+    );
+
+    const apiKit = new SafeApiKit({ chainId: 8453n });
+
+    // Whether the key may propose is the service's call, not ours: a key that
+    // cannot sign for this safe gets its rejection, and the batch is printed
+    // instead, so the call is still there to hand to an owner.
+    let safeTxHash: `0x${string}` | undefined;
+    try {
+      const safeTransaction = await protocolKit.createTransaction({
         transactions: proposals.map((proposal) => ({
           to: factory,
           value: '0',
           data: proposal.data,
         })),
-      };
-      console.log(JSON.stringify(batch, null, 2));
-    } else if (format === 'data') {
-      for (const proposal of proposals) console.log(proposal.data);
+      });
+      const hash = await protocolKit.getTransactionHash(safeTransaction);
+      const senderSignature = await protocolKit.signHash(hash);
+
+      await apiKit.proposeTransaction({
+        safeAddress: expectedSafe,
+        safeTransactionData: safeTransaction.data,
+        safeTxHash: hash,
+        senderAddress: account.address,
+        senderSignature: senderSignature.data,
+      });
+      safeTxHash = hash as `0x${string}`;
+    } catch (error) {
+      printBatch();
+      note('');
+      refuse(`The safe service refused the proposal: ${serviceMessage(error)}`);
     }
 
-    const facts = await safeFacts(expectedSafe, publicClient);
-    note('The signer is not the protocol safe, so nothing is sent.');
-    note(`   chain id:  ${base.id}`);
-    note(`   safe:      ${expectedSafe}`);
-    note(`   threshold: ${facts.threshold}`);
-    note(`   owners:    ${facts.owners}`);
-    if (format === 'text') {
-      for (const proposal of proposals) {
-        note('');
-        note(`   ${proposal.target.name}:`);
-        note(`   to:    ${factory}`);
-        note(`   value: 0`);
-        note(`   data:  ${proposal.data}`);
-      }
-      note('\nRerun with --format batch to print the Safe Transaction Builder batch,');
-      note('or --format data to print the calldata alone.');
-    }
+    if (!safeTxHash) refuse(`The safe service returned no transaction hash for the proposal.`);
+
+    note(`✅ Proposed to ${expectedSafe}: ${proposals.length} setImplementation call(s).`);
+    note(`   safeTxHash: ${safeTxHash}`);
     note('\nNothing changes until that safe executes it.');
     note(
       `Until then a createModule for ${
