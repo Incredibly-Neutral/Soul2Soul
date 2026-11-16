@@ -42,6 +42,22 @@ export type Abi_S2SPublicationModuleV5 = [
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "latest",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotLatest",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "InvalidAuthorAddress",
     "type": "error"
@@ -1332,6 +1348,22 @@ export const Abi_S2SPublicationModuleV5: Abi_S2SPublicationModuleV5 = [
       }
     ],
     "name": "ImplementationNotApproved",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "latest",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotLatest",
     "type": "error"
   },
   {

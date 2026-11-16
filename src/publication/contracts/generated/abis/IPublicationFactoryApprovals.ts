@@ -20,6 +20,19 @@ export type Abi_IPublicationFactoryApprovals = [
   },
   {
     "inputs": [],
+    "name": "latestImplementation",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "protocolSafe",
     "outputs": [
       {
@@ -47,6 +60,19 @@ export const Abi_IPublicationFactoryApprovals: Abi_IPublicationFactoryApprovals 
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "latestImplementation",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",

@@ -92,6 +92,7 @@ const ERRORS = parseAbi([
   'error OnlySafe()',
   'error InvalidFactory(address factory)',
   'error ImplementationNotApproved(address implementation)',
+  'error ImplementationNotLatest(address implementation, address latest)',
   'error AlreadyBackfilled()',
   'error ProtocolSafeMismatch(address factorySays, address expected)',
 ]);
@@ -112,6 +113,12 @@ const enc = {
       abi: ERRORS,
       errorName: 'ImplementationNotApproved',
       args: [implementation],
+    }),
+  notLatest: (implementation: Hex, latest: Hex) =>
+    encodeErrorResult({
+      abi: ERRORS,
+      errorName: 'ImplementationNotLatest',
+      args: [implementation, latest],
     }),
 };
 
@@ -340,10 +347,64 @@ describe('S2SPublicationModuleV5 — approved upgrades', () => {
     const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
 
     await approve(d.caller, d.factory.address, next.address);
+
+    assert.equal(
+      (await d.factory.read.latestImplementation()).toLowerCase(),
+      next.address.toLowerCase(),
+      'the target is the newest set implementation, which is what makes it legal',
+    );
+
     await upgradeTo(d, module, next.address);
 
     assert.equal(await d.factory.read.isApprovedImplementation([next.address]), true);
     assert.equal(await (await moduleAt(module)).read.NAME(), 'S2S Publication Module V5');
+  });
+
+  /**
+   * V4 is construction version 1: the factory approved it when it was deployed
+   * and never un-approves anything, so approval alone would still let a V5-born
+   * proxy install it. That proxy holds the backfill sentinel as a bool in slot
+   * 119, V4 reads that slot as its factory address, and the module freezes.
+   */
+  it('refuses V4 even though the factory approved it at construction', async () => {
+    const d = await deploy();
+    const module = await createModule(d);
+    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
+    await approve(d.caller, d.factory.address, next.address);
+
+    assert.equal(
+      await d.factory.read.isApprovedImplementation([d.v4.address]),
+      true,
+      'V4 stays in the approved set, so the refusal is about being newest',
+    );
+
+    await expectRevert(
+      asSafe(d.caller, module, upgradeToAndCallData(d.v4.address, '0x')),
+      enc.notLatest(d.v4.address, next.address),
+      'ImplementationNotLatest',
+    );
+  });
+
+  it('refuses a superseded V5', async () => {
+    const d = await deploy();
+    const module = await createModule(d);
+    const next = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
+    const third = await viem.deployContract('S2SPublicationModuleV5', [d.factory.address, d.safe]);
+
+    await approve(d.caller, d.factory.address, next.address);
+    await approve(d.caller, d.factory.address, third.address);
+
+    assert.equal(
+      await d.factory.read.isApprovedImplementation([next.address]),
+      true,
+      'the superseded build is still approved; being newer is the second requirement',
+    );
+
+    await expectRevert(
+      asSafe(d.caller, module, upgradeToAndCallData(next.address, '0x')),
+      enc.notLatest(next.address, third.address),
+      'ImplementationNotLatest',
+    );
   });
 
   it('refuses an implementation the immutable factory never set', async () => {

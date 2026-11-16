@@ -107,6 +107,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 interface IPublicationFactoryApprovals {
     function isApprovedImplementation(address implementation) external view returns (bool);
     function protocolSafe() external view returns (address);
+    function latestImplementation() external view returns (address);
 }
 
 contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
@@ -223,6 +224,7 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     error Ended();
     error InvalidFactory(address factory);
     error ImplementationNotApproved(address implementation);
+    error ImplementationNotLatest(address implementation, address latest);
     error AlreadyBackfilled();
     error ProtocolSafeMismatch(address factorySays, address expected);
 
@@ -318,18 +320,37 @@ contract S2SPublicationModuleV5 is Initializable, UUPSUpgradeable {
     }
 
     /**
-     * @dev Only the publication's safe may start an upgrade, and only to an
-     *      implementation the protocol safe set on the factory in `FACTORY`.
+     * @dev Only the publication's safe may start an upgrade, and only to the
+     *      implementation the protocol safe set on the factory in `FACTORY` most
+     *      recently. Approval is required and is no longer sufficient.
+     *
+     *      The factory's approved set is append-only, so an implementation
+     *      approved earlier stays legal for good, and V4 — construction version
+     *      1 — is still in it. A proxy born under V5 holds the backfill sentinel
+     *      as the bool 1 in slot 119, so installing V4 leaves V4 reading its
+     *      factory slot as `address(1)`: its approval check call reverts, and
+     *      every later upgrade reverts with it. One transaction from the
+     *      publication's safe freezes the module for good.
+     *
+     *      Requiring the newest set implementation makes the protocol's most
+     *      recent act the only forward step, so neither V4 nor a superseded V5
+     *      can be installed. The cost is that no rollback to an older
+     *      implementation exists: shipping a successor means the protocol safe
+     *      calls `setImplementation` first, which it must do anyway before any
+     *      proxy can reach it.
+     *
      *      There is no zero case to fail closed on: the constructor refused it,
      *      and the constant cannot change. The constructor checked that factory
      *      answers this protocol's safe; that it is still the protocol's factory
-     *      afterwards is the protocol safe's to keep, through the approval set
-     *      this reads.
+     *      afterwards is the protocol safe's to keep, through the answers this
+     *      reads.
      */
     function _authorizeUpgrade(address newImplementation) internal onlySafe override {
         if (!IPublicationFactoryApprovals(FACTORY).isApprovedImplementation(newImplementation)) {
             revert ImplementationNotApproved(newImplementation);
         }
+        address latest = IPublicationFactoryApprovals(FACTORY).latestImplementation();
+        if (newImplementation != latest) revert ImplementationNotLatest(newImplementation, latest);
         emit ContractUpgraded(newImplementation);
     }
 
