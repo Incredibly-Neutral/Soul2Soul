@@ -140,30 +140,38 @@ Two independent upgrade surfaces, and they are not equally guarded.
 
 **Per publication — guarded, and not by the owners.** `upgradeToAndCall` arrives through
 `UUPSUpgradeable`; `_authorizeUpgrade` is `onlySafe`, so the publication's Safe is `msg.sender` and
-no third party reaches the call. The Safe no longer chooses the code. The implementation must be the
-one the protocol safe set most recently: the module asks the factory in its immutable `FACTORY` for
-`latestImplementation()` and reverts `ImplementationNotApproved(address)` when the target is anything
-else. V5's constructor refuses a factory with no code, `InvalidFactory(address)`, and a factory whose
-`protocolSafe()` is not its second constructor argument, `ProtocolSafeMismatch(address,address)`; V4
-kept the same address in a storage slot written by `initialize`. That check catches a wrong factory at
-the only moment it can be caught, before the immutable is fixed, and it is not proof that the factory
-is the protocol's: the binding act is the protocol safe's `setImplementation` on that factory, and an
+no third party reaches the call. The Safe no longer chooses the code. A module running V5 accepts
+only the target the factory approved, and only while it is the newest one the factory set.
+`_authorizeUpgrade` asks the factory in its immutable `FACTORY` for
+`isApprovedImplementation(newImplementation)` and reverts `ImplementationNotApproved(address)` when
+that answers false; then it reads `latestImplementation()` and reverts
+`ImplementationNotLatest(implementation, latest)` when the target is any other address. V2 and V3
+authorise with `onlySafe` alone and V4 accepts any approved implementation, so the newest-only rule
+binds a proxy from the block it runs V5. V5's constructor refuses a factory with no code,
+`InvalidFactory(address)`, and a factory whose `protocolSafe()` is not its second constructor
+argument, `ProtocolSafeMismatch(address,address)`; V4 kept the same address in a storage slot
+written by `initialize`. That check catches a wrong factory at the only
+moment it can be caught, before the immutable is fixed, and it is not proof that the factory is the
+protocol's: the binding act is the protocol safe's `setImplementation` on that factory, and an
 implementation it has not recorded is a target no proxy can reach.
 
 Approval is still append-only: the factory's constructor and every `setImplementation` append to
 `implementationHistory` and nothing clears an entry, and each entry answers `factory()`, which the
 constructor and `setImplementation` check by staticcall before adding one, refusing
 `ImplementationWithoutUpgradeGate(address)` otherwise. That check is a presence test, not a proof of
-what an implementation does with the field. An older approved implementation is not a legal target,
-and the reason is the storage layout, not the approval rule. A proxy born as V5 holds the bool `1` in
-slot 119; V4 reads that slot as its factory address, so a V5 proxy moved to V4 answers `factory()`
-with `address(1)` and the next upgrade reverts `NoFactory()`: the publication's Safe has spent its one
-upgrade and the module can never change again. A superseded V5 build is still approved in the same
-way, and a proxy moved to one strands itself the same way. Requiring the newest set implementation
-therefore means the protocol safe's latest `setImplementation` is the only target a proxy may name,
-and a successor has to be set before any proxy can take it. The cost is plain: no proxy can roll back
-to an older implementation, and the protocol cannot publish V6 for new publications alone, because
-the newest set implementation is also the only target existing proxies may move to. Storage layout is
+what an implementation does with the field. Legality comes from the `latestImplementation()`
+comparison, and the reason for it is the storage layout. A proxy born as V5 holds the bool `1` in
+slot 119; V4 reads that slot as its factory address, so a proxy moved to V4 sends its approval read
+to `address(1)`, which has no code, and the call reverts with no data. Every later upgrade on that
+proxy reverts, the publication's Safe has spent its one upgrade, and the module can never change
+again. An earlier V5 build carries no latest read and accepts any approved implementation, so a
+proxy moved back to one is governed by the approval rule alone: V4 is reachable again, and so is
+every other approved build. Requiring the newest set implementation means the protocol safe's latest
+`setImplementation` is the only target a V5 proxy may name, and a successor has to be set before any
+proxy can take it. The cost is plain: no proxy can roll back to an older implementation, and
+publishing cannot diverge from upgrading, because `createModule` deploys at `latestImplementation`
+while the gate demands the same address. An upgrade a publication has already queued reverts
+`ImplementationNotLatest` if the protocol safe sets a successor first. Storage layout is
 append-only (INV-3), so an upgrade cannot reorder what exists.
 
 V4's `NoFactory()` case is why V5 has no factory slot. A proxy upgraded to V4 in place never runs
@@ -214,8 +222,8 @@ only CREATE2 factory in the tree and is not deployed.
 |---|---|---|
 | `createModule(safe, authors[], devs[])` | the named safe, or the protocol safe on its behalf | returns the recorded module, deploying and emitting nothing, when the safe already has one — the adopted one first, then the created one; otherwise deploys a proxy at `moduleAddress(safe)`, empty, then calls `initialize(safe, authors, devs)` on it in the same transaction; emits `ModuleCreated` |
 | `createModuleEmpty(safe)` | same | same, empty lists |
-| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, adds to the approved set, and becomes `latestImplementation()`, the only target an upgrade may name; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
-| `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`; the set is append-only and each entry carries the gate, but `_authorizeUpgrade` accepts only the entry `latestImplementation()` names |
+| `setImplementation(address)` | **the protocol safe only** | changes what *future* publications get, adds to the approved set, and becomes `latestImplementation()`, the only target a V5 upgrade may name; refuses an implementation that does not answer `factory()` with `ImplementationWithoutUpgradeGate(address)` |
+| `isApprovedImplementation(address)` | read | true for every implementation in `implementationHistory`; the set is append-only and each entry carries the gate. V4 accepts any of them; V5 accepts one only when it also equals `latestImplementation()`, and refuses the rest with `ImplementationNotLatest(implementation, latest)` |
 | `moduleAddress(safe)` | read | the module `safe` runs, in the order the record is read: the adopted module (`registeredModule`), else the one `createModule` deployed, else the prediction under `latestImplementation` |
 | `moduleAddressForVersion(safe, version)` | read | where a create under that implementation would have landed; 1-based over `implementationHistory`, reverts `InvalidVersion` out of range |
 | `implementationHistory` / `implementationCount` / `getImplementationByVersion` | read | append-only, 1-based |
@@ -429,8 +437,10 @@ module is the only fresh one, because the records factory is still non-idempoten
 - Discovery: a Safe with a V1-named module → `shared` resolves it, the app does not (this asymmetry is
   currently untested and is the thing most likely to bite).
 - Upgrade: `upgradeToAndCall` from a non-Safe EOA reverts `OnlySafe`; from the Safe to an
-  implementation the factory never approved reverts `ImplementationNotApproved`; from the Safe to a
-  former implementation succeeds; from a module with no factory recorded it reverts `NoFactory`.
+  implementation the factory never approved reverts `ImplementationNotApproved`; from the Safe to an
+  approved implementation that is not the newest reverts `ImplementationNotLatest(implementation,
+  latest)`, so a former implementation is a legal target on V4 and not on V5; from a module with no
+  factory recorded it reverts `NoFactory`, which is V4's zero-slot case.
 - CREATE2 factory: `moduleAddress` equals the deployed proxy for both create entry points; a second
   create returns the same address and emits no `ModuleCreated`; a stranger naming a safe that already
   has a module gets the gate's revert, not the idempotent return; a safe created before

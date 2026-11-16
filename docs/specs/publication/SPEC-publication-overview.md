@@ -64,13 +64,14 @@ deployed nowhere today; when it is, the deploy key sends it and the protocol saf
 `setImplementation`. Those are two acts, and the second is the gate: the implementation exists as soon
 as the deploy transaction lands and no proxy can reach it until the protocol safe sets it, which is
 what makes the deploy key unprivileged. A set does two things at once: it changes what new proxies get
-and it becomes `latestImplementation()`, the only target an upgrade may name, so setting a successor
-withdraws every earlier implementation from existing proxies. V5's `_authorizeUpgrade` reads that view
-on the immutable factory and reverts `ImplementationNotApproved(address)` for anything else. The cost
-is that there is no rollback to an older implementation, and the protocol cannot publish V6 for new
-publications alone: the newest set implementation is the only target existing proxies may move to. A
-reader needs no change: `isPublicationModuleName`
-already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
+and it becomes `latestImplementation()`, the only target a V5 upgrade may name, so setting a successor
+withdraws every earlier implementation from every proxy running V5. V5's `_authorizeUpgrade` reads
+the approval set first and that view second, reverting `ImplementationNotApproved(address)` or
+`ImplementationNotLatest(implementation, latest)`. The costs are that no proxy running V5 can roll
+back to an older implementation, and that `createModule` deploys at `latestImplementation` while the
+gate demands the same address, so an upgrade a publication has queued reverts if the protocol safe
+sets a successor first. A reader needs no change: `isPublicationModuleName` already matches any
+`S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`) and
 `publicationBindingFor` binds a later version to the current surface
 (`publication/safe-app/src/lib/publication-version.ts`).
 
@@ -104,7 +105,7 @@ The whole surface, in one table. `onlySafe` is `msg.sender == safe`.
 | `retract` | ✗ (`NotAuthorized()` for the Safe) | the **genesis author** only, and terminal: ends the genesis |
 | `makeOffer` | ✓ (lands as a deal) | `canPublish` addresses for a genesis's first version; `genesisAuthor` for later versions — a **developer's** work lands as an offer |
 | whitelist add/remove | ✓ | — |
-| `upgradeToAndCall` | ✓ (`msg.sender` is the safe) | the implementation the protocol safe set most recently on the factory in the module's immutable, and no other: the holders carry out the upgrade, they do not choose the code |
+| `upgradeToAndCall` | ✓ (`msg.sender` is the safe) | on a module running V5, the implementation the protocol safe set most recently on the factory in the module's immutable, and no other: the holders carry out the upgrade, they do not choose the code |
 | factory `createModule` / `createModuleEmpty` | ✓ (the safe it names) | the protocol safe, on that safe's behalf — see [the upgrade edge](SPEC-publication-account.md#upgradeability) |
 | factory `setImplementation` | **not the publication** | the protocol safe only, fixed at construction |
 | ENS `contenthash_wrapped` | **not the publication** | the PKP (INV-12), granted by the protocol |
