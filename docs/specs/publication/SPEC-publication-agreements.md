@@ -142,12 +142,15 @@ one that ends it, so a re-publish under the same genesis is not possible.
 
 | | representation |
 |---|---|
-| membership | `mapping(bytes32 => bool) _isDeal / _isOffer` — one slot, the read the gate uses |
-| list | `bytes32[] dealList / offerList` |
-| position | `mapping(bytes32 => uint256) dealPos / offerPos` — `index + 1`, `0` = absent |
+| membership | `mapping(bytes32 => bool) _isAgreement / _isOffer` — one slot, the read the gate uses |
+| list | `bytes32[] agreementList / offerList` |
+| position | `mapping(bytes32 => uint256) agreementPos / offerPos` — `index + 1`, `0` = absent |
 | removal | swap-with-last, pop, fix the moved element's position |
 
-`getDeals(offset, limit)` / `getOffers(offset, limit)` return `Entry[]` assembled on read:
+The contract renamed the published set from deals to agreements; prose on this page written before
+the rename (and the migration table below) still says *deal* for the same set.
+
+`getAgreements(offset, limit)` / `getOffers(offset, limit)` return `Entry[]` assembled on read:
 
 ```solidity
 struct Entry { bytes32 genesis; string cid; address author; uint256 timestamp; }
@@ -211,8 +214,8 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 | `acceptLicense(content_id)` | `acceptOffer(genesis)` | `onlySafe` |
 | `revokeLicense(content_id)` | `retract(genesis)` | V2: asymmetric by caller. V3: the Safe's half is `reject` (reversible), the author's is `retract` (terminal) |
 | `isLicensed(string)` | `hasDeal(bytes32)` | the read the gate uses |
-| `isLicensedBulk(string[])` | — | replaced by `getDeals(offset, limit)` |
-| `getAllContentIds()` | `getDeals(offset, limit)` | `Entry[]`, not id arrays |
+| `isLicensedBulk(string[])` | — | replaced by `getAgreements(offset, limit)` |
+| `getAllContentIds()` | `getAgreements(offset, limit)` | `Entry[]`, not id arrays |
 | `getLicenseAuthor(string)` | `authorOf(bytes32)` / `Entry.author` | |
 | `hasPendingLicense(string)` | `hasOffer(bytes32)` | |
 | `getPendingLicense(string)` | `getOffers(offset, limit)` | `Entry[]` |
