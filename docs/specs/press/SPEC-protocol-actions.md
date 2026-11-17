@@ -639,7 +639,10 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `src/manifest/src/S2SManifestModule.sol` is the document's contract, in its own package beside the
   contracts: `pnpm compile`, `pnpm test` and the four scripts (`deploy:impl`, `set:impl`,
   `create:module`, `upgrade:module`) live there, and nothing about it is in the publication package
-  except the factory it is approved by. `setManifest(version, json)` writes an `x.y.z` beside the
+  except the factory it is approved by. The three calls the safe has to make are proposed to it the
+  way the writer proposes: `PROTOCOL_PRIVATE_KEY` signs a batch on the Safe Transaction Service and
+  prints the transaction hash; `--json` and `--data` print the same call for a machine that cannot
+  reach the service. `setManifest(version, json)` writes an `x.y.z` beside the
   JSON, `getManifest()` answers the live version and document in one call by reading
   `jsonByVersion[currentVersion]` (the document is stored once), `getManifest(version)` answers a
   published one, `getVersions()` enumerates them in publish order. `ManifestSet` carries

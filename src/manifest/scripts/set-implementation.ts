@@ -3,9 +3,8 @@
  *
  * `setImplementation(bytes32 kind, address impl)` is accepted only from the
  * factory's own `protocolSafe`, so this script cannot send it. It runs the checks
- * the factory runs, prints the calldata, and prints a Safe Transaction Builder
- * batch for the owners to sign. One signature, one call: approving a build and
- * pointing the kind at it are the same transaction.
+ * the factory runs, then proposes the call to that safe. One signature, one call:
+ * approving a build and pointing the kind at it are the same transaction.
  *
  * The checks, in the order the factory applies them:
  *
@@ -22,15 +21,19 @@
  *
  * Usage:
  *   cd src/manifest
- *   pnpm set:impl [--data]
+ *   pnpm set:impl            propose it to the protocol safe
+ *   pnpm set:impl --json     print a Transaction Builder batch instead
+ *   pnpm set:impl --data     print the calldata instead
  *
  * Requires in .env:
  *   MANIFEST_IMPLEMENTATION_ADDRESS  printed by pnpm deploy:impl
  *   PUBLICATION_FACTORY_ADDRESS      the V6 factory
  *   PROTOCOL_SAFE_ADDRESS            the safe that must sign
+ *   PROTOCOL_PRIVATE_KEY             an owner or delegate of that safe, to propose
  *   BASE_RPC_URL                     optional RPC override
  *
- * stdout is the Safe batch (or the calldata with `--data`). Nothing is sent.
+ * Nothing is sent: the safe executes when its owners sign. stdout is the safe
+ * transaction hash (or the batch, or the calldata).
  */
 
 import { encodeFunctionData } from 'viem';
@@ -40,14 +43,11 @@ import {
   MODULE_ABI,
   addressEnv,
   artifact,
-  batchTx,
-  emit,
+  deliver,
   publicClient,
   refuse,
   say,
 } from './lib.js';
-
-const wantData = process.argv.includes('--data');
 
 const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
 const protocolSafe = addressEnv('PROTOCOL_SAFE_ADDRESS');
@@ -137,4 +137,4 @@ if (!approved) {
   );
 }
 
-emit(wantData ? data : batchTx(factory, data));
+await deliver(factory, data, 'Approve the manifest implementation for its kind');

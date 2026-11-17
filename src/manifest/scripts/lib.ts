@@ -1,8 +1,12 @@
 /**
  * Shared plumbing for the four scripts. Nothing here decides anything: a script
- * reads `.env`, checks what it can check, and prints one of two things, the
- * calldata or a Safe Transaction Builder batch. The key only decides whether a
- * call can be sent from this machine.
+ * reads `.env`, checks what it can check, and hands one call to the protocol safe.
+ *
+ * The hand-off is the writer's: a proposal on the Safe Transaction Service,
+ * signed by `PROTOCOL_PRIVATE_KEY`, which has to be an owner or a delegate of
+ * `PROTOCOL_SAFE_ADDRESS`. A bare run proposes and prints the safe transaction
+ * hash. `--json` prints a Transaction Builder batch instead, for a machine that
+ * cannot reach the service, and `--data` prints the calldata.
  */
 
 import { config } from 'dotenv';
@@ -165,10 +169,52 @@ export function refuse(message: string): never {
 }
 
 /**
- * A Safe Transaction Builder batch of one call. The owners paste this into the
- * app and sign once; nothing this machine does on its own can move the factory.
+ * Hand one call to the protocol safe.
+ *
+ * A proposal, not a send: the safe accepts the call from its own address, so the
+ * key this machine holds can only put a batch in front of the owners, never
+ * execute it. The libraries are imported here so `--json` and `--data` need
+ * neither them nor a network.
  */
-export function batchTx(to: `0x${string}`, data: `0x${string}`) {
+export async function deliver(to: `0x${string}`, data: `0x${string}`, description: string) {
+  if (process.argv.includes('--data')) return emit(data);
+  if (process.argv.includes('--json')) return emit(batchTx(to, data, description));
+
+  const safeAddress = addressEnv('PROTOCOL_SAFE_ADDRESS');
+  const key = env('PROTOCOL_PRIVATE_KEY');
+  const signer = privateKeyToAccount((key.startsWith('0x') ? key : `0x${key}`) as `0x${string}`);
+
+  const [{ default: Safe }, { default: SafeApiKit }] = await Promise.all([
+    import('@safe-global/protocol-kit'),
+    import('@safe-global/api-kit'),
+  ]);
+
+  const protocolKit = await Safe.init({ provider: rpcUrl, signer: key, safeAddress });
+  const apiKit = new SafeApiKit({ chainId: BigInt(base.id) });
+
+  const transaction = await protocolKit.createTransaction({
+    transactions: [{ to, value: '0', data }],
+  });
+  const safeTxHash = await protocolKit.getTransactionHash(transaction);
+  const signature = await protocolKit.signHash(safeTxHash);
+
+  await apiKit.proposeTransaction({
+    safeAddress,
+    safeTransactionData: transaction.data,
+    safeTxHash,
+    senderAddress: signer.address,
+    senderSignature: signature.data,
+  });
+
+  say(`Proposed to ${safeAddress} by ${signer.address}. The owners sign there; nothing was executed.`);
+  emit(safeTxHash);
+}
+
+/**
+ * A Safe Transaction Builder batch of one call, for a machine that cannot reach
+ * the Safe Transaction Service. The owners paste it into the app and sign once.
+ */
+export function batchTx(to: `0x${string}`, data: `0x${string}`, description = '') {
   return JSON.stringify(
     {
       version: '1.0',
@@ -176,7 +222,7 @@ export function batchTx(to: `0x${string}`, data: `0x${string}`) {
       createdAt: Date.now(),
       meta: {
         name: 'Transactions Batch',
-        description: '',
+        description,
         txBuilderVersion: '1.16.5',
         createdFromSafeAddress: optionalAddressEnv('PROTOCOL_SAFE_ADDRESS') ?? '',
         createdFromOwnerAddress: '',

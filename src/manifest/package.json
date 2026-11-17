@@ -17,7 +17,9 @@
   "dependencies": {
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
     "dotenv": "^16.6.1",
-    "viem": "^2.46.2"
+    "viem": "^2.46.2",
+    "@n/api-kit": "npm:@safe-global/api-kit@^3.0.2",
+    "@n/protocol-kit": "npm:@safe-global/protocol-kit@^6.1.2"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-node-test-runner": "^3.0.8",

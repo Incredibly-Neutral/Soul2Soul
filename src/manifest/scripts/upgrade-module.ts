@@ -18,18 +18,31 @@
  *
  * Usage:
  *   cd src/manifest
- *   pnpm upgrade:module [proxy] [implementation] [--data]
+ *   pnpm upgrade:module [proxy] [implementation]        propose it
+ *   pnpm upgrade:module [proxy] [implementation] --json  print a batch instead
+ *   pnpm upgrade:module [proxy] [implementation] --data  print the calldata
  *
  * Requires in .env:
  *   PUBLICATION_FACTORY_ADDRESS  the V6 factory
  *   PROTOCOL_SAFE_ADDRESS        the safe the module answers to
+ *   PROTOCOL_PRIVATE_KEY         an owner or delegate of that safe, to propose
  *   BASE_RPC_URL                 optional RPC override
  *
- * stdout is the Safe batch (or the calldata with `--data`). Nothing is sent.
+ * Nothing is sent: the call is proposed, and the owners sign. stdout is the safe
+ * transaction hash.
  */
 
 import { encodeFunctionData } from 'viem';
-import { FACTORY_ABI, MANIFEST_KIND, addressEnv, batchTx, emit, publicClient, refuse, say } from './lib.js';
+import {
+  FACTORY_ABI,
+  MANIFEST_KIND,
+  addressEnv,
+  deliver,
+  optionalAddressEnv,
+  publicClient,
+  refuse,
+  say,
+} from './lib.js';
 
 const UPGRADE_ABI = {
   type: 'function',
@@ -43,7 +56,6 @@ const UPGRADE_ABI = {
 } as const;
 
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-const wantData = process.argv.includes('--data');
 
 const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
 const safe = addressEnv('PROTOCOL_SAFE_ADDRESS');
@@ -120,11 +132,8 @@ say(
   `Signer: ${safe}. No other address can start this call.`,
 );
 
-emit(
-  wantData
-    ? encodeFunctionData({ abi: [UPGRADE_ABI], functionName: 'upgradeToAndCall', args: [implementation, '0x'] })
-    : batchTx(
-        proxy,
-        encodeFunctionData({ abi: [UPGRADE_ABI], functionName: 'upgradeToAndCall', args: [implementation, '0x'] }),
-      ),
+await deliver(
+  proxy,
+  encodeFunctionData({ abi: [UPGRADE_ABI], functionName: 'upgradeToAndCall', args: [implementation, '0x'] }),
+  `Upgrade the manifest module to ${implementation}`,
 );

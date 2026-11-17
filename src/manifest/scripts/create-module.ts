@@ -22,7 +22,9 @@
  *   PROTOCOL_SAFE_ADDRESS        the safe that will own the module
  *   BASE_RPC_URL                 optional RPC override
  *
- * stdout is the Safe batch (or the calldata with `--data`). Nothing is sent.
+ * Nothing is sent: the call is proposed to the protocol safe, and its owners sign.
+ * stdout is the safe transaction hash, or the module address when it already
+ * exists.
  * The narrative names the address the module will have, so it can be hardcoded in
  * the readers before the call is signed.
  */
@@ -32,14 +34,12 @@ import {
   FACTORY_ABI,
   MANIFEST_KIND,
   addressEnv,
-  batchTx,
+  deliver,
   emit,
   publicClient,
   refuse,
   say,
 } from './lib.js';
-
-const wantData = process.argv.includes('--data');
 
 const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
 const safe = addressEnv('PROTOCOL_SAFE_ADDRESS');
@@ -82,11 +82,8 @@ say(
   'once that runs: until then getManifest() reverts NoManifest and every action fails.',
 );
 
-emit(
-  wantData
-    ? encodeFunctionData({ abi: FACTORY_ABI, functionName: 'createModule', args: [safe, MANIFEST_KIND, '0x'] })
-    : batchTx(
-        factory,
-        encodeFunctionData({ abi: FACTORY_ABI, functionName: 'createModule', args: [safe, MANIFEST_KIND, '0x'] }),
-      ),
+await deliver(
+  factory,
+  encodeFunctionData({ abi: FACTORY_ABI, functionName: 'createModule', args: [safe, MANIFEST_KIND, '0x'] }),
+  `Create the manifest module at ${predicted}`,
 );
