@@ -1,17 +1,20 @@
 import { namehash as viemNamehash } from 'viem/ens';
 import { PublicClient, getContract, decodeFunctionResult, type Address } from 'viem';
+import type { z } from 'zod';
 import type { S2SManifest } from './types';
-import { ENS_NAMEWRAPPER } from './constants';
+import { ENS_NAMEWRAPPER, MANIFEST_MODULE_ADDRESS } from './constants';
 import { predictPublicationModule } from './factories';
 import { isPublicationModuleName } from './module-name';
 import { manifestSchema } from './schemas';
 
-/** The record key the manifest document is published under. */
-const MANIFEST_KEY = 'manifest';
-
 export * from './module-name';
 export * from './factories';
-export { S2S_MODULE_KIND_PUBLICATION, S2S_MODULE_KIND_RECORDS } from './constants';
+export {
+  S2S_MODULE_KIND_PUBLICATION,
+  S2S_MODULE_KIND_RECORDS,
+  MANIFEST_MODULE_ADDRESS,
+  MANIFEST_VERSION_KEY,
+} from './constants';
 
 export type { S2SManifest };
 export type {
@@ -27,10 +30,49 @@ export { useMetered } from './types';
 export type ViemProvider = PublicClient;
 
 /**
- * INV-2: the controller's records module carries the manifest as ONE document,
- * under the key `manifest`. The same document is mirrored at `manifest@x.y.z`
- * for every version ever published, so a reader pinned to an older release
- * still finds it and history is retained without a second read here.
+ * The manifest module's read surface: one document per version, and the version
+ * that is current.
+ *
+ * `getManifest()` answers the current document as a pair, `(version, json)`;
+ * `getManifest(version)` answers the snapshot published under that version,
+ * which is history and never moves. There is no `VERSION()` on this module: the
+ * document names its own version, and the module's address is its identity.
+ */
+// Two abi constants, not one with two `getManifest` entries: the overloads are
+// told apart by their arguments, and a single abi makes the no-argument call
+// answer the versioned overload's type.
+const MANIFEST_CURRENT_ABI = [
+  {
+    inputs: [],
+    name: 'getManifest',
+    outputs: [
+      { internalType: 'string', name: 'version', type: 'string' },
+      { internalType: 'string', name: 'json', type: 'string' },
+    ],
+    stateMutability: 'view' as const,
+    type: 'function',
+  },
+] as const;
+
+const MANIFEST_VERSIONED_ABI = [
+  {
+    inputs: [{ internalType: 'string', name: 'version', type: 'string' }],
+    name: 'getManifest',
+    outputs: [{ internalType: 'string', name: 'json', type: 'string' }],
+    stateMutability: 'view' as const,
+    type: 'function',
+  },
+] as const;
+
+/**
+ * The manifest: the addresses and action CIDs of this deployment, as one JSON
+ * document on the manifest module, `0x0CbCB9…`, held above as a constant.
+ *
+ * Read with one call, and with no input from any publication: this is the
+ * bootstrap read, what a client needs before a publication exists, so it cannot
+ * depend on a publication's version, its records module or its ENS name. A
+ * publication that pins a document is a different read, resolved from that
+ * publication's own `manifest_version` record.
  *
  * The document is JSON, camelCase:
  *
@@ -39,110 +81,79 @@ export type ViemProvider = PublicClient;
  *   maintainCache?, repointArchive?, encrypt?, decrypt?}
  *
  * Optional action CIDs are omitted when the action was never written, never
- * present as an empty string. There is no fallback to the flat keys that
- * preceded this document and none to a partially valid one: a missing key or
- * unparsable JSON is an error naming `manifest`.
+ * present as an empty string. There is no fallback: an empty module, unparsable
+ * JSON, a missing field or an unrecognised shape is an error naming the module
+ * and the version asked for.
  *
- * `VERSION()` on the same module answers the manifest's major.minor as one
- * string, `0.1`, so the check is the document's first two segments against that
- * whole string. There is no redeploy when the document moves within a minor:
- * `VERSION()` stays `0.1` while the document carries `0.1.3`. A different major
- * or minor is a document this module cannot be read alongside.
- *
- * One deployment's manifest: the addresses and action CIDs a client needs to
- * talk to it, read from the controller's records module. This is not protocol
- * text and not code, it is references to code, published per release.
- *
- * `version` names which document to read. Absent, this reads the live record,
- * `manifest`. Present as `x.y.z`, it reads the mirror written for that version,
- * `manifest@x.y.z`, which is history: a snapshot of the fields as they were
- * published then, including action CIDs the Lit group may since have replaced.
- * A named version that answers a document claiming another version is a bad
- * record, not a fallback.
+ * `version` names which document to read. Absent, this reads the current one.
+ * Present as `x.y.z`, it reads the snapshot published under that version, and a
+ * document whose own `version` disagrees with the one named is a bad record, not
+ * a fallback. The current read also checks the pair the module answers, so a
+ * document and its index cannot disagree.
  */
 export const getManifest = async (
-  l1Provider: ViemProvider,
+  // Unused by the bootstrap read; the pinned read needs it, to resolve a
+  // publication's Safe from its ENS name.
+  _l1Provider: ViemProvider,
   l2Provider: ViemProvider,
   version?: string,
 ): Promise<S2SManifest> => {
-  const {
-    multisig,
-    configModule,
-    publicationModule: scannedPublicationModule,
-    modules,
-  } = await getProtocolControllerAndModules(false, l1Provider, l2Provider);
-
-  const key = version ? `${MANIFEST_KEY}@${version}` : MANIFEST_KEY;
-  const [document] = await getRecords(configModule!, [key], l2Provider);
-
-  if (!document) {
-    throw new Error(`manifest: no '${key}' record on ${configModule}`);
+  let document: string;
+  let currentVersion: string | undefined;
+  try {
+    if (version) {
+      document = await l2Provider.readContract({
+        address: MANIFEST_MODULE_ADDRESS as Address,
+        abi: MANIFEST_VERSIONED_ABI,
+        functionName: 'getManifest',
+        args: [version],
+      });
+    } else {
+      const [answeredVersion, answeredDocument] = await l2Provider.readContract({
+        address: MANIFEST_MODULE_ADDRESS as Address,
+        abi: MANIFEST_CURRENT_ABI,
+        functionName: 'getManifest',
+        args: [],
+      });
+      currentVersion = answeredVersion;
+      document = answeredDocument;
+    }
+  } catch (error) {
+    throw new Error(
+      `manifest: cannot read ${version ? `version ${version}` : 'the current version'} on ` +
+        `${MANIFEST_MODULE_ADDRESS}: ${(error as Error).message}`,
+    );
   }
+
+  const key = version ?? currentVersion;
 
   let raw: unknown;
   try {
     raw = JSON.parse(document);
   } catch (error) {
-    throw new Error(
-      `manifest: the '${key}' record is not valid JSON: ${(error as Error).message}`,
-    );
+    throw new Error(`manifest: version ${key} is not valid JSON: ${(error as Error).message}`);
   }
 
-  // The schema's output is the document: everything but the factory discovery
-  // was handed and the module it predicts.
-  let manifest: Omit<S2SManifest, 'moduleFactory' | 'publicationModule'>;
+  let manifest: z.infer<typeof manifestSchema>;
   try {
     manifest = manifestSchema.parse(raw);
   } catch (error) {
     throw new Error(
-      `manifest: the '${key}' record does not have the document's shape: ${(error as Error).message}`,
+      `manifest: version ${key} does not have the document's shape: ${(error as Error).message}`,
     );
   }
 
-  // Asked for one version, answered with another: the record was overwritten
-  // with a different document, or the caller named a key that holds the wrong
-  // thing. Either way it is not the snapshot that was asked for.
-  if (version && manifest.version !== version) {
+  // The index and the document are written together, so they cannot disagree.
+  // Either one answering a different version is a bad write, not a fallback.
+  if (key && manifest.version !== key) {
     throw new Error(
-      `manifest: the '${key}' record carries version ${manifest.version}, not ${version}`,
+      `manifest: version ${key} carries document version ${manifest.version}, not ${key}`,
     );
   }
 
-  const onChainVersion = (await getContract({
-    address: configModule! as Address,
-    abi: [
-      {
-        inputs: [],
-        name: 'VERSION',
-        outputs: [{ internalType: 'string', name: '', type: 'string' }],
-        stateMutability: 'view' as const,
-        type: 'function',
-      },
-    ],
-    client: l2Provider,
-  }).read.VERSION()) as string;
-
-  // `VERSION()` is the manifest's major.minor, so this is the document's first
-  // two segments against the whole of it: `0.1` reads a `0.1.3` document.
-  const documentPrefix = manifest.version.split('.').slice(0, 2).join('.');
-  if (documentPrefix !== onChainVersion) {
-    throw new Error(
-      `manifest: document version ${manifest.version} is not compatible with VERSION() ${onChainVersion}`,
-    );
-  }
-
-  // The factory that answers a module address is in the document, so the
-  // prediction can only run after the read. It is given the module list read
-  // above: one `getModulesPaginated`, one records read, either way.
-  const predictedPublicationModule = manifest.publicationFactory
-    ? await predictPublicationModule(
-        l2Provider,
-        manifest.publicationFactory as Address,
-        multisig as Address,
-        modules,
-      )
-    : undefined;
-
+  // There is no publication in this read: one is resolved by name, from a
+  // publication's own records, and a client that has not created one yet has
+  // nothing to resolve. The factory is in the document, so it is still known.
   return {
     version: manifest.version,
     gateway: manifest.gateway,
@@ -150,9 +161,7 @@ export const getManifest = async (
     ensRecords: manifest.ensRecords,
     publicationFactory: manifest.publicationFactory,
     recordsFactory: manifest.recordsFactory,
-    // One factory for every kind, named by the same field in the document.
     moduleFactory: manifest.publicationFactory,
-    publicationModule: predictedPublicationModule ?? scannedPublicationModule ?? undefined,
     pkp: manifest.pkp,
     litActions: {
       prep: manifest.litActions.prep,

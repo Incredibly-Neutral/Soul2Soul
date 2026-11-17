@@ -1,4 +1,18 @@
 export const ENS_NAMEWRAPPER = '0xd4416b13d2b3a9abae7acd5d6c2bbdbe25686401';
+
+// ---------------------------------------------------------------------------
+// The manifest module — the protocol Safe's own module, holding one versioned
+// JSON document: the addresses and action CIDs of this deployment.
+//
+// A constant, not something to discover: the address is fixed by the factory's
+// CREATE2 salt, so a reader has it without a scan, an ENS walk or a record read.
+// ---------------------------------------------------------------------------
+
+/** `S2SManifestModuleV0_1`, the protocol Safe's own module. */
+export const MANIFEST_MODULE_ADDRESS = '0x0CbCB9FbbEA0A8DE0547fDb5389b24edB447873F';
+
+/** The record a publication keeps to name the manifest document it follows. */
+export const MANIFEST_VERSION_KEY = 'manifest_version';
 // ---------------------------------------------------------------------------
 // Module kinds — the two kinds a publication's Safe installs.
 //
