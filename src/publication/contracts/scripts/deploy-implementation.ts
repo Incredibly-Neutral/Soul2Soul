@@ -2,7 +2,8 @@
  * Deploy one implementation for S2SPublicationModulesFactoryV6.
  *
  * `--kind publication` deploys S2SPublicationModuleV6, `--kind records` deploys
- * S2SRecordsModuleV2, and the default is publication. Both take
+ * S2SRecordsModuleV2, `--kind manifest` deploys S2SManifestModule, and the
+ * default is publication. Both take
  * `(factory, protocolSafe)` as constructor arguments but keep only the factory:
  * the safe is read once, compared with the factory's own `protocolSafe()`, and
  * dropped, and neither implementation has a `protocolSafe()` getter. The safe is
@@ -74,7 +75,7 @@ const ARTIFACT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../artif
 const ERC1967_IMPLEMENTATION_SLOT =
   '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
 
-type KindName = 'publication' | 'records';
+type KindName = 'publication' | 'records' | 'manifest';
 
 const KINDS: Record<KindName, { contract: string; label: string; env: string }> = {
   publication: {
@@ -86,6 +87,11 @@ const KINDS: Record<KindName, { contract: string; label: string; env: string }> 
     contract: 'S2SRecordsModuleV2',
     label: 's2s.module.records',
     env: 'RECORDS_IMPLEMENTATION_ADDRESS',
+  },
+  manifest: {
+    contract: 'S2SManifestModule',
+    label: 's2s.module.manifest',
+    env: 'MANIFEST_IMPLEMENTATION_ADDRESS',
   },
 };
 

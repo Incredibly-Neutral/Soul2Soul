@@ -22,6 +22,7 @@
  *
  *   publication  keccak256("s2s.module.publication")  PUBLICATION_IMPLEMENTATION_ADDRESS
  *   records      keccak256("s2s.module.records")      RECORDS_IMPLEMENTATION_ADDRESS
+ *   manifest     keccak256("s2s.module.manifest")     MANIFEST_IMPLEMENTATION_ADDRESS
  *
  * A proxy whose current implementation does not answer `moduleKind()` predates this
  * shape, and the script refuses it rather than guess a payload for it.
@@ -55,6 +56,7 @@
  *   PUBLICATION_IMPLEMENTATION_ADDRESS  target for a publication-kind proxy when
  *                                       the argument is omitted
  *   RECORDS_IMPLEMENTATION_ADDRESS      the same for a records-kind proxy
+ *   MANIFEST_IMPLEMENTATION_ADDRESS     the same for a manifest-kind proxy
  *   BASE_RPC_URL / VITE_DRPC_API_KEY    optional RPC override
  */
 
@@ -119,6 +121,11 @@ const KINDS: Record<Hex, KindInfo> = {
     label: 'records',
     env: 'RECORDS_IMPLEMENTATION_ADDRESS',
     artifact: 'S2SRecordsModuleV2',
+  },
+  [keccak256(stringToHex('s2s.module.manifest'))]: {
+    label: 'manifest',
+    env: 'MANIFEST_IMPLEMENTATION_ADDRESS',
+    artifact: 'S2SManifestModule',
   },
 };
 

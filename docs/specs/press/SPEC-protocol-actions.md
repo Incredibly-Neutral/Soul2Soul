@@ -633,6 +633,21 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   against `VERSION()` before the batch, which is what keeps the hardcoded address safe.
   Only major `1` has ever been written: nothing is live, so there is no old document to read and no
   compatibility path from one.
+- **The manifest has its own kind, and its own module (2026-11-17, written; not deployed).**
+  `S2SManifestModule.sol` is the document's contract: `setManifest(version, json)` writes an `x.y.z`
+  beside the JSON and appends the version to a list, `getManifest()` answers the live version and
+  document in one call, `getManifest(version)` answers a published one, `getVersions()` enumerates
+  them. The shape checks are the contract's: `_major` refuses anything that is not three digit
+  segments, and `MajorMismatch` refuses a document whose major is not `VERSION()`, so a reader
+  never has to compare a document to a module and can never be handed one it cannot use. History is
+  append-only in one direction and correctable in the other: a version that is already history is
+  refused (`VersionIsHistory`), the live version may be rewritten while nobody has pinned it. The
+  kind is `s2s.module.manifest`, third in the factory beside publication and records, so the address
+  is `moduleAddress(safe, kind)` and upgrades are approved per kind.
+  **State:** the contract compiles, has six node tests, and is in no deployment. The readers still
+  read `manifest` from the records module; `PROTOCOL_RECORDS_MODULE` becomes `MANIFEST_MODULE` once
+  the module exists on Base, and the two disagree only about where the document lives until then,
+  not about its shape.
 - **Read cost and gate ordering.** Every action starts with `getManifest` — one `getRecord('manifest')`
   and one `VERSION()` on the hardcoded module — and discovery takes its factory from that document,
   so there is no separate factory read and nothing to reconcile. An action that gates after

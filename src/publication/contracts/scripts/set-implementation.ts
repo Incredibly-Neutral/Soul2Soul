@@ -44,7 +44,7 @@
  *
  * Usage:
  *   cd src/publication/contracts
- *   pnpm set:impl [--kind publication|records] [--format text|batch|data] [--dry-run]
+ *   pnpm set:impl [--kind publication|records|manifest] [--format text|batch|data] [--dry-run]
  *
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY               key that proposes or sends the call
@@ -52,6 +52,7 @@
  *   PUBLICATION_FACTORY_ADDRESS        the V6 factory, as printed by pnpm deploy:factory
  *   PUBLICATION_IMPLEMENTATION_ADDRESS optional: the publication-kind module
  *   RECORDS_IMPLEMENTATION_ADDRESS     optional: the records-kind module
+ *   MANIFEST_IMPLEMENTATION_ADDRESS    optional: the manifest-kind module
  *   BASE_RPC_URL / VITE_DRPC_API_KEY   optional RPC override
  *
  * After a deploy, put PUBLICATION_FACTORY_ADDRESS in .env and write the
@@ -111,8 +112,9 @@ const SAFE_ABI = parseAbi([
 
 const PUBLICATION_KIND = keccak256(toHex('s2s.module.publication'));
 const RECORDS_KIND = keccak256(toHex('s2s.module.records'));
+const MANIFEST_KIND = keccak256(toHex('s2s.module.manifest'));
 
-type KindName = 'publication' | 'records';
+type KindName = 'publication' | 'records' | 'manifest';
 type Format = 'text' | 'batch' | 'data';
 
 /** Where the calls go, once the key has decided. */
@@ -152,7 +154,7 @@ function refuse(sentence: string): never {
 function usage(message: string): never {
   console.error(`${message}\n`);
   console.error(
-    'Usage: pnpm set:impl [--kind publication|records] [--format text|batch|data] [--dry-run]',
+    'Usage: pnpm set:impl [--kind publication|records|manifest] [--format text|batch|data] [--dry-run]',
   );
   console.error('  the factory is PUBLICATION_FACTORY_ADDRESS in .env');
   console.error('  the implementations are PUBLICATION_IMPLEMENTATION_ADDRESS and');
@@ -229,8 +231,8 @@ function parseArgs(argv: string[]): { kind: KindName | null; format: Format; dry
 
     if (arg === '--kind' || arg.startsWith('--kind=')) {
       const value = arg.includes('=') ? arg.split('=')[1] : argv[++i];
-      if (value !== 'publication' && value !== 'records') {
-        usage(`--kind takes publication or records, not ${value ?? 'nothing'}.`);
+      if (value !== 'publication' && value !== 'records' && value !== 'manifest') {
+        usage(`--kind takes publication, records or manifest, not ${value ?? 'nothing'}.`);
       }
       kind = value;
       continue;
@@ -305,6 +307,7 @@ async function main() {
       impl: null,
     },
     { name: 'records', kind: RECORDS_KIND, env: 'RECORDS_IMPLEMENTATION_ADDRESS', impl: null },
+    { name: 'manifest', kind: MANIFEST_KIND, env: 'MANIFEST_IMPLEMENTATION_ADDRESS', impl: null },
   ];
 
   const targets: Target[] = catalogue
