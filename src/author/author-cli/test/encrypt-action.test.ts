@@ -1,12 +1,12 @@
 // ============================================================================
-// Which encrypt action CID the CLI uses — the protocol record, or the config.
+// Which encrypt action CID the CLI uses — the manifest document, or the config.
 //
 // The CLI ships no action CID: the CID of the encrypt bundle is a protocol fact
-// and lives in the records module (`lit_action_encrypt`), written by
-// press/scripts/lit/update-protocol.ts and read with every other action record
-// in shared's `getManifest` (`litActions.encrypt`). `lit.encryptActionCid`
-// (file or LIT_ENCRYPT_ACTION_CID) is the override, and its presence wins
-// without consulting the record.
+// and lives in the manifest document's `litActions.encrypt`, written by
+// press/scripts/lit/update-protocol.ts and read with every other action CID in
+// shared's `getManifest`. `lit.encryptActionCid` (file or
+// LIT_ENCRYPT_ACTION_CID) is the override, and its presence wins without
+// consulting the document.
 //
 // There is no second resolution here: the record arrives on `protocolInfo`, so
 // a timed-out RPC cannot be mistaken for "the record is not written".
@@ -75,7 +75,7 @@ describe('resolveEncryptActionCid', () => {
     const svc = createLitService(config, cid);
     await expect(svc.encrypt('usage-key', '0xpkp', 'plaintext')).rejects.toMatchObject({
       code: 'usage',
-      message: expect.stringContaining('lit_action_encrypt'),
+      message: expect.stringContaining('litActions.encrypt'),
     });
   });
 });

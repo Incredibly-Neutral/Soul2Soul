@@ -87,8 +87,8 @@ export function resolveEncryptActionCid(
 
 /**
  * The decrypt action CID, resolved exactly like the encrypt one: the config/env
- * value first (`LIT_DECRYPT_ACTION_CID` / `lit.decryptActionCid`), then the
- * `lit_action_decrypt` record. Two leaves, not one: the actions are separate
+ * value first (`LIT_DECRYPT_ACTION_CID` / `lit.decryptActionCid`), then
+ * `manifest.litActions.decrypt`. Two leaves, not one: the actions are separate
  * bundles, swapped one at a time.
  */
 export function resolveDecryptActionCid(

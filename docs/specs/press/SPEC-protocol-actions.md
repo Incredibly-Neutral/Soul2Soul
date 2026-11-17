@@ -620,9 +620,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   publication Safe, and the document read on the constant.
 - **The document, not a key set (2026-11-17).** The manifest is one record, `manifest`, holding a
   JSON document with its own `version`. The keys it replaced (`data_gateway`, `lit_action_prep`, …)
-  are still written by `update-protocol.ts` in the same Safe batch, for a client that predates the
-  document; nothing writes or reads them. The same JSON is mirrored at
-  `manifest@x.y.z` as version history: a reader pinned to a release finds the document it was
+  are gone: `update-protocol.ts` writes the document and its mirror and nothing else. The mirror is
+  `manifest@x.y.z`, version history: a reader pinned to a release finds the document it was
   written for, and a retained version may name CIDs the Lit group has since removed — the group's
   action list decides what runs, not the record.
 - **Version agreement.** Three numbers, one meaning. The document names `x.y.z`: major changes when

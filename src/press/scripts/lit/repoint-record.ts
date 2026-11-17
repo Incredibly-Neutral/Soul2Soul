@@ -1,6 +1,7 @@
 import Safe from "@safe-global/protocol-kit";
 import SafeApiKit from "@safe-global/api-kit";
-import { encodeFunctionData } from "viem";
+import { createPublicClient, encodeFunctionData, http } from "viem";
+import { base } from "viem/chains";
 // @ts-ignore
 import { OperationType } from "@safe-global/types-kit";
 import { loadMonorepoEnv } from "@s2s/soul2soul-shared/chain-secured";
@@ -25,7 +26,16 @@ const recordsModuleAbi = [
       { name: "value", type: "string" },
     ],
   },
+  {
+    name: "getRecord",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "key", type: "string" }],
+    outputs: [{ name: "", type: "string" }],
+  },
 ] as const;
+
+const MANIFEST_KEY = "manifest";
 
 const RECORDS_MODULE_ADDRESS = "0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29";
 
@@ -56,12 +66,17 @@ const proposeToSafe = async (account: any, transactions: any[]) => {
 };
 
 /**
- * repoint-record.ts — targeted reconciliation of the lit_action_repointArchive
- * record. Writes ONLY that one key so the on-chain records module matches the
- * repoint-archive action actually registered in Lit group 1.
+ * repoint-record.ts — targeted reconciliation of one action CID in the manifest
+ * document, for the repoint-archive action registered in Lit group 1.
  *
- * The value is read from config.json (source of truth), so it can never drift
- * from what the tooling thinks the repoint action is.
+ * There is no per-action record to write: the document holds every CID under
+ * `litActions`. This reads the live document, replaces `litActions.repointArchive`
+ * with the CID in config.json, and writes the document back under `manifest` and
+ * `manifest@<version>` — the same two writes `update-protocol.ts` makes, with every
+ * other field carried through untouched.
+ *
+ * The CID is read from config.json (source of truth), so it can never drift from
+ * what the tooling thinks the repoint action is.
  *
  * Usage:
  *   pnpm tsx press/scripts/lit/repoint-record.ts
@@ -79,25 +94,45 @@ const main = async () => {
   const repoint = group.actions.find((a: any) => a.name === 'repoint-archive');
   if (!repoint?.cid) throw new Error('repoint-archive cid missing from config.json');
 
-  const key = 'lit_action_repointArchive';
-  const value = repoint.cid;
+  const client = createPublicClient({
+    chain: base,
+    transport: http(`https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`),
+  });
 
-  const transactions = [
-    {
-      to: RECORDS_MODULE_ADDRESS,
-      data: encodeFunctionData({
-        abi: recordsModuleAbi,
-        functionName: 'setRecord',
-        args: [key, value],
-      }),
-      value: '0',
-      operation: OperationType.Call,
-    },
-  ];
+  const raw = await client.readContract({
+    address: RECORDS_MODULE_ADDRESS,
+    abi: recordsModuleAbi,
+    functionName: 'getRecord',
+    args: [MANIFEST_KEY],
+  });
+  if (!raw) {
+    throw new Error(`no '${MANIFEST_KEY}' record on ${RECORDS_MODULE_ADDRESS}: write the document first (pnpm update-protocol)`);
+  }
 
-  console.log(`\n=== setRecord(${key}, ${value}) ===`);
-  console.log(`to:     ${RECORDS_MODULE_ADDRESS}`);
-  console.log(`data:   ${transactions[0].data}`);
+  const document = JSON.parse(raw);
+  if (typeof document.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(document.version)) {
+    throw new Error(`document version is not x.y.z: ${JSON.stringify(document.version)}`);
+  }
+  const before = document.litActions?.repointArchive;
+  document.litActions = { ...document.litActions, repointArchive: repoint.cid };
+  const patched = JSON.stringify(document);
+
+  const transactions = [MANIFEST_KEY, `${MANIFEST_KEY}@${document.version}`].map((key) => ({
+    to: RECORDS_MODULE_ADDRESS,
+    data: encodeFunctionData({
+      abi: recordsModuleAbi,
+      functionName: 'setRecord' as const,
+      args: [key, patched] as [string, string],
+    }),
+    value: '0',
+    operation: OperationType.Call,
+  }));
+
+  console.log(`\n=== litActions.repointArchive: ${before || '(unset)'} -> ${repoint.cid} ===`);
+  console.log(`document version: ${document.version}`);
+  for (const key of [MANIFEST_KEY, `${MANIFEST_KEY}@${document.version}`]) {
+    console.log(`setRecord(${key}) on ${RECORDS_MODULE_ADDRESS}`);
+  }
 
   if (dryRun) {
     console.log('\ndry-run: STOPPING before proposing to Safe.');

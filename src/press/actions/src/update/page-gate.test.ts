@@ -60,8 +60,7 @@ vi.mock('../libs/ens.factory', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
-  // The one record read before discovery; discovery refuses a null record.
-  getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
+  // The one read before discovery; discovery refuses an unreadable document.
   getManifest: vi.fn(async () => ({
     pkp: '0x' + '55'.repeat(20),
     ensRecords: '0x' + '66'.repeat(20),

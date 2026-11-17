@@ -47,7 +47,7 @@ const timeout = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // The factory, taken from the manifest document, read once per run. Absent is
 // not fatal: the NAME() scan below still resolves the module.
-async function getPublicationFactory(): Promise<`0x${string}` | null> {
+async function getFactoryFromManifest(): Promise<`0x${string}` | null> {
   try {
     const manifest = await getManifest(false, l1, l2);
     return (manifest.moduleFactory || null) as `0x${string}` | null;
@@ -121,7 +121,7 @@ async function main() {
   console.log(`staging:     ${OUT_DIR}`);
   mkdirSync(OUT_DIR, { recursive: true });
 
-  publicationFactory = await getPublicationFactory();
+  publicationFactory = await getFactoryFromManifest();
   console.log(`factory:     ${publicationFactory || '(unreadable — NAME() scan only)'}`);
 
   const pubModule = await resolvePublicationModule(PUBLICATION);

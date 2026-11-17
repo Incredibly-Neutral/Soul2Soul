@@ -486,21 +486,21 @@ that serves different code is a closed failure, not a plaintext upload. The
 bundle is built in `src/press/actions` by the release step; this CLI only names
 it. `LIT_ENCRYPT_ACTION_CID` sets the same leaf.
 
-**The CID also lives on the chain, and that record is the fallback.** With no
-`lit.encryptActionCid` in the env or in a config file, the CLI reads the record
-`lit_action_encrypt` from the manifest document's `litActions` — the field
+**The CID also lives on the chain, in the manifest document.** With no
+`lit.encryptActionCid` in the env or in a config file, the CLI takes
+`litActions.encrypt` from the document — the field
 `press/scripts/lit/update-protocol.ts` writes beside `litActions.decrypt`, read by
-`shared/src/protocol/index.ts :: getManifest` with the rest of the document. The
-flat `lit_action_encrypt` key is still written for clients that predate the
-document; nothing here reads it. The config surface wins over the record: `LIT_ENCRYPT_ACTION_CID`, else
-a config-file `lit.encryptActionCid`, else `lit_action_encrypt`. With all three
-absent the encrypt path fails closed and names both remedies:
-`s2s config set lit.encryptActionCid <cid>`, or writing the record with
+`shared/src/protocol/index.ts :: getManifest` with the rest of it. There is no
+flat key behind it and no second place it can come from. The config surface wins
+over the document: `LIT_ENCRYPT_ACTION_CID`, else a config-file
+`lit.encryptActionCid`, else `manifest.litActions.encrypt`. With all three absent
+the encrypt path fails closed and names both remedies:
+`s2s config set lit.encryptActionCid <cid>`, or writing the manifest with
 `press/scripts/lit/update-protocol.ts`.
 
 `lit.decryptActionCid` is the same leaf for the other direction, and the read path
 resolves it the same way: `LIT_DECRYPT_ACTION_CID`, else a config-file
-`lit.decryptActionCid`, else the record `lit_action_decrypt`. The two are separate
+`lit.decryptActionCid`, else `manifest.litActions.decrypt`. The two are separate
 leaves because they are separate bundles, swapped one at a time. With none of the
 three, `drafts fetch` and `drafts pull` fail closed before they ask Lit anything,
 naming `s2s config set lit.decryptActionCid <cid>` and
