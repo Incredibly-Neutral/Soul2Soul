@@ -346,7 +346,7 @@ export async function createAuthorSafeRunner(
  * This exists because the author identity on chain is the Safe, not the EOA:
  * 0xobsidian sends the same writes through `ctrlr.account[L2]`, a
  * `PermissionlessSafeService` connected to `user.safe`, so `msg.sender` is the
- * Safe and `genesisAuthor[genesis]` becomes the Safe. `S2SPublicationModuleV2`
+ * Safe and `genesisAuthor[genesis]` becomes the Safe. `S2SPublicationModuleV0_1`
  * then refuses anything else: a first append requires `canPublish(msg.sender)`
  * (safe ∨ whitelisted), and appending to an existing genesis requires
  * `msg.sender == genesisAuthor` (or the publication Safe). Sending from the

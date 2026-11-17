@@ -16,7 +16,7 @@ import {
   toBytes32Id,
   type S2SIPFSMethods,
 } from '@s2s/soul2soul-shared';
-import { S2SRecordsModuleV0_1, S2SPublicationModuleV2 } from '@s2s/publication-contracts';
+import { S2SRecordsModuleV0_1, S2SPublicationModuleV0_1 } from '@s2s/publication-contracts';
 import { BaseError, type Address, type Hex } from 'viem';
 import type { TxRunner } from '@s2s/soul2soul-shared';
 import { CliError } from '../lib/errors';
@@ -26,7 +26,7 @@ type SharedPublicClient = Parameters<typeof resolvePublicationSafe>[0];
 
 /**
  * The identity an author write is sent as: the author Safe, never the EOA.
- * `S2SPublicationModuleV2` keys everything (whitelist, `genesisAuthor`) on the
+ * `S2SPublicationModuleV0_1` keys everything (whitelist, `genesisAuthor`) on the
  * Safe address, so `makeOffer`/`retract` must arrive with the Safe as
  * `msg.sender` — which is what the ERC-4337 runner does.
  */
@@ -104,7 +104,7 @@ export class PublicationService {
     const id = toBytes32Id(genesis) as Hex;
 
     await this.simulateAuthorWrite(module, author, 'makeOffer', [id, cid]);
-    return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV2), 'makeOffer', [id, cid], false);
+    return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV0_1), 'makeOffer', [id, cid], false);
   }
 
   /**
@@ -120,7 +120,7 @@ export class PublicationService {
     const id = toBytes32Id(genesis) as Hex;
 
     await this.simulateAuthorWrite(module, author, 'retract', [id]);
-    return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV2), 'retract', [id], false);
+    return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV0_1), 'retract', [id], false);
   }
 
   private requirePublicationModule(): Address {
@@ -158,7 +158,7 @@ export class PublicationService {
       if (method === 'makeOffer') {
         await this.options.l2.simulateContract({
           address: module,
-          abi: S2SPublicationModuleV2,
+          abi: S2SPublicationModuleV0_1,
           functionName: 'makeOffer',
           args: args as [Hex, string],
           account: author.address,
@@ -166,7 +166,7 @@ export class PublicationService {
       } else {
         await this.options.l2.simulateContract({
           address: module,
-          abi: S2SPublicationModuleV2,
+          abi: S2SPublicationModuleV0_1,
           functionName: 'retract',
           args: args as [Hex],
           account: author.address,
