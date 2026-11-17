@@ -51,11 +51,12 @@ vi.mock('../libs/ens.factory', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
-  // The one record read before the module call; null is the probe path.
-  getPublicationFactory: vi.fn(async () => null),
+  // The one record read before discovery; discovery refuses a null record.
+  getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
   getProtocolInfo: vi.fn(async () => ({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
+    moduleFactory: '0x' + '77'.repeat(20),
   })),
 }));
 
@@ -118,7 +119,8 @@ const gatewayResponse = (url: string): Response => {
 // ===========================================================================
 
 import { main } from './main';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
+import { getDomainOwnerAndModules } from '../libs/ens.factory';
 
 const gateway = 'http://gateway.test';
 
@@ -295,6 +297,24 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
     // Nothing was written to the gateway (the gate fails before the tree build),
     // and the protocol walk behind the gate was never paid.
     expect(getProtocolInfo).not.toHaveBeenCalled();
+    expect(mocks.gatewayUrls.length).toBe(0);
+  });
+
+  it('fails on a missing publication_factory record instead of skipping module discovery', async () => {
+    // These two kinds are read from the factory the record names and nowhere
+    // else, so a null record is a refusal, never a discovery without the
+    // module check.
+    vi.mocked(getPublicationFactory).mockResolvedValueOnce(null);
+    const result: any = await main({
+      ...baseInput,
+      signature: await makeSignature(),
+      reset: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('publication_factory record missing');
+    // Discovery was never reached, and nothing was written.
+    expect(getDomainOwnerAndModules).not.toHaveBeenCalled();
     expect(mocks.gatewayUrls.length).toBe(0);
   });
 

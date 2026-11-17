@@ -75,9 +75,12 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     trace.push(`pub: ${publication}`);
     trace.push(`seed cid: ${archiveCid}`);
 
-    // The one `publication_factory` record, so module discovery can use the
-    // factory's prediction; the protocol walk itself stays behind the gate.
+    // The one `publication_factory` record, so module discovery can ask the
+    // factory it names for this Safe's publication module. The author-side gate
+    // reads are a separate path, behind `libs/gates`.
     const publicationFactory = await getPublicationFactory(rpcs);
+    if (!publicationFactory)
+      throw `publication_factory record missing; cannot discover modules for '${publication}'`;
 
     const { publicationModule, multisig } = await getDomainOwnerAndModules(
       publication,
@@ -93,7 +96,7 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
       }
     }
 
-    const protocolInfo = await getProtocolInfo(false, rpcs);
+    const protocolInfo = await getProtocolInfo(false, rpcs, publicationFactory);
     if (!protocolInfo?.pkp || !protocolInfo?.ensRecords) {
       throw 'Failed to fetch protocol info';
     }

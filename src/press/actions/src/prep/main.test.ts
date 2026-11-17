@@ -19,6 +19,10 @@ import * as ethers from 'ethers5';
 vi.mock('../libs/evm', () => ({ evmRead: vi.fn() }));
 vi.mock('../libs/ipfs.factory', () => ({ catFile: vi.fn() }));
 vi.mock('../libs/ens.factory', () => ({ getDomainOwnerAndModules: vi.fn() }));
+// Discovery needs the `publication_factory` record and refuses a null one.
+vi.mock('../libs/protocol.factory', () => ({
+  getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
+}));
 vi.mock('../libs/helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/helpers')>();
   return { ...actual, setRpcAuth: vi.fn() };
@@ -169,5 +173,29 @@ describe('prep — one forged item does not abort the batch', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected failure');
     expect(String(result.error)).toContain('not found');
+  });
+});
+
+describe('prep — a publication whose module the factory cannot name', () => {
+  it('refuses the invocation, naming the publication and the three modules', async () => {
+    // The factory names no publication module for this Safe (a prediction with
+    // no code, or a Safe created by an earlier factory). Discovery answers null
+    // rather than inventing one, and prep must refuse rather than proceed
+    // against a module it cannot identify.
+    vi.mocked(getDomainOwnerAndModules).mockResolvedValue({
+      multisig: '0x' + '11'.repeat(20),
+      configModule: '0x' + '22'.repeat(20),
+      publicationModule: null,
+    } as never);
+
+    const result = await main(input([GOOD_GENESIS]));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error).toBe(
+      `modules not found for '${PUBLICATION}' (multisig/config/publication)`,
+    );
+    // Nothing downstream of discovery ran: no item was ever read.
+    expect(evmRead).not.toHaveBeenCalled();
   });
 });
