@@ -6,6 +6,7 @@
   "description": "S2SManifestModule: the manifest document, its version, and every version before it",
   "scripts": {
     "compile": "hardhat compile",
+    "clean": "hardhat clean",
     "pretest": "pnpm -C ../publication/contracts compile",
     "test": "hardhat test",
     "deploy:impl": "tsx scripts/deploy-implementation.ts",
