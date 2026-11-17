@@ -184,9 +184,11 @@ export async function deliver(to: `0x${string}`, data: `0x${string}`, descriptio
   const key = env('PROTOCOL_PRIVATE_KEY');
   const signer = privateKeyToAccount((key.startsWith('0x') ? key : `0x${key}`) as `0x${string}`);
 
+  // The workspace aliases, which is what this package depends on: `@n/protocol-kit`
+  // is `npm:@safe-global/protocol-kit`, and the bare name resolves nowhere here.
   const [{ default: Safe }, { default: SafeApiKit }] = await Promise.all([
-    import('@safe-global/protocol-kit'),
-    import('@safe-global/api-kit'),
+    import('@n/protocol-kit'),
+    import('@n/api-kit'),
   ]);
 
   const protocolKit = await Safe.init({ provider: rpcUrl, signer: key, safeAddress });
