@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title S2SManifestModule
@@ -13,45 +14,48 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  *
  * Why a module instead of a record in the records module. The manifest is a
  * document with a version, not one key among many: the version has to be
- * written with it, the history has to be enumerable, and the major on the
- * document has to agree with the contract that serves it, or a reader gets a
- * document it cannot use. A key-value store cannot say any of that. Here the
- * shape is the contract's, so a writer cannot publish a document that
- * disagrees with `VERSION()`, and a reader does not have to guess key names or
- * call twice to get a version and a document that belong together.
+ * written with it and the history has to be enumerable. A key-value store
+ * cannot say either of those, and a reader of it has to know the naming
+ * convention rather than ask for a version.
  *
- * The version is `x.y.z`. The major changes when the document's shape changes,
- * the minor when an optional field is added, the patch when an action CID is
- * repointed. `VERSION()` here is the major and nothing else, because this
- * module is not redeployed when the document moves within it, and
- * `setManifest` refuses a document whose major is not the one this module
- * serves.
+ * There is one version and it is the document's own `x.y.z`, written beside it.
+ * The module keeps no version of its own: it cannot tell a 2.x document from a
+ * 1.x one, so claiming a major would be a constant that every upgrade has to
+ * keep in step with stored history, and one mismatch would make a document
+ * unreadable. A reader that only understands major 1 meets a 2.x document and
+ * refuses it, which is where that judgement can actually be made.
  *
- * Three declarations the factory reads before it will set this implementation:
- * `moduleKind()`, `factory()`, and `proxiableUUID()`. An upgrade target is then
- * judged per kind, and an implementation approved for another kind is not a
- * target here.
+ * The rules the module keeps are the ones it can enforce:
+ *
+ *   - `x.y.z`, three digit segments, no leading zeros in any of them,
+ *   - a version is written once; publishing it again reverts `VersionExists`,
+ *     so repointing a CID means a new patch, and `getManifest(version)` is a
+ *     promise rather than a lookup,
+ *   - versions strictly increase in `(major, minor, patch)`, so the last entry
+ *     in the list is the live one and no client has to sort the list.
  */
-interface IS2SManifestModule {
-    event ManifestSet(string version, string json);
-    event ContractUpgraded(address indexed implementation);
+interface IS2SManifestModule is IERC165 {
+    event ManifestSet(bytes32 indexed versionHash, string version, bytes32 jsonHash);
 
     error OnlySafe();
     error OnlyFactory();
+    error ZeroSafe();
     error EmptyVersion();
     error VersionNotXYZ(string version);
-    error MajorMismatch(string documentMajor, string moduleMajor);
+    error LeadingZero(string version);
     error EmptyDocument();
-    error VersionIsHistory(string version);
+    error VersionExists(string version);
+    error VersionNotIncreasing(string version, string current);
     error VersionNotFound(string version);
+    error IndexOutOfBounds(uint256 index);
     error NoManifest();
     error ImplementationNotApproved(address implementation);
     error InvalidFactory(address factory);
     error ProtocolSafeMismatch(address factorySays, address expected);
 
     function NAME() external view returns (string memory);
-    function VERSION() external view returns (string memory);
     function safe() external view returns (address);
+    function factory() external view returns (address);
     function moduleKind() external view returns (bytes32);
 
     function setManifest(string calldata version, string calldata json) external;
@@ -64,8 +68,6 @@ interface IS2SManifestModule {
     function versionCount() external view returns (uint256);
     function getVersionAt(uint256 index) external view returns (string memory);
     function versionExists(string calldata version) external view returns (bool);
-
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool);
 }
 
 /// @dev The reads this module makes on the factory, declared here rather than
@@ -78,27 +80,28 @@ interface IManifestFactoryApprovals {
 contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable {
     string public constant NAME = "S2S Manifest Module";
 
-    /// @notice The document's major version, and only that. The document names
-    ///         its own `x.y.z`; `setManifest` refuses a document whose major is
-    ///         not this one, so every document this module holds is readable
-    ///         beside it.
-    string public constant VERSION = "1";
-
     /// @notice This module's kind, in the one pattern every kind follows:
     ///         `s2s.module.<name>`. The factory approves upgrade targets per
     ///         kind, and a deploy script that passes another kind's string is
-    ///         refused by `ImplementationKindMismatch` rather than silently
-    ///         accepted.
+    ///         refused by `ImplementationKindMismatch`, which lives in
+    ///         `S2SPublicationModulesFactoryV6`, not in this file.
     bytes32 public constant MODULE_KIND = keccak256("s2s.module.manifest");
 
-    /// @notice The Safe that owns this module. Set once, by the factory.
+    /// @notice The Safe that owns this module. Set once, by the factory. It
+    ///         cannot change: a migration is an upgrade, and the upgrade path is
+    ///         what moves it. Nothing else can write or upgrade the module, so a
+    ///         wrong safe here is a module that does nothing, not one that can be
+    ///         rescued.
     address public safe;
 
-    /// @dev The live document and the version written beside it. One write, two
-    ///      answers, so a reader cannot be handed a version from one publish and
-    ///      a document from another.
-    string private currentJson;
+    /// @dev The live version and its numbers. The document is not duplicated:
+    ///      `getManifest()` reads `jsonByVersion[currentVersion]`, and both still
+    ///      come from one write. A second copy of a 10 KB document is about six
+    ///      million gas and buys nothing.
     string private currentVersion;
+    uint256 private currentMajor;
+    uint256 private currentMinor;
+    uint256 private currentPatch;
 
     mapping(string => string) private jsonByVersion;
     string[] private versions;
@@ -142,16 +145,20 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
      *      with the Safe the factory recorded. `params` is
      *      `abi.encode(string version, string json)` to publish the first
      *      document, or empty.
+     *
+     *      A zero Safe is refused here rather than trusted from the factory: a
+     *      module owned by nothing can never be written and never be upgraded,
+     *      so the mistake would be permanent.
      */
     function initialize(address _safe, bytes calldata params) external initializer {
         if (msg.sender != FACTORY) revert OnlyFactory();
+        if (_safe == address(0)) revert ZeroSafe();
         __UUPSUpgradeable_init();
         safe = _safe;
 
         if (params.length != 0) {
             (string memory version, string memory json) = abi.decode(params, (string, string));
             _set(version, json);
-            emit ManifestSet(version, json);
         }
     }
 
@@ -162,7 +169,6 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
         if (!IManifestFactoryApprovals(FACTORY).isApproved(MODULE_KIND, newImplementation)) {
             revert ImplementationNotApproved(newImplementation);
         }
-        emit ContractUpgraded(newImplementation);
     }
 
     // ── Writes ─────────────────────────────────────────────────────
@@ -171,19 +177,14 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
      * @notice Publish `json` under `version`: it becomes the live document and
      *         the snapshot kept for that version.
      *
-     * @dev The major is checked here, not by the reader. A document whose major
-     *      is not `VERSION()` is a document this module cannot be read
-     *      alongside, so it is refused before it can be stored.
-     *
-     *      A version that is already history is refused: history is what a
-     *      reader pinned to a release gets, and silently rewriting it would
-     *      change an answer that was already given. The live version may be
-     *      rewritten, which is how a CID is corrected within the release that
-     *      has not yet been pinned; moving to a new release uses a new version.
+     * @dev The checks are the contract's, not the reader's. A version that is not
+     *      `x.y.z`, has a leading zero, does not increase on the live one, or has
+     *      already been published is refused before anything is stored. A
+     *      published version never changes answer: repointing a CID is a new
+     *      patch version, which is what keeps `getManifest(version)` a promise.
      */
     function setManifest(string calldata version, string calldata json) external onlySafe {
         _set(version, json);
-        emit ManifestSet(version, json);
     }
 
     // ── Reads ──────────────────────────────────────────────────────
@@ -191,11 +192,17 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
     /// @notice The live document and the version it was published under, in one
     ///         call.
     function getManifest() external view returns (string memory version, string memory json) {
-        if (bytes(currentJson).length == 0) revert NoManifest();
-        return (currentVersion, currentJson);
+        if (bytes(currentVersion).length == 0) revert NoManifest();
+        return (currentVersion, jsonByVersion[currentVersion]);
     }
 
-    /// @notice The document published under one version, as it was published.
+    /**
+     * @notice The document published under one version, as it was published.
+     *
+     * @dev Answers any version ever published, across a major, because the caller
+     *      named it. Whether a given reader understands that major is the
+     *      reader's question, not this module's.
+     */
     function getManifest(string calldata version) external view returns (string memory json) {
         json = jsonByVersion[version];
         if (bytes(json).length == 0) revert VersionNotFound(version);
@@ -208,8 +215,8 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
         return currentVersion;
     }
 
-    /// @notice Every version ever published, oldest first. The last one is the
-    ///         live version.
+    /// @notice Every version ever published, in publish order. The last one is
+    ///         the live version, because a write only ever increases the version.
     function getVersions() external view returns (string[] memory) {
         return versions;
     }
@@ -219,7 +226,7 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
     }
 
     function getVersionAt(uint256 index) external view returns (string memory) {
-        require(index < versions.length, "Index out of bounds");
+        if (index >= versions.length) revert IndexOutOfBounds(index);
         return versions[index];
     }
 
@@ -227,63 +234,89 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
         return versionSeen[version];
     }
 
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IS2SManifestModule).interfaceId || interfaceId == 0x01ffc9a7;
+    /// @dev The module's own interface plus ERC-165. `is IS2SManifestModule is
+    ///      IERC165`, so `supportsInterface` is not folded into the module's id
+    ///      the way a locally declared one would be.
+    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+        return interfaceId == type(IS2SManifestModule).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     // ── Internal ───────────────────────────────────────────────────
 
     function _set(string memory version, string memory json) private {
         if (bytes(version).length == 0) revert EmptyVersion();
-        string memory major = _major(version);
-        if (keccak256(bytes(major)) != keccak256(bytes(VERSION))) {
-            revert MajorMismatch(major, VERSION);
-        }
+        (uint256 major, uint256 minor, uint256 patch) = _parse(version);
+
         if (bytes(json).length == 0) revert EmptyDocument();
+        if (versionSeen[version]) revert VersionExists(version);
 
-        if (versionSeen[version]) {
-            // The live version may be rewritten; an older one is history.
-            if (keccak256(bytes(version)) != keccak256(bytes(currentVersion))) {
-                revert VersionIsHistory(version);
-            }
-        } else {
-            versionSeen[version] = true;
-            versions.push(version);
+        if (bytes(currentVersion).length != 0) {
+            bool increases = major > currentMajor ||
+                (major == currentMajor && (minor > currentMinor ||
+                    (minor == currentMinor && patch > currentPatch)));
+            if (!increases) revert VersionNotIncreasing(version, currentVersion);
         }
 
+        versionSeen[version] = true;
+        versions.push(version);
         jsonByVersion[version] = json;
         currentVersion = version;
-        currentJson = json;
+        currentMajor = major;
+        currentMinor = minor;
+        currentPatch = patch;
+
+        uint256 n = bytes(json).length;
+        bytes32 jsonHash;
+        assembly {
+            jsonHash := keccak256(add(json, 32), n)
+        }
+        emit ManifestSet(keccak256(bytes(version)), version, jsonHash);
     }
 
-    /// @dev The first segment of `x.y.z`, and the check that there are exactly
-    ///      three segments of digits: `1`, `1.0` and `1.0.0.0` are not versions
-    ///      this module will store, so a reader never meets a key it cannot
-    ///      name.
-    function _major(string memory version) private pure returns (string memory) {
+    /**
+     * @dev Splits `x.y.z` into numbers and refuses everything else: not three
+     *      segments, a non-digit, an empty segment, a leading zero, or a segment
+     *      long enough that the comparison stops meaning what it says.
+     *
+     *      The numbers are the order. A higher major wins, as semver says, which
+     *      is also how the list stays sorted across a major bump.
+     */
+    function _parse(string memory version) private pure returns (uint256 major, uint256 minor, uint256 patch) {
         bytes memory v = bytes(version);
-        uint256 dots;
-        uint256 digitsInSegment;
-        uint256 firstDot = type(uint256).max;
+        if (v.length == 0) revert VersionNotXYZ(version);
 
-        for (uint256 i = 0; i < v.length; i++) {
-            // 0x2e is '.', 0x30..0x39 are '0'..'9'.
-            if (uint8(v[i]) == 0x2e) {
-                if (digitsInSegment == 0) revert VersionNotXYZ(version);
-                if (firstDot == type(uint256).max) firstDot = i;
-                dots++;
-                digitsInSegment = 0;
-            } else {
-                if (uint8(v[i]) < 0x30 || uint8(v[i]) > 0x39) revert VersionNotXYZ(version);
-                digitsInSegment++;
+        uint256 segment;
+        uint256 value;
+        uint256 digits;
+
+        for (uint256 i = 0; i <= v.length; i++) {
+            bool atDot = i < v.length && uint8(v[i]) == 0x2e;
+            if (i < v.length && !atDot) {
+                uint8 c = uint8(v[i]);
+                if (c < 0x30 || c > 0x39) revert VersionNotXYZ(version);
+                // semver has no leading zeros: `01` is not a number, it is a typo.
+                if (digits == 0 && c == 0x30 && i + 1 < v.length && uint8(v[i + 1]) != 0x2e) {
+                    revert LeadingZero(version);
+                }
+                if (digits == 9) revert VersionNotXYZ(version);
+                value = value * 10 + (c - 0x30);
+                digits++;
+                continue;
             }
-        }
-        if (dots != 2 || digitsInSegment == 0) revert VersionNotXYZ(version);
 
-        bytes memory major = new bytes(firstDot);
-        for (uint256 j = 0; j < firstDot; j++) {
-            major[j] = v[j];
+            if (digits == 0) revert VersionNotXYZ(version);
+            if (segment == 0) {
+                major = value;
+            } else if (segment == 1) {
+                minor = value;
+            } else {
+                patch = value;
+            }
+            segment++;
+            digits = 0;
+            value = 0;
         }
-        return string(major);
+
+        if (segment != 3) revert VersionNotXYZ(version);
     }
 }

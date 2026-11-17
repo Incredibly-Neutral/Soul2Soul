@@ -75,9 +75,8 @@ if (receipt.status !== 'success' || !receipt.contractAddress) {
 
 const address = receipt.contractAddress;
 const module = { address, abi: MODULE_ABI } as const;
-const [name, version, kind, answers, owner] = await Promise.all([
+const [name, kind, answers, owner] = await Promise.all([
   publicClient.readContract({ ...module, functionName: 'NAME' }),
-  publicClient.readContract({ ...module, functionName: 'VERSION' }),
   publicClient.readContract({ ...module, functionName: 'moduleKind' }),
   publicClient.readContract({ ...module, functionName: 'factory' }),
   publicClient.readContract({ ...module, functionName: 'safe' }),
@@ -97,7 +96,7 @@ if (owner !== '0x0000000000000000000000000000000000000000') {
 }
 
 say(
-  `Deployed ${name} ${version} at ${address} in ${hash}.`,
+  `Deployed ${name} at ${address} in ${hash}.`,
   `kind ${kind}, factory ${answers}, safe unset until a proxy initialises it.`,
   '',
   'Next, in this order:',

@@ -623,7 +623,9 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   are gone: `update-protocol.ts` writes the document and its mirror and nothing else. The mirror is
   `manifest@x.y.z`, version history: a reader pinned to a release finds the document it was
   written for, and a retained version may name CIDs the Lit group has since removed — the group's
-  action list decides what runs, not the record.
+  action list decides what runs, not the record. The record and its `@` mirror are the records
+  module's version of this, and they are a stopgap: the manifest module below replaces both with one
+  document per version and no key convention, so the mirror is not carried forward.
 - **Version agreement.** Three numbers, one meaning. The document names `x.y.z`: major changes when
   the document's shape changes, minor when an optional field is added, patch when an action CID is
   repointed. `VERSION()` on `S2SRecordsModuleV2` is the major and nothing else (`"1"`), because the
@@ -637,20 +639,31 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   `src/manifest/src/S2SManifestModule.sol` is the document's contract, in its own package beside the
   contracts: `pnpm compile`, `pnpm test` and the four scripts (`deploy:impl`, `set:impl`,
   `create:module`, `upgrade:module`) live there, and nothing about it is in the publication package
-  except the factory it is approved by. `setManifest(version, json)` writes an `x.y.z`
-  beside the JSON and appends it to a list, `getManifest()` answers the live version and document in
-  one call, `getManifest(version)` answers a published one, `getVersions()` enumerates
-  them. The shape checks are the contract's: `_major` refuses anything that is not three digit
-  segments, and `MajorMismatch` refuses a document whose major is not `VERSION()`, so a reader
-  never has to compare a document to a module and can never be handed one it cannot use. History is
-  append-only in one direction and correctable in the other: a version that is already history is
-  refused (`VersionIsHistory`), the live version may be rewritten while nobody has pinned it. The
-  kind is `s2s.module.manifest`, third in the factory beside publication and records, so the address
-  is `moduleAddress(safe, kind)` and upgrades are approved per kind.
-  **State:** the contract compiles, has six node tests, and is in no deployment. The readers still
-  read `manifest` from the records module; `PROTOCOL_RECORDS_MODULE` becomes `MANIFEST_MODULE` once
-  the module exists on Base, and the two disagree only about where the document lives until then,
-  not about its shape.
+  except the factory it is approved by. `setManifest(version, json)` writes an `x.y.z` beside the
+  JSON, `getManifest()` answers the live version and document in one call by reading
+  `jsonByVersion[currentVersion]` (the document is stored once), `getManifest(version)` answers a
+  published one, `getVersions()` enumerates them in publish order. `ManifestSet` carries
+  `keccak256(version)` as an indexed topic and `keccak256(json)` as the data, so an indexer filters
+  by version and fetches the document once.
+  **One version, and it is the document's.** The module has no `VERSION()`: it cannot tell one
+  document shape from another, so a constant claiming a major would have to be kept in step with
+  stored history by every upgrade, and a mismatch would make a document unreadable. The document
+  names its own major, a reader that only understands major 1 refuses a 2.x document itself, and a
+  major bump is a new writer rather than a new contract.
+  **What the contract enforces:** `x.y.z` only, three digit segments, no leading zeros
+  (`LeadingZero`), a version written once (`VersionExists`, so repointing a CID is a new patch and a
+  pinned read never changes answer), and strictly increasing across `(major, minor, patch)`
+  (`VersionNotIncreasing`), so the last entry is always the live one.
+  `getVersionAt` refuses an index with `IndexOutOfBounds`, `initialize` refuses a zero Safe, and
+  `supportsInterface` reports the module's own id plus ERC-165 because the interface inherits
+  `IERC165`.
+  **Storage.** The proxy holds the document, its version and history; upgrades move code only, so a
+  future implementation must append variables and never reorder them. The owning Safe cannot change;
+  a migration is an upgrade.
+  **State:** the contract compiles, has nine node tests in `src/manifest/test`, and is in no
+  deployment. The readers still read `manifest` from the records module; `PROTOCOL_RECORDS_MODULE`
+  becomes `MANIFEST_MODULE` once the module exists on Base, and the two disagree only about where
+  the document lives until then, not about its shape.
 - **Read cost and gate ordering.** Every action starts with `getManifest` — one `getRecord('manifest')`
   and one `VERSION()` on the hardcoded module — and discovery takes its factory from that document,
   so there is no separate factory read and nothing to reconcile. An action that gates after

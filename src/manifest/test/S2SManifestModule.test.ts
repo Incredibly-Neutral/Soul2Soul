@@ -13,15 +13,50 @@ import { encodeAbiParameters, encodeFunctionData, getContract, keccak256, parseA
  *     under its own kind, so it has an address a client can hardcode,
  *   - the version is written with the document, so a reader gets a pair that was
  *     published together,
- *   - a document is refused before it is stored when its major is not the one
- *     the module serves, or its version is not `x.y.z`,
- *   - history survives a new publish, an older version cannot be rewritten, and
- *     the live version can be,
+ *   - a version is `x.y.z` with no leading zeros, is written once, and strictly
+ *     increases, so the history is sorted and a pinned read never changes,
+ *   - history spans a major and stays readable by version,
  *   - an upgrade needs an implementation approved for the manifest kind.
  */
 
 const { viem } = await network.create();
 const publicClient = await viem.getPublicClient();
+
+type Hex = `0x${string}`;
+
+const FACTORY_KIND = keccak256(toHex('s2s.module.manifest'));
+
+const FACTORY_ABI = parseAbi([
+  'function setImplementation(bytes32 kind, address implementation)',
+  'function createModule(address safe, bytes32 kind, bytes params) returns (address module, bool created)',
+  'function moduleOf(address safe, bytes32 kind) view returns (address)',
+  'function moduleAddress(address safe, bytes32 kind) view returns (address)',
+]);
+
+const MANIFEST_ABI = parseAbi([
+  'function NAME() view returns (string)',
+  'function safe() view returns (address)',
+  'function moduleKind() view returns (bytes32)',
+  'function factory() view returns (address)',
+  'function supportsInterface(bytes4 interfaceId) view returns (bool)',
+  'function setManifest(string version, string json)',
+  'function getManifest() view returns (string version, string json)',
+  'function getManifest(string version) view returns (string json)',
+  'function manifestVersion() view returns (string)',
+  'function getVersions() view returns (string[])',
+  'function getVersionAt(uint256 index) view returns (string)',
+  'function versionCount() view returns (uint256)',
+  'function versionExists(string version) view returns (bool)',
+  'function upgradeToAndCall(address newImplementation, bytes data)',
+]);
+
+const DOC = (version: string) => JSON.stringify({ version, gateway: 'ipfs.example' });
+
+const write = (fn: string, args: unknown[]): Hex =>
+  encodeFunctionData({ abi: MANIFEST_ABI, functionName: fn as never, args: args as never });
+
+const seed = (version: string, json: string): Hex =>
+  encodeAbiParameters([{ type: 'string' }, { type: 'string' }], [version, json]);
 
 /**
  * The factory, from the package that owns it. Solidity in this package cannot
@@ -73,41 +108,6 @@ async function deployFactory(protocolSafe: `0x${string}`) {
   });
 }
 
-type Hex = `0x${string}`;
-
-const FACTORY_KIND = keccak256(toHex('s2s.module.manifest'));
-
-const FACTORY_ABI = parseAbi([
-  'function setImplementation(bytes32 kind, address implementation)',
-  'function createModule(address safe, bytes32 kind, bytes params) returns (address module, bool created)',
-  'function moduleOf(address safe, bytes32 kind) view returns (address)',
-  'function moduleAddress(address safe, bytes32 kind) view returns (address)',
-]);
-
-const MANIFEST_ABI = parseAbi([
-  'function NAME() view returns (string)',
-  'function VERSION() view returns (string)',
-  'function safe() view returns (address)',
-  'function moduleKind() view returns (bytes32)',
-  'function factory() view returns (address)',
-  'function setManifest(string version, string json)',
-  'function getManifest() view returns (string version, string json)',
-  'function getManifest(string version) view returns (string json)',
-  'function manifestVersion() view returns (string)',
-  'function getVersions() view returns (string[])',
-  'function versionCount() view returns (uint256)',
-  'function versionExists(string version) view returns (bool)',
-  'function upgradeToAndCall(address newImplementation, bytes data)',
-]);
-
-const DOC = (version: string) => JSON.stringify({ version, gateway: 'ipfs.example' });
-
-const write = (fn: string, args: unknown[]): Hex =>
-  encodeFunctionData({ abi: MANIFEST_ABI, functionName: fn as never, args: args as never });
-
-const seed = (version: string, json: string): Hex =>
-  encodeAbiParameters([{ type: 'string' }, { type: 'string' }], [version, json]);
-
 async function deploy() {
   const protocolSafe = await viem.deployContract('MockCaller');
   const factory = await deployFactory(protocolSafe.address);
@@ -147,8 +147,6 @@ describe('S2SManifestModule', () => {
 
     assert.equal(await impl.read.moduleKind(), FACTORY_KIND);
     assert.equal(await module.read.NAME(), 'S2S Manifest Module');
-    // The module serves one major. The document names its own x.y.z beside it.
-    assert.equal(await module.read.VERSION(), '1');
     assert.equal((await module.read.safe()).toLowerCase(), ctx.safe.address.toLowerCase());
     assert.equal((await module.read.factory()).toLowerCase(), ctx.factory.address.toLowerCase());
 
@@ -159,7 +157,19 @@ describe('S2SManifestModule', () => {
     assert.equal(await module.read.versionCount(), 0n);
   });
 
-  it('seeds the first document in the same call that deploys it, and announces it', async () => {
+  it('answers ERC-165 for its own interface and the one it inherits', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    assert.equal(await module.read.supportsInterface(['0x01ffc9a7']), true);
+    assert.equal(await module.read.supportsInterface(['0xffffffff']), false);
+    // A locally declared supportsInterface would have been folded into this id;
+    // inheriting IERC165 keeps the module's own id to its own functions.
+    const own = await module.read.supportsInterface(['0x00000000']);
+    assert.equal(own, false);
+  });
+
+  it('seeds the first document in the same call that deploys it, and announces it by hash', async () => {
     const { protocolSafe, factory, safe } = await deploy();
     const impl = await viem.deployContract('S2SManifestModule', [factory.address, protocolSafe.address]);
     await protocolSafe.write.exec([
@@ -188,13 +198,19 @@ describe('S2SManifestModule', () => {
     assert.equal(published[0], '1.0.0');
     assert.equal(published[1], DOC('1.0.0'));
 
+    // The event carries the hashes, not the document: an indexer filters by
+    // version hash and fetches the document once.
     const events = await publicClient.getContractEvents({
       address: predicted,
-      abi: parseAbi(['event ManifestSet(string version, string json)']),
+      abi: parseAbi([
+        'event ManifestSet(bytes32 indexed versionHash, string version, bytes32 jsonHash)',
+      ]),
       eventName: 'ManifestSet',
     });
     assert.equal(events.length, 1);
     assert.equal(events[0].args.version, '1.0.0');
+    assert.equal(events[0].args.versionHash, keccak256(toHex('1.0.0')));
+    assert.equal(events[0].args.jsonHash, keccak256(toHex(DOC('1.0.0'))));
   });
 
   it('writes only for the owning Safe', async () => {
@@ -213,62 +229,111 @@ describe('S2SManifestModule', () => {
     assert.equal(await module.read.manifestVersion(), '1.0.0');
   });
 
-  it('refuses a version that is not x.y.z, and a document whose major is not the module’s', async () => {
+  it('refuses a version that is not x.y.z, or that has a leading zero', async () => {
     const ctx = await deploy();
     const { module } = await manifestUnder(ctx);
 
-    for (const version of ['1', '1.0', '1.0.0.0', 'v1.0.0', '', 'one.0.0', '1..0', '1.0.']) {
+    for (const version of ['1', '1.0', '1.0.0.0', 'v1.0.0', '', 'one.0.0', '1..0', '1.0.', '1.1234567890.0']) {
       await assert.rejects(
         ctx.safe.write.exec([module.address, write('setManifest', [version, DOC('1.0.0')])]),
         /VersionNotXYZ|EmptyVersion/,
         `expected ${JSON.stringify(version)} to be refused`,
       );
     }
-    assert.equal(await module.read.versionCount(), 0n);
 
-    // Major 2 is a shape this module cannot serve, so it never gets stored.
-    await assert.rejects(
-      ctx.safe.write.exec([module.address, write('setManifest', ['2.0.0', DOC('2.0.0')])]),
-      /MajorMismatch/,
-    );
+    // semver says `01` is not a number, so the two spellings cannot both exist.
+    for (const version of ['1.01.0', '01.0.0', '1.0.00']) {
+      await assert.rejects(
+        ctx.safe.write.exec([module.address, write('setManifest', [version, DOC('1.0.0')])]),
+        /LeadingZero/,
+        `expected ${JSON.stringify(version)} to be refused`,
+      );
+    }
+
     await assert.rejects(
       ctx.safe.write.exec([module.address, write('setManifest', ['1.0.0', ''])]),
       /EmptyDocument/,
     );
     assert.equal(await module.read.versionCount(), 0n);
 
-    // Within major 1, a minor and a patch are this module's business.
     await ctx.safe.write.exec([module.address, write('setManifest', ['1.2.3', DOC('1.2.3')])]);
     assert.equal(await module.read.manifestVersion(), '1.2.3');
   });
 
-  it('keeps every version, answers the live one, and refuses to rewrite history', async () => {
+  it('writes a version once, so a pinned read never changes answer', async () => {
     const ctx = await deploy();
     const { module } = await manifestUnder(ctx);
 
     await ctx.safe.write.exec([module.address, write('setManifest', ['1.0.0', DOC('1.0.0')])]);
     await ctx.safe.write.exec([module.address, write('setManifest', ['1.0.1', DOC('1.0.1')])]);
-    await ctx.safe.write.exec([module.address, write('setManifest', ['1.1.0', DOC('1.1.0')])]);
 
-    assert.deepEqual(await module.read.getVersions(), ['1.0.0', '1.0.1', '1.1.0']);
+    // Not the live one, and not an older one: neither can be rewritten. A CID
+    // that moved is 1.0.2, which is what makes `getManifest(version)` a promise.
+    await assert.rejects(
+      ctx.safe.write.exec([module.address, write('setManifest', ['1.0.0', DOC('1.0.0')])]),
+      /VersionExists/,
+    );
+    await assert.rejects(
+      ctx.safe.write.exec([module.address, write('setManifest', ['1.0.1', DOC('1.0.1')])]),
+      /VersionExists/,
+    );
+
+    const pinned = await publicClient.readContract({
+      address: module.address,
+      abi: MANIFEST_ABI,
+      functionName: 'getManifest',
+      args: ['1.0.0'],
+    });
+    assert.equal(pinned, DOC('1.0.0'));
+  });
+
+  it('requires the version to increase, across a major too', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    const publish = (version: string) =>
+      ctx.safe.write.exec([module.address, write('setManifest', [version, DOC(version)])]);
+
+    await publish('1.0.0');
+    await publish('1.0.1');
+    await assert.rejects(publish('1.0.0'), /VersionNotIncreasing|VersionExists/);
+    await publish('1.1.0');
+    await assert.rejects(publish('1.0.9'), /VersionNotIncreasing/);
+    await publish('1.9.9');
+    await publish('2.0.0');
+    await assert.rejects(publish('1.99.0'), /VersionNotIncreasing/);
+    await assert.rejects(publish('2.0.0'), /VersionExists/);
+
+    assert.deepEqual(await module.read.getVersions(), ['1.0.0', '1.0.1', '1.1.0', '1.9.9', '2.0.0']);
+  });
+
+  it('keeps history across a major, and answers the live version', async () => {
+    const ctx = await deploy();
+    const { module } = await manifestUnder(ctx);
+
+    await ctx.safe.write.exec([module.address, write('setManifest', ['1.0.0', DOC('1.0.0')])]);
+    await ctx.safe.write.exec([module.address, write('setManifest', ['1.1.0', DOC('1.1.0')])]);
+    await ctx.safe.write.exec([module.address, write('setManifest', ['2.0.0', DOC('2.0.0')])]);
 
     const live = await publicClient.readContract({
       address: module.address,
       abi: MANIFEST_ABI,
       functionName: 'getManifest',
     });
-    assert.equal(live[0], '1.1.0');
-    assert.equal(live[1], DOC('1.1.0'));
+    assert.equal(live[0], '2.0.0');
+    assert.equal(live[1], DOC('2.0.0'));
 
-    // A pinned reader gets the document as it was published then, not the live
-    // one and not a mixture of the two.
-    const old = await publicClient.readContract({
-      address: module.address,
-      abi: MANIFEST_ABI,
-      functionName: 'getManifest',
-      args: ['1.0.0'],
-    });
-    assert.equal(old, DOC('1.0.0'));
+    // A caller who names a 1.x version gets that document. Whether a 1.x reader
+    // understands 2.x is the reader's question, so the module does not hide it.
+    assert.equal(
+      await publicClient.readContract({
+        address: module.address,
+        abi: MANIFEST_ABI,
+        functionName: 'getManifest',
+        args: ['1.0.0'],
+      }),
+      DOC('1.0.0'),
+    );
 
     await assert.rejects(
       publicClient.readContract({
@@ -280,27 +345,10 @@ describe('S2SManifestModule', () => {
       /VersionNotFound/,
     );
 
-    // 1.0.0 is history now: rewriting it would change an answer already given.
-    await assert.rejects(
-      ctx.safe.write.exec([module.address, write('setManifest', ['1.0.0', DOC('1.0.0')])]),
-      /VersionIsHistory/,
-    );
-
-    // The live version may be corrected in place, which is how a CID is fixed
-    // before anyone pins the release.
-    const corrected = JSON.stringify({ version: '1.1.0', gateway: 'other.example' });
-    await ctx.safe.write.exec([module.address, write('setManifest', ['1.1.0', corrected])]);
-    assert.equal(await module.read.manifestVersion(), '1.1.0');
-    assert.deepEqual(await module.read.getVersions(), ['1.0.0', '1.0.1', '1.1.0']);
-    assert.equal(
-      await publicClient.readContract({
-        address: module.address,
-        abi: MANIFEST_ABI,
-        functionName: 'getManifest',
-        args: ['1.1.0'],
-      }),
-      corrected,
-    );
+    assert.equal(await module.read.getVersionAt([2n]), '2.0.0');
+    await assert.rejects(module.read.getVersionAt([3n]), /IndexOutOfBounds/);
+    assert.equal(await module.read.versionExists(['1.1.0']), true);
+    assert.equal(await module.read.versionExists(['1.0.2']), false);
   });
 
   it('upgrades only to a build approved for the manifest kind', async () => {
