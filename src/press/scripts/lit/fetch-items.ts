@@ -15,7 +15,7 @@ import { getManifest, isPublicationModuleName } from '@s2s/soul2soul-shared';
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, '../../../../.env'), quiet: true });
 
-const PUBLICATION = process.env.PUBLICATION || 's3nl.soul2soul.eth';
+const PUBLICATION = process.env.PUBLICATION || 'test.soul2soul.eth';
 const GATEWAY = (process.env.IPFS_URL || 'https://ipfs.transport-union.dev').replace(/\/$/, '');
 const OUT_DIR = resolve(here, process.argv[2] || `.rebuild-stage-${PUBLICATION.replace(/\./g, '_')}`);
 

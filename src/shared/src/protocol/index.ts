@@ -42,6 +42,10 @@ export type ViemProvider = PublicClient;
 // told apart by their arguments, and a single abi makes the no-argument call
 // answer the versioned overload's type.
 const MANIFEST_CURRENT_ABI = [
+  // The module's own refusals, so a read on an empty module says "no manifest
+  // published yet" instead of a bare 0x6a166a2d.
+  { type: 'error', name: 'NoManifest', inputs: [] },
+  { type: 'error', name: 'VersionNotFound', inputs: [{ name: 'version', type: 'string' }] },
   {
     inputs: [],
     name: 'getManifest',
@@ -55,6 +59,8 @@ const MANIFEST_CURRENT_ABI = [
 ] as const;
 
 const MANIFEST_VERSIONED_ABI = [
+  { type: 'error', name: 'NoManifest', inputs: [] },
+  { type: 'error', name: 'VersionNotFound', inputs: [{ name: 'version', type: 'string' }] },
   {
     inputs: [{ internalType: 'string', name: 'version', type: 'string' }],
     name: 'getManifest',
