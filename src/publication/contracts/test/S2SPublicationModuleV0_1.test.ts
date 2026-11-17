@@ -75,7 +75,7 @@ describe('S2SPublicationModuleV0_1', () => {
 
     assert.equal(await impl.read.moduleKind(), KIND);
     assert.equal((await impl.read.factory()).toLowerCase(), factory.address.toLowerCase());
-    assert.equal(await impl.read.NAME(), 'S2S Publication Module V6');
+    assert.equal(await impl.read.NAME(), 'S2S Publication Module');
 
     await protocolSafe.write.exec([factory.address, setImplData(KIND, impl.address)]);
     await safe.write.exec([factory.address, createData(safe.address, KIND, authorsParams([author]))]);

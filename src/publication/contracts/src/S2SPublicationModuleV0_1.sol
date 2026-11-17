@@ -67,13 +67,12 @@ contract S2SPublicationModuleV0_1 is Initializable, UUPSUpgradeable {
 
     address public safe;
 
-    /// @notice The name discovery matches, and the version this build stamps.
-    ///         The name carries the shape's lineage number, not the manifest
-    ///         version: `publicationModuleVersion` reads the suffix, and this
-    ///         surface is the one that has `admit`/`reject`, so it keeps the
-    ///         number the deployed shape answers. The filename follows the
-    ///         manifest; the name does not.
-    string public constant NAME = "S2S Publication Module V6";
+    /// @notice The role discovery matches. The name says what the module is,
+    ///         `VERSION()` says which build it is, so a new version never
+    ///         renames anything. Discovery still accepts the older ` V<n>`
+    ///         names, because a publication served by an older build answers
+    ///         one of those.
+    string public constant NAME = "S2S Publication Module";
     string public constant VERSION = "0.1";
 
     // ── Constants ──────────────────────────────────────────────────

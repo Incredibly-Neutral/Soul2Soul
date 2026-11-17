@@ -146,7 +146,7 @@ function makeRecordsStub() {
 
 function makePubStub() {
   return {
-    NAME: vi.fn(async () => 'S2S Publication Module V6'),
+    NAME: vi.fn(async () => 'S2S Publication Module'),
     interface: makeInterface(),
     hasAgreement: vi.fn(),
     getAgreements: vi.fn(),
