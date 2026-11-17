@@ -42,7 +42,7 @@ const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 const PEER_ID = '12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN';
 
 const PROTOCOL_INFO = {
-  version: '2.1.0',
+  version: '1.0.0',
   pkp: PKP,
   litActions: { render: 'ipfs://bafkreirenderaction' },
 } as unknown as S2SManifest;

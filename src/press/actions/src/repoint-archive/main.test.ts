@@ -26,8 +26,8 @@ vi.mock('../libs/gates', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
-  getPublicationFactory: vi.fn(async () => FACTORY),
-  getManifest: vi.fn(),
+  // The document carries the factory discovery asks; the tests set the rest.
+  getManifest: vi.fn(async () => ({ moduleFactory: FACTORY })),
 }));
 
 vi.mock('../libs/ens.factory', () => ({

@@ -7,7 +7,7 @@ import {
   S2STemplateConfig,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import {
   ContentIntegrityError,
   fetchById,
@@ -61,9 +61,9 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
     if (!Array.isArray(contentIds) || contentIds.length === 0)
       throw 'contentIds must be a non-empty array';
 
-    const publicationFactory = await getPublicationFactory(rpcs);
-    if (!publicationFactory)
-      throw `publication_factory record missing; cannot discover modules for '${publication}'`;
+    // The manifest first: it carries the factory discovery asks, so there is no
+    // separate record read and nothing to null-check.
+    const { moduleFactory: publicationFactory } = await getManifest(false, rpcs);
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,

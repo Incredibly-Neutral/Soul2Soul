@@ -10,7 +10,7 @@ import { mainnet, base } from 'viem/chains';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
-import { getProtocolControllerAndModules, getRecords, isPublicationModuleName } from '@s2s/soul2soul-shared';
+import { getManifest, isPublicationModuleName } from '@s2s/soul2soul-shared';
 
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, '../../../../.env'), quiet: true });
@@ -45,16 +45,14 @@ const l2 = createPublicClient({ chain: base, transport: http(process.env.BASE_RP
 let publicationFactory: `0x${string}` | null = null;
 const timeout = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// The `publication_factory` record, read once per run. Absent is not fatal: the
-// NAME() scan below still resolves the module.
+// The factory, taken from the manifest document, read once per run. Absent is
+// not fatal: the NAME() scan below still resolves the module.
 async function getPublicationFactory(): Promise<`0x${string}` | null> {
   try {
-    const { configModule } = await getProtocolControllerAndModules(false, l1, l2);
-    if (!configModule) return null;
-    const [factory] = await getRecords(configModule, ['publication_factory'], l2);
-    return (factory || null) as `0x${string}` | null;
+    const manifest = await getManifest(false, l1, l2);
+    return (manifest.moduleFactory || null) as `0x${string}` | null;
   } catch (e) {
-    console.log(`publication_factory unreadable: ${e instanceof Error ? e.message : String(e)}`);
+    console.log(`manifest unreadable: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 }

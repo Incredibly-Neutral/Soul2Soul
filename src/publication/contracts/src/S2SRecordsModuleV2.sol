@@ -70,7 +70,11 @@ interface IRecordsFactoryApprovals {
 
 contract S2SRecordsModuleV2 is IS2SRecordsModuleV2, Initializable, UUPSUpgradeable {
     string public constant NAME = "S2S Records Module";
-    string public constant VERSION = "2.0.0";
+    /// @notice The manifest document's major version, and only that: the
+    ///         document names its own `x.y.z` and a reader compares the two on
+    ///         the first segment. This module is not redeployed when the
+    ///         document moves, so a patch or minor there is not a version here.
+    string public constant VERSION = "1";
 
     /// @notice This module's kind, in the one pattern every kind follows:
     ///         `s2s.module.<name>`. The factory approves upgrade targets per kind,

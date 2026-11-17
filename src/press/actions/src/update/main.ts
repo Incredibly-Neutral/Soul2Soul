@@ -2,7 +2,7 @@
 
 import { ActionResult, EvmUpdateData, EvmUpdateInput } from '@s2s/soul2soul-shared/lit-actions';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
-import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { contenthashToIPFS } from '../libs/ipfs.factory';
 import { fetchWithTimeout, requireFields, setRpcAuth } from '../libs/helpers';
@@ -176,12 +176,10 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
     trace.push(`signer: ${signerAddress}`);
     trace.push(`pub: ${publication}`);
 
-    // The one `publication_factory` record, so module discovery can ask the
-    // factory it names for this Safe's publication and records modules. The
-    // author-side gate reads are a separate path, behind `libs/gates`.
-    const publicationFactory = await getPublicationFactory(rpcs);
-    if (!publicationFactory)
-      throw `publication_factory record missing; cannot discover modules for '${publication}'`;
+    // The manifest first: it carries the factory discovery asks, so the action
+    // spends one document read rather than a separate record read plus this one.
+    const protocolInfo = await getManifest(false, rpcs);
+    const publicationFactory = protocolInfo.moduleFactory;
 
     let modules: Awaited<ReturnType<typeof getDomainOwnerAndModules>>;
     try {
@@ -224,7 +222,6 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       return publishGate;
     };
 
-    const protocolInfo = await getManifest(false, rpcs, publicationFactory);
     if (!protocolInfo?.pkp) {
       throw 'Failed to fetch protocol info';
     }

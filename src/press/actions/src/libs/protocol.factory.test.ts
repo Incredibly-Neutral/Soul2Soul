@@ -1,35 +1,24 @@
 /**
- * `getPublicationFactory` — the one `publication_factory` record read — and
- * `getManifest` — the manifest document plus the module version beside it.
+ * `getManifest` — the manifest document, plus the module version beside it.
  *
- * `getPublicationFactory` exists so an action can ask the factory which modules
- * a Safe owns before its authorization gate without paying the manifest read:
- * one eth_call at the records module, and null on every failure. A null record
- * is a failure at every call site — module discovery has no other source — so
- * the three answers (a value, an empty record, a reverting read) are what this
- * file pins, together with the address the read targets being the records
- * module.
- *
- * `getManifest` reads `getRecord('manifest')` and `VERSION()` on that same
+ * `getManifest` reads `getRecord('manifest')` and `VERSION()` on the records
  * module, and nothing else. What it pins: the two-read sequence, the document
  * mapped onto `S2SManifest`, optional action CIDs omitted rather than present as
  * the empty string, and a failure that names `manifest` for each of the four
  * ways a document can be unreadable — missing, unparsable, wrong shape, wrong
- * major.
- *
- * Both reads target `PROTOCOL_RECORDS_MODULE`, the constant, not a module
- * discovered through the factory: that module is the protocol's root and holds
- * the record every address comes from.
+ * major. It is the only read an action makes before discovery: the document
+ * carries the factory, so there is no separate `publication_factory` call left
+ * to pin.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  /** The `publication_factory` flat record. */
+  /** Still answered for any other `getRecord` key, so a stray read shows up. */
   answer: '' as string,
   /** The `manifest` record: JSON, `''` for absent, or `'revert'`. */
   manifest: '' as string,
   /** What `VERSION()` on the module answers, or `'revert'`. */
-  version: '2.0.0' as string,
+  version: '1' as string,
   /** Still answered for `getRecords`, so a stray key-list read shows up. */
   records: [] as any[],
 }));
@@ -68,7 +57,7 @@ vi.mock('./evm', () => ({
 }));
 
 import { evmRead } from './evm';
-import { getManifest, getPublicationFactory } from './protocol.factory';
+import { getManifest } from './protocol.factory';
 
 const RECORDS_MODULE = '0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29';
 const FACTORY = '0x' + '77'.repeat(20);
@@ -84,7 +73,7 @@ const recordsReads = () =>
 
 /** The document as the writer publishes it: camelCase, every required field. */
 const document = (overrides: Record<string, unknown> = {}) => ({
-  version: '2.1.0',
+  version: '1.0.0',
   gateway: 'https://gw.example',
   ensRegistry: '0x' + '02'.repeat(20),
   ensRecords: '0x' + '03'.repeat(20),
@@ -103,54 +92,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.answer = '';
   mocks.manifest = JSON.stringify(document());
-  mocks.version = '2.0.0';
+  mocks.version = '1';
   mocks.records = [];
-});
-
-describe('getPublicationFactory', () => {
-  it('returns the record and asks the records module for it in one call', async () => {
-    mocks.answer = FACTORY;
-
-    const factory = await getPublicationFactory();
-
-    expect(factory).toBe(FACTORY);
-    expect(evmRead).toHaveBeenCalledTimes(1);
-    const [chain, address, , method, args] = vi.mocked(evmRead).mock.calls[0];
-    expect(chain).toBe('L2');
-    expect(address).toBe(RECORDS_MODULE);
-    expect(method).toBe('getRecord');
-    expect(args).toEqual(['publication_factory']);
-  });
-
-  it('returns null for an empty record, which is what an unwritten key answers', async () => {
-    mocks.answer = '';
-
-    expect(await getPublicationFactory()).toBeNull();
-    expect(evmRead).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns null when the read reverts, and does not retry', async () => {
-    mocks.answer = 'revert';
-
-    expect(await getPublicationFactory()).toBeNull();
-    expect(evmRead).toHaveBeenCalledTimes(1);
-  });
-
-  it('passes the caller’s RPC URLs through to the read', async () => {
-    mocks.answer = FACTORY;
-    const rpcs = { L1: ['http://l1'], L2: ['http://l2'] };
-
-    await getPublicationFactory(rpcs);
-
-    expect(vi.mocked(evmRead).mock.calls[0][5]).toEqual(rpcs.L2);
-  });
 });
 
 describe('getManifest', () => {
   it('maps the document onto S2SManifest', async () => {
     const info = await getManifest(false);
 
-    expect(info.version).toBe('2.1.0');
+    expect(info.version).toBe('1.0.0');
     expect(info.gateway).toBe('https://gw.example');
     expect(info.ensRegistry).toBe('0x' + '02'.repeat(20));
     expect(info.ensRecords).toBe('0x' + '03'.repeat(20));
@@ -199,12 +149,13 @@ describe('getManifest', () => {
     }
   });
 
-  it('accepts a document whose minor segment differs from VERSION(), 2.1.0 beside 2.0.0', async () => {
-    mocks.version = '2.0.0';
+  it('accepts a document whose minor segment differs from VERSION(), 1.2.0 beside 1', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '1.2.0' }));
+    mocks.version = '1';
 
     const info = await getManifest(false);
 
-    expect(info.version).toBe('2.1.0');
+    expect(info.version).toBe('1.2.0');
   });
 
   it('omits an optional action CID the document does not carry, rather than returning it as empty', async () => {
@@ -322,10 +273,10 @@ describe('getManifest', () => {
 
   it('throws naming manifest on a major mismatch with VERSION()', async () => {
     mocks.manifest = JSON.stringify(document({ version: '3.0.0' }));
-    mocks.version = '2.0.0';
+    mocks.version = '1';
 
     await expect(getManifest(false)).rejects.toThrow(
-      /manifest: document version 3\.0\.0 is not compatible with VERSION\(\) 2\.0\.0/,
+      /manifest: document version 3\.0\.0 is not compatible with VERSION\(\) 1/,
     );
   });
 
@@ -335,20 +286,18 @@ describe('getManifest', () => {
     await expect(getManifest(false)).rejects.toThrow(/manifest: VERSION\(\) is unreadable/);
   });
 
-  it('uses the factory a caller read before its gate as moduleFactory, and does not read it again', async () => {
-    const info = await getManifest(false, undefined, FACTORY);
+  it('takes the factory discovery asks from the document, not from a second read', async () => {
+    const info = await getManifest(false);
 
-    expect(info.moduleFactory).toBe(FACTORY);
-    // The document's copy is what gets returned as the published record.
+    expect(info.moduleFactory).toBe(PUB_RECORD);
     expect(info.publicationFactory).toBe(PUB_RECORD);
     expect(recordReads()).toHaveLength(1);
     expect(recordReads()[0][4]).toEqual(['manifest']);
   });
 
-  it('refuses a null factory without issuing a read', async () => {
-    await expect(getManifest(false, undefined, null)).rejects.toThrow(
-      'Failed to read the publication_factory record; module discovery needs it',
-    );
-    expect(evmRead).not.toHaveBeenCalled();
+  it('compares the document major against VERSION() as a whole string', async () => {
+    mocks.version = '1.0.0';
+
+    await expect(getManifest(false)).rejects.toThrow(/VERSION\(\) 1\.0\.0/);
   });
 });

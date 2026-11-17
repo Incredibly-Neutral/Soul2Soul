@@ -4,7 +4,7 @@ import { ProtocolStore } from '../../src/state/protocol.store.js';
 import type { S2SManifest } from '@s2s/soul2soul-shared';
 
 const INFO: S2SManifest = {
-  version: '2.1.0',
+  version: '1.0.0',
   gateway: 'https://gateway',
   ensRegistry: '0x1',
   ensRecords: '0x2',

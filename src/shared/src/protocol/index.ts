@@ -43,10 +43,11 @@ export type ViemProvider = PublicClient;
  * preceded this document and none to a partially valid one: a missing key or
  * unparsable JSON is an error naming `manifest`.
  *
- * `VERSION()` on the same module answers the contract's own version and is
- * compared on its first segment only. There is no redeploy when the document
- * moves: `VERSION()` stays 2.0.0 and the document carries 2.1.0, and only a
- * different major is a document this module cannot be read alongside.
+ * `VERSION()` on the same module answers the document's major and nothing else,
+ * so the check is the document's first segment against that whole string. There
+ * is no redeploy when the document moves within a major: `VERSION()` stays `1`
+ * while the document carries `1.2.0`. A different major is a document this
+ * module cannot be read alongside.
  *
  * One deployment's manifest: the addresses and action CIDs a client needs to
  * talk to it, read from the controller's records module. This is not protocol
@@ -104,11 +105,10 @@ export const getManifest = async (
     client: l2Provider,
   }).read.VERSION()) as string;
 
-  // Only the major segment constrains the document: the module is not
-  // redeployed when the manifest moves, so 2.0.0 reads a 2.1.0 document.
+  // `VERSION()` is the document's major, so this is the document's first
+  // segment against the whole of it: `1` reads a `1.2.0` document.
   const documentMajor = manifest.version.split('.')[0];
-  const onChainMajor = onChainVersion.split('.')[0];
-  if (documentMajor !== onChainMajor) {
+  if (documentMajor !== onChainVersion) {
     throw new Error(
       `manifest: document version ${manifest.version} is not compatible with VERSION() ${onChainVersion}`,
     );

@@ -6,7 +6,7 @@ import {
   RepointArchiveData,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { evmWrite, toHexString } from '../libs/evm';
-import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile } from '../libs/ipfs.factory';
 import { getDeals } from '../libs/module.factory';
@@ -75,12 +75,10 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     trace.push(`pub: ${publication}`);
     trace.push(`seed cid: ${archiveCid}`);
 
-    // The one `publication_factory` record, so module discovery can ask the
-    // factory it names for this Safe's publication module. The author-side gate
-    // reads are a separate path, behind `libs/gates`.
-    const publicationFactory = await getPublicationFactory(rpcs);
-    if (!publicationFactory)
-      throw `publication_factory record missing; cannot discover modules for '${publication}'`;
+    // The manifest first: it carries the factory discovery asks, so the action
+    // spends one document read rather than a separate record read plus this one.
+    const protocolInfo = await getManifest(false, rpcs);
+    const publicationFactory = protocolInfo.moduleFactory;
 
     const { publicationModule, multisig } = await getDomainOwnerAndModules(
       publication,
@@ -96,7 +94,6 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
       }
     }
 
-    const protocolInfo = await getManifest(false, rpcs, publicationFactory);
     if (!protocolInfo?.pkp || !protocolInfo?.ensRecords) {
       throw 'Failed to fetch protocol info';
     }

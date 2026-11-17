@@ -199,7 +199,7 @@ const contentItemV2 = (body = PLAINTEXT) => {
 function setupHappyDeps() {
   vi.mocked(extractSignerAddress).mockReturnValue(SIGNER);
   vi.mocked(getManifest).mockResolvedValue({
-    version: '2.1.0',
+    version: '1.0.0',
     gateway: 'https://ipfs.example',
     ensRegistry: '0xensRegistry',
     ensRecords: '0xens',

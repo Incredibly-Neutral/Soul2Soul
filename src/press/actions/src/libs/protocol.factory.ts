@@ -56,53 +56,27 @@ const fail = (detail: string): never => {
 };
 
 /**
- * The `publication_factory` record on its own: one eth_call, no ENS walk.
+ * The manifest: every address the action needs, and the action CIDs, in one
+ * record and one read.
  *
- * Read before an action's authorization gate so module discovery can ask the
- * factory which modules this Safe owns, and cheap enough that a call the gate
- * then rejects has spent one request rather than the manifest read plus
- * discovery. null when the record is absent or unreadable, which every caller
- * treats as a failure: discovery has no other source.
- */
-export const getPublicationFactory = async (rpcs?: { L1: string[]; L2: string[] }): Promise<string | null> => {
-  try {
-    const factory = await evmRead('L2', PROTOCOL_RECORDS_MODULE, RECORD_ABI, 'getRecord', ['publication_factory'], rpcs?.L2);
-    return typeof factory === 'string' && factory.length > 0 ? factory : null;
-  } catch (error) {
-    const errorMsg = errMsg(error);
-    console.log('publication_factory record unreadable:', errorMsg);
-    return null;
-  }
-};
-
-/**
- * The manifest document, and the module version it is read alongside.
+ * Two calls on the records module, held above as a constant:
  *
- * Two reads, both on the records module held above as a constant:
+ *   1. `getRecord('manifest')` — the JSON document. Every address and CID comes
+ *      from it, including the factory discovery asks. There is no key list: the
+ *      flat record keys it replaced are gone, and no reader reads them.
+ *   2. `VERSION()` — the module's own version, which is the document's major.
+ *      The module is not redeployed when a CID changes, so the document names its
+ *      own `x.y.z` and only its first segment has to equal `VERSION()`; anything
+ *      else is a document this module cannot be read alongside.
  *
- *   1. `getRecord('manifest')` — the JSON document every address and action
- *      CID comes from. No key list: the flat keys it replaced are still
- *      written by update-protocol.ts for clients that predate the document,
- *      but this reader has no fallback to them.
- *   2. `VERSION()` — the contract's own version, compared on its first segment
- *      only. The module is not redeployed when the document moves: VERSION()
- *      stays 2.0.0 and the document carries 2.1.0, and only a different major
- *      is a document this module cannot be read alongside.
- *
- * No ENS walk and no configModule discovery: the constant is the root, so
- * there is nothing above it to ask.
+ * No ENS walk: the constant is the root, so there is nothing above it to ask.
+ * This is also why every action starts here rather than with a single
+ * `publication_factory` read — the document has that value, so a first call is
+ * still two, and discovery gets its factory from the same answer.
  *
  * Validated by hand rather than with the shared zod schema: zod cannot enter an
  * action bundle. A missing record, unparsable JSON, a bad shape and a major
  * mismatch each throw an error naming `manifest`.
- *
- * `publicationFactory` is a caller that already read the record before its
- * authorization gate (the gating actions do, so a rejected call pays one
- * request instead of this read plus discovery). When it is given, discovery
- * uses it — `moduleFactory` is the value discovery actually used — while
- * `publicationFactory` in the result stays the copy the document publishes. A
- * null argument is a failure, not a skip: that read failed, and discovery has
- * no other source.
  *
  * Typed against the shared `S2SManifest` so the two readers cannot drift in
  * shape. Only the type crosses the package boundary: the shared reader itself
@@ -111,14 +85,9 @@ export const getPublicationFactory = async (rpcs?: { L1: string[]; L2: string[] 
 export const getManifest = async (
   dev: boolean,
   rpcs?: { L1: string[]; L2: string[] },
-  publicationFactory?: string | null,
 ): Promise<S2SManifest> => {
 
   try {
-
-  if (publicationFactory === null) {
-    throw new Error("Failed to read the publication_factory record; module discovery needs it");
-  }
 
   // One record, the document, on the constant.
   let document: unknown;
@@ -163,8 +132,8 @@ export const getManifest = async (
     }
   }
 
-  // The contract's own version, on the same address, and only its major
-  // segment constrains the document.
+  // The contract's own version, on the same address. It is the document's
+  // major and nothing else, so the comparison is against the whole string.
   let onChainVersion: unknown;
   try {
     onChainVersion = await evmRead('L2', PROTOCOL_RECORDS_MODULE, VERSION_ABI, 'VERSION', [], rpcs?.L2);
@@ -176,8 +145,7 @@ export const getManifest = async (
   }
 
   const documentMajor = (raw.version as string).split('.')[0];
-  const onChainMajor = (onChainVersion as string).split('.')[0];
-  if (documentMajor !== onChainMajor) {
+  if (documentMajor !== onChainVersion) {
     fail(`document version ${raw.version} is not compatible with VERSION() ${onChainVersion}`);
   }
 
@@ -200,9 +168,9 @@ export const getManifest = async (
     ensRegistry: raw.ensRegistry,
     ensRecords: raw.ensRecords,
     publicationFactory: raw.publicationFactory,
-    // Discovery ran with the factory the caller paid for, or the document's
-    // when the caller had not read one yet. Same record either way.
-    moduleFactory: publicationFactory ?? raw.publicationFactory,
+    // The same value, under the name discovery uses. One record, so the two
+    // cannot disagree; the duplicate name is the type's, not a second read.
+    moduleFactory: raw.publicationFactory,
     recordsFactory: raw.recordsFactory,
     pkp: raw.pkp,
     litActions,

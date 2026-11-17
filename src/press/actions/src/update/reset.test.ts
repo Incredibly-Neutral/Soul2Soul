@@ -51,8 +51,7 @@ vi.mock('../libs/ens.factory', () => ({
 }));
 
 vi.mock('../libs/protocol.factory', () => ({
-  // The one record read before discovery; discovery refuses a null record.
-  getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
+  // The one read before discovery: the document, which carries the factory.
   getManifest: vi.fn(async () => ({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
@@ -119,7 +118,7 @@ const gatewayResponse = (url: string): Response => {
 // ===========================================================================
 
 import { main } from './main';
-import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 
 const gateway = 'http://gateway.test';
@@ -294,17 +293,18 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('reset requires publication owner');
-    // Nothing was written to the gateway (the gate fails before the tree build),
-    // and the protocol walk behind the gate was never paid.
-    expect(getManifest).not.toHaveBeenCalled();
+    // Nothing was written to the gateway: the gate fails before the tree build.
+    // The document read is paid before the gate, because it carries the factory
+    // discovery asks and discovery is what the gate is asked about.
+    expect(getManifest).toHaveBeenCalled();
     expect(mocks.gatewayUrls.length).toBe(0);
   });
 
-  it('fails on a missing publication_factory record instead of skipping module discovery', async () => {
-    // These two kinds are read from the factory the record names and nowhere
-    // else, so a null record is a refusal, never a discovery without the
-    // module check.
-    vi.mocked(getPublicationFactory).mockResolvedValueOnce(null);
+  it('fails on an unreadable manifest instead of skipping module discovery', async () => {
+    // These two kinds are read from the factory the document names and nowhere
+    // else, so an unreadable document is a refusal, never a discovery without
+    // the module check.
+    vi.mocked(getManifest).mockRejectedValueOnce(new Error("manifest: no 'manifest' record on 0xrecord"));
     const result: any = await main({
       ...baseInput,
       signature: await makeSignature(),
@@ -312,7 +312,7 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('publication_factory record missing');
+    expect(result.error).toContain("manifest: no 'manifest' record");
     // Discovery was never reached, and nothing was written.
     expect(getDomainOwnerAndModules).not.toHaveBeenCalled();
     expect(mocks.gatewayUrls.length).toBe(0);

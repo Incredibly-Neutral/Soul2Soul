@@ -861,7 +861,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
 describe('renderwithLitActions — all render jobs fail (no remove, no reset)', () => {
   const updateCid = 'cid-update';
   const protocolInfo: S2SManifest = {
-    version: '2.1.0',
+    version: '1.0.0',
     gateway: 'https://ipfs.transport-union.dev',
     ensRegistry: '0x0',
     ensRecords: '0x0',

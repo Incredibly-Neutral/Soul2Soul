@@ -28,7 +28,7 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import {
   getProtocolControllerAndModules,
-  getRecords,
+  getManifest,
   decodeContenthashWrapped,
   isPublicationModuleName,
 } from '@s2s/soul2soul-shared';
@@ -203,13 +203,14 @@ async function main() {
   console.log(`protocol safe:   ${protoSafe}`);
   console.log(`protocol config: ${protoConfig}`);
   if (!protoConfig) { console.error('FATAL: no protocol config module'); process.exit(1); }
-  const records = await getRecords(protoConfig!, ['ens_records', 'publication_factory', 'pkp_ethAddress', 'data_gateway', 'lit_action_maintainCache'], l2);
-  const [ensRecords, pubFactory, pkp, dataGateway, maintainCacheAction] = records;
+  const manifest = await getManifest(false, l1, l2);
+  const { ensRecords, publicationFactory: pubFactory, pkp, gateway: dataGateway } = manifest;
+  const maintainCacheAction = manifest.litActions.maintainCache;
   console.log(`ens_records:        ${ensRecords}`);
   console.log(`publication_factory:${pubFactory}`);
   console.log(`pkp_ethAddress:     ${pkp}`);
   console.log(`data_gateway:       ${dataGateway}`);
-  console.log(`lit_action_maintainCache: ${maintainCacheAction || '(unset — orchestrator skips maintain-cache)'}`);
+  console.log(`litActions.maintainCache: ${maintainCacheAction || '(unset — orchestrator skips maintain-cache)'}`);
   console.log('');
 
   // 2. Candidates

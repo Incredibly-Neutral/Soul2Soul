@@ -122,7 +122,7 @@ interface ChainOptions {
  */
 const manifestDocument = (overrides: Record<string, unknown> = {}): string =>
   JSON.stringify({
-    version: '2.1.0',
+    version: '1.0.0',
     gateway: 'ipfs.mock',
     ensRegistry: 'ens-registry',
     ensRecords: 'ens-records',
@@ -171,7 +171,7 @@ function makeClients(options: ChainOptions) {
       return options.predictions?.[String(args[1])] ?? REVERT;
     }
     if (functionName === 'getRecords') return [options.manifest ?? RECORD_VALUES[0]];
-    if (functionName === 'VERSION') return options.version ?? '2.0.0';
+    if (functionName === 'VERSION') return options.version ?? '1';
     throw new Error(`unexpected call ${functionName}`);
   };
 
@@ -324,7 +324,7 @@ describe('getManifest', () => {
     const info = await getManifest(false, client, client);
 
     expect(info).toEqual({
-      version: '2.1.0',
+      version: '1.0.0',
       gateway: 'ipfs.mock',
       ensRegistry: 'ens-registry',
       ensRecords: 'ens-records',
@@ -344,22 +344,22 @@ describe('getManifest', () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '2.4.7' }),
-      version: '2.0.0',
+      manifest: manifestDocument({ version: '1.4.7' }),
+      version: '1',
     });
 
-    expect((await getManifest(false, client, client)).version).toBe('2.4.7');
+    expect((await getManifest(false, client, client)).version).toBe('1.4.7');
   });
 
   it('rejects a document whose major differs from VERSION(), naming both', async () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '3.0.0' }),
-      version: '2.0.0',
+      manifest: manifestDocument({ version: '2.0.0' }),
+      version: '1',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/3\.0\.0.*2\.0\.0/);
+    await expect(getManifest(false, client, client)).rejects.toThrow(/2\.0\.0.*VERSION\(\) 1/);
   });
 
   it('throws naming the manifest key when the record was never written', async () => {
