@@ -55,7 +55,7 @@ import type { IMainController } from '../main.ctrlr';
 import { subdomainOf } from '../content/ens-tags';
 import type { RemoveEntry } from '../render/render.helper';
 import { renderCalls } from '../render/render.helper';
-import { S2SRecordsModule } from '@s2s/publication-contracts';
+import { S2SRecordsModuleV0_1 } from '@s2s/publication-contracts';
 import type { IPublicationSrv } from './publication.service';
 
 /**
@@ -81,7 +81,7 @@ async function publicationLocalePathsOf(
 
 		const configCid = (await main.oxo.ctrlr.viem.read(
 			recordsModule,
-			S2SRecordsModule,
+			S2SRecordsModuleV0_1,
 			'getRecord',
 			['config'],
 		)) as string;

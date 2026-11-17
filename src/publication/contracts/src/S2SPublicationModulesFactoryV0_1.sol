@@ -58,7 +58,12 @@ interface IS2SUUPS {
  * approval, so no module can move onto it afterwards, and the withdrawal is
  * permanent, because the reason to revoke a build is a flaw in that build.
  */
-contract S2SPublicationModulesFactoryV6 {
+contract S2SPublicationModulesFactoryV0_1 {
+    /// @notice The manifest's major.minor, which this build implements. The
+    ///         factory is deployed once per protocol release; the number is what
+    ///         a reader compares a document's prefix against.
+    string public constant VERSION = "0.1";
+
     /// @notice The only address that may set or revoke an implementation.
     /// @dev Checked for code in the constructor, so a key alone cannot hold this
     ///      privilege at deploy time. That check is not a guarantee: under

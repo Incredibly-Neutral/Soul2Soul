@@ -1,4 +1,4 @@
-export type Abi_S2SPublicationModuleV6 = [
+export type Abi_S2SPublicationModuleV0_1 = [
   {
     "inputs": [
       {
@@ -493,7 +493,20 @@ export type Abi_S2SPublicationModuleV6 = [
         "type": "string"
       }
     ],
-    "stateMutability": "pure",
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -678,7 +691,7 @@ export type Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry[]",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry[]",
         "name": "",
         "type": "tuple[]"
       }
@@ -719,7 +732,7 @@ export type Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry",
         "name": "",
         "type": "tuple"
       }
@@ -778,7 +791,7 @@ export type Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry[]",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry[]",
         "name": "",
         "type": "tuple[]"
       }
@@ -832,7 +845,7 @@ export type Abi_S2SPublicationModuleV6 = [
             "type": "bool"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Version",
+        "internalType": "struct S2SPublicationModuleV0_1.Version",
         "name": "",
         "type": "tuple"
       }
@@ -1246,7 +1259,7 @@ export type Abi_S2SPublicationModuleV6 = [
     "type": "function"
   }
 ];
-export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
+export const Abi_S2SPublicationModuleV0_1: Abi_S2SPublicationModuleV0_1 = [
   {
     "inputs": [
       {
@@ -1741,7 +1754,20 @@ export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
         "type": "string"
       }
     ],
-    "stateMutability": "pure",
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -1926,7 +1952,7 @@ export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry[]",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry[]",
         "name": "",
         "type": "tuple[]"
       }
@@ -1967,7 +1993,7 @@ export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry",
         "name": "",
         "type": "tuple"
       }
@@ -2026,7 +2052,7 @@ export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Entry[]",
+        "internalType": "struct S2SPublicationModuleV0_1.Entry[]",
         "name": "",
         "type": "tuple[]"
       }
@@ -2080,7 +2106,7 @@ export const Abi_S2SPublicationModuleV6: Abi_S2SPublicationModuleV6 = [
             "type": "bool"
           }
         ],
-        "internalType": "struct S2SPublicationModuleV6.Version",
+        "internalType": "struct S2SPublicationModuleV0_1.Version",
         "name": "",
         "type": "tuple"
       }

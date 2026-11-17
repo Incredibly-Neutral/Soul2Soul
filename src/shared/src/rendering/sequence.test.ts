@@ -198,7 +198,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getManifest(false, l1, l2);
+    protocolInfo = await getManifest(l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
 
@@ -315,7 +315,7 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getManifest(false, l1, l2);
+    protocolInfo = await getManifest(l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
 
@@ -373,7 +373,7 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getManifest(false, l1, l2);
+    protocolInfo = await getManifest(l1, l2);
   }, 15_000);
 
   it('a publication that resolves to no modules returns ok:false', async () => {
@@ -861,7 +861,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
 describe('renderwithLitActions — all render jobs fail (no remove, no reset)', () => {
   const updateCid = 'cid-update';
   const protocolInfo: S2SManifest = {
-    version: '2.1.0',
+    version: '1.0.0',
     gateway: 'https://ipfs.transport-union.dev',
     ensRegistry: '0x0',
     ensRecords: '0x0',

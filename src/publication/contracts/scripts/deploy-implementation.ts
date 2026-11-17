@@ -1,8 +1,8 @@
 /**
- * Deploy one implementation for S2SPublicationModulesFactoryV6.
+ * Deploy one implementation for S2SPublicationModulesFactoryV0_1.
  *
- * `--kind publication` deploys S2SPublicationModuleV6, `--kind records` deploys
- * S2SRecordsModuleV2, and the default is publication. Both take
+ * `--kind publication` deploys S2SPublicationModuleV0_1, `--kind records` deploys
+ * S2SRecordsModuleV0_1, and the default is publication. Both take
  * `(factory, protocolSafe)` as constructor arguments but keep only the factory:
  * the safe is read once, compared with the factory's own `protocolSafe()`, and
  * dropped, and neither implementation has a `protocolSafe()` getter. The safe is
@@ -19,7 +19,7 @@
  * The factory is checked before the deploy, not after. A V4 factory answers
  * `protocolSafe()` and holds an approved set, but under different selectors:
  * `latestImplementation()` takes no argument there and the set is read as
- * `isApprovedImplementation(address)`. The two V6 reads below,
+ * `isApprovedImplementation(address)`. The two reads below,
  * `latestImplementation(bytes32)` and `isApproved(bytes32,address)`, are
  * selectors it never implemented. Deploying over it would burn the gas and
  * produce an implementation that can never hold a module, so each read ends the
@@ -34,7 +34,7 @@
  *   PROTOCOL_PRIVATE_KEY             deployer key, pays gas, carries no privilege
  *   PROTOCOL_SAFE_ADDRESS            the safe the factory answers, and the second
  *                                    constructor argument
- *   PUBLICATION_FACTORY_ADDRESS      the V6 factory, as printed by pnpm deploy:factory
+ *   PUBLICATION_FACTORY_ADDRESS      the factory, as printed by pnpm deploy:factory
  *   BASE_RPC_URL / VITE_DRPC_API_KEY optional RPC override
  *
  * The factory address has one name, PUBLICATION_FACTORY_ADDRESS: it is what
@@ -78,12 +78,12 @@ type KindName = 'publication' | 'records';
 
 const KINDS: Record<KindName, { contract: string; label: string; env: string }> = {
   publication: {
-    contract: 'S2SPublicationModuleV6',
+    contract: 'S2SPublicationModuleV0_1',
     label: 's2s.module.publication',
     env: 'PUBLICATION_IMPLEMENTATION_ADDRESS',
   },
   records: {
-    contract: 'S2SRecordsModuleV2',
+    contract: 'S2SRecordsModuleV0_1',
     label: 's2s.module.records',
     env: 'RECORDS_IMPLEMENTATION_ADDRESS',
   },
@@ -173,7 +173,7 @@ async function main() {
   if (!factoryEnv) {
     fail(
       'PUBLICATION_FACTORY_ADDRESS not set.',
-      'Deploy the V6 factory with pnpm deploy:factory, put the printed PUBLICATION_FACTORY_ADDRESS in .env, then write the publication_factory record with tsx src/press/scripts/lit/update-protocol.ts.',
+      'Deploy the factory with pnpm deploy:factory, put the printed PUBLICATION_FACTORY_ADDRESS in .env, then write the publication_factory record with tsx src/press/scripts/lit/update-protocol.ts.',
     );
   }
   const factory = getAddress(factoryEnv);
@@ -219,13 +219,13 @@ async function main() {
 
   // Read the factory's gate before spending gas. The V4 factory passes the first
   // two lines and fails the third: its own `latestImplementation()` takes no
-  // argument, so the V6 read is an unknown selector. V4 does keep an approved
-  // set, under `isApprovedImplementation(address)`; the V6 module reads
+  // argument, so the kind-scoped read is an unknown selector. V4 does keep an approved
+  // set, under `isApprovedImplementation(address)`; the module reads
   // `isApproved(bytes32,address)`, which V4 also lacks. Either way a module bound
   // to a V4 factory reverts its own upgrade check.
   const factoryCode = await publicClient.getCode({ address: factory });
   if (!factoryCode || factoryCode === '0x') {
-    fail(`No contract at ${factory}.`, 'Deploy the V6 factory with pnpm deploy:factory.');
+    fail(`No contract at ${factory}.`, 'Deploy the factory with pnpm deploy:factory.');
   }
 
   let factorySafe: `0x${string}`;
@@ -244,13 +244,13 @@ async function main() {
     }
     fail(
       `${factory} does not answer protocolSafe().`,
-      'Deploy the V6 factory with pnpm deploy:factory.',
+      'Deploy the factory with pnpm deploy:factory.',
     );
   }
   if (getAddress(factorySafe) !== protocolSafe) {
     fail(
       `${factory} answers protocolSafe() = ${factorySafe}, not PROTOCOL_SAFE_ADDRESS (${protocolSafe}).`,
-      'Deploy the V6 factory with pnpm deploy:factory, or fix the address that is wrong.',
+      'Deploy the factory with pnpm deploy:factory, or fix the address that is wrong.',
     );
   }
 
@@ -271,7 +271,7 @@ async function main() {
     }
     fail(
       `${factory} does not answer latestImplementation(bytes32): the V4 factory's takes no argument.`,
-      'Deploy the V6 factory with pnpm deploy:factory.',
+      'Deploy the factory with pnpm deploy:factory.',
     );
   }
 
@@ -291,7 +291,7 @@ async function main() {
     }
     fail(
       `${factory} does not answer isApproved(bytes32,address): the V4 factory answers isApprovedImplementation(address).`,
-      'Deploy the V6 factory with pnpm deploy:factory.',
+      'Deploy the factory with pnpm deploy:factory.',
     );
   }
 

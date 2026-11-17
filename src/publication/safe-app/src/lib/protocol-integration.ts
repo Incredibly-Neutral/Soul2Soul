@@ -35,7 +35,6 @@ export class ProtocolIntegration {
         });
 
         this.protocolInfo  = await getManifest(
-          false,
           providerL1 as any,
           providerL2 as any,
         );

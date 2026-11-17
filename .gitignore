@@ -9,6 +9,7 @@ build/
 # Hardhat & TypeChain
 cache/
 src/publication/contracts/artifacts/
+src/manifest/artifacts/
 src/publication/ens-contracts/artifacts/
 typechain-types/
 *.dbg.json

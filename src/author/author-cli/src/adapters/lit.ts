@@ -12,12 +12,12 @@
 //                      deployment that can serve a manuscript can serve an
 //                      action bundle.
 //   actions.encrypt    the CID of the encrypt action bundle. The source is the
-//                      protocol record `lit_action_encrypt` (written by
+//                      manifest document's `litActions.encrypt` (written by
 //                      press/scripts/lit/update-protocol.ts with `pnpm
 //                      actions:swap encrypt`); `lit.encryptActionCid` is the
 //                      override, resolved by `buildContext` and passed in here.
-//   actions.decrypt    the same for the decrypt action, from the record
-//                      `lit_action_decrypt` and `lit.decryptActionCid`: the
+//   actions.decrypt    the same for the decrypt action, from
+//                      `litActions.decrypt` and `lit.decryptActionCid`: the
 //                      drafts read path (`drafts fetch` / `drafts pull`).
 //
 // Missing either one is not a fallback: that direction fails closed. With no
@@ -48,15 +48,15 @@ function actionGateway(config: CliConfig): string | undefined {
 
 /** What the encrypt path says when neither the config nor the record names a CID. */
 export const NO_ENCRYPT_ACTION =
-  'cannot encrypt: no encrypt action CID — the protocol record `lit_action_encrypt` is not written and `lit.encryptActionCid` is unset. Set the config value with `s2s config set lit.encryptActionCid <cid>`, or write the record with `src/press/scripts/lit/update-protocol.ts`';
+  'cannot encrypt: no encrypt action CID — the manifest document carries no `litActions.encrypt` and `lit.encryptActionCid` is unset. Set the config value with `s2s config set lit.encryptActionCid <cid>`, or write the manifest with `src/press/scripts/lit/update-protocol.ts`';
 
 /** What the decrypt path says when neither the config nor the record names a CID. */
 export const NO_DECRYPT_ACTION =
-  'cannot decrypt: no decrypt action CID — the protocol record `lit_action_decrypt` is not written and `lit.decryptActionCid` is unset. Set the config value with `s2s config set lit.decryptActionCid <cid>`, or write the record with `src/press/scripts/lit/update-protocol.ts`';
+  'cannot decrypt: no decrypt action CID — the manifest document carries no `litActions.decrypt` and `lit.decryptActionCid` is unset. Set the config value with `s2s config set lit.decryptActionCid <cid>`, or write the manifest with `src/press/scripts/lit/update-protocol.ts`';
 
 /**
  * @param encryptActionCid the resolved CID: `config.lit.encryptActionCid` when
- *   set, else the `lit_action_encrypt` record (`core/context.ts`). Undefined
+ *   set, else `manifest.litActions.encrypt` (`core/context.ts`). Undefined
  *   leaves `actions.encrypt` unset and makes `encrypt` the closed failure.
  * @param decryptActionCid the same for `actions.decrypt`.
  */

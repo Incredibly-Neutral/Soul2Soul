@@ -1,15 +1,4 @@
-export type Abi_S2SRecordsModule = [
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_safe",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
+export type Abi_IS2SRecordsModuleV0_1 = [
   {
     "inputs": [],
     "name": "ArrayLengthMismatch",
@@ -21,14 +10,70 @@ export type Abi_S2SRecordsModule = [
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotApproved",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factory",
+        "type": "address"
+      }
+    ],
+    "name": "InvalidFactory",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "KeyNotFound",
     "type": "error"
   },
   {
     "inputs": [],
+    "name": "OnlyFactory",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlySafe",
     "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factorySays",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "expected",
+        "type": "address"
+      }
+    ],
+    "name": "ProtocolSafeMismatch",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ContractUpgraded",
+    "type": "event"
   },
   {
     "anonymous": false,
@@ -216,6 +261,19 @@ export type Abi_S2SRecordsModule = [
         "internalType": "string[]",
         "name": "values",
         "type": "string[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "moduleKind",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
       }
     ],
     "stateMutability": "view",
@@ -309,18 +367,7 @@ export type Abi_S2SRecordsModule = [
     "type": "function"
   }
 ];
-export const Abi_S2SRecordsModule: Abi_S2SRecordsModule = [
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_safe",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
+export const Abi_IS2SRecordsModuleV0_1: Abi_IS2SRecordsModuleV0_1 = [
   {
     "inputs": [],
     "name": "ArrayLengthMismatch",
@@ -332,14 +379,70 @@ export const Abi_S2SRecordsModule: Abi_S2SRecordsModule = [
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ImplementationNotApproved",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factory",
+        "type": "address"
+      }
+    ],
+    "name": "InvalidFactory",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "KeyNotFound",
     "type": "error"
   },
   {
     "inputs": [],
+    "name": "OnlyFactory",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlySafe",
     "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "factorySays",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "expected",
+        "type": "address"
+      }
+    ],
+    "name": "ProtocolSafeMismatch",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ContractUpgraded",
+    "type": "event"
   },
   {
     "anonymous": false,
@@ -527,6 +630,19 @@ export const Abi_S2SRecordsModule: Abi_S2SRecordsModule = [
         "internalType": "string[]",
         "name": "values",
         "type": "string[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "moduleKind",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
       }
     ],
     "stateMutability": "view",

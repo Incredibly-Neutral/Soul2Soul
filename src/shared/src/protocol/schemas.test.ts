@@ -6,7 +6,7 @@ import { manifestSchema } from './schemas';
  * and `manifest@x.y.z`. Optional action CIDs are absent, never ''.
  */
 const DOCUMENT = {
-  version: '2.1.0',
+  version: '1.0.0',
   gateway: 'https://ipfs.example',
   ensRegistry: '0x0000000000000000000000000000000000000001',
   ensRecords: '0x0000000000000000000000000000000000000002',
@@ -19,7 +19,7 @@ const DOCUMENT = {
 describe('manifestSchema', () => {
   it('accepts the document with the optional actions omitted', () => {
     const parsed = manifestSchema.parse(DOCUMENT);
-    expect(parsed.version).toBe('2.1.0');
+    expect(parsed.version).toBe('1.0.0');
     expect(parsed.litActions.maintainCache).toBeUndefined();
   });
 
@@ -46,7 +46,7 @@ describe('manifestSchema', () => {
   });
 
   it('requires a version of the form x.y.z', () => {
-    for (const version of ['2.1', '2.1.0.1', 'v2.1.0', '', 'latest']) {
+    for (const version of ['1.0', '1.0.0.1', 'v1.0.0', '', 'latest']) {
       expect(() => manifestSchema.parse({ ...DOCUMENT, version })).toThrow(/version/);
     }
   });

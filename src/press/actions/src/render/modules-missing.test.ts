@@ -4,7 +4,7 @@
  * Discovery answers null when the factory names the zero address or a
  * prediction with no code at it (ens.factory.test.ts covers those cases), and
  * throws when the factory does not answer `moduleAddress` at all, which is a
- * factory older than V6. Either way the render must refuse: ok:false, the
+ * factory older than this one. Either way the render must refuse: ok:false, the
  * refusal sentence that names both possibilities, and nothing rendered — no
  * body fetch, no config. Here discovery is stubbed to answer null, so the
  * render-side refusal is what is under test.
@@ -88,7 +88,7 @@ describe('render — a module the factory cannot name', () => {
 
     expect(out.ok).toBe(false);
     expect(out.error).toBe(
-      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused',
+      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused',
     );
     // Nothing downstream was reached: no body, no config, no render.
     expect(getConfig).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe('render — a module the factory cannot name', () => {
 
     expect(out.ok).toBe(false);
     expect(out.error).toBe(
-      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused',
+      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused',
     );
   });
 
@@ -121,7 +121,7 @@ describe('render — a module the factory cannot name', () => {
     // One sentence for the refusal, then the read failure as it came back: the
     // action fails loudly, and nothing pretends the read was an answer.
     expect(out.error).toContain(
-      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused',
+      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused',
     );
     expect(out.error).toContain('missing revert data');
     expect(getConfig).not.toHaveBeenCalled();
@@ -139,7 +139,7 @@ describe('render — a module the factory cannot name', () => {
 
     expect(out.ok).toBe(false);
     expect(out.error).toBe(
-      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused',
+      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused',
     );
   });
 });

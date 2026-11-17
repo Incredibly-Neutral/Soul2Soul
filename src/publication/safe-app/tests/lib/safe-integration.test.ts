@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Abi_S2SPublicationModuleV6 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV6';
-import { Abi_S2SRecordsModuleV2 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV2';
+import { Abi_S2SPublicationModuleV0_1 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV0_1';
+import { Abi_S2SRecordsModuleV0_1 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV0_1';
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 import {
   S2S_MODULE_KIND_PUBLICATION,
@@ -258,11 +258,11 @@ describe('initialize — module discovery through the module factory', () => {
     expect(other.NAME).not.toHaveBeenCalled();
   });
 
-  it('binds the V6 publication and V2 records ABIs', async () => {
+  it('binds the publication and records ABIs', async () => {
     const si = await initInstance();
     expect(si.hasPublicationModule()).toBe(true);
-    expect(boundAbi(P_ADDR)).toEqual(Abi_S2SPublicationModuleV6);
-    expect(boundAbi(R_ADDR)).toEqual(Abi_S2SRecordsModuleV2);
+    expect(boundAbi(P_ADDR)).toEqual(Abi_S2SPublicationModuleV0_1);
+    expect(boundAbi(R_ADDR)).toEqual(Abi_S2SRecordsModuleV0_1);
   });
 
   it('creates a JsonRpcProvider for the Safe chain via getRpcUrl', async () => {
@@ -440,7 +440,7 @@ describe('initialize — module discovery through the module factory', () => {
     expect(si.hasRecordsModule()).toBe(true);
   });
 
-  it('adoptModules binds the V6 publication and V2 records ABIs, with no NAME probe', async () => {
+  it('adoptModules binds the publication and records ABIs, with no NAME probe', async () => {
     const ADOPTED_RECORDS = getAddress('0x' + 'a4'.repeat(20));
     const ADOPTED_PUB = getAddress('0x' + 'a5'.repeat(20));
     eth.contractStubs[ADOPTED_RECORDS] = makeRecordsStub();
@@ -450,8 +450,8 @@ describe('initialize — module discovery through the module factory', () => {
     si.setModuleFactory(FACTORY);
     await si.adoptModules(ADOPTED_RECORDS, ADOPTED_PUB);
 
-    expect(boundAbi(ADOPTED_RECORDS)).toEqual(Abi_S2SRecordsModuleV2);
-    expect(boundAbi(ADOPTED_PUB)).toEqual(Abi_S2SPublicationModuleV6);
+    expect(boundAbi(ADOPTED_RECORDS)).toEqual(Abi_S2SRecordsModuleV0_1);
+    expect(boundAbi(ADOPTED_PUB)).toEqual(Abi_S2SPublicationModuleV0_1);
     expect(pub.NAME).not.toHaveBeenCalled();
   });
 
@@ -737,7 +737,7 @@ describe('read paths (direct contract reads, no sends)', () => {
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
   });
 
-  it('hasDeal / getDeals / getOffers delegate to the V6 hasAgreement/getAgreements', async () => {
+  it('hasDeal / getDeals / getOffers delegate to the hasAgreement/getAgreements', async () => {
     const si = await initInstance();
     const genesis = `0x${'c'.repeat(64)}`;
     pub.hasAgreement.mockResolvedValue(true);

@@ -11,7 +11,7 @@
 // a provider or SDK. Encoding is done directly with ethers v6 (the same module
 // main.ts exposes as the page global).
 //
-// ONE FACTORY. `S2SPublicationModulesFactoryV6` deploys a module of a kind for a
+// ONE FACTORY. `S2SPublicationModulesFactoryV0_1` deploys a module of a kind for a
 // Safe at an address that is a function of (factory, safe, kind) and nothing
 // else:
 //
@@ -38,7 +38,7 @@
 
 import { AbiCoder, Interface, getAddress } from 'ethers';
 import type { InterfaceAbi } from 'ethers';
-import { Abi_S2SPublicationModulesFactoryV6 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV6';
+import { Abi_S2SPublicationModulesFactoryV0_1 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV0_1';
 import {
   S2S_MODULE_KIND_PUBLICATION,
   S2S_MODULE_KIND_RECORDS,
@@ -154,7 +154,7 @@ const SENTINEL_MODULES = '0x0000000000000000000000000000000000000001';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
-const factoryInterface = new Interface(Abi_S2SPublicationModulesFactoryV6);
+const factoryInterface = new Interface(Abi_S2SPublicationModulesFactoryV0_1);
 const safeInterface = new Interface([
   'function enableModule(address module)',
   'function disableModule(address prevModule, address module)',
@@ -278,7 +278,7 @@ export async function moduleAddressFor(
   safeAddress: string,
   kind: string,
 ): Promise<string> {
-  const answer = await deps.read(factory, Abi_S2SPublicationModulesFactoryV6, 'moduleAddress', [
+  const answer = await deps.read(factory, Abi_S2SPublicationModulesFactoryV0_1, 'moduleAddress', [
     safeAddress,
     kind,
   ]);
@@ -435,8 +435,8 @@ export function buildFinalizeBatch(
  * not false.
  *
  * The batch is a single atomic MultiSend tx — if ANY operation reverts the
- * whole thing fails to estimate (Safe UI GS013). S2SRecordsModule.deleteRecord
- * reverts with KeyNotFound() when the key was never written, so callers must
+ * whole thing fails to estimate (Safe UI GS013). The records module's
+ * deleteRecord reverts with KeyNotFound() when the key was never written, so callers must
  * gate `deleteName` on the name record actually existing on-chain (defaults to
  * true to preserve the full-teardown intent for callers that cannot know).
  */

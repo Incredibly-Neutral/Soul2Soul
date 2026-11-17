@@ -77,8 +77,8 @@ Contract ground-truth that makes this valid:
   **must come from the Safe**. Under the superseded V2 factory the function was plain `external`,
   and the proxy's `initialize` being `onlySafe` (`S2SPublicationModuleV2.sol:101,111`) is what made
   it Safe-bound.
-- `S2SRecordsModuleFactory.createModule(safe)` and `S2SRecordsModule.setRecord` are likewise
-  Safe-bound (`S2SRecordsModule.sol:82,246`).
+- `S2SRecordsModuleFactory.createModule(safe)` and `S2SRecordsModuleV0_1.setRecord` are likewise
+  Safe-bound (`S2SRecordsModuleV0_1.sol:97,165`).
 - `enableModule` / `getModulesPaginated` / `isModuleEnabled` are standard Safe functions
   (`shared/src/contracts/safe_implementation.ts`).
 - safe-app already sends arrays via `safeSdk.txs.send({ txs: [...] })` = a batch proposal

@@ -7,7 +7,7 @@ import {
   S2S_MODULE_KIND_PUBLICATION,
   S2S_MODULE_KIND_RECORDS,
 } from '@s2s/soul2soul-shared/safe-app';
-import { Abi_S2SPublicationModulesFactoryV6 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV6';
+import { Abi_S2SPublicationModulesFactoryV0_1 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV0_1';
 import { mountLit } from '../helpers/mount';
 import '../../src/components/s2s-init';
 
@@ -44,7 +44,7 @@ const PROTOCOL_INFO = {
 };
 
 /** Decode the kind out of a factory `createModule(safe, kind, params)` call. */
-const FACTORY_IFACE = new Interface(Abi_S2SPublicationModulesFactoryV6);
+const FACTORY_IFACE = new Interface(Abi_S2SPublicationModulesFactoryV0_1);
 function decodeCreateKind(tx: MetaTransactionData): string {
   const parsed = FACTORY_IFACE.parseTransaction({ data: tx.data });
   return String(parsed!.args[1]);

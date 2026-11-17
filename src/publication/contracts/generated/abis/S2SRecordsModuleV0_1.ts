@@ -1,4 +1,4 @@
-export type Abi_S2SRecordsModuleV2 = [
+export type Abi_S2SRecordsModuleV0_1 = [
   {
     "inputs": [
       {
@@ -542,7 +542,7 @@ export type Abi_S2SRecordsModuleV2 = [
     "type": "function"
   }
 ];
-export const Abi_S2SRecordsModuleV2: Abi_S2SRecordsModuleV2 = [
+export const Abi_S2SRecordsModuleV0_1: Abi_S2SRecordsModuleV0_1 = [
   {
     "inputs": [
       {

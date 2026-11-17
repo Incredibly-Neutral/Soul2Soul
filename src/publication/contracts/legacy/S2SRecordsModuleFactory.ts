@@ -1,3 +1,7 @@
+// The standalone records factory the earlier deployments answer, kept by hand:
+// its source lived in S2SRecordsModule.sol, which this tree no longer has, so
+// `hardhat compile` does not regenerate this file. The contract is still on
+// chain and callers still read it, so the ABI stays.
 export type Abi_S2SRecordsModuleFactory = [
   {
     "anonymous": false,

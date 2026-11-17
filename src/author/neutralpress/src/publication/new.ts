@@ -22,7 +22,7 @@ import { ipfsFromSettings } from './filecoin';
 import {
 	S2SRecordsModuleFactory,
 	S2SPublicationModuleV2Factory,
-	S2SRecordsModule,
+	S2SRecordsModuleV0_1,
 } from '@s2s/publication-contracts';
 
 export const newPublicationSafe = async (main: any, publication: S2SPublication) => {
@@ -38,7 +38,7 @@ export const newPublicationSafe = async (main: any, publication: S2SPublication)
 		protocolInfo: main.protocolInfo,
 		recordsModuleFactoryAbi: S2SRecordsModuleFactory,
 		publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
-		recordsModuleAbi: S2SRecordsModule,
+		recordsModuleAbi: S2SRecordsModuleV0_1,
 		ipfs: ipfsFromSettings(main),
 		githubToken,
 		createFeed: (name, desc, addr) => main.oxo.ctrlr.lens.createFeed(name, desc, addr),

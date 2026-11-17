@@ -1,5 +1,6 @@
 packages:
   - 'src/author/*'
+  - 'src/manifest'
   - 'src/publication/*'
   - 'src/press'
   - 'src/shared'

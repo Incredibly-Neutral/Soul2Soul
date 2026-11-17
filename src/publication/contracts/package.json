@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "generated/abis/index.ts",
-  "types": "generated/abis/index.ts",
+  "main": "index.ts",
+  "types": "index.ts",
   "exports": {
     ".": {
-      "types": "./generated/abis/index.ts",
-      "default": "./generated/abis/index.ts"
+      "types": "./index.ts",
+      "default": "./index.ts"
     },
     "./abis/*": {
       "types": "./generated/abis/*.ts",
@@ -17,9 +17,19 @@
     "./artifacts/*": {
       "types": "./generated/artifacts/*.ts",
       "default": "./generated/artifacts/*.ts"
+    },
+    "./abis/S2SRecordsModuleFactory": {
+      "types": "./legacy/S2SRecordsModuleFactory.ts",
+      "default": "./legacy/S2SRecordsModuleFactory.ts"
+    },
+    "./artifacts/S2SRecordsModuleFactory": {
+      "types": "./legacy/S2SRecordsModuleFactory.artifact.ts",
+      "default": "./legacy/S2SRecordsModuleFactory.artifact.ts"
     }
   },
   "files": [
+    "index.ts",
+    "legacy",
     "generated/abis",
     "src"
   ],

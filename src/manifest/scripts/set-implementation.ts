@@ -1,0 +1,140 @@
+/**
+ * Approve the manifest implementation for its kind.
+ *
+ * `setImplementation(bytes32 kind, address impl)` is accepted only from the
+ * factory's own `protocolSafe`, so this script cannot send it. It runs the checks
+ * the factory runs, then proposes the call to that safe. One signature, one call:
+ * approving a build and pointing the kind at it are the same transaction.
+ *
+ * The checks, in the order the factory applies them:
+ *
+ *   - the implementation has code,
+ *   - `factory()` is this factory,
+ *   - `moduleKind()` is `s2s.module.manifest`,
+ *   - `proxiableUUID()` is the ERC-1967 slot (an implementation whose storage
+ *     layout the proxy cannot follow would break on the first write),
+ *   - the implementation is not revoked (a withdrawal is for good).
+ *
+ * A kind already at this implementation, and approving it, is reported and not
+ * proposed: setting it again writes the same pointer and emits an event that
+ * would look like a deploy.
+ *
+ * Usage:
+ *   cd src/manifest
+ *   pnpm set:impl            propose it to the protocol safe
+ *   pnpm set:impl --json     print a Transaction Builder batch instead
+ *   pnpm set:impl --data     print the calldata instead
+ *
+ * Requires in .env:
+ *   MANIFEST_IMPLEMENTATION_ADDRESS  printed by pnpm deploy:impl
+ *   PUBLICATION_FACTORY_ADDRESS      the factory
+ *   PROTOCOL_SAFE_ADDRESS            the safe that must sign
+ *   PROTOCOL_PRIVATE_KEY             an owner or delegate of that safe, to propose
+ *   BASE_RPC_URL                     optional RPC override
+ *
+ * Nothing is sent: the safe executes when its owners sign. stdout is the safe
+ * transaction hash (or the batch, or the calldata).
+ */
+
+import { encodeFunctionData } from 'viem';
+import {
+  FACTORY_ABI,
+  MANIFEST_KIND,
+  MODULE_ABI,
+  addressEnv,
+  artifact,
+  deliver,
+  publicClient,
+  refuse,
+  say,
+} from './lib.js';
+
+const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
+const protocolSafe = addressEnv('PROTOCOL_SAFE_ADDRESS');
+const implementation = addressEnv('MANIFEST_IMPLEMENTATION_ADDRESS');
+
+const answers = (await publicClient.readContract({
+  address: factory,
+  abi: FACTORY_ABI,
+  functionName: 'protocolSafe',
+})) as `0x${string}`;
+if (answers.toLowerCase() !== protocolSafe.toLowerCase()) {
+  refuse(`The factory answers protocolSafe() = ${answers}, not ${protocolSafe}. A proposal signed by that safe would revert.`);
+}
+
+if ((await publicClient.getCode({ address: implementation })) === undefined) {
+  refuse(`${implementation} has no code. A deploy that never mined looks exactly like this.`);
+}
+
+const asModule = { address: implementation, abi: MODULE_ABI } as const;
+const [declaredKind, declaredFactory] = await Promise.all([
+  publicClient.readContract({ ...asModule, functionName: 'moduleKind' }),
+  publicClient.readContract({ ...asModule, functionName: 'factory' }),
+]);
+if (declaredKind !== MANIFEST_KIND) {
+  refuse(
+    `${implementation} declares kind ${declaredKind}, not ${MANIFEST_KIND}. The factory would refuse it with ImplementationKindMismatch.`,
+  );
+}
+if ((declaredFactory as string).toLowerCase() !== factory.toLowerCase()) {
+  refuse(`${implementation} answers factory() = ${declaredFactory}, not ${factory}. It belongs to another factory.`);
+}
+// The ABI is a list, so membership is a scan: `'name' in abi` tests the array's
+// indices and is false however complete the ABI is.
+const abi = artifact('S2SManifestModuleV0_1').abi as readonly { name?: string }[];
+const uups = abi.some((entry) => entry.name === 'proxiableUUID');
+if (!uups) refuse('The build has no proxiableUUID in its ABI, so it is not a UUPS implementation.');
+const slot = await publicClient.readContract({
+  address: implementation,
+  abi: [
+    {
+      type: 'function',
+      name: 'proxiableUUID',
+      stateMutability: 'view',
+      inputs: [],
+      outputs: [{ type: 'bytes32' }],
+    },
+  ],
+  functionName: 'proxiableUUID',
+});
+const ERC1967 =
+  '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+if (slot !== ERC1967) refuse(`${implementation} answers proxiableUUID() = ${slot}, not the ERC-1967 slot.`);
+
+const [latest, approved, revoked] = await Promise.all([
+  publicClient.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'latestImplementation', args: [MANIFEST_KIND] }) as Promise<`0x${string}`>,
+  publicClient.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'isApproved', args: [MANIFEST_KIND, implementation] }) as Promise<boolean>,
+  publicClient.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'isRevoked', args: [MANIFEST_KIND, implementation] }) as Promise<boolean>,
+]);
+
+if (revoked) refuse(`${implementation} was withdrawn from the manifest kind. A withdrawal cannot be undone; deploy a new build.`);
+
+const data = encodeFunctionData({
+  abi: FACTORY_ABI,
+  functionName: 'setImplementation',
+  args: [MANIFEST_KIND, implementation],
+});
+
+if (latest.toLowerCase() === implementation.toLowerCase() && approved) {
+  say(
+    `The manifest kind is already at ${implementation} and approves it.`,
+    'Nothing to propose. New modules of the kind are built over it now.',
+  );
+  process.exit(0);
+}
+
+if (!approved) {
+  say(
+    `Proposing one call: approve ${implementation} for the manifest kind.`,
+    latest.toLowerCase() === implementation.toLowerCase()
+      ? 'The pointer is already there; this adds the approval an upgrade target needs.'
+      : `The pointer moves from ${latest === '0x0000000000000000000000000000000000000000' ? 'nothing' : latest}. Existing modules keep their address and storage.`,
+    '',
+    `to      ${factory}`,
+    `from    ${protocolSafe} (the factory accepts this call from no one else)`,
+    '',
+    'Until the safe executes it, createModule for this kind reverts NoImplementation.',
+  );
+}
+
+await deliver(factory, data, 'Approve the manifest implementation for its kind');

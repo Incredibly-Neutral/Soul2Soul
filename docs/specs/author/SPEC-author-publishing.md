@@ -71,7 +71,7 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
 
 - **New publication** (`newPublicationSafe`): salt = `"publication_safe_"+name` → `connectToFreshSafe`
   on **L1 and L2 (same salt ⇒ same address)** → **L1** `registerSubdomain(subdomain, addr1)` →
-  **L2** deploy `S2SRecordsModule` + `S2SPublicationModule(authors)` → `enableModule`×2 → verify
+  **L2** deploy `S2SRecordsModuleV0_1` + `S2SPublicationModule(authors)` → `enableModule`×2 → verify
   (poll ≤20×) → `uploadConfig` → `lens.createFeed` → set records (name/config/repo/branch/feed) →
   add owners + **remove temp creation signer**. Long async background job.
 - **Publish** (`proposeContent` = upload intent, `publishContent` = publish intent → `runIntent` →

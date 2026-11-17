@@ -25,7 +25,7 @@ export interface S2SManifest {
   /**
    * The version of the manifest document, `x.y.z`. Read from the on-chain
    * record, not from the controller: `VERSION()` reports the contract's own
-   * version and is only compared on its first segment.
+   * version, the manifest's major.minor, and is compared on that prefix.
    */
   version: string;
   gateway: string; // collapsed data+assets READ gateway
@@ -54,19 +54,19 @@ export interface S2SManifest {
     render: string; // was litActionSingle (RENAMED)
     update: string; // was litActionRootUpdate (RENAMED); cbor merged INTO this action
     // CID of the dedicated maintain-cache action. OPTIONAL: present only once
-    // the action is built + pinned + its lit_action_maintainCache record is
-    // written on-chain. The orchestrator fires the parallel cache-maintenance
-    // action only when this is non-empty (graceful — the render inline
-    // write-back remains the fallback until then).
+    // the action is built, pinned and written into this document's
+    // `litActions.maintainCache`. The orchestrator fires the parallel
+    // cache-maintenance action only when this is present (graceful — the render
+    // inline write-back remains the fallback until then).
     maintainCache?: string;
     // CID of the one-shot repoint-archive action. OPTIONAL: present only once
-    // the action is built + pinned + its lit_action_repointArchive record is
-    // written on-chain. Read by recovery tooling; the orchestrator does not
-    // fire it automatically.
+    // the action is built, pinned and written into `litActions.repointArchive`.
+    // Read by recovery tooling; the orchestrator does not fire it
+    // automatically.
     repointArchive?: string;
     // CID of the encrypt action, which seals a body under the PKP. OPTIONAL:
-    // present only once its lit_action_encrypt record is written on-chain; a
-    // record that was never written reads back as absent, not as "".
+    // present only once it is written into `litActions.encrypt`; a field that
+    // was never written reads back as absent, not as "".
     encrypt?: string;
     // CID of the decrypt action, which opens an author's draft behind
     // GATES-1. OPTIONAL, same rule as `encrypt`.

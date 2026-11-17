@@ -7,7 +7,7 @@ import {
   S2SRipple,
   S2STemplateConfig,
 } from '@s2s/soul2soul-shared/lit-actions';
-import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule';
+import { Abi_S2SRecordsModuleV0_1 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV0_1';
 
 export const getConfig = async (
   configCid: string | undefined,
@@ -20,7 +20,7 @@ export const getConfig = async (
     _configCid =
       typeof configCid !== 'undefined'
         ? configCid
-        : await evmRead('L2', configModule, Abi_S2SRecordsModule, 'getRecord', ['config'], rpcs);
+        : await evmRead('L2', configModule, Abi_S2SRecordsModuleV0_1, 'getRecord', ['config'], rpcs);
   } catch (e) {
     throw new Error(
       `config: failed to read config record from module: ${e instanceof Error ? e.message : String(e)}`,

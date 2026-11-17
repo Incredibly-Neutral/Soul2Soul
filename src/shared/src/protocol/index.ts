@@ -43,31 +43,40 @@ export type ViemProvider = PublicClient;
  * preceded this document and none to a partially valid one: a missing key or
  * unparsable JSON is an error naming `manifest`.
  *
- * `VERSION()` on the same module answers the contract's own version and is
- * compared on its first segment only. There is no redeploy when the document
- * moves: `VERSION()` stays 2.0.0 and the document carries 2.1.0, and only a
- * different major is a document this module cannot be read alongside.
+ * `VERSION()` on the same module answers the manifest's major.minor as one
+ * string, `0.1`, so the check is the document's first two segments against that
+ * whole string. There is no redeploy when the document moves within a minor:
+ * `VERSION()` stays `0.1` while the document carries `0.1.3`. A different major
+ * or minor is a document this module cannot be read alongside.
  *
  * One deployment's manifest: the addresses and action CIDs a client needs to
  * talk to it, read from the controller's records module. This is not protocol
  * text and not code, it is references to code, published per release.
+ *
+ * `version` names which document to read. Absent, this reads the live record,
+ * `manifest`. Present as `x.y.z`, it reads the mirror written for that version,
+ * `manifest@x.y.z`, which is history: a snapshot of the fields as they were
+ * published then, including action CIDs the Lit group may since have replaced.
+ * A named version that answers a document claiming another version is a bad
+ * record, not a fallback.
  */
 export const getManifest = async (
-  dev = false,
   l1Provider: ViemProvider,
   l2Provider: ViemProvider,
+  version?: string,
 ): Promise<S2SManifest> => {
   const {
     multisig,
     configModule,
     publicationModule: scannedPublicationModule,
     modules,
-  } = await getProtocolControllerAndModules(dev, l1Provider, l2Provider);
+  } = await getProtocolControllerAndModules(false, l1Provider, l2Provider);
 
-  const [document] = await getRecords(configModule!, [MANIFEST_KEY], l2Provider);
+  const key = version ? `${MANIFEST_KEY}@${version}` : MANIFEST_KEY;
+  const [document] = await getRecords(configModule!, [key], l2Provider);
 
   if (!document) {
-    throw new Error(`manifest: no '${MANIFEST_KEY}' record on ${configModule}`);
+    throw new Error(`manifest: no '${key}' record on ${configModule}`);
   }
 
   let raw: unknown;
@@ -75,7 +84,7 @@ export const getManifest = async (
     raw = JSON.parse(document);
   } catch (error) {
     throw new Error(
-      `manifest: the '${MANIFEST_KEY}' record is not valid JSON: ${(error as Error).message}`,
+      `manifest: the '${key}' record is not valid JSON: ${(error as Error).message}`,
     );
   }
 
@@ -86,7 +95,16 @@ export const getManifest = async (
     manifest = manifestSchema.parse(raw);
   } catch (error) {
     throw new Error(
-      `manifest: the '${MANIFEST_KEY}' record does not have the document's shape: ${(error as Error).message}`,
+      `manifest: the '${key}' record does not have the document's shape: ${(error as Error).message}`,
+    );
+  }
+
+  // Asked for one version, answered with another: the record was overwritten
+  // with a different document, or the caller named a key that holds the wrong
+  // thing. Either way it is not the snapshot that was asked for.
+  if (version && manifest.version !== version) {
+    throw new Error(
+      `manifest: the '${key}' record carries version ${manifest.version}, not ${version}`,
     );
   }
 
@@ -104,11 +122,10 @@ export const getManifest = async (
     client: l2Provider,
   }).read.VERSION()) as string;
 
-  // Only the major segment constrains the document: the module is not
-  // redeployed when the manifest moves, so 2.0.0 reads a 2.1.0 document.
-  const documentMajor = manifest.version.split('.')[0];
-  const onChainMajor = onChainVersion.split('.')[0];
-  if (documentMajor !== onChainMajor) {
+  // `VERSION()` is the manifest's major.minor, so this is the document's first
+  // two segments against the whole of it: `0.1` reads a `0.1.3` document.
+  const documentPrefix = manifest.version.split('.').slice(0, 2).join('.');
+  if (documentPrefix !== onChainVersion) {
     throw new Error(
       `manifest: document version ${manifest.version} is not compatible with VERSION() ${onChainVersion}`,
     );

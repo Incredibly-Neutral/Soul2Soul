@@ -21,7 +21,8 @@ vi.mock('../libs/ipfs.factory', () => ({ catFile: vi.fn() }));
 vi.mock('../libs/ens.factory', () => ({ getDomainOwnerAndModules: vi.fn() }));
 // Discovery needs the `publication_factory` record and refuses a null one.
 vi.mock('../libs/protocol.factory', () => ({
-  getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
+  // The document carries the factory discovery asks; this is that one field.
+  getManifest: vi.fn(async () => ({ moduleFactory: '0x' + '77'.repeat(20) })),
 }));
 vi.mock('../libs/helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/helpers')>();

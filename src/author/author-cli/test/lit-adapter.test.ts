@@ -2,8 +2,8 @@
 // The Lit adapter — what the CLI hands LitService so it can execute an action.
 //
 // There is no inline action code in this CLI, and no action CID ships in it
-// either: encrypt and decrypt run from the CIDs the protocol records module holds
-// (`lit_action_encrypt`, `lit_action_decrypt`), with `lit.encryptActionCid` /
+// either: encrypt and decrypt run from the CIDs the manifest document holds
+// (`litActions.encrypt`, `litActions.decrypt`), with `lit.encryptActionCid` /
 // `lit.decryptActionCid` as the overrides. These
 // tests assert the wiring — a service that throws "missing actions.encrypt" is
 // the failure that motivated it — not the Lit exchange, which shared's own tests

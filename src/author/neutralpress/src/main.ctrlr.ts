@@ -122,7 +122,6 @@ export class MainController implements IMainController {
 
 			if (success) {
 				this.protocolInfo = await getManifest(
-					this.plugin.settings.dev,
 					this.oxo.ctrlr.account['ETH_MAINNET'].publicClient,
 					this.oxo.ctrlr.account['BASE'].publicClient,
 				);

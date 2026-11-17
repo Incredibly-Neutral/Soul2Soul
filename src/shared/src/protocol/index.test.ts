@@ -111,7 +111,7 @@ interface ChainOptions {
   predictions?: Record<string, Address>;
   /** The `manifest` record's value; `undefined` means the key was never written */
   manifest?: string;
-  /** `VERSION()`; the on-chain contract's own version */
+  /** `VERSION()`; the on-chain contract's own version, the manifest's major.minor */
   version?: string;
 }
 
@@ -122,7 +122,7 @@ interface ChainOptions {
  */
 const manifestDocument = (overrides: Record<string, unknown> = {}): string =>
   JSON.stringify({
-    version: '2.1.0',
+    version: '0.1.0',
     gateway: 'ipfs.mock',
     ensRegistry: 'ens-registry',
     ensRecords: 'ens-records',
@@ -171,7 +171,7 @@ function makeClients(options: ChainOptions) {
       return options.predictions?.[String(args[1])] ?? REVERT;
     }
     if (functionName === 'getRecords') return [options.manifest ?? RECORD_VALUES[0]];
-    if (functionName === 'VERSION') return options.version ?? '2.0.0';
+    if (functionName === 'VERSION') return options.version ?? '0.1';
     throw new Error(`unexpected call ${functionName}`);
   };
 
@@ -248,7 +248,7 @@ describe('getManifest', () => {
       latest: PUBLICATION,
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
     expect(info.publicationFactory.toLowerCase()).toBe(FACTORY);
@@ -277,7 +277,7 @@ describe('getManifest', () => {
       latest: A,
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(A);
   });
@@ -289,7 +289,7 @@ describe('getManifest', () => {
       count: 'revert',
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
   });
@@ -302,7 +302,7 @@ describe('getManifest', () => {
       latest: AT(7),
     });
 
-    expect((await getManifest(false, client, client)).publicationModule).toBe(PUBLICATION);
+    expect((await getManifest(client, client)).publicationModule).toBe(PUBLICATION);
   });
 
   it('leaves publicationModule undefined when nothing resolves, rather than guessing', async () => {
@@ -312,7 +312,7 @@ describe('getManifest', () => {
       count: 'revert',
     });
 
-    expect((await getManifest(false, client, client)).publicationModule).toBeUndefined();
+    expect((await getManifest(client, client)).publicationModule).toBeUndefined();
   });
 
   it('reads the whole manifest from one document under one key', async () => {
@@ -321,10 +321,10 @@ describe('getManifest', () => {
       names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info).toEqual({
-      version: '2.1.0',
+      version: '0.1.0',
       gateway: 'ipfs.mock',
       ensRegistry: 'ens-registry',
       ensRecords: 'ens-records',
@@ -340,26 +340,37 @@ describe('getManifest', () => {
     expect(countCalls(calls, 'VERSION')).toBe(1);
   });
 
-  it('carries a newer document on an unchanged VERSION(), differing only past the major', async () => {
+  it('carries a newer document on an unchanged VERSION(), differing only past the minor', async () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '2.4.7' }),
-      version: '2.0.0',
+      manifest: manifestDocument({ version: '0.1.4' }),
+      version: '0.1',
     });
 
-    expect((await getManifest(false, client, client)).version).toBe('2.4.7');
+    expect((await getManifest(client, client)).version).toBe('0.1.4');
   });
 
   it('rejects a document whose major differs from VERSION(), naming both', async () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '3.0.0' }),
-      version: '2.0.0',
+      manifest: manifestDocument({ version: '1.0.0' }),
+      version: '0.1',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/3\.0\.0.*2\.0\.0/);
+    await expect(getManifest(client, client)).rejects.toThrow(/1\.0\.0.*VERSION\(\) 0\.1/);
+  });
+
+  it('rejects a document whose minor differs from VERSION(), on the same major', async () => {
+    const { client } = makeClients({
+      modules: [RECORDS],
+      names: { [RECORDS]: 'S2S Records Module' },
+      manifest: manifestDocument({ version: '0.2.0' }),
+      version: '0.1',
+    });
+
+    await expect(getManifest(client, client)).rejects.toThrow(/0\.2\.0.*VERSION\(\) 0\.1/);
   });
 
   it('throws naming the manifest key when the record was never written', async () => {
@@ -369,7 +380,7 @@ describe('getManifest', () => {
       manifest: '',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
   });
 
   it('throws naming the manifest key when the record is not JSON, with no fallback', async () => {
@@ -379,7 +390,7 @@ describe('getManifest', () => {
       manifest: 'data_gateway=ipfs.mock',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
     // The flat keys are gone: nothing is read past the document.
     expect(countCalls(calls, 'getRecords')).toBe(1);
     expect(calls).not.toContain('moduleAddress');

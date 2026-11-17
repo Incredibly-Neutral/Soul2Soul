@@ -29,11 +29,6 @@ const recordsModuleAbi = [
       { name: "value", type: "string" },
     ],
   },
-  {
-    name: "deleteRecord",
-    type: "function",
-    inputs: [{ name: "key", type: "string" }],
-  },
 ] as const;
 
 /**
@@ -117,16 +112,6 @@ function requirePublicationFactory(): string {
   );
 }
 
-// Keys that were written under old names and must be removed from on-chain storage.
-// Leaving them means any reader still asking for these keys gets stale data.
-// deleteRecord removes them cleanly (emits RecordDeleted, frees the slot).
-//
-// Empty, and the flat keys the document replaced stay written below: a client
-// that predates the document reads them and has no fallback of its own, and the
-// whole set goes out in one Safe batch, so the cutover cannot half-happen.
-const STALE_KEYS : string[] = [
-]
-
 
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -137,17 +122,6 @@ const setRecord = (key: string, value: string) => ({
     abi: recordsModuleAbi,
     functionName: "setRecord",
     args: [key, value],
-  }),
-  value: "0",
-  operation: OperationType.Call,
-});
-
-const deleteRecord = (key: string) => ({
-  to: RECORDS_MODULE_ADDRESS,
-  data: encodeFunctionData({
-    abi: recordsModuleAbi,
-    functionName: "deleteRecord",
-    args: [key],
   }),
   value: "0",
   operation: OperationType.Call,
@@ -174,41 +148,25 @@ function protocolRpcUrl(): string {
 const protocolClient = () => createPublicClient({ transport: http(protocolRpcUrl()) });
 
 /**
- * MANIFEST_VERSION — the `x.y.z` the document is published as.
+ * The version the manifest document is published as, and the `x.y.z` its mirror
+ * key is named after.
  *
- * Required, and read before the batch is built: the document carries its own
- * version and every action compares its first segment against `VERSION()` on
- * the module, so a document written without one, or written under a version the
- * module cannot be read alongside, fails every action rather than only itself.
- * Bump it for anything that changes what the document says.
+ * A constant here, not an environment variable: the document's shape is decided
+ * by this repo, so the version is a line in the diff a reviewer sees rather than
+ * a value in someone's shell. Bump it here — the third digit for a value that
+ * moved, an action CID or an address, the second for a new optional field, the
+ * first for a shape an older reader must refuse — and its major.minor has to
+ * equal `VERSION()` on the records module.
  */
-function requireManifestVersion(): string {
-  const version = process.env.MANIFEST_VERSION;
-
-  if (!version) {
-    throw new Error(
-      "MANIFEST_VERSION is not set. Set it to the x.y.z this batch publishes the manifest " +
-        "document as (e.g. MANIFEST_VERSION=2.1.0) and re-run. The document names its own " +
-        "version and every action compares it against the module's VERSION()."
-    );
-  }
-
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(
-      `MANIFEST_VERSION "${version}" is not x.y.z. It is compared on its first segment ` +
-        "against the module's VERSION(), so it has to be a three-part version."
-    );
-  }
-
-  return version;
-}
+const MANIFEST_VERSION = "0.1.0";
 
 /**
  * Refuse a document the module on chain cannot be read alongside.
  *
- * `VERSION()` is the contract's own version and stays 2.0.0: the document moves
- * without a redeploy, so only the major segment has to agree. Read through the
- * same RPC the factory probe uses.
+ * `VERSION()` is the contract's own version, and it is the manifest's
+ * major.minor as one string ("0.1"), not a bare major: the document moves
+ * without a redeploy, so the prefix the two share has to agree and the patch
+ * digit is free. Read through the same RPC the factory probe uses.
  */
 const assertManifestVersion = async (documentVersion: string): Promise<void> => {
   const client = protocolClient();
@@ -223,16 +181,20 @@ const assertManifestVersion = async (documentVersion: string): Promise<void> => 
   } catch (error) {
     throw new Error(
       `Could not read VERSION() on ${RECORDS_MODULE_ADDRESS}: ` +
-        `${error instanceof Error ? error.message : String(error)}. The document's major ` +
-        "segment has to match it, so the batch is not built without it."
+        `${error instanceof Error ? error.message : String(error)}. The document's major.minor ` +
+        "prefix has to match it, so the batch is not built without it."
     );
   }
 
-  if (documentVersion.split(".")[0] !== onChainVersion.split(".")[0]) {
+  // Both are compared as the `major.minor` the document opens with, so "0.1.0"
+  // is read alongside a module answering "0.1", and a "0.2" module is not.
+  const documentPrefix = documentVersion.split(".").slice(0, 2).join(".");
+  if (documentPrefix !== onChainVersion) {
     throw new Error(
-      `MANIFEST_VERSION ${documentVersion} is a different major from VERSION() ` +
-        `${onChainVersion} on ${RECORDS_MODULE_ADDRESS}. Every action compares the two on the ` +
-        "first segment and refuses the document; bump or fix MANIFEST_VERSION."
+      `The manifest document is ${documentVersion}, whose major.minor is ${documentPrefix}, but ` +
+        `${RECORDS_MODULE_ADDRESS} answers VERSION() ${onChainVersion}. Every action compares ` +
+        "the two and refuses a document whose prefix differs, so nothing was proposed. Redeploy " +
+        "the records module, or publish the document under the prefix it answers."
     );
   }
 };
@@ -390,23 +352,13 @@ const proposeToSafe = async (account: any, transactions: any[]) => {
 // ── Exports ──────────────────────────────────────────────────────────────────
 
 /**
- * Full protocol update: write new keys + the manifest document + delete stale
- * ones + re-authorize PKP. All in one Safe batch so it's atomic — owners confirm
- * once for the whole set.
+ * Full protocol update: the manifest document, and the PKP re-authorized on the
+ * ENS records contract. One Safe batch, so owners confirm once.
  *
- * The document is written twice, `manifest` and `manifest@x.y.z` (the version in
- * MANIFEST_VERSION): readers read the first, the second is the version history.
- * Both carry the same JSON, built from the values this batch already writes. The
- * flat keys stay written beside it for a client that predates the document; the
- * read side has no fallback to them, and one batch means the cutover cannot
- * half-happen.
- *
- * Lit action naming (post-rename):
- *   prep         — was lit_action_prep      (unchanged)
- *   render       — was lit_action_single    (renamed; key: lit_action_render)
- *   update       — was lit_action_root_update + cbor merged in (key: lit_action_update)
- *   encrypt      — seals a body under the PKP        (key: lit_action_encrypt)
- *   decrypt      — opens an author's draft (GATES-1) (key: lit_action_decrypt)
+ * The document is written twice, `manifest` and `manifest@x.y.z` (MANIFEST_VERSION
+ * above): readers read the first, the second is the version history. Both carry
+ * the same JSON. No flat key is written: the document replaced them, and nothing
+ * reads them.
  */
 export const updateProtocol = async (
   account: any,
@@ -424,17 +376,16 @@ export const updateProtocol = async (
   const publicationFactory = requirePublicationFactory();
   await assertGatedFactory(publicationFactory);
 
-  // Also before the batch: the version the document is published as, and the
-  // major segment the module on chain can be read alongside.
-  const version = requireManifestVersion();
-  await assertManifestVersion(version);
+  // Also before the batch: the module on chain has to answer the major this
+  // document is published under, or every action would refuse it.
+  await assertManifestVersion(MANIFEST_VERSION);
 
   const gateway = process.env.IPFS_URL || "";
   const ensRegistry = process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || "";
   const recordsFactory = process.env.RECORDS_FACTORY_ADDRESS || "";
 
   const document = buildManifestDocument({
-    version,
+    version: MANIFEST_VERSION,
     gateway,
     ensRegistry,
     ensRecords: ENS_RECORDS_ADDRESS,
@@ -453,37 +404,10 @@ export const updateProtocol = async (
   });
 
   const transactions = [
-    // Write current values
-    setRecord("pkp_ethAddress", pkpInfo.ethAddress),
-    setRecord("lit_action_prep", prepActionCid),
-    setRecord("lit_action_render", renderActionCid),
-    setRecord("lit_action_update", updateActionCid),
-    setRecord('lit_action_encrypt', encryptActionCid),
-    setRecord('lit_action_decrypt', decryptActionCid),
-    // Optional: the dedicated maintain-cache action (parallel cache pointer
-    // write). Only written when the action has been built + registered, so a
-    // protocol update before this feature's deploy stays valid.
-    ...(maintainCacheActionCid
-      ? [setRecord("lit_action_maintainCache", maintainCacheActionCid)]
-      : []),
-    // Optional: the one-shot repoint-archive action (recovery). Only written
-    // when it has been built + registered, same pattern as maintain-cache.
-    ...(repointArchiveActionCid
-      ? [setRecord("lit_action_repointArchive", repointArchiveActionCid)]
-      : []),
-    setRecord("ens_records", ENS_RECORDS_ADDRESS),
-    setRecord("data_gateway", gateway),
-    setRecord("ens_registry", ensRegistry),
-    setRecord("publication_factory", publicationFactory),
-    setRecord("records_factory", recordsFactory),
-
-    // The document, read by every action, and its per-version mirror.
+    // The manifest document: the only thing any reader reads, and its
+    // per-version mirror, which is the history.
     setRecord(MANIFEST_KEY, document),
-    setRecord(`${MANIFEST_KEY}@${version}`, document),
-
-
-    // Delete stale keys from previous naming scheme
-    ...STALE_KEYS.map(deleteRecord),
+    setRecord(`${MANIFEST_KEY}@${MANIFEST_VERSION}`, document),
 
     // Re-authorize the PKP on the ENS records contract (INV-12)
     {
@@ -506,10 +430,9 @@ export const updateProtocol = async (
  * Use when re-deploying Lit actions between protocol key rotations.
  *
  * The document already on chain is patched rather than rebuilt: only
- * `litActions.prep/render/update` and the version change, so the addresses and
- * whatever optional CIDs were published survive a rotation. The patched
- * document goes out under `manifest` and `manifest@x.y.z` in the same batch as
- * the flat CIDs, for the same reasons as a full update.
+ * `litActions.prep/render/update` and the version, so the addresses and whatever
+ * optional CIDs were published survive a rotation. The patched document goes out
+ * under `manifest` and `manifest@x.y.z`.
  */
 export const updateActions = async (
   account: any,
@@ -517,8 +440,7 @@ export const updateActions = async (
   renderActionCid: string,
   updateActionCid: string,
 ) => {
-  const version = requireManifestVersion();
-  await assertManifestVersion(version);
+  await assertManifestVersion(MANIFEST_VERSION);
 
   // There is nothing to patch if no document was ever published: an
   // actions-only rotation cannot invent the addresses, and writing a document
@@ -543,7 +465,7 @@ export const updateActions = async (
   }
 
   const document = buildManifestDocument({
-    version,
+    version: MANIFEST_VERSION,
     gateway: parsed?.gateway,
     ensRegistry: parsed?.ensRegistry,
     ensRecords: parsed?.ensRecords,
@@ -561,26 +483,10 @@ export const updateActions = async (
   });
 
   const transactions = [
-    setRecord("lit_action_prep", prepActionCid),
-    setRecord("lit_action_render", renderActionCid),
-    setRecord("lit_action_update", updateActionCid),
-
     setRecord(MANIFEST_KEY, document),
-    setRecord(`${MANIFEST_KEY}@${version}`, document),
+    setRecord(`${MANIFEST_KEY}@${MANIFEST_VERSION}`, document),
   ];
 
-  return proposeToSafe(account, transactions);
-};
-
-/**
- * One-time cleanup: delete stale keys left over from the old naming scheme.
- * Run once after the first updateProtocol with the new keys is executed on-chain.
- * Safe to run again — deleteRecord on a non-existent key reverts with KeyNotFound,
- * so batch it only with keys you know exist (check recordExists first if unsure).
- */
-export const cleanupStaleKeys = async (account: any) => {
-  console.log("Deleting stale keys:", STALE_KEYS);
-  const transactions = STALE_KEYS.map(deleteRecord);
   return proposeToSafe(account, transactions);
 };
 
