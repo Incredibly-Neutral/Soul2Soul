@@ -16,7 +16,9 @@ import {
   buildCreateModuleBatch,
   buildEnableModuleBatch,
   buildFinalizeBatch,
+  buildManifestVersionBatch,
   buildNameRecordBatch,
+  MANIFEST_VERSION,
   buildDeletePublicationBatch,
   encodeEnableModule,
   encodeCreateRecordsModule,
@@ -64,12 +66,13 @@ function decodeCreate(data: string) {
  * A `read` stub answering `moduleAddress(safe, kind)` from `MODULES`. Any other
  * method is a bug in the lib, so it throws rather than returning something.
  */
-function makeRead(mapping: Record<string, string> = MODULES) {
+function makeRead(mapping: Record<string, string> = MODULES, record: string = '') {
   const calls: Array<{ factory: string; method: string; args: unknown[] }> = [];
   const read = vi.fn(async (factory: string, _abi: unknown, method: string, args: unknown[]) => {
     calls.push({ factory, method, args });
-    if (method !== 'moduleAddress') throw new Error(`unexpected read: ${method}`);
-    return mapping[String(args[1])] ?? ZERO;
+    if (method === 'moduleAddress') return mapping[String(args[1])] ?? ZERO;
+    if (method === 'getRecord') return record;
+    throw new Error(`unexpected read: ${method}`);
   });
   return { read, calls };
 }
@@ -79,9 +82,9 @@ function makeRead(mapping: Record<string, string> = MODULES) {
  * factory deploys the modules, a batch to the Safe enables them. The proposal
  * mock applies it, so the reads after it see the chain the human would have.
  */
-function makeChain() {
+function makeChain(record: string = '') {
   const state = { created: false, enabled: false };
-  const { read } = makeRead();
+  const { read } = makeRead(MODULES, record);
   let n = 0;
   const propose = vi.fn(async (txs: MetaTransactionData[]) => {
     if (txs.every((tx) => tx.to.toLowerCase() === MODULE_FACTORY.toLowerCase())) {
@@ -201,6 +204,18 @@ describe('batch builders', () => {
       { to: SAFE, value: '0', data: iface.encodeFunctionData('enableModule', [RECORDS_MODULE]) },
       { to: SAFE, value: '0', data: iface.encodeFunctionData('enableModule', [PUB_MODULE]) },
     ]);
+  });
+
+  it('buildManifestVersionBatch: [records.setRecord("manifest_version", "0.1.0")]', () => {
+    const iface = new Interface(['function setRecord(string key, string value)']);
+    expect(buildManifestVersionBatch(RECORDS_MODULE)).toEqual([
+      {
+        to: RECORDS_MODULE,
+        value: '0',
+        data: iface.encodeFunctionData('setRecord', ['manifest_version', MANIFEST_VERSION]),
+      },
+    ]);
+    expect(MANIFEST_VERSION).toBe('0.1.0');
   });
 
   it('buildNameRecordBatch: [records.setRecord("name", name)]', () => {
@@ -542,12 +557,14 @@ describe('initializePublication', () => {
       recordsModule: RECORDS_MODULE,
       publicationModule: PUB_MODULE,
       nameRecorded: false,
+      manifestVersion: MANIFEST_VERSION,
       proposals: ['proposal-1', 'proposal-2'],
     });
     expect(propose.mock.calls[0][0]).toEqual(buildCreateModuleBatch(protocolInfo, SAFE, []));
-    expect(propose.mock.calls[1][0]).toEqual(
-      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
-    );
+    expect(propose.mock.calls[1][0]).toEqual([
+      ...buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+      ...buildManifestVersionBatch(RECORDS_MODULE),
+    ]);
     expect(deps.isModuleEnabled).toHaveBeenCalledWith(RECORDS_MODULE);
     expect(deps.isModuleEnabled).toHaveBeenCalledWith(PUB_MODULE);
   });
@@ -593,9 +610,10 @@ describe('initializePublication', () => {
     await initializePublication({ ...deps, hasCode: async () => true }, {});
 
     expect(propose).toHaveBeenCalledTimes(1);
-    expect(propose.mock.calls[0][0]).toEqual(
-      buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
-    );
+    expect(propose.mock.calls[0][0]).toEqual([
+      ...buildEnableModuleBatch(SAFE, RECORDS_MODULE, PUB_MODULE),
+      ...buildManifestVersionBatch(RECORDS_MODULE),
+    ]);
   });
 
   it('with a name: 2 proposals (create, merged enable+name), nameRecorded true', async () => {
@@ -626,12 +644,24 @@ describe('initializePublication', () => {
       { name: 'my-pub' },
     );
     expect(propose).toHaveBeenCalledTimes(1);
-    expect(propose.mock.calls[0][0]).toEqual(buildNameRecordBatch(RECORDS_MODULE, 'my-pub'));
+    expect(propose.mock.calls[0][0]).toEqual([
+      ...buildNameRecordBatch(RECORDS_MODULE, 'my-pub'),
+      ...buildManifestVersionBatch(RECORDS_MODULE),
+    ]);
     expect(result.proposals).toEqual(['proposal-1']);
   });
 
+  it('a publication pinned to another version keeps its pin and proposes nothing', async () => {
+    const { propose, deps } = makeChain('0.0.9');
+    await initializePublication(
+      { ...deps, hasCode: async () => true, isModuleEnabled: async () => true },
+      {},
+    );
+    expect(propose).toHaveBeenCalledTimes(0);
+  });
+
   it('a fully live publication proposes nothing', async () => {
-    const { propose, deps } = makeChain();
+    const { propose, deps } = makeChain(MANIFEST_VERSION);
     await initializePublication(
       { ...deps, hasCode: async () => true, isModuleEnabled: async () => true },
       {},

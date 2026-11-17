@@ -81,10 +81,10 @@ describe('ProtocolIntegration', () => {
     expect(l1Cfg.chain).toBeUndefined();
     expect(l2Cfg.chain).toBeUndefined();
 
-    // getManifest receives (false, providerL1, providerL2).
+    // getManifest receives (providerL1, providerL2). It took a `dev` flag as its
+    // first argument once; that is gone, and the clients are the arguments.
     expect(mocks.getManifest).toHaveBeenCalledTimes(1);
-    const [flag, pL1, pL2] = mocks.getManifest.mock.calls[0];
-    expect(flag).toBe(false);
+    const [pL1, pL2] = mocks.getManifest.mock.calls[0];
     expect(pL1.cfg).toEqual(l1Cfg);
     expect(pL2.cfg).toEqual(l2Cfg);
   });

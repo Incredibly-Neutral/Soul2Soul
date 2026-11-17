@@ -239,9 +239,9 @@ function bodyText(el: S2SPublicationInit): string {
   return (el.shadowRoot!.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/** The merged finalize batch layout: 2 enable self-calls + 3 setRecord calls. */
+/** The merged finalize batch layout: 2 enable self-calls + 4 setRecord calls. */
 function expectFinalizeShape(batch: MetaTransactionData[], expectedName: string): void {
-  expect(batch).toHaveLength(5);
+  expect(batch).toHaveLength(6);
   // Enable both modules via Safe self-calls.
   expect(batch[0].to).toBe(SAFE_ADDRESS);
   expect(batch[1].to).toBe(SAFE_ADDRESS);
@@ -254,6 +254,8 @@ function expectFinalizeShape(batch: MetaTransactionData[], expectedName: string)
     value: 'https://github.com/Joera/website-starter',
   });
   expect(decodeSetRecord(batch[4])).toEqual({ key: 'branch', value: 'main' });
+  // The pin: the manifest document this publication was created against.
+  expect(decodeSetRecord(batch[5])).toEqual({ key: 'manifest_version', value: '0.1.0' });
 }
 
 describe('s2s-publication-init', () => {
@@ -312,7 +314,7 @@ describe('s2s-publication-init', () => {
     await flush();
 
     const finalizeBatch = si.proposeBatch.mock.calls[1][0] as MetaTransactionData[];
-    expect(finalizeBatch).toHaveLength(5);
+    expect(finalizeBatch).toHaveLength(6);
     expect(decodeSetRecord(finalizeBatch[3])).toEqual({
       key: 'repo',
       value: 'https://github.com/Joera/other-site',

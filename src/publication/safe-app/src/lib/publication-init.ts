@@ -30,7 +30,15 @@
 // FLOW (two Safe proposals, NOT one — a human executes each):
 //   batch1 = createModule(safe, records, params) + createModule(safe, publication, params)
 //   read   = moduleAddress(safe, kind) for both kinds, polled until each has code
-//   batch2 = enableModule(both) + records.setRecord("name", name)   (MultiSend)
+//   batch2 = enableModule(both) + records.setRecord("name", name)
+//            + records.setRecord("manifest_version", "0.1.0")        (MultiSend)
+//
+// Every publication is pinned to a manifest document at creation. The version is
+// three digits, `0.1.0`, and it names the document the protocol published when
+// this publication was made; the records module holds it under
+// `manifest_version` like every other configuration value the publication has.
+// A publication that cannot name its document cannot be read, so the pin is part
+// of the flow rather than something added later.
 //
 // The inverse (buildDeletePublicationBatch) is a teardown for starting over:
 // disable both modules on the Safe + records.deleteRecord("name"). It never
@@ -43,6 +51,17 @@ import {
   S2S_MODULE_KIND_PUBLICATION,
   S2S_MODULE_KIND_RECORDS,
 } from '@s2s/soul2soul-shared/safe-app';
+
+/**
+ * The manifest document this build creates publications against: `x.y.z`, three
+ * digits. Contracts carry a major and minor (`0.1` in `VERSION()`); a document
+ * is the full version, because the third digit moves whenever a CID or an
+ * address inside it moves.
+ */
+export const MANIFEST_VERSION = '0.1.0';
+
+/** The record key a publication's records module holds its manifest version under. */
+export const MANIFEST_VERSION_KEY = 'manifest_version';
 
 // ---------------------------------------------------------------------------
 // Types (exported contract — later workers code against these NAMES).
@@ -137,6 +156,8 @@ export type InitResult = {
   recordsModule: string;
   publicationModule: string;
   nameRecorded: boolean;
+  /** The manifest version the records module now answers, or should once the batch executes. */
+  manifestVersion: string;
   proposals: string[];
 };
 
@@ -368,6 +389,25 @@ export function buildEnableModuleBatch(
   ];
 }
 
+/** `recordsModule.getRecord(string key)` → the read the pin is checked with. */
+export const RECORDS_GET_RECORD_ABI: InterfaceAbi = [
+  'function getRecord(string key) view returns (string value)',
+];
+
+/**
+ * Batch: pin the publication to the manifest document it was created against.
+ * `[records.setRecord("manifest_version", MANIFEST_VERSION)]`.
+ */
+export function buildManifestVersionBatch(recordsModule: string): MetaTransactionData[] {
+  return [
+    {
+      to: recordsModule,
+      value: '0',
+      data: encodeSetRecord(MANIFEST_VERSION_KEY, MANIFEST_VERSION),
+    },
+  ];
+}
+
 /**
  * Batch 3 (optional): record the publication identity.
  * [records.setRecord("name", name), records.setRecord("repo", repo),
@@ -408,13 +448,15 @@ export function buildFinalizeBatch(
   safeAddress: string,
   recordsModule: string,
   publicationModule: string,
-  name: string,
+  name: string | undefined,
   extra?: { repo?: string; branch?: string },
+  opts?: { pin?: boolean },
 ): MetaTransactionData[] {
-  return [
-    ...buildEnableModuleBatch(safeAddress, recordsModule, publicationModule),
-    ...buildNameRecordBatch(recordsModule, name, extra),
+  const recordBatch: MetaTransactionData[] = [
+    ...(name ? buildNameRecordBatch(recordsModule, name, extra) : []),
+    ...((opts?.pin ?? true) ? buildManifestVersionBatch(recordsModule) : []),
   ];
+  return [...buildEnableModuleBatch(safeAddress, recordsModule, publicationModule), ...recordBatch];
 }
 
 /**
@@ -601,17 +643,32 @@ export async function initializePublication(
     deps.isModuleEnabled(recordsModule),
     deps.isModuleEnabled(publicationModule),
   ]);
-  const finalizeBatch =
+
+  // The manifest version is written once, at creation, and re-reading it is what
+  // makes a second run idempotent: a publication that already names a document
+  // gets no pin transaction.
+  const pinned = (await deps.read(
+    recordsModule,
+    RECORDS_GET_RECORD_ABI,
+    'getRecord',
+    [MANIFEST_VERSION_KEY],
+  )) as string | undefined;
+  // Written when absent and never overwritten: a publication already pinned to
+  // another document keeps it, because moving a publication onto a newer
+  // manifest is a decision its own Safe makes, not a side effect of a re-run.
+  const needsPin = pinned === undefined || pinned === '';
+
+  const recordBatch: MetaTransactionData[] = [
+    ...(hasName ? buildNameRecordBatch(recordsModule, name!, { repo: opts.repo, branch: opts.branch }) : []),
+    ...(needsPin ? buildManifestVersionBatch(recordsModule) : []),
+  ];
+  const finalizeBatch: MetaTransactionData[] =
     recordsEnabled && publicationEnabled
-      ? hasName
-        ? buildNameRecordBatch(recordsModule, name, { repo: opts.repo, branch: opts.branch })
-        : []
-      : hasName
-        ? buildFinalizeBatch(deps.safeAddress, recordsModule, publicationModule, name, {
-            repo: opts.repo,
-            branch: opts.branch,
-          })
-        : buildEnableModuleBatch(deps.safeAddress, recordsModule, publicationModule);
+      ? recordBatch
+      : [
+          ...buildEnableModuleBatch(deps.safeAddress, recordsModule, publicationModule),
+          ...recordBatch,
+        ];
   if (finalizeBatch.length) proposals.push(await deps.propose(finalizeBatch));
 
   // Wait for the human to execute the batch in the Safe queue.
@@ -627,5 +684,11 @@ export async function initializePublication(
     { timeoutMs: opts.enableTimeoutMs, pollIntervalMs: opts.enablePollIntervalMs },
   );
 
-  return { recordsModule, publicationModule, nameRecorded: hasName, proposals };
+  return {
+    recordsModule,
+    publicationModule,
+    nameRecorded: hasName,
+    manifestVersion: MANIFEST_VERSION,
+    proposals,
+  };
 }
