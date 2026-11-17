@@ -1,0 +1,130 @@
+/**
+ * Move the manifest module to an approved implementation.
+ *
+ * `upgradeToAndCall(newImplementation, data)` is accepted only from the module's
+ * own safe, and the module checks the factory's approved set at the moment of the
+ * call: an implementation approved for another kind, or not approved at all, is
+ * `ImplementationNotApproved` even if it is deployed and looks right.
+ *
+ * The proxy address and the implementation both default to what the factory
+ * answers, so the usual run names no arguments: `moduleOf(protocolSafe, kind)` is
+ * the proxy, `latestImplementation(kind)` is the build. Naming either overrides
+ * the default, which is how a rollback is done: approve an earlier build and pass
+ * it here.
+ *
+ * The document and its history are storage, in the proxy. An upgrade moves the
+ * code and nothing else, which is why the manifest survives one and why a build
+ * that reordered the storage would lose it.
+ *
+ * Usage:
+ *   cd src/manifest
+ *   pnpm upgrade:module [proxy] [implementation] [--data]
+ *
+ * Requires in .env:
+ *   PUBLICATION_FACTORY_ADDRESS  the V6 factory
+ *   PROTOCOL_SAFE_ADDRESS        the safe the module answers to
+ *   BASE_RPC_URL                 optional RPC override
+ *
+ * stdout is the Safe batch (or the calldata with `--data`). Nothing is sent.
+ */
+
+import { encodeFunctionData } from 'viem';
+import { FACTORY_ABI, MANIFEST_KIND, addressEnv, batchTx, emit, publicClient, refuse, say } from './lib.js';
+
+const UPGRADE_ABI = {
+  type: 'function',
+  name: 'upgradeToAndCall',
+  stateMutability: 'payable',
+  inputs: [
+    { name: 'newImplementation', type: 'address' },
+    { name: 'data', type: 'bytes' },
+  ],
+  outputs: [],
+} as const;
+
+const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+const wantData = process.argv.includes('--data');
+
+const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
+const safe = addressEnv('PROTOCOL_SAFE_ADDRESS');
+
+const proxy =
+  (args[0] as `0x${string}` | undefined) ??
+  ((await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'moduleOf',
+    args: [safe, MANIFEST_KIND],
+  })) as `0x${string}`);
+
+if (proxy === '0x0000000000000000000000000000000000000000') {
+  refuse(`No manifest module exists for ${safe}. Run pnpm create:module first.`);
+}
+
+const implementation =
+  (args[1] as `0x${string}` | undefined) ??
+  ((await publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'latestImplementation',
+    args: [MANIFEST_KIND],
+  })) as `0x${string}`);
+
+const [approvedOnChain, revoked, proxyOwner, proxyKind] = await Promise.all([
+  publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'isApproved',
+    args: [MANIFEST_KIND, implementation],
+  }) as Promise<boolean>,
+  publicClient.readContract({
+    address: factory,
+    abi: FACTORY_ABI,
+    functionName: 'isRevoked',
+    args: [MANIFEST_KIND, implementation],
+  }) as Promise<boolean>,
+  publicClient.readContract({
+    address: proxy,
+    abi: [
+      { type: 'function', name: 'safe', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+    ],
+    functionName: 'safe',
+  }) as Promise<`0x${string}`>,
+  publicClient.readContract({
+    address: proxy,
+    abi: [
+      { type: 'function', name: 'moduleKind', stateMutability: 'view', inputs: [], outputs: [{ type: 'bytes32' }] },
+    ],
+    functionName: 'moduleKind',
+  }) as Promise<`0x${string}`>,
+]);
+
+if (proxyKind !== MANIFEST_KIND) {
+  refuse(`${proxy} declares kind ${proxyKind}, not ${MANIFEST_KIND}. That is another module, not this one.`);
+}
+if (proxyOwner.toLowerCase() !== safe.toLowerCase()) {
+  refuse(`${proxy} answers safe() = ${proxyOwner}. Only that safe can upgrade it, so ${safe} cannot propose this.`);
+}
+if (revoked) refuse(`${implementation} was withdrawn from the manifest kind. Approving it again is not possible.`);
+if (!approvedOnChain) {
+  say(
+    `${implementation} is not an approved target for the manifest kind.`,
+    'Run pnpm set:impl, have the safe execute it, then run this again. The module checks the same set, so this call would revert ImplementationNotApproved.',
+  );
+  process.exit(1);
+}
+
+say(
+  `Upgrading the manifest module at ${proxy} to ${implementation}.`,
+  'The document, its version and its history are in the proxy and are untouched.',
+  `Signer: ${safe}. No other address can start this call.`,
+);
+
+emit(
+  wantData
+    ? encodeFunctionData({ abi: [UPGRADE_ABI], functionName: 'upgradeToAndCall', args: [implementation, '0x'] })
+    : batchTx(
+        proxy,
+        encodeFunctionData({ abi: [UPGRADE_ABI], functionName: 'upgradeToAndCall', args: [implementation, '0x'] }),
+      ),
+);

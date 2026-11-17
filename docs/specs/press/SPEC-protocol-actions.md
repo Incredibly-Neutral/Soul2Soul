@@ -634,9 +634,12 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   Only major `1` has ever been written: nothing is live, so there is no old document to read and no
   compatibility path from one.
 - **The manifest has its own kind, and its own module (2026-11-17, written; not deployed).**
-  `S2SManifestModule.sol` is the document's contract: `setManifest(version, json)` writes an `x.y.z`
-  beside the JSON and appends the version to a list, `getManifest()` answers the live version and
-  document in one call, `getManifest(version)` answers a published one, `getVersions()` enumerates
+  `src/manifest/src/S2SManifestModule.sol` is the document's contract, in its own package beside the
+  contracts: `pnpm compile`, `pnpm test` and the four scripts (`deploy:impl`, `set:impl`,
+  `create:module`, `upgrade:module`) live there, and nothing about it is in the publication package
+  except the factory it is approved by. `setManifest(version, json)` writes an `x.y.z`
+  beside the JSON and appends it to a list, `getManifest()` answers the live version and document in
+  one call, `getManifest(version)` answers a published one, `getVersions()` enumerates
   them. The shape checks are the contract's: `_major` refuses anything that is not three digit
   segments, and `MajorMismatch` refuses a document whose major is not `VERSION()`, so a reader
   never has to compare a document to a module and can never be handed one it cannot use. History is

@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { network } from 'hardhat';
-import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbi, toHex } from 'viem';
+import { encodeAbiParameters, encodeFunctionData, getContract, keccak256, parseAbi, toHex } from 'viem';
 
 /**
  * The manifest module: one document, its version, and every version before it.
@@ -21,6 +22,56 @@ import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbi, toHex } f
 
 const { viem } = await network.create();
 const publicClient = await viem.getPublicClient();
+
+/**
+ * The factory, from the package that owns it. Solidity in this package cannot
+ * import it (Hardhat refuses an import that leaves the package), and a copy of
+ * it here would be a second source of the same contract, so the suite deploys
+ * the real build. `pnpm test` compiles the publication package first, which is
+ * where the artifact comes from.
+ */
+const FACTORY_ARTIFACT = JSON.parse(
+  readFileSync(
+    new URL(
+      '../../publication/contracts/artifacts/src/S2SPublicationModulesFactoryV6.sol/S2SPublicationModulesFactoryV6.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
+
+/** Another kind's implementation, for the cross-kind refusal. Same package, same
+ * reason: there is no Solidity import across the package boundary. */
+const RECORDS_ARTIFACT = JSON.parse(
+  readFileSync(
+    new URL(
+      '../../publication/contracts/artifacts/src/S2SRecordsModuleV2.sol/S2SRecordsModuleV2.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
+
+async function deployArtifact(artifact: { abi: unknown; bytecode: string }, args: unknown[]) {
+  const [wallet] = await viem.getWalletClients();
+  const hash = await wallet.deployContract({
+    abi: artifact.abi as never,
+    bytecode: artifact.bytecode as `0x${string}`,
+    args: args as never,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  return receipt.contractAddress!;
+}
+
+async function deployFactory(protocolSafe: `0x${string}`) {
+  const [wallet] = await viem.getWalletClients();
+  const address = await deployArtifact(FACTORY_ARTIFACT, [protocolSafe]);
+  return getContract({
+    address,
+    abi: FACTORY_ARTIFACT.abi,
+    client: { public: publicClient, wallet },
+  });
+}
 
 type Hex = `0x${string}`;
 
@@ -59,7 +110,7 @@ const seed = (version: string, json: string): Hex =>
 
 async function deploy() {
   const protocolSafe = await viem.deployContract('MockCaller');
-  const factory = await viem.deployContract('S2SPublicationModulesFactoryV6', [protocolSafe.address]);
+  const factory = await deployFactory(protocolSafe.address);
   const safe = await viem.deployContract('MockCaller');
   return { protocolSafe, factory, safe };
 }
@@ -256,10 +307,7 @@ describe('S2SManifestModule', () => {
     const ctx = await deploy();
     const { module, impl: first } = await manifestUnder(ctx);
     const second = await viem.deployContract('S2SManifestModule', [ctx.factory.address, ctx.protocolSafe.address]);
-    const recordsBuild = await viem.deployContract('S2SRecordsModuleV2', [
-      ctx.factory.address,
-      ctx.protocolSafe.address,
-    ]);
+    const recordsBuild = await deployArtifact(RECORDS_ARTIFACT, [ctx.factory.address, ctx.protocolSafe.address]);
 
     await assert.rejects(
       ctx.protocolSafe.write.exec([
@@ -267,7 +315,7 @@ describe('S2SManifestModule', () => {
         encodeFunctionData({
           abi: FACTORY_ABI,
           functionName: 'setImplementation',
-          args: [FACTORY_KIND, recordsBuild.address],
+          args: [FACTORY_KIND, recordsBuild],
         }),
       ]),
       /ImplementationKindMismatch/,

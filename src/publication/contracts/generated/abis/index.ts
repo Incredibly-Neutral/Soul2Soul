@@ -1,6 +1,3 @@
-export {Abi_IManifestFactoryApprovals as IManifestFactoryApprovals} from "./IManifestFactoryApprovals.js"
-export {Abi_IS2SManifestModule as IS2SManifestModule} from "./IS2SManifestModule.js"
-export {Abi_S2SManifestModule as S2SManifestModule} from "./S2SManifestModule.js"
 export {Abi_IS2SModuleFactoryBootstrap as IS2SModuleFactoryBootstrap} from "./IS2SModuleFactoryBootstrap.js"
 export {Abi_S2SModuleProxy as S2SModuleProxy} from "./S2SModuleProxy.js"
 export {Abi_IPublicationFactoryApprovals as IPublicationFactoryApprovals} from "./IPublicationFactoryApprovals.js"
