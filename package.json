@@ -10,6 +10,7 @@
     "actions:add": "tsx --require dotenv/config src/press/scripts/lit/add-action.ts",
     "actions:add-dev": "tsx --require dotenv/config src/press/scripts/lit/add-dev-action.ts",
     "actions:swap": "tsx --require dotenv/config src/press/scripts/lit/swap-action.ts",
+    "actions:group": "tsx --require dotenv/config src/press/scripts/lit/create-group.ts",
     "actions:remove": "tsx --require dotenv/config src/press/scripts/lit/remove-action.ts",
     "refresh-key": "tsx --require dotenv/config src/press/scripts/lit/refresh-key.ts",
     "update-protocol": "tsx --require dotenv/config src/press/scripts/lit/update-protocol.ts",

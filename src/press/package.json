@@ -13,8 +13,7 @@
     "test": "vitest run --reporter=verbose",
     "contracts:publication:compile": "pnpm -C ../publication/contracts run compile",
     "press:update": "tsx ./scripts/lit/update-protocol.ts",
-    "contracts:ens:compile": "pnpm -C ../publication/ens-contracts run compile",
-    "actions:group": "tsx ./scripts/lit/create-group.ts"
+    "contracts:ens:compile": "pnpm -C ../publication/ens-contracts run compile"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-keystore": "^3.0.4",
