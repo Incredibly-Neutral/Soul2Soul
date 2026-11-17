@@ -47,7 +47,7 @@ export interface CliContext {
   /**
    * EOA runner for L2. Reads and non-identity work ONLY — it is never used for
    * an author write, because the on-chain author is the Safe (see
-   * `authorRunner` and `S2SPublicationModuleV2._append`). The EOA's only roles
+   * `authorRunner` and `S2SPublicationModuleV0_1.makeOffer`). The EOA's only roles
    * are signing (EIP-712 content item, `lit actions auth`) and owning the Safe.
    */
   l2Runner: TxRunner;

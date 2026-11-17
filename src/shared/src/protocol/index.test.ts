@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createPublicClient,
   custom,
@@ -9,7 +9,12 @@ import {
   type Hex,
 } from 'viem';
 
-import { getProtocolControllerAndModules, getManifest } from './index';
+import {
+  getProtocolControllerAndModules,
+  getManifest,
+  MANIFEST_MODULE_ADDRESS,
+  type ViemProvider,
+} from './index';
 
 // The controller's module lookup runs through viem contract instances, so the
 // fake is a transport: `eth_call` in, ABI-encoded `eth_call` out. What the test
@@ -236,92 +241,26 @@ describe('getProtocolControllerAndModules', () => {
 });
 
 // ============================================================================
-// getManifest — the shipped path: the record decides the prediction
+// getManifest — one call on the manifest module, no publication in the read
 // ============================================================================
 
 describe('getManifest', () => {
-  it('resolves the controller’s publication module by prediction, once the record is read', async () => {
-    const { client, calls } = makeClients({
-      modules: [RECORDS, PUBLICATION],
-      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
-      count: 1n,
-      latest: PUBLICATION,
+  /** A provider whose only job is to answer the manifest module's calls. */
+  const makeReader = (current: string, { version = '0.1.0', revert = false } = {}) => {
+    const readContract = vi.fn(async (args: any) => {
+      if (revert) throw new Error('execution reverted: NoManifest()');
+      if (args.aborted) throw new Error('aborted');
+      if (args.args && args.args.length) return current;
+      return [version, current] as const;
     });
 
-    const info = await getManifest(client, client);
+    return { provider: { readContract } as unknown as ViemProvider, readContract };
+  };
 
-    expect(info.publicationModule).toBe(PUBLICATION);
-    expect(info.publicationFactory.toLowerCase()).toBe(FACTORY);
-    // The kind model's factory is the same record: one factory, every kind.
-    expect(info.moduleFactory.toLowerCase()).toBe(FACTORY);
-    // The factory is read from the record, so the prediction cannot come first.
-    expect(calls.lastIndexOf('getRecords')).toBeLessThan(calls.indexOf('moduleAddress'));
-    // One module list, one records read: the prediction reuses both.
-    expect(countCalls(calls, 'getModulesPaginated')).toBe(1);
-    expect(countCalls(calls, 'getRecords')).toBe(1);
-  });
+  it('reads the current document with one call on the module constant', async () => {
+    const { provider, readContract } = makeReader(manifestDocument());
 
-  it('prefers the prediction over the module the NAME() scan would pick', async () => {
-    // Two publication-named modules: the scan keeps the last one it reads,
-    // which is not the prediction. Prediction first is only true if A wins.
-    const A = AT(3);
-    const B = AT(4);
-    const { client } = makeClients({
-      modules: [RECORDS, A, B],
-      names: {
-        [RECORDS]: 'S2S Records Module',
-        [A]: 'S2S Publication Module V3',
-        [B]: 'S2S Publication Module V3',
-      },
-      count: 1n,
-      latest: A,
-    });
-
-    const info = await getManifest(client, client);
-
-    expect(info.publicationModule).toBe(A);
-  });
-
-  it('falls back to the NAME() scan on a factory that cannot answer', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS, PUBLICATION],
-      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V2' },
-      count: 'revert',
-    });
-
-    const info = await getManifest(client, client);
-
-    expect(info.publicationModule).toBe(PUBLICATION);
-  });
-
-  it('keeps the scan answer when the prediction names an address the Safe does not enable', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS, PUBLICATION],
-      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V2' },
-      count: 1n,
-      latest: AT(7),
-    });
-
-    expect((await getManifest(client, client)).publicationModule).toBe(PUBLICATION);
-  });
-
-  it('leaves publicationModule undefined when nothing resolves, rather than guessing', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS],
-      names: { [RECORDS]: 'S2S Records Module' },
-      count: 'revert',
-    });
-
-    expect((await getManifest(client, client)).publicationModule).toBeUndefined();
-  });
-
-  it('reads the whole manifest from one document under one key', async () => {
-    const { client, calls } = makeClients({
-      modules: [RECORDS, PUBLICATION],
-      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
-    });
-
-    const info = await getManifest(client, client);
+    const info = await getManifest(provider, provider);
 
     expect(info).toEqual({
       version: '0.1.0',
@@ -331,68 +270,89 @@ describe('getManifest', () => {
       publicationFactory: FACTORY,
       recordsFactory: 'records-factory',
       moduleFactory: FACTORY,
-      publicationModule: PUBLICATION,
       pkp: 'pkp',
       litActions: { prep: 'prep', render: 'render', update: 'update' },
     });
-    // One records read for the document, one VERSION() answering compatibility.
-    expect(countCalls(calls, 'getRecords')).toBe(1);
-    expect(countCalls(calls, 'VERSION')).toBe(1);
+    expect(readContract).toHaveBeenCalledTimes(1);
+    expect(readContract.mock.calls[0][0].address).toBe(MANIFEST_MODULE_ADDRESS);
+    expect(readContract.mock.calls[0][0].args).toEqual([]);
   });
 
-  it('carries a newer document on an unchanged VERSION(), differing only past the minor', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS],
-      names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '0.1.4' }),
-      version: '0.1',
-    });
-
-    expect((await getManifest(client, client)).version).toBe('0.1.4');
+  it('names no publication: the bootstrap read cannot depend on one', async () => {
+    const { provider } = makeReader(manifestDocument());
+    expect((await getManifest(provider, provider)).publicationModule).toBeUndefined();
   });
 
-  it('rejects a document whose major differs from VERSION(), naming both', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS],
-      names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '1.0.0' }),
-      version: '0.1',
-    });
+  it('reads a named version, and reports the document\'s own version', async () => {
+    const { provider, readContract } = makeReader(
+      manifestDocument({ version: '0.1.4' }),
+    );
 
-    await expect(getManifest(client, client)).rejects.toThrow(/1\.0\.0.*VERSION\(\) 0\.1/);
+    const info = await getManifest(provider, provider, '0.1.4');
+
+    expect(info.version).toBe('0.1.4');
+    expect(readContract.mock.calls[0][0].args).toEqual(['0.1.4']);
   });
 
-  it('rejects a document whose minor differs from VERSION(), on the same major', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS],
-      names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '0.2.0' }),
-      version: '0.1',
-    });
+  it('omits action CIDs the document omits, rather than answering undefined strings', async () => {
+    const { provider } = makeReader(
+      manifestDocument({
+        litActions: { prep: 'p', render: 'r', update: 'u', encrypt: 'e' },
+      }),
+    );
 
-    await expect(getManifest(client, client)).rejects.toThrow(/0\.2\.0.*VERSION\(\) 0\.1/);
+    const info = await getManifest(provider, provider);
+
+    expect(info.litActions.encrypt).toBe('e');
+    expect(info.litActions.decrypt).toBeUndefined();
+    expect('decrypt' in info.litActions).toBe(true);
   });
 
-  it('throws naming the manifest key when the record was never written', async () => {
-    const { client } = makeClients({
-      modules: [RECORDS],
-      names: { [RECORDS]: 'S2S Records Module' },
-      manifest: '',
-    });
+  it('rejects a versioned read whose document names another version', async () => {
+    const { provider } = makeReader(manifestDocument({ version: '0.1.0' }));
 
-    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
+    await expect(getManifest(provider, provider, '0.1.4')).rejects.toThrow(
+      /0\.1\.4 carries document version 0\.1\.0/,
+    );
   });
 
-  it('throws naming the manifest key when the record is not JSON, with no fallback', async () => {
-    const { client, calls } = makeClients({
-      modules: [RECORDS, PUBLICATION],
-      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
-      manifest: 'data_gateway=ipfs.mock',
+  it('rejects an index and a document that disagree', async () => {
+    const { provider } = makeReader(manifestDocument({ version: '0.1.0' }), {
+      version: '0.1.1',
     });
 
-    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
-    // The flat keys are gone: nothing is read past the document.
-    expect(countCalls(calls, 'getRecords')).toBe(1);
-    expect(calls).not.toContain('moduleAddress');
+    await expect(getManifest(provider, provider)).rejects.toThrow(
+      /0\.1\.1 carries document version 0\.1\.0/,
+    );
+  });
+
+  it('throws naming the module when the module answers no manifest', async () => {
+    const { provider } = makeReader('', { revert: true });
+
+    await expect(getManifest(provider, provider)).rejects.toThrow(
+      new RegExp(`cannot read the current version on ${MANIFEST_MODULE_ADDRESS}`),
+    );
+  });
+
+  it('throws naming the version asked for when that version is not published', async () => {
+    const { provider } = makeReader('', { revert: true });
+
+    await expect(getManifest(provider, provider, '0.1.4')).rejects.toThrow(
+      /cannot read version 0\.1\.4/,
+    );
+  });
+
+  it('throws on a document that is not JSON, with no fallback', async () => {
+    const { provider } = makeReader('data_gateway=ipfs.mock');
+
+    await expect(getManifest(provider, provider)).rejects.toThrow(/0\.1\.0 is not valid JSON/);
+  });
+
+  it('throws on a document with a missing field, naming the version', async () => {
+    const { provider } = makeReader(manifestDocument({ gateway: undefined }));
+
+    await expect(getManifest(provider, provider)).rejects.toThrow(
+      /0\.1\.0 does not have the document's shape/,
+    );
   });
 });

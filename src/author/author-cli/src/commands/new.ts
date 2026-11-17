@@ -22,7 +22,7 @@ import type { Hex } from 'viem';
 import {
   S2SRecordsModuleV0_1,
   S2SRecordsModuleFactory,
-  S2SPublicationModuleV2Factory,
+  S2SPublicationModulesFactoryV0_1,
 } from '@s2s/publication-contracts';
 
 import { createSafeRunner } from '../adapters/tx-runner';
@@ -126,7 +126,7 @@ export const newPublication: CommandSpec = {
       privateKey: requirePrivateKey(ctx),
       protocolInfo: ctx.protocolInfo,
       recordsModuleFactoryAbi: S2SRecordsModuleFactory,
-      publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
+      publicationModuleFactoryAbi: S2SPublicationModulesFactoryV0_1,
       recordsModuleAbi: S2SRecordsModuleV0_1,
       ipfs: ctx.ipfs,
       githubToken: ctx.config.github.token ?? '',

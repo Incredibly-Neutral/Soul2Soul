@@ -216,7 +216,7 @@ async function main() {
   // 2. Candidates
   const candidates = process.argv.slice(2).length
     ? process.argv.slice(2)
-    : ['s3nl.soul2soul.io', 's3nl.soul2soul.eth'];
+    : ['test.soul2soul.io', 'test.soul2soul.eth'];
 
   for (const name of candidates) {
     console.log(`\n──────── publication: ${name} ────────`);

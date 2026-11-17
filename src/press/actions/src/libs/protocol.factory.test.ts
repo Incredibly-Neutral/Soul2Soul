@@ -1,25 +1,26 @@
 /**
- * `getManifest` — the manifest document, plus the module version beside it.
+ * `getManifest` — the manifest document, from the manifest module.
  *
- * `getManifest` reads `getRecord('manifest')` and `VERSION()` on the records
- * module, and nothing else. What it pins: the two-read sequence, the document
- * mapped onto `S2SManifest`, optional action CIDs omitted rather than present as
- * the empty string, and a failure that names `manifest` for each of the four
- * ways a document can be unreadable — missing, unparsable, wrong shape, wrong
- * major.minor prefix. It is the only read an action makes before discovery: the document
- * carries the factory, so there is no separate `publication_factory` call left
- * to pin.
+ * `getManifest` makes one call, `getManifest()` on `0x0CbCB9…`, and nothing
+ * else: no records module, no ENS walk, no `VERSION()` beside the document.
+ * What it pins: the single read, the current document versus a named version's
+ * snapshot, the document mapped onto `S2SManifest`, optional action CIDs omitted
+ * rather than present as the empty string, and a failure that names the version
+ * read for each of the ways a document can be unreadable — absent, unparsable,
+ * wrong shape, wrong version for the index.
+ *
+ * It is the only read an action makes before discovery: the document carries the
+ * factory, so there is no separate `publication_factory` call left to pin.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  /** Still answered for any other `getRecord` key, so a stray read shows up. */
-  answer: '' as string,
-  /** The `manifest` record: JSON, `''` for absent, or `'revert'`. */
+  /** The document, JSON: `''` for an empty answer, or `'revert'`. */
   manifest: '' as string,
-  /** What `VERSION()` on the module answers, or `'revert'`. */
-  version: '0.1' as string,
-  /** Still answered for `getRecords`, so a stray key-list read shows up. */
+  /** What the module's index answers as the current version, or `'revert'`. */
+  index: '0.1.0' as string,
+  /** A stray `getRecord`/`getRecords` read shows up here. */
+  answer: '' as string,
   records: [] as any[],
 }));
 
@@ -37,19 +38,23 @@ vi.hoisted(() => {
 
 vi.mock('./evm', () => ({
   evmRead: vi.fn(
-    async (chain: string, address: string, abi: unknown, method: string, args: any[]) => {
-      if (method === 'getRecord') {
-        if (args[0] === 'manifest') {
-          if (mocks.manifest === 'revert') throw new Error('execution reverted');
-          return mocks.manifest;
+    async (
+      _chain: string,
+      _address: string,
+      _abi: unknown,
+      method: string,
+      args: any[],
+    ): Promise<any> => {
+      if (method === 'getManifest') {
+        if (mocks.manifest === 'revert' || mocks.index === 'revert') {
+          throw new Error('execution reverted: NoManifest()');
         }
-        if (mocks.answer === 'revert') throw new Error('execution reverted');
-        return mocks.answer;
+        // The versioned overload answers the JSON alone; the no-argument one
+        // answers a named pair, as ethers decodes a two-value return.
+        if (args.length) return mocks.manifest;
+        return { version: mocks.index, json: mocks.manifest };
       }
-      if (method === 'VERSION') {
-        if (mocks.version === 'revert') throw new Error('execution reverted');
-        return mocks.version;
-      }
+      if (method === 'getRecord') return mocks.answer;
       if (method === 'getRecords') return mocks.records;
       return '';
     },
@@ -59,17 +64,13 @@ vi.mock('./evm', () => ({
 import { evmRead } from './evm';
 import { getManifest } from './protocol.factory';
 
-const RECORDS_MODULE = '0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29';
+const MANIFEST_MODULE = '0x0CbCB9FbbEA0A8DE0547fDb5389b24edB447873F';
 const FACTORY = '0x' + '77'.repeat(20);
 const PUB_RECORD = '0x' + '55'.repeat(20);
 const PKP = '0x' + '44'.repeat(20);
 
-const recordReads = () =>
-  vi.mocked(evmRead).mock.calls.filter(([, , , method]) => method === 'getRecord');
-const versionReads = () =>
-  vi.mocked(evmRead).mock.calls.filter(([, , , method]) => method === 'VERSION');
-const recordsReads = () =>
-  vi.mocked(evmRead).mock.calls.filter(([, , , method]) => method === 'getRecords');
+const manifestReads = () =>
+  vi.mocked(evmRead).mock.calls.filter(([, , , method]) => method === 'getManifest');
 
 /** The document as the writer publishes it: camelCase, every required field. */
 const document = (overrides: Record<string, unknown> = {}) => ({
@@ -92,7 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.answer = '';
   mocks.manifest = JSON.stringify(document());
-  mocks.version = '0.1';
+  mocks.index = '0.1.0';
   mocks.records = [];
 });
 
@@ -115,31 +116,28 @@ describe('getManifest', () => {
     });
   });
 
-  it('reads the manifest record then VERSION() on the records module, and nothing else', async () => {
+  it('reads the current document with one call on the module, and nothing else', async () => {
     await getManifest();
 
-    expect(vi.mocked(evmRead).mock.calls).toHaveLength(2);
+    expect(vi.mocked(evmRead).mock.calls).toHaveLength(1);
 
-    const [record] = recordReads();
-    expect(record[0]).toBe('L2');
-    expect(record[1]).toBe(RECORDS_MODULE);
-    expect(record[4]).toEqual(['manifest']);
-
-    const [version] = versionReads();
-    expect(version[0]).toBe('L2');
-    expect(version[1]).toBe(RECORDS_MODULE);
-
-    expect(recordsReads()).toHaveLength(0);
+    const [read] = manifestReads();
+    expect(read[0]).toBe('L2');
+    expect(read[1]).toBe(MANIFEST_MODULE);
+    expect(read[4]).toEqual([]);
   });
 
-  it('reads the record before the version, so an unreadable document fails first', async () => {
-    await getManifest();
+  it('reads a named version from the versioned overload, not the current document', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.1.4' }));
 
-    const order = vi.mocked(evmRead).mock.calls.map(([, , , method]) => method);
-    expect(order).toEqual(['getRecord', 'VERSION']);
+    const info = await getManifest(undefined, '0.1.4');
+
+    expect(info.version).toBe('0.1.4');
+    const [read] = manifestReads();
+    expect(read[4]).toEqual(['0.1.4']);
   });
 
-  it('passes the caller’s L2 RPC URLs to both reads', async () => {
+  it('passes the caller’s L2 RPC URLs to the read', async () => {
     const rpcs = { L1: ['http://l1'], L2: ['http://l2'] };
 
     await getManifest(rpcs);
@@ -147,15 +145,6 @@ describe('getManifest', () => {
     for (const call of vi.mocked(evmRead).mock.calls) {
       expect(call[5]).toEqual(rpcs.L2);
     }
-  });
-
-  it('accepts a document whose patch segment differs from VERSION(), 0.1.2 beside 0.1', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '0.1.2' }));
-    mocks.version = '0.1';
-
-    const info = await getManifest();
-
-    expect(info.version).toBe('0.1.2');
   });
 
   it('omits an optional action CID the document does not carry, rather than returning it as empty', async () => {
@@ -206,38 +195,37 @@ describe('getManifest', () => {
     await expect(getManifest()).rejects.toThrow(/manifest: .*litActions\.encrypt/);
   });
 
-  it('throws naming manifest when the record is missing, without reading VERSION()', async () => {
+  it('throws naming the version when the module answers nothing', async () => {
     mocks.manifest = '';
 
-    await expect(getManifest()).rejects.toThrow(/manifest: no 'manifest' record/);
-    expect(versionReads()).toHaveLength(0);
+    await expect(getManifest()).rejects.toThrow(/manifest: version 0\.1\.0 is empty/);
+    expect(manifestReads()).toHaveLength(1);
   });
 
-  it('throws naming manifest when the read reverts', async () => {
-    mocks.manifest = 'revert';
+  it('throws naming the module when the read reverts', async () => {
+    mocks.index = 'revert';
 
     await expect(getManifest()).rejects.toThrow(
-      /manifest: the 'manifest' record is unreadable/,
+      new RegExp(`manifest: cannot read the current version on ${MANIFEST_MODULE}`),
     );
-    expect(versionReads()).toHaveLength(0);
+    await expect(getManifest(undefined, '0.1.4')).rejects.toThrow(
+      /manifest: cannot read version 0\.1\.4/,
+    );
   });
 
-  it('throws naming manifest on invalid JSON', async () => {
+  it('throws on invalid JSON', async () => {
     mocks.manifest = '{"version":"2.1.0",';
 
-    await expect(getManifest()).rejects.toThrow(
-      /manifest: the 'manifest' record is not valid JSON/,
-    );
-    expect(versionReads()).toHaveLength(0);
+    await expect(getManifest()).rejects.toThrow(/manifest: version 0\.1\.0 is not valid JSON/);
   });
 
-  it('throws naming manifest when the JSON is not an object', async () => {
+  it('throws when the JSON is not an object', async () => {
     mocks.manifest = '"2.1.0"';
 
     await expect(getManifest()).rejects.toThrow(/manifest: .*not a JSON object/);
   });
 
-  it('throws naming manifest when version is absent or not x.y.z', async () => {
+  it('throws when version is absent or not x.y.z', async () => {
     mocks.manifest = JSON.stringify(document({ version: '2.1' }));
     await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
 
@@ -245,7 +233,7 @@ describe('getManifest', () => {
     await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
   });
 
-  it('throws naming manifest when a required address is missing or empty', async () => {
+  it('throws when a required address is missing or empty', async () => {
     for (const field of [
       'gateway',
       'ensRegistry',
@@ -262,42 +250,30 @@ describe('getManifest', () => {
     }
   });
 
-  it('throws naming manifest when litActions or one of the three CIDs is missing', async () => {
+  it('throws when litActions or one of the three CIDs is missing', async () => {
     const { litActions, ...withoutActions } = document();
     mocks.manifest = JSON.stringify(withoutActions);
     await expect(getManifest()).rejects.toThrow(/manifest: 'litActions'/);
 
-    mocks.manifest = JSON.stringify(document({ litActions: { prep: 'bafyprep', render: 'bafyrender' } }));
+    mocks.manifest = JSON.stringify(
+      document({ litActions: { prep: 'bafyprep', render: 'bafyrender' } }),
+    );
     await expect(getManifest()).rejects.toThrow(/manifest: 'litActions\.update'/);
   });
 
-  it('throws naming manifest on a major.minor mismatch with VERSION()', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '0.3.0' }));
-    mocks.version = '0.1';
+  it('refuses a document whose own version disagrees with the index', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.1.3' }));
+    mocks.index = '0.1.0';
 
-    await expect(getManifest()).rejects.toThrow(
-      /manifest: document version 0\.3\.0 is not compatible with VERSION\(\) 0\.1/,
+    await expect(getManifest()).rejects.toThrow(/version 0\.1\.0 carries document version 0\.1\.3/);
+  });
+
+  it('refuses a named version answered with another document', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.1.0' }));
+
+    await expect(getManifest(undefined, '0.1.4')).rejects.toThrow(
+      /version 0\.1\.4 carries document version 0\.1\.0/,
     );
-  });
-
-  it('refuses a document whose minor moved, even on the same major', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '0.2.0' }));
-    mocks.version = '0.1';
-
-    await expect(getManifest()).rejects.toThrow(/is not compatible with VERSION\(\) 0\.1/);
-  });
-
-  it('refuses a document whose major differs', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '1.1.0' }));
-    mocks.version = '0.1';
-
-    await expect(getManifest()).rejects.toThrow(/is not compatible with VERSION\(\) 0\.1/);
-  });
-
-  it('throws naming manifest when VERSION() is unreadable', async () => {
-    mocks.version = 'revert';
-
-    await expect(getManifest()).rejects.toThrow(/manifest: VERSION\(\) is unreadable/);
   });
 
   it('takes the factory discovery asks from the document, not from a second read', async () => {
@@ -305,13 +281,10 @@ describe('getManifest', () => {
 
     expect(info.moduleFactory).toBe(PUB_RECORD);
     expect(info.publicationFactory).toBe(PUB_RECORD);
-    expect(recordReads()).toHaveLength(1);
-    expect(recordReads()[0][4]).toEqual(['manifest']);
-  });
-
-  it('compares the document prefix against VERSION() as a whole string', async () => {
-    mocks.version = '0.1.0';
-
-    await expect(getManifest()).rejects.toThrow(/VERSION\(\) 0\.1\.0/);
+    // Nothing else was read: no record, no VERSION(), no ENS walk.
+    expect(manifestReads()).toHaveLength(1);
+    expect(
+      vi.mocked(evmRead).mock.calls.filter(([, , , method]) => method !== 'getManifest'),
+    ).toHaveLength(0);
   });
 });

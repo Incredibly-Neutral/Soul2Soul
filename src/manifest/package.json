@@ -12,7 +12,8 @@
     "deploy:impl": "tsx scripts/deploy-implementation.ts",
     "set:impl": "tsx scripts/set-implementation.ts",
     "create:module": "tsx scripts/create-module.ts",
-    "upgrade:module": "tsx scripts/upgrade-module.ts"
+    "upgrade:module": "tsx scripts/upgrade-module.ts",
+    "set:manifest": "tsx scripts/set-manifest.ts"
   },
   "dependencies": {
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
