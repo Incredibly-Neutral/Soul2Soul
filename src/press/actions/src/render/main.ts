@@ -30,37 +30,37 @@ import { requireFields, setRpcAuth } from '../libs/helpers';
 import { toBytes32Id } from '@s2s/soul2soul-shared/lit-actions';
 
 /**
- * On-chain revoke check: is `jobId`'s genesis currently NOT under a deal?
+ * On-chain revoke check: is `jobId`'s genesis currently NOT under an agreement?
  *
- * Conservative by design (reviewer C/G): this returns true ONLY when hasDeal
- * is definitively false — a genuine on-chain revoke. On any RPC failure it
- * returns false (treat as still active) so a transport error can never turn a
- * live page into a revoked-and-removed one; the orchestrator's
+ * Conservative by design (reviewer C/G): this returns true ONLY when
+ * hasAgreement is definitively false — a genuine on-chain revoke. On any RPC
+ * failure it returns false (treat as still active) so a transport error can
+ * never turn a live page into a revoked-and-removed one; the orchestrator's
  * runRenderActionWithRetry handles transient RPC failures. Mirrors the
  * established evmRead pattern in libs/gates.ts (canRead).
  */
-export async function isRevokedByDealState(
+export async function isRevokedByAgreementState(
   jobId: string,
   publicationModule: string,
   rpcs?: string[],
 ): Promise<boolean> {
   const genesis = toBytes32Id(jobId);
-  let dealActive = true;
+  let agreementActive = true;
   try {
-    dealActive = await evmRead(
+    agreementActive = await evmRead(
       'L2',
       publicationModule,
-      ['function hasDeal(bytes32 genesis) view returns (bool)'],
-      'hasDeal',
+      ['function hasAgreement(bytes32 genesis) view returns (bool)'],
+      'hasAgreement',
       [genesis],
       rpcs,
     );
   } catch (e) {
     console.log(
-      `hasDeal read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
+      `hasAgreement read failed for ${jobId.slice(0, 12)}… — not treating as revoked: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return !dealActive;
+  return !agreementActive;
 }
 
 // ENS records contract ABI (getText only) — local mirror of update/main.ts;
@@ -272,24 +272,24 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     );
     trace.push(templateData);
 
-    // Revoke detection via on-chain deal state: the decrypt-path
+    // Revoke detection via on-chain agreement state: the decrypt-path
     // `revoked` flag only covers decrypt failures, not a takedown on chain —
     // the author's terminal `retract` or the publication's `reject`.
-    // Check hasDeal so a revoked plaintext item also renders
+    // Check hasAgreement so a revoked plaintext item also renders
     // as revoked (empty html + preserved path for the orchestrator's
     // remove entry). The path is kept so the orchestrator can derive the
     // remove entry from the revoked job itself (no separate caller-supplied
     // remove entry required).
     //
-    // Guard (reviewer C/G): hasDeal=false must only mark GENUINELY-revoked
-    // items as revoked, never a live page that merely isn't a deal or a
-    // transient RPC failure. Three conservative guards:
+    // Guard (reviewer C/G): hasAgreement=false must only mark GENUINELY-revoked
+    // items as revoked, never a live page that merely isn't under an agreement
+    // or a transient RPC failure. Three conservative guards:
     //   a. TRIGGERED-CONTENT SCOPE: the check runs ONLY for the id(s) the
     //      caller rendered (input.triggeredContentIds, threaded through by the
     //      orchestrator from its contentIds). A cascade/ripple destination
     //      (e.g. home) is re-rendered as a consequence of the trigger and is
-    //      NEVER hasDeal-checked — a destination pinned via query.genesis may
-    //      never have been a deal, so hasDeal=false there would falsely
+    //      NEVER hasAgreement-checked — a destination pinned via query.genesis
+    //      may never have been under an agreement, so hasAgreement=false there would falsely
     //      revoke-and-remove a live page (publish-path regression, acceptance
     //      4; breaks 1(b) in production). A revoke is always about the id the
     //      caller rendered, never a destination.
@@ -297,15 +297,15 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
     //      revoked item was previously rendered, so it has a path to remove.
     //      A pathless job (never rendered, nothing to remove) is never
     //      misclassified as revoked.
-    //   c. isRevokedByDealState wraps the evmRead defensively: on RPC failure
+    //   c. isRevokedByAgreementState wraps the evmRead defensively: on RPC failure
     //      it defaults to NOT revoked (treat as still active). A transport
     //      failure must never turn a live page into a revoked-and-removed one;
     //      the orchestrator's runRenderActionWithRetry handles transient RPC
     //      failures.
     const triggeredIds: string[] = triggeredContentIds ?? [];
     if (triggeredIds.includes(job.id) && !templateData.revoked && templateData.path) {
-      if (await isRevokedByDealState(job.id, publicationModule, rpcs?.L2)) {
-        console.log(`hasDeal false for ${job.id.slice(0, 12)}… — treating as revoked`);
+      if (await isRevokedByAgreementState(job.id, publicationModule, rpcs?.L2)) {
+        console.log(`hasAgreement false for ${job.id.slice(0, 12)}… — treating as revoked`);
         templateData.revoked = true;
       }
     }
