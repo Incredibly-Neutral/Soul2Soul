@@ -79,9 +79,11 @@ if (declaredKind !== MANIFEST_KIND) {
 if ((declaredFactory as string).toLowerCase() !== factory.toLowerCase()) {
   refuse(`${implementation} answers factory() = ${declaredFactory}, not ${factory}. It belongs to another factory.`);
 }
-if (!('proxiableUUID' in artifact('S2SManifestModule').abi)) {
-  refuse('The build has no proxiableUUID in its ABI, so it is not a UUPS implementation.');
-}
+// The ABI is a list, so membership is a scan: `'name' in abi` tests the array's
+// indices and is false however complete the ABI is.
+const abi = artifact('S2SManifestModule').abi as readonly { name?: string }[];
+const uups = abi.some((entry) => entry.name === 'proxiableUUID');
+if (!uups) refuse('The build has no proxiableUUID in its ABI, so it is not a UUPS implementation.');
 const slot = await publicClient.readContract({
   address: implementation,
   abi: [
