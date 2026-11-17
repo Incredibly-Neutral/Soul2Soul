@@ -174,6 +174,7 @@ function makeDeps(
     l2,
     privateKey: '0xdeadbeef',
     protocolInfo: {
+      version: '2.1.0',
       gateway: 'ipfs.mock',
       ensRegistry: '0xensRegistry0000000000000000000000000001',
       ensRecords: '0xmockEnsRecords',
