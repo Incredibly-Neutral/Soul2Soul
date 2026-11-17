@@ -212,7 +212,8 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 
 1. `extractSignerAddress(hashMessage("lit actions auth"), signature)` → `signerAddress` (INV-1)
 2. `getManifest(false)` (in-action) → `S2SManifest` — one `getRecord('manifest')` and one
-   `VERSION()` on `PROTOCOL_RECORDS_MODULE`, no ENS walk; the record is one JSON document. A
+   `VERSION()` on `PROTOCOL_RECORDS_MODULE` (the host-side reader asks for the same record through
+   the batched `getRecords` with that one key), no ENS walk; the record is one JSON document. A
    missing record, bad JSON, a bad shape or a major mismatch fails here with that reason stated
 3. `getDomainOwnerAndModules(publication, rpcs, protocolInfo.moduleFactory)` → `{ multisig, configModule, publicationModule }` (INV-4). The factory names both kinds and each answer is kept only when code sits at it.
 4. `fetchById(job.id)` → body
@@ -613,7 +614,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   full JSON `components` format (not human-readable ABI strings — ethers v5 in the Lit runtime can't
   decode struct returns from them). When the contract changes, update fragments in that one file.
 - **The one ENS walk left (redundant-walk note, 2026-08-06; settled 2026-11-16).** `getManifest` walks
-  nothing: it reads `getRecord('manifest')` and `VERSION()` on `PROTOCOL_RECORDS_MODULE`. The third
+  nothing: both readers read the `manifest` record and `VERSION()` on `PROTOCOL_RECORDS_MODULE`, the
+  action side with `getRecord` and the host side through the batched `getRecords` on that one key. The third
   walk (`parentDomainController`) and the records-only discovery path that used it are gone with it.
   What remains is `getDomainOwnerAndModules`' two-hop walk (`nameWrapper()`→`ownerOf()`) for the
   publication Safe, and the document read on the constant.
