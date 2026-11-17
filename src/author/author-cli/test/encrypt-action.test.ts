@@ -65,7 +65,6 @@ describe('resolveEncryptActionCid', () => {
     const config = loadConfig({}, nowhere);
 
     expect(resolveEncryptActionCid(config, protocolWith())).toBeUndefined();
-    expect(resolveEncryptActionCid(config, protocolWith(''))).toBeUndefined();
   });
 
   it('resolves nothing when neither names a CID, and the encrypt path says why', async () => {

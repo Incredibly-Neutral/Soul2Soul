@@ -22,6 +22,12 @@
 // ============================================================================
 
 export interface S2SManifest {
+  /**
+   * The version of the manifest document, `x.y.z`. Read from the on-chain
+   * record, not from the controller: `VERSION()` reports the contract's own
+   * version and is only compared on its first segment.
+   */
+  version: string;
   gateway: string; // collapsed data+assets READ gateway
   ensRegistry: string; // kept — pub flow's registerSubdomain target
   ensRecords: string; // kept

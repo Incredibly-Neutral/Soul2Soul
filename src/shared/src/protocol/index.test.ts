@@ -90,6 +90,13 @@ const ABI = [
     stateMutability: 'view',
     type: 'function',
   },
+  {
+    inputs: [],
+    name: 'VERSION',
+    outputs: [{ internalType: 'string', name: '', type: 'string' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
 ] as const satisfies Abi;
 
 interface ChainOptions {
@@ -102,26 +109,36 @@ interface ChainOptions {
   latest?: Address;
   /** version (as a string) → predicted address */
   predictions?: Record<string, Address>;
+  /** The `manifest` record's value; `undefined` means the key was never written */
+  manifest?: string;
+  /** `VERSION()`; the on-chain contract's own version */
+  version?: string;
 }
 
 /**
- * The controller's records, in the order `getManifest` reads them. Only two
- * of them matter to a module lookup: `ens_registry` (echoed back) and
- * `publication_factory` (the address the prediction is read from).
+ * The `manifest` document as the other worker writes it: one JSON value under
+ * the record key `manifest`, camelCase, optional action CIDs absent when the
+ * action was never written.
  */
-const RECORD_VALUES = [
-  'ipfs.mock', //       data_gateway
-  'ens-records', //     ens_records
-  'ens-registry', //    ens_registry
-  FACTORY, //           publication_factory
-  'records-factory', // records_factory
-  'prep', //            lit_action_prep
-  'render', //          lit_action_render
-  'update', //          lit_action_update
-  '', //                lit_action_maintainCache — optional, absent
-  '', //                lit_action_repointArchive — optional, absent
-  'pkp', //             pkp_ethAddress
-];
+const manifestDocument = (overrides: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    version: '2.1.0',
+    gateway: 'ipfs.mock',
+    ensRegistry: 'ens-registry',
+    ensRecords: 'ens-records',
+    publicationFactory: FACTORY,
+    recordsFactory: 'records-factory',
+    pkp: 'pkp',
+    litActions: { prep: 'prep', render: 'render', update: 'update' },
+    ...overrides,
+  });
+
+/**
+ * The controller's records, as `getManifest` reads them: one document under the
+ * single key `manifest`. Only one field matters to a module lookup —
+ * `publicationFactory`, the address the prediction is read from.
+ */
+const RECORD_VALUES = [manifestDocument()];
 
 /**
  * An answer that is not an answer: the transport returns empty data, which
@@ -153,7 +170,8 @@ function makeClients(options: ChainOptions) {
     if (functionName === 'moduleAddressForVersion') {
       return options.predictions?.[String(args[1])] ?? REVERT;
     }
-    if (functionName === 'getRecords') return RECORD_VALUES;
+    if (functionName === 'getRecords') return [options.manifest ?? RECORD_VALUES[0]];
+    if (functionName === 'VERSION') return options.version ?? '2.0.0';
     throw new Error(`unexpected call ${functionName}`);
   };
 
@@ -295,5 +313,75 @@ describe('getManifest', () => {
     });
 
     expect((await getManifest(false, client, client)).publicationModule).toBeUndefined();
+  });
+
+  it('reads the whole manifest from one document under one key', async () => {
+    const { client, calls } = makeClients({
+      modules: [RECORDS, PUBLICATION],
+      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
+    });
+
+    const info = await getManifest(false, client, client);
+
+    expect(info).toEqual({
+      version: '2.1.0',
+      gateway: 'ipfs.mock',
+      ensRegistry: 'ens-registry',
+      ensRecords: 'ens-records',
+      publicationFactory: FACTORY,
+      recordsFactory: 'records-factory',
+      moduleFactory: FACTORY,
+      publicationModule: PUBLICATION,
+      pkp: 'pkp',
+      litActions: { prep: 'prep', render: 'render', update: 'update' },
+    });
+    // One records read for the document, one VERSION() answering compatibility.
+    expect(countCalls(calls, 'getRecords')).toBe(1);
+    expect(countCalls(calls, 'VERSION')).toBe(1);
+  });
+
+  it('carries a newer document on an unchanged VERSION(), differing only past the major', async () => {
+    const { client } = makeClients({
+      modules: [RECORDS],
+      names: { [RECORDS]: 'S2S Records Module' },
+      manifest: manifestDocument({ version: '2.4.7' }),
+      version: '2.0.0',
+    });
+
+    expect((await getManifest(false, client, client)).version).toBe('2.4.7');
+  });
+
+  it('rejects a document whose major differs from VERSION(), naming both', async () => {
+    const { client } = makeClients({
+      modules: [RECORDS],
+      names: { [RECORDS]: 'S2S Records Module' },
+      manifest: manifestDocument({ version: '3.0.0' }),
+      version: '2.0.0',
+    });
+
+    await expect(getManifest(false, client, client)).rejects.toThrow(/3\.0\.0.*2\.0\.0/);
+  });
+
+  it('throws naming the manifest key when the record was never written', async () => {
+    const { client } = makeClients({
+      modules: [RECORDS],
+      names: { [RECORDS]: 'S2S Records Module' },
+      manifest: '',
+    });
+
+    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+  });
+
+  it('throws naming the manifest key when the record is not JSON, with no fallback', async () => {
+    const { client, calls } = makeClients({
+      modules: [RECORDS, PUBLICATION],
+      names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
+      manifest: 'data_gateway=ipfs.mock',
+    });
+
+    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+    // The flat keys are gone: nothing is read past the document.
+    expect(countCalls(calls, 'getRecords')).toBe(1);
+    expect(calls).not.toContain('moduleAddress');
   });
 });

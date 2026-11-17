@@ -29,6 +29,7 @@ vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
 }));
 
 const PROTOCOL_INFO: S2SManifest = {
+  version: '2.1.0',
   protocolModuleAddress: '0xProto',
   recordsModuleAddress: '0xRecords',
   publicationModuleAddress: '0xPub',

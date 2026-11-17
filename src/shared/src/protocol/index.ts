@@ -4,6 +4,10 @@ import type { S2SManifest } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
 import { predictPublicationModule } from './factories';
 import { isPublicationModuleName } from './module-name';
+import { manifestSchema } from './schemas';
+
+/** The record key the manifest document is published under. */
+const MANIFEST_KEY = 'manifest';
 
 export * from './module-name';
 export * from './factories';
@@ -23,25 +27,30 @@ export { useMetered } from './types';
 export type ViemProvider = PublicClient;
 
 /**
- * NOTE (INV-2): This reader expects the following on-chain record keys to exist
- * on the controller's records module. Before this can produce correct results,
- * the on-chain records must be written (see press/scripts/lit/update-protocol.ts):
+ * INV-2: the controller's records module carries the manifest as ONE document,
+ * under the key `manifest`. The same document is mirrored at `manifest@x.y.z`
+ * for every version ever published, so a reader pinned to an older release
+ * still finds it and history is retained without a second read here.
  *
- *   data_gateway, ens_records, ens_registry, publication_factory, records_factory,
- *   pkp_ethAddress, lit_action_prep, lit_action_render, lit_action_update,
- *   lit_action_encrypt, lit_action_decrypt
+ * The document is JSON, camelCase:
  *
- * The following keys were DROPPED (stop reading): assets_gateway, lens_app,
- * pkp_tokenId, pkp_publicKey, lit_action_cbor, lit_action_single, lit_action_root_update.
- * The following were RENAMED: lit_action_single → lit_action_render,
- * lit_action_root_update → lit_action_update.
- */
-/**
+ *   version, gateway, ensRegistry, ensRecords, publicationFactory,
+ *   recordsFactory, pkp, litActions{prep, render, update,
+ *   maintainCache?, repointArchive?, encrypt?, decrypt?}
+ *
+ * Optional action CIDs are omitted when the action was never written, never
+ * present as an empty string. There is no fallback to the flat keys that
+ * preceded this document and none to a partially valid one: a missing key or
+ * unparsable JSON is an error naming `manifest`.
+ *
+ * `VERSION()` on the same module answers the contract's own version and is
+ * compared on its first segment only. There is no redeploy when the document
+ * moves: `VERSION()` stays 2.0.0 and the document carries 2.1.0, and only a
+ * different major is a document this module cannot be read alongside.
+ *
  * One deployment's manifest: the addresses and action CIDs a client needs to
- * talk to it, read from the controller's records module.
- *
- * The name says what the value is. This is not protocol text and not code, it
- * is references to code, published per release.
+ * talk to it, read from the controller's records module. This is not protocol
+ * text and not code, it is references to code, published per release.
  */
 export const getManifest = async (
   dev = false,
@@ -55,81 +64,87 @@ export const getManifest = async (
     modules,
   } = await getProtocolControllerAndModules(dev, l1Provider, l2Provider);
 
-  const [
-    data_gateway,
-    ens_records,
-    ens_registry,
-    publication_factory,
-    records_factory,
-    lit_action_prep,
-    lit_action_render,
-    lit_action_update,
-    lit_action_maintainCache,
-    lit_action_repointArchive,
-    lit_action_encrypt,
-    lit_action_decrypt,
-    pkp_ethAddress,
-  ] = await getRecords(
-    configModule!,
-    [
-      'data_gateway',
-      'ens_records',
-      'ens_registry',
-      'publication_factory',
-      'records_factory',
-      'lit_action_prep',
-      'lit_action_render',
-      'lit_action_update',
-      // Optional: the dedicated maintain-cache action. When the record isn't
-      // written yet this reads back an empty string → protocolInfo.litActions
-      // .maintainCache is falsy and the orchestrator skips the parallel path.
-      'lit_action_maintainCache',
-      // Optional: the one-shot repoint-archive action (recovery). Empty string
-      // until deployed → litActions.repointArchive is falsy.
-      'lit_action_repointArchive',
-      // Optional: the two author-facing actions. Empty string until the record
-      // is written → litActions.encrypt / .decrypt are undefined, and a caller
-      // that needs one says so itself.
-      'lit_action_encrypt',
-      'lit_action_decrypt',
-      'pkp_ethAddress',
-    ],
-    l2Provider,
-  );
+  const [document] = await getRecords(configModule!, [MANIFEST_KEY], l2Provider);
 
-  // The factory that answers a module address is itself a record, so the
-  // prediction can only run after the records read. It is given the module list
-  // read above: one `getModulesPaginated`, one records read, either way.
-  const predictedPublicationModule = publication_factory
+  if (!document) {
+    throw new Error(`manifest: no '${MANIFEST_KEY}' record on ${configModule}`);
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(document);
+  } catch (error) {
+    throw new Error(
+      `manifest: the '${MANIFEST_KEY}' record is not valid JSON: ${(error as Error).message}`,
+    );
+  }
+
+  // The schema's output is the document: everything but the factory discovery
+  // was handed and the module it predicts.
+  let manifest: Omit<S2SManifest, 'moduleFactory' | 'publicationModule'>;
+  try {
+    manifest = manifestSchema.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `manifest: the '${MANIFEST_KEY}' record does not have the document's shape: ${(error as Error).message}`,
+    );
+  }
+
+  const onChainVersion = (await getContract({
+    address: configModule! as Address,
+    abi: [
+      {
+        inputs: [],
+        name: 'VERSION',
+        outputs: [{ internalType: 'string', name: '', type: 'string' }],
+        stateMutability: 'view' as const,
+        type: 'function',
+      },
+    ],
+    client: l2Provider,
+  }).read.VERSION()) as string;
+
+  // Only the major segment constrains the document: the module is not
+  // redeployed when the manifest moves, so 2.0.0 reads a 2.1.0 document.
+  const documentMajor = manifest.version.split('.')[0];
+  const onChainMajor = onChainVersion.split('.')[0];
+  if (documentMajor !== onChainMajor) {
+    throw new Error(
+      `manifest: document version ${manifest.version} is not compatible with VERSION() ${onChainVersion}`,
+    );
+  }
+
+  // The factory that answers a module address is in the document, so the
+  // prediction can only run after the read. It is given the module list read
+  // above: one `getModulesPaginated`, one records read, either way.
+  const predictedPublicationModule = manifest.publicationFactory
     ? await predictPublicationModule(
         l2Provider,
-        publication_factory as Address,
+        manifest.publicationFactory as Address,
         multisig as Address,
         modules,
       )
     : undefined;
 
   return {
-    gateway: data_gateway,
-    ensRegistry: ens_registry,
-    ensRecords: ens_records,
-    publicationFactory: publication_factory,
-    recordsFactory: records_factory,
-    // One factory for every kind. The record key is unchanged, so a deployment
-    // that predates the kind model names nothing useful here and reads back ''.
-    moduleFactory: publication_factory ?? '',
+    version: manifest.version,
+    gateway: manifest.gateway,
+    ensRegistry: manifest.ensRegistry,
+    ensRecords: manifest.ensRecords,
+    publicationFactory: manifest.publicationFactory,
+    recordsFactory: manifest.recordsFactory,
+    // One factory for every kind, named by the same field in the document.
+    moduleFactory: manifest.publicationFactory,
     publicationModule: predictedPublicationModule ?? scannedPublicationModule ?? undefined,
-    pkp: pkp_ethAddress,
+    pkp: manifest.pkp,
     litActions: {
-      prep: lit_action_prep,
-      render: lit_action_render,
-      update: lit_action_update,
-      maintainCache: lit_action_maintainCache || undefined,
-      repointArchive: lit_action_repointArchive || undefined,
-      // Empty string → undefined: the record is only written by a protocol
-      // update, and a reader before that write must see "not there", never "".
-      encrypt: lit_action_encrypt || undefined,
-      decrypt: lit_action_decrypt || undefined,
+      prep: manifest.litActions.prep,
+      render: manifest.litActions.render,
+      update: manifest.litActions.update,
+      maintainCache: manifest.litActions.maintainCache,
+      repointArchive: manifest.litActions.repointArchive,
+      encrypt: manifest.litActions.encrypt,
+      decrypt: manifest.litActions.decrypt,
     },
   };
 };

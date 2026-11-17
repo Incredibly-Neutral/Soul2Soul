@@ -348,6 +348,7 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
 // ── Fresh JCS pages ─────────────────────────────────────────────────────────
 
 const PROTOCOL_INFO = {
+  version: '2.1.0',
   pkp: PKP,
   litActions: { render: 'ipfs://bafkreirenderaction' },
 } as unknown as S2SManifest;
