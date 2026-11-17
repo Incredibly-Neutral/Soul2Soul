@@ -19,15 +19,34 @@ import {
   PROTOCOL_SAFE_ADDRESS,
   adminHash,
   buildSafeBatch,
+  encodeSetUsageApiKey,
+  loadLitConfig,
   loadMonorepoEnv,
   prettyPrintBatch,
   proposeToSafe,
   requireProtocolPrivateKey,
   resolveLitRpcUrl,
+  usageHash,
 } from '@s2s/soul2soul-shared/chain-secured';
+import path from 'path';
 import { fileURLToPath } from 'url';
 
 loadMonorepoEnv(fileURLToPath(import.meta.url));
+
+/**
+ * The usage key names the groups it may execute in. Removing a group leaves that
+ * list pointing at an id that no longer exists, and creating a duplicate group
+ * leaves it pointing at the duplicate, so both the removal and the scope repair
+ * belong in the same batch.
+ */
+function usageKeyOf(): string {
+  const key = process.env.VITE_LIT_USAGE_KEY;
+  if (key) return key;
+  const configPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'config.json');
+  const group = loadLitConfig(configPath).groups[0];
+  if (!group?.usage_key) throw new Error('no usage key: set VITE_LIT_USAGE_KEY');
+  return group.usage_key;
+}
 
 const groupId = process.argv[2];
 if (!groupId || !/^\d+$/.test(groupId)) {
@@ -54,15 +73,34 @@ async function main(): Promise<void> {
   if (!target) throw new Error(`no group ${groupId} on ${ACCOUNT_CONFIG_ADDRESS}`);
   console.log(`group ${groupId}: ${target.name}`);
 
+  const remaining = groups.filter((g) => g.id !== BigInt(groupId)).map((g) => Number(g.id));
+  const usageKey = usageKeyOf();
+
   const transactions = buildSafeBatch([
     {
-      to: ACCOUNT_CONFIG_ADDRESS,
+      functionName: 'removeGroup',
+      args: [admin, BigInt(groupId)],
       data: encodeFunctionData({
         abi: removeGroupAbi,
         functionName: 'removeGroup',
         args: [BigInt(admin), BigInt(groupId)],
       }),
     },
+    encodeSetUsageApiKey({
+      apiKeyHash: admin,
+      usageApiKeyHash: usageHash(usageKey),
+      expiration: 0,
+      balance: 0,
+      name: 's2s usage key',
+      description: `Executes the s2s Lit actions in groups ${remaining.join(', ')} (chain-secured)`,
+      createGroups: false,
+      deleteGroups: false,
+      createPKPs: false,
+      manageIPFSIdsInGroups: remaining,
+      addPkpToGroups: [],
+      removePkpFromGroups: [],
+      executeInGroups: remaining,
+    }),
   ]);
   console.log(prettyPrintBatch(transactions));
 
