@@ -165,7 +165,7 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
     /// @dev Only the owning Safe starts an upgrade, and only to an implementation
     ///      the protocol safe approved for this kind. The approval is read at the
     ///      moment of the upgrade, so a withdrawn target cannot be used.
-    function _authorizeUpgrade(address newImplementation) internal onlySafe override {
+    function _authorizeUpgrade(address newImplementation) internal view onlySafe override {
         if (!IManifestFactoryApprovals(FACTORY).isApproved(MODULE_KIND, newImplementation)) {
             revert ImplementationNotApproved(newImplementation);
         }
