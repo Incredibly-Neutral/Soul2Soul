@@ -318,7 +318,9 @@ describe('S2SManifestModule', () => {
           args: [FACTORY_KIND, recordsBuild],
         }),
       ]),
-      /ImplementationKindMismatch/,
+      // ImplementationKindMismatch(address,bytes32,bytes32) = 0x5edbb8e5: the
+      // revert is bubbled through MockCaller, so viem reports the selector.
+      (error: unknown) => JSON.stringify(error).toLowerCase().includes('0x5edbb8e5'),
     );
 
     await assert.rejects(
