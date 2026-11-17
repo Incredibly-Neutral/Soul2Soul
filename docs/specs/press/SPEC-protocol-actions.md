@@ -211,9 +211,9 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 **Sequence (each step is an assertion point for tests):**
 
 1. `extractSignerAddress(hashMessage("lit actions auth"), signature)` → `signerAddress` (INV-1)
-2. `getManifest(false)` (in-action) → `S2SManifest` — one `getRecord`
-   for `publication_factory` then one `getRecords` on `PROTOCOL_RECORDS_MODULE`, no ENS walk; a
-   missing record fails here with that reason stated
+2. `getManifest(false)` (in-action) → `S2SManifest` — one `getRecord('manifest')` and one
+   `VERSION()` on `PROTOCOL_RECORDS_MODULE`, no ENS walk; the record is one JSON document. A
+   missing record, bad JSON, a bad shape or a major mismatch fails here with that reason stated
 3. `getDomainOwnerAndModules(publication, rpcs, protocolInfo.moduleFactory)` → `{ multisig, configModule, publicationModule }` (INV-4). The factory names both kinds and each answer is kept only when code sits at it.
 4. `fetchById(job.id)` → body
 5. `getConfig(configCid, configModule)` → config
@@ -255,7 +255,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
 
-**Sequence:** recover signer (INV-1) → `getPublicationFactory` (the one `publication_factory` record, read before the gate so a rejected call pays one request rather than the full read) → modules (INV-4, with that factory) → `getManifest` (handed that factory, so it spends no second standalone `getRecord`; the batched `getRecords` still returns the same key) →
+**Sequence:** recover signer (INV-1) → `getPublicationFactory` (the one `publication_factory` record, read before the gate so a rejected call pays one request rather than the full read) → modules (INV-4, with that factory) → `getManifest` (handed that factory, so discovery and the document agree; the document's own `publicationFactory` is returned) →
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
@@ -530,7 +530,7 @@ section is relied upon.
 
 | fn                                                                                    | in              | out                                                                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getManifest(dev, rpcs?, publicationFactory?)`                                    | `boolean`, RPCs?, address? | `S2SManifest` — one `getRecord` for `publication_factory` (skipped when the caller passes one) then one `getRecords` on the `PROTOCOL_RECORDS_MODULE` constant; `moduleFactory` and `publicationFactory` are that same record                                                                           |
+| `getManifest(dev, rpcs?, publicationFactory?)`                                    | `boolean`, RPCs?, address? | `S2SManifest` — one `getRecord('manifest')` on the `PROTOCOL_RECORDS_MODULE` constant, parsed as the JSON document, then one `VERSION()` whose major segment must equal the document's; `publicationFactory` is the document's field, `moduleFactory` the factory discovery was handed (or that same field)                                                          |
 | `getPublicationFactory(rpcs?)`                                                        | RPCs?           | `address \| null` — the `publication_factory` record read on its own in one call at the hardcoded `PROTOCOL_RECORDS_MODULE` (see Gotchas: a stale constant now fails every discovery), null when absent or unreadable                                                                                    |
 | `getDomainOwnerAndModules(pub, rpcs, factory)`                                        | `pub`, rpcs, factory | `{ multisig, configModule, publicationModule }` (null per kind the factory cannot name) — one `moduleAddress(safe, kind)` per kind, kept only when `evmGetCode` finds code; a throwing factory read propagates                                                                                              |
 | `getConfig(configCid?, configModule)`                                                 | cid?/addr       | `S2SPublicationConfig` (parsed JSON)                                                                                                                                                                                                                                                                        |
@@ -612,32 +612,44 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   action bundles. Hand-copy only the needed function fragments into `module.factory.ts` using the
   full JSON `components` format (not human-readable ABI strings — ethers v5 in the Lit runtime can't
   decode struct returns from them). When the contract changes, update fragments in that one file.
-- **The one ENS walk left (redundant-walk note, 2026-08-06; settled 2026-11-16).** `getManifest`
-  walks nothing: it reads `getRecords` on `PROTOCOL_RECORDS_MODULE`, preceded by one `getRecord` for
-  the factory unless the caller passes one. The third walk (`parentDomainController`) and the
-  records-only discovery path that used it are gone with them. What remains is
-  `getDomainOwnerAndModules`' two-hop walk (`nameWrapper()`→`ownerOf()`) for the publication Safe,
-  and the records read on the constant. The actions that must resolve modules before their
-  authorization gate read the single `publication_factory` record (`getPublicationFactory`, one
-  call), discover with it, gate, then hand the same value to `getManifest` so the session never
-  issues a second standalone `getRecord`. The batched `getRecords` still asks for that key and still
-  returns it as `publicationFactory`; only the standalone read is skipped.
+- **The one ENS walk left (redundant-walk note, 2026-08-06; settled 2026-11-16).** `getManifest` walks
+  nothing: it reads `getRecord('manifest')` and `VERSION()` on `PROTOCOL_RECORDS_MODULE`. The third
+  walk (`parentDomainController`) and the records-only discovery path that used it are gone with it.
+  What remains is `getDomainOwnerAndModules`' two-hop walk (`nameWrapper()`→`ownerOf()`) for the
+  publication Safe, and the document read on the constant.
+- **The document, not a key set (2026-11-17).** The manifest is one record, `manifest`, holding a
+  JSON document with its own `version`. The keys it replaced (`data_gateway`, `lit_action_prep`, …)
+  are still written by `update-protocol.ts` in the same Safe batch, for a client that predates the
+  document; the actions read none of them and have no fallback. The same JSON is mirrored at
+  `manifest@x.y.z` as version history: a reader pinned to a release finds the document it was
+  written for, and a retained version may name CIDs the Lit group has since removed — the group's
+  action list decides what runs, not the record.
+- **Version agreement.** The document names `x.y.z`; `VERSION()` on the module is the contract's own
+  version and is only compared on its first segment, so a document moves without a redeploy. A
+  different major is a document this module cannot be read alongside, and the read throws rather
+  than guessing. `update-protocol.ts` requires `MANIFEST_VERSION` and refuses to build a batch whose
+  major disagrees with `VERSION()`, which is what keeps the hardcoded address safe.
+- **Read cost and gate ordering.** The actions that must resolve modules before their authorization
+  gate read the single `publication_factory` record (`getPublicationFactory`, one call), discover
+  with it, gate, then hand the same value to `getManifest`, where it becomes `moduleFactory`. The
+  document's own `publicationFactory` is returned beside it. The two cannot disagree unless a batch
+  is half-written, and a batch cannot be half-written.
   A read costs one request per RPC URL tried, so a second URL adds a request only where the earlier
   one fails, and nothing is retried in-session. Most of these reads are L2 and the walk is L1. The
   isolated bounds below assume one URL per chain. `getDomainOwnerAndModules` at most 6 (2 walk, one
-  `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getManifest` 2 (one
-  `getRecord`, one `getRecords`), or 1 when the caller passes the factory; `getPublicationFactory`
-  1. Per action that is a fixed prologue, one URL per chain: prep 7 (one record read plus
-  discovery); render, update, maintain-cache and repoint-archive 8 each (one record read, at most 6
-  for discovery, one `getRecords` — render spends its record read inside `getManifest`).
-  Against `main`: prep 6 → 7, render 11 → 8, and update, maintain-cache and repoint-archive 12 → 8.
+  `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getManifest` 2 (one `getRecord`,
+  one `VERSION`), the same 2 whether or not the caller passes the factory; `getPublicationFactory`
+  1. Per action that is a fixed prologue, one URL per chain: prep 8 (the document read plus
+  discovery); render, update, maintain-cache and repoint-archive 9 each (one pre-gate
+  `publication_factory` read, at most 6 for discovery, plus the document read and `VERSION`).
+  Against `main`: prep 6 → 8, render 11 → 9, and update, maintain-cache and repoint-archive 12 → 9.
   `main` spent the difference on a module-list read plus role and `NAME()` probes, and on a
   five-request protocol path.
 - **`publication_factory` read from a hardcoded records module (2026-11-13):** `getPublicationFactory`
   calls `getRecord("publication_factory")` on `PROTOCOL_RECORDS_MODULE`
   (`0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29`, `libs/protocol.factory.ts`), the Base records
   module `update-protocol.ts` and `repoint-record.ts` write to. `getPublicationFactory` and
-  `getManifest` both read it here, so this constant is the one place a redeploy can
+  `getManifest` both read here, so this constant is the one place a redeploy can
   drift: point it at a retired module and `getRecord` answers the empty string on the old address,
   `getPublicationFactory` returns null, and **every action that discovers through it fails** — a
   null factory is a stated failure, not a slower path — with the `publication_factory record

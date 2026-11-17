@@ -488,10 +488,11 @@ it. `LIT_ENCRYPT_ACTION_CID` sets the same leaf.
 
 **The CID also lives on the chain, and that record is the fallback.** With no
 `lit.encryptActionCid` in the env or in a config file, the CLI reads the record
-`lit_action_encrypt` from the protocol controller's records module — the key
-`press/scripts/lit/update-protocol.ts` writes beside `lit_action_decrypt`, read
-with `getRecords` the way `shared/src/protocol/index.ts` reads the other protocol
-records. The config surface wins over the record: `LIT_ENCRYPT_ACTION_CID`, else
+`lit_action_encrypt` from the manifest document's `litActions` — the field
+`press/scripts/lit/update-protocol.ts` writes beside `litActions.decrypt`, read by
+`shared/src/protocol/index.ts :: getManifest` with the rest of the document. The
+flat `lit_action_encrypt` key is still written for clients that predate the
+document; nothing here reads it. The config surface wins over the record: `LIT_ENCRYPT_ACTION_CID`, else
 a config-file `lit.encryptActionCid`, else `lit_action_encrypt`. With all three
 absent the encrypt path fails closed and names both remedies:
 `s2s config set lit.encryptActionCid <cid>`, or writing the record with

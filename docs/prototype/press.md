@@ -20,7 +20,7 @@ Lit runs Chipotle as one confidential VM on Phala Cloud, built on dstack and Int
 
 ## Code: actions addressed by their content
 
-Each action is a bundle of JavaScript, identified by its CID; there are five: prep, render, update, maintain-cache and repoint-archive. To change what the press does, the implementation's governance publishes a new CID and adds it to the group. The protocol's Safe records the current CIDs, and every build reads them there, so a client can't choose the code that builds a page.
+Each action is a bundle of JavaScript, identified by its CID; there are five: prep, render, update, maintain-cache and repoint-archive. To change what the press does, the implementation's governance publishes a new CID and adds it to the group. The protocol's Safe records the current CIDs in one document that names its own version, and every build reads them there, so a client can't choose the code that builds a page. Each version is kept, so the record says what the press ran at any point, and the document's major number has to agree with the version the records contract reports, or the read fails.
 
 ## Keys: one key for everything
 

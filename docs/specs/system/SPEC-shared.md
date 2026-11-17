@@ -9,7 +9,7 @@
 > imports. Read **SPEC-00** first. This spec is the **canonical type catalog** the front-end specs
 > (safe-app, 0xobsidian, neutralpress) point at instead of re-deriving shapes. Follows SPEC-00 §7.
 >
-> Invariants carried/owned here: INV-2 (record-key set in `getManifest`), INV-5 type
+> Invariants carried/owned here: INV-2 (the manifest document's shape, read by `getManifest`), INV-5 type
 > (`S2SContentInfo`), INV-7 (the action-bundle entry point must stay runtime-free), plus the
 > canonical shapes behind every other INV.
 
@@ -125,7 +125,7 @@ On the page, the author identifier is a JSON-LD `PropertyValue` node naming a CA
 
 | module | role | notes |
 |---|---|---|
-| `protocol/` | `getManifest` (viem), `getRecords`, `getProtocolControllerAndModules`, `predictPublicationModule`, constants | **read-side counterpart of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers), and not a mirror: module resolution here asks the `publication_factory` record for a CREATE2 prediction first (`predictPublicationModule`, newest implementation then older ones, capped) and falls back to the Safe's `NAME()` scan, which is the only route the in-action version has. `getManifest` runs the prediction after the records read and returns it as `publicationModule`. Has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Holds the implementation record (`S2SManifest`, `PKP`); the manuscript's own types are in `manuscript/types.ts`. `S2SManifest` is the name of record: the protocol is Polyphony, and this is one deployment's list of references to code — addresses and action CIDs — so it is not called protocol info. |
+| `protocol/` | `getManifest` (viem), `getRecords`, `getProtocolControllerAndModules`, `predictPublicationModule`, constants | **read-side counterpart of the in-action `libs/protocol.factory.ts`** — same manifest document (INV-2), different stack (viem vs ethers), and not a mirror: module resolution here asks the `publication_factory` record for a CREATE2 prediction first (`predictPublicationModule`, newest implementation then older ones, capped) and falls back to the Safe's `NAME()` scan, which is the only route the in-action version has. `getManifest` runs the prediction after the document read and returns it as `publicationModule`. Has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Holds the implementation record (`S2SManifest`, `PKP`); the manuscript's own types are in `manuscript/types.ts`. `S2SManifest` is the name of record: the protocol is Polyphony, and this is one deployment's list of references to code — addresses and action CIDs — so it is not called protocol info. |
 | `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers + **action-io schemas** | drives the pipeline; selects Bun (preview) vs Lit (prod). Zod schemas (`s2sContentItemSchema` etc.) remain in action-io.ts; the content-item types are in `manuscript/types.ts`. |
 | `lit/` | `LitService` (Chipotle REST client), `actions/types` (action I/O), `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). No action code ships from here: the encrypt and decrypt actions are built in `src/press/actions`, registered on Lit by CID, and named as CIDs in `LitService` config (`actions.encrypt`, `actions.decrypt`); `LitService` fetches the bundle by CID from its configured IPFS `gateway` and posts it as `code`, hashing the fetched bytes with `/get_lit_action_ipfs_id` first and refusing unless that equals the requested CID (a gateway is not trusted to choose what runs beside the PKP). The shared gates are the gate, and the action imports them. Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side); `bodySchema` mirrors the deprecated `S2SBody` |
@@ -211,7 +211,7 @@ S2SBody-driven actions** — new content-type validation should use `s2sContentI
 
 ## Invariants this component preserves
 
-INV-2 (`getManifest` key set — keep in sync with the in-action copy), INV-5 type
+INV-2 (`getManifest` document shape — keep in sync with the in-action copy), INV-5 type
 (`S2SContentInfo`), INV-7 (the `lit-actions` entry stays runtime-free). Canonical shapes here back
 INV-6/8/11 etc. in the consumers.
 
@@ -221,8 +221,9 @@ entry. This is the existing author/publication gate, extended to guard appends.
 
 ## Local gotchas / gaps
 
-- **Two `getManifest`** (here viem; action ethers) — same key set, different field order;
-  must co-evolve (INV-2). The `dev` branch here is vestigial (GAP-8).
+- **Two `getManifest`** (here viem; action ethers) — same document shape, different stack; must
+  co-evolve (INV-2). The viem one validates with `manifestSchema`; the action one validates by hand,
+  because zod cannot enter an action bundle. The `dev` branch here is vestigial (GAP-8).
 - **PKP `tokenId`/`publicKey` vestigial** (GAP-11) — prune from `PKP`, `S2SManifest` pkp, and the
   record-key set.
 - zod exists client-side but not in actions — *by design*, not a gap.
@@ -248,7 +249,7 @@ entry. This is the existing author/publication gate, extended to guard appends.
 - 🟢 extend `cid-view/` (new collectors, new retrievability sources/fields) — keep the INV-7 purity
   split (pure parser vs the single network client) and mirror any new zod schema in `validation.ts`.
 - 🔴 add runtime/Node deps to `lit-actions.ts` (breaks INV-7 bundling); change the `getManifest`
-  record-key set without mirroring the action copy (INV-2); fork the canonical types further.
+  document shape without mirroring the action copy (INV-2); fork the canonical types further.
 - 🔴 change the ipfs-check classification rules (served/agent/host semantics, `FILECOIN_SP_HOSTS`)
   without re-validating against the live endpoint; break the parser↔client purity split; diverge
   `statusFromCheckLine` from `parseRow`'s non-array-`result` semantics without updating both.

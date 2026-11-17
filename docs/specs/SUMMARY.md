@@ -59,7 +59,9 @@ in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
 
 **Record stores — do not conflate:**
 - `S2SRecordsModule` (a.k.a. *configModule*) — KV config for protocol/publication (gateways, action
-  CIDs, PKP fields, `ens_records` address); read/write via `getRecords`/`setRecord`.
+  CIDs, PKP fields, `ens_records` address). The protocol's own record is the single `manifest`
+  document (INV-2) plus its `manifest@x.y.z` history, read with `getRecord`; individual keys are
+  written with `setRecord` and batched with `getRecords`.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**
 - **`DraftsModuleV1`** (author side, in `src/author/contracts`, deployed on Base behind
