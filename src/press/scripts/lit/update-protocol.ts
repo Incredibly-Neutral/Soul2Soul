@@ -37,6 +37,27 @@ const recordsModuleAbi = [
 ] as const;
 
 /**
+ * Reads the batch needs before it is built: the manifest document already on
+ * chain (`getRecord`) and the module's own version (`VERSION`).
+ */
+const recordsModuleReadAbi = [
+  {
+    name: "getRecord",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "key", type: "string" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    name: "VERSION",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+/**
  * The one function that tells a gated factory from the superseded one. V2 has
  * no `protocolSafe()` at all, so the call reverting is the signal.
  */
@@ -66,6 +87,14 @@ const ensRecordsAbi = [
 const RECORDS_MODULE_ADDRESS = "0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29";
 const ENS_RECORDS_ADDRESS = "0x5D42f9b016B4251FC6407d5e8154DA887F394900";
 
+/**
+ * The record key the manifest document is published under, and the prefix of
+ * its per-version mirror: `manifest` and `manifest@x.y.z`, the same JSON under
+ * both. Readers read `manifest`; the mirror is the version history, so a client
+ * pinned to a release still finds the document it was written for.
+ */
+const MANIFEST_KEY = "manifest";
+
 // One name for this address: `PUBLICATION_FACTORY_ADDRESS`, which is what
 // `src/publication/contracts/scripts/deploy-publication-factory.ts` prints and
 // what `check-module.ts` and both verify scripts read. Following the deploy
@@ -91,6 +120,10 @@ function requirePublicationFactory(): string {
 // Keys that were written under old names and must be removed from on-chain storage.
 // Leaving them means any reader still asking for these keys gets stale data.
 // deleteRecord removes them cleanly (emits RecordDeleted, frees the slot).
+//
+// Empty, and the flat keys the document replaced stay written below: a client
+// that predates the document reads them and has no fallback of its own, and the
+// whole set goes out in one Safe batch, so the cutover cannot half-happen.
 const STALE_KEYS : string[] = [
 ]
 
@@ -120,16 +153,8 @@ const deleteRecord = (key: string) => ({
   operation: OperationType.Call,
 });
 
-
-/**
- * Refuse to write a factory that cannot answer `protocolSafe()`.
- *
- * The V2 factory has no such function and no gate on `setImplementation`, so
- * pasting its address into PUBLICATION_FACTORY_ADDRESS would otherwise be
- * written to the record with a full green run. Same probe `update-impl.ts` uses
- * before it sends an implementation change.
- */
-const assertGatedFactory = async (address: string): Promise<void> => {
+/** BASE_RPC_URL, or the DRPC endpoint built from the key. */
+function protocolRpcUrl(): string {
   const rpcUrl =
     process.env.BASE_RPC_URL ||
     (process.env.VITE_DRPC_API_KEY
@@ -143,7 +168,180 @@ const assertGatedFactory = async (address: string): Promise<void> => {
     );
   }
 
-  const client = createPublicClient({ transport: http(rpcUrl) });
+  return rpcUrl;
+}
+
+const protocolClient = () => createPublicClient({ transport: http(protocolRpcUrl()) });
+
+/**
+ * MANIFEST_VERSION — the `x.y.z` the document is published as.
+ *
+ * Required, and read before the batch is built: the document carries its own
+ * version and every action compares its first segment against `VERSION()` on
+ * the module, so a document written without one, or written under a version the
+ * module cannot be read alongside, fails every action rather than only itself.
+ * Bump it for anything that changes what the document says.
+ */
+function requireManifestVersion(): string {
+  const version = process.env.MANIFEST_VERSION;
+
+  if (!version) {
+    throw new Error(
+      "MANIFEST_VERSION is not set. Set it to the x.y.z this batch publishes the manifest " +
+        "document as (e.g. MANIFEST_VERSION=2.1.0) and re-run. The document names its own " +
+        "version and every action compares it against the module's VERSION()."
+    );
+  }
+
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error(
+      `MANIFEST_VERSION "${version}" is not x.y.z. It is compared on its first segment ` +
+        "against the module's VERSION(), so it has to be a three-part version."
+    );
+  }
+
+  return version;
+}
+
+/**
+ * Refuse a document the module on chain cannot be read alongside.
+ *
+ * `VERSION()` is the contract's own version and stays 2.0.0: the document moves
+ * without a redeploy, so only the major segment has to agree. Read through the
+ * same RPC the factory probe uses.
+ */
+const assertManifestVersion = async (documentVersion: string): Promise<void> => {
+  const client = protocolClient();
+
+  let onChainVersion: string;
+  try {
+    onChainVersion = await client.readContract({
+      address: RECORDS_MODULE_ADDRESS as `0x${string}`,
+      abi: recordsModuleReadAbi,
+      functionName: "VERSION",
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not read VERSION() on ${RECORDS_MODULE_ADDRESS}: ` +
+        `${error instanceof Error ? error.message : String(error)}. The document's major ` +
+        "segment has to match it, so the batch is not built without it."
+    );
+  }
+
+  if (documentVersion.split(".")[0] !== onChainVersion.split(".")[0]) {
+    throw new Error(
+      `MANIFEST_VERSION ${documentVersion} is a different major from VERSION() ` +
+        `${onChainVersion} on ${RECORDS_MODULE_ADDRESS}. Every action compares the two on the ` +
+        "first segment and refuses the document; bump or fix MANIFEST_VERSION."
+    );
+  }
+};
+
+/**
+ * The litActions of the document, in a fixed key order.
+ *
+ * An action with no CID is omitted, never written as the empty string: a reader
+ * cannot tell an absent action from one it must run with no code. The caller's
+ * "not deployed" value is whatever `config.json` did not have, i.e. undefined.
+ */
+const litActionsOf = (actions: {
+  prep: string;
+  render: string;
+  update: string;
+  maintainCache?: string;
+  repointArchive?: string;
+  encrypt?: string;
+  decrypt?: string;
+}): Record<string, string> => {
+  const document: Record<string, string> = {
+    prep: actions.prep,
+    render: actions.render,
+    update: actions.update,
+  };
+
+  if (actions.maintainCache) document.maintainCache = actions.maintainCache;
+  if (actions.repointArchive) document.repointArchive = actions.repointArchive;
+  if (actions.encrypt) document.encrypt = actions.encrypt;
+  if (actions.decrypt) document.decrypt = actions.decrypt;
+
+  return document;
+};
+
+/** Where each document address comes from, for the refusal message below. */
+const MANIFEST_FIELD_SOURCE: Record<string, string> = {
+  gateway: "IPFS_URL",
+  ensRegistry: "ENS_OPEN_SUBDOMAIN_REGISTRY",
+  ensRecords: "ENS_RECORDS_ADDRESS (constant in this file)",
+  publicationFactory: "PUBLICATION_FACTORY_ADDRESS",
+  recordsFactory: "RECORDS_FACTORY_ADDRESS",
+  pkp: "the PKP in config.json",
+};
+
+/**
+ * The manifest document, as one string: camelCase, no whitespace.
+ *
+ * Built from exactly the values the batch writes to the flat keys beside it, so
+ * the document and the legacy records cannot say different things. Every address
+ * is required non-empty: a flat key written empty is a stale record, but the
+ * document is the only thing the actions read, and an empty address in it fails
+ * every action at once.
+ */
+function buildManifestDocument(values: {
+  version: string;
+  gateway: string;
+  ensRegistry: string;
+  ensRecords: string;
+  publicationFactory: string;
+  recordsFactory: string;
+  pkp: string;
+  litActions: Record<string, string>;
+}): string {
+  for (const field of Object.keys(MANIFEST_FIELD_SOURCE)) {
+    const value = (values as unknown as Record<string, string>)[field];
+    if (!value) {
+      throw new Error(
+        `The manifest document cannot be published with an empty ${field} ` +
+          `(${MANIFEST_FIELD_SOURCE[field]}). Set it and re-run: every action reads the ` +
+          "document, so an empty address there fails all of them. Nothing was proposed."
+      );
+    }
+  }
+
+  return JSON.stringify({
+    version: values.version,
+    gateway: values.gateway,
+    ensRegistry: values.ensRegistry,
+    ensRecords: values.ensRecords,
+    publicationFactory: values.publicationFactory,
+    recordsFactory: values.recordsFactory,
+    pkp: values.pkp,
+    litActions: values.litActions,
+  });
+}
+
+/** The `manifest` record as it stands on chain, or the empty string if unset. */
+const readManifestRecord = async (): Promise<string> => {
+  const client = protocolClient();
+
+  return (await client.readContract({
+    address: RECORDS_MODULE_ADDRESS as `0x${string}`,
+    abi: recordsModuleReadAbi,
+    functionName: "getRecord",
+    args: [MANIFEST_KEY],
+  })) as string;
+};
+
+
+/**
+ * Refuse to write a factory that cannot answer `protocolSafe()`.
+ *
+ * The V2 factory has no such function and no gate on `setImplementation`, so
+ * pasting its address into PUBLICATION_FACTORY_ADDRESS would otherwise be
+ * written to the record with a full green run. Same probe `update-impl.ts` uses
+ * before it sends an implementation change.
+ */
+const assertGatedFactory = async (address: string): Promise<void> => {
+  const client = protocolClient();
 
   try {
     const protocolSafe = await client.readContract({
@@ -192,8 +390,16 @@ const proposeToSafe = async (account: any, transactions: any[]) => {
 // ── Exports ──────────────────────────────────────────────────────────────────
 
 /**
- * Full protocol update: write new keys + delete stale ones + re-authorize PKP.
- * All in one Safe batch so it's atomic — owners confirm once for the whole set.
+ * Full protocol update: write new keys + the manifest document + delete stale
+ * ones + re-authorize PKP. All in one Safe batch so it's atomic — owners confirm
+ * once for the whole set.
+ *
+ * The document is written twice, `manifest` and `manifest@x.y.z` (the version in
+ * MANIFEST_VERSION): readers read the first, the second is the version history.
+ * Both carry the same JSON, built from the values this batch already writes. The
+ * flat keys stay written beside it for a client that predates the document; the
+ * read side has no fallback to them, and one batch means the cutover cannot
+ * half-happen.
  *
  * Lit action naming (post-rename):
  *   prep         — was lit_action_prep      (unchanged)
@@ -218,6 +424,34 @@ export const updateProtocol = async (
   const publicationFactory = requirePublicationFactory();
   await assertGatedFactory(publicationFactory);
 
+  // Also before the batch: the version the document is published as, and the
+  // major segment the module on chain can be read alongside.
+  const version = requireManifestVersion();
+  await assertManifestVersion(version);
+
+  const gateway = process.env.IPFS_URL || "";
+  const ensRegistry = process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || "";
+  const recordsFactory = process.env.RECORDS_FACTORY_ADDRESS || "";
+
+  const document = buildManifestDocument({
+    version,
+    gateway,
+    ensRegistry,
+    ensRecords: ENS_RECORDS_ADDRESS,
+    publicationFactory,
+    recordsFactory,
+    pkp: pkpInfo.ethAddress,
+    litActions: litActionsOf({
+      prep: prepActionCid,
+      render: renderActionCid,
+      update: updateActionCid,
+      maintainCache: maintainCacheActionCid,
+      repointArchive: repointArchiveActionCid,
+      encrypt: encryptActionCid,
+      decrypt: decryptActionCid,
+    }),
+  });
+
   const transactions = [
     // Write current values
     setRecord("pkp_ethAddress", pkpInfo.ethAddress),
@@ -238,11 +472,14 @@ export const updateProtocol = async (
       ? [setRecord("lit_action_repointArchive", repointArchiveActionCid)]
       : []),
     setRecord("ens_records", ENS_RECORDS_ADDRESS),
-    setRecord("data_gateway", process.env.IPFS_URL || ""),
-    setRecord("ens_registry", process.env.ENS_OPEN_SUBDOMAIN_REGISTRY || ""),
+    setRecord("data_gateway", gateway),
+    setRecord("ens_registry", ensRegistry),
     setRecord("publication_factory", publicationFactory),
-    setRecord("records_factory", process.env.RECORDS_FACTORY_ADDRESS || ""),
-  
+    setRecord("records_factory", recordsFactory),
+
+    // The document, read by every action, and its per-version mirror.
+    setRecord(MANIFEST_KEY, document),
+    setRecord(`${MANIFEST_KEY}@${version}`, document),
 
 
     // Delete stale keys from previous naming scheme
@@ -267,6 +504,12 @@ export const updateProtocol = async (
 /**
  * Actions-only update: rotate CIDs without touching the PKP or ENS auth.
  * Use when re-deploying Lit actions between protocol key rotations.
+ *
+ * The document already on chain is patched rather than rebuilt: only
+ * `litActions.prep/render/update` and the version change, so the addresses and
+ * whatever optional CIDs were published survive a rotation. The patched
+ * document goes out under `manifest` and `manifest@x.y.z` in the same batch as
+ * the flat CIDs, for the same reasons as a full update.
  */
 export const updateActions = async (
   account: any,
@@ -274,11 +517,56 @@ export const updateActions = async (
   renderActionCid: string,
   updateActionCid: string,
 ) => {
+  const version = requireManifestVersion();
+  await assertManifestVersion(version);
+
+  // There is nothing to patch if no document was ever published: an
+  // actions-only rotation cannot invent the addresses, and writing a document
+  // with them missing would fail every action.
+  const current = await readManifestRecord();
+  if (!current) {
+    throw new Error(
+      `No '${MANIFEST_KEY}' record on ${RECORDS_MODULE_ADDRESS}. Run pnpm update-protocol ` +
+        "first: an actions-only rotation patches the published document, and there is none."
+    );
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(current);
+  } catch (error) {
+    throw new Error(
+      `The '${MANIFEST_KEY}' record is not valid JSON: ` +
+        `${error instanceof Error ? error.message : String(error)}. Fix it with a full ` +
+        "pnpm update-protocol rather than patching it here."
+    );
+  }
+
+  const document = buildManifestDocument({
+    version,
+    gateway: parsed?.gateway,
+    ensRegistry: parsed?.ensRegistry,
+    ensRecords: parsed?.ensRecords,
+    publicationFactory: parsed?.publicationFactory,
+    recordsFactory: parsed?.recordsFactory,
+    pkp: parsed?.pkp,
+    // The three rotating CIDs replace the published ones; every optional CID is
+    // carried across as it stands.
+    litActions: litActionsOf({
+      ...(parsed?.litActions ?? {}),
+      prep: prepActionCid,
+      render: renderActionCid,
+      update: updateActionCid,
+    }),
+  });
+
   const transactions = [
     setRecord("lit_action_prep", prepActionCid),
     setRecord("lit_action_render", renderActionCid),
     setRecord("lit_action_update", updateActionCid),
 
+    setRecord(MANIFEST_KEY, document),
+    setRecord(`${MANIFEST_KEY}@${version}`, document),
   ];
 
   return proposeToSafe(account, transactions);
