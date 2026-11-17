@@ -47,7 +47,7 @@ vi.mock('../libs/ipfs.factory', () => ({
   decodeArchiveCid: vi.fn(),
 }));
 
-vi.mock('../libs/module.factory', () => ({ getDeals: vi.fn(async () => []) }));
+vi.mock('../libs/module.factory', () => ({ getAgreements: vi.fn(async () => []) }));
 vi.mock('../libs/archive.factory', () => ({
   parseArchive: vi.fn(),
   reconcile: vi.fn(),

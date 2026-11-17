@@ -16,7 +16,7 @@ const NETWORK_CONFIG: Record<string, { chainId: number; name: string }> = {
 // failure, with backoff) so a flaky/slow Base transport multiplied the request
 // spend (up to 3x) for every eth_call in the render. On a multi-collection home
 // render (many ETH reads across gates, ENS walks + NAME probes, module.getLatest
-// / getDeals, protocol.getRecords) that pushed a ~33-38 request render over the
+// / getAgreements, protocol.getRecords) that pushed a ~33-38 request render over the
 // 50-request-session cap.
 //
 // These reads are NOT retry-until-success calls: if one fails, the render

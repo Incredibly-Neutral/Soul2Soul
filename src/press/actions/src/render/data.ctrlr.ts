@@ -3,7 +3,7 @@ import {
   fetchByPublication,
   fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
-  getDeals,
+  getAgreements,
   getLatestEntry,
   publicLabel,
   toBody,
@@ -444,7 +444,7 @@ export const sortCollection = (items: any[], collection: any): any[] => {
  * `fresh` (Map<genesis, body> — archive bodies) and `fetched` (bodies for the
  * `needsFetch` entries, same order) are merged into one per-genesis map, then
  * emitted in deal order — identical ordering to `fetchByPublication` (which
- * maps over getDeals order), so the filter/sort/decrypt chain sees
+ * maps over getAgreements order), so the filter/sort/decrypt chain sees
  * byte-identical input. Bodies that failed to fetch (null) are skipped.
  */
 export const bodiesFromReconcile = (
@@ -537,7 +537,7 @@ const summariseIssues = (issues: IntegrityIssue[]): string => {
  * Archive-backed collection source: one cat of the archive + a bounded drift
  * refetch, instead of N cats per deal'd item.
  *
- *   deals    = getDeals()                      # freshness oracle (1 RPC)
+ *   deals    = getAgreements()                 # freshness oracle (1 RPC)
  *   archive  = parseArchive(cat(archiveCid))   # 1 IPFS cat
  *   { fresh, needsFetch } = reconcile(deals, archive)
  *   fetched  = cat + toBody each needsFetch entry (bounded — the drift)
@@ -574,10 +574,10 @@ const fetchCollectionsFromArchive = async (
   // Cat the archive FIRST, wrapped: if the pointer is set but the blob is
   // unavailable (gateway hiccup, IPFS GC, unpinned), degrade to the exact
   // no-archive path (today's N cats) rather than fail the render — the cache
-  // is a performance optimization, getDeals is the correctness oracle.
-  // getDeals is intentionally NOT wrapped: the no-archive path calls it too,
+  // is a performance optimization, getAgreements is the correctness oracle.
+  // getAgreements is intentionally NOT wrapped: the no-archive path calls it too,
   // so it fails identically either way. Catting first also means a cat failure
-  // never wastes the getDeals RPC.
+  // never wastes the getAgreements RPC.
   let archive: Archive;
   try {
     archive = parseArchive(await catFile(gateway!, archiveCid));
@@ -589,7 +589,7 @@ const fetchCollectionsFromArchive = async (
     return { bodies: fb.bodies, drift: null, skips: fb.skips };
   }
 
-  const deals = await getDeals(publicationModule, rpcs);
+  const deals = await getAgreements(publicationModule, rpcs);
   const { fresh, needsFetch, integrityIssues } = reconcile(deals, archive);
 
   // Tamper evidence reaches the CALLER, not just the action log: the same

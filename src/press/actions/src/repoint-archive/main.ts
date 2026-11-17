@@ -9,7 +9,7 @@ import { evmWrite, toHexString } from '../libs/evm';
 import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile } from '../libs/ipfs.factory';
-import { getDeals } from '../libs/module.factory';
+import { getAgreements } from '../libs/module.factory';
 import { parseArchive, reconcile } from '../libs/archive.factory';
 import { canReset, extractSignerAddress } from '../libs/gates';
 import { requireFields, setRpcAuth } from '../libs/helpers';
@@ -111,7 +111,7 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
     let integrityIssues: { genesis: string; code: string; reason: string }[] = [];
     try {
       const archive = parseArchive(await catFile(gateway!, archiveCid));
-      deals = await getDeals(publicationModule, rpcs?.L2);
+      deals = await getAgreements(publicationModule, rpcs?.L2);
       const rc = reconcile(deals, archive);
       needsFetch = rc.needsFetch;
       // A seed archive containing a forged/tampered entry is REJECTED as a

@@ -58,7 +58,7 @@ vi.mock('../libs/module.factory', () => ({
   fetchByPublication: vi.fn(),
   fetchByPublicationWithSkips: vi.fn(),
   fetchByPublicationDetailed: vi.fn(),
-  getDeals: vi.fn(),
+  getAgreements: vi.fn(),
   getLatestEntry: vi.fn(),
   getVersion: vi.fn(),
   toBody: vi.fn(),

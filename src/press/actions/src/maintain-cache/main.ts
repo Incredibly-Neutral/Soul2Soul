@@ -10,7 +10,7 @@ import { evmRead, evmWrite, toHexString } from '../libs/evm';
 import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
-import { getDeals, type Entry } from '../libs/module.factory';
+import { getAgreements, type Entry } from '../libs/module.factory';
 import { parseArchive, reconcile, mergeArchive, serialize } from '../libs/archive.factory';
 import { judgeRefetchedItem, type ItemIssueCode } from '../libs/item-integrity';
 import { canPublish, extractSignerAddress } from '../libs/gates';
@@ -40,7 +40,7 @@ const RECORDS_CONTRACT_ABI = [
  *
  * This action reproduces those reliable conditions on its own: it is a tiny,
  * dedicated action with its OWN 50-request budget and a fresh provider. Given a
- * publication it re-derives the archive state (getDeals + archive cat +
+ * publication it re-derives the archive state (getAgreements + archive cat +
  * reconcile) — exactly like writeBackArchiveCache — and writes the pointer
  * (confirm:true, mirrored from update). It is fired by the orchestrator after a
  * successful render whose envelope flagged pending cache drift, so the pointer's
@@ -124,8 +124,8 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
     }
     trace.push({ cache: 'pointer', publication, archiveCid: archiveCid || '(empty)' });
 
-    // Re-derive the drift: freshness oracle (getDeals) + archive cat + reconcile.
-    const deals: Entry[] = await getDeals(publicationModule, rpcs?.L2);
+    // Re-derive the drift: freshness oracle (getAgreements) + archive cat + reconcile.
+    const deals: Entry[] = await getAgreements(publicationModule, rpcs?.L2);
     const archive = archiveCid ? parseArchive(await catFile(gateway!, archiveCid)) : null;
     const { needsFetch, integrityIssues } = reconcile(deals, archive);
     trace.push({

@@ -205,7 +205,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
         archiveCid = decodeArchiveCid(archiveCid);
       } catch (e) {
         // Cache pointer is non-authoritative (RFC trust model: the cache is a
-        // performance optimization, getDeals is the correctness oracle). A failed
+        // performance optimization, getAgreements is the correctness oracle). A failed
         // pointer read must never fail the render — degrade to the no-archive
         // (N-cat) path, which fetchCollections handles when archiveCid is ''.
         console.log(

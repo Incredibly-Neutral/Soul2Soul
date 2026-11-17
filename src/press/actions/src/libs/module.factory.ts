@@ -20,7 +20,7 @@ import type {
 import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 
 // ── Module ABIs (Base) ────────────────────────────────────────────────────
-// Entry tuple returned by getLatest / getDeals / getOffers.
+// Entry tuple returned by getLatest / getAgreements / getOffers.
 const ENTRY_COMPONENTS = [
   { name: 'genesis', type: 'bytes32' },
   { name: 'author', type: 'address' },
@@ -38,7 +38,7 @@ const MODULE_ABI = [
   },
   {
     type: 'function',
-    name: 'getDeals',
+    name: 'getAgreements',
     stateMutability: 'view',
     inputs: [
       { name: 'offset', type: 'uint256' },
@@ -458,7 +458,7 @@ export const getLatestEntry = async (
 };
 
 /** Enumerate all deals for this publication (paginated). Entry.cid is the latest. */
-export const getDeals = async (
+export const getAgreements = async (
   publicationModule: string,
   rpcs?: string[],
   pageSize = 100,
@@ -469,7 +469,7 @@ export const getDeals = async (
       'L2',
       publicationModule,
       MODULE_ABI,
-      'getDeals',
+      'getAgreements',
       [offset, pageSize],
       rpcs,
     );
@@ -576,7 +576,7 @@ export const verifyDecryptedBody = (
 
 /**
  * Replaces lens.factory `fetchByQuery` for the "filter by publication" case.
- * The module instance IS the publication, so this is getDeals() + cat each cid.
+ * The module instance IS the publication, so this is getAgreements() + cat each cid.
  */
 export const fetchByPublication = async (
   publicationModule: string,
@@ -588,7 +588,7 @@ export const fetchByPublication = async (
 };
 
 /**
- * ONE pass over a publication's deals: getDeals → readItemByEntry (the single
+ * ONE pass over a publication's deals: getAgreements → readItemByEntry (the single
  * cat + integrity choke point) → toBody. Bodies come out in DEAL ORDER and a
  * bad item becomes an {@link ItemSkip} (never an exception, never a rendered
  * body), carrying `cause` so a caller can tell a hash mismatch from an
@@ -609,7 +609,7 @@ const readPublicationItems = async (
   entries: Entry[];
   skips: ItemSkip[];
 }> => {
-  const entries = await getDeals(publicationModule, rpcs);
+  const entries = await getAgreements(publicationModule, rpcs);
   const reads = await Promise.all(entries.map((entry) => readItemByEntry(entry, gateway)));
 
   const bodies: any[] = [];
