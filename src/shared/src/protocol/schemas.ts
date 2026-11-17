@@ -17,12 +17,14 @@ export const manifestSchema = z.object({
   recordsFactory: z.string(),
   pkp: z.string(),
   litActions: z.object({
-    prep: z.string(),
-    render: z.string(),
-    update: z.string(),
-    maintainCache: z.string().optional(),
-    repointArchive: z.string().optional(),
-    encrypt: z.string().optional(),
-    decrypt: z.string().optional(),
+    prep: z.string().min(1),
+    render: z.string().min(1),
+    update: z.string().min(1),
+    // `.min(1)`: present means deployed. The action reader rejects a key that
+    // carries the empty string, and this schema has to answer the same way.
+    maintainCache: z.string().min(1).optional(),
+    repointArchive: z.string().min(1).optional(),
+    encrypt: z.string().min(1).optional(),
+    decrypt: z.string().min(1).optional(),
   }),
 });

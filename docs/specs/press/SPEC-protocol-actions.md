@@ -641,10 +641,12 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   isolated bounds below assume one URL per chain. `getDomainOwnerAndModules` at most 6 (2 walk, one
   `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getManifest` 2 (one `getRecord`,
   one `VERSION`), the same 2 whether or not the caller passes the factory; `getPublicationFactory`
-  1. Per action that is a fixed prologue, one URL per chain: prep 8 (the document read plus
-  discovery); render, update, maintain-cache and repoint-archive 9 each (one pre-gate
-  `publication_factory` read, at most 6 for discovery, plus the document read and `VERSION`).
-  Against `main`: prep 6 → 8, render 11 → 9, and update, maintain-cache and repoint-archive 12 → 9.
+  1. Per action that is a fixed prologue, one URL per chain: prep 7 (one `publication_factory`
+  read, at most 6 for discovery; prep reads no document); render 8 (the document read plus
+  `VERSION`, at most 6 for discovery, and no pre-gate factory read); update, maintain-cache and
+  repoint-archive 9 each (one pre-gate `publication_factory` read, at most 6 for discovery, plus the
+  document read and `VERSION`).
+  Against `main`: prep 6 → 7, render 11 → 8, and update, maintain-cache and repoint-archive 12 → 9.
   `main` spent the difference on a module-list read plus role and `NAME()` probes, and on a
   five-request protocol path.
 - **`publication_factory` read from a hardcoded records module (2026-11-13):** `getPublicationFactory`

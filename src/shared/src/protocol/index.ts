@@ -79,7 +79,16 @@ export const getManifest = async (
     );
   }
 
-  const manifest = manifestSchema.parse(raw);
+  // The schema's output is the document: everything but the factory discovery
+  // was handed and the module it predicts.
+  let manifest: Omit<S2SManifest, 'moduleFactory' | 'publicationModule'>;
+  try {
+    manifest = manifestSchema.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `manifest: the '${MANIFEST_KEY}' record does not have the document's shape: ${(error as Error).message}`,
+    );
+  }
 
   const onChainVersion = (await getContract({
     address: configModule! as Address,
