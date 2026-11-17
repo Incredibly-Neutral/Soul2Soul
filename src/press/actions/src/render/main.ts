@@ -177,7 +177,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       signature,
     );
 
-    const protocolInfo = await getManifest(false, rpcs);
+    const protocolInfo = await getManifest(rpcs);
     if (!protocolInfo) throw 'Failed to fetch protocol info';
 
     // Per-publication content archive pointer (ENS text record). Mirrors

@@ -98,7 +98,7 @@ beforeEach(() => {
 
 describe('getManifest', () => {
   it('maps the document onto S2SManifest', async () => {
-    const info = await getManifest(false);
+    const info = await getManifest();
 
     expect(info.version).toBe('1.0.0');
     expect(info.gateway).toBe('https://gw.example');
@@ -116,7 +116,7 @@ describe('getManifest', () => {
   });
 
   it('reads the manifest record then VERSION() on the records module, and nothing else', async () => {
-    await getManifest(false);
+    await getManifest();
 
     expect(vi.mocked(evmRead).mock.calls).toHaveLength(2);
 
@@ -133,7 +133,7 @@ describe('getManifest', () => {
   });
 
   it('reads the record before the version, so an unreadable document fails first', async () => {
-    await getManifest(false);
+    await getManifest();
 
     const order = vi.mocked(evmRead).mock.calls.map(([, , , method]) => method);
     expect(order).toEqual(['getRecord', 'VERSION']);
@@ -142,7 +142,7 @@ describe('getManifest', () => {
   it('passes the caller’s L2 RPC URLs to both reads', async () => {
     const rpcs = { L1: ['http://l1'], L2: ['http://l2'] };
 
-    await getManifest(false, rpcs);
+    await getManifest(rpcs);
 
     for (const call of vi.mocked(evmRead).mock.calls) {
       expect(call[5]).toEqual(rpcs.L2);
@@ -153,13 +153,13 @@ describe('getManifest', () => {
     mocks.manifest = JSON.stringify(document({ version: '1.2.0' }));
     mocks.version = '1';
 
-    const info = await getManifest(false);
+    const info = await getManifest();
 
     expect(info.version).toBe('1.2.0');
   });
 
   it('omits an optional action CID the document does not carry, rather than returning it as empty', async () => {
-    const info = await getManifest(false);
+    const info = await getManifest();
 
     expect('maintainCache' in info.litActions).toBe(false);
     expect('repointArchive' in info.litActions).toBe(false);
@@ -182,7 +182,7 @@ describe('getManifest', () => {
       }),
     );
 
-    const info = await getManifest(false);
+    const info = await getManifest();
 
     expect(info.litActions.maintainCache).toBe('bafycache');
     expect(info.litActions.repointArchive).toBe('bafyrepoint');
@@ -203,20 +203,20 @@ describe('getManifest', () => {
       }),
     );
 
-    await expect(getManifest(false)).rejects.toThrow(/manifest: .*litActions\.encrypt/);
+    await expect(getManifest()).rejects.toThrow(/manifest: .*litActions\.encrypt/);
   });
 
   it('throws naming manifest when the record is missing, without reading VERSION()', async () => {
     mocks.manifest = '';
 
-    await expect(getManifest(false)).rejects.toThrow(/manifest: no 'manifest' record/);
+    await expect(getManifest()).rejects.toThrow(/manifest: no 'manifest' record/);
     expect(versionReads()).toHaveLength(0);
   });
 
   it('throws naming manifest when the read reverts', async () => {
     mocks.manifest = 'revert';
 
-    await expect(getManifest(false)).rejects.toThrow(
+    await expect(getManifest()).rejects.toThrow(
       /manifest: the 'manifest' record is unreadable/,
     );
     expect(versionReads()).toHaveLength(0);
@@ -225,7 +225,7 @@ describe('getManifest', () => {
   it('throws naming manifest on invalid JSON', async () => {
     mocks.manifest = '{"version":"2.1.0",';
 
-    await expect(getManifest(false)).rejects.toThrow(
+    await expect(getManifest()).rejects.toThrow(
       /manifest: the 'manifest' record is not valid JSON/,
     );
     expect(versionReads()).toHaveLength(0);
@@ -234,15 +234,15 @@ describe('getManifest', () => {
   it('throws naming manifest when the JSON is not an object', async () => {
     mocks.manifest = '"2.1.0"';
 
-    await expect(getManifest(false)).rejects.toThrow(/manifest: .*not a JSON object/);
+    await expect(getManifest()).rejects.toThrow(/manifest: .*not a JSON object/);
   });
 
   it('throws naming manifest when version is absent or not x.y.z', async () => {
     mocks.manifest = JSON.stringify(document({ version: '2.1' }));
-    await expect(getManifest(false)).rejects.toThrow(/manifest: 'version'/);
+    await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
 
     mocks.manifest = JSON.stringify(document({ version: undefined }));
-    await expect(getManifest(false)).rejects.toThrow(/manifest: 'version'/);
+    await expect(getManifest()).rejects.toThrow(/manifest: 'version'/);
   });
 
   it('throws naming manifest when a required address is missing or empty', async () => {
@@ -255,27 +255,27 @@ describe('getManifest', () => {
       'pkp',
     ]) {
       mocks.manifest = JSON.stringify(document({ [field]: '' }));
-      await expect(getManifest(false)).rejects.toThrow(new RegExp(`manifest: '${field}'`));
+      await expect(getManifest()).rejects.toThrow(new RegExp(`manifest: '${field}'`));
 
       mocks.manifest = JSON.stringify(document({ [field]: undefined }));
-      await expect(getManifest(false)).rejects.toThrow(new RegExp(`manifest: '${field}'`));
+      await expect(getManifest()).rejects.toThrow(new RegExp(`manifest: '${field}'`));
     }
   });
 
   it('throws naming manifest when litActions or one of the three CIDs is missing', async () => {
     const { litActions, ...withoutActions } = document();
     mocks.manifest = JSON.stringify(withoutActions);
-    await expect(getManifest(false)).rejects.toThrow(/manifest: 'litActions'/);
+    await expect(getManifest()).rejects.toThrow(/manifest: 'litActions'/);
 
     mocks.manifest = JSON.stringify(document({ litActions: { prep: 'bafyprep', render: 'bafyrender' } }));
-    await expect(getManifest(false)).rejects.toThrow(/manifest: 'litActions\.update'/);
+    await expect(getManifest()).rejects.toThrow(/manifest: 'litActions\.update'/);
   });
 
   it('throws naming manifest on a major mismatch with VERSION()', async () => {
     mocks.manifest = JSON.stringify(document({ version: '3.0.0' }));
     mocks.version = '1';
 
-    await expect(getManifest(false)).rejects.toThrow(
+    await expect(getManifest()).rejects.toThrow(
       /manifest: document version 3\.0\.0 is not compatible with VERSION\(\) 1/,
     );
   });
@@ -283,11 +283,11 @@ describe('getManifest', () => {
   it('throws naming manifest when VERSION() is unreadable', async () => {
     mocks.version = 'revert';
 
-    await expect(getManifest(false)).rejects.toThrow(/manifest: VERSION\(\) is unreadable/);
+    await expect(getManifest()).rejects.toThrow(/manifest: VERSION\(\) is unreadable/);
   });
 
   it('takes the factory discovery asks from the document, not from a second read', async () => {
-    const info = await getManifest(false);
+    const info = await getManifest();
 
     expect(info.moduleFactory).toBe(PUB_RECORD);
     expect(info.publicationFactory).toBe(PUB_RECORD);
@@ -298,6 +298,6 @@ describe('getManifest', () => {
   it('compares the document major against VERSION() as a whole string', async () => {
     mocks.version = '1.0.0';
 
-    await expect(getManifest(false)).rejects.toThrow(/VERSION\(\) 1\.0\.0/);
+    await expect(getManifest()).rejects.toThrow(/VERSION\(\) 1\.0\.0/);
   });
 });

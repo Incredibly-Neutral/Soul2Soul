@@ -248,7 +248,7 @@ describe('getManifest', () => {
       latest: PUBLICATION,
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
     expect(info.publicationFactory.toLowerCase()).toBe(FACTORY);
@@ -277,7 +277,7 @@ describe('getManifest', () => {
       latest: A,
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(A);
   });
@@ -289,7 +289,7 @@ describe('getManifest', () => {
       count: 'revert',
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
   });
@@ -302,7 +302,7 @@ describe('getManifest', () => {
       latest: AT(7),
     });
 
-    expect((await getManifest(false, client, client)).publicationModule).toBe(PUBLICATION);
+    expect((await getManifest(client, client)).publicationModule).toBe(PUBLICATION);
   });
 
   it('leaves publicationModule undefined when nothing resolves, rather than guessing', async () => {
@@ -312,7 +312,7 @@ describe('getManifest', () => {
       count: 'revert',
     });
 
-    expect((await getManifest(false, client, client)).publicationModule).toBeUndefined();
+    expect((await getManifest(client, client)).publicationModule).toBeUndefined();
   });
 
   it('reads the whole manifest from one document under one key', async () => {
@@ -321,7 +321,7 @@ describe('getManifest', () => {
       names: { [RECORDS]: 'S2S Records Module', [PUBLICATION]: 'S2S Publication Module V3' },
     });
 
-    const info = await getManifest(false, client, client);
+    const info = await getManifest(client, client);
 
     expect(info).toEqual({
       version: '1.0.0',
@@ -348,7 +348,7 @@ describe('getManifest', () => {
       version: '1',
     });
 
-    expect((await getManifest(false, client, client)).version).toBe('1.4.7');
+    expect((await getManifest(client, client)).version).toBe('1.4.7');
   });
 
   it('rejects a document whose major differs from VERSION(), naming both', async () => {
@@ -359,7 +359,7 @@ describe('getManifest', () => {
       version: '1',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/2\.0\.0.*VERSION\(\) 1/);
+    await expect(getManifest(client, client)).rejects.toThrow(/2\.0\.0.*VERSION\(\) 1/);
   });
 
   it('throws naming the manifest key when the record was never written', async () => {
@@ -369,7 +369,7 @@ describe('getManifest', () => {
       manifest: '',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
   });
 
   it('throws naming the manifest key when the record is not JSON, with no fallback', async () => {
@@ -379,7 +379,7 @@ describe('getManifest', () => {
       manifest: 'data_gateway=ipfs.mock',
     });
 
-    await expect(getManifest(false, client, client)).rejects.toThrow(/'manifest'/);
+    await expect(getManifest(client, client)).rejects.toThrow(/'manifest'/);
     // The flat keys are gone: nothing is read past the document.
     expect(countCalls(calls, 'getRecords')).toBe(1);
     expect(calls).not.toContain('moduleAddress');

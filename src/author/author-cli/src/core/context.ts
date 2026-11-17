@@ -139,7 +139,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const l1 = createPublicClient({ chain: mainnet, transport: http(l1Rpc) }) as SharedPublicClient;
   const l2 = createPublicClient({ chain: base, transport: http(l2Rpc) }) as SharedPublicClient;
 
-  const protocolInfo = await getManifest(config.environment === 'dev', l1, l2);
+  const protocolInfo = await getManifest(l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
   const encryptActionCid = resolveEncryptActionCid(config, protocolInfo);
   const decryptActionCid = resolveDecryptActionCid(config, protocolInfo);

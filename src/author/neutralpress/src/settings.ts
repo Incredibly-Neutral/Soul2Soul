@@ -60,7 +60,7 @@ export class DSGSettingsTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 
 					this.plugin.ctrlr.protocolInfo = await getManifest(
-						this.plugin.ctrlr, this.plugin.oxo.ctrlr.account["ETH_MAINNET"].provider, this.plugin.oxo.ctrlr.account["BASE"].provider
+						this.plugin.oxo.ctrlr.account["ETH_MAINNET"].provider, this.plugin.oxo.ctrlr.account["BASE"].provider
 					);
 				});
 			});

@@ -63,7 +63,7 @@ async function main(input: PrepInput): Promise<ActionResult<PrepData>> {
 
     // The manifest first: it carries the factory discovery asks, so there is no
     // separate record read and nothing to null-check.
-    const { moduleFactory: publicationFactory } = await getManifest(false, rpcs);
+    const { moduleFactory: publicationFactory } = await getManifest(rpcs);
 
     const { multisig, configModule, publicationModule } = await getDomainOwnerAndModules(
       publication,

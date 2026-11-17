@@ -178,7 +178,7 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
     // The manifest first: it carries the factory discovery asks, so the action
     // spends one document read rather than a separate record read plus this one.
-    const protocolInfo = await getManifest(false, rpcs);
+    const protocolInfo = await getManifest(rpcs);
     const publicationFactory = protocolInfo.moduleFactory;
 
     let modules: Awaited<ReturnType<typeof getDomainOwnerAndModules>>;

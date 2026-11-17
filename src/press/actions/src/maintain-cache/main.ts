@@ -76,7 +76,7 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
 
     // The manifest first: it carries the factory discovery asks, so the action
     // spends one document read rather than a separate record read plus this one.
-    const protocolInfo = await getManifest(false, rpcs);
+    const protocolInfo = await getManifest(rpcs);
     const publicationFactory = protocolInfo.moduleFactory;
 
     const { publicationModule } = await getDomainOwnerAndModules(

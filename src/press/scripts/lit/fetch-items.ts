@@ -49,7 +49,7 @@ const timeout = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // not fatal: the NAME() scan below still resolves the module.
 async function getFactoryFromManifest(): Promise<`0x${string}` | null> {
   try {
-    const manifest = await getManifest(false, l1, l2);
+    const manifest = await getManifest(l1, l2);
     return (manifest.moduleFactory || null) as `0x${string}` | null;
   } catch (e) {
     console.log(`manifest unreadable: ${e instanceof Error ? e.message : String(e)}`);

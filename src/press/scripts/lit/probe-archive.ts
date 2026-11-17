@@ -203,7 +203,7 @@ async function main() {
   console.log(`protocol safe:   ${protoSafe}`);
   console.log(`protocol config: ${protoConfig}`);
   if (!protoConfig) { console.error('FATAL: no protocol config module'); process.exit(1); }
-  const manifest = await getManifest(false, l1, l2);
+  const manifest = await getManifest(l1, l2);
   const { ensRecords, publicationFactory: pubFactory, pkp, gateway: dataGateway } = manifest;
   const maintainCacheAction = manifest.litActions.maintainCache;
   console.log(`ens_records:        ${ensRecords}`);

@@ -63,7 +63,8 @@ const fail = (detail: string): never => {
  *
  *   1. `getRecord('manifest')` — the JSON document. Every address and CID comes
  *      from it, including the factory discovery asks. There is no key list: the
- *      flat record keys it replaced are gone, and no reader reads them.
+ *      flat record keys it replaced are gone, and no reader reads them. A
+ *      `version` argument reads the mirror instead, `manifest@x.y.z`.
  *   2. `VERSION()` — the module's own version, which is the document's major.
  *      The module is not redeployed when a CID changes, so the document names its
  *      own `x.y.z` and only its first segment has to equal `VERSION()`; anything
@@ -76,42 +77,52 @@ const fail = (detail: string): never => {
  *
  * Validated by hand rather than with the shared zod schema: zod cannot enter an
  * action bundle. A missing record, unparsable JSON, a bad shape and a major
- * mismatch each throw an error naming `manifest`.
+ * mismatch each throw an error naming the key read.
+ *
+ * `version` names which document: absent is the live `manifest`; `x.y.z` is the
+ * mirror `manifest@x.y.z`, the snapshot published under that version, whose
+ * action CIDs the Lit group may since have replaced. A record that answers a
+ * different version than the one named is a bad record and throws.
  *
  * Typed against the shared `S2SManifest` so the two readers cannot drift in
  * shape. Only the type crosses the package boundary: the shared reader itself
  * is viem and cannot enter an action bundle.
  */
 export const getManifest = async (
-  dev: boolean,
   rpcs?: { L1: string[]; L2: string[] },
+  version?: string,
 ): Promise<S2SManifest> => {
 
   try {
 
+  const key = version ? `${MANIFEST_KEY}@${version}` : MANIFEST_KEY;
+
   // One record, the document, on the constant.
   let document: unknown;
   try {
-    document = await evmRead('L2', PROTOCOL_RECORDS_MODULE, RECORD_ABI, 'getRecord', [MANIFEST_KEY], rpcs?.L2);
+    document = await evmRead('L2', PROTOCOL_RECORDS_MODULE, RECORD_ABI, 'getRecord', [key], rpcs?.L2);
   } catch (error) {
-    fail(`the '${MANIFEST_KEY}' record is unreadable on ${PROTOCOL_RECORDS_MODULE}: ${errMsg(error)}`);
+    fail(`the '${key}' record is unreadable on ${PROTOCOL_RECORDS_MODULE}: ${errMsg(error)}`);
   }
   if (!isNonEmptyString(document)) {
-    fail(`no '${MANIFEST_KEY}' record on ${PROTOCOL_RECORDS_MODULE}`);
+    fail(`no '${key}' record on ${PROTOCOL_RECORDS_MODULE}`);
   }
 
   let raw: any;
   try {
     raw = JSON.parse(document as string);
   } catch (error) {
-    fail(`the '${MANIFEST_KEY}' record is not valid JSON: ${errMsg(error)}`);
+    fail(`the '${key}' record is not valid JSON: ${errMsg(error)}`);
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    fail(`the '${MANIFEST_KEY}' record is not a JSON object`);
+    fail(`the '${key}' record is not a JSON object`);
   }
 
   if (typeof raw.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(raw.version)) {
     fail(`'version' is missing or not x.y.z (got ${JSON.stringify(raw.version)})`);
+  }
+  if (version && raw.version !== version) {
+    fail(`the '${key}' record carries version ${raw.version}, not ${version}`);
   }
   for (const field of REQUIRED_STRINGS) {
     if (!isNonEmptyString(raw[field])) {
