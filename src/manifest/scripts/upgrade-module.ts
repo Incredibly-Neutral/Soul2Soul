@@ -60,8 +60,11 @@ const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
 const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
 const safe = addressEnv('PROTOCOL_SAFE_ADDRESS');
 
+// Naming the proxy, or having it in `.env`, saves the factory a call: the checks
+// below ask the proxy for its own safe, so a wrong address is refused either way.
 const proxy =
   (args[0] as `0x${string}` | undefined) ??
+  optionalAddressEnv('MANIFEST_MODULE_ADDRESS') ??
   ((await publicClient.readContract({
     address: factory,
     abi: FACTORY_ABI,
