@@ -65,10 +65,10 @@ const fail = (detail: string): never => {
  *      from it, including the factory discovery asks. There is no key list: the
  *      flat record keys it replaced are gone, and no reader reads them. A
  *      `version` argument reads the mirror instead, `manifest@x.y.z`.
- *   2. `VERSION()` — the module's own version, which is the document's major.
- *      The module is not redeployed when a CID changes, so the document names its
- *      own `x.y.z` and only its first segment has to equal `VERSION()`; anything
- *      else is a document this module cannot be read alongside.
+ *   2. `VERSION()` — the module's own version, which is the manifest's
+ *      major.minor ("0.1"), not a bare major. The module is not redeployed when a
+ *      CID changes, so the document names its own `x.y.z` and only the prefix the
+ *      two share has to agree: "0.1.0" reads beside "0.1", "0.2.0" does not.
  *
  * No ENS walk: the constant is the root, so there is nothing above it to ask.
  * This is also why every action starts here rather than with a single
@@ -143,8 +143,8 @@ export const getManifest = async (
     }
   }
 
-  // The contract's own version, on the same address. It is the document's
-  // major and nothing else, so the comparison is against the whole string.
+  // The contract's own version, on the same address. It is the manifest's
+  // major.minor, so the comparison is against the document's first two segments.
   let onChainVersion: unknown;
   try {
     onChainVersion = await evmRead('L2', PROTOCOL_RECORDS_MODULE, VERSION_ABI, 'VERSION', [], rpcs?.L2);
@@ -155,8 +155,8 @@ export const getManifest = async (
     fail(`VERSION() on ${PROTOCOL_RECORDS_MODULE} answered nothing`);
   }
 
-  const documentMajor = (raw.version as string).split('.')[0];
-  if (documentMajor !== onChainVersion) {
+  const documentPrefix = (raw.version as string).split('.').slice(0, 2).join('.');
+  if (documentPrefix !== onChainVersion) {
     fail(`document version ${raw.version} is not compatible with VERSION() ${onChainVersion}`);
   }
 

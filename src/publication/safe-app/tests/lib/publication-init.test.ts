@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { AbiCoder, Interface, getAddress } from 'ethers';
-import { Abi_S2SPublicationModulesFactoryV6 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV6';
+import { Abi_S2SPublicationModulesFactoryV0_1 } from '@s2s/publication-contracts/abis/S2SPublicationModulesFactoryV0_1';
 import {
   S2S_MODULE_KIND_PUBLICATION,
   S2S_MODULE_KIND_RECORDS,
@@ -46,7 +46,7 @@ const AUTHOR2 = getAddress('0x7777777777777777777777777777777777777777');
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 const protocolInfo = { moduleFactory: MODULE_FACTORY };
-const factoryIface = new Interface(Abi_S2SPublicationModulesFactoryV6);
+const factoryIface = new Interface(Abi_S2SPublicationModulesFactoryV0_1);
 
 /** The factory's answer for each kind: one module per (safe, kind). */
 const MODULES: Record<string, string> = {

@@ -20,7 +20,7 @@ import { mainnet, base } from 'viem/chains';
 import type { Hex } from 'viem';
 
 import {
-  S2SRecordsModule,
+  S2SRecordsModuleV0_1,
   S2SRecordsModuleFactory,
   S2SPublicationModuleV2Factory,
 } from '@s2s/publication-contracts';
@@ -127,7 +127,7 @@ export const newPublication: CommandSpec = {
       protocolInfo: ctx.protocolInfo,
       recordsModuleFactoryAbi: S2SRecordsModuleFactory,
       publicationModuleFactoryAbi: S2SPublicationModuleV2Factory,
-      recordsModuleAbi: S2SRecordsModule,
+      recordsModuleAbi: S2SRecordsModuleV0_1,
       ipfs: ctx.ipfs,
       githubToken: ctx.config.github.token ?? '',
       createFeed: createFeedStub,

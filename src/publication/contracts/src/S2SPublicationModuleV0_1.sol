@@ -5,11 +5,11 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
- * @title S2SPublicationModuleV6
+ * @title S2SPublicationModuleV0_1
  * @notice The publication module for a fresh start: no migration, one kind, one
  *         initializer, one approval set.
  *
- * A module is deployed by S2SPublicationModulesFactoryV6 behind a proxy whose
+ * A module is deployed by S2SPublicationModulesFactoryV0_1 behind a proxy whose
  * address depends only on (factory, safe, kind). Nothing here is carried over
  * from an earlier module: no reinitializer, no sentinel in a slot somebody else
  * spent, no deprecated name. This is the first module a fresh deployment runs,
@@ -63,9 +63,18 @@ interface IPublicationFactoryApprovals {
     function protocolSafe() external view returns (address);
 }
 
-contract S2SPublicationModuleV6 is Initializable, UUPSUpgradeable {
+contract S2SPublicationModuleV0_1 is Initializable, UUPSUpgradeable {
 
     address public safe;
+
+    /// @notice The name discovery matches, and the version this build stamps.
+    ///         The name carries the shape's lineage number, not the manifest
+    ///         version: `publicationModuleVersion` reads the suffix, and this
+    ///         surface is the one that has `admit`/`reject`, so it keeps the
+    ///         number the deployed shape answers. The filename follows the
+    ///         manifest; the name does not.
+    string public constant NAME = "S2S Publication Module V6";
+    string public constant VERSION = "0.1";
 
     // ── Constants ──────────────────────────────────────────────────
 
@@ -269,10 +278,6 @@ contract S2SPublicationModuleV6 is Initializable, UUPSUpgradeable {
             revert ImplementationNotApproved(newImplementation);
         }
         emit ContractUpgraded(newImplementation);
-    }
-
-    function NAME() external pure returns (string memory) {
-        return "S2S Publication Module V6";
     }
 
     // ── Single write: makeOffer (append + place in agreements or offers) ─

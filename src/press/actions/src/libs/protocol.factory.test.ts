@@ -6,7 +6,7 @@
  * mapped onto `S2SManifest`, optional action CIDs omitted rather than present as
  * the empty string, and a failure that names `manifest` for each of the four
  * ways a document can be unreadable — missing, unparsable, wrong shape, wrong
- * major. It is the only read an action makes before discovery: the document
+ * major.minor prefix. It is the only read an action makes before discovery: the document
  * carries the factory, so there is no separate `publication_factory` call left
  * to pin.
  */
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   /** The `manifest` record: JSON, `''` for absent, or `'revert'`. */
   manifest: '' as string,
   /** What `VERSION()` on the module answers, or `'revert'`. */
-  version: '1' as string,
+  version: '0.1' as string,
   /** Still answered for `getRecords`, so a stray key-list read shows up. */
   records: [] as any[],
 }));
@@ -73,7 +73,7 @@ const recordsReads = () =>
 
 /** The document as the writer publishes it: camelCase, every required field. */
 const document = (overrides: Record<string, unknown> = {}) => ({
-  version: '1.0.0',
+  version: '0.1.0',
   gateway: 'https://gw.example',
   ensRegistry: '0x' + '02'.repeat(20),
   ensRecords: '0x' + '03'.repeat(20),
@@ -92,7 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.answer = '';
   mocks.manifest = JSON.stringify(document());
-  mocks.version = '1';
+  mocks.version = '0.1';
   mocks.records = [];
 });
 
@@ -100,7 +100,7 @@ describe('getManifest', () => {
   it('maps the document onto S2SManifest', async () => {
     const info = await getManifest();
 
-    expect(info.version).toBe('1.0.0');
+    expect(info.version).toBe('0.1.0');
     expect(info.gateway).toBe('https://gw.example');
     expect(info.ensRegistry).toBe('0x' + '02'.repeat(20));
     expect(info.ensRecords).toBe('0x' + '03'.repeat(20));
@@ -149,13 +149,13 @@ describe('getManifest', () => {
     }
   });
 
-  it('accepts a document whose minor segment differs from VERSION(), 1.2.0 beside 1', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '1.2.0' }));
-    mocks.version = '1';
+  it('accepts a document whose patch segment differs from VERSION(), 0.1.2 beside 0.1', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.1.2' }));
+    mocks.version = '0.1';
 
     const info = await getManifest();
 
-    expect(info.version).toBe('1.2.0');
+    expect(info.version).toBe('0.1.2');
   });
 
   it('omits an optional action CID the document does not carry, rather than returning it as empty', async () => {
@@ -271,13 +271,27 @@ describe('getManifest', () => {
     await expect(getManifest()).rejects.toThrow(/manifest: 'litActions\.update'/);
   });
 
-  it('throws naming manifest on a major mismatch with VERSION()', async () => {
-    mocks.manifest = JSON.stringify(document({ version: '3.0.0' }));
-    mocks.version = '1';
+  it('throws naming manifest on a major.minor mismatch with VERSION()', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.3.0' }));
+    mocks.version = '0.1';
 
     await expect(getManifest()).rejects.toThrow(
-      /manifest: document version 3\.0\.0 is not compatible with VERSION\(\) 1/,
+      /manifest: document version 0\.3\.0 is not compatible with VERSION\(\) 0\.1/,
     );
+  });
+
+  it('refuses a document whose minor moved, even on the same major', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '0.2.0' }));
+    mocks.version = '0.1';
+
+    await expect(getManifest()).rejects.toThrow(/is not compatible with VERSION\(\) 0\.1/);
+  });
+
+  it('refuses a document whose major differs', async () => {
+    mocks.manifest = JSON.stringify(document({ version: '1.1.0' }));
+    mocks.version = '0.1';
+
+    await expect(getManifest()).rejects.toThrow(/is not compatible with VERSION\(\) 0\.1/);
   });
 
   it('throws naming manifest when VERSION() is unreadable', async () => {
@@ -295,9 +309,9 @@ describe('getManifest', () => {
     expect(recordReads()[0][4]).toEqual(['manifest']);
   });
 
-  it('compares the document major against VERSION() as a whole string', async () => {
-    mocks.version = '1.0.0';
+  it('compares the document prefix against VERSION() as a whole string', async () => {
+    mocks.version = '0.1.0';
 
-    await expect(getManifest()).rejects.toThrow(/VERSION\(\) 1\.0\.0/);
+    await expect(getManifest()).rejects.toThrow(/VERSION\(\) 0\.1\.0/);
   });
 });

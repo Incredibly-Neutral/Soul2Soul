@@ -21,11 +21,11 @@ const ACTION = 'evm-update';
 
 // Why a publication with an unresolved module is refused. One sentence, because
 // the two outcomes are one refusal to the caller: the factory answered and named
-// nothing with code at it, or it did not answer at all (a factory older than
-// V6 has no `moduleAddress`). A failed read is not classified here — see
+// nothing with code at it, or it did not answer at all (older builds have no
+// `moduleAddress`). A failed read is not classified here — see
 // libs/ens.factory.ts and GAP-15 — so the RPC cause is appended, not interpreted.
 const MODULES_UNRESOLVED =
-  'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused';
+  'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused';
 
 const RECORDS_CONTRACT_ABI = [
   'function getText(bytes32 node, string key) view returns (string)',

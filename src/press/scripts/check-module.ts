@@ -5,8 +5,6 @@ dotenv.config();
 
 import {Artifact_S2SPublicationModuleFactory} from '@s2s/publication-contracts/artifacts/S2SPublicationModuleFactory';
 import {Artifact_S2SPublicationModule} from '@s2s/publication-contracts/artifacts/S2SPublicationModule';
-import {Artifact_S2SRecordsModuleFactory} from '@s2s/publication-contracts/artifacts/S2SRecordsModuleFactory';
-import {Artifact_S2SRecordsModule} from '@s2s/publication-contracts/artifacts/S2SRecordsModule';
 
 async function main() {
 	const network = process.env.HARDHAT_NETWORK || process.env.NETWORK || 'base';
@@ -22,7 +20,6 @@ async function main() {
 	});
 
 	const pubFactoryAddr = process.env.PUBLICATION_FACTORY_ADDRESS;
-	const recFactoryAddr = process.env.RECORDS_FACTORY_ADDRESS;
 
 	console.log(`\n=== Checking deployments on ${network} ===\n`);
 
@@ -63,22 +60,6 @@ async function main() {
 		}
 	} else {
 		console.log('--- S2SPublicationModuleFactory: not set (PUBLICATION_FACTORY_ADDRESS)');
-	}
-
-	if (recFactoryAddr) {
-		console.log(`\n--- S2SRecordsModuleFactory @ ${recFactoryAddr} ---`);
-		try {
-			const recFactory = getContract({
-				address: recFactoryAddr as `0x${string}`,
-				abi: Artifact_S2SRecordsModuleFactory.abi,
-				client,
-			});
-			console.log(`  ✅ Factory accessible`);
-		} catch (e: any) {
-			console.log(`  ❌ Error: ${e.message}`);
-		}
-	} else {
-		console.log('\n--- S2SRecordsModuleFactory: not set (RECORDS_FACTORY_ADDRESS)');
 	}
 }
 

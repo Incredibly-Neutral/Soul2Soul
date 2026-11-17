@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { getDomainOwnerAndModules } from './ens.factory';
 
 // ============================================================================
-// Module discovery through the V6 factory.
+// Module discovery through the factory.
 //
 // What these tests hold down:
 //
@@ -13,8 +13,8 @@ import { getDomainOwnerAndModules } from './ens.factory';
 //      no version walk in this path.
 //   2. A prediction with no code at it, a zero answer, and an answer for a kind
 //      the factory does not know are all "no module", never a discovered one.
-//   3. A factory that does not answer throws. A revert (a factory older than
-//      V6, with no `moduleAddress`) and a transport failure are indistinguishable
+//   3. A factory that does not answer throws. A revert (an older build, with no
+//      `moduleAddress`) and a transport failure are indistinguishable
 //      to the caller, and this code does not try to tell them apart: both fail
 //      the action loudly, and neither is reported as a null module.
 //   4. The ENS walk is unchanged (nameWrapper -> ownerOf at namehash(publication)),
@@ -250,7 +250,7 @@ describe('getDomainOwnerAndModules — both kinds from the factory', () => {
     expect(state.reads.length).toBe(4);
   });
 
-  it('fails loudly when the factory does not answer — a factory older than V6 reverts', async () => {
+  it('fails loudly when the factory does not answer — an older factory reverts', async () => {
     nameKind(RECORDS_KIND, RECORDS);
     nameKind(PUBLICATION_KIND, PUBLICATION);
     state.factoryFailure = 'revert';

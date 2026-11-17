@@ -16,7 +16,7 @@ import {
   toBytes32Id,
   type S2SIPFSMethods,
 } from '@s2s/soul2soul-shared';
-import { S2SRecordsModule, S2SPublicationModuleV2 } from '@s2s/publication-contracts';
+import { S2SRecordsModuleV0_1, S2SPublicationModuleV2 } from '@s2s/publication-contracts';
 import { BaseError, type Address, type Hex } from 'viem';
 import type { TxRunner } from '@s2s/soul2soul-shared';
 import { CliError } from '../lib/errors';
@@ -204,7 +204,7 @@ export class PublicationService {
     try {
       const configCid = (await this.options.l2Runner.genericRead(
         this.configModule,
-        JSON.stringify(S2SRecordsModule),
+        JSON.stringify(S2SRecordsModuleV0_1),
         'getRecord',
         ['config'],
       )) as string;

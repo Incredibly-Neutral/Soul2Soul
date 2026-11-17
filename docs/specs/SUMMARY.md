@@ -58,10 +58,11 @@ Deno-sandboxed JS. `Lit.Actions.getPrivateKey` is the current primitive (enclave
 in-sandbox); the old threshold `signAndCombineEcdsa` is removed.
 
 **Record stores — do not conflate:**
-- `S2SRecordsModule` (a.k.a. *configModule*) — KV config for protocol/publication (gateways, action
+- `S2SRecordsModuleV0_1` (a.k.a. *configModule*) — KV config for protocol/publication (gateways, action
   CIDs, PKP fields, `ens_records` address). The protocol's own record is the single `manifest`
   document (INV-2) plus its `manifest@x.y.z` history, read with `getRecord`; `VERSION()` on this
-  module is the document's major and nothing else, and it is the only version a reader compares.
+  module returns `"0.1"`, the document's major and minor, and it is the only version a reader compares.
+  The suffix is that same pair, `V0_1`, while the manifest is `0.1.0`.
   The flat keys that preceded the document are gone, written by nothing and read by nothing.
 - The **ENS records contract** (`protocolInfo.ensRecords`) — stores **`contenthash_wrapped`** (the
 **site root**); read/written via `getText`/`setText`. **Only the PKP writes this, as the "publish."**

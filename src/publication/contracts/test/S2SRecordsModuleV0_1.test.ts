@@ -53,15 +53,15 @@ const seed = (keys: string[], values: string[]): Hex =>
 
 async function deploy() {
   const protocolSafe = await viem.deployContract('MockCaller');
-  const factory = await viem.deployContract('S2SPublicationModulesFactoryV6', [protocolSafe.address]);
+  const factory = await viem.deployContract('S2SPublicationModulesFactoryV0_1', [protocolSafe.address]);
   const safe = await viem.deployContract('MockCaller');
   return { protocolSafe, factory, safe };
 }
 
-describe('S2SRecordsModuleV2', () => {
+describe('S2SRecordsModuleV0_1', () => {
   it('is created by the same factory at the address a client computes in advance', async () => {
     const { protocolSafe, factory, safe } = await deploy();
-    const impl = await viem.deployContract('S2SRecordsModuleV2', [factory.address, protocolSafe.address]);
+    const impl = await viem.deployContract('S2SRecordsModuleV0_1', [factory.address, protocolSafe.address]);
 
     assert.equal(await impl.read.moduleKind(), RECORDS_KIND);
     await protocolSafe.write.exec([
@@ -88,7 +88,7 @@ describe('S2SRecordsModuleV2', () => {
       }),
     ]);
 
-    const module = await viem.getContractAt('S2SRecordsModuleV2', predicted);
+    const module = await viem.getContractAt('S2SRecordsModuleV0_1', predicted);
     assert.equal((await module.read.safe()).toLowerCase(), safe.address.toLowerCase());
     assert.equal((await module.read.factory()).toLowerCase(), factory.address.toLowerCase());
     assert.equal(await module.read.NAME(), 'S2S Records Module');
@@ -108,7 +108,7 @@ describe('S2SRecordsModuleV2', () => {
 
   it('writes only for the owning Safe, and only the Safe can start an upgrade', async () => {
     const { protocolSafe, factory, safe } = await deploy();
-    const impl = await viem.deployContract('S2SRecordsModuleV2', [factory.address, protocolSafe.address]);
+    const impl = await viem.deployContract('S2SRecordsModuleV0_1', [factory.address, protocolSafe.address]);
     await protocolSafe.write.exec([
       factory.address,
       encodeFunctionData({ abi: FACTORY_ABI, functionName: 'setImplementation', args: [RECORDS_KIND, impl.address] }),
@@ -118,7 +118,7 @@ describe('S2SRecordsModuleV2', () => {
       encodeFunctionData({ abi: FACTORY_ABI, functionName: 'createModule', args: [safe.address, RECORDS_KIND, '0x'] }),
     ]);
     const module = await viem.getContractAt(
-      'S2SRecordsModuleV2',
+      'S2SRecordsModuleV0_1',
       await factory.read.moduleOf([safe.address, RECORDS_KIND]),
     );
 
@@ -139,9 +139,9 @@ describe('S2SRecordsModuleV2', () => {
 
   it('upgrades only to a build approved for the records kind', async () => {
     const { protocolSafe, factory, safe } = await deploy();
-    const first = await viem.deployContract('S2SRecordsModuleV2', [factory.address, protocolSafe.address]);
-    const second = await viem.deployContract('S2SRecordsModuleV2', [factory.address, protocolSafe.address]);
-    const publicationBuild = await viem.deployContract('S2SPublicationModuleV6', [
+    const first = await viem.deployContract('S2SRecordsModuleV0_1', [factory.address, protocolSafe.address]);
+    const second = await viem.deployContract('S2SRecordsModuleV0_1', [factory.address, protocolSafe.address]);
+    const publicationBuild = await viem.deployContract('S2SPublicationModuleV0_1', [
       factory.address,
       protocolSafe.address,
     ]);

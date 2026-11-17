@@ -67,7 +67,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 
 Entry point: **`@s2s/soul2soul-shared/lit-actions`** — **types + ABIs only, no runtime** (INV-7).
 Imports: types `S2SJob`, `S2STemplateConfig`, `S2SBody`, `S2SRipple`, `S2SPublicationConfig`,
-`S2SManifest`, `PKP`, `S2SContentInfo`; and the contract ABIs (`Abi_S2SRecordsModule`, etc.).
+`S2SManifest`, `PKP`, `S2SContentInfo`; and the contract ABIs (`Abi_S2SRecordsModuleV0_1`, etc.).
 These compile into each bundled action — they are this package's code, not an external service.
 **Constraint:** nothing imported here may pull in a runtime/Node dep (would break the bundle). The
 zod validators in shared are deliberately _not_ exported through this entry.
@@ -162,7 +162,7 @@ answers `moduleAddress(safe, bytes32 kind)`, where `kind` is
 `keccak256("s2s.module.publication")` (`0x93cd3ffe…`) or `keccak256("s2s.module.records")`
 (`0x32af023b…`), derived at bundle load with `ethers.utils.id(...)`; the same pair lives in
 `shared/src/protocol/constants.ts` for the app. A Safe the factory has no record of still gets an
-answer: `S2SPublicationModulesFactoryV6.sol:299-304` returns a fresh prediction, and `address(0)`
+answer: `S2SPublicationModulesFactoryV0_1.sol:299-304` returns a fresh prediction, and `address(0)`
 when the kind has no implementation set. An answer without code at it is no module, and so is the
 zero answer. A revert happens when the record itself names a factory older than `moduleAddress`:
 the read fails, the action fails loudly, and the publication is refused. The code does not separate
@@ -179,7 +179,7 @@ predictions are only probe order, and the Safe's `getModulesPaginated` list (:19
 `supportsInterface` (:149) decide. This change does not touch that path. **Outside this package:**
 the operator tools `scripts/lit/fetch-items.ts` and `scripts/lit/probe-archive.ts` still scan by
 `NAME()`; they are pinned to the legacy fleet and use the viem helper from `shared`, not this
-package's discovery, so the V6-only rule does not govern them. **Gotcha:** returns `undefined`
+package's discovery, so the kind-based rule does not govern them. **Gotcha:** returns `undefined`
 (not an error) if modules missing — caller must treat falsy `jobs` as failure.
 
 **Slug-change detection (auto `remove`):** for each contentId, prep reads the first (genesis)
@@ -531,7 +531,7 @@ section is relied upon.
 
 | fn                                                                                    | in              | out                                                                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getManifest(dev, rpcs?)`                                                             | `boolean`, RPCs? | `S2SManifest` — one `getRecord('manifest')` on the `PROTOCOL_RECORDS_MODULE` constant, parsed as the JSON document, then one `VERSION()` the document's first segment must equal; `publicationFactory` and `moduleFactory` are the same field of that document, so there is nothing left to reconcile                                                                                                              |
+| `getManifest(dev, rpcs?)`                                                             | `boolean`, RPCs? | `S2SManifest` — one `getRecord('manifest')` on the `PROTOCOL_RECORDS_MODULE` constant, parsed as the JSON document, then one `VERSION()` the document's major and minor must equal; `publicationFactory` and `moduleFactory` are the same field of that document, so there is nothing left to reconcile                                                                                                              |
 | `getDomainOwnerAndModules(pub, rpcs, factory)`                                        | `pub`, rpcs, factory | `{ multisig, configModule, publicationModule }` (null per kind the factory cannot name) — one `moduleAddress(safe, kind)` per kind, kept only when `evmGetCode` finds code; a throwing factory read propagates                                                                                              |
 | `getConfig(configCid?, configModule)`                                                 | cid?/addr       | `S2SPublicationConfig` (parsed JSON)                                                                                                                                                                                                                                                                        |
 | `getTaskConfig(config, body)`                                                         | config, body    | `{ templateConfig, rippleConfigs }` (throws if no mapping)                                                                                                                                                                                                                                                  |
@@ -628,15 +628,19 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   document per version and no key convention, so the mirror is not carried forward.
 - **Version agreement.** Three numbers, one meaning. The document names `x.y.z`: major changes when
   the document's shape changes, the second when an optional field is added, the third when a value
-  moves, an action CID or an address. A CID change is a small bump, so it lands in the third digit. `VERSION()` on `S2SRecordsModuleV2` is the major and nothing else (`"1"`), because the
-  module is not redeployed when the document moves; every reader compares the document's first
-  segment to that whole string and throws on a difference rather than guessing.
+  moves, an action CID or an address. A CID change is a small bump, so it lands in the third digit.
+  The contract carries the manifest version's major and minor and nothing else: `VERSION()` on
+  `S2SRecordsModuleV0_1` returns `"0.1"`, and the suffix is that pair joined by an underscore,
+  `V0_1`, never the patch and never `x.y.z`. A contract refactor moves that number; a document
+  bump inside `0.1` does not, because the module is not redeployed when the document moves. Every
+  reader compares the document's major and minor to `VERSION()` and throws on a difference rather
+  than guessing.
   `update-protocol.ts` builds the document with a plain `MANIFEST_VERSION` constant and asserts it
   against `VERSION()` before the batch, which is what keeps the hardcoded address safe.
-  Only major `1` has ever been written: nothing is live, so there is no old document to read and no
-  compatibility path from one.
+  The first document is `0.1.0`, and only `0.1` has ever been written: nothing is live, so there is
+  no old document to read and no compatibility path from one.
 - **The manifest has its own kind, and its own module (2026-11-17, written; not deployed).**
-  `src/manifest/src/S2SManifestModule.sol` is the document's contract, in its own package beside the
+  `src/manifest/src/S2SManifestModuleV0_1.sol` is the document's contract, in its own package beside the
   contracts: `pnpm compile`, `pnpm test` and the four scripts (`deploy:impl`, `set:impl`,
   `create:module`, `upgrade:module`) live there, and nothing about it is in the publication package
   except the factory it is approved by. The three calls the safe has to make are proposed to it the
@@ -652,7 +656,9 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   document shape from another, so a constant claiming a major would have to be kept in step with
   stored history by every upgrade, and a mismatch would make a document unreadable. The document
   names its own major, a reader that only understands major 1 refuses a 2.x document itself, and a
-  major bump is a new writer rather than a new contract.
+  major bump is a new writer rather than a new contract. The name still carries the manifest's major
+  and minor, `V0_1`, so a reader can pair the contract it found with the document it reads; the
+  `x.y.z` itself lives in the document and in `setManifest`'s argument.
   **What the contract enforces:** `x.y.z` only, three digit segments, no leading zeros
   (`LeadingZero`), a version written once (`VersionExists`, so repointing a CID is a new third digit
   and a pinned read never changes answer), and strictly increasing across `(major, minor, patch)`

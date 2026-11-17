@@ -117,7 +117,7 @@ describe('update — the factory names no module', () => {
 
     expect(out.ok).toBe(false);
     expect(out.error).toBe(
-      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as a factory older than V6 cannot, so a publication from an earlier factory is refused',
+      'publication modules unresolved: the factory named no module with code at it, or did not answer moduleAddress at all, as an older factory cannot, so a publication from an earlier factory is refused',
     );
     // The real discovery asked the factory once per kind, for the Safe the ENS
     // walk found, and each answer was the zero address.

@@ -27,7 +27,7 @@
  *
  * Requires in .env:
  *   MANIFEST_IMPLEMENTATION_ADDRESS  printed by pnpm deploy:impl
- *   PUBLICATION_FACTORY_ADDRESS      the V6 factory
+ *   PUBLICATION_FACTORY_ADDRESS      the factory
  *   PROTOCOL_SAFE_ADDRESS            the safe that must sign
  *   PROTOCOL_PRIVATE_KEY             an owner or delegate of that safe, to propose
  *   BASE_RPC_URL                     optional RPC override
@@ -81,7 +81,7 @@ if ((declaredFactory as string).toLowerCase() !== factory.toLowerCase()) {
 }
 // The ABI is a list, so membership is a scan: `'name' in abi` tests the array's
 // indices and is false however complete the ABI is.
-const abi = artifact('S2SManifestModule').abi as readonly { name?: string }[];
+const abi = artifact('S2SManifestModuleV0_1').abi as readonly { name?: string }[];
 const uups = abi.some((entry) => entry.name === 'proxiableUUID');
 if (!uups) refuse('The build has no proxiableUUID in its ABI, so it is not a UUPS implementation.');
 const slot = await publicClient.readContract({

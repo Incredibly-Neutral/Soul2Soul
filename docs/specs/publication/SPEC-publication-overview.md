@@ -42,7 +42,7 @@ write itself. Everything a holder does is a Safe transaction; everything a reade
 
 | piece      | what it is                                                               | child                                        |
 | ---------- | ------------------------------------------------------------------------ | -------------------------------------------- |
-| account    | Safe + `S2SPublicationModuleV5` (proxy) + `S2SRecordsModule` (immutable) | [account](SPEC-publication-account.md)       |
+| account    | Safe + `S2SPublicationModuleV0_1` (proxy) + `S2SRecordsModuleV0_1` (immutable) | [account](SPEC-publication-account.md)       |
 | agreements | offer/deal sets, version log, whitelists                                 | [agreements](SPEC-publication-agreements.md) |
 | read gate  | who may decrypt a pending offer                                          | [review](SPEC-publication-review.md)         |
 | surface    | `safe-app` — the five tabs, proposals, config build                      | [admin-app](SPEC-publication-admin-app.md)   |
@@ -67,6 +67,10 @@ what makes the deploy key unprivileged. A reader needs no change: `isPublication
 already matches any `S2S Publication Module V<n>` (`shared/src/protocol/module-name.ts`), and a module
 the app binds is addressed by kind — `moduleAddress(safe, kind)` on the factory, the same answer before
 and after a create — so no version read stands between the record and the module.
+
+The generations above are history. A contract's suffix is the manifest version's major and minor
+joined by an underscore, `V0_1` while the manifest is `0.1.0`; a contract refactor moves that number,
+and a build superseded inside it does not stay.
 
 ## Lifecycle
 
@@ -125,7 +129,7 @@ Recorded because the folded text was read by people who may still quote it.
 | `safe-app` workflow uses `grantLicense` / `acceptLicense` / `revokeLicense`               | `makeOffer` / `admit` / `reject` — V2 renamed the trio, V3 split the ending in two (see [agreements](SPEC-publication-agreements.md#corrections-to-the-folded-spec))                                                                       |
 | "the offer path is only reachable through the publication Safe"                           | false: a whitelisted **developer** passes `canPublish` and their genesis becomes an offer                                                                                                                                                  |
 | `retract` "author withdraws fully, safe demotes" listed under one row of `onlySafe`       | V2: the function has no modifier, the branch is on `msg.sender`. V3: two functions — `reject` is `onlySafe` and reversible, `retract` is the genesis author's and terminal                                                                 |
-| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | still true of the reader, which matches any `S2S Publication Module V<n>`; the admin app no longer probes. It asks `moduleAddress(safe, kind)`, binds `S2SPublicationModuleV6` for the publication kind and calls `admit`/`reject` by name |
+| `NAME() == "S2S Publication Module V2"`, V1 "accepted for backwards-compatible discovery" | still true of the reader, which matches any `S2S Publication Module V<n>`; the admin app no longer probes. It asks `moduleAddress(safe, kind)`, binds `S2SPublicationModuleV0_1` for the publication kind and calls `admit`/`reject` by name |
 | `ConfigBuilder` "fetch `mapping.json` verbatim" as _the_ description                      | still verbatim, but the build also pins the commit, `dagPut`s a template DAG with real IPLD links, and mirrors to two providers                                                                                                            |
 | `website-starter` "legacy local render loop"                                              | replaced: the dev loop drives the real render action through `S2S_RUNNER_URL`, with `contract-pull` as a mode                                                                                                                              |
 | `templateConfig` "filters" implied to work                                                | `templateConfig[].filters` is read by nothing                                                                                                                                                                                              |

@@ -1,7 +1,7 @@
 /**
  * Deploy the manifest implementation.
  *
- * `S2SManifestModule` is deployed once per factory and shared by every proxy of
+ * `S2SManifestModuleV0_1` is deployed once per factory and shared by every proxy of
  * its kind: it keeps no per-proxy state, so nothing is re-initialised when a new
  * module is created over it. The address of a module is a function of
  * `(factory, safe, kind)` and of the factory's proxy creation code, none of which
@@ -23,7 +23,7 @@
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY        deployer key, pays gas, carries no privilege
  *   PROTOCOL_SAFE_ADDRESS       the safe the factory answers
- *   PUBLICATION_FACTORY_ADDRESS the V6 factory this implementation belongs to
+ *   PUBLICATION_FACTORY_ADDRESS the factory this implementation belongs to
  *   BASE_RPC_URL                optional RPC override
  *
  * stdout is `MANIFEST_IMPLEMENTATION_ADDRESS=0x…`, one line, to paste into .env.
@@ -59,7 +59,7 @@ if (factoryAnswers.toLowerCase() !== protocolSafe.toLowerCase()) {
   process.exit(1);
 }
 
-const { abi, bytecode } = artifact('S2SManifestModule');
+const { abi, bytecode } = artifact('S2SManifestModuleV0_1');
 const account = wallet();
 if (!account.account) {
   say('PROTOCOL_PRIVATE_KEY produced no account.');

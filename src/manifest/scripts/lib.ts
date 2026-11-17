@@ -127,7 +127,7 @@ export function wallet() {
 export function artifact(contract: string) {
   return JSON.parse(
     readFileSync(
-      fileURLToPath(new URL(`../artifacts/src/S2SManifestModule.sol/${contract}.json`, import.meta.url)),
+      fileURLToPath(new URL(`../artifacts/src/S2SManifestModuleV0_1.sol/${contract}.json`, import.meta.url)),
       'utf8',
     ),
   ) as { abi: readonly unknown[]; bytecode: `0x${string}` };

@@ -12,7 +12,7 @@
  * module declares no `receive` and no `fallback`, so `0x` reverts the whole upgrade
  * on a delegatecall to nothing. The data has to be a call the new implementation
  * answers. `moduleKind()` is a pure view: it returns the same word before and after
- * the upgrade, it changes no storage, and every module of the V6 shape answers it.
+ * the upgrade, it changes no storage, and every module of this shape answers it.
  * So the payload is `moduleKind()` and the wrapper is
  * `upgradeToAndCall(target, moduleKind())`.
  *
@@ -113,12 +113,12 @@ const KINDS: Record<Hex, KindInfo> = {
   [keccak256(stringToHex('s2s.module.publication'))]: {
     label: 'publication',
     env: 'PUBLICATION_IMPLEMENTATION_ADDRESS',
-    artifact: 'S2SPublicationModuleV6',
+    artifact: 'S2SPublicationModuleV0_1',
   },
   [keccak256(stringToHex('s2s.module.records'))]: {
     label: 'records',
     env: 'RECORDS_IMPLEMENTATION_ADDRESS',
-    artifact: 'S2SRecordsModuleV2',
+    artifact: 'S2SRecordsModuleV0_1',
   },
 };
 
@@ -237,7 +237,7 @@ async function main() {
   } catch (error) {
     if (!isNoAnswer(error)) throw error;
     refuse(
-      `${proxy} predates the V6 proxy shape: its kind cannot be read, and the payload for it is not this script's to guess.`,
+      `${proxy} predates the current proxy shape: its kind cannot be read, and the payload for it is not this script's to guess.`,
     );
   }
 
@@ -264,7 +264,7 @@ async function main() {
   } catch (error) {
     if (!isNoAnswer(error)) throw error;
     refuse(
-      `${currentImpl} does not answer factory() and NAME(), so it is not a V6 module and this proxy cannot be checked against a factory.`,
+      `${currentImpl} does not answer factory() and NAME(), so it is not a current module and this proxy cannot be checked against a factory.`,
     );
   }
   if (factory === '0x0000000000000000000000000000000000000000') {
@@ -326,7 +326,7 @@ async function main() {
   } catch (error) {
     if (!isNoAnswer(error)) throw error;
     refuse(
-      `${target} does not answer moduleKind(), factory() and proxiableUUID(): it is not a V6 module, and the protocol safe approves only a module of that shape with pnpm set:impl.`,
+      `${target} does not answer moduleKind(), factory() and proxiableUUID(): it is not a current module, and the protocol safe approves only a module of that shape with pnpm set:impl.`,
     );
   }
 

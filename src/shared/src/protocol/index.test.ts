@@ -111,7 +111,7 @@ interface ChainOptions {
   predictions?: Record<string, Address>;
   /** The `manifest` record's value; `undefined` means the key was never written */
   manifest?: string;
-  /** `VERSION()`; the on-chain contract's own version */
+  /** `VERSION()`; the on-chain contract's own version, the manifest's major.minor */
   version?: string;
 }
 
@@ -122,7 +122,7 @@ interface ChainOptions {
  */
 const manifestDocument = (overrides: Record<string, unknown> = {}): string =>
   JSON.stringify({
-    version: '1.0.0',
+    version: '0.1.0',
     gateway: 'ipfs.mock',
     ensRegistry: 'ens-registry',
     ensRecords: 'ens-records',
@@ -171,7 +171,7 @@ function makeClients(options: ChainOptions) {
       return options.predictions?.[String(args[1])] ?? REVERT;
     }
     if (functionName === 'getRecords') return [options.manifest ?? RECORD_VALUES[0]];
-    if (functionName === 'VERSION') return options.version ?? '1';
+    if (functionName === 'VERSION') return options.version ?? '0.1';
     throw new Error(`unexpected call ${functionName}`);
   };
 
@@ -324,7 +324,7 @@ describe('getManifest', () => {
     const info = await getManifest(client, client);
 
     expect(info).toEqual({
-      version: '1.0.0',
+      version: '0.1.0',
       gateway: 'ipfs.mock',
       ensRegistry: 'ens-registry',
       ensRecords: 'ens-records',
@@ -340,26 +340,37 @@ describe('getManifest', () => {
     expect(countCalls(calls, 'VERSION')).toBe(1);
   });
 
-  it('carries a newer document on an unchanged VERSION(), differing only past the major', async () => {
+  it('carries a newer document on an unchanged VERSION(), differing only past the minor', async () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '1.4.7' }),
-      version: '1',
+      manifest: manifestDocument({ version: '0.1.4' }),
+      version: '0.1',
     });
 
-    expect((await getManifest(client, client)).version).toBe('1.4.7');
+    expect((await getManifest(client, client)).version).toBe('0.1.4');
   });
 
   it('rejects a document whose major differs from VERSION(), naming both', async () => {
     const { client } = makeClients({
       modules: [RECORDS],
       names: { [RECORDS]: 'S2S Records Module' },
-      manifest: manifestDocument({ version: '2.0.0' }),
-      version: '1',
+      manifest: manifestDocument({ version: '1.0.0' }),
+      version: '0.1',
     });
 
-    await expect(getManifest(client, client)).rejects.toThrow(/2\.0\.0.*VERSION\(\) 1/);
+    await expect(getManifest(client, client)).rejects.toThrow(/1\.0\.0.*VERSION\(\) 0\.1/);
+  });
+
+  it('rejects a document whose minor differs from VERSION(), on the same major', async () => {
+    const { client } = makeClients({
+      modules: [RECORDS],
+      names: { [RECORDS]: 'S2S Records Module' },
+      manifest: manifestDocument({ version: '0.2.0' }),
+      version: '0.1',
+    });
+
+    await expect(getManifest(client, client)).rejects.toThrow(/0\.2\.0.*VERSION\(\) 0\.1/);
   });
 
   it('throws naming the manifest key when the record was never written', async () => {

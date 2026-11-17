@@ -1,4 +1,4 @@
-export type Abi_S2SPublicationModulesFactoryV6 = [
+export type Abi_S2SPublicationModulesFactoryV0_1 = [
   {
     "inputs": [
       {
@@ -240,6 +240,19 @@ export type Abi_S2SPublicationModulesFactoryV6 = [
     ],
     "name": "ModuleCreated",
     "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   },
   {
     "inputs": [],
@@ -629,7 +642,7 @@ export type Abi_S2SPublicationModulesFactoryV6 = [
     "type": "function"
   }
 ];
-export const Abi_S2SPublicationModulesFactoryV6: Abi_S2SPublicationModulesFactoryV6 = [
+export const Abi_S2SPublicationModulesFactoryV0_1: Abi_S2SPublicationModulesFactoryV0_1 = [
   {
     "inputs": [
       {
@@ -871,6 +884,19 @@ export const Abi_S2SPublicationModulesFactoryV6: Abi_S2SPublicationModulesFactor
     ],
     "name": "ModuleCreated",
     "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   },
   {
     "inputs": [],

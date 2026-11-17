@@ -1,8 +1,8 @@
 /**
- * Set the V6 factory's implementation, one kind at a time.
+ * Set the factory's implementation, one kind at a time.
  *
  * `setImplementation(bytes32 kind, address impl)` is the privileged half of the
- * deploy: S2SPublicationModulesFactoryV6 accepts it only from its immutable
+ * deploy: S2SPublicationModulesFactoryV0_1 accepts it only from its immutable
  * `protocolSafe`. It moves nothing. New modules of that kind are built over the
  * implementation; every module already deployed keeps its address and its
  * storage, and moves only when its own Safe calls `upgradeToAndCall`.
@@ -38,7 +38,7 @@
  * shape prints instead of proposing or sending, whoever holds the key. The default
  * is text, which proposes and prints only the narrative.
  *
- * This is the V6 pair only. The V4/V5 scripts beside it encode different
+ * This is the current pair only. The older scripts beside it encode different
  * selectors against different factories and cannot be adapted by changing an
  * address.
  *
@@ -49,7 +49,7 @@
  * Requires in .env:
  *   PROTOCOL_PRIVATE_KEY               key that proposes or sends the call
  *   PROTOCOL_SAFE_ADDRESS              the safe the factory must answer
- *   PUBLICATION_FACTORY_ADDRESS        the V6 factory, as printed by pnpm deploy:factory
+ *   PUBLICATION_FACTORY_ADDRESS        the factory, as printed by pnpm deploy:factory
  *   PUBLICATION_IMPLEMENTATION_ADDRESS optional: the publication-kind module
  *   RECORDS_IMPLEMENTATION_ADDRESS     optional: the records-kind module
  *   BASE_RPC_URL / VITE_DRPC_API_KEY   optional RPC override
@@ -91,7 +91,7 @@ const ARTIFACT_ROOT = resolve(__dirname, '../artifacts');
 type Wallet = WalletClient<HttpTransport, typeof base, Account>;
 type Pub = PublicClient<HttpTransport, typeof base>;
 
-const FACTORY_NAME = 'S2SPublicationModulesFactoryV6';
+const FACTORY_NAME = 'S2SPublicationModulesFactoryV0_1';
 
 const FACTORY_ENV = 'PUBLICATION_FACTORY_ADDRESS';
 
@@ -365,7 +365,7 @@ async function main() {
     if (!isRevert(error)) {
       refuse(`The RPC failed while reading protocolSafe() on ${factory}: ${reason(error)}`);
     }
-    refuse(`${factory} has no protocolSafe(), so it is not the V6 factory.`);
+    refuse(`${factory} has no protocolSafe(), so it is not the factory.`);
   }
   if (getAddress(safeAnswers) !== expectedSafe) {
     refuse(

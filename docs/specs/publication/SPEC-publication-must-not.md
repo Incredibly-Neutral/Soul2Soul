@@ -85,10 +85,10 @@ act alone; no author can let themselves in.
 Mechanism: `admit` and `reject` are `onlySafe` (`:240`, `:277`); `acceptOffer` is a deprecated alias
 that goes through `admit` and carries the same modifier (`:249`). Evidence: `onlySafe` reverts
 `OnlySafe()` at `:155-157`; the app binds a module by its KIND, not by a probed version: the
-publication kind gets `S2SPublicationModuleV6` and is called `admit`/`reject` by name
+publication kind gets `S2SPublicationModuleV0_1` and is called `admit`/`reject` by name
 (`src/publication/safe-app/src/lib/safe-integration.ts`, `moduleWrapper`), tested in
-`src/publication/safe-app/tests/lib/safe-integration.test.ts` — "binds the V6 publication and V2
-records ABIs" and "never probes NAME(): the kind, not a string, decides the ABI".
+`src/publication/safe-app/tests/lib/safe-integration.test.ts`: the kind picks the bound ABI, and
+"never probes NAME(): the kind, not a string, decides the ABI".
 
 **`no-self-made-offer`** — A publication can never create the offer it then accepts. If it could, an
 admission would be a formality over a version the safe itself wrote.

@@ -5,16 +5,15 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
- * @title S2SRecordsModuleV2
+ * @title S2SRecordsModuleV0_1
  * @notice The records module as a factory-deployed proxy: string to string records
  *         that only the owning Safe writes, behind the same proxy as every other
  *         kind, so its address is computed the same way.
  *
- * Why this exists beside S2SRecordsModule. That contract takes the Safe as an
- * immutable constructor argument, so its address cannot be known before it is
- * deployed, it cannot be upgraded, and the factory cannot build it. This one
- * takes the Safe from the factory in `initialize`, so the address depends only
- * on (factory, safe, kind) and is knowable in advance.
+ * The Safe arrives from the factory in `initialize`, never as a constructor
+ * argument, so the address depends only on (factory, safe, kind) and is knowable
+ * in advance; nothing has to be deployed first to learn it, and the module can
+ * be upgraded.
  *
  * Three declarations the factory reads before it will set this implementation:
  * `moduleKind()`, `factory()`, and `proxiableUUID()`. An upgrade target is then
@@ -25,7 +24,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * order with a swap-pop on delete. `NAME` and `VERSION` stay for callers that
  * read them.
  */
-interface IS2SRecordsModuleV2 {
+interface IS2SRecordsModuleV0_1 {
     event RecordSet(string indexed key, string value);
     event RecordsSetBatch(string[] keys, string[] values);
     event RecordDeleted(string indexed key);
@@ -68,13 +67,13 @@ interface IRecordsFactoryApprovals {
     function protocolSafe() external view returns (address);
 }
 
-contract S2SRecordsModuleV2 is IS2SRecordsModuleV2, Initializable, UUPSUpgradeable {
+contract S2SRecordsModuleV0_1 is IS2SRecordsModuleV0_1, Initializable, UUPSUpgradeable {
     string public constant NAME = "S2S Records Module";
-    /// @notice The manifest document's major version, and only that: the
-    ///         document names its own `x.y.z` and a reader compares the two on
-    ///         the first segment. This module is not redeployed when the
-    ///         document moves, so a patch or minor there is not a version here.
-    string public constant VERSION = "1";
+    /// @notice The manifest's major.minor, which this build implements. The
+    ///         document names its own `x.y.z`; a reader compares that prefix to
+    ///         this string, so a patch release of the document needs no redeploy
+    ///         while a minor does.
+    string public constant VERSION = "0.1";
 
     /// @notice This module's kind, in the one pattern every kind follows:
     ///         `s2s.module.<name>`. The factory approves upgrade targets per kind,
@@ -233,7 +232,7 @@ contract S2SRecordsModuleV2 is IS2SRecordsModuleV2, Initializable, UUPSUpgradeab
     }
 
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IS2SRecordsModuleV2).interfaceId || interfaceId == 0x01ffc9a7;
+        return interfaceId == type(IS2SRecordsModuleV0_1).interfaceId || interfaceId == 0x01ffc9a7;
     }
 
     // ── Internal ───────────────────────────────────────────────────

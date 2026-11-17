@@ -223,9 +223,10 @@ entry. This is the existing author/publication gate, extended to guard appends.
 
 - **Two `getManifest`** (here viem; action ethers) — same document shape, different stack; must
   co-evolve (INV-2). The viem one validates with `manifestSchema`; the action one validates by hand,
-  because zod cannot enter an action bundle. Both compare the document's first segment to `VERSION()`
-  as a whole string: that function returns the major and nothing else (`"1"`), so a `1.2.0` document
-  reads through the same module. The `dev` branch here is vestigial (GAP-8).
+  because zod cannot enter an action bundle. Both compare the document's major and minor to
+  `VERSION()` as a whole string: that function returns `"0.1"`, the manifest's first two
+  segments, so a `0.1.4` document reads through the same module. The `dev` branch here is
+  vestigial (GAP-8).
 - **PKP `tokenId`/`publicKey` vestigial** (GAP-11) — prune from `PKP`, `S2SManifest` pkp, and the
   record-key set.
 - zod exists client-side but not in actions — *by design*, not a gap.

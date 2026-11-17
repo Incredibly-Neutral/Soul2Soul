@@ -138,7 +138,7 @@ async function implementationAt(address: Hex): Promise<string> {
 
 async function deploy() {
   const protocolSafe = await viem.deployContract('MockCaller');
-  const factory = await viem.deployContract('S2SPublicationModulesFactoryV6', [protocolSafe.address]);
+  const factory = await viem.deployContract('S2SPublicationModulesFactoryV0_1', [protocolSafe.address]);
   const safe = await viem.deployContract('MockCaller');
   const otherSafe = await viem.deployContract('MockCaller');
   return { protocolSafe, factory, safe, otherSafe };
@@ -158,12 +158,12 @@ async function setImplementation(
   await protocolSafe.write.exec([factory.address, setImplData(kind, implementation)]);
 }
 
-describe('S2SPublicationModulesFactoryV6', () => {
+describe('S2SPublicationModulesFactoryV0_1', () => {
   it('refuses a protocol safe without code, and creates nothing before an implementation is set', async () => {
     const { factory, safe } = await deploy();
 
     await assert.rejects(
-      viem.deployContract('S2SPublicationModulesFactoryV6', ['0x0000000000000000000000000000000000000001']),
+      viem.deployContract('S2SPublicationModulesFactoryV0_1', ['0x0000000000000000000000000000000000000001']),
       /revert/i,
     );
 

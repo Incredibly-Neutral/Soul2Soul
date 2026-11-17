@@ -155,17 +155,18 @@ const protocolClient = () => createPublicClient({ transport: http(protocolRpcUrl
  * by this repo, so the version is a line in the diff a reviewer sees rather than
  * a value in someone's shell. Bump it here — the third digit for a value that
  * moved, an action CID or an address, the second for a new optional field, the
- * first for a shape an older reader must refuse — and the major has to equal
- * `VERSION()` on the records module.
+ * first for a shape an older reader must refuse — and its major.minor has to
+ * equal `VERSION()` on the records module.
  */
-const MANIFEST_VERSION = "1.0.0";
+const MANIFEST_VERSION = "0.1.0";
 
 /**
  * Refuse a document the module on chain cannot be read alongside.
  *
- * `VERSION()` is the contract's own version and stays 2.0.0: the document moves
- * without a redeploy, so only the major segment has to agree. Read through the
- * same RPC the factory probe uses.
+ * `VERSION()` is the contract's own version, and it is the manifest's
+ * major.minor as one string ("0.1"), not a bare major: the document moves
+ * without a redeploy, so the prefix the two share has to agree and the patch
+ * digit is free. Read through the same RPC the factory probe uses.
  */
 const assertManifestVersion = async (documentVersion: string): Promise<void> => {
   const client = protocolClient();
@@ -180,18 +181,20 @@ const assertManifestVersion = async (documentVersion: string): Promise<void> => 
   } catch (error) {
     throw new Error(
       `Could not read VERSION() on ${RECORDS_MODULE_ADDRESS}: ` +
-        `${error instanceof Error ? error.message : String(error)}. The document's major ` +
-        "segment has to match it, so the batch is not built without it."
+        `${error instanceof Error ? error.message : String(error)}. The document's major.minor ` +
+        "prefix has to match it, so the batch is not built without it."
     );
   }
 
-  const documentMajor = documentVersion.split(".")[0];
-  if (documentMajor !== onChainVersion) {
+  // Both are compared as the `major.minor` the document opens with, so "0.1.0"
+  // is read alongside a module answering "0.1", and a "0.2" module is not.
+  const documentPrefix = documentVersion.split(".").slice(0, 2).join(".");
+  if (documentPrefix !== onChainVersion) {
     throw new Error(
-      `The manifest document is ${documentVersion}, whose major is ${documentMajor}, but ` +
+      `The manifest document is ${documentVersion}, whose major.minor is ${documentPrefix}, but ` +
         `${RECORDS_MODULE_ADDRESS} answers VERSION() ${onChainVersion}. Every action compares ` +
-        "the two and refuses a document whose major differs, so nothing was proposed. Redeploy " +
-        "the records module, or publish the document under the major it answers."
+        "the two and refuses a document whose prefix differs, so nothing was proposed. Redeploy " +
+        "the records module, or publish the document under the prefix it answers."
     );
   }
 };

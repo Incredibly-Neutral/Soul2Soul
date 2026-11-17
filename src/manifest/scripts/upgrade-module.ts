@@ -23,7 +23,7 @@
  *   pnpm upgrade:module [proxy] [implementation] --data  print the calldata
  *
  * Requires in .env:
- *   PUBLICATION_FACTORY_ADDRESS  the V6 factory
+ *   PUBLICATION_FACTORY_ADDRESS  the factory
  *   PROTOCOL_SAFE_ADDRESS        the safe the module answers to
  *   PROTOCOL_PRIVATE_KEY         an owner or delegate of that safe, to propose
  *   BASE_RPC_URL                 optional RPC override

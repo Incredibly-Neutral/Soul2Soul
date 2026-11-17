@@ -55,7 +55,7 @@ const authorsParams = (authors: Hex[], devs: Hex[] = []): Hex =>
 
 async function deploy() {
   const protocolSafe = await viem.deployContract('MockCaller');
-  const factory = await viem.deployContract('S2SPublicationModulesFactoryV6', [protocolSafe.address]);
+  const factory = await viem.deployContract('S2SPublicationModulesFactoryV0_1', [protocolSafe.address]);
   const safe = await viem.deployContract('MockCaller');
   const author = (await viem.getWalletClients())[1].account.address as Hex;
   return { protocolSafe, factory, safe, author };
@@ -66,9 +66,9 @@ const genesisFor = (author: Hex, firstCid: string): Hex =>
   keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'string' }], [author, firstCid]));
 
 const implementation = (factory: Hex, protocolSafe: Hex) =>
-  viem.deployContract('S2SPublicationModuleV6', [factory, protocolSafe]);
+  viem.deployContract('S2SPublicationModuleV0_1', [factory, protocolSafe]);
 
-describe('S2SPublicationModuleV6', () => {
+describe('S2SPublicationModuleV0_1', () => {
   it('is accepted by the factory for its kind, and the module it deploys is initialised and usable', async () => {
     const { protocolSafe, factory, safe, author } = await deploy();
     const impl = await implementation(factory.address, protocolSafe.address);
@@ -81,7 +81,7 @@ describe('S2SPublicationModuleV6', () => {
     await safe.write.exec([factory.address, createData(safe.address, KIND, authorsParams([author]))]);
     const moduleAddress = await factory.read.moduleOf([safe.address, KIND]);
 
-    const module = await viem.getContractAt('S2SPublicationModuleV6', moduleAddress);
+    const module = await viem.getContractAt('S2SPublicationModuleV0_1', moduleAddress);
     assert.equal((await module.read.safe()).toLowerCase(), safe.address.toLowerCase());
     assert.equal(await module.read.moduleKind(), KIND);
     assert.equal(await module.read.canPublish([author]), true, 'the author list reached the initializer');
@@ -109,7 +109,7 @@ describe('S2SPublicationModuleV6', () => {
     await protocolSafe.write.exec([factory.address, setImplData(KIND, impl.address)]);
     await safe.write.exec([factory.address, createData(safe.address, KIND, '0x')]);
     const moduleAddress = await factory.read.moduleOf([safe.address, KIND]);
-    const module = await viem.getContractAt('S2SPublicationModuleV6', moduleAddress);
+    const module = await viem.getContractAt('S2SPublicationModuleV0_1', moduleAddress);
 
     // A second create is a no-op: the module exists, params are not reapplied,
     // and the initializer is never reached a second time.
@@ -190,7 +190,7 @@ describe('S2SPublicationModuleV6', () => {
     const moduleAddress = await factory.read.moduleOf([safe.address, KIND]);
 
     const stranger = (await viem.getWalletClients())[0];
-    const module = await viem.getContractAt('S2SPublicationModuleV6', moduleAddress);
+    const module = await viem.getContractAt('S2SPublicationModuleV0_1', moduleAddress);
 
     // OnlySafe() = 0xd7fed6bd. The gate runs before the upgrade, so nothing is
     // written and the pointer stays where it was.

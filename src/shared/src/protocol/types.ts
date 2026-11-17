@@ -25,7 +25,7 @@ export interface S2SManifest {
   /**
    * The version of the manifest document, `x.y.z`. Read from the on-chain
    * record, not from the controller: `VERSION()` reports the contract's own
-   * version and is only compared on its first segment.
+   * version, the manifest's major.minor, and is compared on that prefix.
    */
   version: string;
   gateway: string; // collapsed data+assets READ gateway

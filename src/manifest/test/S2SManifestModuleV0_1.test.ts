@@ -68,7 +68,7 @@ const seed = (version: string, json: string): Hex =>
 const FACTORY_ARTIFACT = JSON.parse(
   readFileSync(
     new URL(
-      '../../publication/contracts/artifacts/src/S2SPublicationModulesFactoryV6.sol/S2SPublicationModulesFactoryV6.json',
+      '../../publication/contracts/artifacts/src/S2SPublicationModulesFactoryV0_1.sol/S2SPublicationModulesFactoryV0_1.json',
       import.meta.url,
     ),
     'utf8',
@@ -80,7 +80,7 @@ const FACTORY_ARTIFACT = JSON.parse(
 const RECORDS_ARTIFACT = JSON.parse(
   readFileSync(
     new URL(
-      '../../publication/contracts/artifacts/src/S2SRecordsModuleV2.sol/S2SRecordsModuleV2.json',
+      '../../publication/contracts/artifacts/src/S2SRecordsModuleV0_1.sol/S2SRecordsModuleV0_1.json',
       import.meta.url,
     ),
     'utf8',
@@ -118,7 +118,7 @@ async function deploy() {
 /** A module owned by `safe`, created by the factory with nothing published. */
 async function manifestUnder(ctx: Awaited<ReturnType<typeof deploy>>) {
   const { protocolSafe, factory, safe } = ctx;
-  const impl = await viem.deployContract('S2SManifestModule', [factory.address, protocolSafe.address]);
+  const impl = await viem.deployContract('S2SManifestModuleV0_1', [factory.address, protocolSafe.address]);
   await protocolSafe.write.exec([
     factory.address,
     encodeFunctionData({
@@ -136,11 +136,11 @@ async function manifestUnder(ctx: Awaited<ReturnType<typeof deploy>>) {
       args: [safe.address, FACTORY_KIND, '0x'],
     }),
   ]);
-  const module = await viem.getContractAt('S2SManifestModule', predicted);
+  const module = await viem.getContractAt('S2SManifestModuleV0_1', predicted);
   return { module, impl };
 }
 
-describe('S2SManifestModule', () => {
+describe('S2SManifestModuleV0_1', () => {
   it('is created by the factory at the address a client computes in advance, under its own kind', async () => {
     const ctx = await deploy();
     const { module, impl } = await manifestUnder(ctx);
@@ -171,7 +171,7 @@ describe('S2SManifestModule', () => {
 
   it('seeds the first document in the same call that deploys it, and announces it by hash', async () => {
     const { protocolSafe, factory, safe } = await deploy();
-    const impl = await viem.deployContract('S2SManifestModule', [factory.address, protocolSafe.address]);
+    const impl = await viem.deployContract('S2SManifestModuleV0_1', [factory.address, protocolSafe.address]);
     await protocolSafe.write.exec([
       factory.address,
       encodeFunctionData({
@@ -354,7 +354,7 @@ describe('S2SManifestModule', () => {
   it('upgrades only to a build approved for the manifest kind', async () => {
     const ctx = await deploy();
     const { module, impl: first } = await manifestUnder(ctx);
-    const second = await viem.deployContract('S2SManifestModule', [ctx.factory.address, ctx.protocolSafe.address]);
+    const second = await viem.deployContract('S2SManifestModuleV0_1', [ctx.factory.address, ctx.protocolSafe.address]);
     const recordsBuild = await deployArtifact(RECORDS_ARTIFACT, [ctx.factory.address, ctx.protocolSafe.address]);
 
     await assert.rejects(

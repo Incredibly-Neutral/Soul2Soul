@@ -1,6 +1,6 @@
 // src/lib/safe-integration.ts
-import { Abi_S2SRecordsModuleV2 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV2';
-import { Abi_S2SPublicationModuleV6 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV6';
+import { Abi_S2SRecordsModuleV0_1 } from '@s2s/publication-contracts/abis/S2SRecordsModuleV0_1';
+import { Abi_S2SPublicationModuleV0_1 } from '@s2s/publication-contracts/abis/S2SPublicationModuleV0_1';
 
 import { toBytes32Id } from '@s2s/soul2soul-shared';
 import {
@@ -162,7 +162,7 @@ export class SafeIntegration {
         recordsModule = moduleWrapper(
           recordsModule,
           recordsAddress,
-          Abi_S2SRecordsModuleV2,
+          Abi_S2SRecordsModuleV0_1,
           provider,
           isListed,
           wasListed,
@@ -170,7 +170,7 @@ export class SafeIntegration {
         publicationModule = moduleWrapper(
           publicationModule,
           publicationAddress,
-          Abi_S2SPublicationModuleV6,
+          Abi_S2SPublicationModuleV0_1,
           provider,
           isListed,
           wasListed,
@@ -333,9 +333,9 @@ export class SafeIntegration {
    * without a reload, and hasRecordsModule/hasPublicationModule flip so the app
    * switches to its normal UI.
    *
-   * The ABI is the kind's ABI — V6 for the publication module, V2 for records —
-   * with no NAME() probe: a module deployed by the factory over `kind` is that
-   * kind, and its kind is what the factory was asked for.
+   * The ABI is the kind's ABI — publication or records — with no NAME() probe: a
+   * module deployed by the factory over `kind` is that kind, and its kind is what
+   * the factory was asked for.
    */
   async adoptModules(recordsModule?: string, publicationModule?: string): Promise<void> {
     console.log(
@@ -344,7 +344,7 @@ export class SafeIntegration {
     if (recordsModule && !this.recordsModule) {
       this.recordsModule = new window.ethers.Contract(
         recordsModule,
-        Abi_S2SRecordsModuleV2,
+        Abi_S2SRecordsModuleV0_1,
         this.getProvider(),
       );
       if (this.safeInfo) this.safeInfo.s2sRecords = recordsModule;
@@ -352,7 +352,7 @@ export class SafeIntegration {
     if (publicationModule && !this.publicationModule) {
       this.publicationModule = new window.ethers.Contract(
         publicationModule,
-        Abi_S2SPublicationModuleV6,
+        Abi_S2SPublicationModuleV0_1,
         this.getProvider(),
       );
       if (this.safeInfo) this.safeInfo.s2sPublication = publicationModule;
@@ -466,8 +466,8 @@ export class SafeIntegration {
   }
 
   /**
-   * Admit a pending offer → agreement. `admit` is the V6 publication module's
-   * own verb; there is no second name for it to pick between.
+   * Admit a pending offer → agreement. `admit` is the publication module's own
+   * verb; there is no second name for it to pick between.
    */
   async admit(genesis: string): Promise<void> {
     if (!this.safeSdk) {
@@ -497,7 +497,7 @@ export class SafeIntegration {
     });
   }
 
-  /** Is `genesis` an agreement (not merely an offer)? V6: `hasAgreement`. */
+  /** Is `genesis` an agreement (not merely an offer)? `hasAgreement` says. */
   async hasDeal(genesis: string): Promise<boolean> {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
     return await this.publicationModule.hasAgreement(toBytes32Id(genesis));

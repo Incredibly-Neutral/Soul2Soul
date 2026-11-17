@@ -6,7 +6,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
- * @title S2SManifestModule
+ * @title S2SManifestModuleV0_1
  * @notice One deployment's manifest: the JSON document a client reads to find
  *         every address and action CID it needs, plus every version ever
  *         published. Written only by the owning Safe, behind the same factory
@@ -34,7 +34,7 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *   - versions strictly increase in `(major, minor, patch)`, so the last entry
  *     in the list is the live one and no client has to sort the list.
  */
-interface IS2SManifestModule is IERC165 {
+interface IS2SManifestModuleV0_1 is IERC165 {
     event ManifestSet(bytes32 indexed versionHash, string version, bytes32 jsonHash);
 
     error OnlySafe();
@@ -77,14 +77,14 @@ interface IManifestFactoryApprovals {
     function protocolSafe() external view returns (address);
 }
 
-contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable {
+contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpgradeable {
     string public constant NAME = "S2S Manifest Module";
 
     /// @notice This module's kind, in the one pattern every kind follows:
     ///         `s2s.module.<name>`. The factory approves upgrade targets per
     ///         kind, and a deploy script that passes another kind's string is
     ///         refused by `ImplementationKindMismatch`, which lives in
-    ///         `S2SPublicationModulesFactoryV6`, not in this file.
+    ///         `S2SPublicationModulesFactoryV0_1`, not in this file.
     bytes32 public constant MODULE_KIND = keccak256("s2s.module.manifest");
 
     /// @notice The Safe that owns this module. Set once, by the factory. It
@@ -234,11 +234,11 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
         return versionSeen[version];
     }
 
-    /// @dev The module's own interface plus ERC-165. `is IS2SManifestModule is
+    /// @dev The module's own interface plus ERC-165. `is IS2SManifestModuleV0_1 is
     ///      IERC165`, so `supportsInterface` is not folded into the module's id
     ///      the way a locally declared one would be.
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
-        return interfaceId == type(IS2SManifestModule).interfaceId || interfaceId == type(IERC165).interfaceId;
+        return interfaceId == type(IS2SManifestModuleV0_1).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     // ── Internal ───────────────────────────────────────────────────

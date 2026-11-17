@@ -18,7 +18,7 @@
  *   pnpm create:module [--data]
  *
  * Requires in .env:
- *   PUBLICATION_FACTORY_ADDRESS  the V6 factory
+ *   PUBLICATION_FACTORY_ADDRESS  the factory
  *   PROTOCOL_SAFE_ADDRESS        the safe that will own the module
  *   MANIFEST_MODULE_ADDRESS      the module's address, the constant the readers carry
  *   BASE_RPC_URL                 optional RPC override

@@ -11,7 +11,7 @@ const ENS_REGISTRY_ADDRESS = '0x9aB0B1629fc094B1142F9fe9456cdc34A130c4e5';
 // The read targets the factory the protocol's `publication_factory` record
 // names, not whichever factory deployed the Safe. It answers
 // `moduleAddress(safe, bytes32 kind)`
-// (S2SPublicationModulesFactoryV6.sol:299-304): the module it recorded for that
+// (S2SPublicationModulesFactoryV0_1.sol:299-304): the module it recorded for that
 // Safe and kind, otherwise a fresh prediction computed from the init code hash
 // and the salt, and `address(0)` when no implementation is set for the kind. A
 // Safe this factory has no record of therefore still gets an answer. The answer
@@ -80,10 +80,11 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
  * The module the factory names for (`safe`, `kind`), or null when it names the
  * zero address or an address with no code at it.
  *
- * No read here is caught. A factory that does not answer `moduleAddress` — one
- * older than V6 — makes `evmRead` throw, and that error propagates: the caller
- * turns it into a refusal, and the action fails. A failed read is never
- * returned as null, because null means the factory answered and named nothing.
+ * No read here is caught. A factory that does not answer `moduleAddress` — an
+ * older build that has none — makes `evmRead` throw, and that error propagates:
+ * the caller turns it into a refusal, and the action fails. A failed read is
+ * never returned as null, because null means the factory answered and named
+ * nothing.
  */
 const moduleAt = async (
   publicationFactory: string,

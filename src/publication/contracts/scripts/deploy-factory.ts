@@ -1,5 +1,5 @@
 /**
- * Deploy S2SPublicationModulesFactoryV6 on Base.
+ * Deploy S2SPublicationModulesFactoryV0_1 on Base.
  *
  * The factory takes one constructor argument, the protocol safe, and checks it
  * has code. That address is the only caller `setImplementation` and
@@ -63,7 +63,7 @@ const ARTIFACT_ROOT = resolve(__dirname, '../artifacts');
 type Wallet = WalletClient<HttpTransport, typeof base, Account>;
 type Pub = PublicClient<HttpTransport, typeof base>;
 
-const FACTORY_NAME = 'S2SPublicationModulesFactoryV6';
+const FACTORY_NAME = 'S2SPublicationModulesFactoryV0_1';
 
 const FACTORY_ABI = parseAbi(['function protocolSafe() view returns (address)']);
 
