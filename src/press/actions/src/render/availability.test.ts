@@ -46,7 +46,7 @@ vi.mock('../libs/ipfs.factory', () => ({
   catFile: vi.fn(),
 }));
 vi.mock('../libs/protocol.factory', () => ({
-  getProtocolInfo: vi.fn(),
+  getManifest: vi.fn(),
 }));
 vi.mock('../libs/evm', () => ({
   evmRead: vi.fn(),
@@ -97,7 +97,7 @@ vi.mock('../renderer/html.ctrlr', () => ({
 import { getConfig } from './config.ctrl';
 import { initTemplateData, fetchCollections, shouldWriteBackCache } from './data.ctrlr';
 import { fetchById } from '../libs/module.factory';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
@@ -118,7 +118,7 @@ const baseInput: SingleInput = {
 
 function setupHappyDeps() {
   vi.mocked(extractSignerAddress).mockReturnValue('0xSigner');
-  vi.mocked(getProtocolInfo).mockResolvedValue({
+  vi.mocked(getManifest).mockResolvedValue({
     gateway: 'https://ipfs.example.com',
     publicationFactory: '0x' + '88'.repeat(20), // the getRecords copy; render reads moduleFactory
     moduleFactory: '0x' + '77'.repeat(20),

@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
 // ============================================================================
-// Protocol info schema — validates the IMPLEMENTATION record (S2SProtocolInfo).
+// Manifest schema — validates the IMPLEMENTATION record (S2SManifest).
 // The publication's own shapes live in ../publication/schemas.
 // ============================================================================
-export const protocolSchema = z.object({
+export const manifestSchema = z.object({
   gateway: z.string(),
   ensRegistry: z.string(),
   ensRecords: z.string(),

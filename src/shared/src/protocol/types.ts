@@ -1,11 +1,16 @@
 // ============================================================================
-// Protocol types — what an implementation publishes about itself, and the
+// Manifest types — what an implementation publishes about itself, and the
 // secrets consumed to talk to it.
 //
-// S2SProtocolInfo is the IMPLEMENTATION record: contract addresses, gateway,
+// S2SManifest is the IMPLEMENTATION record: contract addresses, gateway,
 // PKP, and the CIDs of the actions this deployment runs. It is read from the
-// controller's on-chain records (see getProtocolInfo) — it is not part of the
+// controller's on-chain records (see getManifest) — it is not part of the
 // protocol text, and a different implementation may publish a different one.
+//
+// The name is deliberate. The protocol is Polyphony, the paper; this is one
+// implementation's manifest: references to code, not the code. A manifest
+// lists what a release ships — addresses and content addresses — and carries
+// the version the sender published it as.
 //
 // The authored thing lives in ../manuscript. The publication's design
 // (template config, collections, ripples) lives in ../publication. The
@@ -13,10 +18,10 @@
 // ============================================================================
 
 // ============================================================================
-// Protocol Info
+// Manifest
 // ============================================================================
 
-export interface S2SProtocolInfo {
+export interface S2SManifest {
   gateway: string; // collapsed data+assets READ gateway
   ensRegistry: string; // kept — pub flow's registerSubdomain target
   ensRecords: string; // kept

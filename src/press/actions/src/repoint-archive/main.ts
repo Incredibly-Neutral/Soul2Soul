@@ -6,7 +6,7 @@ import {
   RepointArchiveData,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { evmWrite, toHexString } from '../libs/evm';
-import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile } from '../libs/ipfs.factory';
 import { getDeals } from '../libs/module.factory';
@@ -96,7 +96,7 @@ async function main(input: RepointArchiveInput): Promise<ActionResult<RepointArc
       }
     }
 
-    const protocolInfo = await getProtocolInfo(false, rpcs, publicationFactory);
+    const protocolInfo = await getManifest(false, rpcs, publicationFactory);
     if (!protocolInfo?.pkp || !protocolInfo?.ensRecords) {
       throw 'Failed to fetch protocol info';
     }

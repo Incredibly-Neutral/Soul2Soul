@@ -1290,7 +1290,7 @@ export class S2SPublicationInit extends LitElement {
    * Refuse to use the module factory on a chain where it does not exist.
    *
    * `protocolInfo.moduleFactory` comes from on-chain protocol state read through
-   * the L2 provider (shared/src/protocol getProtocolInfo), i.e. it is a Base
+   * the L2 provider (shared/src/protocol getManifest), i.e. it is a Base
    * (8453) deployment. On any other chain a createModule call to it hits an
    * address with no code: the Safe tx SUCCEEDS as a no-op and no module is ever
    * deployed, so the flow would poll `moduleAddress` for ten minutes for code

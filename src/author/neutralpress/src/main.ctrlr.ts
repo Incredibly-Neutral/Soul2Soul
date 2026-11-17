@@ -4,7 +4,7 @@ import { IPublicationSrv, PublicationService } from './publication/publication.s
 import { PreviewCtrlr } from './preview.ctrlr';
 import { getPublicationMultiSig, isAvailableEnsName } from './publication/ens';
 import { NewPublicationModal } from './publication/new.modal';
-import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import { getManifest, S2SManifest } from '@s2s/soul2soul-shared';
 import { ContentController } from './content/content.ctrlr';
 import { runIntent } from './publication/intents';
 import { renderCalls as renderCallsHelper } from './render/render.helper';
@@ -16,7 +16,7 @@ export interface IMainController {
 	content: ContentController;
 	preview: PreviewCtrlr;
 	publications: any;
-	protocolInfo: S2SProtocolInfo;
+	protocolInfo: S2SManifest;
 	notice: Notice;
 
 	getInitializedService: (subdomain: string) => Promise<IPublicationSrv>;
@@ -55,7 +55,7 @@ export class MainController implements IMainController {
 	preview: PreviewCtrlr;
 	content: ContentController;
 	publications: any;
-	protocolInfo!: S2SProtocolInfo;
+	protocolInfo!: S2SManifest;
 	notice!: Notice;
 
 	constructor(plugin: DSG) {
@@ -121,7 +121,7 @@ export class MainController implements IMainController {
 			const success = await this.oxo.ctrlr.initChains(['ETH_MAINNET', 'BASE']);
 
 			if (success) {
-				this.protocolInfo = await getProtocolInfo(
+				this.protocolInfo = await getManifest(
 					this.plugin.settings.dev,
 					this.oxo.ctrlr.account['ETH_MAINNET'].publicClient,
 					this.oxo.ctrlr.account['BASE'].publicClient,

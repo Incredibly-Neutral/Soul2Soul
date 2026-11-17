@@ -7,7 +7,7 @@
  *   - DSGSettingsTab: constructor wiring (app/plugin/name) against the mocked
  *     App/PluginSettingTab, plus a headless exercise of `display()`'s dev
  *     toggle handler (persist + protocolInfo refresh) with a recording
- *     Setting mock and a stubbed shared `getProtocolInfo`.
+ *     Setting mock and a stubbed shared `getManifest`.
  *
  * DOM-heavy rendering is intentionally kept minimal — the value here is the
  * defaults contract and the settings wiring, not Obsidian's container markup.
@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// `display()`'s dev-toggle handler calls getProtocolInfo (live chain RPC).
+// `display()`'s dev-toggle handler calls getManifest (live chain RPC).
 // Stub it so the wiring is testable headlessly; the callback args are still
 // evaluated, so the plugin shape below mirrors what the handler reads.
 const { mockGetProtocolInfo, mockToggleCallbacks } = vi.hoisted(() => ({
@@ -23,7 +23,7 @@ const { mockGetProtocolInfo, mockToggleCallbacks } = vi.hoisted(() => ({
 	mockToggleCallbacks: [] as Array<(v: boolean) => void>,
 }));
 
-vi.mock('@s2s/soul2soul-shared', () => ({ getProtocolInfo: mockGetProtocolInfo }));
+vi.mock('@s2s/soul2soul-shared', () => ({ getManifest: mockGetProtocolInfo }));
 
 // Replace only `Setting` with a recording variant so `display()`'s
 // addToggle(cb) callback is captured (the stock obsidian stub ignores it).

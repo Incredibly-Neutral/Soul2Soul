@@ -1,8 +1,8 @@
 // Minimal endpoint for @s2s/soul2soul-shared/endpoint
 // Only exports what the safe-app actually needs — no Lit, no Lens, no CCIP baggage
 
-export type { S2SProtocolInfo } from './protocol/types';
-export { getProtocolInfo } from './protocol/index';
+export type { S2SManifest } from './protocol/types';
+export { getManifest } from './protocol/index';
 export { ENS_NAMEWRAPPER } from './protocol/constants';
 export { S2S_MODULE_KIND_PUBLICATION, S2S_MODULE_KIND_RECORDS } from './protocol/constants';
 export type { S2SPublicationConfig } from './publication';

@@ -2,7 +2,7 @@
 export type { S2SJob } from './rendering/types';
 export type { S2STemplateConfig, S2SRipple } from './publication/types';
 export type { S2SPublicationConfig } from './publication';
-export type { S2SProtocolInfo } from './protocol';
+export type { S2SManifest } from './protocol';
 export type { S2SContentInfo } from './metadata';
 export type {
   S2SBody,

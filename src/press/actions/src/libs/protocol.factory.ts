@@ -1,9 +1,10 @@
 import { evmRead } from "./evm";
+import type { S2SManifest } from '@s2s/soul2soul-shared/lit-actions';
 import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecordsModule'
 
 // The protocol's records module on Base: `configModule` for soul2soul.eth, the
 // address update-protocol.ts and repoint-record.ts write to — and the module
-// `getProtocolInfo` reads its records from.
+// `getManifest` reads its records from.
 //
 // This is the bootstrap root, and no factory resolves it: it holds the
 // `publication_factory` record, so this address is where the factory address
@@ -15,7 +16,7 @@ import { Abi_S2SRecordsModule } from '@s2s/publication-contracts/abis/S2SRecords
 // shortcut.
 //
 // A redeploy of the records module makes this constant stale without error: the
-// read answers empty on the old address, so getProtocolInfo throws for want of
+// read answers empty on the old address, so getManifest throws for want of
 // the `publication_factory` record rather than discovering a module it cannot
 // identify. See SPEC-protocol-actions.md, Gotchas.
 const PROTOCOL_RECORDS_MODULE = '0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29';
@@ -55,15 +56,19 @@ export const getPublicationFactory = async (rpcs?: { L1: string[]; L2: string[] 
  * rejected call pays one request instead of the walk) spends none. A null
  * argument is a failure, not a skip: discovery has no other source.
  *
- * Two factory fields are returned because S2SProtocolInfo declares both and
+ * Two factory fields are returned because S2SManifest declares both and
  * both are the same record: `moduleFactory` is the value discovery actually
  * used, `publicationFactory` the copy `configModule` publishes in getRecords.
+ *
+ * Typed against the shared `S2SManifest` so the two readers cannot drift in
+ * shape. Only the type crosses the package boundary: the shared reader itself
+ * is viem and cannot enter an action bundle.
  */
-export const getProtocolInfo = async (
+export const getManifest = async (
   dev: boolean,
   rpcs?: { L1: string[]; L2: string[] },
   publicationFactory?: string | null,
-) => {
+): Promise<S2SManifest> => {
 
   try {
 
@@ -96,7 +101,7 @@ export const getProtocolInfo = async (
 
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.log("Protocol info fetch error:", errorMsg);
+    console.log("Manifest fetch error:", errorMsg);
     throw error;
   }
 };

@@ -4,7 +4,7 @@
 // The CLI ships no action CID: the CID of the encrypt bundle is a protocol fact
 // and lives in the records module (`lit_action_encrypt`), written by
 // press/scripts/lit/update-protocol.ts and read with every other action record
-// in shared's `getProtocolInfo` (`litActions.encrypt`). `lit.encryptActionCid`
+// in shared's `getManifest` (`litActions.encrypt`). `lit.encryptActionCid`
 // (file or LIT_ENCRYPT_ACTION_CID) is the override, and its presence wins
 // without consulting the record.
 //

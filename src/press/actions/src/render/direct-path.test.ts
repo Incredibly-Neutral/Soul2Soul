@@ -28,7 +28,7 @@ vi.mock('../libs/ipfs.factory', () => ({
   decodeArchiveCid: vi.fn(() => ''),
 }));
 vi.mock('../libs/decrypt', () => ({ decryptRaw: vi.fn() }));
-vi.mock('../libs/protocol.factory', () => ({ getProtocolInfo: vi.fn() }));
+vi.mock('../libs/protocol.factory', () => ({ getManifest: vi.fn() }));
 vi.mock('../libs/ens.factory', () => ({ getDomainOwnerAndModules: vi.fn() }));
 vi.mock('../libs/gates', () => ({ extractSignerAddress: vi.fn() }));
 vi.mock('../libs/helpers', () => ({
@@ -52,7 +52,7 @@ import { main } from './main';
 import { evmRead } from '../libs/evm';
 import { catFile, uploadFile } from '../libs/ipfs.factory';
 import { decryptRaw } from '../libs/decrypt';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
 import { getConfig } from './config.ctrl';
@@ -198,7 +198,7 @@ const contentItemV2 = (body = PLAINTEXT) => {
 
 function setupHappyDeps() {
   vi.mocked(extractSignerAddress).mockReturnValue(SIGNER);
-  vi.mocked(getProtocolInfo).mockResolvedValue({
+  vi.mocked(getManifest).mockResolvedValue({
     gateway: 'https://ipfs.example',
     ensRegistry: '0xensRegistry',
     ensRecords: '0xens',

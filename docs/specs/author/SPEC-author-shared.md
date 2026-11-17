@@ -43,7 +43,7 @@ the import list, when adding anything here.
 | import path | what an authoring host gets | who |
 |---|---|---|
 | `@s2s/soul2soul-shared` | everything, including `authoring/`, identity, rendering, publication, ABIs | neutralpress, 0xobsidian (esbuild), author-cli (esbuild) |
-| `@s2s/soul2soul-shared/safe-app` | `getProtocolInfo`, `LitService`, types, `cid-view/`, `ConfigBuilder`/`AssetsBuilder`, `S2SIPFSMethods` | safe-app (Vite) |
+| `@s2s/soul2soul-shared/safe-app` | `getManifest`, `LitService`, types, `cid-view/`, `ConfigBuilder`/`AssetsBuilder`, `S2SIPFSMethods` | safe-app (Vite) |
 | `@s2s/soul2soul-shared/lit-actions` | types + ABIs only | protocol actions |
 | `@s2s/soul2soul-shared/rendering/action-io` | zod runtime schemas | one action (`render`) |
 
@@ -53,7 +53,7 @@ the import list, when adding anything here.
   `S2SRipple`, `S2STemplateConfig`), Lens helpers, content types. It is an opaque dependency supplier
   to the rest: `shared` treats it as `any` at the `createTxRunner(oxo, chain)` seam
   ([SPEC-author-hosts](SPEC-author-hosts.md) AD-1).
-- **`neutralpress`** — `getProtocolInfo`, `renderwithLitActions`, `pinCidFromRemote`,
+- **`neutralpress`** — `getManifest`, `renderwithLitActions`, `pinCidFromRemote`,
   `postToLens`/`updateToLens`, content types, `runFilecoinLeg`, `newPublicationSafe` +
   `buildNewPublicationDeps`, `createL1Runner`/`createL2Runner`.
 - **`author-cli`** — `parseMarkdownNote`, `extractFrontmatter`, `buildSignedContentItem`, `noOpEncrypt`,
@@ -62,7 +62,7 @@ the import list, when adding anything here.
   `buildNewPublicationDeps`, `S2SPublication`, `TxRunner`, `buildFallbackRpcs`, the generated ABIs,
   `toBytes32Id`. Nothing else — the blank-slate rule forbids importing `neutralpress`/`0xobsidian`
   internals, and the CLI writes its own node adapters.
-- **`safe-app`** — read-only surface (`/safe-app` entry): protocol info, types, cid-view, IPFS methods,
+- **`safe-app`** — read-only surface (`/safe-app` entry): the manifest, types, cid-view, IPFS methods,
   config/assets builders.
 
 ## The injected-dependency seams

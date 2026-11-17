@@ -1,6 +1,6 @@
 import { namehash as viemNamehash } from 'viem/ens';
 import { PublicClient, getContract, decodeFunctionResult, type Address } from 'viem';
-import type { S2SProtocolInfo } from './types';
+import type { S2SManifest } from './types';
 import { ENS_NAMEWRAPPER } from './constants';
 import { predictPublicationModule } from './factories';
 import { isPublicationModuleName } from './module-name';
@@ -9,7 +9,7 @@ export * from './module-name';
 export * from './factories';
 export { S2S_MODULE_KIND_PUBLICATION, S2S_MODULE_KIND_RECORDS } from './constants';
 
-export type { S2SProtocolInfo };
+export type { S2SManifest };
 export type {
   Metered,
   S2SSignerSecrets,
@@ -36,11 +36,18 @@ export type ViemProvider = PublicClient;
  * The following were RENAMED: lit_action_single → lit_action_render,
  * lit_action_root_update → lit_action_update.
  */
-export const getProtocolInfo = async (
+/**
+ * One deployment's manifest: the addresses and action CIDs a client needs to
+ * talk to it, read from the controller's records module.
+ *
+ * The name says what the value is. This is not protocol text and not code, it
+ * is references to code, published per release.
+ */
+export const getManifest = async (
   dev = false,
   l1Provider: ViemProvider,
   l2Provider: ViemProvider,
-): Promise<S2SProtocolInfo> => {
+): Promise<S2SManifest> => {
   const {
     multisig,
     configModule,
@@ -173,7 +180,7 @@ export const getRecords = async (
  * The controller's modules, resolved by the Safe's own `NAME()` scan.
  *
  * Scan-only on purpose: the factory address a prediction needs is itself a
- * record, and this runs before the records are read. `getProtocolInfo` is where
+ * record, and this runs before the records are read. `getManifest` is where
  * the prediction happens, once it holds that record.
  */
 export const getProtocolControllerAndModules = async (

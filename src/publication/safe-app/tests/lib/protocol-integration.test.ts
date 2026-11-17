@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ProtocolIntegration } from '../../src/lib/protocol-integration';
-import type { S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
+import type { S2SManifest } from '@s2s/soul2soul-shared/safe-app';
 
 const mocks = vi.hoisted(() => {
   const opts: unknown[] = [];
@@ -15,8 +15,8 @@ const mocks = vi.hoisted(() => {
   };
   const http = vi.fn((url: string) => ({ url }));
   const createPublicClient = vi.fn((cfg: { chain: unknown; transport: unknown }) => ({ cfg }));
-  const getProtocolInfo = vi.fn();
-  return { opts, getInfo, txsSend, SDK, http, createPublicClient, getProtocolInfo };
+  const getManifest = vi.fn();
+  return { opts, getInfo, txsSend, SDK, http, createPublicClient, getManifest };
 });
 
 vi.mock('@safe-global/safe-apps-sdk', () => ({ default: mocks.SDK }));
@@ -25,14 +25,14 @@ vi.mock('viem', () => ({
   http: mocks.http,
 }));
 vi.mock('@s2s/soul2soul-shared/safe-app', () => ({
-  getProtocolInfo: mocks.getProtocolInfo,
+  getManifest: mocks.getManifest,
 }));
 
-const PROTOCOL_INFO: S2SProtocolInfo = {
+const PROTOCOL_INFO: S2SManifest = {
   protocolModuleAddress: '0xProto',
   recordsModuleAddress: '0xRecords',
   publicationModuleAddress: '0xPub',
-} as S2SProtocolInfo;
+} as S2SManifest;
 
 describe('ProtocolIntegration', () => {
   beforeEach(() => {
@@ -43,7 +43,7 @@ describe('ProtocolIntegration', () => {
     mocks.txsSend.mockReset();
     mocks.http.mockClear();
     mocks.createPublicClient.mockClear();
-    mocks.getProtocolInfo.mockReset();
+    mocks.getManifest.mockReset();
   });
 
   it('starts disconnected', () => {
@@ -53,7 +53,7 @@ describe('ProtocolIntegration', () => {
 
   it('constructs the SafeAppsSDK with the allowedDomains / debug opts', async () => {
     mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 8453, network: 'base' });
-    mocks.getProtocolInfo.mockResolvedValue(PROTOCOL_INFO);
+    mocks.getManifest.mockResolvedValue(PROTOCOL_INFO);
     const pi = new ProtocolIntegration();
     await pi.initialize();
 
@@ -64,9 +64,9 @@ describe('ProtocolIntegration', () => {
     expect(opts.allowedDomains[0].test('https://evil.example')).toBe(false);
   });
 
-  it('wires both viem public clients to the DRPC URLs for L1 (1) and L2 (8453) and feeds them into getProtocolInfo', async () => {
+  it('wires both viem public clients to the DRPC URLs for L1 (1) and L2 (8453) and feeds them into getManifest', async () => {
     mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 8453, network: 'base' });
-    mocks.getProtocolInfo.mockResolvedValue(PROTOCOL_INFO);
+    mocks.getManifest.mockResolvedValue(PROTOCOL_INFO);
 
     const pi = new ProtocolIntegration();
     await pi.initialize();
@@ -80,9 +80,9 @@ describe('ProtocolIntegration', () => {
     expect(l1Cfg.chain).toBeUndefined();
     expect(l2Cfg.chain).toBeUndefined();
 
-    // getProtocolInfo receives (false, providerL1, providerL2).
-    expect(mocks.getProtocolInfo).toHaveBeenCalledTimes(1);
-    const [flag, pL1, pL2] = mocks.getProtocolInfo.mock.calls[0];
+    // getManifest receives (false, providerL1, providerL2).
+    expect(mocks.getManifest).toHaveBeenCalledTimes(1);
+    const [flag, pL1, pL2] = mocks.getManifest.mock.calls[0];
     expect(flag).toBe(false);
     expect(pL1.cfg).toEqual(l1Cfg);
     expect(pL2.cfg).toEqual(l2Cfg);
@@ -90,7 +90,7 @@ describe('ProtocolIntegration', () => {
 
   it('returns the protocol info from initialize() and exposes it via getInfo()', async () => {
     mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 1, network: 'mainnet' });
-    mocks.getProtocolInfo.mockResolvedValue(PROTOCOL_INFO);
+    mocks.getManifest.mockResolvedValue(PROTOCOL_INFO);
 
     const pi = new ProtocolIntegration();
     const result = await pi.initialize();
@@ -99,19 +99,19 @@ describe('ProtocolIntegration', () => {
     expect(pi.isConnected()).toBe(true);
   });
 
-  it('returns undefined and never calls getProtocolInfo when the Safe SDK getInfo fails', async () => {
+  it('returns undefined and never calls getManifest when the Safe SDK getInfo fails', async () => {
     mocks.getInfo.mockRejectedValue(new Error('wallet not connected'));
     const pi = new ProtocolIntegration();
     await expect(pi.initialize()).resolves.toBeUndefined();
-    expect(mocks.getProtocolInfo).not.toHaveBeenCalled();
+    expect(mocks.getManifest).not.toHaveBeenCalled();
     // NB: the source assigns safeSdk before awaiting getInfo, so the instance
     // still reports connected after a failed initialize.
     expect(pi.isConnected()).toBe(true);
   });
 
-  it('returns undefined when getProtocolInfo itself throws', async () => {
+  it('returns undefined when getManifest itself throws', async () => {
     mocks.getInfo.mockResolvedValue({ safeAddress: '0xSafe', chainId: 1, network: 'mainnet' });
-    mocks.getProtocolInfo.mockRejectedValue(new Error('protocol discovery failed'));
+    mocks.getManifest.mockRejectedValue(new Error('protocol discovery failed'));
     const pi = new ProtocolIntegration();
     await expect(pi.initialize()).resolves.toBeUndefined();
   });

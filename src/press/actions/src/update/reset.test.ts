@@ -53,7 +53,7 @@ vi.mock('../libs/ens.factory', () => ({
 vi.mock('../libs/protocol.factory', () => ({
   // The one record read before discovery; discovery refuses a null record.
   getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
-  getProtocolInfo: vi.fn(async () => ({
+  getManifest: vi.fn(async () => ({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
     moduleFactory: '0x' + '77'.repeat(20),
@@ -119,7 +119,7 @@ const gatewayResponse = (url: string): Response => {
 // ===========================================================================
 
 import { main } from './main';
-import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 
 const gateway = 'http://gateway.test';
@@ -296,7 +296,7 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
     expect(result.error).toBe('reset requires publication owner');
     // Nothing was written to the gateway (the gate fails before the tree build),
     // and the protocol walk behind the gate was never paid.
-    expect(getProtocolInfo).not.toHaveBeenCalled();
+    expect(getManifest).not.toHaveBeenCalled();
     expect(mocks.gatewayUrls.length).toBe(0);
   });
 

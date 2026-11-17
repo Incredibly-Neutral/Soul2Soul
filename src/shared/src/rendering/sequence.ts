@@ -1,4 +1,4 @@
-import { S2SProtocolInfo } from '../protocol';
+import { S2SManifest } from '../protocol';
 import * as ethers from 'ethers';
 (global as any).ethers = ethers;
 
@@ -153,7 +153,7 @@ export const renderwithLitActions = async (
   lit: LitService,
   signature: string,
   litUsageKey: string,
-  protocolInfo: S2SProtocolInfo,
+  protocolInfo: S2SManifest,
   notice: any,
   authorSafeAddress: string,
   publication: string,

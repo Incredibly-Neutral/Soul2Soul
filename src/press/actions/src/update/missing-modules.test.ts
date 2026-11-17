@@ -55,7 +55,7 @@ vi.mock('../libs/evm', () => ({
 
 vi.mock('../libs/protocol.factory', () => ({
   getPublicationFactory: vi.fn(async () => '0x' + '77'.repeat(20)),
-  getProtocolInfo: vi.fn(async () => ({
+  getManifest: vi.fn(async () => ({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
     moduleFactory: '0x' + '77'.repeat(20),

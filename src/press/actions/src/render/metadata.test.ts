@@ -23,7 +23,7 @@ import {
   jcs,
   verifyBodyHash,
   type S2SContentInfo,
-  type S2SProtocolInfo,
+  type S2SManifest,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { addAndSignMetadata, type S2SContentInfoWithDates } from './metadata';
 import { LEGACY_AUTHOR_PREFIX } from '../../../../shared/dist/manuscript/identity/author-address';
@@ -44,7 +44,7 @@ const PEER_ID = '12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN';
 const PROTOCOL_INFO = {
   pkp: PKP,
   litActions: { render: 'ipfs://bafkreirenderaction' },
-} as unknown as S2SProtocolInfo;
+} as unknown as S2SManifest;
 
 const PAGE = `<!DOCTYPE html>
 <html lang="en"><head><title>t</title></head><body><h1>Hello</h1></body></html>`;

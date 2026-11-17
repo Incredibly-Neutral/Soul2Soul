@@ -18,7 +18,7 @@ import {
   canonicalizeProofPayloadLegacy,
   proofCanonicalizationOf,
   type S2SContentInfo,
-  type S2SProtocolInfo,
+  type S2SManifest,
 } from '@s2s/soul2soul-shared/lit-actions';
 import { extractHashableHtml } from '@s2s/soul2soul-shared/lit-actions';
 import { pageIdentityOf, verifyPathAvailable, verifyProvenance } from './verify';
@@ -350,7 +350,7 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
 const PROTOCOL_INFO = {
   pkp: PKP,
   litActions: { render: 'ipfs://bafkreirenderaction' },
-} as unknown as S2SProtocolInfo;
+} as unknown as S2SManifest;
 
 const contentInfo = (overrides: Partial<S2SContentInfo> = {}): S2SContentInfo => ({
   author: {

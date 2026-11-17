@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { templateConfigSchema, rippleSchema } from './schemas';
-import { protocolSchema } from '../protocol/schemas';
+import { manifestSchema } from '../protocol/schemas';
 import { S2SPublicationConfig, S2STemplateConfig, S2SRipple } from './types';
 
 
@@ -115,7 +115,7 @@ export const validateMapping = (templateConfig: S2STemplateConfig, rippleConfigs
  */
 export const validateProtocol = (protocol: any): void => {
     try {
-        protocolSchema.parse(protocol);
+        manifestSchema.parse(protocol);
         // console.log('Protocol validation successful');
     } catch (error: any) {
         if (error instanceof z.ZodError) {

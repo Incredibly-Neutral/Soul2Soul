@@ -5,7 +5,7 @@ import { RecordStore } from './record.store.js'
 import { DealStore } from './deal.store.js'
 import { StorageStore } from './storage.store.js'
 import { Deal, SafeInfo } from "../types/index.js"
-import { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import { S2SManifest } from '@s2s/soul2soul-shared';
 import { ProtocolStore } from './protocol.store.js';
 import { SafeStore } from './safe.store.js';
 import { WebStore } from './web.store.js';
@@ -121,11 +121,11 @@ class Store {
   }
 
       // ============ protocolInfo ============
-  get protocolInfo(): S2SProtocolInfo | undefined {
+  get protocolInfo(): S2SManifest | undefined {
     return this.protocolStore.info;
   }
 
-  setProtocolInfo(info: S2SProtocolInfo | undefined): void {
+  setProtocolInfo(info: S2SManifest | undefined): void {
     if (info != undefined) this.protocolStore.set(info);
   }
 
@@ -163,7 +163,7 @@ class Store {
     return this.safeStore.subscribe(listener);
   }
 
-  subscribeToProtocolInfo(listener: Listener<S2SProtocolInfo | undefined>): () => void {
+  subscribeToProtocolInfo(listener: Listener<S2SManifest | undefined>): () => void {
     return this.protocolStore.subscribe(listener);
   }
 

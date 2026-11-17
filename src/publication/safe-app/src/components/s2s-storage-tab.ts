@@ -2,7 +2,7 @@
 import { LitElement, html, css, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { FilecoinStorage } from '@s2s/soul2soul-shared/filecoin';
-import type { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import type { S2SManifest } from '@s2s/soul2soul-shared';
 import type { CidViewReadContext } from '@s2s/soul2soul-shared/safe-app';
 import { store, StoragePiece, PublicationDataSet } from '../state/index.js';
 import type { SafeIntegration } from '../lib/safe-integration.js';
@@ -71,7 +71,7 @@ export class S2SStorageTab extends LitElement {
   // Memoized CID-inventory read context (built once when both modules are up).
   private cidCtx: CidViewReadContext | undefined = undefined;
   private cidCtxSafe: SafeIntegration | null = null;
-  private cidCtxProtocol: S2SProtocolInfo | null = null;
+  private cidCtxProtocol: S2SManifest | null = null;
 
   // Memoized heal config (rebuilt when the storage identity changes).
   private healConfig: HealConfig | undefined = undefined;

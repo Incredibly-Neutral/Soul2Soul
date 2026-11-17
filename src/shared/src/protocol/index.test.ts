@@ -9,7 +9,7 @@ import {
   type Hex,
 } from 'viem';
 
-import { getProtocolControllerAndModules, getProtocolInfo } from './index';
+import { getProtocolControllerAndModules, getManifest } from './index';
 
 // The controller's module lookup runs through viem contract instances, so the
 // fake is a transport: `eth_call` in, ABI-encoded `eth_call` out. What the test
@@ -105,7 +105,7 @@ interface ChainOptions {
 }
 
 /**
- * The controller's records, in the order `getProtocolInfo` reads them. Only two
+ * The controller's records, in the order `getManifest` reads them. Only two
  * of them matter to a module lookup: `ens_registry` (echoed back) and
  * `publication_factory` (the address the prediction is read from).
  */
@@ -218,10 +218,10 @@ describe('getProtocolControllerAndModules', () => {
 });
 
 // ============================================================================
-// getProtocolInfo — the shipped path: the record decides the prediction
+// getManifest — the shipped path: the record decides the prediction
 // ============================================================================
 
-describe('getProtocolInfo', () => {
+describe('getManifest', () => {
   it('resolves the controller’s publication module by prediction, once the record is read', async () => {
     const { client, calls } = makeClients({
       modules: [RECORDS, PUBLICATION],
@@ -230,7 +230,7 @@ describe('getProtocolInfo', () => {
       latest: PUBLICATION,
     });
 
-    const info = await getProtocolInfo(false, client, client);
+    const info = await getManifest(false, client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
     expect(info.publicationFactory.toLowerCase()).toBe(FACTORY);
@@ -259,7 +259,7 @@ describe('getProtocolInfo', () => {
       latest: A,
     });
 
-    const info = await getProtocolInfo(false, client, client);
+    const info = await getManifest(false, client, client);
 
     expect(info.publicationModule).toBe(A);
   });
@@ -271,7 +271,7 @@ describe('getProtocolInfo', () => {
       count: 'revert',
     });
 
-    const info = await getProtocolInfo(false, client, client);
+    const info = await getManifest(false, client, client);
 
     expect(info.publicationModule).toBe(PUBLICATION);
   });
@@ -284,7 +284,7 @@ describe('getProtocolInfo', () => {
       latest: AT(7),
     });
 
-    expect((await getProtocolInfo(false, client, client)).publicationModule).toBe(PUBLICATION);
+    expect((await getManifest(false, client, client)).publicationModule).toBe(PUBLICATION);
   });
 
   it('leaves publicationModule undefined when nothing resolves, rather than guessing', async () => {
@@ -294,6 +294,6 @@ describe('getProtocolInfo', () => {
       count: 'revert',
     });
 
-    expect((await getProtocolInfo(false, client, client)).publicationModule).toBeUndefined();
+    expect((await getManifest(false, client, client)).publicationModule).toBeUndefined();
   });
 });

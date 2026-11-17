@@ -3,7 +3,7 @@ import type { TxRunner } from './tx-runner';
 import {
   isPredictedModuleAddress,
   PUBLICATION_FACTORY_CREATE2_ABI,
-  type S2SProtocolInfo,
+  type S2SManifest,
 } from '../protocol';
 import type { S2SIPFSMethods } from '../ipfs';
 import { safeAbi, ensSubdomainRegistryAbi } from '../contracts';
@@ -19,7 +19,7 @@ export interface NewPublicationDeps {
   l1: TxRunner;
   l2: TxRunner;
   privateKey: string;
-  protocolInfo: S2SProtocolInfo; // sources ensRegistry, recordsFactory, publicationFactory
+  protocolInfo: S2SManifest; // sources ensRegistry, recordsFactory, publicationFactory
   recordsModuleFactoryAbi: any; // protocol-generated
   publicationModuleFactoryAbi: any; // protocol-generated
   recordsModuleAbi: any; // protocol-generated
@@ -44,7 +44,7 @@ export interface NewPublicationDeps {
 export interface BuildNewPublicationDepsInput {
   runners: { l1: TxRunner; l2: TxRunner };
   privateKey: string;
-  protocolInfo: S2SProtocolInfo; // sources ensRegistry, recordsFactory, publicationFactory
+  protocolInfo: S2SManifest; // sources ensRegistry, recordsFactory, publicationFactory
   recordsModuleFactoryAbi: any; // protocol-generated
   publicationModuleFactoryAbi: any; // protocol-generated
   recordsModuleAbi: any; // protocol-generated

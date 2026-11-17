@@ -19,7 +19,7 @@ import type {
   PublicationCidView,
   VersionRead,
 } from '@s2s/soul2soul-shared/safe-app';
-import type { S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
+import type { S2SManifest } from '@s2s/soul2soul-shared/safe-app';
 import { keccak256, toBytes } from 'viem';
 import type { SafeIntegration } from '../safe-integration.js';
 import { evmRead } from '../evm.js';
@@ -131,7 +131,7 @@ async function mapWithLimit<T, R>(
  */
 export function buildSafeAppCidViewContext(args: {
   safeIntegration: SafeIntegration;
-  protocolInfo: S2SProtocolInfo;
+  protocolInfo: S2SManifest;
 }): CidViewReadContext {
   const { safeIntegration, protocolInfo } = args;
   const ipfs = makeIPFS();
@@ -374,7 +374,7 @@ export function buildSafeAppCidViewContext(args: {
  * safe-app adapter. Never throws — the collectors + adapter are fail-open.
  */
 export async function fetchCidView(
-  args: { safeIntegration: SafeIntegration; protocolInfo: S2SProtocolInfo },
+  args: { safeIntegration: SafeIntegration; protocolInfo: S2SManifest },
   publication: string,
 ): Promise<PublicationCidView> {
   return buildPublicationCidView(buildSafeAppCidViewContext(args), publication);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { protocolSchema } from './schemas';
+import { manifestSchema } from './schemas';
 
 const RECORD = {
   gateway: 'https://ipfs.example',
@@ -12,15 +12,15 @@ const RECORD = {
   litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
 };
 
-describe('protocolSchema', () => {
+describe('manifestSchema', () => {
   it('accepts a record that names the module factory', () => {
-    expect(protocolSchema.parse(RECORD).moduleFactory).toBe(
+    expect(manifestSchema.parse(RECORD).moduleFactory).toBe(
       '0x0000000000000000000000000000000000000005',
     );
   });
 
   it('rejects a record that names no module factory', () => {
     const { moduleFactory: _dropped, ...withoutFactory } = RECORD;
-    expect(() => protocolSchema.parse(withoutFactory)).toThrow(/moduleFactory/);
+    expect(() => manifestSchema.parse(withoutFactory)).toThrow(/moduleFactory/);
   });
 });

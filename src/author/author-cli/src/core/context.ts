@@ -6,10 +6,10 @@
 // ============================================================================
 
 import {
-  getProtocolInfo,
+  getManifest,
   LitService,
   S2SIPFSMethods,
-  type S2SProtocolInfo,
+  type S2SManifest,
 } from '@s2s/soul2soul-shared';
 import { createPublicClient, http, type Address } from 'viem';
 import { mainnet, base } from 'viem/chains';
@@ -39,7 +39,7 @@ export interface CliContext {
   l1: SharedPublicClient;
   l2: SharedPublicClient;
   rpcs: RpcEndpoints;
-  protocolInfo: S2SProtocolInfo;
+  protocolInfo: S2SManifest;
   lit: LitService;
   ipfs: S2SIPFSMethods;
   signer: ViemTypedDataSigner;
@@ -63,12 +63,12 @@ export interface CliContext {
 }
 
 /** The PublicClient type that shared's chain helpers consume. */
-type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
+type SharedPublicClient = Parameters<typeof getManifest>[1];
 
 /**
  * The encrypt action CID: the config/env value when set, else the protocol's
  * own record (`protocolInfo.litActions.encrypt`, read with every other action
- * record in shared's `getProtocolInfo`). The key itself is not named here: one
+ * record in shared's `getManifest`). The key itself is not named here: one
  * batch of record keys exists, and it lives in shared.
  *
  * The config value short-circuits, so a machine that sets it does not depend on
@@ -77,7 +77,7 @@ type SharedPublicClient = Parameters<typeof getProtocolInfo>[1];
  */
 export function resolveEncryptActionCid(
   config: CliConfig,
-  protocolInfo: Pick<S2SProtocolInfo, 'litActions'>,
+  protocolInfo: Pick<S2SManifest, 'litActions'>,
 ): string | undefined {
   const configured = config.lit.encryptActionCid;
   if (configured !== undefined && configured.trim() !== '') return configured;
@@ -93,7 +93,7 @@ export function resolveEncryptActionCid(
  */
 export function resolveDecryptActionCid(
   config: CliConfig,
-  protocolInfo: Pick<S2SProtocolInfo, 'litActions'>,
+  protocolInfo: Pick<S2SManifest, 'litActions'>,
 ): string | undefined {
   const configured = config.lit.decryptActionCid;
   if (configured !== undefined && configured.trim() !== '') return configured;
@@ -139,7 +139,7 @@ export async function buildContext(out: CliOut, config: CliConfig): Promise<CliC
   const l1 = createPublicClient({ chain: mainnet, transport: http(l1Rpc) }) as SharedPublicClient;
   const l2 = createPublicClient({ chain: base, transport: http(l2Rpc) }) as SharedPublicClient;
 
-  const protocolInfo = await getProtocolInfo(config.environment === 'dev', l1, l2);
+  const protocolInfo = await getManifest(config.environment === 'dev', l1, l2);
   const ensRegistry = (config.ens.registry ?? protocolInfo.ensRegistry) as Address;
   const encryptActionCid = resolveEncryptActionCid(config, protocolInfo);
   const decryptActionCid = resolveDecryptActionCid(config, protocolInfo);

@@ -48,7 +48,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | `render/config.ctrl.ts`    | `getConfig`, `getTaskConfig`                                                                                                                                      | live                                                                               |
 | `render/data.ctrlr.ts`     | `initTemplateData`, `fetchCollections`, path helpers                                                                                                              | live                                                                               |
 | `render/metadata.ts`       | `addAndSignMetadata` (provenance)                                                                                                                                 | live (see GAP-1, GAP-2)                                                            |
-| `libs/protocol.factory.ts` | in-action `getProtocolInfo`, `getPublicationFactory` (the one `publication_factory` record)                                                                   | live (dup of shared, see Gotchas)                                                  |
+| `libs/protocol.factory.ts` | in-action `getManifest`, `getPublicationFactory` (the one `publication_factory` record)                                                                   | live (dup of shared, see Gotchas)                                                  |
 | `libs/ens.factory.ts`      | `getDomainOwnerAndModules` — the publication and records kinds are read from the factory the record names, and nowhere else; `moduleAddress(safe, kind)` per kind, answer needs code | live |
 | `libs/module.factory.ts`   | `getLatestEntry` / `getDeals` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅) | live                                                                               |
 | `libs/evm.ts`              | `evmRead` (catch-all failover + aggregated error), `evmGetCode` (one `eth_getCode`, same failover), `evmWrite`, `toHexString`                                      | live ⚠ GAP-15 (partly addressed)                                                   |
@@ -67,7 +67,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 
 Entry point: **`@s2s/soul2soul-shared/lit-actions`** — **types + ABIs only, no runtime** (INV-7).
 Imports: types `S2SJob`, `S2STemplateConfig`, `S2SBody`, `S2SRipple`, `S2SPublicationConfig`,
-`S2SProtocolInfo`, `PKP`, `S2SContentInfo`; and the contract ABIs (`Abi_S2SRecordsModule`, etc.).
+`S2SManifest`, `PKP`, `S2SContentInfo`; and the contract ABIs (`Abi_S2SRecordsModule`, etc.).
 These compile into each bundled action — they are this package's code, not an external service.
 **Constraint:** nothing imported here may pull in a runtime/Node dep (would break the bundle). The
 zod validators in shared are deliberately _not_ exported through this entry.
@@ -211,7 +211,7 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 **Sequence (each step is an assertion point for tests):**
 
 1. `extractSignerAddress(hashMessage("lit actions auth"), signature)` → `signerAddress` (INV-1)
-2. `getProtocolInfo(false)` (in-action) → `S2SProtocolInfo` — one `getRecord`
+2. `getManifest(false)` (in-action) → `S2SManifest` — one `getRecord`
    for `publication_factory` then one `getRecords` on `PROTOCOL_RECORDS_MODULE`, no ENS walk; a
    missing record fails here with that reason stated
 3. `getDomainOwnerAndModules(publication, rpcs, protocolInfo.moduleFactory)` → `{ multisig, configModule, publicationModule }` (INV-4). The factory names both kinds and each answer is kept only when code sits at it.
@@ -255,7 +255,7 @@ Encrypted-content editorial review runs through a separate, real Lit decrypt act
 
 **Produces** `{ success, cid?, response?, logz }` — `cid` = new site root.
 
-**Sequence:** recover signer (INV-1) → `getPublicationFactory` (the one `publication_factory` record, read before the gate so a rejected call pays one request rather than the full read) → modules (INV-4, with that factory) → `getProtocolInfo` (handed that factory, so it spends no second standalone `getRecord`; the batched `getRecords` still returns the same key) →
+**Sequence:** recover signer (INV-1) → `getPublicationFactory` (the one `publication_factory` record, read before the gate so a rejected call pays one request rather than the full read) → modules (INV-4, with that factory) → `getManifest` (handed that factory, so it spends no second standalone `getRecord`; the batched `getRecords` still returns the same key) →
 read prev `contenthash_wrapped` via `getText` on `protocolInfo.ensRecords` → `contenthashToIPFS`
 (INV-6) → copy prev root into temp MFS → `cp` each job's html CID to `{path}/index.html` →
 **`remove` loop** (delete stale paths — see below) → `cp` `config.assetsCid` → `/assets` (INV-11) →
@@ -530,7 +530,7 @@ section is relied upon.
 
 | fn                                                                                    | in              | out                                                                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getProtocolInfo(dev, rpcs?, publicationFactory?)`                                    | `boolean`, RPCs?, address? | `S2SProtocolInfo` — one `getRecord` for `publication_factory` (skipped when the caller passes one) then one `getRecords` on the `PROTOCOL_RECORDS_MODULE` constant; `moduleFactory` and `publicationFactory` are that same record                                                                           |
+| `getManifest(dev, rpcs?, publicationFactory?)`                                    | `boolean`, RPCs?, address? | `S2SManifest` — one `getRecord` for `publication_factory` (skipped when the caller passes one) then one `getRecords` on the `PROTOCOL_RECORDS_MODULE` constant; `moduleFactory` and `publicationFactory` are that same record                                                                           |
 | `getPublicationFactory(rpcs?)`                                                        | RPCs?           | `address \| null` — the `publication_factory` record read on its own in one call at the hardcoded `PROTOCOL_RECORDS_MODULE` (see Gotchas: a stale constant now fails every discovery), null when absent or unreadable                                                                                    |
 | `getDomainOwnerAndModules(pub, rpcs, factory)`                                        | `pub`, rpcs, factory | `{ multisig, configModule, publicationModule }` (null per kind the factory cannot name) — one `moduleAddress(safe, kind)` per kind, kept only when `evmGetCode` finds code; a throwing factory read propagates                                                                                              |
 | `getConfig(configCid?, configModule)`                                                 | cid?/addr       | `S2SPublicationConfig` (parsed JSON)                                                                                                                                                                                                                                                                        |
@@ -567,14 +567,14 @@ section is relied upon.
   they are author-owned in the publication's repo. **Planned (admin-app TODO):** `ConfigBuilder`
   should inject the `feedAddress` at build time. Until then, a copied `website-starter` carries
   someone else's values.
-- **`S2SProtocolInfo`**: `{ addr, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords,
+- **`S2SManifest`**: `{ addr, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords,
 pkp{ethAddress,publicKey,tokenId}, litActionPrep/Single/Cbor/RootUpdate }`.
 
 ---
 
 ## Invariants this component must preserve
 
-INV-1 (auth string), INV-2 (record keys — see the duplicate-`getProtocolInfo` gotcha), INV-4
+INV-1 (auth string), INV-2 (record keys — see the duplicate-`getManifest` gotcha), INV-4
 (module discovery through the factory), INV-5 (provenance canonicalization), INV-6 (contenthash
 codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453 hardcoded), INV-11
 (assets→/assets).
@@ -594,14 +594,17 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   upstream, or dropping `assetsCid` altogether, does not leave it published forever. The `ls` of
   `assets/txt` is fatal on any failure other than kubo's "file does not exist": only an absent
   directory may read as "no root txt", or a broken call would publish a site with no `/robots.txt`.
-- **Shape mismatch (illustrative of the whole testing rationale):** `getProtocolInfo` returns
+- **Shape mismatch (illustrative of the whole testing rationale):** `getManifest` returns
   `assetsGateway` (camelCase); `initTemplateData` reads `protocolInfo.assets_gateway` (snake) →
   silently `undefined`. Likely vestigial post the assets-into-`/assets` refactor (templates now use
   root-absolute `/assets/...`), but confirm. **This is exactly the bug class boundary fixtures catch.**
-- **Two `getProtocolInfo`:** `libs/protocol.factory.ts` (ethers/evmRead, in-action) and
+- **Two `getManifest`:** `libs/protocol.factory.ts` (ethers/evmRead, in-action) and
   `shared/src/protocol/index.ts` (viem, client). Same record-key _set_, but **different field
   _order_ in each destructure** — each is internally consistent, but the key set must stay in sync
-  (INV-2). The in-action one walks no ENS: it reads the `publication_factory` record on the
+  (INV-2). Both are typed `S2SManifest` (the action takes the type from
+  `@s2s/soul2soul-shared/lit-actions`, never the viem reader), so a shape drift is a compile error
+  rather than a silent `undefined`. Named *manifest* because the protocol is Polyphony and this is
+  one implementation's list of references to code, not the code. The in-action one walks no ENS: it reads the `publication_factory` record on the
   constant and the records on the constant (see the records-module gotcha), so it has no `dev`
   branch and no `configModule` to check (cf. GAP-8).
 - **Lit action ABI fragments (module.factory.ts):** the generated ABIs at
@@ -609,24 +612,24 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   action bundles. Hand-copy only the needed function fragments into `module.factory.ts` using the
   full JSON `components` format (not human-readable ABI strings — ethers v5 in the Lit runtime can't
   decode struct returns from them). When the contract changes, update fragments in that one file.
-- **The one ENS walk left (redundant-walk note, 2026-08-06; settled 2026-11-16).** `getProtocolInfo`
+- **The one ENS walk left (redundant-walk note, 2026-08-06; settled 2026-11-16).** `getManifest`
   walks nothing: it reads `getRecords` on `PROTOCOL_RECORDS_MODULE`, preceded by one `getRecord` for
   the factory unless the caller passes one. The third walk (`parentDomainController`) and the
   records-only discovery path that used it are gone with them. What remains is
   `getDomainOwnerAndModules`' two-hop walk (`nameWrapper()`→`ownerOf()`) for the publication Safe,
   and the records read on the constant. The actions that must resolve modules before their
   authorization gate read the single `publication_factory` record (`getPublicationFactory`, one
-  call), discover with it, gate, then hand the same value to `getProtocolInfo` so the session never
+  call), discover with it, gate, then hand the same value to `getManifest` so the session never
   issues a second standalone `getRecord`. The batched `getRecords` still asks for that key and still
   returns it as `publicationFactory`; only the standalone read is skipped.
   A read costs one request per RPC URL tried, so a second URL adds a request only where the earlier
   one fails, and nothing is retried in-session. Most of these reads are L2 and the walk is L1. The
   isolated bounds below assume one URL per chain. `getDomainOwnerAndModules` at most 6 (2 walk, one
-  `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getProtocolInfo` 2 (one
+  `moduleAddress` per kind, one `evmGetCode` per non-zero answer); `getManifest` 2 (one
   `getRecord`, one `getRecords`), or 1 when the caller passes the factory; `getPublicationFactory`
   1. Per action that is a fixed prologue, one URL per chain: prep 7 (one record read plus
   discovery); render, update, maintain-cache and repoint-archive 8 each (one record read, at most 6
-  for discovery, one `getRecords` — render spends its record read inside `getProtocolInfo`).
+  for discovery, one `getRecords` — render spends its record read inside `getManifest`).
   Against `main`: prep 6 → 7, render 11 → 8, and update, maintain-cache and repoint-archive 12 → 8.
   `main` spent the difference on a module-list read plus role and `NAME()` probes, and on a
   five-request protocol path.
@@ -634,7 +637,7 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   calls `getRecord("publication_factory")` on `PROTOCOL_RECORDS_MODULE`
   (`0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29`, `libs/protocol.factory.ts`), the Base records
   module `update-protocol.ts` and `repoint-record.ts` write to. `getPublicationFactory` and
-  `getProtocolInfo` both read it here, so this constant is the one place a redeploy can
+  `getManifest` both read it here, so this constant is the one place a redeploy can
   drift: point it at a retired module and `getRecord` answers the empty string on the old address,
   `getPublicationFactory` returns null, and **every action that discovers through it fails** — a
   null factory is a stated failure, not a slower path — with the `publication_factory record
@@ -734,7 +737,7 @@ mutate shared state. A mocked-transport unit layer is the next step after the fi
   signatures reproducible (and to verify INV-5 round-trip / expose GAP-2).
 - **Endpoints:** `IPFS_URL`, RPC URLs, and the run URL are hardcoded — parameterize
   to point unit/integration runs at ephemeral infra. (Lens is gone from the action path — GAP-10.)
-- **Per-action fixtures:** capture one real `S2SProtocolInfo`, `S2SPublicationConfig`, encrypted +
+- **Per-action fixtures:** capture one real `S2SManifest`, `S2SPublicationConfig`, encrypted +
   unencrypted `S2SBody`, and a `S2SJob`. Assert output shapes per the tables above.
 - **Sequence test:** prep.jobs → single(job) → update(renderedJobs); assert the shape handed
   across each boundary (this is where the camelCase/snake class of bug surfaces first).

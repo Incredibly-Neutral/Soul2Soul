@@ -1,6 +1,6 @@
 import {
   S2SContentInfo,
-  S2SProtocolInfo,
+  S2SManifest,
   canonicalizeProofPayload,
   extractHashableHtml,
   hasHtmlBlock,
@@ -47,7 +47,7 @@ export type S2SContentInfoWithDates = S2SContentInfo & {
 export const addAndSignMetadata = async (
   id: string,
   html: string,
-  protocolInfo: S2SProtocolInfo,
+  protocolInfo: S2SManifest,
   contentInfo?: S2SContentInfoWithDates,
 ) => {
   // console.log("pkp", protocolInfo.pkp.publicKey.replace("0x", ""));

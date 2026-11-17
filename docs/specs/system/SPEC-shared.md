@@ -9,7 +9,7 @@
 > imports. Read **SPEC-00** first. This spec is the **canonical type catalog** the front-end specs
 > (safe-app, 0xobsidian, neutralpress) point at instead of re-deriving shapes. Follows SPEC-00 §7.
 >
-> Invariants carried/owned here: INV-2 (record-key set in `getProtocolInfo`), INV-5 type
+> Invariants carried/owned here: INV-2 (record-key set in `getManifest`), INV-5 type
 > (`S2SContentInfo`), INV-7 (the action-bundle entry point must stay runtime-free), plus the
 > canonical shapes behind every other INV.
 
@@ -56,7 +56,7 @@ get a runtime-free subset). Each entry tailors the surface to one build context:
 | `@s2s/soul2soul-shared` (`index.ts`) | **everything** (services + types + ABIs + identity) | neutralpress, 0xobsidian (**esbuild**) | full runtime OK |
 | `@s2s/soul2soul-shared/lit-actions` (`lit-actions.ts`) | **types + ABIs only**, no runtime | `protocol/actions` (**action bundler**) | **INV-7:** never add runtime/Node deps; zod validators intentionally commented out (bundle size) |
 | `@s2s/soul2soul-shared/rendering/action-io` (`rendering/action-io.ts`) | **zod runtime schemas** for action I/O (e.g. `s2sContentItemSchema`) | `protocol/actions` — only the action that needs runtime validation (currently `render` via `archive.factory`) | **narrow, deliberate:** carries zod into exactly one action bundle; added 2026-08-19 to fix the 413 (root-barrel import had dragged the whole shared graph into `render/main.js`, 2.6 MB → 341 KB). Do NOT re-export these schemas from `lit-actions` (keeps it zod-free, INV-7); do NOT import them from the root barrel inside action code. |
-| `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | `getProtocolInfo`, `LitService`, types + **the whole `cid-view/` surface** + `ConfigBuilder`/`AssetsBuilder`/`S2SIPFSMethods` | safe-app (**Vite**) | "no Lit/Lens/CCIP baggage" — the cid-view addition is deliberate (safe-app is its only consumer) |
+| `@s2s/soul2soul-shared/safe-app` (`safe-app.ts`) | `getManifest`, `LitService`, types + **the whole `cid-view/` surface** + `ConfigBuilder`/`AssetsBuilder`/`S2SIPFSMethods` | safe-app (**Vite**) | "no Lit/Lens/CCIP baggage" — the cid-view addition is deliberate (safe-app is its only consumer) |
 
 ## Canonical type catalog (single source of truth)
 
@@ -117,7 +117,7 @@ On the page, the author identifier is a JSON-LD `PropertyValue` node naming a CA
 | `S2STemplateConfig` | `protocol/types.ts` | `reference, file, path, collections?, filters?` |
 | `S2SJob` | `protocol/types.ts` | `id, templateConfig, path?, templateData?, html?, revoked?` |
 | `PKP` | `protocol/types.ts` | `tokenId, publicKey, ethAddress` — **tokenId/publicKey vestigial (GAP-11)** |
-| `S2SProtocolInfo` | `protocol/types.ts` | `addr?, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords, pkp, litAction{Prep,Cbor,Single,RootUpdate}` |
+| `S2SManifest` | `protocol/types.ts` | `addr?, recordsModule, dataGateway, assetsGateway, lensApp, ensRecords, pkp, litAction{Prep,Cbor,Single,RootUpdate}` |
 | `S2SPublicationConfig` | `publication/types.ts` | `assetsCid, contract, dataGateway, mapping, name, templateCid` |
 | `S2SPublication` | `publication/types.ts` | `name, owners[], authors[], contract?, configCid?, feed?, devRepository, branch` (← GitHub repo+branch for templates/assets) |
 
@@ -125,7 +125,7 @@ On the page, the author identifier is a JSON-LD `PropertyValue` node naming a CA
 
 | module | role | notes |
 |---|---|---|
-| `protocol/` | `getProtocolInfo` (viem), `getRecords`, `getProtocolControllerAndModules`, `predictPublicationModule`, constants | **read-side counterpart of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers), and not a mirror: module resolution here asks the `publication_factory` record for a CREATE2 prediction first (`predictPublicationModule`, newest implementation then older ones, capped) and falls back to the Safe's `NAME()` scan, which is the only route the in-action version has. `getProtocolInfo` runs the prediction after the records read and returns it as `publicationModule`. Has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Holds the implementation record (`S2SProtocolInfo`, `PKP`); the manuscript's own types are in `manuscript/types.ts`. |
+| `protocol/` | `getManifest` (viem), `getRecords`, `getProtocolControllerAndModules`, `predictPublicationModule`, constants | **read-side counterpart of the in-action `libs/protocol.factory.ts`** — same record-key set (INV-2), different stack (viem vs ethers), and not a mirror: module resolution here asks the `publication_factory` record for a CREATE2 prediction first (`predictPublicationModule`, newest implementation then older ones, capped) and falls back to the Safe's `NAME()` scan, which is the only route the in-action version has. `getManifest` runs the prediction after the records read and returns it as `publicationModule`. Has the `dev`→`dev.soul2soul.eth` branch (GAP-8, vestigial). Holds the implementation record (`S2SManifest`, `PKP`); the manuscript's own types are in `manuscript/types.ts`. `S2SManifest` is the name of record: the protocol is Polyphony, and this is one deployment's list of references to code — addresses and action CIDs — so it is not called protocol info. |
 | `rendering/` | `renderwithLitActions` (client orchestrator: prep→single→merged) + helpers + **action-io schemas** | drives the pipeline; selects Bun (preview) vs Lit (prod). Zod schemas (`s2sContentItemSchema` etc.) remain in action-io.ts; the content-item types are in `manuscript/types.ts`. |
 | `lit/` | `LitService` (Chipotle REST client), `actions/types` (action I/O), `compactAction`, gates `can_publish`/`can_read` | `LitService` base URL = `api.chipotle.litprotocol.com/core/v1` (prod) / `api.dev…` (dev); `X-Api-Key`; `poolKeys` map (poolId→usageKey). No action code ships from here: the encrypt and decrypt actions are built in `src/press/actions`, registered on Lit by CID, and named as CIDs in `LitService` config (`actions.encrypt`, `actions.decrypt`); `LitService` fetches the bundle by CID from its configured IPFS `gateway` and posts it as `code`, hashing the fetched bytes with `/get_lit_action_ipfs_id` first and refusing unless that equals the requested CID (a gateway is not trusted to choose what runs beside the PKP). The shared gates are the gate, and the action imports them. Backs `swap-action`/`deploy-group`/`update-protocol` |
 | `publication/` | `config-builder` (S2SConfigBuilder: GitHub repo→config), `types`, **`validation` (zod)** | validation schemas live here (client-side); `bodySchema` mirrors the deprecated `S2SBody` |
@@ -211,7 +211,7 @@ S2SBody-driven actions** — new content-type validation should use `s2sContentI
 
 ## Invariants this component preserves
 
-INV-2 (`getProtocolInfo` key set — keep in sync with the in-action copy), INV-5 type
+INV-2 (`getManifest` key set — keep in sync with the in-action copy), INV-5 type
 (`S2SContentInfo`), INV-7 (the `lit-actions` entry stays runtime-free). Canonical shapes here back
 INV-6/8/11 etc. in the consumers.
 
@@ -221,9 +221,9 @@ entry. This is the existing author/publication gate, extended to guard appends.
 
 ## Local gotchas / gaps
 
-- **Two `getProtocolInfo`** (here viem; action ethers) — same key set, different field order;
+- **Two `getManifest`** (here viem; action ethers) — same key set, different field order;
   must co-evolve (INV-2). The `dev` branch here is vestigial (GAP-8).
-- **PKP `tokenId`/`publicKey` vestigial** (GAP-11) — prune from `PKP`, `S2SProtocolInfo` pkp, and the
+- **PKP `tokenId`/`publicKey` vestigial** (GAP-11) — prune from `PKP`, `S2SManifest` pkp, and the
   record-key set.
 - zod exists client-side but not in actions — *by design*, not a gap.
 - **Two content-type systems coexist** during migration: the old Lens-era S2SBody/S2SPublicContent
@@ -247,7 +247,7 @@ entry. This is the existing author/publication gate, extended to guard appends.
 - 🟢 migrate action code from S2SBody to the new S2SContentItem (incremental).
 - 🟢 extend `cid-view/` (new collectors, new retrievability sources/fields) — keep the INV-7 purity
   split (pure parser vs the single network client) and mirror any new zod schema in `validation.ts`.
-- 🔴 add runtime/Node deps to `lit-actions.ts` (breaks INV-7 bundling); change the `getProtocolInfo`
+- 🔴 add runtime/Node deps to `lit-actions.ts` (breaks INV-7 bundling); change the `getManifest`
   record-key set without mirroring the action copy (INV-2); fork the canonical types further.
 - 🔴 change the ipfs-check classification rules (served/agent/host semantics, `FILECOIN_SP_HOSTS`)
   without re-validating against the live endpoint; break the parser↔client purity split; diverge
@@ -267,7 +267,7 @@ entry. This is the existing author/publication gate, extended to guard appends.
   fetch streams drive the ipfs-check batch client; the parser is pure. The safe-app
   `s2s-cid-view-section` / `s2s-storage-tab` component tests exercise the same contracts through the
   app's `lib/cid-view/` wiring.
-- The zod schemas **are** the boundary fixtures — assert real `getProtocolInfo`/`getConfig`/
+- The zod schemas **are** the boundary fixtures — assert real `getManifest`/`getConfig`/
   `fetchById` outputs parse against them at the consumer that calls them; the first failure names the field.
 - **NEW test seam:** `identity/jcs.ts` is pure — unit test deterministic JSON + keccak round-trips.
 - **NEW test seam:** `identity/sign-content.ts` + `verify-content.ts` can be tested as a

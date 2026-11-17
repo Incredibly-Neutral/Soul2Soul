@@ -28,7 +28,7 @@ vi.mock('../libs/gates', () => ({
 
 vi.mock('../libs/protocol.factory', () => ({
   getPublicationFactory: vi.fn(async () => FACTORY),
-  getProtocolInfo: vi.fn(),
+  getManifest: vi.fn(),
 }));
 
 vi.mock('../libs/ens.factory', () => ({

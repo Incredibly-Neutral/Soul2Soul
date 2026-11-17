@@ -44,7 +44,7 @@ import { main as renderMain } from './main';
 import { evmRead } from '../libs/evm';
 import { fetchById } from '../libs/module.factory';
 import { getConfig } from './config.ctrl';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { extractSignerAddress } from '../libs/gates';
 import { fetchTemplateBundle, fetchPartialsSourceMap } from '../renderer/html.ctrlr';
@@ -69,7 +69,7 @@ vi.mock('./config.ctrl', () => ({
   getConfig: vi.fn(),
 }));
 vi.mock('../libs/protocol.factory', () => ({
-  getProtocolInfo: vi.fn(),
+  getManifest: vi.fn(),
 }));
 vi.mock('../libs/ens.factory', () => ({
   getDomainOwnerAndModules: vi.fn(),
@@ -164,7 +164,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     vi.mocked(evmRead).mockReset();
     vi.mocked(fetchById).mockReset();
     vi.mocked(getConfig).mockReset();
-    vi.mocked(getProtocolInfo).mockReset();
+    vi.mocked(getManifest).mockReset();
     vi.mocked(getDomainOwnerAndModules).mockReset();
     vi.mocked(extractSignerAddress).mockReset();
     vi.mocked(fetchTemplateBundle).mockReset();
@@ -175,7 +175,7 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
   it('rendering a revoked postId yields a remove entry, a cascaded home job, and excludes the revoked job from the update', async () => {
     // ---- real render action deps (revoked path) ----
     vi.mocked(extractSignerAddress).mockReturnValue('0xSigner');
-    vi.mocked(getProtocolInfo).mockResolvedValue(protocolInfo as any);
+    vi.mocked(getManifest).mockResolvedValue(protocolInfo as any);
     vi.mocked(getDomainOwnerAndModules).mockResolvedValue({
       multisig: '0xms',
       configModule: '0xcfg',

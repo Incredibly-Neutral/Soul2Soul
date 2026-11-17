@@ -25,7 +25,7 @@ vi.mock('../libs/ipfs.factory', () => ({
   decodeArchiveCid: vi.fn(() => ''),
 }));
 vi.mock('../libs/decrypt', () => ({ decryptRaw: vi.fn() }));
-vi.mock('../libs/protocol.factory', () => ({ getProtocolInfo: vi.fn() }));
+vi.mock('../libs/protocol.factory', () => ({ getManifest: vi.fn() }));
 vi.mock('../libs/ens.factory', () => ({ getDomainOwnerAndModules: vi.fn() }));
 vi.mock('../libs/gates', () => ({ extractSignerAddress: vi.fn() }));
 vi.mock('../libs/helpers', () => ({
@@ -39,7 +39,7 @@ vi.mock('../renderer/html.ctrlr', () => ({ renderHTML: vi.fn() }));
 
 import { main } from './main';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { extractSignerAddress } from '../libs/gates';
 import { getConfig } from './config.ctrl';
 import { renderHTML } from '../renderer/html.ctrlr';
@@ -68,7 +68,7 @@ const input = (): SingleInput => ({
 const result = () => main(input()) as Promise<{ ok: boolean; error?: string; trace: unknown[] }>;
 
 beforeEach(() => {
-  vi.mocked(getProtocolInfo).mockResolvedValue({
+  vi.mocked(getManifest).mockResolvedValue({
     pkp: '0x' + '44'.repeat(20),
     ensRecords: '0x' + '55'.repeat(20),
     moduleFactory: '0x' + '77'.repeat(20),

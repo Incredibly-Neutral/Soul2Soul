@@ -10,7 +10,7 @@ import {
 import { decryptRaw } from '../libs/decrypt';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
-import { getProtocolInfo } from '../libs/protocol.factory';
+import { getManifest } from '../libs/protocol.factory';
 import { evmRead } from '../libs/evm';
 import { fetchById, verifyDecryptedBody } from '../libs/module.factory';
 
@@ -177,7 +177,7 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
       signature,
     );
 
-    const protocolInfo = await getProtocolInfo(false, rpcs);
+    const protocolInfo = await getManifest(false, rpcs);
     if (!protocolInfo) throw 'Failed to fetch protocol info';
 
     // Per-publication content archive pointer (ENS text record). Mirrors

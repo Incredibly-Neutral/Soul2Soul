@@ -2,13 +2,13 @@
  * Sequence test — drives each Lit action stage through the Bun runner,
  * asserting envelope shape at every seam.
  *
- * CIDs are fetched from the chain at test time via getProtocolInfo().
+ * CIDs are fetched from the chain at test time via getManifest().
  * Auth signature is generated from TEST_PRIVATE_KEY.
  * Test data (publication, contentIds) must be supplied via TEST_* env vars.
  *
  * Required env vars:
- *   MAINNET_RPC_URL          L1 RPC (used by getProtocolInfo)
- *   BASE_RPC_URL             L2 RPC (used by getProtocolInfo)
+ *   MAINNET_RPC_URL          L1 RPC (used by getManifest)
+ *   BASE_RPC_URL             L2 RPC (used by getManifest)
  *   TEST_PUBLICATION         ENS name of a test publication
  *   TEST_PRIVATE_KEY         Private key to sign "lit actions auth"
  *
@@ -24,8 +24,8 @@ import { mainnet, base } from 'viem/chains';
 import { Wallet } from 'ethers';
 
 import { buildFallbackRpcs } from '../rpc';
-import { getProtocolInfo } from '../protocol';
-import type { S2SProtocolInfo } from '../protocol';
+import { getManifest } from '../protocol';
+import type { S2SManifest } from '../protocol';
 import type { LitService } from '../lit';
 import { runAction } from './helpers';
 import { runRenderActionWithRetry, renderwithLitActions } from './sequence';
@@ -182,7 +182,7 @@ describe('sequence — local shape contracts', () => {
 // ============================================================================
 
 describe.skipIf(!chainReady)('sequence — full happy path', () => {
-  let protocolInfo: S2SProtocolInfo;
+  let protocolInfo: S2SManifest;
   let SIGNATURE: string;
   let prepResult: any;
   let jobs: any[];
@@ -198,7 +198,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getProtocolInfo(false, l1, l2);
+    protocolInfo = await getManifest(false, l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
 
@@ -302,7 +302,7 @@ describe.skipIf(!chainReady)('sequence — full happy path', () => {
 // ============================================================================
 
 describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () => {
-  let protocolInfo: S2SProtocolInfo;
+  let protocolInfo: S2SManifest;
   let SIGNATURE: string;
 
   beforeAll(async () => {
@@ -315,7 +315,7 @@ describe.skipIf(!chainReady)('sequence — seam contract (prep → single)', () 
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getProtocolInfo(false, l1, l2);
+    protocolInfo = await getManifest(false, l1, l2);
     SIGNATURE = await makeSignature();
   }, 15_000);
 
@@ -361,7 +361,7 @@ describe.skip('sequence — non-fatal trace', () => {
 // ============================================================================
 
 describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
-  let protocolInfo: S2SProtocolInfo;
+  let protocolInfo: S2SManifest;
 
   beforeAll(async () => {
     const rpcs = buildFallbackRpcs();
@@ -373,7 +373,7 @@ describe.skipIf(!chainReady)('sequence — stage failure envelope', () => {
       chain: base as any,
       transport: fallback(rpcs.L2.map((url) => http(url))),
     }) as any;
-    protocolInfo = await getProtocolInfo(false, l1, l2);
+    protocolInfo = await getManifest(false, l1, l2);
   }, 15_000);
 
   it('a publication that resolves to no modules returns ok:false', async () => {
@@ -860,7 +860,7 @@ describe('renderwithLitActions — reset-only path (zero contentIds, reset:true)
 
 describe('renderwithLitActions — all render jobs fail (no remove, no reset)', () => {
   const updateCid = 'cid-update';
-  const protocolInfo: S2SProtocolInfo = {
+  const protocolInfo: S2SManifest = {
     gateway: 'https://ipfs.transport-union.dev',
     ensRegistry: '0x0',
     ensRecords: '0x0',

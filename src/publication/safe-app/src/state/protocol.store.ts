@@ -1,4 +1,4 @@
-import { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import { S2SManifest } from '@s2s/soul2soul-shared';
 import { Observable, Listener } from './observable.js';
 
 
@@ -6,17 +6,17 @@ import { Observable, Listener } from './observable.js';
 import { } from './storage.js';
 
 export class ProtocolStore {
-  private observable: Observable<S2SProtocolInfo | undefined>;
+  private observable: Observable<S2SManifest | undefined>;
 
   constructor() {
-    this.observable = new Observable<S2SProtocolInfo | undefined>(undefined);
+    this.observable = new Observable<S2SManifest | undefined>(undefined);
   }
 
-  get info(): S2SProtocolInfo | undefined {
+  get info(): S2SManifest | undefined {
     return this.observable.get();
   }
 
-  set(info: S2SProtocolInfo): void {
+  set(info: S2SManifest): void {
     this.observable.set(info);
   }
 
@@ -24,7 +24,7 @@ export class ProtocolStore {
     this.observable.set(undefined);
   }
 
-  subscribe(listener: Listener<S2SProtocolInfo | undefined>): () => void {
+  subscribe(listener: Listener<S2SManifest | undefined>): () => void {
     return this.observable.subscribe(listener);
   }
 }

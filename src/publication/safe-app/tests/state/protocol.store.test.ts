@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { installLS, type LSStub } from './_helpers.js';
 import { ProtocolStore } from '../../src/state/protocol.store.js';
-import type { S2SProtocolInfo } from '@s2s/soul2soul-shared';
+import type { S2SManifest } from '@s2s/soul2soul-shared';
 
-const INFO: S2SProtocolInfo = {
+const INFO: S2SManifest = {
   gateway: 'https://gateway',
   ensRegistry: '0x1',
   ensRecords: '0x2',

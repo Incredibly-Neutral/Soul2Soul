@@ -14,7 +14,7 @@
 > the publish pipeline (SPEC-protocol-actions) and deploys the per-publication contracts
 > (../SPEC-publication.md, ../SPEC-contracts-ens.md). Follows SPEC-00 §7.
 >
-> Invariants touched: INV-1 (passes the author signature), INV-2/INV-4 (`getProtocolInfo`, module
+> Invariants touched: INV-1 (passes the author signature), INV-2/INV-4 (`getManifest`, module
 > discovery), INV-8 (holds/passes the `litUsageKey`), the **cross-chain same-address** Safe
 > requirement (implemented here), and Q5 feed-per-publication.
 
@@ -29,7 +29,7 @@ and rendering/signing to the Lit Actions.
 
 Obsidian plugin, **esbuild**-built. Depends on `oxo-core` — `initializeOxo()` waits up to 10s for
 `app.plugins.plugins["oxo-core"]`, then reads the active user, `initChains(["ETH_MAINNET","BASE"])`,
-and `getProtocolInfo(dev, L1, L2)`. No active oxo user → init stops.
+and `getManifest(dev, L1, L2)`. No active oxo user → init stops.
 
 ## Boundary interfaces
 
@@ -42,8 +42,8 @@ render-pipeline invocations.
 
 ## Shared surface consumed (bundled into the esbuild output)
 
-Entry point: **`@s2s/soul2soul-shared`** (full index). Imports: `getProtocolInfo`,
-`S2SProtocolInfo`, `S2SPublication`, `buildSignedContentItem`, `noOpEncrypt`, content
+Entry point: **`@s2s/soul2soul-shared`** (full index). Imports: `getManifest`,
+`S2SManifest`, `S2SPublication`, `buildSignedContentItem`, `noOpEncrypt`, content
 type `S2SContentItem`, **`renderwithLitActions`** (the orchestrator),
 **`runFilecoinLeg`** (Filecoin durability-leg runner: lifecycle logging + timeout +
 `onFailure` callback — relocated from `publication/filecoin.ts`, see SPEC-shared), and the
@@ -96,7 +96,7 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   factory + initializer on both chains, or `publicationAddress1 != publicationAddress2` and the
   L1-owner/L2-modules split breaks (SPEC-contracts-ens topology). Worth an explicit equality assert.
 - **INV-1:** passes the author signature (from the oxo signer) into `renderwithLitActions`.
-- **INV-2/INV-4:** `getProtocolInfo`; `getModuleAdresses` discovers modules by `NAME()`.
+- **INV-2/INV-4:** `getManifest`; `getModuleAdresses` discovers modules by `NAME()`.
 - **INV-8:** holds the `litUsageKey` (oxo settings) and passes it to render. Not to encrypt —
   nothing here encrypts (see Publish).
 - **Q5 feed-per-publication:** `lens.createFeed` per publication; content posted to that feed.

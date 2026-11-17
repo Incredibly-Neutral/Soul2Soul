@@ -3,14 +3,14 @@
 import type { EthersContract } from '@/types';
 import SafeAppsSDK from '@safe-global/safe-apps-sdk';
 import { createPublicClient, http } from 'viem';
-import { getProtocolInfo, S2SProtocolInfo } from '@s2s/soul2soul-shared/safe-app';
+import { getManifest, S2SManifest } from '@s2s/soul2soul-shared/safe-app';
 import { getRpcUrl } from './evm';
 
 export class ProtocolIntegration {
   private safeSdk: SafeAppsSDK | null = null;
-  public protocolInfo!: S2SProtocolInfo;
+  public protocolInfo!: S2SManifest;
 
-  async initialize(): Promise<S2SProtocolInfo | undefined> {
+  async initialize(): Promise<S2SManifest | undefined> {
     try {
         if (typeof SafeAppsSDK === 'undefined') {
             throw new Error('SafeAppsSDK not available');
@@ -34,7 +34,7 @@ export class ProtocolIntegration {
           transport: http(getRpcUrl(8453)),
         });
 
-        this.protocolInfo  = await getProtocolInfo(
+        this.protocolInfo  = await getManifest(
           false,
           providerL1 as any,
           providerL2 as any,
@@ -48,7 +48,7 @@ export class ProtocolIntegration {
     }
   }
 
-  getInfo(): S2SProtocolInfo {
+  getInfo(): S2SManifest {
 
       return this.protocolInfo; 
   }

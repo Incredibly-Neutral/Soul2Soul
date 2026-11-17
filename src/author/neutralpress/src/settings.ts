@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import { getProtocolInfo, S2SPublication } from "@s2s/soul2soul-shared";
+import { getManifest, S2SPublication } from "@s2s/soul2soul-shared";
 
 export interface Settings {
 	dev: boolean;
@@ -59,7 +59,7 @@ export class DSGSettingsTab extends PluginSettingTab {
 					this.plugin.settings.dev = value;
 					await this.plugin.saveSettings();
 
-					this.plugin.ctrlr.protocolInfo = await getProtocolInfo(
+					this.plugin.ctrlr.protocolInfo = await getManifest(
 						this.plugin.ctrlr, this.plugin.oxo.ctrlr.account["ETH_MAINNET"].provider, this.plugin.oxo.ctrlr.account["BASE"].provider
 					);
 				});

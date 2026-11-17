@@ -207,7 +207,7 @@ describe('store (aggregate)', () => {
   });
 
   describe('protocolInfo / safeInfo', () => {
-    it('setProtocolInfo/getProtocolInfo round-trip and notify', async () => {
+    it('setProtocolInfo/getManifest round-trip and notify', async () => {
       const store = await freshStore();
       const fn = vi.fn();
       store.subscribeToProtocolInfo(fn);

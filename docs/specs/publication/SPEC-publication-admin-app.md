@@ -40,7 +40,7 @@ links, tests and the e2e helper key off them.
 ## Boundary interfaces
 
 **Consumes:** `SafeAppsSDK.safe.getInfo()` (address, owners, threshold, modules); the two modules' ABIs
-from `protocol/generated`; from shared — `getProtocolInfo`, `LitService`, `renderwithLitActions`,
+from `protocol/generated`; from shared — `getManifest`, `LitService`, `renderwithLitActions`,
 `toBytes32Id`, `ConfigBuilder`, `AssetsBuilder`, `S2SIPFSMethods`, the whole `cid-view/` surface,
 `heal/`; from `@s2s/soul2soul-shared/filecoin` — `FilecoinStorage`; GitHub + Kubo for config building;
 the ipfs-check batch endpoint.
@@ -72,7 +72,7 @@ its own transaction path and its own key. Do not "fix" it by routing it through 
 | `state/store.ts`, `observable.ts`, `*.store.ts`, `storage.ts`                                                                  | observable store, localStorage-backed                                                                            |
 | `lib/safe-integration.ts`                                                                                                      | Safe SDK wrapper: module discovery, reads, **proposal** encoding                                                 |
 | `lib/publication-init.ts`                                                                                                      | the two-batch initialisation and the teardown batch ([account child](SPEC-publication-account.md))               |
-| `lib/protocol-integration.ts`                                                                                                  | `getProtocolInfo(false, L1, L2)` via viem                                                                        |
+| `lib/protocol-integration.ts`                                                                                                  | `getManifest(false, L1, L2)` via viem                                                                        |
 | `lib/cid-view/`                                                                                                                | safe-app adapter over the shared cid-view surface                                                                |
 | `lib/ens-registration.ts`                                                                                                      | L1 subname registration, NameWrapper branch                                                                      |
 

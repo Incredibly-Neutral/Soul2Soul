@@ -46,7 +46,7 @@ const USAGE_KEY = process.env.VITE_LIT_USAGE_KEY || '';
 // but that bundle is NOT registered in group 1 — executing it would be denied.
 // Both bundles contain the identical repoint action code (verified by diff:
 // the only difference is the optional repointArchive field in the shared
-// protocolSchema, which does not affect this action's runtime). We execute
+// manifestSchema, which does not affect this action's runtime). We execute
 // the group-registered bundle. See the divergence note for the cleanup.
 const REPOINT_ACTION_CID = 'QmZr42z6rCaMAGWPFR5jR1gcwfuGyHjaEySrFGeMDnR4Hi';
 

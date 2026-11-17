@@ -8,7 +8,7 @@
  * answers (a value, an empty record, a reverting read) are what this file pins,
  * together with the address the read targets being the records module.
  *
- * `getProtocolInfo` reuses that read: `moduleFactory` is the record discovery
+ * `getManifest` reuses that read: `moduleFactory` is the record discovery
  * was built from, `publicationFactory` the copy `configModule` publishes. A
  * caller that already holds the record passes it and spends no second read.
  *
@@ -49,7 +49,7 @@ vi.mock('./evm', () => ({
 }));
 
 import { evmRead } from './evm';
-import { getProtocolInfo, getPublicationFactory } from './protocol.factory';
+import { getManifest, getPublicationFactory } from './protocol.factory';
 
 const RECORDS_MODULE = '0xBB0BBd828c19502a8fCFbF07f5ACEcd8E8641D29';
 const FACTORY = '0x' + '77'.repeat(20);
@@ -115,11 +115,11 @@ describe('getPublicationFactory', () => {
   });
 });
 
-describe('getProtocolInfo', () => {
+describe('getManifest', () => {
   it('returns the record discovery used as moduleFactory, beside the getRecords copy', async () => {
     mocks.answer = FACTORY;
 
-    const info = await getProtocolInfo(false);
+    const info = await getManifest(false);
 
     expect(info.moduleFactory).toBe(FACTORY);
     expect(info.publicationFactory).toBe(PUB_RECORD);
@@ -128,13 +128,13 @@ describe('getProtocolInfo', () => {
   it('reads the record once when no factory is passed', async () => {
     mocks.answer = FACTORY;
 
-    await getProtocolInfo(false);
+    await getManifest(false);
 
     expect(recordReads()).toHaveLength(1);
   });
 
   it('skips the standalone read when the caller passes the factory', async () => {
-    const info = await getProtocolInfo(false, undefined, FACTORY);
+    const info = await getManifest(false, undefined, FACTORY);
 
     expect(recordReads()).toHaveLength(0);
     expect(info.moduleFactory).toBe(FACTORY);
@@ -143,7 +143,7 @@ describe('getProtocolInfo', () => {
   it('reads the records module held as a constant, with no factory walk', async () => {
     mocks.answer = FACTORY;
 
-    await getProtocolInfo(false);
+    await getManifest(false);
 
     expect(recordsReads()).toHaveLength(1);
     expect(recordsReads()[0][1]).toBe(RECORDS_MODULE);
@@ -152,7 +152,7 @@ describe('getProtocolInfo', () => {
   });
 
   it('refuses a null factory without issuing a read', async () => {
-    await expect(getProtocolInfo(false, undefined, null)).rejects.toThrow(
+    await expect(getManifest(false, undefined, null)).rejects.toThrow(
       'Failed to read the publication_factory record; module discovery needs it',
     );
     expect(recordReads()).toHaveLength(0);

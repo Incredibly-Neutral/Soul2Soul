@@ -7,7 +7,7 @@ import {
 } from '@s2s/soul2soul-shared/lit-actions';
 import type { AnyS2SContentItem } from '../../../../shared/dist/manuscript/types';
 import { evmRead, evmWrite, toHexString } from '../libs/evm';
-import { getProtocolInfo, getPublicationFactory } from '../libs/protocol.factory';
+import { getManifest, getPublicationFactory } from '../libs/protocol.factory';
 import { getDomainOwnerAndModules } from '../libs/ens.factory';
 import { catFile, uploadFile, decodeArchiveCid } from '../libs/ipfs.factory';
 import { getDeals, type Entry } from '../libs/module.factory';
@@ -96,7 +96,7 @@ async function main(input: MaintainCacheInput): Promise<ActionResult<MaintainCac
       }
     }
 
-    const protocolInfo = await getProtocolInfo(false, rpcs, publicationFactory);
+    const protocolInfo = await getManifest(false, rpcs, publicationFactory);
     if (!protocolInfo?.pkp || !protocolInfo?.ensRecords) {
       throw 'Failed to fetch protocol info';
     }
