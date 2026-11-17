@@ -6,11 +6,11 @@
  * call: an implementation approved for another kind, or not approved at all, is
  * `ImplementationNotApproved` even if it is deployed and looks right.
  *
- * The proxy address and the implementation both default to what the factory
- * answers, so the usual run names no arguments: `moduleOf(protocolSafe, kind)` is
- * the proxy, `latestImplementation(kind)` is the build. Naming either overrides
- * the default, which is how a rollback is done: approve an earlier build and pass
- * it here.
+ * The proxy is `MANIFEST_MODULE_ADDRESS`: this deploy has one manifest, so the
+ * address is a constant the readers already carry. The implementation defaults to
+ * `latestImplementation(kind)`, which is the one thing only the factory knows.
+ * Naming either overrides the default, which is how a rollback is done: approve an
+ * earlier build and pass it here.
  *
  * The document and its history are storage, in the proxy. An upgrade moves the
  * code and nothing else, which is why the manifest survives one and why a build
@@ -38,7 +38,6 @@ import {
   MANIFEST_KIND,
   addressEnv,
   deliver,
-  optionalAddressEnv,
   publicClient,
   refuse,
   say,
@@ -60,21 +59,10 @@ const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
 const factory = addressEnv('PUBLICATION_FACTORY_ADDRESS');
 const safe = addressEnv('PROTOCOL_SAFE_ADDRESS');
 
-// Naming the proxy, or having it in `.env`, saves the factory a call: the checks
-// below ask the proxy for its own safe, so a wrong address is refused either way.
-const proxy =
-  (args[0] as `0x${string}` | undefined) ??
-  optionalAddressEnv('MANIFEST_MODULE_ADDRESS') ??
-  ((await publicClient.readContract({
-    address: factory,
-    abi: FACTORY_ABI,
-    functionName: 'moduleOf',
-    args: [safe, MANIFEST_KIND],
-  })) as `0x${string}`);
-
-if (proxy === '0x0000000000000000000000000000000000000000') {
-  refuse(`No manifest module exists for ${safe}. Run pnpm create:module first.`);
-}
+// One manifest per deploy, so its address is a constant: named here or in
+// `.env`, never resolved through the factory. The proxy is asked for its own
+// safe below, which refuses an address that is not this module.
+const proxy = (args[0] as `0x${string}` | undefined) ?? addressEnv('MANIFEST_MODULE_ADDRESS');
 
 const implementation =
   (args[1] as `0x${string}` | undefined) ??

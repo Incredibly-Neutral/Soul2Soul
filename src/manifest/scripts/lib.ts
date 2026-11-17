@@ -48,26 +48,6 @@ export const FACTORY_ABI = [
   },
   {
     type: 'function',
-    name: 'moduleAddress',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'safe', type: 'address' },
-      { name: 'kind', type: 'bytes32' },
-    ],
-    outputs: [{ name: '', type: 'address' }],
-  },
-  {
-    type: 'function',
-    name: 'moduleOf',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'safe', type: 'address' },
-      { name: 'kind', type: 'bytes32' },
-    ],
-    outputs: [{ name: '', type: 'address' }],
-  },
-  {
-    type: 'function',
     name: 'latestImplementation',
     stateMutability: 'view',
     inputs: [{ name: 'kind', type: 'bytes32' }],
