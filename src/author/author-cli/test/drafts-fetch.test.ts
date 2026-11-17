@@ -715,7 +715,7 @@ describe('resolveDecryptActionCid', () => {
 
   it('falls back to the record, and to nothing when neither is written', () => {
     expect(resolveDecryptActionCid(config(undefined), record('bafyrecord'))).toBe('bafyrecord');
-    expect(resolveDecryptActionCid(config(''), record(''))).toBeUndefined();
+    expect(resolveDecryptActionCid(config(''), record(undefined))).toBeUndefined();
     expect(resolveDecryptActionCid(config(undefined), record(undefined))).toBeUndefined();
   });
 });
