@@ -627,8 +627,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   module's version of this, and they are a stopgap: the manifest module below replaces both with one
   document per version and no key convention, so the mirror is not carried forward.
 - **Version agreement.** Three numbers, one meaning. The document names `x.y.z`: major changes when
-  the document's shape changes, minor when an optional field is added, patch when an action CID is
-  repointed. `VERSION()` on `S2SRecordsModuleV2` is the major and nothing else (`"1"`), because the
+  the document's shape changes, the second when an optional field is added, the third when a value
+  moves, an action CID or an address. A CID change is a small bump, so it lands in the third digit. `VERSION()` on `S2SRecordsModuleV2` is the major and nothing else (`"1"`), because the
   module is not redeployed when the document moves; every reader compares the document's first
   segment to that whole string and throws on a difference rather than guessing.
   `update-protocol.ts` builds the document with a plain `MANIFEST_VERSION` constant and asserts it
@@ -651,8 +651,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   names its own major, a reader that only understands major 1 refuses a 2.x document itself, and a
   major bump is a new writer rather than a new contract.
   **What the contract enforces:** `x.y.z` only, three digit segments, no leading zeros
-  (`LeadingZero`), a version written once (`VersionExists`, so repointing a CID is a new patch and a
-  pinned read never changes answer), and strictly increasing across `(major, minor, patch)`
+  (`LeadingZero`), a version written once (`VersionExists`, so repointing a CID is a new third digit
+  and a pinned read never changes answer), and strictly increasing across `(major, minor, patch)`
   (`VersionNotIncreasing`), so the last entry is always the live one.
   `getVersionAt` refuses an index with `IndexOutOfBounds`, `initialize` refuses a zero Safe, and
   `supportsInterface` reports the module's own id plus ERC-165 because the interface inherits

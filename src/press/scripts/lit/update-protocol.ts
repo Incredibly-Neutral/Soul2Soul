@@ -153,9 +153,10 @@ const protocolClient = () => createPublicClient({ transport: http(protocolRpcUrl
  *
  * A constant here, not an environment variable: the document's shape is decided
  * by this repo, so the version is a line in the diff a reviewer sees rather than
- * a value in someone's shell. Bump it here — patch for new action CIDs, minor for
- * a new optional field, major for a shape an older reader must refuse — and the
- * major has to equal `VERSION()` on the records module.
+ * a value in someone's shell. Bump it here — the third digit for a value that
+ * moved, an action CID or an address, the second for a new optional field, the
+ * first for a shape an older reader must refuse — and the major has to equal
+ * `VERSION()` on the records module.
  */
 const MANIFEST_VERSION = "1.0.0";
 

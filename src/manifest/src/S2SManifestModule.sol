@@ -29,7 +29,7 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *
  *   - `x.y.z`, three digit segments, no leading zeros in any of them,
  *   - a version is written once; publishing it again reverts `VersionExists`,
- *     so repointing a CID means a new patch, and `getManifest(version)` is a
+ *     so repointing a CID moves the third digit, and `getManifest(version)` is a
  *     promise rather than a lookup,
  *   - versions strictly increase in `(major, minor, patch)`, so the last entry
  *     in the list is the live one and no client has to sort the list.
@@ -180,8 +180,8 @@ contract S2SManifestModule is IS2SManifestModule, Initializable, UUPSUpgradeable
      * @dev The checks are the contract's, not the reader's. A version that is not
      *      `x.y.z`, has a leading zero, does not increase on the live one, or has
      *      already been published is refused before anything is stored. A
-     *      published version never changes answer: repointing a CID is a new
-     *      patch version, which is what keeps `getManifest(version)` a promise.
+     *      published version never changes answer: repointing a CID moves the
+     *      third digit, which is what keeps `getManifest(version)` a promise.
      */
     function setManifest(string calldata version, string calldata json) external onlySafe {
         _set(version, json);
