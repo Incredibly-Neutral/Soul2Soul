@@ -55,6 +55,7 @@ import {
   resolveLitRpcUrl,
   saveLitConfig,
   usageHash,
+  viewsFacetAbi,
 } from '@s2s/soul2soul-shared/chain-secured';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -109,6 +110,31 @@ function previousGroup() {
   if (!usageKey) throw new Error('No usage key: pass --usage-key or set VITE_LIT_USAGE_KEY');
 
   return { pkp, usageKey, groupIds: config.groups.map((g) => g.id) };
+}
+
+/**
+ * The group name already on chain, if any. A version is created once: re-running
+ * the command must not propose a second batch that opens a second group for the
+ * same version and re-binds the same hashes to it.
+ */
+async function existingGroupId(admin: string): Promise<bigint | null> {
+  const client = createPublicClient({ transport: http(resolveLitRpcUrl()) });
+  const groups = await client.readContract({
+    address: ACCOUNT_CONFIG_ADDRESS,
+    abi: viewsFacetAbi,
+    functionName: 'listGroups',
+    args: [BigInt(admin), 0n, 100n],
+  });
+  const found = groups.find((g) => g.name === groupName);
+  return found ? BigInt(found.id) : null;
+}
+
+function refuseExisting(): void {
+  if (fs.existsSync(versionConfigPath) && !process.argv.includes('--force')) {
+    throw new Error(
+      `${versionConfigPath} exists: ${version} has already been proposed. Use --finalize <safeTxHash> to read its group id, or --force to propose anyway.`,
+    );
+  }
 }
 
 async function pinActions(dryRun: boolean) {
@@ -169,11 +195,17 @@ async function main(): Promise<void> {
   if (finalizeTx) return finalize(finalizeTx);
 
   const dryRun = isDryRun();
+  refuseExisting();
   const { pkp, usageKey, groupIds } = previousGroup();
   const admin = adminHash(PROTOCOL_SAFE_ADDRESS);
   const usage = usageHash(usageKey);
   console.log(`version ${version}, group ${groupName}`);
   console.log(`pkp ${pkp} (inherited), usage key hash ${usage}`);
+
+  const bound = await existingGroupId(admin);
+  if (bound !== null) {
+    throw new Error(`group ${groupName} already exists as id ${String(bound)} on chain — nothing to propose`);
+  }
 
   const actions = await pinActions(dryRun);
   const predicted = (await predictNextGroupId({ adminHash: admin })) ?? 1n;
@@ -228,16 +260,6 @@ async function main(): Promise<void> {
   console.log(`\n=== Safe batch (${transactions.length} calls) ===`);
   console.log(prettyPrintBatch(transactions));
 
-  const config = {
-    version,
-    groups: [
-      { name: groupName, id: Number(predicted), actions, pkps: [pkp], usage_key: usageKey },
-    ],
-  };
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  saveLitConfig(versionConfigPath, config);
-  console.log(`📝 Wrote ${versionConfigPath}`);
-
   if (dryRun) {
     console.log('\ndry-run: STOPPING before proposing to the Safe.');
     return;
@@ -249,6 +271,17 @@ async function main(): Promise<void> {
     signerPrivateKey: requireProtocolPrivateKey(),
     rpcUrl: resolveLitRpcUrl(),
   });
+
+  const config = {
+    version,
+    safeTxHash,
+    groups: [
+      { name: groupName, id: Number(predicted), actions, pkps: [pkp], usage_key: usageKey },
+    ],
+  };
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  saveLitConfig(versionConfigPath, config);
+  console.log(`📝 Wrote ${versionConfigPath}`);
 
   console.log('\n=== NEXT STEPS ===');
   console.log(`1. Approve ${safeTxHash} in the Safe UI (owners confirm, then execute).`);

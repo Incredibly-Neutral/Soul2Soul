@@ -1,5 +1,6 @@
 {
   "version": "0.1.1",
+  "safeTxHash": "0x40286471030e13cc1b5bac2c860811900b065d12952eeed2120df0b038047d35",
   "groups": [
     {
       "name": "s2s@0.1.1",
