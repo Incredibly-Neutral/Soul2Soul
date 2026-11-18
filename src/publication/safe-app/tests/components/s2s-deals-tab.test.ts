@@ -1045,6 +1045,31 @@ describe('s2s-deals-tab', () => {
     });
   });
 
+  it('loads the deals when the table title action is clicked', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
+      offers: [],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+    const loads = m.safeIntegration.getAllDealsAndOffers.mock.calls.length;
+
+    // The button lives in the table's titleAction, so its listener runs with
+    // the table as its host: bound wrong, it throws instead of reloading.
+    const table = [...root.querySelectorAll('s2s-table')].find((t) =>
+      (t.textContent ?? '').includes('Active Agreements'),
+    )!;
+    table.querySelector('s2s-button')!.shadowRoot!.querySelector('button')!.click();
+    await flushUpdates(el);
+
+    expect(m.safeIntegration.getAllDealsAndOffers.mock.calls.length).toBe(loads + 1);
+    expect(root.textContent).toContain('Active Agreements (1)');
+  });
+
   it('keeps a refused offer when the chain lists it as a deal again', async () => {
     let loads = 0;
     m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {

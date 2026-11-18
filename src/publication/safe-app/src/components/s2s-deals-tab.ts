@@ -844,7 +844,7 @@ export class S2SDealsTab extends LitElement {
               <s2s-table
                 title="Pending Offers"
                 .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
-                  @click=${this.handleRefresh} style="margin-right: 1rem">
+                  @click=${() => void this.handleRefresh()} style="margin-right: 1rem">
                   <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
                 </s2s-button>`}
                 .columns=${OFFER_COLUMNS}
@@ -868,7 +868,7 @@ export class S2SDealsTab extends LitElement {
         <s2s-table
           title="Active Agreements"
           .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
-            @click=${this.handleRefresh} style="margin-right: 1rem">
+            @click=${() => void this.handleRefresh()} style="margin-right: 1rem">
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
           </s2s-button>`}
           .columns=${DEAL_COLUMNS}
