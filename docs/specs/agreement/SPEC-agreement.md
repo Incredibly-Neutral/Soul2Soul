@@ -83,8 +83,8 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
   V3 made the asymmetry two functions with different guards.
 - **AGREEMENT-5 is the live one, through `canRead`.** The press decides reading by the module's
   `canRead(genesis, safe)` and its own author check, and `canRead` counts an agreement or an offer as
-  admission. The bare boolean is `hasAgreement(genesis)`, which the removal and revoke guards read
-  through `isOutOfForce`.
+  admission. The bare boolean is `hasAgreement(genesis)`: the revoke guard reads it through
+  `isOutOfForce`, and the overwrite guard reads it directly.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may
   upgrade, so the entry and ending rules change through the protocol's procedure and never through
   the publication's own — which is what the paper requires of them.
