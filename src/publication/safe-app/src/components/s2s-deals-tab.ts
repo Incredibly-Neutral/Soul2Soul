@@ -142,6 +142,16 @@ export class S2SDealsTab extends LitElement {
     message: string;
   } = { result: 'idle', message: '' };
   @state() private rowPhase: Record<string, RowPhase> = {};
+  /** Bumped on every phase change, handed to <s2s-table> as its revision. */
+  @state() private rowRevision = 0;
+  /**
+   * Rows kept in the Pending Offers table after the chain stopped listing them.
+   * A refused offer leaves no chain state behind, but its page may still be
+   * live (an author's non-whitelisted `makeOffer` suspends an agreement and
+   * moves the document into the offer set without touching the tree), so the
+   * row has to stay visible until its removal is rendered.
+   */
+  @state() private retainedOffers: Deal[] = [];
 
   private unsubscriber: (() => void) | null = null;
 
@@ -205,6 +215,13 @@ export class S2SDealsTab extends LitElement {
     super.connectedCallback();
     this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    // A row can be mid-wait when the element is reattached: its phase survived
+    // on the instance, so the timer has to come back with it, plus one pass
+    // now in case the chain moved while nothing was watching.
+    if (this.hasWaitingRow()) {
+      this.startPoll();
+      void this.pollAgreements();
+    }
     this.loadDeals();
   }
 
@@ -340,15 +357,20 @@ export class S2SDealsTab extends LitElement {
       await this.safeIntegration.reject(genesis);
 
       if (status === 'offer') {
-        // A declined offer never had a page, so there is nothing to render:
-        // no wait, no row action, the row simply goes away.
+        // A declined offer leaves no offer behind on chain, but that does not
+        // mean it has no page: an author's non-whitelisted `makeOffer` suspends
+        // an agreement and moves the document into the offer set while its page
+        // stays live. Keep the row and let the render decide (hasAgreement is
+        // already false, so its page is out of force and removable).
         this.showNotification('Offer rejected! Transaction pending approval.', 'success');
         // Remove from offers — no demotion
         const idx = this.offers.findIndex((o) => o.genesis === genesis);
         if (idx !== -1) {
-          this.offers.splice(idx, 1);
+          const offer = this.offers.splice(idx, 1)[0];
           store.setOffers(this.offers);
+          this.retainOffer(offer);
         }
+        this.beginWait(genesis, false);
       } else {
         // A demoted deal leaves a live page behind; once the chain reports no
         // agreement the row can render that page away.
@@ -412,6 +434,7 @@ export class S2SDealsTab extends LitElement {
 
   private setRowPhase(genesis: string, phase: RowPhase) {
     this.rowPhase = { ...this.rowPhase, [genesis]: phase };
+    this.rowRevision += 1;
   }
 
   /** Record what the proposal asks for and start watching the chain for it. */
@@ -427,6 +450,38 @@ export class S2SDealsTab extends LitElement {
     const next = { ...this.waitingSince };
     delete next[genesis];
     this.waitingSince = next;
+  }
+
+  private retainOffer(offer: Deal) {
+    if (this.retainedOffers.some((r) => r.genesis === offer.genesis)) return;
+    this.retainedOffers = [...this.retainedOffers, offer];
+  }
+
+  private releaseRetained(genesis: string) {
+    if (!this.retainedOffers.some((r) => r.genesis === genesis)) return;
+    this.retainedOffers = this.retainedOffers.filter((r) => r.genesis !== genesis);
+  }
+
+  private isRetained(genesis: string): boolean {
+    return this.retainedOffers.some((r) => r.genesis === genesis);
+  }
+
+  /**
+   * Pending Offer rows: what the chain lists, plus any row kept alive for a
+   * removal the chain no longer knows about. A genesis the chain lists again
+   * wins over the retained copy.
+   */
+  private offerRows(): Deal[] {
+    const listed = new Set([...store.deals, ...store.offers].map((d) => d.genesis));
+    return [...store.offers, ...this.retainedOffers.filter((r) => !listed.has(r.genesis))];
+  }
+
+  /** The name a waiting row is announced by, for the timeout notice. */
+  private rowLabel(genesis: string): string {
+    const row = [...store.deals, ...store.offers, ...this.retainedOffers].find(
+      (d) => d.genesis === genesis,
+    );
+    return row ? displayName(row) : genesis;
   }
 
   private hasWaitingRow(): boolean {
@@ -460,17 +515,11 @@ export class S2SDealsTab extends LitElement {
     for (const [genesis, phase] of Object.entries(this.rowPhase)) {
       if (phase !== 'waiting') continue;
 
-      const started = this.waitingSince[genesis];
-      if (started !== undefined && Date.now() - started >= POLL_TIMEOUT_MS) {
-        // Nobody executed the proposal: drop the row back to no action rather
-        // than nag about it forever. A later click starts the dance again.
-        this.clearWait(genesis);
-        this.setRowPhase(genesis, 'idle');
-        continue;
-      }
-
       const expects = this.rowExpects[genesis];
       if (expects === undefined) continue;
+
+      const started = this.waitingSince[genesis];
+      const expired = started !== undefined && Date.now() - started >= POLL_TIMEOUT_MS;
 
       try {
         const hasAgreement = await this.safeIntegration.hasAgreement(genesis);
@@ -479,6 +528,19 @@ export class S2SDealsTab extends LitElement {
         if (hasAgreement === expects) {
           this.clearWait(genesis);
           this.setRowPhase(genesis, 'render');
+          continue;
+        }
+        if (expired) {
+          // Not a dead end: the proposal may still be executed later, and Sync
+          // site sweeps the offers, so the removal or the page is reconciled
+          // there. Say so once and stop watching.
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'idle');
+          this.releaseRetained(genesis);
+          this.showNotification(
+            `${this.rowLabel(genesis)}: the proposal has not executed. Sync site will reconcile it.`,
+            'error',
+          );
         }
       } catch (error) {
         // A read that fails is not an answer: keep waiting until the cap.
@@ -499,7 +561,19 @@ export class S2SDealsTab extends LitElement {
     try {
       const res = await this.performRender(false, [genesis]);
       console.log(res);
+      // A `success:false` envelope is a render that wrote nothing, including
+      // the contenthash write that moves the root. Marking it rendered would
+      // claim a page that the site does not have.
+      if (!res.success) {
+        this.setRowPhase(genesis, 'render');
+        this.showNotification(
+          `Render failed: ${res.error ?? 'the update action did not report success'}`,
+          'error',
+        );
+        return;
+      }
       this.setRowPhase(genesis, 'done');
+      this.releaseRetained(genesis);
       await this.loadDeals();
     } catch (error: any) {
       this.setRowPhase(genesis, 'render');
@@ -532,8 +606,15 @@ export class S2SDealsTab extends LitElement {
     try {
       const res = await this.performRender(preview, this.renderIds(preview));
       console.log(res);
-    } catch (error) {
+      if (!res.success) {
+        this.showNotification(
+          `Sync failed: ${res.error ?? 'the update action did not report success'}`,
+          'error',
+        );
+      }
+    } catch (error: any) {
       console.error('Bulk render failed:', error);
+      this.showNotification(`Sync failed: ${error.message}`, 'error');
     }
   }
 
@@ -594,7 +675,9 @@ export class S2SDealsTab extends LitElement {
     if (this.previewMode) return nothing;
 
     const phase = this.rowPhase[genesis] ?? 'idle';
-    const label = this.rowExpects[genesis] ? 'Publish' : 'Remove page';
+    const expects = this.rowExpects[genesis] ?? true;
+    const label = expects ? 'Publish' : 'Remove page';
+    const doneLabel = expects ? 'Published' : 'Removed';
 
     switch (phase) {
       case 'idle':
@@ -618,7 +701,7 @@ export class S2SDealsTab extends LitElement {
         `;
       case 'done':
         return html`
-          <s2s-button action="render" genesis="${genesis}" ?disabled=${true} type="success">Published</s2s-button>
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true} type="success">${doneLabel}</s2s-button>
         `;
     }
   }
@@ -633,10 +716,12 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell offer-actions">
-          <s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
-            @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
-          <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
-            @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>
+          ${this.isRetained(offer.genesis)
+            ? nothing
+            : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
+                @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
+              <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
+                @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>`}
           ${this.renderRowAction(offer.genesis)}
         </div>
       </div>
@@ -671,6 +756,8 @@ export class S2SDealsTab extends LitElement {
       `;
     }
 
+    const offers = this.offerRows();
+
     return html`
       <div class="toolbar">
         <s2s-check
@@ -685,7 +772,7 @@ export class S2SDealsTab extends LitElement {
           @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
       </div>
 
-      ${store.offers.length > 0
+      ${offers.length > 0
         ? html`
             <div class="section">
               <s2s-table
@@ -695,11 +782,12 @@ export class S2SDealsTab extends LitElement {
                   <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
                 </s2s-button>`}
                 .columns=${OFFER_COLUMNS}
-                .rows=${store.offers}
+                .rows=${offers}
                 .sort=${this.offersSort}
                 .chipsGroups=${DEAL_CHIPS_GROUPS}
                 .chips=${this.offersChips}
                 .rowRenderer=${this.offerRowRenderer}
+                .revision=${this.rowRevision}
                 .actionsHeader=${true}
                 emptyText="No offers match the current filters"
                 gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
@@ -723,6 +811,7 @@ export class S2SDealsTab extends LitElement {
           .chipsGroups=${store.deals.length > 0 ? DEAL_CHIPS_GROUPS : []}
           .chips=${this.dealsChips}
           .rowRenderer=${this.dealRowRenderer}
+          .revision=${this.rowRevision}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
           .actionsContent=${html`Actions`}

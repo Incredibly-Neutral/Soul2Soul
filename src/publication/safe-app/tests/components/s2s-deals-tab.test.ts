@@ -278,6 +278,18 @@ function lastRenderCall(): unknown[] {
   return calls[calls.length - 1] as unknown[];
 }
 
+/** A render that ran and wrote nothing: the envelope the orchestrator returns. */
+function renderFailure(error?: string) {
+  return {
+    success: false,
+    cid: null,
+    path: '',
+    trace: ['update action failed'],
+    error,
+    maintainCache: undefined,
+  };
+}
+
 /**
  * Run a body with fake timers, then always hand the tab its timers back: the
  * element is detached (disconnectedCallback clears the poll interval) before
@@ -693,11 +705,59 @@ describe('s2s-deals-tab', () => {
       expect(args[0]).toBe(false);
       expect(args[8]).toEqual(['0xDeal1']);
       expect(args[12]).toBeUndefined();
-      expect(root.textContent).toContain('Published');
+      // A completed removal says Removed, never Published: the page is gone.
+      expect(root.textContent).toContain('Removed');
+      expect(root.textContent).not.toContain('Published');
     });
   });
 
-  it('starts no poll and offers no render action when an offer is refused', async () => {
+  it('keeps a refused offer on the table and offers its removal once the chain agrees', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xOffer1', '0xAuthorOffer');
+      // An offer whose page is still live: after the refusal the chain lists
+      // it in neither set, so only the tab's own row can carry the removal.
+      return loads === 1 ? { deals: [], offers: [row] } : { deals: [], offers: [] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    vi.mocked(renderwithLitActions).mockResolvedValue(renderResult('bafyRemovedOffer'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="offer"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(m.safeIntegration.reject).toHaveBeenCalledWith('0xOffer1');
+      // No render at click time, and the row survives an empty refetch.
+      expect(renderwithLitActions).not.toHaveBeenCalled();
+      expect(root.textContent).toContain('Waiting for signers');
+      expect(root.querySelector('[data-genesis="0xOffer1"]')).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+      expect(m.safeIntegration.hasAgreement).toHaveBeenCalledWith('0xOffer1');
+      expect(root.textContent).toContain('Remove page');
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(renderwithLitActions).toHaveBeenCalledTimes(1);
+      expect(lastRenderCall()[8]).toEqual(['0xOffer1']);
+      // Once its removal is rendered the row has nothing left to say.
+      await flushUpdates(el);
+      expect(root.querySelector('[data-genesis="0xOffer1"]')).toBeNull();
+    });
+  });
+
+  it('does not treat a refused offer as removable without a wait', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
       offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
@@ -714,18 +774,14 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
 
-      expect(m.safeIntegration.reject).toHaveBeenCalledWith('0xOffer1');
-
-      // A declined offer never had a page: nothing to wait for, nothing to render.
-      await vi.advanceTimersByTimeAsync(60_000);
-      await flushUpdates(el);
+      // Same wait either way. An offer the chain lists again is shown as
+      // listed; the render action decides whether a page is removed.
+      expect(root.textContent).toContain('Waiting for signers');
       expect(m.safeIntegration.hasAgreement).not.toHaveBeenCalled();
-      expect(rowRenderButton(root, '0xOffer1')).toBeNull();
-      expect(root.textContent).not.toContain('Waiting for signers');
     });
   });
 
-  it('gives up on the poll after ten minutes and drops the row back to no action', async () => {
+  it('gives up on the poll after ten minutes and says the proposal has not executed', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
       offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
@@ -745,16 +801,51 @@ describe('s2s-deals-tab', () => {
       await flushUpdates(el);
       expect(root.textContent).toContain('Waiting for signers');
 
+      const readsBeforeCap = m.safeIntegration.hasAgreement.mock.calls.length;
       await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
       await flushUpdates(el);
 
+      // One last read at the cap, then the row stops claiming to wait.
+      expect(m.safeIntegration.hasAgreement.mock.calls.length).toBeGreaterThan(readsBeforeCap);
       expect(root.textContent).not.toContain('Waiting for signers');
       expect(rowRenderButton(root, '0xOffer1')).toBeNull();
+      expect(notificationTexts().join(' | ')).toContain(
+        'Offer Title: the proposal has not executed. Sync site will reconcile it.',
+      );
 
       // The poll stopped with the row: no more reads on the next beats.
       const reads = m.safeIntegration.hasAgreement.mock.calls.length;
       await vi.advanceTimersByTimeAsync(30_000);
       expect(m.safeIntegration.hasAgreement.mock.calls.length).toBe(reads);
+    });
+  });
+
+  it('offers the render at the cap when the last read finally agrees', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      // Still an offer the whole way; the signers execute at the very end.
+      m.safeIntegration.hasAgreement.mockResolvedValue(false);
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Waiting for signers');
+
+      m.safeIntegration.hasAgreement.mockResolvedValue(true);
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      await flushUpdates(el);
+
+      expect(root.textContent).toContain('Publish');
+      expect(notificationTexts().join(' | ')).not.toContain('has not executed');
     });
   });
 
@@ -794,6 +885,116 @@ describe('s2s-deals-tab', () => {
       });
     } finally {
       delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
+  });
+
+  it('keeps the row on the render step when the render throws', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    vi.mocked(renderwithLitActions).mockRejectedValue(new Error('lit action exploded'));
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(notificationTexts().join(' | ')).toContain('Render failed: lit action exploded');
+      // Not done: the page was never written, so the action is still live.
+      const again = rowRenderButton(root, '0xOffer1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      expect(root.textContent).not.toContain('Published');
+    });
+  });
+
+  it('keeps the row on the render step when the render reports success:false', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderFailure('contenthash write failed: boom'),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      // The write did not land: claiming Published would be a lie.
+      expect(root.textContent).not.toContain('Published');
+      const again = rowRenderButton(root, '0xOffer1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      expect(notificationTexts().join(' | ')).toContain(
+        'Render failed: contenthash write failed: boom',
+      );
+    });
+  });
+
+  it('resumes the poll when a waiting tab is reattached', async () => {
+    m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
+      deals: [],
+      offers: [rawDeal('0xOffer1', '0xAuthorOffer')],
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    vi.useFakeTimers();
+    try {
+      findRowButton(root, 'button[data-action="accept"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Waiting for signers');
+
+      const reads = m.safeIntegration.hasAgreement.mock.calls.length;
+      el.remove();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(m.safeIntegration.hasAgreement.mock.calls.length).toBe(reads);
+
+      document.body.appendChild(el);
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      // Reattached: the phase survived, so the poll and one read come back.
+      expect(m.safeIntegration.hasAgreement.mock.calls.length).toBeGreaterThan(reads);
+      expect(root.textContent).toContain('Publish');
+    } finally {
+      unmount(el);
+      vi.useRealTimers();
     }
   });
 
