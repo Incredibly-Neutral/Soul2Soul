@@ -148,7 +148,7 @@ const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
  *   waiting   the proposal is queued; poll `hasAgreement` until it lands
  *   render    the chain agrees with what the proposal asked for — render it
  *   rendering the per-row render call is in flight
- *   done      rendered, and the page now matches the agreement state
+ *   done      the action reported a write, or a removal it performed
  */
 type RowPhase = 'idle' | 'waiting' | 'render' | 'rendering' | 'done';
 
@@ -254,10 +254,13 @@ export class S2SDealsTab extends LitElement {
 
       /* An actions cell holds more than one button, and <s2s-table>'s
          .table-cell is a flex COLUMN, so the cell has to opt back into a row
-         or the buttons stack. Same gap as before, on one line. */
+         or the buttons stack. Wrapping keeps a long label ("Waiting for
+         signers") from squeezing the fr columns into the table's hidden
+         overflow; the gap is the one it always had. */
       .row-actions {
         display: flex;
         flex-direction: row;
+        flex-wrap: wrap;
         align-items: center;
         gap: 0.5rem;
       }
@@ -330,10 +333,7 @@ export class S2SDealsTab extends LitElement {
           const content = await fetchFromIPFS('https://ipfs.transport-union.dev', l.cid);
 
           l.creationDate = readPublicDate(content, CREATION_DATE_FIELDS);
-          // The chain's own timestamp stays the last resort: it is when the
-          // agreement last moved, which is the honest answer for an item whose
-          // content carries no date at all.
-          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS) ?? l.modifiedDate;
+          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS);
           l.author = content.public.author;
           l.postType = content.public.postType;
           l.encryption = content.encryption;
@@ -351,7 +351,7 @@ export class S2SDealsTab extends LitElement {
         try {
           const content = await fetchFromIPFS('https://ipfs.transport-union.dev', l.cid);
           l.creationDate = readPublicDate(content, CREATION_DATE_FIELDS);
-          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS) ?? l.modifiedDate;
+          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS);
           l.author = content.public.author;
           l.postType = content.public.postType;
           l.encryption = content.encryption;
@@ -718,10 +718,17 @@ export class S2SDealsTab extends LitElement {
           return;
         }
         if (outcome.kind === 'skipped') {
+          // A skip is a decision not to remove: no page there, a reserved path,
+          // or another genesis still in force at that path. So the page is not
+          // necessarily gone, and the row keeps the removal on offer with the
+          // reason beside it. It also stays retained: the chain does not list
+          // it, so releasing it would drop the row that owes the removal.
+          this.setRowPhase(genesis, 'render');
           this.showNotification(
             `Removal skipped: ${outcome.line.replace(/^skip remove\s+/, '')}`,
             'success',
           );
+          return;
         }
       }
       this.setRowPhase(genesis, 'done');

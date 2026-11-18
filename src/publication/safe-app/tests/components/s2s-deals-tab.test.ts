@@ -1080,7 +1080,7 @@ describe('s2s-deals-tab', () => {
     });
   });
 
-  it('calls a skipped removal done and says why it was skipped', async () => {
+  it('keeps the removal on offer when the action skips it, and says why', async () => {
     let loads = 0;
     m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
       loads += 1;
@@ -1111,7 +1111,16 @@ describe('s2s-deals-tab', () => {
       await vi.advanceTimersByTimeAsync(0);
       await flushUpdates(el);
 
-      expect(rowRenderButton(root, '0xDeal1')).toBeNull();
+      // A skip is not a done row: the page was not removed, and another
+      // genesis may still be in force at that path.
+      const again = rowRenderButton(root, '0xDeal1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      // The label lives in the s2s-button's own light DOM, not in the button
+      // element it renders into its shadow root.
+      const host = root.querySelector('s2s-button[action="render"][genesis="0xDeal1"]');
+      expect(host).not.toBeNull();
+      expect(host!.textContent).toContain('Remove page');
       expect(root.textContent).not.toContain('Removed');
       expect(notificationTexts().join(' | ')).toContain(
         'Removal skipped: posts/gone: Failed to read MFS path',
@@ -1405,16 +1414,18 @@ describe('s2s-deals-tab', () => {
     });
   });
 
-  it('reads a v2 creationDate and modifiedDate, and formats both without a locale', async () => {
+  it('reads a v2 creationDate and modifiedDate ahead of a stray v1 createdAt', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [rawDeal('0xDeal1', '0xAuthorDeal')],
       offers: [],
     });
-    // 1700000000 = 2023-11-14T22:13:20Z; 2024-01-01T08:05:00Z is the modified one.
+    // 1700000000 = 2023-11-14T22:13:20Z; 2024-01-01T08:05:00Z is the modified
+    // one. The stray v1 field says 2020-09-13: if it won, created would say so.
     m.fetchFromIPFS.mockResolvedValue(
       m.contentForV2('V2 manuscript', {
         creationDate: 1_700_000_000,
         modifiedDate: 1_704_067_200 + 8 * 3600 + 5 * 60,
+        createdAt: 1_600_000_000,
       }),
     );
 
@@ -1426,6 +1437,9 @@ describe('s2s-deals-tab', () => {
     // created is the date only; modified is date plus 24-hour time.
     expect(cells[3]).toBe('2023-11-14');
     expect(cells[4]).toBe('2024-01-01 08:05');
+    // The v2 fields win: nothing in either cell comes from the stray createdAt.
+    expect(cells[3]).not.toBe('2020-09-13');
+    expect(cells[4]).not.toContain('2020-09-13');
     // Nothing in either cell is locale-shaped: no AM/PM, no 11/14/23.
     expect(cells[4]).not.toMatch(/[AP]M/);
     expect(cells[3]).not.toContain('/');
@@ -1473,7 +1487,9 @@ describe('s2s-deals-tab', () => {
 
     for (const genesis of ['0xUndated', '0xGarbage']) {
       const cells = cellTexts(root, genesis);
+      // Neither cell borrows the chain timestamp: no content date, no date.
       expect(cells[3]).toBe('—');
+      expect(cells[4]).toBe('—');
       expect(root.textContent).not.toContain('Invalid Date');
     }
   });
@@ -1527,6 +1543,11 @@ describe('s2s-deals-tab', () => {
     const root = el.shadowRoot!;
     await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
 
+    // Room for every button in each actions cell: this is about the direction
+    // the cell lays them out in, not about how little space it has.
+    el.style.width = '1600px';
+    await flushUpdates(el);
+
     await withFakeTimers(el, async () => {
       // Both rows get an action of their own beside their standing one: the
       // offer keeps Accept/Refuse and gains the waiting one, the deal keeps
@@ -1542,7 +1563,9 @@ describe('s2s-deals-tab', () => {
         const cell = root.querySelector(`[data-genesis="${genesis}"] .row-actions`) as HTMLElement;
         expect(cell).not.toBeNull();
         // Same class on both cells, and a row despite .table-cell's column.
+        // It wraps rather than squeezing the fr columns when space is short.
         expect(getComputedStyle(cell).flexDirection).toBe('row');
+        expect(getComputedStyle(cell).flexWrap).toBe('wrap');
 
         const lefts = [...cell.querySelectorAll('s2s-button')].map(
           (b) => b.getBoundingClientRect().left,
