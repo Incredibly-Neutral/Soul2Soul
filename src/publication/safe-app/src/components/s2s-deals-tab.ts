@@ -311,20 +311,21 @@ export class S2SDealsTab extends LitElement {
       const { deals, offers } = await this.safeIntegration.getAllDealsAndOffers();
 
       // Map deals → this.deals; offers → this.offers.
-      // genesis replaces contentId; cid is the storage pointer.
+      // genesis replaces contentId; cid is the storage pointer. No date is
+      // taken from the chain: the row's dates come from the stored item's
+      // public part, so a fetch that fails shows an em dash rather than a chain
+      // timestamp that is not the item's.
       this.deals = deals.map((d) => ({
         genesis: d.genesis,
         author: d.author,
         cid: d.cid,
         status: 'deal' as const,
-        modifiedDate: new Date(Number(d.timestamp) * 1_000),
       }));
       this.offers = offers.map((o) => ({
         genesis: o.genesis,
         author: o.author,
         cid: o.cid,
         status: 'offer' as const,
-        modifiedDate: new Date(Number(o.timestamp) * 1_000),
       }));
 
       // Augment with public info fetched by CID.

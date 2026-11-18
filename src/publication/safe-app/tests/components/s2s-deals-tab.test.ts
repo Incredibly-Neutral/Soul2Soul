@@ -797,6 +797,56 @@ describe('s2s-deals-tab', () => {
     });
   });
 
+  it('keeps a refused offer whose removal was skipped, with the removal still on offer', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xOffer1', '0xAuthorOffer');
+      // The same retained row as above: the chain lists it nowhere after the
+      // refusal, so only the tab's own row carries the removal. The skip branch
+      // must not release it, or the row that owes the removal disappears.
+      return loads === 1 ? { deals: [], offers: [row] } : { deals: [], offers: [] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyNoChange', [
+        'skip remove posts/offer.md: another genesis is in force',
+      ]),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Pending Offers (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="offer"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+      expect(root.textContent).toContain('Remove page');
+
+      rowRenderButton(root, '0xOffer1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      // Still there, still offering its removal: a skip removed nothing.
+      expect(root.querySelector('[data-genesis="0xOffer1"]')).not.toBeNull();
+      const again = rowRenderButton(root, '0xOffer1');
+      expect(again).not.toBeNull();
+      expect(again!.hasAttribute('disabled')).toBe(false);
+      const host = root.querySelector('s2s-button[action="render"][genesis="0xOffer1"]');
+      expect(host).not.toBeNull();
+      expect(host!.textContent).toContain('Remove page');
+      expect(notificationTexts().join(' | ')).toContain(
+        'Removal skipped: posts/offer.md: another genesis is in force',
+      );
+      expect(root.textContent).not.toContain('Removed');
+    });
+  });
+
   it('does not treat a refused offer as removable without a wait', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({
       deals: [],
