@@ -55,7 +55,6 @@ import {
   loadLitConfig,
   type LitConfigFile,
   loadMonorepoEnv,
-  predictNextGroupId,
   prettyPrintBatch,
   proposeToSafe,
   requireProtocolPrivateKey,
@@ -63,6 +62,7 @@ import {
   saveLitConfig,
   usageHash,
   viewsFacetAbi,
+  writesFacetAbi,
 } from '@s2s/soul2soul-shared/chain-secured';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -240,13 +240,72 @@ function inheritedTransfer(): { pkp: string; usageKey: string; groupIds: number[
 }
 
 /**
+ * The id `addGroup` would hand out, asked of the facet itself. Counting the
+ * groups that exist answers highest + 1, which is wrong as soon as one has been
+ * removed: the facet keeps counting, so the batch would address a group that
+ * never gets created. The simulation is a read, so nothing is signed or written,
+ * and a revert here names the reason instead of becoming a GS013 days later.
+ */
+async function simulatedGroupId(args: {
+  cidHashes: `0x${string}`[];
+  pkpIds: `0x${string}`[];
+  description: string;
+}): Promise<bigint> {
+  try {
+    const id = await l2.readContract({
+      address: ACCOUNT_CONFIG_ADDRESS,
+      abi: writesFacetAbi,
+      functionName: 'addGroup',
+      args: [admin, groupName, args.description, args.cidHashes, args.pkpIds],
+      account: PROTOCOL_SAFE_ADDRESS,
+    } as any);
+    return BigInt(id as bigint);
+  } catch (error: any) {
+    throw new Error(
+      `addGroup(\"${groupName}\") reverts as ${PROTOCOL_SAFE_ADDRESS}: ${error.shortMessage ?? error.message}`,
+    );
+  }
+}
+
+/**
+ * `addAction` for every bundle, asked of the facet before the batch is proposed.
+ * These calls do not depend on the group, so a revert here is the same revert the
+ * Safe would report as a bare GS013.
+ */
+async function assertActionsAddable(
+  actions: Array<{ name: string; hashedCid: string }>,
+): Promise<void> {
+  for (const action of actions) {
+    try {
+      await l2.readContract({
+        address: ACCOUNT_CONFIG_ADDRESS,
+        abi: writesFacetAbi,
+        functionName: 'addAction',
+        args: [admin, action.name, action.name, BigInt(action.hashedCid)],
+        account: PROTOCOL_SAFE_ADDRESS,
+      } as any);
+    } catch (error: any) {
+      throw new Error(
+        `addAction(${action.name}) reverts as ${PROTOCOL_SAFE_ADDRESS}: ${error.shortMessage ?? error.message}`,
+      );
+    }
+  }
+  console.log('  addAction    all seven answer without a revert');
+}
+
+/**
  * The group that a version's next build needs: the same PKP and the same usage
  * key, widened to the new group, no removals.
  */
 async function proposeGroup(actions: Array<{ name: string; cid: string; hashedCid: string }>) {
   const { pkp, usageKey, groupIds } = inheritedTransfer();
-  const predicted = (await predictNextGroupId({ adminHash: adminHex })) ?? 1n;
+  const predicted = await simulatedGroupId({
+    description: `${groupName} — manifest ${version}`,
+    cidHashes: actions.map((a) => a.hashedCid as `0x${string}`),
+    pkpIds: [pkp as `0x${string}`],
+  });
   const scopes = [...new Set([...groupIds, Number(predicted)])];
+  await assertActionsAddable(actions);
 
   const transactions = buildSafeBatch(
     [
