@@ -6,7 +6,7 @@
     "deploy:safe-app": "pnpm -C src/publication/safe-app run deploy",
     "deploy-group": "tsx --require dotenv/config src/press/scripts/lit/deploy-group.ts",
     "inspect-group": "tsx --require dotenv/config src/press/scripts/lit/inspect-group.ts",
-    "actions:build": "node src/press/scripts/lit/build-actions.cjs",
+    "actions:build": "pnpm shared && node src/press/scripts/lit/build-actions.cjs",
     "actions:add": "tsx --require dotenv/config src/press/scripts/lit/add-action.ts",
     "actions:add-dev": "tsx --require dotenv/config src/press/scripts/lit/add-dev-action.ts",
     "actions:swap": "tsx --require dotenv/config src/press/scripts/lit/swap-action.ts",
