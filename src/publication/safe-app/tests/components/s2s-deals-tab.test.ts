@@ -95,7 +95,7 @@ const m = vi.hoisted(() => {
     getAllDealsAndOffers: vi.fn<() => Promise<{ deals: unknown[]; offers: unknown[] }>>(
       async () => ({ deals: [], offers: [] }),
     ),
-    hasDeal: vi.fn(async () => true),
+    hasAgreement: vi.fn(async () => true),
     admit: vi.fn(async () => {}),
     reject: vi.fn(async () => {}),
     signWithSigner: vi.fn(async () => 'sig'),
@@ -402,7 +402,7 @@ describe('s2s-deals-tab', () => {
 
   it('checks deal status via the s2s-check flow and reports an active deal', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({ deals: [], offers: [] });
-    m.safeIntegration.hasDeal.mockResolvedValue(true);
+    m.safeIntegration.hasAgreement.mockResolvedValue(true);
 
     const el = await mountTab();
     await vi.waitFor(() => {
@@ -415,17 +415,17 @@ describe('s2s-deals-tab', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
 
-    // hasDeal is called with the toBytes32Id-normalised genesis id.
+    // hasAgreement is called with the toBytes32Id-normalised genesis id.
     await vi.waitFor(() =>
-      expect(m.safeIntegration.hasDeal).toHaveBeenCalledWith('0xhash-0xGenesis1'),
+      expect(m.safeIntegration.hasAgreement).toHaveBeenCalledWith('0xhash-0xGenesis1'),
     );
     await vi.waitFor(() => expect(check.result).toBe('pass'));
     expect(check.message).toBe('has an agreement');
   });
 
-  it('reports no agreement via the s2s-check flow when hasDeal is false', async () => {
+  it('reports no agreement via the s2s-check flow when hasAgreement is false', async () => {
     m.safeIntegration.getAllDealsAndOffers.mockResolvedValue({ deals: [], offers: [] });
-    m.safeIntegration.hasDeal.mockResolvedValue(false);
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
 
     const el = await mountTab();
     await vi.waitFor(() => {
@@ -439,7 +439,7 @@ describe('s2s-deals-tab', () => {
     (check.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
 
     await vi.waitFor(() =>
-      expect(m.safeIntegration.hasDeal).toHaveBeenCalledWith('0xhash-0xGenesis2'),
+      expect(m.safeIntegration.hasAgreement).toHaveBeenCalledWith('0xhash-0xGenesis2'),
     );
     await vi.waitFor(() => expect(check.result).toBe('fail'));
     expect(check.message).toBe('no agreement');

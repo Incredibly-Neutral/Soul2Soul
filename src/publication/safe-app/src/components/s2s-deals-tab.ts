@@ -247,15 +247,15 @@ export class S2SDealsTab extends LitElement {
 
   /**
    * Parent-driven 'check if genesis id has a deal' verification (s2s-check).
-   * Normalises the genesis ref to bytes32, then asks SafeIntegration.hasDeal
+   * Normalises the genesis ref to bytes32, then asks SafeIntegration.hasAgreement
    * and reflects the outcome back onto <s2s-check> via .result / .message.
-   * An offer does NOT count — hasDeal is the deal-only (_isDeal) view.
+   * An offer does NOT count — hasAgreement is the deal-only (_isDeal) view.
    */
   private async runDealCheck(genesis: string) {
     this.dealCheck = { result: 'pending', message: '' };
     try {
       const g = toBytes32Id(genesis);
-      const ok = await this.safeIntegration.hasDeal(g);
+      const ok = await this.safeIntegration.hasAgreement(g);
       this.dealCheck = {
         result: ok ? 'pass' : 'fail',
         message: ok ? 'has an agreement' : 'no agreement',
