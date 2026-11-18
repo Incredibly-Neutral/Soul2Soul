@@ -469,9 +469,10 @@ async function main(): Promise<void> {
       functionName: 'setManifest',
       args: [version!, json],
     });
-    const transactions = buildSafeBatch([
-      { functionName: 'setManifest', args: [version, json], data },
-    ]);
+    const transactions = buildSafeBatch(
+      [{ functionName: 'setManifest', args: [version, json], data }],
+      MANIFEST_MODULE_ADDRESS,
+    );
     console.log(`\n=== document ${version} (${json.length} bytes) ===`);
     console.log(json);
     if (isDryRun()) return console.log('\ndry-run: STOPPING before proposing.');
