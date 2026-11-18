@@ -1,5 +1,5 @@
 // s2s-deals-tab.ts
-import { LitElement, html, css, type TemplateResult } from 'lit';
+import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
@@ -92,6 +92,20 @@ const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
 ];
 
 /**
+ * The next step a row owes after its proposal has executed:
+ *   idle      nothing to do
+ *   waiting   the proposal is queued; poll `hasAgreement` until it lands
+ *   render    the chain agrees with what the proposal asked for — render it
+ *   rendering the per-row render call is in flight
+ *   done      rendered, and the page now matches the agreement state
+ */
+type RowPhase = 'idle' | 'waiting' | 'render' | 'rendering' | 'done';
+
+/** How often a waiting row asks `hasAgreement`, and how long it keeps asking. */
+const POLL_INTERVAL_MS = 6_000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
+
+/**
  * Immutable chips-state update: copy, set `key` to `values`, delete the key
  * when `values` is empty (matches <s2s-table>'s clear-filters chip, which
  * emits values: []). The host owns the chips state, mirroring the chip-filter
@@ -127,8 +141,17 @@ export class S2SDealsTab extends LitElement {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
   } = { result: 'idle', message: '' };
+  @state() private rowPhase: Record<string, RowPhase> = {};
 
   private unsubscriber: (() => void) | null = null;
+
+  // Per-row poll bookkeeping, keyed like rowPhase. `rowExpects` is the
+  // agreement state the proposal asks for: true from an Accept (the page is
+  // written), false from a Refuse (the page is removed). It also decides the
+  // only thing the tab says differently about the two: the button label.
+  private rowExpects: Record<string, boolean> = {};
+  private waitingSince: Record<string, number> = {};
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   // Stable row renderers (bound once) so <s2s-table> only re-renders on real
   // data/state changes, not on every host render.
@@ -159,12 +182,29 @@ export class S2SDealsTab extends LitElement {
         display: flex;
         gap: 0.5rem;
       }
+
+      .row-spinner {
+        display: inline-block;
+        width: 0.7rem;
+        height: 0.7rem;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: row-spin 1s linear infinite;
+      }
+
+      @keyframes row-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     `,
   ];
 
   connectedCallback() {
     super.connectedCallback();
     this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.loadDeals();
   }
 
@@ -172,6 +212,8 @@ export class S2SDealsTab extends LitElement {
     super.disconnectedCallback();
     this.unsubscriber?.();
     this.unsubscriber = null;
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    this.stopPoll();
   }
 
   private async loadDeals() {
@@ -269,6 +311,9 @@ export class S2SDealsTab extends LitElement {
   private async admitOffer(genesis: string) {
     try {
       await this.safeIntegration.admit(genesis);
+      // The proposal is only queued: the agreement exists once the signers
+      // execute it, so the row waits for the chain rather than rendering now.
+      this.beginWait(genesis, true);
       this.showNotification('Offer admitted! Transaction pending approval.', 'success');
       await this.loadDeals();
       // Update internal state
@@ -295,6 +340,8 @@ export class S2SDealsTab extends LitElement {
       await this.safeIntegration.reject(genesis);
 
       if (status === 'offer') {
+        // A declined offer never had a page, so there is nothing to render:
+        // no wait, no row action, the row simply goes away.
         this.showNotification('Offer rejected! Transaction pending approval.', 'success');
         // Remove from offers — no demotion
         const idx = this.offers.findIndex((o) => o.genesis === genesis);
@@ -303,6 +350,9 @@ export class S2SDealsTab extends LitElement {
           store.setOffers(this.offers);
         }
       } else {
+        // A demoted deal leaves a live page behind; once the chain reports no
+        // agreement the row can render that page away.
+        this.beginWait(genesis, false);
         this.showNotification('Agreement rejected — back in pending offers.', 'success');
         // Deal → offer demotion (existing logic)
         const idx = this.deals.findIndex((d) => d.genesis === genesis);
@@ -358,24 +408,153 @@ export class S2SDealsTab extends LitElement {
     }, 5000);
   }
 
+  // ---- row action state machine -------------------------------------------
+
+  private setRowPhase(genesis: string, phase: RowPhase) {
+    this.rowPhase = { ...this.rowPhase, [genesis]: phase };
+  }
+
+  /** Record what the proposal asks for and start watching the chain for it. */
+  private beginWait(genesis: string, expectsAgreement: boolean) {
+    this.rowExpects = { ...this.rowExpects, [genesis]: expectsAgreement };
+    this.waitingSince = { ...this.waitingSince, [genesis]: Date.now() };
+    this.setRowPhase(genesis, 'waiting');
+    this.startPoll();
+  }
+
+  private clearWait(genesis: string) {
+    if (!(genesis in this.waitingSince)) return;
+    const next = { ...this.waitingSince };
+    delete next[genesis];
+    this.waitingSince = next;
+  }
+
+  private hasWaitingRow(): boolean {
+    return Object.values(this.rowPhase).includes('waiting');
+  }
+
+  /**
+   * One timer for every waiting row. Polling is bound to the tab being visible:
+   * a hidden tab costs nothing, and turning visible again picks the rows back
+   * up where they were, the 10-minute cap still counted from the click.
+   */
+  private startPoll() {
+    if (this.pollTimer !== null) return;
+    if (!this.hasWaitingRow()) return;
+    if (document.visibilityState !== 'visible') return;
+    this.pollTimer = setInterval(() => void this.pollAgreements(), POLL_INTERVAL_MS);
+  }
+
+  private stopPoll() {
+    if (this.pollTimer === null) return;
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') this.startPoll();
+    else this.stopPoll();
+  };
+
+  private async pollAgreements() {
+    for (const [genesis, phase] of Object.entries(this.rowPhase)) {
+      if (phase !== 'waiting') continue;
+
+      const started = this.waitingSince[genesis];
+      if (started !== undefined && Date.now() - started >= POLL_TIMEOUT_MS) {
+        // Nobody executed the proposal: drop the row back to no action rather
+        // than nag about it forever. A later click starts the dance again.
+        this.clearWait(genesis);
+        this.setRowPhase(genesis, 'idle');
+        continue;
+      }
+
+      const expects = this.rowExpects[genesis];
+      if (expects === undefined) continue;
+
+      try {
+        const hasAgreement = await this.safeIntegration.hasAgreement(genesis);
+        // The row may have moved on while the read was in flight.
+        if (this.rowPhase[genesis] !== 'waiting') continue;
+        if (hasAgreement === expects) {
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'render');
+        }
+      } catch (error) {
+        // A read that fails is not an answer: keep waiting until the cap.
+        console.warn('Could not read agreement state', genesis, error);
+      }
+    }
+
+    if (!this.hasWaitingRow()) this.stopPoll();
+  }
+
+  /**
+   * Render one row's genesis. The render action decides for itself what to do —
+   * an agreement writes the page, no agreement removes the page its path holds
+   * — so the tab passes only the id and never a remove entry.
+   */
+  private async renderRow(genesis: string) {
+    this.setRowPhase(genesis, 'rendering');
+    try {
+      const res = await this.performRender(false, [genesis]);
+      console.log(res);
+      this.setRowPhase(genesis, 'done');
+      await this.loadDeals();
+    } catch (error: any) {
+      this.setRowPhase(genesis, 'render');
+      this.showNotification(`Render failed: ${error.message}`, 'error');
+    }
+  }
+
+  // ---- render calls -------------------------------------------------------
+
+  /**
+   * Every genesis a sweep must visit: the deals and the offers, deduped. An
+   * offer has no agreement, so rendering it makes the action remove the page
+   * its path still holds — which is the only way a revoked manuscript's own
+   * page is ever revisited, since it is no longer a deal. Preview drops
+   * encrypted items: their bodies cannot be rendered without the key.
+   */
+  private renderIds(preview: boolean): string[] {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const item of [...store.deals, ...store.offers]) {
+      if (preview && item.encryption) continue;
+      if (seen.has(item.genesis)) continue;
+      seen.add(item.genesis);
+      ids.push(item.genesis);
+    }
+    return ids;
+  }
+
   private async bulkRender(preview: boolean) {
+    try {
+      const res = await this.performRender(preview, this.renderIds(preview));
+      console.log(res);
+    } catch (error) {
+      console.error('Bulk render failed:', error);
+    }
+  }
+
+  /**
+   * The one render call the tab makes, in both shapes: a sweep or a single row.
+   * Throws when the records it needs are missing, so a caller can report it
+   * instead of rendering nothing under a spinner.
+   */
+  private async performRender(preview: boolean, genesisIds: string[]) {
     const configCid = store.getRecord('config');
-    if (configCid == null) return;
+    if (configCid == null) throw new Error('no config record');
 
     const publication = store.getRecord('name');
-    if (publication == null) return;
-    // possibly add a visual list with filters & checkboxes // make that a separate component
+    if (publication == null) throw new Error('no publication name record');
 
     const protocolInfo = store.protocolInfo;
-    if (protocolInfo == undefined) return;
+    if (protocolInfo == undefined) throw new Error('no protocol info');
     const safeInfo = store.safeInfo;
-    if (safeInfo == undefined) return;
+    if (safeInfo == undefined) throw new Error('no safe info');
 
     const signature = await this.safeIntegration.signWithSigner('lit actions auth');
-
-    const genesisIds = preview
-      ? store.deals.filter((d) => d.encryption == false).map((d) => d.genesis)
-      : store.deals.map((d) => d.genesis);
 
     // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base).
     // Single source of truth is getRpcUrl in lib/evm.ts — no hardcoded keys
@@ -386,7 +565,7 @@ export class S2SDealsTab extends LitElement {
       L2: [getRpcUrl(8453)],
     };
 
-    const res = await renderwithLitActions(
+    return await renderwithLitActions(
       preview,
       this.lit,
       signature,
@@ -405,8 +584,43 @@ export class S2SDealsTab extends LitElement {
       // so the render action's writes (add/dag/put to compute CIDs) pass the gate.
       import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
     );
+  }
 
-    console.log(res);
+  /**
+   * The next step for one row, or nothing. Preview hides it: a preview renders
+   * the cache, it does not decide what the live site says about an agreement.
+   */
+  private renderRowAction(genesis: string): TemplateResult | typeof nothing {
+    if (this.previewMode) return nothing;
+
+    const phase = this.rowPhase[genesis] ?? 'idle';
+    const label = this.rowExpects[genesis] ? 'Publish' : 'Remove page';
+
+    switch (phase) {
+      case 'idle':
+        return nothing;
+      case 'waiting':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true}>
+            <span class="row-spinner" aria-hidden="true"></span> Waiting for signers
+          </s2s-button>
+        `;
+      case 'render':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" variant="spin"
+            @click=${() => void this.renderRow(genesis)}>${label}</s2s-button>
+        `;
+      case 'rendering':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true}>
+            <span class="row-spinner" aria-hidden="true"></span> Rendering
+          </s2s-button>
+        `;
+      case 'done':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true} type="success">Published</s2s-button>
+        `;
+    }
   }
 
   private renderOfferRow(offer: Deal): TemplateResult {
@@ -423,6 +637,7 @@ export class S2SDealsTab extends LitElement {
             @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
           <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
             @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>
+          ${this.renderRowAction(offer.genesis)}
         </div>
       </div>
     `;
@@ -441,6 +656,7 @@ export class S2SDealsTab extends LitElement {
           <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
+          ${this.renderRowAction(deal.genesis)}
         </div>
       </div>
     `;
@@ -464,7 +680,7 @@ export class S2SDealsTab extends LitElement {
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
         <s2s-button action="bulkrender" type="secondary"
-          @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</s2s-button>
+          @click=${() => this.bulkRender(this.previewMode)}>Sync site</s2s-button>
         <toggle-button .bool=${this.previewMode} label="preview"
           @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
       </div>
