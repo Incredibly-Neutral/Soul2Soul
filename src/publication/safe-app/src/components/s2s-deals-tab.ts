@@ -101,6 +101,19 @@ const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
  */
 type RowPhase = 'idle' | 'waiting' | 'render' | 'rendering' | 'done';
 
+/**
+ * What a render's trace says it did about removals. Line prefixes only: the
+ * path is derived inside the update action, so the tab has no path to match a
+ * row's page against. The honest fix is for the render sequence to return the
+ * removals it performed as structured data instead of the tab reading strings;
+ * that reaches src/shared and src/press and is out of scope for this branch.
+ */
+type RemovalOutcome =
+  | { kind: 'removed' }
+  | { kind: 'failed'; line: string }
+  | { kind: 'skipped'; line: string }
+  | { kind: 'silent' };
+
 /** How often a waiting row asks `hasAgreement`, and how long it keeps asking. */
 const POLL_INTERVAL_MS = 6_000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -499,24 +512,23 @@ export class S2SDealsTab extends LitElement {
   }
 
   /**
-   * What the update's trace says about the removals it was asked to make. The
-   * action's own rm step catches a failed `files/rm` into a `warn: rm failed`
-   * line and then records `removed:` anyway, so a success envelope alone does
-   * not mean the page left the tree. A trace that says nothing about removals
-   * (or is absent) is not evidence of failure.
+   * What the update's trace says about the removals it was asked to make, by
+   * line prefix. `removed:` wins over a `warn: rm failed` line, because the
+   * action records the removal it performed and a warning beside it is about
+   * another path. A `skip remove` line is a decision, not a failure: the action
+   * considered the removal and refused it. No line about removals at all is not
+   * evidence either way.
    */
-  private removalFault(trace: unknown): string | null {
-    if (!Array.isArray(trace)) return null;
-    const lines = trace.filter((line): line is string => typeof line === 'string');
+  private removalOutcome(trace: unknown): RemovalOutcome {
+    const lines = Array.isArray(trace)
+      ? trace.filter((line): line is string => typeof line === 'string')
+      : [];
+    if (lines.some((line) => line.startsWith('removed: '))) return { kind: 'removed' };
     const failed = lines.find((line) => line.startsWith('warn: rm failed'));
-    if (failed) return failed;
+    if (failed) return { kind: 'failed', line: failed };
     const skipped = lines.find((line) => line.startsWith('skip remove'));
-    if (skipped) return skipped;
-    const listed = lines.some((line) => /^rm \d+ paths?$/.test(line));
-    if (listed && !lines.some((line) => line.startsWith('removed: '))) {
-      return 'the removal was listed and never performed';
-    }
-    return null;
+    if (skipped) return { kind: 'skipped', line: skipped };
+    return { kind: 'silent' };
   }
 
   /** The name a waiting row is announced by, for the timeout notice. */
@@ -629,14 +641,29 @@ export class S2SDealsTab extends LitElement {
         );
         return;
       }
-      // A removal is only done if the action's trace says the rm happened: the
-      // rm branch warns and records `removed:` regardless of the outcome.
-      const expects = this.rowExpects[genesis];
-      const fault = expects === false ? this.removalFault(res.trace) : null;
-      if (fault) {
-        this.setRowPhase(genesis, 'render');
-        this.showNotification(`Removal failed: ${fault}`, 'error');
-        return;
+      // A removal is done when the action's trace records the removal it
+      // performed; see removalOutcome for why the trace is read as lines.
+      if (this.rowExpects[genesis] === false) {
+        const outcome = this.removalOutcome(res.trace);
+        if (outcome.kind === 'failed') {
+          this.setRowPhase(genesis, 'render');
+          this.showNotification(`Removal failed: ${outcome.line}`, 'error');
+          return;
+        }
+        if (outcome.kind === 'silent') {
+          this.setRowPhase(genesis, 'render');
+          this.showNotification(
+            'Removal not confirmed: the action reported nothing about it.',
+            'error',
+          );
+          return;
+        }
+        if (outcome.kind === 'skipped') {
+          this.showNotification(
+            `Removal skipped: ${outcome.line.replace(/^skip remove\s+/, '')}`,
+            'success',
+          );
+        }
       }
       this.setRowPhase(genesis, 'done');
       this.releaseRetained(genesis);

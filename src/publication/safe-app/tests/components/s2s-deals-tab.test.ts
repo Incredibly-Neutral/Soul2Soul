@@ -676,7 +676,9 @@ describe('s2s-deals-tab', () => {
     });
     m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
     m.safeIntegration.hasAgreement.mockResolvedValue(false);
-    vi.mocked(renderwithLitActions).mockResolvedValue(renderResult('bafyRemoved'));
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyRemoved', ['rm 1 paths', 'removed: posts/gone.md']),
+    );
     seedRenderPrerequisites();
 
     const el = await mountTab();
@@ -722,7 +724,9 @@ describe('s2s-deals-tab', () => {
     });
     m.fetchFromIPFS.mockResolvedValue(m.contentFor('Offer Title'));
     m.safeIntegration.hasAgreement.mockResolvedValue(false);
-    vi.mocked(renderwithLitActions).mockResolvedValue(renderResult('bafyRemovedOffer'));
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyRemovedOffer', ['rm 1 paths', 'removed: posts/offer.md']),
+    );
     seedRenderPrerequisites();
 
     const el = await mountTab();
@@ -998,6 +1002,122 @@ describe('s2s-deals-tab', () => {
     }
   });
 
+  it('calls a removal done when the trace records the removal it performed', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xDeal1', '0xAuthorDeal');
+      return loads === 1 ? { deals: [row], offers: [] } : { deals: [], offers: [row] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    // A skip for one path beside a removal for another: the action recorded the
+    // removal it made, so the row is done.
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyAfterRemoval', [
+        'rm 1 paths',
+        'skip remove posts/gone: Failed to read MFS path',
+        'removed: posts/gone',
+      ]),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="deal"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xDeal1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(root.textContent).toContain('Removed');
+      expect(notificationTexts().join(' | ')).not.toContain('Removal failed');
+      expect(notificationTexts().join(' | ')).not.toContain('Removal skipped');
+    });
+  });
+
+  it('calls a skipped removal done and says why it was skipped', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xDeal1', '0xAuthorDeal');
+      return loads === 1 ? { deals: [row], offers: [] } : { deals: [], offers: [row] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    // The action considered the removal and refused it: no page there, a
+    // reserved path, or another genesis still in force.
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyNoChange', ['skip remove posts/gone: Failed to read MFS path']),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="deal"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xDeal1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(root.textContent).toContain('Removed');
+      expect(notificationTexts().join(' | ')).toContain(
+        'Removal skipped: posts/gone: Failed to read MFS path',
+      );
+    });
+  });
+
+  it('keeps a removal at the render step when the trace says nothing about it', async () => {
+    let loads = 0;
+    m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
+      loads += 1;
+      const row = rawDeal('0xDeal1', '0xAuthorDeal');
+      return loads === 1 ? { deals: [row], offers: [] } : { deals: [], offers: [row] };
+    });
+    m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
+    m.safeIntegration.hasAgreement.mockResolvedValue(false);
+    vi.mocked(renderwithLitActions).mockResolvedValue(
+      renderResult('bafyUnknown', ['rm 1 paths']),
+    );
+    seedRenderPrerequisites();
+
+    const el = await mountTab();
+    const root = el.shadowRoot!;
+    await vi.waitFor(() => expect(root.textContent).toContain('Active Agreements (1)'));
+
+    await withFakeTimers(el, async () => {
+      findRowButton(root, 'button[data-action="reject"][data-status="deal"]')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushUpdates(el);
+
+      rowRenderButton(root, '0xDeal1')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushUpdates(el);
+
+      expect(root.textContent).not.toContain('Removed');
+      expect(rowRenderButton(root, '0xDeal1')!.hasAttribute('disabled')).toBe(false);
+      expect(notificationTexts().join(' | ')).toContain(
+        'Removal not confirmed: the action reported nothing about it.',
+      );
+    });
+  });
+
   it('does not call a removal done when the trace records a failed rm', async () => {
     let loads = 0;
     m.safeIntegration.getAllDealsAndOffers.mockImplementation(async () => {
@@ -1007,13 +1127,12 @@ describe('s2s-deals-tab', () => {
     });
     m.fetchFromIPFS.mockResolvedValue(m.contentFor('My Deal'));
     m.safeIntegration.hasAgreement.mockResolvedValue(false);
-    // The update action catches a failed files/rm into a warn line and records
-    // `removed:` anyway, so the envelope is ok:true over a page still in place.
+    // The rm step catches a failed files/rm into a warn line and records no
+    // removal for it, so the envelope is ok:true over a page still in place.
     vi.mocked(renderwithLitActions).mockResolvedValue(
       renderResult('bafyStillThere', [
-        'rm 1 paths',
+        'rm 2 paths',
         'warn: rm failed posts/gone.md: files/rm timed out',
-        'removed: posts/gone.md',
       ]),
     );
     seedRenderPrerequisites();
