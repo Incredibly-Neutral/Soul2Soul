@@ -34,7 +34,7 @@ Three ANDed reads, all on L2:
 |---|---|---|
 | 1 | `publicationModule.canPublish(safeAddress)` | the author Safe is one the publication would accept |
 | 2 | `safe.isOwner(signerAddress)` | the caller holds that author Safe |
-| 3 | `publicationModule.hasAgreement(toBytes32Id(contentId))` | **the work is an agreement** |
+| 3 | `publicationModule.canRead(toBytes32Id(contentId), safeAddress)` | **the module admits this reader**, agreement or offer |
 
 **What the module answers.** V3 exposes the per-genesis gates: `canRead(bytes32 genesis, address
 reader)` and `canReview(bytes32 genesis, address who)` (`S2SPublicationModuleV3.sol:297-312`). Both

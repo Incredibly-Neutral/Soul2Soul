@@ -401,6 +401,10 @@ input.remove[] →  per-entry (parallel)
                                                                         → can't prove safe to remove.
 ```
 
+Every `hasAgreement(bytes32)` read in this section is the module's one agreement boolean, asked by
+`verifyPathAvailable`, `verifyRevocable` and the render revoke guard from bundle **0.1.2**; 0.1.0/0.1.1
+ask for `hasDeal`, which the module does not expose.
+
 ### Execution order (structural invariant)
 
 ```

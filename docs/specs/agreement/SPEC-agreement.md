@@ -81,8 +81,10 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
   nothing re-opens it — a later `makeOffer` or `admit` reverts `Ended()`. Ending was asymmetric in V2 as
   one function branching on `msg.sender`, and the first ADR in `publication.md` still records that shape;
   V3 made the asymmetry two functions with different guards.
-- **AGREEMENT-5 is the live one.** The press asks the module `hasAgreement(genesis)` when it decides
-  whether to decrypt; the boolean is the agreement, so it is exactly the ground the invariant names.
+- **AGREEMENT-5 is the live one, through `canRead`.** The press decides reading by the module's
+  `canRead(genesis, safe)` and its own author check, and `canRead` counts an agreement or an offer as
+  admission. The bare boolean is `hasAgreement(genesis)`, which the removal and revoke guards read
+  through `isOutOfForce`.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may
   upgrade, so the entry and ending rules change through the protocol's procedure and never through
   the publication's own — which is what the paper requires of them.
