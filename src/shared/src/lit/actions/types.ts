@@ -49,9 +49,9 @@ export interface SingleInput {
   preview?: boolean;
   maintainCache?: boolean;
   // The id(s) the caller rendered (the orchestrator's contentIds). The render
-  // action scopes its on-chain hasDeal revoke check to these ids ONLY — a
-  // cascade/ripple destination (e.g. home) is never hasDeal-checked, because
-  // a destination pinned via query.genesis may never have been a deal.
+  // action scopes its on-chain hasAgreement revoke check to these ids ONLY — a
+  // cascade/ripple destination (e.g. home) is never hasAgreement-checked, because
+  // a destination pinned via query.genesis may never have been under an agreement.
   triggeredContentIds?: string[];
   endpoints: {
     ipfsGateway?: string;

@@ -89,8 +89,8 @@ const CAN_REVIEW_ABI = ['function canReview(bytes32 genesis, address who) view r
 const AUTHOR_OF_ABI = ['function authorOf(bytes32 genesis) view returns (address)'];
 /** DraftsModuleV1 — the block behind each version, index for index with history(). */
 const BLOCKS_OF_ABI = ['function blocksOf(bytes32 genesis) view returns (uint64[] blocks)'];
-/** DealsModuleV1 — whether an agreement on this genesis is in force. */
-const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
+/** S2SPublicationModuleV0_1 — whether an agreement on this genesis is in force. */
+const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns (bool)'];
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 
@@ -489,8 +489,12 @@ export const canReset = async (
  * `genesis` is already bytes32. The caller normalises a content reference with
  * `toBytes32Id`; this gate hashes nothing.
  *
- * True only on a definitive `false` from `hasDeal`. A read that throws answers
- * false: a transport error must never make a live page look removable.
+ * True only on a definitive `false` from `hasAgreement`. A read that throws
+ * answers false: a transport error must never make a live page look removable.
+ *
+ * The deployed publication exposes `hasAgreement`, not `hasDeal`, which reverts
+ * and would read as in force. The name `isOutOfForce` stays because the press
+ * re-exports it under that name.
  */
 export const isOutOfForce = async (
   read: GateRead,
@@ -498,7 +502,7 @@ export const isOutOfForce = async (
   publicationModule: string,
 ): Promise<boolean> => {
   try {
-    return (await read(publicationModule, HAS_DEAL_ABI, 'hasDeal', [genesis])) === false;
+    return (await read(publicationModule, HAS_AGREEMENT_ABI, 'hasAgreement', [genesis])) === false;
   } catch {
     return false;
   }
