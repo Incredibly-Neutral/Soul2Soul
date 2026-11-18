@@ -5,12 +5,12 @@
  * item disappear from the rendered site:
  *
  *   1. On-chain `service.retract(genesis)` FIRST — the author's own verb, and
- *      terminal: it ends the genesis and flips `hasDeal` → false (the gate the
- *      update action's `verifyRevocable` checks). It does NOT call
+ *      terminal: it ends the genesis and flips `hasAgreement` → false (the gate
+ *      the update action's `verifyRevocable` checks). It does NOT call
  *      `makeOffer`/`publishContent`/sign for the revoked item — that would
  *      re-add the deal, and on an ended genesis it reverts `Ended()` anyway.
- *   2. Re-render the REVOKED contentId itself (B2). Because the deal is
- *      already retracted, the render action's hasDeal check — scoped to the
+ *   2. Re-render the REVOKED contentId itself (B2). Because the agreement is
+ *      already retracted, the render action's hasAgreement check — scoped to the
  *      triggered contentIds (the id the caller rendered, threaded through by
  *      the orchestrator) — marks the job `revoked`: it returns ok:true with
  *      empty html and the preserved path, and the orchestrator auto-derives a
@@ -18,7 +18,7 @@
  *      shared/src/rendering/sequence.ts). Prep expands ripples for the revoked
  *      id just as on publish (postType matches a ripple origin → a cascaded
  *      destination job, e.g. home), and the destination re-renders ACTIVE (it
- *      is never hasDeal-checked) with its collection dropping the revoked
+ *      is never hasAgreement-checked) with its collection dropping the revoked
  *      item. So the revoke propagates to dependent pages in production: home
  *      re-renders and no longer lists the revoked post. When the postType has
  *      NO ripple, the update still processes the lone remove via the zero-jobs
@@ -153,7 +153,7 @@ export async function revokeContent(
 	const genesis = (await resolveGenesis(main, file)) ?? subdomain;
 
 	// 1. On-chain retract FIRST — the author's own verb, terminal: it ends the
-	//    genesis and flips hasDeal -> false so the update's verifyRevocable
+	//    genesis and flips hasAgreement -> false so the update's verifyRevocable
 	//    passes.
 	console.log(`[retract] retracting ${genesis} from ${publication} ...`);
 	await service.retract(genesis);
@@ -188,19 +188,19 @@ export async function revokeContent(
 	);
 
 	// Re-render the REVOKED contentId itself (B2). The on-chain retract already
-	// flipped hasDeal → false, so the render action's hasDeal check — scoped to
-	// triggeredContentIds=[genesis] (the id the caller rendered) — marks this
-	// job `revoked`: it returns ok:true with empty html and the preserved path,
-	// and the orchestrator auto-derives a remove entry from the revoked job's
-	// path (revokedRemove in shared/src/rendering/sequence.ts) IN ADDITION to
-	// the caller-supplied `remove` below. Prep expands ripples for the revoked
-	// id just as on publish (postType matches a ripple origin → a cascaded
-	// destination job like home); the destination re-renders ACTIVE — it is
-	// never hasDeal-checked, since hasDeal is scoped to triggeredContentIds=
-	// [genesis] — and its collection drops the revoked item. So dependent pages
-	// re-render and no longer list the revoked post. If the postType has NO
-	// ripple, the update still processes the lone remove via the zero-jobs
-	// relaxation (jobs.length===0 && remove present).
+	// flipped hasAgreement → false, so the render action's hasAgreement check —
+	// scoped to triggeredContentIds=[genesis] (the id the caller rendered) —
+	// marks this job `revoked`: it returns ok:true with empty html and the
+	// preserved path, and the orchestrator auto-derives a remove entry from the
+	// revoked job's path (revokedRemove in shared/src/rendering/sequence.ts) IN
+	// ADDITION to the caller-supplied `remove` below. Prep expands ripples for
+	// the revoked id just as on publish (postType matches a ripple origin → a
+	// cascaded destination job like home); the destination re-renders ACTIVE —
+	// it is never hasAgreement-checked, since the check is scoped to
+	// triggeredContentIds=[genesis] — and its collection drops the revoked
+	// item. So dependent pages re-render and no longer list the revoked post.
+	// If the postType has NO ripple, the update still processes the lone remove
+	// via the zero-jobs relaxation (jobs.length===0 && remove present).
 	//
 	// This is safe for Lit's 50-requests-per-session ceiling: at most the
 	// revoked job + one level of ripple destinations (J small) — NOT the full
