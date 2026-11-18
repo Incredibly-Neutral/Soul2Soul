@@ -293,10 +293,25 @@ export class S2SDealsTab extends LitElement {
 
       store.setDeals(this.deals);
       store.setOffers(this.offers);
+
+      // A retained row the chain now lists as a deal is somebody else's result:
+      // drop the removal it was carrying, or the deal row would offer to remove
+      // the page its own agreement just wrote.
+      const listedAsDeal = new Set(this.deals.map((d) => d.genesis));
+      const cameBack = this.retainedOffers.filter((r) => listedAsDeal.has(r.genesis));
+      if (cameBack.length > 0) {
+        for (const row of cameBack) {
+          this.releaseRetained(row.genesis);
+          this.setRowPhase(row.genesis, 'idle');
+          this.forgetExpectation(row.genesis);
+        }
+      }
     } catch (error) {
       console.error('Error loading deals:', error);
     }
     this.fetching = false;
+    // Nothing is waiting any more (a released row included): let the timer go.
+    if (!this.hasWaitingRow()) this.stopPoll();
   }
 
   // Add refresh handler
@@ -452,6 +467,13 @@ export class S2SDealsTab extends LitElement {
     this.waitingSince = next;
   }
 
+  private forgetExpectation(genesis: string) {
+    if (!(genesis in this.rowExpects)) return;
+    const next = { ...this.rowExpects };
+    delete next[genesis];
+    this.rowExpects = next;
+  }
+
   private retainOffer(offer: Deal) {
     if (this.retainedOffers.some((r) => r.genesis === offer.genesis)) return;
     this.retainedOffers = [...this.retainedOffers, offer];
@@ -474,6 +496,27 @@ export class S2SDealsTab extends LitElement {
   private offerRows(): Deal[] {
     const listed = new Set([...store.deals, ...store.offers].map((d) => d.genesis));
     return [...store.offers, ...this.retainedOffers.filter((r) => !listed.has(r.genesis))];
+  }
+
+  /**
+   * What the update's trace says about the removals it was asked to make. The
+   * action's own rm step catches a failed `files/rm` into a `warn: rm failed`
+   * line and then records `removed:` anyway, so a success envelope alone does
+   * not mean the page left the tree. A trace that says nothing about removals
+   * (or is absent) is not evidence of failure.
+   */
+  private removalFault(trace: unknown): string | null {
+    if (!Array.isArray(trace)) return null;
+    const lines = trace.filter((line): line is string => typeof line === 'string');
+    const failed = lines.find((line) => line.startsWith('warn: rm failed'));
+    if (failed) return failed;
+    const skipped = lines.find((line) => line.startsWith('skip remove'));
+    if (skipped) return skipped;
+    const listed = lines.some((line) => /^rm \d+ paths?$/.test(line));
+    if (listed && !lines.some((line) => line.startsWith('removed: '))) {
+      return 'the removal was listed and never performed';
+    }
+    return null;
   }
 
   /** The name a waiting row is announced by, for the timeout notice. */
@@ -533,18 +576,32 @@ export class S2SDealsTab extends LitElement {
         if (expired) {
           // Not a dead end: the proposal may still be executed later, and Sync
           // site sweeps the offers, so the removal or the page is reconciled
-          // there. Say so once and stop watching.
+          // there. Say so once and stop watching. The name is read before the
+          // row is released, or there is nothing left to name it by.
+          const label = this.rowLabel(genesis);
           this.clearWait(genesis);
           this.setRowPhase(genesis, 'idle');
           this.releaseRetained(genesis);
           this.showNotification(
-            `${this.rowLabel(genesis)}: the proposal has not executed. Sync site will reconcile it.`,
+            `${label}: the proposal has not executed. Sync site will reconcile it.`,
             'error',
           );
         }
       } catch (error) {
-        // A read that fails is not an answer: keep waiting until the cap.
+        // A read that fails is not an answer: keep waiting until the cap, but
+        // the cap is still a cap — a permanently failing read must not leave a
+        // spinner turning forever.
         console.warn('Could not read agreement state', genesis, error);
+        if (expired) {
+          const label = this.rowLabel(genesis);
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'idle');
+          this.releaseRetained(genesis);
+          this.showNotification(
+            `${label}: the proposal could not be confirmed. Sync site will reconcile it.`,
+            'error',
+          );
+        }
       }
     }
 
@@ -570,6 +627,15 @@ export class S2SDealsTab extends LitElement {
           `Render failed: ${res.error ?? 'the update action did not report success'}`,
           'error',
         );
+        return;
+      }
+      // A removal is only done if the action's trace says the rm happened: the
+      // rm branch warns and records `removed:` regardless of the outcome.
+      const expects = this.rowExpects[genesis];
+      const fault = expects === false ? this.removalFault(res.trace) : null;
+      if (fault) {
+        this.setRowPhase(genesis, 'render');
+        this.showNotification(`Removal failed: ${fault}`, 'error');
         return;
       }
       this.setRowPhase(genesis, 'done');
