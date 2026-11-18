@@ -37,7 +37,7 @@ const ABIS = {
   moduleAddress: [{ type: 'function', name: 'moduleAddress', stateMutability: 'view', inputs: [{ type: 'address', name: 'safe' }], outputs: [{ type: 'address' }] }],
   moduleAddressForVersion: [{ type: 'function', name: 'moduleAddressForVersion', stateMutability: 'view', inputs: [{ type: 'address', name: 'safe' }, { type: 'uint256', name: 'version' }], outputs: [{ type: 'address' }] }],
   implementationCount: [{ type: 'function', name: 'implementationCount', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] }],
-  getDeals: [{ type: 'function', name: 'getDeals', stateMutability: 'view', inputs: [{ type: 'uint256', name: 'offset' }, { type: 'uint256', name: 'limit' }], outputs: [{ type: 'tuple[]', components: ENTRY_COMPONENTS }] }],
+  getAgreements: [{ type: 'function', name: 'getAgreements', stateMutability: 'view', inputs: [{ type: 'uint256', name: 'offset' }, { type: 'uint256', name: 'limit' }], outputs: [{ type: 'tuple[]', components: ENTRY_COMPONENTS }] }],
 };
 
 const l1 = createPublicClient({ chain: mainnet, transport: http(process.env.MAINNET_RPC_URL!) });
@@ -130,7 +130,7 @@ async function main() {
 
   const deals: { genesis: string; author: string; cid: string; timestamp: bigint }[] = [];
   for (let offset = 0n; ; offset += 100n) {
-    const page = await l2.readContract({ address: pubModule as `0x${string}`, abi: ABIS.getDeals, functionName: 'getDeals', args: [offset, 100n] });
+    const page = await l2.readContract({ address: pubModule as `0x${string}`, abi: ABIS.getAgreements, functionName: 'getAgreements', args: [offset, 100n] });
     for (const e of page) deals.push({ genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp });
     if (page.length < 100) break;
   }

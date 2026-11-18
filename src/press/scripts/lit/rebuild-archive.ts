@@ -1,7 +1,7 @@
 // press/scripts/lit/rebuild-archive.ts — Phase 1: rebuild the lost
 // per-publication content archive cache off-chain (no on-chain writes).
 //
-// Source of truth: getDeals() (on-chain, in the staged manifest) + the item
+// Source of truth: getAgreements() (on-chain, in the staged manifest) + the item
 // CIDs (fetched from ipfs.transport-union.dev into the staging dir).
 //
 // Output: the new archive blob, its CID, and the EIP-1577 pointer value that

@@ -9,7 +9,7 @@
 //     publication module (getDomainOwnerAndModules walk) and read:
 //       - `content_cache_<publication>` text record on the ENS records contract
 //         (the archive pointer; decodes EIP-1577 envelope → CID)
-//       - `getDeals` (offset/limit paginated) → P entries + item CIDs
+//       - `getAgreements` (offset/limit paginated) → P entries + item CIDs
 //  3. Probe every unique item CID against the three storage providers
 //     (transport-union Kubo, Pinata gateway, Filebase gateway) to confirm
 //     availability for an off-chain archive rebuild.
@@ -74,8 +74,8 @@ const ABIS = {
     inputs: [{ type: 'bytes32', name: 'node' }, { type: 'string', name: 'key' }],
     outputs: [{ type: 'string' }],
   }],
-  getDeals: [{
-    type: 'function', name: 'getDeals', stateMutability: 'view',
+  getAgreements: [{
+    type: 'function', name: 'getAgreements', stateMutability: 'view',
     inputs: [{ type: 'uint256', name: 'offset' }, { type: 'uint256', name: 'limit' }],
     outputs: [{ type: 'tuple[]', components: ENTRY_COMPONENTS }],
   }],
@@ -152,11 +152,11 @@ async function predictPublicationModule(
   return null;
 }
 
-async function getDeals(pubModule: string) {
+async function getAgreements(pubModule: string) {
   const out: { genesis: string; author: string; cid: string; timestamp: bigint }[] = [];
   for (let offset = 0n; ; offset += 100n) {
     const page = await l2.readContract({
-      address: pubModule as `0x${string}`, abi: ABIS.getDeals, functionName: 'getDeals',
+      address: pubModule as `0x${string}`, abi: ABIS.getAgreements, functionName: 'getAgreements',
       args: [offset, 100n],
     });
     for (const e of page) out.push({ genesis: e.genesis, author: e.author, cid: e.cid, timestamp: e.timestamp });
@@ -249,7 +249,7 @@ async function main() {
       continue;
     }
 
-    const deals = await getDeals(publicationModule);
+    const deals = await getAgreements(publicationModule);
     const uniqueCids = [...new Set(deals.map((d) => d.cid))];
     console.log(`  deals: ${deals.length}  unique item CIDs: ${uniqueCids.length}`);
     deals.slice(0, 8).forEach((d, i) =>
