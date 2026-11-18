@@ -71,7 +71,7 @@ s2s author migrate   [--json]                                                   
 s2s author upload    <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + pins + drafts append (no offer)
 s2s author offer     <note> [--cid <cid>] [--publication <ens>] [--allow-plaintext] [--json]      # drafts append + on-chain offer only
 s2s author preview   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # ipfs + preview render (off-chain, no append)
-s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins
+s2s author publish   <note> [--publication <ens>] [--allow-plaintext] [--json]                    # all-in-one: upload + append + offer + render + pins; refuses an author whose append would be an offer
 s2s author revoke    <note> [--publication <ens>] [--json]                                        # on-chain retract + remove re-render
 s2s signer add       <safe> [--name <pet-name>] [--key <0x…> | --mnemonic <words>] [--emit <path>] [--emit-batch <path>] [--json]   # file a key and propose it as one owner of a deployed Safe
 s2s signer propose   --file <call.json> [--json]                                                  # post a call written by `signer add --emit`, signing as an owner
@@ -1263,6 +1263,16 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   stored item does not declare `encryption: true`, has no string body, or cannot be read or parsed —
   and the check is on the anchored CID (including `--cid`), not on the frontmatter's `cid`. It
   runs the same downgrade guard as the write path.
+- **Publish precondition**: `publish` refuses, before it signs or pins anything, when the author
+  Safe's append would not reach the agreement set — it is neither the publication Safe nor a
+  whitelisted author, so `makeOffer` records the version as an offer and the site, which renders
+  `getAgreements` only, never shows it. The read is the module's `isWhitelistedAuthor` (after the
+  Safe comparison), through the EOA runner, never the author runner. The refusal names the note,
+  the author Safe and the publication, and the next step: `s2s author offer <note>`, or the
+  publication Safe's `whitelistAuthor` for that address. `offer` is not gated — it is what the
+  refusal names. An existing agreement does not rescue the author: `makeOffer` suspends it and
+  moves the document back to the offer set. A failed listing read warns and continues;
+  `simulateAuthorWrite` still guards the write.
 - **Render gate**: `authorSafeAddress` = `service.getMultiSig()` (ENS-resolved, like neutralpress);
   signature = `signMessage('lit actions auth')`; `litUsageKey` required; preview → Bun runner,
   publish → Lit nodes; kuboToken passed as Bearer `_ipfsGatewayAuth`.
