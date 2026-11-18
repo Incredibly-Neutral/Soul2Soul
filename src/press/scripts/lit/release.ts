@@ -268,6 +268,35 @@ async function simulatedGroupId(args: {
 }
 
 /**
+ * The id to address in the batch: take the highest group id + 1 and increment
+ * while that id is taken, then let the facet confirm it. A removed group can leave
+ * its id occupied in the counter while `listGroups` no longer shows it, so counting and
+ * asking answer differently; the facet wins, and the difference is printed.
+ */
+async function nextGroupId(args: {
+  cidHashes: `0x${string}`[];
+  pkpIds: `0x${string}`[];
+  description: string;
+}): Promise<bigint> {
+  const groups = (await l2.readContract({
+    address: ACCOUNT_CONFIG_ADDRESS,
+    abi: viewsFacetAbi,
+    functionName: 'listGroups',
+    args: [admin, 0n, 100n],
+  } as any)) as ReadonlyArray<{ id: bigint }>;
+
+  const taken = new Set(groups.map((g) => g.id));
+  let candidate = groups.reduce((max, g) => (g.id > max ? g.id : max), 0n) + 1n;
+  while (taken.has(candidate)) candidate += 1n;
+
+  const simulated = await simulatedGroupId(args);
+  if (simulated !== candidate) {
+    console.log(`  group id     ${candidate} by count, ${simulated} from the facet — using ${simulated}`);
+  }
+  return simulated;
+}
+
+/**
  * `addAction` for every bundle, asked of the facet before the batch is proposed.
  * These calls do not depend on the group, so a revert here is the same revert the
  * Safe would report as a bare GS013.
@@ -299,7 +328,7 @@ async function assertActionsAddable(
  */
 async function proposeGroup(actions: Array<{ name: string; cid: string; hashedCid: string }>) {
   const { pkp, usageKey, groupIds } = inheritedTransfer();
-  const predicted = await simulatedGroupId({
+  const predicted = await nextGroupId({
     description: `${groupName} — manifest ${version}`,
     cidHashes: actions.map((a) => a.hashedCid as `0x${string}`),
     pkpIds: [pkp as `0x${string}`],
