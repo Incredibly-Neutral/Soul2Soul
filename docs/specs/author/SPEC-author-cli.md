@@ -1204,7 +1204,7 @@ Written fresh (nothing imported from neutralpress/0xobsidian):
   (`src/shared/src/lit/actions/encrypt.ts`), which must return the hash the decrypt call needs.
   Reading an encrypted note still has to pass the action's `canRead` gate
   (`protocol/actions/src/libs/gates.ts`: `canPublish(authorSafe)` + `isOwner(signer)` +
-  `hasDeal(genesis)`) inside `decryptRaw`, so an author preview renders empty/revoked until a deal
+  `hasAgreement(genesis)`) inside `decryptRaw`, so an author preview renders empty/revoked until a deal
   exists for the note.
 - **The label**: frontmatter `label` is a short public name for the manuscript. `parseMarkdownNote`
   fills `ParsedNote.label`, trimmed, with a blank or non-string value resolving to `null` (no label,

@@ -34,7 +34,7 @@ Three ANDed reads, all on L2:
 |---|---|---|
 | 1 | `publicationModule.canPublish(safeAddress)` | the author Safe is one the publication would accept |
 | 2 | `safe.isOwner(signerAddress)` | the caller holds that author Safe |
-| 3 | `publicationModule.hasDeal(toBytes32Id(contentId))` | **the work is an agreement** |
+| 3 | `publicationModule.hasAgreement(toBytes32Id(contentId))` | **the work is an agreement** |
 
 **What the module answers.** V3 exposes the per-genesis gates: `canRead(bytes32 genesis, address
 reader)` and `canReview(bytes32 genesis, address who)` (`S2SPublicationModuleV3.sol:297-312`). Both
@@ -47,7 +47,7 @@ press's composed gate does that in term 2, which is why the composition exists a
 
 Two things follow, and both are load-bearing:
 
-**Term 3 is the whole problem.** A pending offer has `hasDeal == false`, and term 1 refuses it as well:
+**Term 3 is the whole problem.** A pending offer has `hasAgreement == false`, and term 1 refuses it as well:
 a pending offer's author is not a whitelisted author. So a pending offer **cannot be decrypted through
 the press by anyone** — not the holders, not the author, not a reviewer, not the person who wrote it.
 The composed gate has no `hasOffer` branch, and nothing on this path calls `hasOffer`.

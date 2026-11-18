@@ -110,7 +110,7 @@ Read against `src/publication/` (contracts), `src/press/actions` (the press),
 ## Gaps without a proposal
 
 - **PUBLICATION-5 — an offered manuscript cannot be read.** The only decryption gate is
-  `canRead`, which asks `canPublish(author)` and `hasDeal(genesis)`; `hasOffer` exists on the
+  `canRead`, which asks `canPublish(author)` and `hasAgreement(genesis)`; `hasOffer` exists on the
   contract and no gate reads it. So a pending offer fails twice over: the author is by definition
   not trusted, and there is no deal. Reviewers can see that an offer exists and what its latest
   CID is, but cannot open it — which makes "wait for review" a queue nobody can review.

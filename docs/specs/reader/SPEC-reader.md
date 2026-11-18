@@ -64,7 +64,7 @@ Everything else a reader needs lives outside this folder, and mostly inside the 
 ## Readings
 
 - **READER-4's "trace"** is three reads that the page's own data lines up with: `authorOf(genesis)`
-  on the publication module, `hasDeal(genesis)` for the agreement, and the manuscript's proof. The
+  on the publication module, `hasAgreement(genesis)` for the agreement, and the manuscript's proof. The
   ingredients are on the page and on the ledger; there is no fourth thing to fetch.
 - **Currency** is decided by the name alone. A page from an older build can carry a valid press
   signature and a valid author proof and still not be what the name points to — which is the reason

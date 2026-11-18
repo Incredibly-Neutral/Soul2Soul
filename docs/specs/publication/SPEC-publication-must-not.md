@@ -270,15 +270,16 @@ this document exists in this shape.
 
 **`press-read-gate-composes-its-own`** `[GAP]` — The press does not call the module's gates on the
 decrypt path. `src/shared/src/gates/index.ts:94-105` composes `canPublish(safeAddress) &&
-isOwner(signerAddress) && hasDeal(genesis)`, so an offer-stage read is refused there by both term 1 and
-term 3 even though the module's `canRead` would admit the safe, the author and a reviewer.
+isOwner(signerAddress) && hasAgreement(genesis)` (the call site still spells that read `hasDeal`; its
+own change lands separately), so an offer-stage read is refused there by both term 1 and term 3 even
+though the module's `canRead` would admit the safe, the author and a reviewer.
 Offer-stage reviewers are meant to go through `canReview` (`src/press/actions/src/libs/gates.ts:49`),
 which asks the module and returns `reviewers[who] && (agreement || offer)`; nothing in this tree calls
 it, and the app has no reviewer surface. So a reviewer cannot decrypt through the deployed press path
 at all: the composed gate asks for an owner of the author Safe, and a reviewer is not one. Recorded as
 a gap, not fixed here. Evidence:
-`src/shared/src/gates/index.ts:94-105`, with tests in `src/shared/src/gates/index.test.ts` — "reads
-canPublish on the publication, isOwner on the author Safe, hasDeal on the publication".
+`src/shared/src/gates/index.ts:94-105`, with tests in `src/shared/src/gates/index.test.ts` covering the
+same three reads: canPublish on the publication, isOwner on the author Safe, hasAgreement on the publication.
 
 ## Nobody
 

@@ -126,7 +126,7 @@ function retract(bytes32 genesis) external {
 
 | verb | caller | on a deal | on an offer | afterwards |
 |---|---|---|---|---|
-| `reject` | `safe` only | **demoted**: leaves deals, re-enters offers (`hasDeal` flips false) | declined | admit is possible again |
+| `reject` | `safe` only | **demoted**: leaves deals, re-enters offers (`hasAgreement` flips false) | declined | admit is possible again |
 | `retract` | `genesisAuthor` only | removed from deals | removed | genesis **ended**: `makeOffer` and `admit` revert `Ended()` |
 
 **Nothing is ever deleted from the version log.** A rejected work keeps its versions, its CIDs, and its

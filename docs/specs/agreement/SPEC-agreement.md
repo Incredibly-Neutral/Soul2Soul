@@ -65,7 +65,7 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
 
 ## Readings
 
-- **An agreement is not an object.** The module keeps a boolean per manuscript: `_isDeal[genesis]`.
+- **An agreement is not an object.** The module keeps a boolean per manuscript: `_isAgreement[genesis]`.
   The author is `genesisAuthor[genesis]`, set by the first version ever appended; the versions are an
   append-only log under the same genesis; the permission is the boolean. There is no struct to read,
   and nothing to enumerate beyond the two lists of deals and offers.
@@ -81,8 +81,8 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
   nothing re-opens it — a later `makeOffer` or `admit` reverts `Ended()`. Ending was asymmetric in V2 as
   one function branching on `msg.sender`, and the first ADR in `publication.md` still records that shape;
   V3 made the asymmetry two functions with different guards.
-- **AGREEMENT-5 is the live one.** `canRead` asks `hasDeal(genesis)` and nothing else about the
-  publication's side, so the boolean is exactly the ground the invariant names.
+- **AGREEMENT-5 is the live one.** The press asks the module `hasAgreement(genesis)` when it decides
+  whether to decrypt; the boolean is the agreement, so it is exactly the ground the invariant names.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may
   upgrade, so the entry and ending rules change through the protocol's procedure and never through
   the publication's own — which is what the paper requires of them.
