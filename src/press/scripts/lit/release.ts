@@ -34,6 +34,8 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { createPublicClient, http, parseAbi, encodeFunctionData } from 'viem';
 import { namehash } from 'viem/ens';
+import { privateKeyToAccount } from 'viem/accounts';
+import Safe from '@safe-global/protocol-kit';
 import { base, mainnet } from 'viem/chains';
 import { LitService, compactAction, S2SIPFSMethods } from '@s2s/soul2soul-shared';
 import {
@@ -56,7 +58,6 @@ import {
   type LitConfigFile,
   loadMonorepoEnv,
   prettyPrintBatch,
-  proposeToSafe,
   requireProtocolPrivateKey,
   resolveLitRpcUrl,
   saveLitConfig,
@@ -498,20 +499,14 @@ async function main(): Promise<void> {
   console.log(`\nnothing to propose: ${version} is group ${bound}, filed, and pinned where asked.`);
 }
 
-/**
- * What the Safe Transaction Service refused, as far as it can be seen from
- * outside. api-kit replaces a 422 body with its status text, so the only way to
- * say anything useful is to show the nonce the batch took on chain and the
- * proposals already queued against the Safe.
- */
+/** The chain's view of the Safe, to compare with the nonce the batch took. */
 async function explainProposeFailure(): Promise<void> {
   const nonce = await l2.readContract({
     address: PROTOCOL_SAFE_ADDRESS as `0x${string}`,
     abi: SAFE_ABI,
     functionName: 'nonce',
   });
-  console.log(`\n  safe nonce on chain: ${nonce}`);
-
+  console.log(`  safe nonce on chain: ${nonce}`);
   try {
     const response = await fetch(
       `${TX_SERVICE}/safes/${PROTOCOL_SAFE_ADDRESS}/multisig-transactions/?executed=false&limit=20`,
@@ -524,33 +519,54 @@ async function explainProposeFailure(): Promise<void> {
       const selector = String(row.data ?? '').slice(0, 10);
       console.log(`    nonce ${row.nonce}  ${row.safeTxHash}  ${selector}`);
     }
-    const clash = rows.find((row) => Number(row.nonce) === Number(nonce));
-    if (clash) {
-      console.log(
-        `\n  a proposal already holds nonce ${nonce}: reject or execute it, then re-run.`,
-      );
-    }
   } catch (error: any) {
     console.log(`  could not read the queue: ${error.shortMessage ?? error.message}`);
   }
 }
 
+/**
+ * Propose the batch and print what the service answered. api-kit throws away the
+ * body of a 422 and keeps the status text, which names nothing; this asks the same
+ * endpoint with the same body and keeps the answer.
+ */
 async function propose(opts: {
   transactions: ReturnType<typeof buildSafeBatch>;
   what: string;
 }): Promise<{ safeTxHash: string }> {
-  let safeTxHash: string;
-  try {
-    ({ safeTxHash } = await proposeToSafe({
-      transactions: opts.transactions,
-      safeAddress: PROTOCOL_SAFE_ADDRESS,
-      signerPrivateKey: requireProtocolPrivateKey(),
-      rpcUrl: resolveLitRpcUrl(),
-    }));
-  } catch (error) {
+  const privateKey = requireProtocolPrivateKey();
+  const protocolKit = await Safe.init({
+    provider: resolveLitRpcUrl(),
+    signer: privateKey,
+    safeAddress: PROTOCOL_SAFE_ADDRESS,
+  });
+  const transaction = await protocolKit.createTransaction({ transactions: opts.transactions });
+  const safeTxHash = await protocolKit.getTransactionHash(transaction);
+  const signature = await protocolKit.signHash(safeTxHash);
+  const sender = privateKeyToAccount(privateKey).address;
+
+  const { nonce, to, value, data, operation } = transaction.data;
+  console.log(
+    `\n  proposing nonce ${nonce}, ${to}, operation ${operation}, ${String(data).length / 2 - 1} bytes`,
+  );
+
+  const response = await fetch(`${TX_SERVICE}/safes/${PROTOCOL_SAFE_ADDRESS}/multisig-transactions/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      ...transaction.data,
+      contractTransactionHash: safeTxHash,
+      sender,
+      signature: signature.data,
+    }),
+  });
+  const answer = await response.text();
+  if (!response.ok) {
     await explainProposeFailure();
-    throw error;
+    throw new Error(`
+      the Safe service refused nonce ${nonce} with ${response.status}:\n      ${answer.slice(0, 600)}
+    `);
   }
+
   console.log(`\nproposed ${opts.what}: ${safeTxHash}`);
   return { safeTxHash };
 }
