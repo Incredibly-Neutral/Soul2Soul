@@ -31,6 +31,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import { createPublicClient, http, parseAbi, encodeFunctionData } from 'viem';
 import { namehash } from 'viem/ens';
 import { base, mainnet } from 'viem/chains';
@@ -52,6 +53,7 @@ import {
   encodeAddPkpToGroup,
   encodeSetUsageApiKey,
   loadLitConfig,
+  type LitConfigFile,
   loadMonorepoEnv,
   predictNextGroupId,
   prettyPrintBatch,
@@ -67,6 +69,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 loadMonorepoEnv(__filename);
+
+const REPO_ROOT = path.resolve(__dirname, '../../../..');
+/** What a version's record holds: the config file's shape plus what it was proposed under. */
+type GroupRecord = LitConfigFile & { version: string; safeTxHash?: string };
 
 const CONFIG_DIR = path.join(__dirname, 'config');
 const PREVIOUS_CONFIG = path.join(__dirname, 'config.json');
@@ -183,13 +189,22 @@ async function publicationPin(
 
 // ── Steps ───────────────────────────────────────────────────────────────────
 
-/** Pin every bundle and return the CIDs. A version already proposed reuses its record. */
-async function pinActions(): Promise<Array<{ name: string; cid: string; hashedCid: string }>> {
-  if (fs.existsSync(versionConfigPath)) {
-    const recorded = loadLitConfig(versionConfigPath).groups[0]?.actions ?? [];
-    if (recorded.length === ACTIONS.length) return recorded;
-  }
+/**
+ * Rebuild `src/shared` and the action bundles before anything is pinned. A CID is
+ * content addressed, so this cannot disturb a version that is already filed, and
+ * it closes the one way a stale `src/shared/dist` reached the chain: pinning a
+ * bundle from the last build rather than from this tree.
+ */
+function buildBundles(): void {
+  execSync('pnpm actions:build', { cwd: REPO_ROOT, stdio: 'inherit' });
+}
 
+/**
+ * Pin every bundle and return the CIDs. A recorded config is not reused: it says
+ * what was proposed once, and pinning from it would pin that again whatever this
+ * tree now builds.
+ */
+async function pinActions(): Promise<Array<{ name: string; cid: string; hashedCid: string }>> {
   const lit = new LitService({ environment: 'prod' });
   const ipfs = isDryRun()
     ? null
@@ -203,7 +218,7 @@ async function pinActions(): Promise<Array<{ name: string; cid: string; hashedCi
   const pinned: Array<{ name: string; cid: string; hashedCid: string }> = [];
   for (const name of ACTIONS) {
     const file = path.resolve(__dirname, '../../actions/dist', name, 'main.js');
-    if (!fs.existsSync(file)) throw new Error(`${file} is missing — run \`pnpm actions:build\` first`);
+    if (!fs.existsSync(file)) throw new Error(`${file} is missing after the build`);
     const compact = compactAction(fs.readFileSync(file, 'utf-8'));
     const computed = await lit.getActionCid(compact);
     const cid = ipfs ? await ipfs.uploadToPinata(compact, name) : computed;
@@ -279,16 +294,22 @@ async function proposeGroup(actions: Array<{ name: string; cid: string; hashedCi
     ACCOUNT_CONFIG_ADDRESS,
   );
 
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  saveLitConfig(versionConfigPath, {
-    version,
+  const record: Omit<GroupRecord, 'safeTxHash'> = {
+    version: version!,
     groups: [
       { name: groupName, id: Number(predicted), actions, pkps: [pkp], usage_key: usageKey },
     ],
-  });
+  };
   console.log(`\n=== group ${groupName} (predicted id ${predicted}, ${transactions.length} calls) ===`);
   console.log(prettyPrintBatch(transactions));
-  return { transactions, predicted };
+  return { transactions, predicted, record };
+}
+
+/** Written once the proposal exists, as the record of what it pinned. Never read back. */
+function recordProposal(record: Omit<GroupRecord, 'safeTxHash'>, safeTxHash: string): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const file: GroupRecord = { ...record, safeTxHash };
+  saveLitConfig(versionConfigPath, file);
 }
 
 /** The document: the module's current one with `version` and the CIDs replaced. */
@@ -313,10 +334,12 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
 async function main(): Promise<void> {
   const publication = flag('--publication') ?? process.env.TEST_PUBLICATION ?? null;
   console.log(`version ${version}`);
+  buildBundles();
 
   const [bound, filed] = await Promise.all([groupId(), documentFiled()]);
   const pin = publication ? await publicationPin(publication) : null;
 
+  console.log(`  bundles    built from this tree`);
   console.log(`  group      ${bound === null ? 'absent' : `id ${bound}`}`);
   console.log(`  document   ${filed ? 'filed' : 'absent'}`);
   if (pin) console.log(`  ${publication} pin ${pin.pinned || '(none)'}`);
@@ -324,12 +347,13 @@ async function main(): Promise<void> {
   if (bound === null) {
     console.log('\nactions:');
     const actions = await pinActions();
-    const { transactions, predicted } = await proposeGroup(actions);
+    const { transactions, predicted, record } = await proposeGroup(actions);
     if (isDryRun()) return console.log('\ndry-run: STOPPING before proposing.');
     const { safeTxHash } = await propose({
       transactions,
       what: `group ${groupName} (predicted id ${predicted})`,
     });
+    recordProposal(record, safeTxHash);
     return next(`approve ${safeTxHash}, then re-run to file the document`);
   }
 
