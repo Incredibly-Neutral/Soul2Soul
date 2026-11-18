@@ -40,7 +40,7 @@ import {
   resolveKuboCid,
   upsertFrontmatter,
 } from '../lib/frontmatter';
-import { CliError, UsageError, ActionError } from '../lib/errors';
+import { CliError, UsageError, ActionError, describeError } from '../lib/errors';
 import { authorSafeState } from './author-safe';
 import { requireSetting } from './config';
 import { buildEncryptFn, fetchStoredItem, storedBodyIsDecryptable } from './encrypt';
@@ -54,7 +54,7 @@ import {
 } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
 import type { CliContext } from './context';
-import { PublicationService } from './service';
+import { PublicationService, type AuthorListing } from './service';
 
 // ===========================================================================
 // Shared result types
@@ -162,6 +162,13 @@ export interface AuthorWriteOptions {
    * is refused — see `guardEncryptionDowngrade`.
    */
   allowPlaintext?: boolean;
+  /**
+   * Refuse unless the author Safe's append would become an agreement (it is the
+   * publication Safe, or a whitelisted author). `publish` sets this; `offer`
+   * does not, because offering is exactly what the refusal names as the next
+   * step.
+   */
+  requireListing?: boolean;
 }
 
 /** What a test may replace in `authorWrite`: the drafts log's own reads. */
@@ -227,6 +234,49 @@ export function noteSigningInputs(
     },
     body: { title: parsed.title, slug: parsed.slug, content: parsed.content, custom },
   };
+}
+
+/**
+ * Refuse a `publish` whose append would be recorded as an offer.
+ *
+ * The site serves agreements only (`getAgreements`), so an append from an
+ * author who is neither the publication Safe nor whitelisted uploads, pins and
+ * offers and then never appears — the exact silent outcome this gate turns
+ * into a refusal that names `s2s author offer`.
+ *
+ * A failed read is not a verdict: a flaky RPC must not block a publish, and
+ * `simulateAuthorWrite` still refuses a write the chain would reject. So the
+ * read failure warns and continues.
+ */
+export async function guardAuthorListing(
+  ctx: CliContext,
+  service: PublicationService,
+  publication: string,
+  notePath: string,
+  author: Address,
+): Promise<void> {
+  let listing: AuthorListing;
+  try {
+    listing = await service.authorListing(author);
+  } catch (err) {
+    ctx.out.warn(
+      `could not check whether ${author} is listed on ${publication}: ${describeError(err)}` +
+        ' — publishing anyway; the on-chain write is still simulated first',
+    );
+    return;
+  }
+  if (listing.listed) return;
+
+  const safe = service.getMultiSig();
+  throw new CliError(
+    `refusing to publish ${notePath}: the author Safe ${author} is neither the publication Safe nor a\n` +
+      `whitelisted author of ${publication}, so makeOffer records its append as an offer. The site\n` +
+      'serves agreements only, so the note would never appear.\n' +
+      `  next: run \`s2s author offer ${notePath}\` to record the offer on purpose, or have the\n` +
+      `  publication Safe ${safe} whitelistAuthor(${author}) and publish again.`,
+    1,
+    'author_not_listed',
+  );
 }
 
 export async function authorWrite(
@@ -335,6 +385,15 @@ export async function authorWrite(
       )
     : undefined;
   const subdomain = service?.subdomain ?? subdomainOf(publication);
+
+  // `publish` promises the note appears on the site, and only an agreement is
+  // served: an unlisted author's append is an offer. Checked before the note is
+  // signed, encrypted or pinned, so a refusal leaves no bytes behind. The final
+  // objectId does not exist yet; a first publish has no genesis, so it cannot
+  // be an admitted document either.
+  if (opts.requireListing && service) {
+    await guardAuthorListing(ctx, service, publication, notePath, author.address);
+  }
 
   const now = Math.floor(Date.now() / 1000);
   // The two signed dates. `modifiedDate` is this upload; `creationDate` is the

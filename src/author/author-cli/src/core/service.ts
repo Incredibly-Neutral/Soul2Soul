@@ -25,6 +25,17 @@ import { CliError } from '../lib/errors';
 type SharedPublicClient = Parameters<typeof resolvePublicationSafe>[0];
 
 /**
+ * Whether an author Safe's append lands in the publication's agreements.
+ *
+ * `makeOffer` admits only two senders straight into the agreement set: the
+ * publication Safe, and a whitelisted author. Everyone else's append is an
+ * offer, which the site does not serve until the publication admits it.
+ */
+export type AuthorListing =
+  | { listed: true; via: 'publication-safe' | 'whitelist' }
+  | { listed: false };
+
+/**
  * The identity an author write is sent as: the author Safe, never the EOA.
  * `S2SPublicationModuleV0_1` keys everything (whitelist, `genesisAuthor`) on the
  * Safe address, so `makeOffer`/`retract` must arrive with the Safe as
@@ -95,6 +106,35 @@ export class PublicationService {
       throw new Error('PublicationService not resolved — call init() first');
     }
     return this.safeAddress;
+  }
+
+  /**
+   * Whether an append from `author` becomes an agreement, mirroring the two
+   * branches of the module's `makeOffer` — no more, because there is no other
+   * way into the agreement set.
+   *
+   * An existing agreement does not help an author who is no longer
+   * whitelisted: `makeOffer` suspends it, moves the document back to the offer
+   * set, and the site stops serving it. So a document's current standing is not
+   * asked, and the answer is `listed: false` for that author.
+   *
+   * Reads go through the EOA runner, never the author runner: this is a view,
+   * and every bundler dependency would be paid for nothing. Errors propagate —
+   * the caller decides whether an unreadable chain blocks the write.
+   */
+  async authorListing(author: Address): Promise<AuthorListing> {
+    if (author.toLowerCase() === this.getMultiSig().toLowerCase()) {
+      return { listed: true, via: 'publication-safe' };
+    }
+
+    const whitelisted = (await this.options.l2Runner.genericRead(
+      this.requirePublicationModule(),
+      JSON.stringify(S2SPublicationModuleV0_1),
+      'isWhitelistedAuthor',
+      [author],
+    )) as boolean;
+
+    return whitelisted ? { listed: true, via: 'whitelist' } : { listed: false };
   }
 
   /** Append a version (deal if the caller is a whitelisted author, else an offer). */

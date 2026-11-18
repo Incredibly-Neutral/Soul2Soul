@@ -25,6 +25,10 @@ export const publish: CommandSpec = {
       render: true,
       publish: true,
       offer: true,
+      // A publish promises the note appears on the site, and only an agreement
+      // is served. `offer` leaves this off: it is the next step the refusal
+      // names.
+      requireListing: true,
       // Explicit opt-in to republishing a previously-encrypted genesis in the clear.
       allowPlaintext: flagBool(args.flags, 'allow-plaintext'),
     });
