@@ -200,9 +200,19 @@ function buildBundles(): void {
 }
 
 /**
- * Pin every bundle and return the CIDs. A recorded config is not reused: it says
- * what was proposed once, and pinning from it would pin that again whatever this
- * tree now builds.
+ * The CIDs an earlier run of this version recorded, when it recorded all seven.
+ * A version is pinned once: after that the record is what the document names, and
+ * rebuilding would only re-derive the same CIDs.
+ */
+function recordedActions(): Array<{ name: string; cid: string; hashedCid: string }> | null {
+  if (!fs.existsSync(versionConfigPath)) return null;
+  const recorded = loadLitConfig(versionConfigPath).groups[0]?.actions ?? [];
+  return recorded.length === ACTIONS.length ? recorded : null;
+}
+
+/**
+ * Pin every bundle and return the CIDs. Only a version without a record reaches
+ * this: it builds first, so a CID can only be the one this tree produces.
  */
 async function pinActions(): Promise<Array<{ name: string; cid: string; hashedCid: string }>> {
   const lit = new LitService({ environment: 'prod' });
@@ -422,19 +432,23 @@ async function documentJson(actions: Array<{ name: string; cid: string }>): Prom
 async function main(): Promise<void> {
   const publication = flag('--publication') ?? process.env.TEST_PUBLICATION ?? null;
   console.log(`version ${version}`);
-  buildBundles();
+  const pinned = recordedActions();
+  if (!pinned) buildBundles();
 
   const [bound, filed] = await Promise.all([groupId(), documentFiled()]);
   const pin = publication ? await publicationPin(publication) : null;
 
-  console.log(`  bundles    built from this tree`);
+  console.log(
+    `  bundles    ${pinned ? `already pinned, ${pinned.length} CIDs from the record` : 'built from this tree'}`,
+  );
   console.log(`  group      ${bound === null ? 'absent' : `id ${bound}`}`);
   console.log(`  document   ${filed ? 'filed' : 'absent'}`);
   if (pin) console.log(`  ${publication} pin ${pin.pinned || '(none)'}`);
 
+  const actions = pinned ?? (await pinActions());
+
   if (bound === null) {
     console.log('\nactions:');
-    const actions = await pinActions();
     const { transactions, predicted, record } = await proposeGroup(actions);
     if (isDryRun()) return console.log('\ndry-run: STOPPING before proposing.');
     const { safeTxHash } = await propose({
@@ -446,7 +460,6 @@ async function main(): Promise<void> {
   }
 
   if (!filed) {
-    const actions = await pinActions();
     const json = await documentJson(actions);
     const data = encodeFunctionData({
       abi: MANIFEST_ABI,
