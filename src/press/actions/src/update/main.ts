@@ -289,11 +289,20 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
       const prevCid = contenthashToIPFS(prevEncoded);
       trace.push(`cp root ${prevCid} → ${mfsPath}`);
 
-      await fetchWithTimeout(
-        `${gateway}/api/v0/files/cp?arg=/ipfs/${prevCid}&arg=${encodeURIComponent(mfsPath)}&parents=true`,
-        { method: 'POST' },
-        TIMEOUTS.cpRoot,
-      );
+      // The copy is a reference copy only when the node already holds the root.
+      // If it does not, Kubo goes to the network and the request hangs until this
+      // bound, which reads as a timeout rather than "this root is not here any
+      // more". Say the second thing: the reader needs to know the tree has to be
+      // rebuilt, and a bare timeout does not say that.
+      try {
+        await fetchWithTimeout(
+          `${gateway}/api/v0/files/cp?arg=/ipfs/${prevCid}&arg=${encodeURIComponent(mfsPath)}&parents=true`,
+          { method: 'POST' },
+          TIMEOUTS.cpRoot,
+        );
+      } catch {
+        throw `previous root ${prevCid} could not be copied within ${TIMEOUTS.cpRoot / 1000}s — this node does not hold it, so it has to be fetched from the network and does not arrive. The publication's tree has to be rebuilt: run reset (publication owner) against ${nodes[0]}, which starts from mkdir and writes a new contenthash.`;
+      }
     } else {
       trace.push(`mkdir ${mfsPath}`);
       await fetchWithTimeout(
@@ -633,7 +642,11 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
         `${gateway}/api/v0/pin/add?arg=${newRootCid}`,
         { method: 'POST' },
         TIMEOUTS.pinAdd,
-      );
+      ).then(async (res) => {
+        if (!res.ok) {
+          throw `pin/add ${newRootCid} failed: ${res.status} ${await res.text()}`;
+        }
+      });
 
       if (!preview) {
         const encoded = toHexString(newRootCid);
