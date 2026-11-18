@@ -64,7 +64,7 @@ const entry: Entry = { genesis: GENESIS, author: AUTHOR.address, cid: 'bafyitem'
 const GATEWAY = 'https://ipfs.example';
 const PUBLICATION = '0xPubModule';
 
-/** Serve one item over both chain reads: getDeals (collection) and getLatest (direct). */
+/** Serve one item over both chain reads: getAgreements (collection) and getLatest (direct). */
 const serve = (item: unknown, e: Entry = entry): void => {
   vi.mocked(evmRead).mockImplementation((async (
     _chain: unknown,
@@ -72,7 +72,7 @@ const serve = (item: unknown, e: Entry = entry): void => {
     _abi: unknown,
     method: string,
   ) => {
-    if (method === 'getDeals') return [e];
+    if (method === 'getAgreements') return [e];
     if (method === 'getLatest') return e;
     throw new Error(`unexpected chain read: ${method}`);
   }) as never);

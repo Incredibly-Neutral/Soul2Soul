@@ -126,7 +126,7 @@ function retract(bytes32 genesis) external {
 
 | verb | caller | on a deal | on an offer | afterwards |
 |---|---|---|---|---|
-| `reject` | `safe` only | **demoted**: leaves deals, re-enters offers (`hasDeal` flips false) | declined | admit is possible again |
+| `reject` | `safe` only | **demoted**: leaves deals, re-enters offers (`hasAgreement` flips false) | declined | admit is possible again |
 | `retract` | `genesisAuthor` only | removed from deals | removed | genesis **ended**: `makeOffer` and `admit` revert `Ended()` |
 
 **Nothing is ever deleted from the version log.** A rejected work keeps its versions, its CIDs, and its
@@ -142,15 +142,18 @@ one that ends it, so a re-publish under the same genesis is not possible.
 
 | | representation |
 |---|---|
-| membership | `mapping(bytes32 => bool) _isDeal / _isOffer` — one slot, the read the gate uses |
-| list | `bytes32[] dealList / offerList` |
-| position | `mapping(bytes32 => uint256) dealPos / offerPos` — `index + 1`, `0` = absent |
+| membership | `mapping(bytes32 => bool) _isAgreement / _isOffer` — one slot, the read the gate uses |
+| list | `bytes32[] agreementList / offerList` |
+| position | `mapping(bytes32 => uint256) agreementPos / offerPos` — zero-based index into the list, written before the push and used as a direct index on removal, so `0` is both the first slot and the default for a genesis never added; membership is decided by `_isAgreement` / `_isOffer`, never by the position |
 | removal | swap-with-last, pop, fix the moved element's position |
 
-`getDeals(offset, limit)` / `getOffers(offset, limit)` return `Entry[]` assembled on read:
+The contract renamed the published set from deals to agreements; prose on this page written before
+the rename (and the migration table below) still says *deal* for the same set.
+
+`getAgreements(offset, limit)` / `getOffers(offset, limit)` return `Entry[]` assembled on read:
 
 ```solidity
-struct Entry { bytes32 genesis; string cid; address author; uint256 timestamp; }
+struct Entry { bytes32 genesis; address author; string cid; uint256 timestamp; }
 ```
 
 **`Entry` is not stored anywhere.** There is no `entries[]`. Each entry is built from
@@ -210,9 +213,9 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 | `grantLicense(pub, content_id)` | `makeOffer(genesis, cid)` | single author write; entitled caller → deal, else offer |
 | `acceptLicense(content_id)` | `acceptOffer(genesis)` | `onlySafe` |
 | `revokeLicense(content_id)` | `retract(genesis)` | V2: asymmetric by caller. V3: the Safe's half is `reject` (reversible), the author's is `retract` (terminal) |
-| `isLicensed(string)` | `hasDeal(bytes32)` | the read the gate uses |
-| `isLicensedBulk(string[])` | — | replaced by `getDeals(offset, limit)` |
-| `getAllContentIds()` | `getDeals(offset, limit)` | `Entry[]`, not id arrays |
+| `isLicensed(string)` | `hasAgreement(bytes32)` | the read the gate uses |
+| `isLicensedBulk(string[])` | — | replaced by `getAgreements(offset, limit)` |
+| `getAllContentIds()` | `getAgreements(offset, limit)` | `Entry[]`, not id arrays |
 | `getLicenseAuthor(string)` | `authorOf(bytes32)` / `Entry.author` | |
 | `hasPendingLicense(string)` | `hasOffer(bytes32)` | |
 | `getPendingLicense(string)` | `getOffers(offset, limit)` | `Entry[]` |
@@ -225,7 +228,7 @@ Three claims in `SPEC-contracts-publication` did not survive this audit:
 - **INV-10** — see the matrix below; anything not listed reverts.
 - **`genesisAuthor` is written once and never changes.** The first writer owns the document forever,
   including the right to withdraw it. Transfers do not exist.
-- **A deal is a bool, not a record.** `hasDeal` is one slot read; the human-readable history is the log.
+- **A deal is a bool, not a record.** `hasAgreement` is one slot read; the human-readable history is the log.
 - **`onlySafe`** is `msg.sender == safe`, and `safe` is a storage address, not an immutable — an upgrade
   that never touches it leaves it fixed.
 

@@ -36,7 +36,7 @@ Either party ends an agreement alone, in one transaction, and the other can't re
 
 ## Roadmap
 
-- **One word for each act.** The contract's names follow the white paper: `offer`, `admit`, `decline`, `withdraw` and `end` replace `makeOffer`, `acceptOffer` and `retract`, and "agreement" replaces "deal", as in `hasAgreement` for `hasDeal`.
+- **One word for each act.** The contract's names follow the white paper: `offer`, `admit`, `decline`, `withdraw` and `end` replace `makeOffer`, `acceptOffer` and `retract`, and "agreement" replaces "deal": the module already exposes `hasAgreement` where earlier prose said `hasDeal`.
 - **No upgradeability.** The publication module becomes immutable, one per publication, and a new version is deployed and enabled rather than upgraded in place. The code a reader can check is then the code that runs.
 
 ## Gaps

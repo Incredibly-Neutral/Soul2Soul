@@ -171,7 +171,7 @@ const v1ItemWithStrayLabel = (label: string) => {
   };
 };
 
-/** Serve one item over both chain reads: getDeals (collection) and getLatest. */
+/** Serve one item over both chain reads: getAgreements (collection) and getLatest. */
 const serve = (item: unknown): void => {
   vi.mocked(evmRead).mockImplementation((async (
     _chain: unknown,
@@ -179,7 +179,7 @@ const serve = (item: unknown): void => {
     _abi: unknown,
     method: string,
   ) => {
-    if (method === 'getDeals') return [entry];
+    if (method === 'getAgreements') return [entry];
     if (method === 'getLatest') return entry;
     throw new Error(`unexpected chain read: ${method}`);
   }) as never);

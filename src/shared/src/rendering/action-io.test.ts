@@ -190,7 +190,7 @@ describe('validateSingleInput', () => {
     );
   });
 
-  it('accepts triggeredContentIds (optional) — scopes the hasDeal revoke check to the triggered content', () => {
+  it('accepts triggeredContentIds (optional) — scopes the hasAgreement revoke check to the triggered content', () => {
     const triggered = ['0x9a1600a648241726b0470d0b0b85df1d166e0aa74b88789b5f569294baa5a063'];
     const result = validateSingleInput({ ...validSingleInput, triggeredContentIds: triggered });
     expect(result.triggeredContentIds).toEqual(triggered);

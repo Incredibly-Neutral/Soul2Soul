@@ -276,8 +276,8 @@ export async function readGenesisAtMfsPath(gateway: string, mfsPath: string): Pr
   return schema.identifier;
 }
 
-/** ABI fragment for hasDeal. */
-const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
+/** ABI fragment for hasAgreement. */
+const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns (bool)'];
 
 const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
 
@@ -287,9 +287,10 @@ const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
  *  - Convert to bytes32 (keccak256 if not already)
  *  - Ask the publication module whether that genesis is out of force
  *
- * Throws if the genesis is still in force (an active deal: the page carries a
- * manuscript the press still owes). A page that is out of force is a repair,
- * not an exercise of authority, so the caller needs no permission for it.
+ * Throws if the genesis is still in force (an active agreement: the page
+ * carries a manuscript the press still owes). A page that is out of force is a
+ * repair, not an exercise of authority, so the caller needs no permission for
+ * it.
  */
 export async function verifyRevocable(
   gateway: string,
@@ -354,8 +355,9 @@ export async function readPageIdentity(
  *    it. (An UNSIGNED page at the destination is not a carrier: no signature
  *    means no reusable signing material, and it cannot have come from the
  *    renderer at all.)
- * 3. Otherwise: the existing content must not be under an active deal with a
- *    different genesis (a deal-protected page must never be silently replaced).
+ * 3. Otherwise: the existing content must not be under an active agreement with
+ *    a different genesis (an agreement-protected page must never be silently
+ *    replaced).
  *
  * `incoming` is the identity of the page being written (what verifyProvenance
  * just parsed). Callers that omit it get rules 2 (identifier only) and 3.
@@ -415,7 +417,7 @@ export async function verifyPathAvailable(
   if (existingPage.identifier === incomingGenesis) return;
   const existingGenesis = existingPage.identifier;
 
-  // Different genesis — check if existing content has an active deal
+  // Different genesis — check if existing content is under an active agreement
   const bytes32Genesis = HEX32_RE.test(existingGenesis)
     ? existingGenesis.toLowerCase()
     : ethers.utils.keccak256(ethers.utils.toUtf8Bytes(existingGenesis));
@@ -423,20 +425,20 @@ export async function verifyPathAvailable(
   // NOTE: destructuring `{ provider }` off a StaticJsonRpcProvider INSTANCE yields
   // undefined (the instance has no `provider` property), so the Contract would be
   // constructed with an undefined provider and ethers v5 sets contract.provider =
-  // null — `contract.hasDeal(...)` then reads this.provider.call(...) and throws
+  // null — `contract.hasAgreement(...)` then reads this.provider.call(...) and throws
   // "TypeError: Cannot read properties of null (reading 'call')". Construct the
   // provider directly (mirrors libs/evm.ts evmSetup).
   const provider = new ethers.providers.StaticJsonRpcProvider(rpcs?.[0] || '', {
     chainId: 8453,
     name: 'base',
   });
-  const contract = new ethers.Contract(publicationModule, HAS_DEAL_ABI, provider);
-  const hasDeal: boolean = await contract.hasDeal(bytes32Genesis);
+  const contract = new ethers.Contract(publicationModule, HAS_AGREEMENT_ABI, provider);
+  const hasAgreement: boolean = await contract.hasAgreement(bytes32Genesis);
 
-  if (hasDeal) {
+  if (hasAgreement) {
     throw (
       `Path occupied by genesis ${bytes32Genesis.slice(0, 12)}… ` +
-      `with active deal — refusing overwrite by genesis ${incomingGenesis.slice(0, 12)}…`
+      `with active agreement — refusing overwrite by genesis ${incomingGenesis.slice(0, 12)}…`
     );
   }
 }

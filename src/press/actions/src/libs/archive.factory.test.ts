@@ -28,7 +28,7 @@ import { S2S_DOMAIN, S2S_TYPES } from '../../../../shared/dist/manuscript/types'
 // archive.factory — per-publication IPFS content archive (pure, deterministic).
 //
 // Correctness home of the archive: classify fresh/miss/stale against the
-// freshness oracle (getDeals), merge refreshed items back in, never throw on a
+// freshness oracle (getAgreements), merge refreshed items back in, never throw on a
 // corrupt/cached blob (fail open to an empty archive), and NEVER serve an item
 // that fails the integrity verdict.
 //
@@ -62,7 +62,7 @@ const ATTACKER = new Wallet('0x' + '22'.repeat(32));
 
 const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address): Entry => ({
   genesis,
-  author, // getDeals() returns a plain address, never a prefixed author form
+  author, // getAgreements() returns a plain address, never a prefixed author form
   cid,
   timestamp: 1234,
 });

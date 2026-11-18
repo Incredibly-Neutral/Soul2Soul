@@ -498,7 +498,7 @@ export class SafeIntegration {
   }
 
   /** Is `genesis` an agreement (not merely an offer)? `hasAgreement` says. */
-  async hasDeal(genesis: string): Promise<boolean> {
+  async hasAgreement(genesis: string): Promise<boolean> {
     if (!this.publicationModule) throw new Error('Publication module not initialized');
     return await this.publicationModule.hasAgreement(toBytes32Id(genesis));
   }

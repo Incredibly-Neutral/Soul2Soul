@@ -22,7 +22,7 @@ import { addressOf } from './address';
 // Two read paths consume it and must never disagree about the same item:
 //
 //   ARCHIVE path (writeable cache)         DIRECT path (content-addressed)
-//   getDeals() + cat(content_cache_…)      getLatestEntry() + cat(deal cid)
+//   getAgreements() + cat(content_cache_…)  getLatestEntry() + cat(deal cid)
 //   libs/archive.factory.ts                libs/module.factory.ts
 //     reconcile() → inspectItemIntegrity()   fetchById() → checkItemIntegrity()
 //     mismatch ⇒ MISS, refetch               mismatch ⇒ ContentIntegrityError
@@ -52,7 +52,7 @@ import { addressOf } from './address';
 // ascending order of strength:
 //
 //   1. AUTHOR BINDING: `public.author` must equal the deal's author
-//      (`Entry.author` from getDeals()/getLatestEntry()). Without this, a
+//      (`Entry.author` from getAgreements()/getLatestEntry()). Without this, a
 //      self-consistent forged item (attacker's own author + own hash + own
 //      proof) verifies trivially, because every check below is satisfied
 //      *within* the blob.
@@ -241,7 +241,7 @@ const mismatch = (code: ItemIssueCode, reason: string): ItemIntegrity => ({
  * Inspect one content item and decide whether it may be served.
  *
  * `dealAuthor` is the on-chain deal author (`Entry.author` from
- * getDeals()/getLatestEntry()). Pass it whenever it is available: without it
+ * getAgreements()/getLatestEntry()). Pass it whenever it is available: without it
  * the author binding — the check that stops a self-consistent forged blob —
  * cannot run. See the module header for what each check proves and for the
  * documented residuals.

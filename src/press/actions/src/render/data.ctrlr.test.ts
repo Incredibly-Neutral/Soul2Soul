@@ -16,7 +16,7 @@ import {
   fetchByPublication,
   fetchByPublicationWithSkips,
   fetchByPublicationDetailed,
-  getDeals,
+  getAgreements,
   getLatestEntry,
   toBody,
 } from '../libs/module.factory';
@@ -59,7 +59,7 @@ vi.mock('../libs/module.factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../libs/module.factory')>();
   return {
     ...actual,
-    getDeals: vi.fn(),
+    getAgreements: vi.fn(),
     getLatestEntry: vi.fn(),
     fetchByPublication: vi.fn(),
     fetchByPublicationWithSkips: vi.fn(),
@@ -339,7 +339,7 @@ const ATTACKER = new Wallet('0x' + '22'.repeat(32));
 
 const mkEntry = (genesis: string, cid: string, author: string = AUTHOR.address) => ({
   genesis,
-  author, // getDeals() returns a plain address, never a prefixed author form
+  author, // getAgreements() returns a plain address, never a prefixed author form
   cid,
   timestamp: 1,
 });
@@ -634,7 +634,7 @@ describe('fetchCollections: archive cat-failure fallback', () => {
 
   it('falls back to fetchByPublicationWithSkips when the archive cat fails', async () => {
     (catFile as any).mockRejectedValue(new Error('gateway down'));
-    (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
+    (getAgreements as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
     const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
     (fetchByPublicationWithSkips as any).mockResolvedValue({ bodies: [fallbackBody], skips: [] });
 
@@ -644,8 +644,8 @@ describe('fetchCollections: archive cat-failure fallback', () => {
     // archive cat was attempted, then degraded to the exact no-archive path
     expect(catFile).toHaveBeenCalledWith('gateway', 'archiveCid');
     expect(fetchByPublicationWithSkips).toHaveBeenCalledWith('module', ['rpc'], 'gateway');
-    // cat-first ordering: a failed cat never wastes the getDeals RPC
-    expect(getDeals).not.toHaveBeenCalled();
+    // cat-first ordering: a failed cat never wastes the getAgreements RPC
+    expect(getAgreements).not.toHaveBeenCalled();
     // same filter/sort pipeline as the no-archive path
     expect(result.collections.posts).toEqual([fallbackBody]);
   });
@@ -719,7 +719,7 @@ describe('fetchCollections: archive drift tracking', () => {
     (catFile as any)
       .mockResolvedValueOnce(archive) // archive cat
       .mockResolvedValueOnce(JSON.stringify(g2Item)); // drift refetch of g2
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -781,7 +781,7 @@ describe('fetchCollections: archive drift tracking', () => {
 
   it('returns drift null when the archive cat fails (no-archive fallback)', async () => {
     (catFile as any).mockRejectedValue(new Error('gateway down'));
-    (getDeals as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
+    (getAgreements as any).mockResolvedValue([mkEntry('g1', 'cid1')]);
     const fallbackBody = { id: 'g1', title: 'T', content: 'C', encryption: false };
     (fetchByPublicationWithSkips as any).mockResolvedValue({ bodies: [fallbackBody], skips: [] });
     const tpl = { collections: [{ slug: 'posts' }] } as any;
@@ -832,7 +832,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     (catFile as any)
       .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedItem('g1') } }))
       .mockResolvedValueOnce(JSON.stringify(honest)); // drift refetch of the REAL cid
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -860,7 +860,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     (catFile as any)
       .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedWholeItem('g1') } }))
       .mockResolvedValueOnce(JSON.stringify(honest));
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -877,7 +877,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     (catFile as any)
       .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: forgedItem('g1') } }))
       .mockResolvedValueOnce(JSON.stringify(forgedItem('g1'))); // refetch is forged too
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -898,7 +898,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     (catFile as any)
       .mockResolvedValueOnce(mkArchiveJson({})) // archive has nothing for g1
       .mockResolvedValueOnce('{"not":"an item"}');
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -918,7 +918,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     const deals = [mkEntry('g1', 'cid1')];
     const honest = mkItem('g1');
     (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: honest } }));
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -934,7 +934,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     const deals = [mkEntry('g1', 'cid1')];
     const enc = mkItem('g1', { encryption: true });
     (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: enc } }));
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -951,7 +951,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     const deals = [mkEntry('g1', 'cid1')];
     const legacy = mkItem('g1', { legacy: true });
     (catFile as any).mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: legacy } }));
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -969,7 +969,7 @@ describe('fetchCollections: archive read-path integrity', () => {
     (catFile as any)
       .mockResolvedValueOnce(mkArchiveJson({ g1: { cid: 'cid1', item: stripped } }))
       .mockResolvedValueOnce(''); // refetch fails → nothing served
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');
@@ -985,7 +985,7 @@ describe('fetchCollections: archive read-path integrity', () => {
         g1: { cid: 'cid1', item: mkItem('g1', { encryption: true, signer: ATTACKER }) },
       }),
     );
-    (getDeals as any).mockResolvedValue(deals);
+    (getAgreements as any).mockResolvedValue(deals);
 
     const tpl = { collections: [{ slug: 'posts' }] } as any;
     const result = await fetchCollections(tpl, 'module', ['rpc'], 'gateway', 'archiveCid');

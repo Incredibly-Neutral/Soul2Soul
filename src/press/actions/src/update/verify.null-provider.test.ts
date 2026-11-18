@@ -2,14 +2,14 @@
  * Regression test — evm-update Lit action crash on overwrite:
  *   "TypeError: Cannot read properties of null (reading 'call')"
  *
- * Root cause: verifyRevocable() and verifyPathAvailable() built their hasDeal
+ * Root cause: verifyRevocable() and verifyPathAvailable() built their hasAgreement
  * Contract from a provider DESTRUCTURED OFF A PROVIDER INSTANCE:
  *
  *   const { provider } = new ethers.providers.StaticJsonRpcProvider(...);
  *
  * A StaticJsonRpcProvider instance has no `provider` property, so the
  * destructure yields `undefined`. ethers v5 then sets `contract.provider =
- * null`, and `contract.hasDeal(...)` reads `this.provider.call(...)` and
+ * null`, and `contract.hasAgreement(...)` reads `this.provider.call(...)` and
  * throws the TypeError above — i.e. every time an existing page at the
  * destination is overwritten with different content.
  *
@@ -34,7 +34,7 @@ import { verifyPathAvailable, verifyRevocable } from './verify';
 // run unmocked.
 (globalThis as { ethers?: unknown }).ethers = ethers;
 
-const HAS_DEAL_ABI = ['function hasDeal(bytes32 genesis) view returns (bool)'];
+const HAS_AGREEMENT_ABI = ['function hasAgreement(bytes32 genesis) view returns (bool)'];
 const PUB_MODULE = '0x' + '11'.repeat(20);
 const GENESIS_BYTES32 = '0x' + '22'.repeat(32);
 
@@ -44,7 +44,7 @@ const GENESIS_BYTES32 = '0x' + '22'.repeat(32);
 
 let server: http.Server;
 let rpcUrl: string;
-let nextHasDeal = false; // per-test switch for the eth_call (hasDeal) result
+let nextHasAgreement = false; // per-test switch for the eth_call (hasAgreement) result
 
 const boolToHex32 = (value: boolean): string => '0x' + '00'.repeat(31) + (value ? '01' : '00');
 
@@ -55,7 +55,7 @@ const stubResult = (method: string): string => {
     case 'eth_chainId':
       return '0x2105';
     case 'eth_call':
-      return boolToHex32(nextHasDeal);
+      return boolToHex32(nextHasAgreement);
     default:
       return '0x';
   }
@@ -92,7 +92,7 @@ afterAll(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  nextHasDeal = false;
+  nextHasAgreement = false;
 });
 
 // ---------------------------------------------------------------------------
@@ -110,19 +110,19 @@ describe('verify.ts provider construction pattern', () => {
     // property (the cast makes that explicit — a direct destructure is a TS error).
     const { provider } = instance as any; // ← the buggy verify.ts pattern
     expect(provider).toBeUndefined();
-    const contract = new ethers.Contract(PUB_MODULE, HAS_DEAL_ABI, provider);
+    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
     // ethers v5 sets contract.provider = null for an undefined signer/provider
     expect(contract.provider).toBeNull();
   });
 
-  it('OLD pattern — hasDeal rejects with the EXACT production TypeError', async () => {
+  it('OLD pattern — hasAgreement rejects with the EXACT production TypeError', async () => {
     const instance = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
       chainId: 8453,
       name: 'base',
     });
     const { provider } = instance as any; // ← the buggy verify.ts pattern
-    const contract = new ethers.Contract(PUB_MODULE, HAS_DEAL_ABI, provider);
-    await expect(contract.hasDeal(GENESIS_BYTES32)).rejects.toThrow(
+    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
+    await expect(contract.hasAgreement(GENESIS_BYTES32)).rejects.toThrow(
       "Cannot read properties of null (reading 'call')",
     );
   });
@@ -132,25 +132,25 @@ describe('verify.ts provider construction pattern', () => {
       chainId: 8453,
       name: 'base',
     });
-    const contract = new ethers.Contract(PUB_MODULE, HAS_DEAL_ABI, provider);
+    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
     expect(contract.provider).not.toBeNull();
     expect(contract.provider).toBe(provider);
   });
 
-  it('FIXED pattern — hasDeal completes a real RPC round-trip (no null-provider crash)', async () => {
-    nextHasDeal = true;
+  it('FIXED pattern — hasAgreement completes a real RPC round-trip (no null-provider crash)', async () => {
+    nextHasAgreement = true;
     const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, {
       chainId: 8453,
       name: 'base',
     });
-    const contract = new ethers.Contract(PUB_MODULE, HAS_DEAL_ABI, provider);
-    await expect(contract.hasDeal(GENESIS_BYTES32)).resolves.toBe(true);
+    const contract = new ethers.Contract(PUB_MODULE, HAS_AGREEMENT_ABI, provider);
+    await expect(contract.hasAgreement(GENESIS_BYTES32)).resolves.toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
 // (b) Real verify.ts functions end-to-end against the local RPC.
-// Stubs only the IPFS gateway fetch; the provider/Contract/hasDeal path is
+// Stubs only the IPFS gateway fetch; the provider/Contract/hasAgreement path is
 // the REAL code. With the old pattern these reject with the null-provider
 // TypeError instead.
 // ---------------------------------------------------------------------------
@@ -171,8 +171,8 @@ const stubGateway = (identifier: string): void => {
 };
 
 describe('verify.ts real functions (end-to-end, local RPC)', () => {
-  it('verifyPathAvailable — overwrite with a DIFFERENT genesis reaches hasDeal and resolves when no deal is active', async () => {
-    nextHasDeal = false;
+  it('verifyPathAvailable — overwrite with a DIFFERENT genesis reaches hasAgreement and resolves when no agreement is active', async () => {
+    nextHasAgreement = false;
     stubGateway('existing-genesis');
     await expect(
       verifyPathAvailable(
@@ -185,8 +185,8 @@ describe('verify.ts real functions (end-to-end, local RPC)', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('verifyPathAvailable — refuses the overwrite when the existing genesis HAS an active deal', async () => {
-    nextHasDeal = true;
+  it('verifyPathAvailable — refuses the overwrite when the existing genesis HAS an active agreement', async () => {
+    nextHasAgreement = true;
     stubGateway('existing-genesis');
     await expect(
       verifyPathAvailable(
@@ -200,7 +200,7 @@ describe('verify.ts real functions (end-to-end, local RPC)', () => {
   });
 
   it('verifyPathAvailable — same genesis overwriting itself never touches the RPC', async () => {
-    nextHasDeal = true; // would throw if the RPC path were taken
+    nextHasAgreement = true; // would throw if the RPC path were taken
     const fetchMock = vi.fn().mockResolvedValue(new Response(schemaHtml('same-genesis'), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     await expect(
@@ -214,16 +214,16 @@ describe('verify.ts real functions (end-to-end, local RPC)', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('verifyRevocable — resolves when the existing page has no active deal', async () => {
-    nextHasDeal = false;
+  it('verifyRevocable — resolves when the existing page has no active agreement', async () => {
+    nextHasAgreement = false;
     stubGateway('existing-genesis');
     await expect(
       verifyRevocable('http://gateway.test', '/root', 'some/page', PUB_MODULE, [rpcUrl]),
     ).resolves.toBeUndefined();
   });
 
-  it('verifyRevocable — refuses removal when the existing page HAS an active deal', async () => {
-    nextHasDeal = true;
+  it('verifyRevocable — refuses removal when the existing page HAS an active agreement', async () => {
+    nextHasAgreement = true;
     stubGateway('existing-genesis');
     await expect(
       verifyRevocable('http://gateway.test', '/root', 'some/page', PUB_MODULE, [rpcUrl]),

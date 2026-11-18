@@ -259,11 +259,11 @@ export const SingleActionInputSchema = z.object({
   preview: z.boolean().optional(),
   maintainCache: z.boolean().optional(),
   // The id(s) the caller rendered — the render action scopes its on-chain
-  // hasDeal revoke check to these ids ONLY. A cascade/ripple destination is
-  // never hasDeal-checked (a destination pinned via query.genesis may never
-  // have been a deal; hasDeal=false there must not revoke-and-remove a live
-  // page). Optional for backward compatibility with direct callers that do
-  // not drive a revoke-triggered render.
+  // hasAgreement revoke check to these ids ONLY. A cascade/ripple destination is
+  // never hasAgreement-checked (a destination pinned via query.genesis may never
+  // have been under an agreement; hasAgreement=false there must not
+  // revoke-and-remove a live page). Optional for backward compatibility with
+  // direct callers that do not drive a revoke-triggered render.
   triggeredContentIds: z.array(z.string()).optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),

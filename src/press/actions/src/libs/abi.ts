@@ -113,23 +113,6 @@
 //     stateMutability: "view",
 //     type: "function",
 //   },
-//   {
-//     inputs: [
-//       {
-//         name: "stream_id",
-//         type: "string",
-//       },
-//     ],
-//     name: "hasDeal",
-//     outputs: [
-//       {
-//         name: "",
-//         type: "bool",
-//       },
-//     ],
-//     stateMutability: "view",
-//     type: "function",
-//   },
 // ];
 
 // export const s2sRecordsAbi = [

@@ -30,7 +30,7 @@ export {
 // metadata + body + proof + objectId + encryption) for each genesis keyed by
 // genesis, together with the source cid it was built from. This is the
 // "freshness oracle" consumer: a given genesis entry is FRESH when its stored
-// cid still matches the latest cid returned by getDeals(); otherwise it is
+// cid still matches the latest cid returned by getAgreements(); otherwise it is
 // STALE/MISS and must be re-catted and rebuilt.
 //
 // Items are stored as they were parsed (the raw object, NOT a re-normalised
@@ -38,7 +38,7 @@ export {
 // survives a round trip. What IS re-serialised is the archive container itself
 // (a JSON object of items), so the *item's* CID cannot be recomputed from the
 // archive bytes — content-addressing stops at the container boundary, which is
-// why `ArchiveItem.cid` is a claim (compared against getDeals) rather than
+// why `ArchiveItem.cid` is a claim (compared against getAgreements) rather than
 // something this module can re-derive.
 //
 // INTEGRITY — see libs/item-integrity.ts
@@ -54,7 +54,7 @@ export {
 //
 // The core functions are pure/deterministic — no chain or IPFS calls inside —
 // so the whole correctness story is unit-testable in isolation. The caller
-// wires the I/O (getDeals, catFile, uploadFile) around these functions.
+// wires the I/O (getAgreements, catFile, uploadFile) around these functions.
 // ───────────────────────────────────────────────────────────────────────────
 
 export const ARCHIVE_FORMAT = 's2s-publication-archive/2';

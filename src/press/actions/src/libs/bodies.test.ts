@@ -71,7 +71,7 @@ const serve = (item: unknown): void => {
     _abi: unknown,
     method: string,
   ) => {
-    if (method === 'getDeals') return [entry];
+    if (method === 'getAgreements') return [entry];
     if (method === 'getLatest') return entry;
     throw new Error(`unexpected chain read: ${method}`);
   }) as never);

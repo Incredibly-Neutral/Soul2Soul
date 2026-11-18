@@ -22,7 +22,7 @@ export const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 /**
  * Normalise an address-shaped string to a lowercase 0x address. Accepts both a
- * plain address (what getDeals() returns for a deal, and what an item minted
+ * plain address (what getAgreements() returns for a deal, and what an item minted
  * since the author became bare carries) and the pre-change form shared's
  * `authorAddress()` strips.
  *

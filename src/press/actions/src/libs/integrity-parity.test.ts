@@ -70,7 +70,7 @@ const GATEWAY = 'https://ipfs.example';
 
 const mkEntry = (author: string = AUTHOR.address): Entry => ({
   genesis: GENESIS,
-  author, // getDeals()/getLatest() return a plain address
+  author, // getAgreements()/getLatest() return a plain address
   cid: CID,
   timestamp: 1234,
 });
@@ -143,7 +143,7 @@ const mkArchive = (item: unknown): Archive => ({
   items: { [GENESIS]: { cid: CID, item } as any },
 });
 
-/** Answer both chain reads the two paths make (getLatest for one, getDeals for all). */
+/** Answer both chain reads the two paths make (getLatest for one, getAgreements for all). */
 const mockChain = (entry: Entry): void => {
   vi.mocked(evmRead).mockImplementation((async (
     _chain: unknown,
@@ -151,7 +151,7 @@ const mockChain = (entry: Entry): void => {
     _abi: unknown,
     method: string,
   ) => {
-    if (method === 'getDeals') return [entry];
+    if (method === 'getAgreements') return [entry];
     if (method === 'getLatest') return entry;
     throw new Error(`unexpected chain read: ${method}`);
   }) as never);

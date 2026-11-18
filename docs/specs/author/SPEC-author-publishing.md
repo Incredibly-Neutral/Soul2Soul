@@ -87,7 +87,7 @@ the durability tail is `ipfs.backupToProviders`, not a shared pin helper.
   whose CID mismatch surfaces as an `onFilecoinMismatch` Notice). Durability never blocks the flow.
 - **Licensing:** `grantLicense`/`acceptLicense`/`revokeLicense` exist on the module contract, but
   neutralpress has no call site for any of them — the deal is recorded by `makeOffer` and the read
-  gate is `hasDeal`, not a license.
+  gate is `hasAgreement`, not a license.
 
 ## Invariants this component preserves
 

@@ -19,14 +19,14 @@
  *   (b) a cascaded home job is rendered and lands in the update input's jobs,
  *   (c) the update input's jobs EXCLUDE the revoked job (activeJobs filter),
  *   (d) the destination (home) is NEVER marked revoked — it renders ACTIVE
- *     through the real render action even when hasDeal(home) would be false,
- *     because the hasDeal check is scoped to the triggered content only,
+ *     through the real render action even when hasAgreement(home) would be false,
+ *     because the hasAgreement check is scoped to the triggered content only,
  *   (e) the destination's path NEVER lands in `remove`.
  *
- * Regression that shipped (reviewer C/G): before the fix, the hasDeal revoke
+ * Regression that shipped (reviewer C/G): before the fix, the hasAgreement revoke
  * check ran on EVERY rendered job — including ripple destinations. A
- * destination pinned via query.genesis (e.g. home) may never have been a deal,
- * so hasDeal(home)=false falsely revoked-and-removed the homepage (publish-path
+ * destination pinned via query.genesis (e.g. home) may never have been under an agreement,
+ * so hasAgreement(home)=false falsely revoked-and-removed the homepage (publish-path
  * regression, acceptance 4; breaks 1(b) in production). This test drives home
  * through the REAL render action (not a canned envelope) so that class of
  * regression is caught: it FAILS on 5a6704d and PASSES after the C/G fix.
@@ -56,7 +56,7 @@ vi.mock('../../../../shared/src/rendering/helpers', async (importOriginal) => {
 });
 
 // Mock the real render action's chain/template deps so the REAL render main
-// runs its plaintext + hasDeal path without network access.
+// runs its plaintext + hasAgreement path without network access.
 vi.mock('../libs/evm', () => ({
   evmRead: vi.fn(),
   evmWrite: vi.fn(),
@@ -187,9 +187,9 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
       throw new Error(`unexpected id: ${id}`);
     });
     vi.mocked(getConfig).mockResolvedValue({ localePaths: {} } as any);
-    // hasDeal=false for BOTH ids — the revoked triggered job AND home. Home is
+    // hasAgreement=false for BOTH ids — the revoked triggered job AND home. Home is
     // a ripple destination (not the triggered id), so with the C/G fix the
-    // hasDeal check is scoped away from it and it must still render ACTIVE.
+    // hasAgreement check is scoped away from it and it must still render ACTIVE.
     vi.mocked(evmRead).mockResolvedValue(false);
     vi.mocked(fetchTemplateBundle).mockResolvedValue({
       templateSource: '<html>home</html>',
@@ -219,10 +219,10 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
       }
       if (cid === RENDER_CID) {
         // Run the REAL render action for BOTH jobs:
-        //  - the revoked triggered job → hasDeal=false → revoked branch;
+        //  - the revoked triggered job → hasAgreement=false → revoked branch;
         //  - the home ripple destination → must render ACTIVE even though
-        //    hasDeal(home) would be false — home is NOT the triggered id, so
-        //    the hasDeal check is scoped away from it (C/G fix). Pre-fix this
+        //    hasAgreement(home) would be false — home is NOT the triggered id, so
+        //    the hasAgreement check is scoped away from it (C/G fix). Pre-fix this
         //    falsely revoked home and put '/' into the remove list.
         return renderMain(inputs as any);
       }
@@ -262,8 +262,8 @@ describe('renderwithLitActions — revoke propagation (end-to, real render actio
     expect(updateJobIds).toContain(HOME_ID);
 
     // (d) the destination (home) is NEVER marked revoked — it is a cascade
-    // consequence, not the triggered id. hasDeal(home) would be false, but the
-    // hasDeal check is scoped to the triggered content only, so home renders
+    // consequence, not the triggered id. hasAgreement(home) would be false, but the
+    // hasAgreement check is scoped to the triggered content only, so home renders
     // ACTIVE through the real render action.
     const homeUpdateJob = updateInputs.jobs.find((j: any) => j.id === HOME_ID);
     expect(homeUpdateJob).toBeDefined();

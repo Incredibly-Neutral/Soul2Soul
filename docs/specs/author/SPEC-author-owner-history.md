@@ -467,7 +467,7 @@ const wasOwner = await read(history, HISTORY_ABI, 'isOwnerAt', [signer, blockOfT
 return (
   (await read(publicationModule, CAN_PUBLISH_ABI, 'canPublish', [authorSafe])) &&
   wasOwner &&
-  (await read(genesis, HAS_DEAL_ABI, 'hasDeal', [genesis]))
+  (await read(publicationModule, HAS_AGREEMENT_ABI, 'hasAgreement', [genesis]))
 )
 ```
 

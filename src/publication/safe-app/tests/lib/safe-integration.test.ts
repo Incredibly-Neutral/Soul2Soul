@@ -737,14 +737,14 @@ describe('read paths (direct contract reads, no sends)', () => {
     await expect(si.getAllRecords()).rejects.toThrow('Records module not initialized');
   });
 
-  it('hasDeal / getDeals / getOffers delegate to the hasAgreement/getAgreements', async () => {
+  it('hasAgreement / getDeals / getOffers delegate to the contract hasAgreement/getAgreements reads', async () => {
     const si = await initInstance();
     const genesis = `0x${'c'.repeat(64)}`;
     pub.hasAgreement.mockResolvedValue(true);
     pub.getAgreements.mockResolvedValue([{ genesis, author: '0xA', cid: 'c1', timestamp: 1n }]);
     pub.getOffers.mockResolvedValue([]);
 
-    await expect(si.hasDeal(genesis)).resolves.toBe(true);
+    await expect(si.hasAgreement(genesis)).resolves.toBe(true);
     expect(pub.hasAgreement).toHaveBeenCalledWith(toBytes32Id(genesis));
 
     await si.getDeals();

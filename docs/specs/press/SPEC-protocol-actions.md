@@ -50,7 +50,7 @@ by CID, executed either on Lit nodes (prod) or the Bun runner (preview). Globals
 | `render/metadata.ts`       | `addAndSignMetadata` (provenance)                                                                                                                                 | live (see GAP-1, GAP-2)                                                            |
 | `libs/protocol.factory.ts` | in-action `getManifest` — the document and `VERSION()`, both on the hardcoded records module                                                                     | live (dup of shared, see Gotchas)                                                  |
 | `libs/ens.factory.ts`      | `getDomainOwnerAndModules` — the publication and records kinds are read from the factory the record names, and nowhere else; `moduleAddress(safe, kind)` per kind, answer needs code | live |
-| `libs/module.factory.ts`   | `getLatestEntry` / `getDeals` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅) | live                                                                               |
+| `libs/module.factory.ts`   | `getLatestEntry` / `getAgreements` / `fetchById` / `fetchByPublication` — reads latest cid from the publication module + IPFS cat (replaces `lens.factory`, GAP-10 ✅). The module's published set is `getAgreements(offset, limit)`; the helper asks for it by that name from bundle **0.1.2**, and earlier bundles ask for `getDeals`, which the module does not expose | live on **0.1.2**; dead on 0.1.0/0.1.1                                           |
 | `libs/evm.ts`              | `evmRead` (catch-all failover + aggregated error), `evmGetCode` (one `eth_getCode`, same failover), `evmWrite`, `toHexString`                                      | live ⚠ GAP-15 (partly addressed)                                                   |
 | `libs/ipfs.factory.ts`     | IPFS cat/add/dag/MFS + `contenthashToIPFS`                                                                                                                        | live (dag/cbor helpers mostly dead)                                                |
 | `libs/gates.ts`            | `canPublish`, `canRead`, `canAuthorVerdict`, `isOutOfForce`, `canReset`, `canReview`, `extractSignerAddress`                                                      | live                                                                               |
@@ -347,7 +347,7 @@ input.jobs[] →  verifyProvenance(htmlCid, id, pkp, gateway)
                                             ├─ existingGenesis == incomingGenesis?
                                             │   └─ YES → allow (same page re-render)
                                             │
-                                            └─ NO → hasDeal(genesis) on publicationModule?
+                                            └─ NO → hasAgreement(genesis) on publicationModule?
                                                     │
                                                     ├─ true → throw (refuse overwrite)
                                                     │   Path is occupied by deal-protected content
@@ -366,7 +366,7 @@ input.remove[] →  per-entry (parallel)
                     │                                ├─ YES (rename) ──▶ files/rm
                     │                                │    Rename = content moved to new
                     │                                │    path. Same genesis, deal unaffected.
-                    │                                │    No hasDeal check needed — content
+                    │                                │    No hasAgreement check needed — content
                     │                                │    wasn't removed, just relocated.
                     │                                │
                     │                                └─ NO  ──▶ skip (trace: unknown genesis)
@@ -383,7 +383,7 @@ input.remove[] →  per-entry (parallel)
                                                                    │
                                                                    ├─ toBytes32(genesis)
                                                                    │
-                                                                   ├─ hasDeal(bytes32) on publicationModule
+                                                                   ├─ hasAgreement(bytes32) on publicationModule
                                                                    │     │
                                                                    │     ├─ true  → skip (trace: active deal)
                                                                    │     │   Content under active deal is
@@ -397,9 +397,13 @@ input.remove[] →  per-entry (parallel)
                                                                       pre-gate content, garbage)
                                                                       → skip remove (trace)
                                                                         Conservative: can't determine
-                                                                        genesis → can't check hasDeal
+                                                                        genesis → can't check hasAgreement
                                                                         → can't prove safe to remove.
 ```
+
+Every `hasAgreement(bytes32)` read in this section is the module's one agreement boolean, asked by
+`verifyPathAvailable`, `verifyRevocable` and the render revoke guard from bundle **0.1.2**; 0.1.0/0.1.1
+ask for `hasDeal`, which the module does not expose.
 
 ### Execution order (structural invariant)
 
@@ -428,22 +432,22 @@ trusts it. If copy loop throws, remove loop never runs.
 - **Copy loop succeeds before remove loop runs.** If any job fails verification the entire update
   rejects, so `jobGenesisSet` always contains verified HTML. The rename guard
   `jobGenesisSet.has(replacedBy)` transitively proves the target is verified.
-- **Remove-revoke (`!replacedBy`) checks `!hasDeal` on-chain — not authorship.** Any caller,
+- **Remove-revoke (`!replacedBy`) checks `!hasAgreement` on-chain — not authorship.** Any caller,
   trusted or not, can remove any path that has no active deal. "Author A can only remove Author B's
   content when there is no deal — when B or the publication revoked the deal first." Deal revocation
   is an on-chain operation performed by the deal-striking author or publication admin before the
   update action runs.
-- **Rename (`replacedBy`) does NOT check `hasDeal`.** A rename changes the tree path but preserves
+- **Rename (`replacedBy`) does NOT check `hasAgreement`.** A rename changes the tree path but preserves
   the content — the deal references the genesis, not the path. Buyer still gets what they paid for
   at the new slug.
 - **Pre-gate content (no JSON-LD schema) is conservatively skipped.** The MFS read
   fails, `verifyRevocable` throws, the remove is skipped (traced). Without a genesis to pass to
-  `hasDeal` the action can't confirm the content has no active deal, so it refuses the removal.
+  `hasAgreement` the action can't confirm the content has no active deal, so it refuses the removal.
   Pre-gate content can be removed once a deal is revoked by calling `remove` with `replacedBy`
   set to a verified genesis arriving in the same update (rename the pre-gate path through
   verified content).
 - **Slug-overwrite deal check (`verifyPathAvailable`):** before `rm`+`cp` for an existing path,
-  the copy loop reads the existing HTML's JSON-LD, extracts its genesis, and calls `hasDeal`
+  the copy loop reads the existing HTML's JSON-LD, extracts its genesis, and calls `hasAgreement`
   on-chain. If a deal exists **and** the incoming genesis differs, the update throws. This
   prevents an author from overwriting deal-protected content with their own content. Same-genesis
   re-renders are exempt (the page just updated, deal unaffected). Preview (`!preview` guard)
@@ -455,7 +459,7 @@ trusts it. If copy loop throws, remove loop never runs.
   render artifact per slug-override, not a content property — binding it on-chain fights the model).
 - No re-verifying the PKP sig in the copy loop or remove loop (add loop gated the entry; remove
   loop parse-trusts it). Exception: the **copy loop** reads the existing entry's JSON-LD to check
-  `hasDeal` — but that reads genesis, not re-verifying a sig.
+  `hasAgreement` — but that reads genesis, not re-verifying a sig.
 - No author signing of `jobs`/`remove` (PKP sig per-HTML is the stronger integrity proof and already
   exists; "sign the jobs" only binds who approved the list, not that the claims are true —
   superseded).
@@ -521,7 +525,7 @@ re-render on its own. Verify this is intended, not a stale-page hazard.
 
 _Doc drift:_ `action-flow-diagram.md` describes ripples via `getRipplesOnce` from OrbisDB — stale
 (Ceramic era), same drift noted in SPEC-00 Q5. The action-path data source has since moved again:
-Lens `fetchByQuery` → `module.factory` (`getDeals` / `fetchByPublication`, GAP-10 ✅). The
+Lens `fetchByQuery` → `module.factory` (`getAgreements` / `fetchByPublication`, GAP-10 ✅). The
 cascade/ripple expansion logic in `prep` needs re-confirmation against current code before this
 section is relied upon.
 
@@ -536,10 +540,10 @@ section is relied upon.
 | `getConfig(configCid?, configModule)`                                                 | cid?/addr       | `S2SPublicationConfig` (parsed JSON)                                                                                                                                                                                                                                                                        |
 | `getTaskConfig(config, body)`                                                         | config, body    | `{ templateConfig, rippleConfigs }` (throws if no mapping)                                                                                                                                                                                                                                                  |
 | `fetchById(genesis, pubModule, rpcs, gateway)`                                        | bytes32 genesis | `S2SBody \| undefined` — `getLatest` → IPFS cat → `toBody` (`module.factory`, GAP-10 ✅)                                                                                                                                                                                                                    |
-| `fetchByPublication(pubModule, rpcs, gateway)`                                        | module addr     | `S2SBody[]` — `getDeals` (paginated) → cat each → `toBody`                                                                                                                                                                                                                                                  |
-| `getDeals(pubModule, rpcs, pageSize=100)`                                             | module addr     | `Entry[]` — enumerates all deals; `pageSize` defaults to **100** (was 200, briefly 10) to keep each RPC response minimal inside the Lit fetch budget                                                                                                                                                        |
+| `fetchByPublication(pubModule, rpcs, gateway)`                                        | module addr     | `S2SBody[]` — `getAgreements` (paginated) → cat each → `toBody`                                                                                                                                                                                                                                                  |
+| `getAgreements(pubModule, rpcs, pageSize=100)`                                        | module addr     | `Entry[]` — enumerates the publication's agreements, the module read being `getAgreements(offset, limit)`, which the helper asks for by that name from bundle 0.1.2 (0.1.0/0.1.1 ask for `getDeals`); `pageSize` defaults to **100** (was 200, briefly 10) to keep each RPC response minimal inside the Lit fetch budget                                                                                                                                                        |
 | `initTemplateData(protocolInfo, authorSafe, signer, templateConfig, body, pubModule)` | —               | templateData `{ ...body, assets_gateway, path, content(unescaped), revoked }`                                                                                                                                                                                                                               |
-| `fetchCollections(templateConfig, pubModule, rpcs, gateway)`                          | templateConfig  | `{ [slug]: items[] }` — calls `fetchByPublication` **once**, caches in `allDeals`, filters per-collection in-memory (Lit fetch-budget fix; previously one `getDeals` per collection)                                                                                                                        |
+| `fetchCollections(templateConfig, pubModule, rpcs, gateway)`                          | templateConfig  | `{ [slug]: items[] }` — calls `fetchByPublication` **once**, caches in `allDeals`, filters per-collection in-memory (Lit fetch-budget fix; previously one `getAgreements` call per collection)                                                                                                                        |
 | `renderHTML(config, templateConfig, templateData)`                                    | —               | `string` (HTML)                                                                                                                                                                                                                                                                                             |
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)`                            | —               | `string` (HTML + signed JSON-LD)                                                                                                                                                                                                                                                                            |
 | `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ `isOwnerAt` with no block) — the **add** gate, asked per page: a destination path that does not yet carry the incoming genesis                                                                                                                                                                        |
@@ -695,12 +699,14 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   records-module redeploy, and keep it in step with `press/scripts/lit/update-protocol.ts`
   (`RECORDS_MODULE_ADDRESS`).
 - **Lit enclave fetch budget (fixed 2026-08-06):** Lit nodes have an internal fetch budget
-  exhausted by **repeated identical RPC calls**, not response size. `getDeals` (dynamic `tuple[]`)
-  called 3+ times returned `"missing response"` (empty body) from both DRPC and Alchemy.
-  `fetchCollections` previously called `fetchByPublication` (→`getDeals`) **once per collection**;
-  it now fetches **once** and filters per-collection in-memory. `getDeals` `pageSize` lowered
-  200→100 to keep each response minimal. Lesson: inside a Lit action, never issue N identical
-  on-chain reads — fetch once and filter locally.
+  exhausted by **repeated identical RPC calls**, not response size. The enumeration read — named
+  `getDeals` then, `getAgreements` from bundle 0.1.2 once the contract renamed the set — returns a
+  dynamic `tuple[]`, and calling it 3+ times returned `"missing response"` (empty body) from both
+  DRPC and Alchemy. `fetchCollections` previously called `fetchByPublication` (→ that enumeration)
+  **once per collection**; it now fetches **once** and filters per-collection in-memory. The
+  helper's `pageSize` (100, lowered from 200) supplies the read's `limit`: it is a helper
+  parameter (`module.factory.ts`), not an argument of `getAgreements(offset, limit)`. Lesson:
+  inside a Lit action, never issue N identical on-chain reads — fetch once and filter locally.
 - **Hardcoded secrets (GAP-9) — action-side resolved 2026-08-07:** `libs/constants.ts` (and
   `renderer/constants.ts`) deleted; gateway + RPCs now arrive via the `endpoints` action input,
   not hardcoded. Zero secrets in `actions/src`. Remaining: orchestrator `rpcs` source unwired
@@ -746,7 +752,7 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 | preview `prep→single→update` sequence (Bun runner, no gates)                   | `shared/src/rendering/sequence.test.ts`  | ⚠ **stale + blocked** | (1) hardcodes Lens-era `SINGLE_POST` (decimal post id) but `prep` now calls `fetchById(genesis)`→`getLatest(bytes32)` — a decimal id breaks ABI encoding; (2) ignores the `TEST_CONTENT_IDS` env var `.env` already provides; (3) `MAINNET_RPC_URL`/`BASE_RPC_URL` absent from `.env` → `chainReady=false` → live tests **silently skip**. Fix: read `TEST_CONTENT_IDS`, set RPC env, use a real bytes32 genesis. |
 | preview sequence shape contract (prep→single input handoff)                    | `sequence.test.ts` “seam contract”       | ⚠ stale               | inherits the same `SINGLE_POST` fixture                                                                                                                                                                                                                                                                                                                                                                           |     | non-fatal trace survives (ok:true + trace, no error join) | `sequence.test.ts` Test 3 | ⊘ skipped | `describe.skip` — TODO, never authored. The fatal-vs-non-fatal rule (§I/O) is untested. |
 | stage-failure envelope (ok:false, string error, no throw)                      | `sequence.test.ts` Test 4                | ✅ (gated)            | runs only when `chainReady`; covers a no-modules publication                                                                                                                                                                                                                                                                                                                                                      |
-| INV-append / `makeOffer` / `hasDeal` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
+| INV-append / `makeOffer` / `hasAgreement` on-chain gating (the trust boundary)      | —                                        | ⛔ **missing**        | no `.t.sol`, no Hardhat tests under `protocol/`. The genesis-author append gate (INV-append) is entirely untested on-chain.                                                                                                                                                                                                                                                                                       |
 | INV-8 desync (records-updated-but-group-not, and inverse)                      | —                                        | ⛔ missing            | flagged as a contract test in §Test seams; not authored                                                                                                                                                                                                                                                                                                                                                           |
 | GAP-2 canonicalization (nested-key sort → verify fail)                         | —                                        | ⛔ missing            | flagged; not authored                                                                                                                                                                                                                                                                                                                                                                                             |
 | determinism (frozen clock: `metadata.ts` `new Date()`, `update` `Date.now()`)  | —                                        | ⛔ missing            | output CIDs non-deterministic; no clock injection                                                                                                                                                                                                                                                                                                                                                                 |

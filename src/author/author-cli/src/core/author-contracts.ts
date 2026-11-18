@@ -16,7 +16,7 @@
 //   4. the guard      the Safe's own setGuard(guard) — `onlySelf` too
 //
 // Why the modules are enabled: an enabled module is how a gate discovers a role.
-// The publication's `canPublish`/`hasDeal` gates read the author Safe's enabled
+// The publication's `canPublish`/`hasAgreement` gates read the author Safe's enabled
 // modules and ask each one which role it answers (ERC-165); a module that is
 // deployed but not enabled is invisible to them, so an author with no enabled
 // drafts module cannot be discovered as an author at all.

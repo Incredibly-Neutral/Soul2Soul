@@ -238,12 +238,13 @@ export const renderwithLitActions = async (
             preview,
             maintainCache: index === jobs.length - 1,
             // The id(s the caller rendered — the render action scopes its on-chain
-            // hasDeal revoke check to these ids ONLY (a revoke is always about the
-            // id the caller rendered). A cascade/ripple destination (e.g. home) is
-            // re-rendered as a consequence of the trigger and must NEVER be
-            // hasDeal-checked: a destination pinned via query.genesis may never
-            // have been a deal, so hasDeal=false there would falsely revoke-and-
-            // remove a live page (publish-path regression, acceptance 4).
+            // hasAgreement revoke check to these ids ONLY (a revoke is always about
+            // the id the caller rendered). A cascade/ripple destination (e.g. home)
+            // is re-rendered as a consequence of the trigger and must NEVER be
+            // hasAgreement-checked: a destination pinned via query.genesis may never
+            // have been under an agreement, so hasAgreement=false there would
+            // falsely revoke-and-remove a live page (publish-path regression,
+            // acceptance 4).
             triggeredContentIds: contentIds,
             endpoints,
           });

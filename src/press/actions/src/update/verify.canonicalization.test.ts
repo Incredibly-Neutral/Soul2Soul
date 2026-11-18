@@ -225,7 +225,7 @@ describe('legacy pages — byte-identical verification', () => {
 
 describe('legacy carrier — the update gate refuses grafted content', () => {
   const DEST = '/pub/some/page/index.html';
-  // Never reached by these cases (every rule fires before the hasDeal RPC), but
+  // Never reached by these cases (every rule fires before the hasAgreement RPC), but
   // the gate needs a module address.
   const PUB_MODULE = '0x' + '11'.repeat(20);
 
@@ -283,9 +283,9 @@ describe('legacy carrier — the update gate refuses grafted content', () => {
     ).rejects.toThrow(/legacy-signed page/);
   });
 
-  it('refuses a DIFFERENT content item over a legacy carrier (no deal check needed)', async () => {
+  it('refuses a DIFFERENT content item over a legacy carrier (no agreement check needed)', async () => {
     // A distinct genesis at a path occupied by a legacy page: previously allowed
-    // whenever the old genesis had no active deal, i.e. the legacy page could be
+    // whenever the old genesis had no active agreement, i.e. the legacy page could be
     // replaced by arbitrary new content.
     await expect(
       verifyPathAvailable(gateway, DEST, '0x' + '99'.repeat(32), PUB_MODULE, [], null),
