@@ -1,5 +1,5 @@
 // s2s-deals-tab.ts
-import { LitElement, html, css, type TemplateResult } from 'lit';
+import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { LitService, renderwithLitActions, toBytes32Id } from '@s2s/soul2soul-shared';
 import { SafeIntegration } from '../lib/safe-integration.js';
@@ -92,6 +92,33 @@ const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
 ];
 
 /**
+ * The next step a row owes after its proposal has executed:
+ *   idle      nothing to do
+ *   waiting   the proposal is queued; poll `hasAgreement` until it lands
+ *   render    the chain agrees with what the proposal asked for — render it
+ *   rendering the per-row render call is in flight
+ *   done      rendered, and the page now matches the agreement state
+ */
+type RowPhase = 'idle' | 'waiting' | 'render' | 'rendering' | 'done';
+
+/**
+ * What a render's trace says it did about removals. Line prefixes only: the
+ * path is derived inside the update action, so the tab has no path to match a
+ * row's page against. The honest fix is for the render sequence to return the
+ * removals it performed as structured data instead of the tab reading strings;
+ * that reaches src/shared and src/press and is out of scope for this branch.
+ */
+type RemovalOutcome =
+  | { kind: 'removed' }
+  | { kind: 'failed'; line: string }
+  | { kind: 'skipped'; line: string }
+  | { kind: 'silent' };
+
+/** How often a waiting row asks `hasAgreement`, and how long it keeps asking. */
+const POLL_INTERVAL_MS = 6_000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
+
+/**
  * Immutable chips-state update: copy, set `key` to `values`, delete the key
  * when `values` is empty (matches <s2s-table>'s clear-filters chip, which
  * emits values: []). The host owns the chips state, mirroring the chip-filter
@@ -127,8 +154,27 @@ export class S2SDealsTab extends LitElement {
     result: 'idle' | 'pending' | 'pass' | 'fail' | 'error';
     message: string;
   } = { result: 'idle', message: '' };
+  @state() private rowPhase: Record<string, RowPhase> = {};
+  /** Bumped on every phase change, handed to <s2s-table> as its revision. */
+  @state() private rowRevision = 0;
+  /**
+   * Rows kept in the Pending Offers table after the chain stopped listing them.
+   * A refused offer leaves no chain state behind, but its page may still be
+   * live (an author's non-whitelisted `makeOffer` suspends an agreement and
+   * moves the document into the offer set without touching the tree), so the
+   * row has to stay visible until its removal is rendered.
+   */
+  @state() private retainedOffers: Deal[] = [];
 
   private unsubscriber: (() => void) | null = null;
+
+  // Per-row poll bookkeeping, keyed like rowPhase. `rowExpects` is the
+  // agreement state the proposal asks for: true from an Accept (the page is
+  // written), false from a Refuse (the page is removed). It also decides the
+  // only thing the tab says differently about the two: the button label.
+  private rowExpects: Record<string, boolean> = {};
+  private waitingSince: Record<string, number> = {};
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   // Stable row renderers (bound once) so <s2s-table> only re-renders on real
   // data/state changes, not on every host render.
@@ -159,12 +205,36 @@ export class S2SDealsTab extends LitElement {
         display: flex;
         gap: 0.5rem;
       }
+
+      .row-spinner {
+        display: inline-block;
+        width: 0.7rem;
+        height: 0.7rem;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: row-spin 1s linear infinite;
+      }
+
+      @keyframes row-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     `,
   ];
 
   connectedCallback() {
     super.connectedCallback();
     this.unsubscriber = store.subscribeToDeals(() => this.requestUpdate());
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    // A row can be mid-wait when the element is reattached: its phase survived
+    // on the instance, so the timer has to come back with it, plus one pass
+    // now in case the chain moved while nothing was watching.
+    if (this.hasWaitingRow()) {
+      this.startPoll();
+      void this.pollAgreements();
+    }
     this.loadDeals();
   }
 
@@ -172,6 +242,8 @@ export class S2SDealsTab extends LitElement {
     super.disconnectedCallback();
     this.unsubscriber?.();
     this.unsubscriber = null;
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    this.stopPoll();
   }
 
   private async loadDeals() {
@@ -234,10 +306,25 @@ export class S2SDealsTab extends LitElement {
 
       store.setDeals(this.deals);
       store.setOffers(this.offers);
+
+      // A retained row the chain now lists as a deal is somebody else's result:
+      // drop the removal it was carrying, or the deal row would offer to remove
+      // the page its own agreement just wrote.
+      const listedAsDeal = new Set(this.deals.map((d) => d.genesis));
+      const cameBack = this.retainedOffers.filter((r) => listedAsDeal.has(r.genesis));
+      if (cameBack.length > 0) {
+        for (const row of cameBack) {
+          this.releaseRetained(row.genesis);
+          this.setRowPhase(row.genesis, 'idle');
+          this.forgetExpectation(row.genesis);
+        }
+      }
     } catch (error) {
       console.error('Error loading deals:', error);
     }
     this.fetching = false;
+    // Nothing is waiting any more (a released row included): let the timer go.
+    if (!this.hasWaitingRow()) this.stopPoll();
   }
 
   // Add refresh handler
@@ -269,6 +356,9 @@ export class S2SDealsTab extends LitElement {
   private async admitOffer(genesis: string) {
     try {
       await this.safeIntegration.admit(genesis);
+      // The proposal is only queued: the agreement exists once the signers
+      // execute it, so the row waits for the chain rather than rendering now.
+      this.beginWait(genesis, true);
       this.showNotification('Offer admitted! Transaction pending approval.', 'success');
       await this.loadDeals();
       // Update internal state
@@ -295,14 +385,24 @@ export class S2SDealsTab extends LitElement {
       await this.safeIntegration.reject(genesis);
 
       if (status === 'offer') {
+        // A declined offer leaves no offer behind on chain, but that does not
+        // mean it has no page: an author's non-whitelisted `makeOffer` suspends
+        // an agreement and moves the document into the offer set while its page
+        // stays live. Keep the row and let the render decide (hasAgreement is
+        // already false, so its page is out of force and removable).
         this.showNotification('Offer rejected! Transaction pending approval.', 'success');
         // Remove from offers — no demotion
         const idx = this.offers.findIndex((o) => o.genesis === genesis);
         if (idx !== -1) {
-          this.offers.splice(idx, 1);
+          const offer = this.offers.splice(idx, 1)[0];
           store.setOffers(this.offers);
+          this.retainOffer(offer);
         }
+        this.beginWait(genesis, false);
       } else {
+        // A demoted deal leaves a live page behind; once the chain reports no
+        // agreement the row can render that page away.
+        this.beginWait(genesis, false);
         this.showNotification('Agreement rejected — back in pending offers.', 'success');
         // Deal → offer demotion (existing logic)
         const idx = this.deals.findIndex((d) => d.genesis === genesis);
@@ -358,24 +458,277 @@ export class S2SDealsTab extends LitElement {
     }, 5000);
   }
 
+  // ---- row action state machine -------------------------------------------
+
+  private setRowPhase(genesis: string, phase: RowPhase) {
+    this.rowPhase = { ...this.rowPhase, [genesis]: phase };
+    this.rowRevision += 1;
+  }
+
+  /** Record what the proposal asks for and start watching the chain for it. */
+  private beginWait(genesis: string, expectsAgreement: boolean) {
+    this.rowExpects = { ...this.rowExpects, [genesis]: expectsAgreement };
+    this.waitingSince = { ...this.waitingSince, [genesis]: Date.now() };
+    this.setRowPhase(genesis, 'waiting');
+    this.startPoll();
+  }
+
+  private clearWait(genesis: string) {
+    if (!(genesis in this.waitingSince)) return;
+    const next = { ...this.waitingSince };
+    delete next[genesis];
+    this.waitingSince = next;
+  }
+
+  private forgetExpectation(genesis: string) {
+    if (!(genesis in this.rowExpects)) return;
+    const next = { ...this.rowExpects };
+    delete next[genesis];
+    this.rowExpects = next;
+  }
+
+  private retainOffer(offer: Deal) {
+    if (this.retainedOffers.some((r) => r.genesis === offer.genesis)) return;
+    this.retainedOffers = [...this.retainedOffers, offer];
+  }
+
+  private releaseRetained(genesis: string) {
+    if (!this.retainedOffers.some((r) => r.genesis === genesis)) return;
+    this.retainedOffers = this.retainedOffers.filter((r) => r.genesis !== genesis);
+  }
+
+  private isRetained(genesis: string): boolean {
+    return this.retainedOffers.some((r) => r.genesis === genesis);
+  }
+
+  /**
+   * Pending Offer rows: what the chain lists, plus any row kept alive for a
+   * removal the chain no longer knows about. A genesis the chain lists again
+   * wins over the retained copy.
+   */
+  private offerRows(): Deal[] {
+    const listed = new Set([...store.deals, ...store.offers].map((d) => d.genesis));
+    return [...store.offers, ...this.retainedOffers.filter((r) => !listed.has(r.genesis))];
+  }
+
+  /**
+   * What the update's trace says about the removals it was asked to make, by
+   * line prefix. `removed:` wins over a `warn: rm failed` line, because the
+   * action records the removal it performed and a warning beside it is about
+   * another path. A `skip remove` line is a decision, not a failure: the action
+   * considered the removal and refused it. No line about removals at all is not
+   * evidence either way.
+   */
+  private removalOutcome(trace: unknown): RemovalOutcome {
+    const lines = Array.isArray(trace)
+      ? trace.filter((line): line is string => typeof line === 'string')
+      : [];
+    if (lines.some((line) => line.startsWith('removed: '))) return { kind: 'removed' };
+    const failed = lines.find((line) => line.startsWith('warn: rm failed'));
+    if (failed) return { kind: 'failed', line: failed };
+    const skipped = lines.find((line) => line.startsWith('skip remove'));
+    if (skipped) return { kind: 'skipped', line: skipped };
+    return { kind: 'silent' };
+  }
+
+  /** The name a waiting row is announced by, for the timeout notice. */
+  private rowLabel(genesis: string): string {
+    const row = [...store.deals, ...store.offers, ...this.retainedOffers].find(
+      (d) => d.genesis === genesis,
+    );
+    return row ? displayName(row) : genesis;
+  }
+
+  private hasWaitingRow(): boolean {
+    return Object.values(this.rowPhase).includes('waiting');
+  }
+
+  /**
+   * One timer for every waiting row. Polling is bound to the tab being visible:
+   * a hidden tab costs nothing, and turning visible again picks the rows back
+   * up where they were, the 10-minute cap still counted from the click.
+   */
+  private startPoll() {
+    if (this.pollTimer !== null) return;
+    if (!this.hasWaitingRow()) return;
+    if (document.visibilityState !== 'visible') return;
+    this.pollTimer = setInterval(() => void this.pollAgreements(), POLL_INTERVAL_MS);
+  }
+
+  private stopPoll() {
+    if (this.pollTimer === null) return;
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') this.startPoll();
+    else this.stopPoll();
+  };
+
+  private async pollAgreements() {
+    for (const [genesis, phase] of Object.entries(this.rowPhase)) {
+      if (phase !== 'waiting') continue;
+
+      const expects = this.rowExpects[genesis];
+      if (expects === undefined) continue;
+
+      const started = this.waitingSince[genesis];
+      const expired = started !== undefined && Date.now() - started >= POLL_TIMEOUT_MS;
+
+      try {
+        const hasAgreement = await this.safeIntegration.hasAgreement(genesis);
+        // The row may have moved on while the read was in flight.
+        if (this.rowPhase[genesis] !== 'waiting') continue;
+        if (hasAgreement === expects) {
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'render');
+          continue;
+        }
+        if (expired) {
+          // Not a dead end: the proposal may still be executed later, and Sync
+          // site sweeps the offers, so the removal or the page is reconciled
+          // there. Say so once and stop watching. The name is read before the
+          // row is released, or there is nothing left to name it by.
+          const label = this.rowLabel(genesis);
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'idle');
+          this.releaseRetained(genesis);
+          this.showNotification(
+            `${label}: the proposal has not executed. Sync site will reconcile it.`,
+            'error',
+          );
+        }
+      } catch (error) {
+        // A read that fails is not an answer: keep waiting until the cap, but
+        // the cap is still a cap — a permanently failing read must not leave a
+        // spinner turning forever.
+        console.warn('Could not read agreement state', genesis, error);
+        if (expired) {
+          const label = this.rowLabel(genesis);
+          this.clearWait(genesis);
+          this.setRowPhase(genesis, 'idle');
+          this.releaseRetained(genesis);
+          this.showNotification(
+            `${label}: the proposal could not be confirmed. Sync site will reconcile it.`,
+            'error',
+          );
+        }
+      }
+    }
+
+    if (!this.hasWaitingRow()) this.stopPoll();
+  }
+
+  /**
+   * Render one row's genesis. The render action decides for itself what to do —
+   * an agreement writes the page, no agreement removes the page its path holds
+   * — so the tab passes only the id and never a remove entry.
+   */
+  private async renderRow(genesis: string) {
+    this.setRowPhase(genesis, 'rendering');
+    try {
+      const res = await this.performRender(false, [genesis]);
+      console.log(res);
+      // A `success:false` envelope is a render that wrote nothing, including
+      // the contenthash write that moves the root. Marking it rendered would
+      // claim a page that the site does not have.
+      if (!res.success) {
+        this.setRowPhase(genesis, 'render');
+        this.showNotification(
+          `Render failed: ${res.error ?? 'the update action did not report success'}`,
+          'error',
+        );
+        return;
+      }
+      // A removal is done when the action's trace records the removal it
+      // performed; see removalOutcome for why the trace is read as lines.
+      if (this.rowExpects[genesis] === false) {
+        const outcome = this.removalOutcome(res.trace);
+        if (outcome.kind === 'failed') {
+          this.setRowPhase(genesis, 'render');
+          this.showNotification(`Removal failed: ${outcome.line}`, 'error');
+          return;
+        }
+        if (outcome.kind === 'silent') {
+          this.setRowPhase(genesis, 'render');
+          this.showNotification(
+            'Removal not confirmed: the action reported nothing about it.',
+            'error',
+          );
+          return;
+        }
+        if (outcome.kind === 'skipped') {
+          this.showNotification(
+            `Removal skipped: ${outcome.line.replace(/^skip remove\s+/, '')}`,
+            'success',
+          );
+        }
+      }
+      this.setRowPhase(genesis, 'done');
+      this.releaseRetained(genesis);
+      await this.loadDeals();
+    } catch (error: any) {
+      this.setRowPhase(genesis, 'render');
+      this.showNotification(`Render failed: ${error.message}`, 'error');
+    }
+  }
+
+  // ---- render calls -------------------------------------------------------
+
+  /**
+   * Every genesis a sweep must visit: the deals and the offers, deduped. An
+   * offer has no agreement, so rendering it makes the action remove the page
+   * its path still holds — which is the only way a revoked manuscript's own
+   * page is ever revisited, since it is no longer a deal. Preview drops
+   * encrypted items: their bodies cannot be rendered without the key.
+   */
+  private renderIds(preview: boolean): string[] {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const item of [...store.deals, ...store.offers]) {
+      if (preview && item.encryption) continue;
+      if (seen.has(item.genesis)) continue;
+      seen.add(item.genesis);
+      ids.push(item.genesis);
+    }
+    return ids;
+  }
+
   private async bulkRender(preview: boolean) {
+    try {
+      const res = await this.performRender(preview, this.renderIds(preview));
+      console.log(res);
+      if (!res.success) {
+        this.showNotification(
+          `Sync failed: ${res.error ?? 'the update action did not report success'}`,
+          'error',
+        );
+      }
+    } catch (error: any) {
+      console.error('Bulk render failed:', error);
+      this.showNotification(`Sync failed: ${error.message}`, 'error');
+    }
+  }
+
+  /**
+   * The one render call the tab makes, in both shapes: a sweep or a single row.
+   * Throws when the records it needs are missing, so a caller can report it
+   * instead of rendering nothing under a spinner.
+   */
+  private async performRender(preview: boolean, genesisIds: string[]) {
     const configCid = store.getRecord('config');
-    if (configCid == null) return;
+    if (configCid == null) throw new Error('no config record');
 
     const publication = store.getRecord('name');
-    if (publication == null) return;
-    // possibly add a visual list with filters & checkboxes // make that a separate component
+    if (publication == null) throw new Error('no publication name record');
 
     const protocolInfo = store.protocolInfo;
-    if (protocolInfo == undefined) return;
+    if (protocolInfo == undefined) throw new Error('no protocol info');
     const safeInfo = store.safeInfo;
-    if (safeInfo == undefined) return;
+    if (safeInfo == undefined) throw new Error('no safe info');
 
     const signature = await this.safeIntegration.signWithSigner('lit actions auth');
-
-    const genesisIds = preview
-      ? store.deals.filter((d) => d.encryption == false).map((d) => d.genesis)
-      : store.deals.map((d) => d.genesis);
 
     // DRPC endpoints, one URL per chain (L1 = Ethereum, L2 = Base).
     // Single source of truth is getRpcUrl in lib/evm.ts — no hardcoded keys
@@ -386,7 +739,7 @@ export class S2SDealsTab extends LitElement {
       L2: [getRpcUrl(8453)],
     };
 
-    const res = await renderwithLitActions(
+    return await renderwithLitActions(
       preview,
       this.lit,
       signature,
@@ -405,8 +758,45 @@ export class S2SDealsTab extends LitElement {
       // so the render action's writes (add/dag/put to compute CIDs) pass the gate.
       import.meta.env.VITE_KUBO_TOKEN ? `Bearer ${import.meta.env.VITE_KUBO_TOKEN}` : undefined,
     );
+  }
 
-    console.log(res);
+  /**
+   * The next step for one row, or nothing. Preview hides it: a preview renders
+   * the cache, it does not decide what the live site says about an agreement.
+   */
+  private renderRowAction(genesis: string): TemplateResult | typeof nothing {
+    if (this.previewMode) return nothing;
+
+    const phase = this.rowPhase[genesis] ?? 'idle';
+    const expects = this.rowExpects[genesis] ?? true;
+    const label = expects ? 'Publish' : 'Remove page';
+    const doneLabel = expects ? 'Published' : 'Removed';
+
+    switch (phase) {
+      case 'idle':
+        return nothing;
+      case 'waiting':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true}>
+            <span class="row-spinner" aria-hidden="true"></span> Waiting for signers
+          </s2s-button>
+        `;
+      case 'render':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" variant="spin"
+            @click=${() => void this.renderRow(genesis)}>${label}</s2s-button>
+        `;
+      case 'rendering':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true}>
+            <span class="row-spinner" aria-hidden="true"></span> Rendering
+          </s2s-button>
+        `;
+      case 'done':
+        return html`
+          <s2s-button action="render" genesis="${genesis}" ?disabled=${true} type="success">${doneLabel}</s2s-button>
+        `;
+    }
   }
 
   private renderOfferRow(offer: Deal): TemplateResult {
@@ -419,10 +809,13 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
         <div class="table-cell offer-actions">
-          <s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
-            @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
-          <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
-            @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>
+          ${this.isRetained(offer.genesis)
+            ? nothing
+            : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
+                @click=${() => this.admitOffer(offer.genesis)}>Accept</s2s-button>
+              <s2s-button action="reject" genesis="${offer.genesis}" status="offer"
+                @click=${() => this.reject(offer.genesis, 'offer')}>Refuse</s2s-button>`}
+          ${this.renderRowAction(offer.genesis)}
         </div>
       </div>
     `;
@@ -441,6 +834,7 @@ export class S2SDealsTab extends LitElement {
           <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
+          ${this.renderRowAction(deal.genesis)}
         </div>
       </div>
     `;
@@ -455,6 +849,8 @@ export class S2SDealsTab extends LitElement {
       `;
     }
 
+    const offers = this.offerRows();
+
     return html`
       <div class="toolbar">
         <s2s-check
@@ -464,26 +860,27 @@ export class S2SDealsTab extends LitElement {
           @s2s-check=${(e: CustomEvent) => void this.runDealCheck(e.detail.value)}
         ></s2s-check>
         <s2s-button action="bulkrender" type="secondary"
-          @click=${() => this.bulkRender(this.previewMode)}>Bulk Render</s2s-button>
+          @click=${() => this.bulkRender(this.previewMode)}>Sync site</s2s-button>
         <toggle-button .bool=${this.previewMode} label="preview"
           @toggle=${(e: CustomEvent) => { this.previewMode = e.detail.checked; }}></toggle-button>
       </div>
 
-      ${store.offers.length > 0
+      ${offers.length > 0
         ? html`
             <div class="section">
               <s2s-table
                 title="Pending Offers"
                 .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
-                  @click=${this.handleRefresh} style="margin-right: 1rem">
+                  @click=${() => void this.handleRefresh()} style="margin-right: 1rem">
                   <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
                 </s2s-button>`}
                 .columns=${OFFER_COLUMNS}
-                .rows=${store.offers}
+                .rows=${offers}
                 .sort=${this.offersSort}
                 .chipsGroups=${DEAL_CHIPS_GROUPS}
                 .chips=${this.offersChips}
                 .rowRenderer=${this.offerRowRenderer}
+                .revision=${this.rowRevision}
                 .actionsHeader=${true}
                 emptyText="No offers match the current filters"
                 gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
@@ -498,7 +895,7 @@ export class S2SDealsTab extends LitElement {
         <s2s-table
           title="Active Agreements"
           .titleAction=${html`<s2s-button type="primary" ?disabled=${this.fetching}
-            @click=${this.handleRefresh} style="margin-right: 1rem">
+            @click=${() => void this.handleRefresh()} style="margin-right: 1rem">
             <ph-arrow-clockwise size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-arrow-clockwise> Sync
           </s2s-button>`}
           .columns=${DEAL_COLUMNS}
@@ -507,6 +904,7 @@ export class S2SDealsTab extends LitElement {
           .chipsGroups=${store.deals.length > 0 ? DEAL_CHIPS_GROUPS : []}
           .chips=${this.dealsChips}
           .rowRenderer=${this.dealRowRenderer}
+          .revision=${this.rowRevision}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
           .actionsContent=${html`Actions`}
