@@ -37,7 +37,6 @@ export const revoke: CommandSpec = {
           ? {
               cid: result.render.cid,
               path: result.render.path,
-              remove: result.render.remove,
               previewUrl: result.render.previewUrl,
               rootTx: result.render.rootTx,
               trace: result.render.trace,
@@ -49,11 +48,11 @@ export const revoke: CommandSpec = {
         '  genesis     : ENDED — this note id cannot be published again; republishing needs a new note',
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  tx          : ${result.txHash ?? '(none — already retracted by an earlier run)'}`,
+        `  tx          : ${result.txHash}`,
         result.render
           ? [
               `  re-render   : ${result.render.cid}`,
-              `  removed     : ${result.removePaths.join(', ') || '(none)'}`,
+              `  removed     : ${result.removePath}`,
               rootTxLine(result.render),
             ].join('\n')
           : '  render      : (none)',

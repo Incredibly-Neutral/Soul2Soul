@@ -24,7 +24,6 @@ export type {
   RepointArchiveInput,
   PrepData,
   PrepInput,
-  RevokeTarget,
   SingleData,
   SingleInput,
 } from './lit';
