@@ -317,7 +317,7 @@ describe('render action — plaintext integrity (direct read path)', () => {
     const item = contentItem();
     expect(metadata?.author?.proof).toEqual({ ...item.proof, objectId: item.objectId });
     expect(metadata?.objectId).toBe(item.objectId);
-    // The publisher is the publication: the Safe that owns the ENS name, not
+    // The page names the publication: the Safe that owns the ENS name, not
     // the render signer and not the author's Safe.
     expect(metadata?.publisher?.address).toBe('0xms');
     expect(metadata?.publisher?.url).toBe(PUBLICATION);

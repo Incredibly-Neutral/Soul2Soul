@@ -492,8 +492,8 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             // above. The signer is the proof's verificationMethod; the
             // author's Safe is not the publisher.
             address: multisig,
-            // The publication's ENS name — the publisher's `name`, and the
-            // page's mainEntityOfPage @id.
+            // The publication's ENS name — the publication node's `name`, and
+            // the page's mainEntityOfPage @id.
             url: body.publication || '',
           },
           contentGenesis: job.id,

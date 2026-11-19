@@ -298,7 +298,7 @@ describe('addAndSignMetadata — author proof nesting', () => {
     expect(schema.author.identifier.value).toBe(
       'eip155:8453:0xabcdef0123456789012345678901234567890123',
     );
-    expect(schema.publisher).toEqual({
+    expect(schema.publication).toEqual({
       '@type': 'Organization',
       name: 'test.soul2soul.eth',
       identifier: {
@@ -310,14 +310,14 @@ describe('addAndSignMetadata — author proof nesting', () => {
     });
   });
 
-  it('omits the publisher name when the publication name is empty, keeping the identifier', async () => {
+  it('omits the publication name when the publication name is empty, keeping the identifier', async () => {
     const { schema } = await render(
       contentInfo({
         publisher: { address: '0x2222222222222222222222222222222222222222', url: '' },
       }),
     );
-    expect(schema.publisher).not.toHaveProperty('name');
-    expect(schema.publisher.identifier.value).toBe(
+    expect(schema.publication).not.toHaveProperty('name');
+    expect(schema.publication.identifier.value).toBe(
       'eip155:8453:0x2222222222222222222222222222222222222222',
     );
   });

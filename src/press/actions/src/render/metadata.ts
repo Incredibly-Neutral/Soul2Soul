@@ -131,12 +131,13 @@ export const addAndSignMetadata = async (
       schema.author = author;
     }
 
-    // Publisher. The publication itself, mirrored on the author node: one
-    // CAIP-10 value naming the Safe that owns the ENS name, plus the name that
-    // Safe answers to. The render signer is the proof's verificationMethod and
-    // appears nowhere here.
+    // Publication node (`publication`). The publication itself, mirrored on
+    // the author node: one CAIP-10 value naming the Safe that owns the ENS
+    // name, plus the name that Safe answers to. The render signer is the
+    // proof's verificationMethod and appears nowhere here. The retired key was
+    // `publisher`; old pages keep it, and nothing reads the term.
     if (contentInfo?.publisher) {
-      schema.publisher = {
+      schema.publication = {
         '@type': 'Organization',
         // Omitting an empty name rather than emitting `name: ''`.
         ...(contentInfo.publisher.url ? { name: contentInfo.publisher.url } : {}),

@@ -719,10 +719,12 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   naming a CAIP-10 account id: `propertyID: 'CAIP-10'`, `name: 'Safe smart account'`,
   `value: 'eip155:8453:<authorSafeAddress>'` — the address exactly as the item carries it, chain
   id from one constant in `render/metadata.ts` (the same one the PKP `verificationMethod` uses).
-  The publisher node mirrors it: one `propertyID: 'CAIP-10'` PropertyValue naming the
+  The `publication` node mirrors it: one `propertyID: 'CAIP-10'` PropertyValue naming the
   publication Safe (the `multisig` `getDomainOwnerAndModules` returns), plus `name` holding the
-  publication's ENS name. The render signer appears nowhere on the publisher node — it is the
-  proof's `verificationMethod`; the retired `address` / `address:safe` pair is gone.
+  publication's ENS name. The render signer appears nowhere on the `publication` node — it is the
+  proof's `verificationMethod`; the retired `address` / `address:safe` pair is gone, and the node
+  key that was `publisher` is now `publication` (old pages keep the retired key; nothing reads the
+  term).
   `update/verify.ts` reads the author identity through
   shared's `accountAddress()` and selects by value shape, not by term, so a page pinned before
   either change still reads as the same address. GAP-1's only remaining tail is the
