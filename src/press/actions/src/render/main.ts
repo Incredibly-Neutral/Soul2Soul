@@ -487,11 +487,14 @@ async function main(input: SingleInput): Promise<ActionResult<SingleData>> {
             ...(authorProof ? { proof: authorProof } : {}),
           },
           publisher: {
-            // The bare signer address; the page builder writes it as the
-            // `address` value.
-            address: signerAddress || '',
+            // The publication, not the render signer: `multisig` is the Safe
+            // that owns the ENS name, and the page builder writes it as the
+            // publisher's CAIP-10 value. The signer is already the proof's
+            // verificationMethod; the author's Safe is not the publisher.
+            address: multisig || '',
+            // The publication's ENS name — the publisher's `name`, and the
+            // page's mainEntityOfPage @id.
             url: body.publication || '',
-            ...(authorSafeAddress ? { safe: authorSafeAddress } : {}),
           },
           contentGenesis: job.id,
           // The page's two signed dates: genesis signing time and this
