@@ -233,6 +233,37 @@ export class PublicationService {
   }
 
   /**
+   * The publication config document (Records module `getRecord('config')` →
+   * config CID → fetched JSON), read once per service and cached, so the
+   * revoke path derivation and the locale map come from the same fetch the
+   * renderer uses. Returns undefined when the config can't be resolved.
+   */
+  private configDocumentPromise: Promise<any | undefined> | null = null;
+  private configDocument(): Promise<any | undefined> {
+    if (!this.configDocumentPromise) {
+      this.configDocumentPromise = (async () => {
+        if (!this.configModule) return undefined;
+        try {
+          const configCid = (await this.options.l2Runner.genericRead(
+            this.configModule,
+            JSON.stringify(S2SRecordsModuleV0_1),
+            'getRecord',
+            ['config'],
+          )) as string;
+          if (!configCid) return undefined;
+
+          const config = (await this.options.ipfs.fetchFromKubo(configCid)) as any;
+          if (!config || config.Type === 'error') return undefined;
+          return config;
+        } catch {
+          return undefined;
+        }
+      })();
+    }
+    return this.configDocumentPromise;
+  }
+
+  /**
    * Read the publication's real on-chain `localePaths` (Records module
    * `getRecord('config')` → config CID → fetched mapping) so the revoke
    * remove-path reproduces the renderer's `createPath` prefix exactly.
@@ -240,24 +271,24 @@ export class PublicationService {
    * the legacy scheme + caveat rather than aborting the revoke).
    */
   async localePathsOf(): Promise<Record<string, string> | undefined> {
-    if (!this.configModule) return undefined;
-    try {
-      const configCid = (await this.options.l2Runner.genericRead(
-        this.configModule,
-        JSON.stringify(S2SRecordsModuleV0_1),
-        'getRecord',
-        ['config'],
-      )) as string;
-      if (!configCid) return undefined;
+    const config = await this.configDocument();
+    if (!config) return undefined;
+    return config.localePaths ?? config.mapping?.localePaths;
+  }
 
-      const config = (await this.options.ipfs.fetchFromKubo(configCid)) as
-        | { Type?: string; localePaths?: Record<string, string>; mapping?: { localePaths?: Record<string, string> } }
-        | undefined;
-      if (!config || config.Type === 'error') return undefined;
-
-      return config.localePaths ?? config.mapping?.localePaths;
-    } catch {
-      return undefined;
-    }
+  /**
+   * The publication's template path for one post type, as the renderer's
+   * `createPath` reads it (`config.mapping.templateConfig[reference].path`).
+   * This is what makes a revoke remove the page where it was actually written:
+   * a post template at `/posts/{slug}/` is not the `/{slug}` the standard
+   * scheme assumes. Returns undefined when the config or the template can't be
+   * resolved, so the caller falls back to the standard scheme and says so.
+   */
+  async templatePathOf(postType: string | undefined): Promise<string | undefined> {
+    const config = await this.configDocument();
+    if (!config) return undefined;
+    const templates: any[] = config.mapping?.templateConfig ?? config.templates ?? [];
+    const entry = templates.find((t) => t?.reference === (postType ?? 'post'));
+    return typeof entry?.path === 'string' ? entry.path : undefined;
   }
 }

@@ -52,7 +52,7 @@ export const revoke: CommandSpec = {
         result.render
           ? [
               `  re-render   : ${result.render.cid}`,
-              `  removed     : ${result.render.path}`,
+              `  removed     : ${result.removePath}`,
               rootTxLine(result.render),
             ].join('\n')
           : '  render      : (none)',
