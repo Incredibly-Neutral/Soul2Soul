@@ -249,6 +249,28 @@ describe('prep — revoke removal targets the page the template renders', () => 
     expect(result.data.remove).toEqual([{ path: '/posts/test2/' }]);
   });
 
+  it('targets the page of an encrypted note, whose body cannot say where it lives', async () => {
+    // The failing case: the note is encrypted, so the stored body carries
+    // ciphertext and no slug at all, and after `retract` the agreement is gone
+    // so nothing decrypts it back. The caller supplies the slug; the template
+    // still comes from the config, and together they name the live page.
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const encrypted = { ...item('ciphertext'), encryption: true };
+    vi.mocked(catFile).mockImplementation((() =>
+      Promise.resolve(JSON.stringify(encrypted))) as never);
+
+    const result = await main({
+      ...input([genesis]),
+      revoke: [{ id: genesis, slug: 'test2', locale: 'en', postType: 'post' }],
+    });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.remove).toEqual([{ path: '/posts/test2/' }]);
+  });
+
   it('removes nothing, and says so, when the id rendered no page', async () => {
     vi.mocked(getTaskConfig).mockResolvedValue({
       templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
