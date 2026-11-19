@@ -230,6 +230,21 @@ export const renderwithLitActions = async (
     // Read auto-detected slug-change removals from prep output
     prepRemove = (validatedPrep as any).ok ? (validatedPrep as any).data?.remove : undefined;
 
+    // A caller-named revoke is answered by prep, or by nothing. Say which: a
+    // prep action that predates revoke targets ignores the field, and the run
+    // then reports a removal it never asked for and never gets.
+    if (revokeIds?.length) {
+      const prepTrace = ((validatedPrep as any)?.trace ?? []).filter(
+        (line: unknown) => typeof line === 'string' && line.startsWith('revoke'),
+      );
+      if (prepTrace.length > 0) prepTrace.forEach((line: string) => console.log(line));
+      else
+        console.warn(
+          'prep answered no revoke path: the prep action at ' +
+            `${protocolInfo.litActions.prep} does not accept revoke targets — add and release the rebuilt action, then re-run`,
+        );
+    }
+
     // ---------------- Single Actions Stage ----------------------------------
 
     if (notice) notice.setMessage('ispatching render actions ...');
