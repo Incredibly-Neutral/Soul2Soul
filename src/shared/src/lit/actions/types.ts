@@ -24,11 +24,25 @@ export interface DataAvailabilityEntry {
   fatal: boolean;
 }
 
+/**
+ * A caller-named revocation. `id` is the genesis; the rest is the item's
+ * identity, because a retracted item's stored body keeps its public part but
+ * loses its slug (the version log tombstones it), and the page path needs one.
+ */
+export interface RevokeTarget {
+  id: string;
+  slug?: string;
+  locale?: string;
+  postType?: string;
+}
+
 export interface PrepInput {
   publication: string;
   contentIds: string[];
   configCid?: string;
   prevRootCid?: string;
+  /** Ids the caller is revoking; prep derives each page path and removes it. */
+  revoke?: RevokeTarget[];
   endpoints: {
     ipfsGateway?: string;
     ipfsGatewayAuth?: string;
