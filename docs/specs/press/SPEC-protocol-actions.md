@@ -219,7 +219,8 @@ uploaded page, `job.path` = interpolated slug path, `job.revoked` set if decrypt
 4. `fetchById(job.id)` → body
 5. `getConfig(configCid, configModule)` → config
 6. `initTemplateData(...)` → decrypts body if `body.encryption` (gated `canRead`: the publication's
-   admission, then ownership of the author Safe at the append block); sets `revoked`
+   admission, then ownership of the author Safe at the append block, or live ownership of the
+   reader Safe it named); sets `revoked`
 7. if not revoked: `fetchCollections` → per-item `decrypt` (gated) → `renderHTML` → `addAndSignMetadata` (PKP sign, INV-5) → `uploadFile` → CID
 8. else: `job.revoked = true`, empty html/path
 
@@ -228,11 +229,14 @@ IPFS add/cat, **PKP** for `Lit.Actions.Decrypt` and the metadata signature. **Ru
 Bun (preview, unsigned).**
 
 **Invariants:** INV-1, 5, 7, 9, and the gates (`canRead` = the publication's own
-`canRead(genesis, safe)` **AND** ownership of the author Safe judged at the append block of the
-manuscript's last version). `canRead` takes ownership from `canAuthor`, which resolves the block from
-the author Safe's drafts module; a Safe whose modules cannot be resolved is refused, a version with
-no height is answered against the Safe's live owner set, and a positive block with no owner-history
-module on the Safe is refused with that module named. `genesis =
+`canRead(genesis, safe)` **AND** ownership of the reader it admitted, as either the genesis author
+at the append block of the manuscript's last version or, for the publication Safe and a reviewer
+Safe, the Safe's live owner set). The author half is `canAuthor`, which resolves the block from the
+author Safe's drafts module; a Safe whose modules cannot be resolved is refused there, a version
+with no height is answered against the Safe's live owner set, and a positive block with no
+owner-history module on the Safe is refused with that module named. The other admitted Safes run no
+drafts module, so their half is `isOwner(readerSafe, signer)`, read only after the author half
+refuses, and a Safe the verdict named as the genesis author never falls back to it. `genesis =
 toBytes32Id(contentId)` — `toBytes32Id` lives in `@s2s/soul2soul-shared` and is imported at the top of
 `gates.ts`. **Gotchas:** GAP-1 (provenance is now built from real signed data in `render/main.ts`, not literals — only the `S2SContentInfo` type-rename tail remains; see the A3 trust TODO for the planned genesis-as-explicit-signed-field addition); the `assets_gateway` shape mismatch (see Gotchas); **GAP-13** (informational) — the Bun shim has no `Lit.Actions.Decrypt`, but this is moot by design:
 preview content is mock and never encrypted, so `decrypt.ts` is never called on that path.
@@ -547,13 +551,13 @@ section is relied upon.
 | `renderHTML(config, templateConfig, templateData)`                                    | —               | `string` (HTML)                                                                                                                                                                                                                                                                                             |
 | `addAndSignMetadata(id, html, protocolInfo, contentInfo?)`                            | —               | `string` (HTML + signed JSON-LD)                                                                                                                                                                                                                                                                            |
 | `canPublish(authorSafe, pubModule, signer)`                                           | —               | `boolean` (canPublish ∧ `isOwnerAt` with no block) — the **add** gate, asked per page: a destination path that does not yet carry the incoming genesis                                                                                                                                                                        |
-| `canRead(contentId, safe, pubModule, signer)`                                         | —               | `boolean` (the publication's `canRead(genesis, safe)` ∧ `canAuthor`: ownership at the append block of the manuscript's last version, live `isOwner` when the log records no height, refusal when the Safe's modules cannot be resolved)                                                                        |
+| `canRead(contentId, safe, pubModule, signer)`                                         | —               | `boolean` (the publication's `canRead(genesis, safe)` ∧ either `canAuthor`: ownership at the append block of the manuscript's last version, live `isOwner` when the log records no height, refusal when the Safe's modules cannot be resolved, **or** live `isOwner` of the reader Safe the publication admitted, for the publication Safe and reviewers) |
 | `canAuthorVerdict(genesis, safe, signer)`                                             | bytes32 genesis | `CanAuthorVerdict` — `ok` plus what the answer was read from: `block`, `ownerSet` (`append-block` \| `live`), `modules`, `modulesError`, `author`. One call for the whole author question; the decrypt action reads the entry from it                                                                          |
 | `isOutOfForce`                                                                        | `bytes32 genesis` | `boolean` — no deal in force for the genesis. The **remove** limit: a page whose genesis is out of force may come off the tree, and no gate asks who is asking                                                                                                                                                |
 | `decrypt(pkpId, body, authorSafe, pubModule, signer)`                                 | —               | decrypted obj \| false (gated by `canRead`)                                                                                                                                                                                                                                                                 |
 | `evmRead(chain, addr, abi, method, args, rpcs?)`                                      | —               | call result — **catch-all failover**: tries each URL in `rpcs[]`, collects every failure in `failures[]`, throws one aggregated `Error` (`.failures` attached) on total failure. No transport-vs-revert distinction (attempted & reverted — ethers v5 wraps `SERVER_ERROR` as `CALL_EXCEPTION`; see GAP-15) |
 | `evmWrite(chain, pkp, addr, abi, method, args, confirm?)`                             | —               | `{ success, hash, ... }` (PKP-signed)                                                                                                                                                                                                                                                                       |
-| `toHexString(cidV0)`                                                                  | base58 CID      | `0xe301…` contenthash (INV-6)                                                                                                                                                                                                                                                                               |
+| `toHexString(cid)`                                                                    | CIDv0 or CIDv1  | `0xe30101…` contenthash, **always CIDv1** (INV-6); a CIDv0 root is normalised with `toV1()` (same multihash)                                                                                                                                                                                                                                                                               |
 | `contenthashToIPFS(hex)`                                                              | contenthash hex | CIDv0 string (INV-6)                                                                                                                                                                                                                                                                                        |
 | `uploadFile(str)` / `catFile(cid)`                                                    | —               | CID / text (Kubo `add`/`cat`)                                                                                                                                                                                                                                                                               |
 
@@ -667,13 +671,24 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
   (`LeadingZero`), a version written once (`VersionExists`, so repointing a CID is a new third digit
   and a pinned read never changes answer), and strictly increasing across `(major, minor, patch)`
   (`VersionNotIncreasing`), so the last entry is always the live one.
+  **The dev lane.** A version prefixed `d.` is a build under test: `d.x.y`, two numbers, ordered only
+  against the other dev versions, never the live document, never in `getVersions()`. It is read by
+  name or by a publication's pin, so a test is tried against the real deployment without consuming
+  the release number that replaces it, and a release after it is compared with the release line and
+  not with the test (`d.0.1`, then `0.1.5` is fine). Storage gained `devVersion` and its three
+  numbers, appended after every earlier slot.
   `getVersionAt` refuses an index with `IndexOutOfBounds`, `initialize` refuses a zero Safe, and
   `supportsInterface` reports the module's own id plus ERC-165 because the interface inherits
   `IERC165`.
+  **The upgrade is `upgradeTo`.** OZ 4.9's `upgradeToAndCall` force-calls the new implementation even
+  with `0x`, and this module has no `receive` or `fallback`, so the empty form reverts
+  `Address: low-level delegate call failed`; a Safe wraps that as GS013, which names nothing.
+  `pnpm upgrade:module --simulate` runs the call from the Safe as a bare `eth_call` and prints the
+  revert before anything is proposed.
   **Storage.** The proxy holds the document, its version and history; upgrades move code only, so a
   future implementation must append variables and never reorder them. The owning Safe cannot change;
   a migration is an upgrade.
-  **State:** the contract compiles, has nine node tests in `src/manifest/test`, and is in no
+  **State:** the contract compiles, has twelve node tests in `src/manifest/test`, and is in no
   deployment. The readers still read `manifest` from the records module; `PROTOCOL_RECORDS_MODULE`
   becomes `MANIFEST_MODULE` once the module exists on Base, and the two disagree only about where
   the document lives until then, not about its shape.
@@ -735,7 +750,8 @@ codec), INV-7 (runtime-agnostic), INV-8 (action CID ↔ group), INV-9 (Base/8453
 - 🟢 Handlebars templates/helpers, RPC URLs, timeouts, log lines, dead code removal.
 - 🔴 The `"lit actions auth"` string; record-key names/set; the contenthash
   codec; the canonicalization in `metadata.ts`; anything that makes an action depend on a Node
-  built-in (breaks INV-7); emitting CIDv1 from update (breaks INV-6 / `toHexString`).
+  built-in (breaks INV-7); writing a CIDv0 root as-is (`0xe3010070…`), which no standard contenthash parser accepts, so
+  eth.limo refuses the name.
 
 ---
 

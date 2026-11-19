@@ -17,4 +17,19 @@ describe('authoring/revoke', () => {
     expect(revokedPathFor('hello-world', 'en', { default: '', en: '' })).toBe('/hello-world');
     expect(revokedPathFor('hello-world', 'fr', { default: '', fr: '' })).toBe('/hello-world');
   });
+
+  it('uses the publication template path, substituted, when one is given', () => {
+    expect(revokedPathFor('test2', 'default', undefined, '/posts/{slug}/')).toBe('/posts/test2/');
+    expect(revokedPathFor('test2', 'default', { default: '' }, '/posts/{slug}/')).toBe(
+      '/posts/test2/',
+    );
+    expect(revokedPathFor('test2', 'fr', { default: '', fr: '/fr' }, '/posts/{slug}/')).toBe(
+      '/fr/posts/test2/',
+    );
+  });
+
+  it('falls back to the standard scheme for a shared page with no {slug}', () => {
+    expect(revokedPathFor('test2', 'default', undefined, '/posts')).toBe('/test2');
+    expect(revokedPathFor('test2', 'default', undefined, null)).toBe('/test2');
+  });
 });

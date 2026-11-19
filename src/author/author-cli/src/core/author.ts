@@ -1019,6 +1019,8 @@ export interface RevokeResult {
   subdomain: string;
   /** retract transaction hash on L2. */
   txHash: string;
+  /** The rendered path the remove entry targeted (where the page actually was). */
+  removePath: string;
   /** Result of the remove-plumbing re-render. */
   render: RenderOutcome | undefined;
 }
@@ -1071,8 +1073,17 @@ export async function revokeContent(
   );
 
   // 2. Remove-plumbing re-render so the published site stops resolving it.
+  // The path comes from the publication's own template for this post type, the
+  // same config the renderer reads: a post template at `/posts/{slug}/` writes
+  // `/posts/<slug>/`, so the standard `/{slug}` guess removed nothing.
   const localePaths = await service.localePathsOf();
-  const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths);
+  const templatePath = await service.templatePathOf(parsed.postType);
+  if (!templatePath) {
+    ctx.out.warn(
+      `could not read the "${parsed.postType ?? 'post'}" template path from the publication config — assuming /{slug}, which may remove nothing`,
+    );
+  }
+  const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths, templatePath);
   ctx.out.log(`removing ${removePath} from the rendered tree…`);
 
   const render = await renderContent(ctx, service, publication, genesis, authorSafeAddress, {
@@ -1087,6 +1098,7 @@ export async function revokeContent(
     publication,
     subdomain: service.subdomain,
     txHash,
+    removePath,
     render,
   };
 }

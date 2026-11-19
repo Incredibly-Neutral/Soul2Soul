@@ -311,7 +311,7 @@ export class S2SApp extends LitElement {
       // Protocol first: the module factory it carries is the only thing
       // discovery asks for a module address, so it has to be set before the
       // first initialize(). Without it the first pass finds no module at all.
-      const protocolInfo = await this.protocolIntegration.initialize();
+      let protocolInfo = await this.protocolIntegration.initialize();
       store.setProtocolInfo(protocolInfo);
       console.log(protocolInfo);
 
@@ -332,6 +332,27 @@ export class S2SApp extends LitElement {
           type: 'metadata',
         })),
       );
+
+      // The publication's own `manifest_version` decides which document it runs.
+      // The read above is the deployment's current one only because the records
+      // module cannot be found without the module factory it carries; now that
+      // the records are in, a pin at another version is the answer. A pin this
+      // module does not hold throws (getManifest never falls back), and the pass
+      // carries on with the current document rather than losing the rest of the
+      // load to it.
+      const pinnedVersion = store.getRecord('manifest_version');
+      const currentVersion = protocolInfo?.version;
+      if (pinnedVersion && currentVersion && pinnedVersion !== currentVersion) {
+        try {
+          protocolInfo = await this.protocolIntegration.load(pinnedVersion);
+          store.setProtocolInfo(protocolInfo);
+        } catch (error) {
+          console.error(
+            `[app] pinned manifest ${pinnedVersion} unreadable, keeping ${currentVersion}:`,
+            error,
+          );
+        }
+      }
 
       // The standalone ENS step for an ALREADY LIVE publication. Deliberately
       // AFTER the record load: the optional card must never hold the app's

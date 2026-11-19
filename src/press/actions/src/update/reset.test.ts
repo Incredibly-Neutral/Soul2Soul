@@ -17,6 +17,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as ethers from 'ethers5'; // protocol's v5 alias — the action runs against ethers v5 semantics
+import {
+  parseCID,
+  decodeContenthashWrapped,
+  encodeContenthashWrapped,
+} from '@s2s/soul2soul-shared/lit-actions';
 
 // The action references the Lit-runtime-injected global `ethers`
 // (action_globals.ts); point it at the real ethers v5 so the real
@@ -63,19 +68,23 @@ vi.mock('../render/config.ctrl', () => ({
   getConfig: vi.fn(async () => mocks.config),
 }));
 
-vi.mock('../libs/evm', () => ({
-  evmRead: vi.fn(
-    async (chain: string, addr: string, abi: unknown, method: string, args: any[]) => {
-      // The auxiliary alias-tracking record read is distinguished by its key.
-      if (method === 'getText' && args?.[1] === 'aliases') {
-        return mocks.prevAliasesJson;
-      }
-      return mocks.prevEncoded;
-    },
-  ),
-  evmWrite: vi.fn(async () => mocks.evmWriteResult),
-  toHexString: (cid: string) => '0x' + cid,
-}));
+vi.mock('../libs/evm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../libs/evm')>();
+  return {
+    ...actual,
+    // toHexString stays REAL: the on-chain encoding is what these tests pin.
+    evmRead: vi.fn(
+      async (chain: string, addr: string, abi: unknown, method: string, args: any[]) => {
+        // The auxiliary alias-tracking record read is distinguished by its key.
+        if (method === 'getText' && args?.[1] === 'aliases') {
+          return mocks.prevAliasesJson;
+        }
+        return mocks.prevEncoded;
+      },
+    ),
+    evmWrite: vi.fn(async () => mocks.evmWriteResult),
+  };
+});
 
 vi.mock('../libs/ipfs.factory', () => ({
   contenthashToIPFS: vi.fn(() => 'QmPrevRoot'),
@@ -335,6 +344,10 @@ describe('evm-update reset — publication-owner gate (canReset)', () => {
 });
 
 describe('evm-update — contenthash_wrapped write target (config.domain / aliases)', () => {
+  // The gateway stub answers files/stat with `QmNewRoot` (CIDv0). The action
+  // encodes it with the REAL toHexString, which normalises to v1 first.
+  const ENCODED_ROOT = encodeContenthashWrapped(parseCID('QmNewRoot').toV1());
+
   /** Return the batchSetRecords evmWrite call, or undefined. */
   const batchCallOf = async (): Promise<any[] | undefined> => {
     const { evmWrite } = await import('../libs/evm');
@@ -373,6 +386,31 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     expect(await batchNodesOf()).toEqual([
       ethers.utils.namehash('alice.soul2soul.eth'),
     ]);
+  });
+
+  it('writes contenthash_wrapped in the CIDv1 form even when the root is CIDv0', async () => {
+    // The gateway stub answers every files/stat with `QmNewRoot`, a CIDv0 root —
+    // what a fresh `files/mkdir` can still return after a reset. The record must
+    // not carry it as-is: `0xe30100701220…` is unreadable by standard parsers,
+    // so eth.limo rejects the contenthash and refuses to serve the name.
+    mocks.config = { assetsCid: 'QmAssets' };
+    const result: any = await main({
+      ...baseInput,
+      preview: false,
+      reset: true,
+      jobs: [sampleJob],
+      signature: await makeSignature(),
+    });
+
+    expect(result.ok).toBe(true);
+    const encoded = (await batchValuesOf())?.[0]?.[0] ?? '';
+    // e3 (ipfs-ns) 01 (contenthash version) 01 (CIDv1) 70 (dag-pb) …
+    expect(encoded.slice(0, 10)).toBe('0xe3010170');
+    expect(encoded.slice(0, 8)).not.toBe('0xe30100');
+    // Same multihash as the v0 root — same blocks, only the label changed.
+    expect(decodeContenthashWrapped(encoded).toV1().toString()).toBe(
+      parseCID('QmNewRoot').toV1().toString(),
+    );
   });
 
   it('writes to namehash(config.domain) when config.domain is set (legacy single-node override)', async () => {
@@ -431,7 +469,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     });
 
     expect(result.ok).toBe(true);
-    const encoded = '0x' + 'QmNewRoot'; // mock toHexString(cid) === '0x' + cid
+    const encoded = ENCODED_ROOT;
     const keys = await batchKeysOf();
     const values = await batchValuesOf();
     expect(keys).toEqual([
@@ -476,7 +514,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     });
 
     expect(result.ok).toBe(true);
-    const encoded = '0x' + 'QmNewRoot';
+    const encoded = ENCODED_ROOT;
     expect(await batchNodesOf()).toEqual([
       ethers.utils.namehash('alice.soul2soul.eth'), // canonical — always written
       ethers.utils.namehash('kept.eth'), // kept alias — written
@@ -512,7 +550,7 @@ describe('evm-update — contenthash_wrapped write target (config.domain / alias
     const canonicalNode = ethers.utils.namehash('alice.soul2soul.eth');
     const canonicalIdx = (await batchNodesOf())!.indexOf(canonicalNode);
     // The canonical node's contenthash value is the encoded root, never ''.
-    expect(values![canonicalIdx][0]).toBe('0xQmNewRoot');
+    expect(values![canonicalIdx][0]).toBe(ENCODED_ROOT);
   });
 
   it('reset clears the same node list atomically (single batchSetRecords)', async () => {

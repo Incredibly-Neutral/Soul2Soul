@@ -72,6 +72,29 @@ function addInput(section: HTMLElement): HTMLInputElement {
   return input;
 }
 
+/** The confirmation dialog the tab renders for a removal. */
+function confirmModal(el: S2SWhitelistTab): HTMLElement & {
+  open: boolean;
+  updateComplete: Promise<boolean>;
+} {
+  const host = el.shadowRoot!.querySelector('s2s-confirm-modal');
+  if (!host) throw new Error('s2s-confirm-modal not found');
+  return host as HTMLElement & { open: boolean; updateComplete: Promise<boolean> };
+}
+
+/** Click a button inside the confirm modal's shadow root. */
+async function clickModalButton(
+  el: S2SWhitelistTab,
+  id: 'confirm-ok' | 'confirm-cancel',
+): Promise<void> {
+  const modal = confirmModal(el);
+  await modal.updateComplete;
+  const button = modal.shadowRoot!.querySelector<HTMLElement>(`#${id}`);
+  if (!button) throw new Error(`${id} not found in the confirm modal`);
+  button.click();
+  await el.updateComplete;
+}
+
 /** Open the slide-open input (first click on Add). No-op if already open. */
 async function openAddInput(section: HTMLElement): Promise<void> {
   await vi.waitFor(() => addHost(section).shadowRoot?.querySelector('#add-btn'));
@@ -185,44 +208,36 @@ describe('s2s-whitelist-tab', () => {
     expect(safeIntegration.whitelistAuthor).not.toHaveBeenCalled();
   });
 
-  it('skips removal when confirm() is dismissed', async () => {
+  it('skips removal when the confirm modal is cancelled', async () => {
     safeIntegration.getWhitelistedAuthors.mockResolvedValue([AUTHOR_A]);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    try {
-      const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
-      await vi.waitFor(() => sections(el)[0].querySelector('.alias-pill__remove'));
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    await vi.waitFor(() => sections(el)[0].querySelector('.alias-pill__remove'));
 
-      (sections(el)[0].querySelector('.alias-pill__remove') as HTMLButtonElement).click();
-      await el.updateComplete;
+    (sections(el)[0].querySelector('.alias-pill__remove') as HTMLButtonElement).click();
+    await el.updateComplete;
+    await clickModalButton(el, 'confirm-cancel');
 
-      expect(confirmSpy).toHaveBeenCalled();
-      expect(safeIntegration.removeWhitelistedAuthor).not.toHaveBeenCalled();
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    expect(safeIntegration.removeWhitelistedAuthor).not.toHaveBeenCalled();
+    expect(confirmModal(el).open).toBe(false);
   });
 
-  it('removes an author after confirm() and drops the pill optimistically', async () => {
+  it('removes an author after confirming, and drops the pill optimistically', async () => {
     safeIntegration.getWhitelistedAuthors.mockResolvedValue([AUTHOR_A, AUTHOR_B]);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    try {
-      const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
-      await vi.waitFor(() => sections(el)[0].querySelector('.alias-pill__remove'));
+    const el = await mountLit<S2SWhitelistTab>('s2s-whitelist-tab', { safeIntegration });
+    await vi.waitFor(() => sections(el)[0].querySelector('.alias-pill__remove'));
 
-      // Remove the first author (AUTHOR_A).
-      (sections(el)[0].querySelector('.alias-pill__remove') as HTMLButtonElement).click();
+    // Remove the first author (AUTHOR_A).
+    (sections(el)[0].querySelector('.alias-pill__remove') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(confirmModal(el).open).toBe(true);
+    await clickModalButton(el, 'confirm-ok');
 
-      await vi.waitFor(() =>
-        expect(safeIntegration.removeWhitelistedAuthor).toHaveBeenCalledWith(AUTHOR_A),
-      );
-      await vi.waitFor(() => expect(notificationTexts()).toContain('Author removed!'));
-      await vi.waitFor(() =>
-        expect(pillValues(sections(el)[0])).not.toContain(AUTHOR_A),
-      );
-      expect(pillValues(sections(el)[0])).toContain(AUTHOR_B);
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    await vi.waitFor(() =>
+      expect(safeIntegration.removeWhitelistedAuthor).toHaveBeenCalledWith(AUTHOR_A),
+    );
+    await vi.waitFor(() => expect(notificationTexts()).toContain('Author removed!'));
+    await vi.waitFor(() => expect(pillValues(sections(el)[0])).not.toContain(AUTHOR_A));
+    expect(pillValues(sections(el)[0])).toContain(AUTHOR_B);
   });
 
   it('reports CAN publish when the address has permission', async () => {

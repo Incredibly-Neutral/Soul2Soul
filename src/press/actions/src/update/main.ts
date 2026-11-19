@@ -462,11 +462,21 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
           }
 
           const rmPath = `${mfsPath}/${cleanPath}`;
+          let rmFailure: unknown;
           await fetchWithTimeout(
             `${gateway}/api/v0/files/rm?arg=${encodeURIComponent(rmPath)}&recursive=true`,
             { method: 'POST' },
             TIMEOUTS.rm,
-          ).catch((e) => trace.push(`warn: rm failed ${entry.path}: ${String(e)}`));
+          ).catch((e) => {
+            rmFailure = e;
+          });
+          // Only a call that returned is a removal. Claiming `removed:` after a
+          // swallowed failure reported a no-op as success: the path stayed in
+          // the tree and the caller printed a clean summary.
+          if (rmFailure !== undefined) {
+            trace.push(`✗ rm failed ${entry.path}: ${String(rmFailure)}`);
+            return;
+          }
           trace.push(`removed: ${entry.path}`);
         }),
       );

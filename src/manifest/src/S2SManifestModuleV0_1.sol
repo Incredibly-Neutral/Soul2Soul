@@ -31,8 +31,16 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *   - a version is written once; publishing it again reverts `VersionExists`,
  *     so repointing a CID moves the third digit, and `getManifest(version)` is a
  *     promise rather than a lookup,
- *   - versions strictly increase in `(major, minor, patch)`, so the last entry
- *     in the list is the live one and no client has to sort the list.
+ *   - release versions strictly increase in `(major, minor, patch)`, so the last
+ *     entry in the list is the live one and no client has to sort the list.
+ *
+ * The dev lane is the one exception, and it is explicit: a version prefixed `d.`
+ * (`d.0.1`, two numbers after the prefix) is ordered only against the dev
+ * versions, never against a release, and never becomes the live one. A document
+ * under test is reachable by name and by a publication's pin without consuming
+ * the release number that will replace it, and without making the next release
+ * fail as non-increasing. Dev versions stay out of `versions`, so that list
+ * remains the release history.
  */
 interface IS2SManifestModuleV0_1 is IERC165 {
     event ManifestSet(bytes32 indexed versionHash, string version, bytes32 jsonHash);
@@ -106,6 +114,14 @@ contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpg
     mapping(string => string) private jsonByVersion;
     string[] private versions;
     mapping(string => bool) private versionSeen;
+
+    /// @dev The dev lane's last version and its numbers, ordered among
+    ///      themselves. Appended after every earlier slot: this module upgrades
+    ///      in place, so storage may only grow at the end.
+    string private devVersion;
+    uint256 private devMajor;
+    uint256 private devMinor;
+    uint256 private devPatch;
 
     /// @dev The factory whose approved set decides what this module may upgrade
     ///      to. Immutable: no storage write can change it, and it is the same
@@ -215,8 +231,9 @@ contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpg
         return currentVersion;
     }
 
-    /// @notice Every version ever published, in publish order. The last one is
-    ///         the live version, because a write only ever increases the version.
+    /// @notice Every release version ever published, in publish order. The last
+    ///         one is the live version, because a release only ever increases.
+    ///         Dev versions (`d.x.y`) are not listed: they are read by name.
     function getVersions() external view returns (string[] memory) {
         return versions;
     }
@@ -245,25 +262,37 @@ contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpg
 
     function _set(string memory version, string memory json) private {
         if (bytes(version).length == 0) revert EmptyVersion();
-        (uint256 major, uint256 minor, uint256 patch) = _parse(version);
+        (bool dev, uint256 major, uint256 minor, uint256 patch) = _parse(version);
 
         if (bytes(json).length == 0) revert EmptyDocument();
         if (versionSeen[version]) revert VersionExists(version);
 
-        if (bytes(currentVersion).length != 0) {
-            bool increases = major > currentMajor ||
-                (major == currentMajor && (minor > currentMinor ||
-                    (minor == currentMinor && patch > currentPatch)));
-            if (!increases) revert VersionNotIncreasing(version, currentVersion);
+        if (dev) {
+            // Its own line: a dev version only has to beat the last dev one, so
+            // the release after it is judged against the release triple and
+            // cannot be refused as non-increasing.
+            if (bytes(devVersion).length != 0 &&
+                !_increases(major, minor, patch, devMajor, devMinor, devPatch)) {
+                revert VersionNotIncreasing(version, devVersion);
+            }
+            devVersion = version;
+            devMajor = major;
+            devMinor = minor;
+            devPatch = patch;
+        } else {
+            if (bytes(currentVersion).length != 0 &&
+                !_increases(major, minor, patch, currentMajor, currentMinor, currentPatch)) {
+                revert VersionNotIncreasing(version, currentVersion);
+            }
+            currentVersion = version;
+            currentMajor = major;
+            currentMinor = minor;
+            currentPatch = patch;
+            versions.push(version);
         }
 
         versionSeen[version] = true;
-        versions.push(version);
         jsonByVersion[version] = json;
-        currentVersion = version;
-        currentMajor = major;
-        currentMinor = minor;
-        currentPatch = patch;
 
         uint256 n = bytes(json).length;
         bytes32 jsonHash;
@@ -273,23 +302,52 @@ contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpg
         emit ManifestSet(keccak256(bytes(version)), version, jsonHash);
     }
 
+    /// @dev Strict `(major, minor, patch)` order, the one semver uses.
+    function _increases(
+        uint256 major,
+        uint256 minor,
+        uint256 patch,
+        uint256 atMajor,
+        uint256 atMinor,
+        uint256 atPatch
+    ) private pure returns (bool) {
+        return major > atMajor ||
+            (major == atMajor && (minor > atMinor ||
+                (minor == atMinor && patch > atPatch)));
+    }
+
     /**
-     * @dev Splits `x.y.z` into numbers and refuses everything else: not three
-     *      segments, a non-digit, an empty segment, a leading zero, or a segment
-     *      long enough that the comparison stops meaning what it says.
+     * @dev Splits `x.y.z`, or `d.x.y` on the dev lane, into numbers and refuses
+     *      everything else: not the right number of segments, a non-digit, an
+     *      empty segment, a leading zero, or a segment long enough that the
+     *      comparison stops meaning what it says.
      *
-     *      The numbers are the order. A higher major wins, as semver says, which
-     *      is also how the list stays sorted across a major bump.
+     *      The numbers are the order within their lane, with `d.x.y` compared as
+     *      `(x, y)` and the patch left at zero. A higher major wins, as semver
+     *      says, which is how the release list stays sorted across a major bump;
+     *      the dev lane compares only with itself.
      */
-    function _parse(string memory version) private pure returns (uint256 major, uint256 minor, uint256 patch) {
+    function _parse(string memory version)
+        private
+        pure
+        returns (bool dev, uint256 major, uint256 minor, uint256 patch)
+    {
         bytes memory v = bytes(version);
         if (v.length == 0) revert VersionNotXYZ(version);
+
+        uint256 i = 0;
+        // The dev lane is an explicit `d.` prefix, lowercase; a version without
+        // one is a release and takes its place in the release line.
+        if (v.length >= 2 && uint8(v[0]) == 0x64 && uint8(v[1]) == 0x2e) {
+            dev = true;
+            i = 2;
+        }
 
         uint256 segment;
         uint256 value;
         uint256 digits;
 
-        for (uint256 i = 0; i <= v.length; i++) {
+        for (; i <= v.length; i++) {
             bool atDot = i < v.length && uint8(v[i]) == 0x2e;
             if (i < v.length && !atDot) {
                 uint8 c = uint8(v[i]);
@@ -317,6 +375,8 @@ contract S2SManifestModuleV0_1 is IS2SManifestModuleV0_1, Initializable, UUPSUpg
             value = 0;
         }
 
-        if (segment != 3) revert VersionNotXYZ(version);
+        // A dev version is two numbers, not three: `d.0.1` is `0.1` on the dev
+        // lane, and the release it is testing is a separate triple.
+        if (segment != (dev ? 2 : 3)) revert VersionNotXYZ(version);
     }
 }

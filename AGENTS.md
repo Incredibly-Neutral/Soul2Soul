@@ -57,6 +57,7 @@ docs/prototype/<domain>.md    this implementation (published: about.soul2soul.et
 # separate repo: ~/code/polyphony/whitepaper/<domain>.md   the paper (polyphony.eth.link)
 docs/specs/<domain>/          invariants + branches (read these)
 docs/adr/  docs/rfc/          decisions and proposals, numbered forever, one namespace each
+docs/releases.md              release notes, one section per manifest version
 docs/research/  docs/audits/  dated evidence
 docs/code-map/MAP.md          where code is, and how to dump it cheaply
 docs/conventions.md           the layer rule

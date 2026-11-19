@@ -71,7 +71,7 @@ codec (no dag-pb byte) → only this resolver + gateway resolve reliably; generi
 
 ## INV-6 full span (write ↔ read)
 
-`updateEvm` `toHexString(cidV0)` → `evmWrite setText(node,"contenthash_wrapped")` on **C3** with the
+`updateEvm` `toHexString(cid)` → `evmWrite setText(node,"contenthash_wrapped")` on **C3** with the
 **PKP** (needs INV-8 group **and** INV-12 authorizedCaller) → read: client → **C5** `resolve` →
 `OffchainLookup` → `ccip_gateway` → `getText` on **C3** → `contenthashToIPFS` decode → IPFS fetch.
 `node = namehash(publication)`. Codec custom & unversioned (SPEC-00 Q3 / SPEC-protocol-actions).

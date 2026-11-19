@@ -55,9 +55,13 @@ describe('decodeArchiveCid', () => {
     expect(decodeArchiveCid(envelope)).toBe(TEST_V1);
   });
 
-  it('decodes a CIDv0 contenthash pointer to the same CID (Qm...)', () => {
+  it('decodes a CIDv0 archive CID to its v1 form (the pointer is always written as v1)', () => {
+    // toHexString normalises to v1, so a v0 archive CID comes back as the same
+    // multihash under the bafy… label. Same blocks, readable envelope.
     const envelope = toHexString(TEST_V0);
-    expect(decodeArchiveCid(envelope)).toBe(TEST_V0);
+    expect(decodeArchiveCid(envelope)).toBe(
+      'bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq',
+    );
   });
 
   it('round-trips through encodeContenthashWrapped(parseCID(...))', () => {

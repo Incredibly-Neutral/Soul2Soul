@@ -82,8 +82,8 @@ Read against `src/publication/contracts/src/S2SPublicationModuleV3.sol`,
   one function branching on `msg.sender`, and the first ADR in `publication.md` still records that shape;
   V3 made the asymmetry two functions with different guards.
 - **AGREEMENT-5 is the live one, through `canRead`.** The press decides reading by the module's
-  `canRead(genesis, safe)` and its own author check, and `canRead` counts an agreement or an offer as
-  admission. The bare boolean is `hasAgreement(genesis)`: the revoke guard reads it through
+  `canRead(genesis, safe)` and its own ownership check (the genesis author at the append block, or
+  the reader Safe's live owner set), and `canRead` counts an agreement or an offer as admission. The bare boolean is `hasAgreement(genesis)`: the revoke guard reads it through
   `isOutOfForce`, and the overwrite guard reads it directly.
 - **Rule changes are upgrades.** The module sits behind a proxy that only the publication's safe may
   upgrade, so the entry and ending rules change through the protocol's procedure and never through

@@ -5,11 +5,17 @@ import { z } from 'zod';
 // The publication's own shapes live in ../publication/schemas.
 //
 // The on-chain value is one JSON document under the record keys `manifest`
-// and `manifest@<x.y.z>`. Optional action CIDs are absent from the document
+// and `manifest@<version>`. Optional action CIDs are absent from the document
 // when the action was never written, never present as an empty string.
+//
+// Two version shapes: a release, `x.y.z`, and a dev build, `d.x.y`. The dev lane
+// is never the live document, so it is only ever read by name (or by a
+// publication's pin).
 // ============================================================================
+export const MANIFEST_VERSION_PATTERN = /^(?:\d+\.\d+\.\d+|d\.\d+\.\d+)$/;
+
 export const manifestSchema = z.object({
-  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  version: z.string().regex(MANIFEST_VERSION_PATTERN),
   gateway: z.string(),
   ensRegistry: z.string(),
   ensRecords: z.string(),

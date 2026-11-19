@@ -97,7 +97,8 @@ client ── signature over "lit actions auth" ───▶
            reads: ENS→modules, config, content bodies; expands "ripples" (related content)
         ▼
 [RENDER]   runtime: Lit (PKP)                   → job.html (CID)
-  "single"  gate: canRead/canPublish (on-chain, Base) AND signer ∈ owners of author Safe
+  "single"  gate: canRead/canPublish (on-chain, Base) AND signer ∈ owners of the author Safe
+            (canRead: at the append block; the publication Safe and reviewers: live)
            PKP: Lit.Actions.Decrypt (gated collections)
            render: Handlebars → HTML; sign: provenance embedded
            upload: HTML → IPFS

@@ -110,8 +110,10 @@ const main = async () => {
   }
 
   const document = JSON.parse(raw);
-  if (typeof document.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(document.version)) {
-    throw new Error(`document version is not x.y.z: ${JSON.stringify(document.version)}`);
+  // `x.y.z` for a release, `d.x.y` for a dev build; the module's `_parse` is the
+  // authority, this only refuses a document that could not have come from it.
+  if (typeof document.version !== 'string' || !/^(?:\d+\.\d+\.\d+|d\.\d+\.\d+)$/.test(document.version)) {
+    throw new Error(`document version is not x.y.z or d.x.y: ${JSON.stringify(document.version)}`);
   }
   const before = document.litActions?.repointArchive;
   document.litActions = { ...document.litActions, repointArchive: repoint.cid };

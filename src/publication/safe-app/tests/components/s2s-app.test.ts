@@ -54,7 +54,7 @@ const safeIntMocks = vi.hoisted(() => ({
   moduleAddress: vi.fn(),
 }));
 
-const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn() }));
+const protocolMocks = vi.hoisted(() => ({ initialize: vi.fn(), load: vi.fn() }));
 
 // The records-tab module is mocked away below, so the host's duck-typed call
 // (`tab.updateConfig(undefined, { suppressQueueOpen: true })`) needs a stub
@@ -192,6 +192,7 @@ vi.mock('@/lib/safe-integration.js', () => ({
 vi.mock('@/lib/protocol-integration.js', () => ({
   ProtocolIntegration: class {
     initialize = protocolMocks.initialize;
+    load = protocolMocks.load;
   },
 }));
 
@@ -388,6 +389,7 @@ describe('s2s-app (shell)', () => {
     safeIntMocks.proposeBatch.mockReset();
     safeIntMocks.getSafeInfo.mockReset();
     protocolMocks.initialize.mockReset();
+    protocolMocks.load.mockReset();
     filecoinMocks.initWithSessionKey.mockReset();
     filecoinMocks.listPublicationStorage.mockReset();
 
@@ -1209,6 +1211,29 @@ describe('s2s-app (shell)', () => {
       const host = el.shadowRoot?.querySelector('s2s-ens-step') as S2SEnsStep | null;
       expect(host?.shadowRoot?.querySelector('#ens-step')).toBeTruthy();
     });
+  });
+
+  it('runs the document the publication pinned, not the deployment current one', async () => {
+    protocolMocks.initialize.mockResolvedValue({ version: '0.1.4', moduleFactory: MODULE_FACTORY });
+    safeIntMocks.getAllRecords.mockResolvedValue([['manifest_version'], ['d.0.1']]);
+    protocolMocks.load.mockResolvedValue({ version: 'd.0.1', moduleFactory: MODULE_FACTORY });
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
+
+    expect(protocolMocks.load).toHaveBeenCalledWith('d.0.1');
+    expect((storeMock.store.protocolInfo as { version: string }).version).toBe('d.0.1');
+  });
+
+  it('keeps the current document when the pinned version cannot be read', async () => {
+    protocolMocks.initialize.mockResolvedValue({ version: '0.1.4', moduleFactory: MODULE_FACTORY });
+    safeIntMocks.getAllRecords.mockResolvedValue([['manifest_version'], ['d.9.9']]);
+    protocolMocks.load.mockRejectedValue(new Error('VersionNotFound'));
+
+    const el = await mountLit<S2SApp>('s2s-app', {});
+    await settled(el);
+
+    expect((storeMock.store.protocolInfo as { version: string }).version).toBe('0.1.4');
   });
 
   it('does not show the standalone card when the protocol registry is unknown', async () => {

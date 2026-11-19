@@ -1,6 +1,13 @@
 import { evmRead } from "./evm";
 import type { S2SManifest } from '@s2s/soul2soul-shared/lit-actions';
 
+/**
+ * `x.y.z` for a release, `d.x.y` for a dev build. Mirrors `_parse` in
+ * `S2SManifestModuleV0_1`, which is the authority; kept local because importing
+ * the shared schema would pull zod and the whole protocol reader into the bundle.
+ */
+const VERSION_PATTERN = /^(?:\d+\.\d+\.\d+|d\.\d+\.\d+)$/;
+
 // The manifest module on Base: the protocol Safe's own module, holding the
 // versioned JSON document every action reads. A constant, because the document
 // is the root — it holds the factory, the gateway, the ENS registries and the
@@ -123,8 +130,8 @@ export const getManifest = async (
     fail(`version ${key} is not a JSON object`);
   }
 
-  if (typeof raw.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(raw.version)) {
-    fail(`'version' is missing or not x.y.z (got ${JSON.stringify(raw.version)})`);
+  if (typeof raw.version !== 'string' || !VERSION_PATTERN.test(raw.version)) {
+    fail(`'version' is missing or not x.y.z (or d.x.y for a dev build) (got ${JSON.stringify(raw.version)})`);
   }
   if (key && raw.version !== key) {
     fail(`version ${key} carries document version ${raw.version}, not ${key}`);

@@ -23,7 +23,8 @@
 
 export interface S2SManifest {
   /**
-   * The version of the manifest document, `x.y.z`. Read from the on-chain
+   * The version of the manifest document, `x.y.z`, or `d.x.y` on the dev lane
+   * (a build under test that is never the live document). Read from the on-chain
    * record, not from the controller: `VERSION()` reports the contract's own
    * version, the manifest's major.minor, and is compared on that prefix.
    */
