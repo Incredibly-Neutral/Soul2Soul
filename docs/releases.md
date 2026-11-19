@@ -14,10 +14,12 @@ the manifest moves.
 A change that needs a deploy step says so in its entry. An action change needs a rebuild and a
 release; a contract change needs a Safe batch; a doc or spec change needs neither.
 
-## 0.1.3 — unreleased
+## 0.1.3 — 2026-11-19
 
-Unpinned. `pnpm update-protocol 0.1.3` creates group `s2s@0.1.3`; its id, the seven CIDs and the
-`safeTxHash` are recorded here at that run.
+Group `s2s@0.1.3`, id `5`, seven actions, six new CIDs; `encrypt` is unchanged. Batch
+`0x509b9e7befde34cfdf110056a7e98a42834238a9e84569387a9c3c547573a1a3` (nonce 723), document
+`0x0a9657b191e6dc6fa38b1d86eef8882f6a0616b6ad95e8aff9909b14aced9916` (nonce 724, filed). Tag: the
+commit that records the pin in `config/0.1.3.json`.
 
 - `contenthash_wrapped` is normalised to CIDv1, so a reset can no longer write `0xe3010070…`, which
   eth.limo refuses. `evm.test.ts` and `reset.test.ts` pin the bytes and the written value.
