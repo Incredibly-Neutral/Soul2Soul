@@ -10,10 +10,12 @@
 // ============================================================================
 
 import {
+  MANIFEST_VERSION_KEY,
   resolvePublicationModules,
   resolvePublicationSafe,
   subdomainOf,
   toBytes32Id,
+  type S2SManifest,
   type S2SIPFSMethods,
 } from '@s2s/soul2soul-shared';
 import { S2SRecordsModuleV0_1, S2SPublicationModuleV0_1 } from '@s2s/publication-contracts';
@@ -73,6 +75,18 @@ export class PublicationService {
   safeAddress: Address | undefined;
   configModule: Address | undefined;
   publicationModule: Address | undefined;
+  /**
+   * The manifest version this publication pins (`manifest_version` on its
+   * records module), or undefined when it pins none.
+   *
+   * The protocol's current document is not the publication's: a release goes
+   * live for a publication when that publication's pin moves, and an action CID
+   * is only what this publication runs if its pin names the version carrying it.
+   */
+  manifestVersion: string | undefined;
+
+  /** The document `manifestVersion` names. Read once, by `manifestFor`. */
+  pinnedManifest: S2SManifest | undefined;
 
   private constructor(options: PublicationServiceOptions, subdomain: string) {
     this.options = options;
@@ -98,6 +112,23 @@ export class PublicationService {
       throw new Error(
         `No S2S publication module found on Safe ${address} (${this.subdomain}). Is the publication created and its modules enabled?`,
       );
+    }
+
+    // A publication that pins no version runs the protocol's current document;
+    // an unreadable record is the same answer, not a failure — nothing downstream
+    // needs the pin to be readable.
+    if (configModule) {
+      try {
+        const [pinned] = (await this.options.l2.readContract({
+          address: configModule,
+          abi: S2SRecordsModuleV0_1,
+          functionName: 'getRecord',
+          args: [MANIFEST_VERSION_KEY],
+        } as never)) as unknown as [string];
+        this.manifestVersion = pinned && pinned.trim() !== '' ? pinned.trim() : undefined;
+      } catch {
+        this.manifestVersion = undefined;
+      }
     }
   }
 

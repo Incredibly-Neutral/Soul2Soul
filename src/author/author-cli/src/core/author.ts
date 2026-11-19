@@ -52,7 +52,7 @@ import {
   type ResolvedDraftsModule,
 } from './drafts';
 import { ipfsUri } from '../lib/ipfs-link';
-import type { CliContext } from './context';
+import { manifestFor, type CliContext } from './context';
 import { PublicationService, type AuthorListing } from './service';
 
 // ===========================================================================
@@ -864,12 +864,18 @@ async function renderContent(
   const signature = await ctx.signer.signMessage('lit actions auth');
   const litUsageKey = requireSetting(ctx.config.lit.usageKey, 'LIT_USAGE_KEY');
 
+  // The actions this publication runs are the ones its own pin names, not the
+  // protocol's current document: a release reaches a publication only when its
+  // pin moves, so reading the current version here dispatches the previous
+  // prep after a release and looks like a fix that did nothing.
+  const protocolInfo = await manifestFor(ctx, service);
+
   const res = await renderwithLitActions(
     !opts.publish,
     ctx.lit,
     signature,
     litUsageKey,
-    ctx.protocolInfo,
+    protocolInfo,
     null,
     authorSafeAddress,
     publication,
