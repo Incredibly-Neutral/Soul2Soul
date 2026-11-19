@@ -165,6 +165,8 @@ export const renderwithLitActions = async (
   reset?: boolean,
   /** Kubo RPC bearer token for the data gateway (token-gated writes). */
   _ipfsGatewayAuth?: string,
+  /** Ids the caller is revoking: prep derives each page path and removes it. */
+  revokeIds?: string[],
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
@@ -202,7 +204,13 @@ export const renderwithLitActions = async (
 
   if (!resetOnly) {
     if (notice) notice.setMessage('prepping render ...');
-    const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
+    const prepInputs = validatePrepInput({
+      publication,
+      configCid,
+      contentIds,
+      endpoints,
+      revoke: revokeIds,
+    });
     const prepAction = await runAction(
       true,
       lit,
@@ -433,6 +441,12 @@ export const renderwithLitActions = async (
     success: validated.ok ? true : false,
     cid,
     path: primaryPath,
+    // The remove entries the update action was given (prep's slug-change and
+    // caller-named revocations, plus any the render flagged). It carries them
+    // on the envelope because the removal is a separate step from the tree
+    // write: the trace says whether each one landed, and a caller that asked
+    // for a removal needs to name what it asked for.
+    remove: allRemove,
     trace: evmAction.trace,
     // Surface the REAL failure cause so callers (e.g. the website-tree reset
     // tab) can display it instead of a generic "did not report success".

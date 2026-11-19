@@ -20,7 +20,6 @@ import {
   buildSignedContentItem,
   parseMarkdownNote,
   renderwithLitActions,
-  revokedPathFor,
   runFilecoinLeg,
   subdomainOf,
   toPreviewLabel,
@@ -81,6 +80,8 @@ export interface RootTxOutcome {
 export interface RenderOutcome {
   cid: string;
   path: string;
+  /** The remove entries the update action was given (revoke/slug change). */
+  remove: { path: string; replacedBy?: string }[];
   /** ipfs://<rootCid>/<path> style human-readable preview link. */
   previewUrl: string;
   /** Production ENS-based link (publish only). */
@@ -157,6 +158,11 @@ export interface AuthorWriteOptions {
   /** Revocation remove entries (render path only). */
   remove?: { path: string; replacedBy?: string }[];
   /**
+   * Ids being revoked. The pipeline resolves each id's page path in prep, with
+   * the renderer's own createPath, and removes that: a caller-side path guess
+   * (`/{slug}`) misses a publication whose post template renders elsewhere.
+   */
+  revoke?: string[];  /**
    * Allow replacing a previously-encrypted genesis with a plaintext body
    * (`--allow-plaintext`). Without it, a republish that drops `encrypted: true`
    * is refused — see `guardEncryptionDowngrade`.
@@ -873,6 +879,7 @@ async function renderContent(
     opts.remove !== undefined && opts.remove.length > 0 ? opts.remove : undefined,
     undefined,
     ctx.config.ipfs.primary?.key ? `Bearer ${ctx.config.ipfs.primary.key}` : undefined,
+    opts.revoke,
   );
 
   if (!res.success) {
@@ -920,7 +927,7 @@ async function renderContent(
     }
   }
 
-  return { cid, path: res.path, previewUrl, ipfsUrl, prodUrl, rootTx, trace };
+  return { cid, path: res.path, remove: (res.remove ?? []) as any, previewUrl, ipfsUrl, prodUrl, rootTx, trace };
 }
 
 // ===========================================================================
@@ -1019,8 +1026,8 @@ export interface RevokeResult {
   subdomain: string;
   /** retract transaction hash on L2; absent when the genesis was already ended. */
   txHash: string | undefined;
-  /** The rendered path the remove entry targeted (where the page actually was). */
-  removePath: string;
+  /** The page paths the remove entry was given (prep-derived). */
+  removePaths: string[];
   /** Result of the remove-plumbing re-render. */
   render: RenderOutcome | undefined;
 }
@@ -1084,24 +1091,13 @@ export async function revokeContent(
   }
 
   // 2. Remove-plumbing re-render so the published site stops resolving it.
-  // The path comes from the publication's own template for this post type, the
-  // same config the renderer reads: a post template at `/posts/{slug}/` writes
-  // `/posts/<slug>/`, so the standard `/{slug}` guess removed nothing.
-  const localePaths = await service.localePathsOf();
-  const templatePath = await service.templatePathOf(parsed.postType);
-  if (!templatePath) {
-    ctx.out.warn(
-      `could not read the "${parsed.postType ?? 'post'}" template path from the publication config — assuming /{slug}, which may remove nothing`,
-    );
-  }
-  const removePath = revokedPathFor(parsed.slug, parsed.locale, localePaths, templatePath);
-  ctx.out.log(`removing ${removePath} from the rendered tree…`);
-
+  // The path is not the caller's to derive: prep resolves the page this id
+  // occupies with the renderer's own createPath and removes exactly that.
   const render = await renderContent(ctx, service, publication, genesis, authorSafeAddress, {
     render: true,
     publish: true,
     offer: false,
-    remove: [{ path: removePath }],
+    revoke: [genesis],
   });
 
   // The update action decides the removal after the fact: it skips the path
@@ -1122,7 +1118,7 @@ export async function revokeContent(
     publication,
     subdomain: service.subdomain,
     txHash,
-    removePath,
+    removePaths: (render?.remove ?? []).map((entry) => entry.path),
     render,
   };
 }

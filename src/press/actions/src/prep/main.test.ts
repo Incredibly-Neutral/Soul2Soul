@@ -200,3 +200,42 @@ describe('prep — a publication whose module the factory cannot name', () => {
     expect(evmRead).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * prep — the removal path comes from the template, not from `/{slug}`.
+ *
+ * A publication whose post template renders at `/posts/{slug}/` publishes
+ * `/posts/<slug>/`. A caller-side guess of `/<slug>` targets a page that does
+ * not exist, so the removal silently matches nothing and the page stays live.
+ * prep holds the config and the body, so it is the stage that knows the path.
+ */
+describe('prep — revoke removal targets the page the template renders', () => {
+  const genesis = item(PLAINTEXT).objectId;
+
+  it('emits the template-derived path for a caller-named revoke', async () => {
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+
+    const result = await main({ ...input([genesis]), revoke: [genesis] });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.jobs[0].path).toBe('/posts/hello/');
+    expect(result.data.remove).toEqual([{ path: '/posts/hello/' }]);
+  });
+
+  it('removes nothing, and says so, when the id rendered no page', async () => {
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const absent = '0x' + '33'.repeat(32);
+
+    const result = await main({ ...input([genesis]), revoke: [absent] });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.remove).toBeUndefined();
+    expect(result.trace.join('\n')).toContain('nothing to remove');
+  });
+});

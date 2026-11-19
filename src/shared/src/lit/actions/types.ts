@@ -29,6 +29,9 @@ export interface PrepInput {
   contentIds: string[];
   configCid?: string;
   prevRootCid?: string;
+  /** Ids the caller is revoking; prep turns each into a remove entry for the
+   *  page that id occupies, derived with the renderer's createPath. */
+  revoke?: string[];
   endpoints: {
     ipfsGateway?: string;
     ipfsGatewayAuth?: string;

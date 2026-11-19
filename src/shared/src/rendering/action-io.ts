@@ -192,6 +192,7 @@ export const PrepActionInputSchema = z.object({
   contentIds: z.array(z.string()).min(1, 'contentIds must have at least one item'),
   configCid: z.string().optional(),
   prevRootCid: z.string().optional(),
+  revoke: z.array(z.string()).optional(),
   endpoints: z.object({
     ipfsGateway: z.string().optional(),
     ipfsGatewayAuth: z.string().optional(),
