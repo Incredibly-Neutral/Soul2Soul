@@ -13,6 +13,7 @@ import {
   validateSingleOutput,
 } from './action-io';
 import { S2SJob } from './types';
+import type { RevokeTarget } from '../lit/actions/types';
 import { runAction } from './helpers';
 
 // ===========================================================================
@@ -165,6 +166,8 @@ export const renderwithLitActions = async (
   reset?: boolean,
   /** Kubo RPC bearer token for the data gateway (token-gated writes). */
   _ipfsGatewayAuth?: string,
+  /** Ids the caller is revoking: prep derives each page path and removes it. */
+  revokeIds?: RevokeTarget[],
 ) => {
   let jobs: S2SJob[] = [];
   let cid: string | null = null;
@@ -202,7 +205,13 @@ export const renderwithLitActions = async (
 
   if (!resetOnly) {
     if (notice) notice.setMessage('prepping render ...');
-    const prepInputs = validatePrepInput({ publication, configCid, contentIds, endpoints });
+    const prepInputs = validatePrepInput({
+      publication,
+      configCid,
+      contentIds,
+      endpoints,
+      revoke: revokeIds,
+    });
     const prepAction = await runAction(
       true,
       lit,
@@ -220,6 +229,21 @@ export const renderwithLitActions = async (
 
     // Read auto-detected slug-change removals from prep output
     prepRemove = (validatedPrep as any).ok ? (validatedPrep as any).data?.remove : undefined;
+
+    // A caller-named revoke is answered by prep, or by nothing. Say which: a
+    // prep action that predates revoke targets ignores the field, and the run
+    // then reports a removal it never asked for and never gets.
+    if (revokeIds?.length) {
+      const prepTrace = ((validatedPrep as any)?.trace ?? []).filter(
+        (line: unknown) => typeof line === 'string' && line.startsWith('revoke'),
+      );
+      if (prepTrace.length > 0) prepTrace.forEach((line: string) => console.log(line));
+      else
+        console.warn(
+          'prep answered no revoke path: the prep action at ' +
+            `${protocolInfo.litActions.prep} does not accept revoke targets — add and release the rebuilt action, then re-run`,
+        );
+    }
 
     // ---------------- Single Actions Stage ----------------------------------
 
@@ -316,7 +340,16 @@ export const renderwithLitActions = async (
 
     // Merge: auto-detected (slug-change) removals from prep + revoked-job
     // paths + caller-supplied removals (neutralpress revoke flow).
-    allRemove = [...(prepRemove ?? []), ...revokedRemove, ...(remove ?? [])];
+    //
+    // A revoked job re-renders from a stored body that has lost its slug, so its
+    // path can come back as the template itself (`/posts/{slug}/`). That names
+    // no directory: dropping it here leaves prep's own entry, which it derived
+    // with the slug the caller supplied, as the removal.
+    allRemove = [...(prepRemove ?? []), ...revokedRemove, ...(remove ?? [])].filter((entry) => {
+      if (!/\{[a-z_]+\}/i.test(entry.path)) return true;
+      console.warn(`drop remove ${entry.path}: unresolved template placeholder`);
+      return false;
+    });
 
     // Primary job path (first active rendered job = the content the user triggered)
     primaryPath = activeJobs[0]?.path ?? '';
@@ -433,6 +466,12 @@ export const renderwithLitActions = async (
     success: validated.ok ? true : false,
     cid,
     path: primaryPath,
+    // The remove entries the update action was given (prep's slug-change and
+    // caller-named revocations, plus any the render flagged). It carries them
+    // on the envelope because the removal is a separate step from the tree
+    // write: the trace says whether each one landed, and a caller that asked
+    // for a removal needs to name what it asked for.
+    remove: allRemove,
     trace: evmAction.trace,
     // Surface the REAL failure cause so callers (e.g. the website-tree reset
     // tab) can display it instead of a generic "did not report success".

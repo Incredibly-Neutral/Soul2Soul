@@ -60,7 +60,7 @@ const FORGED_PLAINTEXT = JSON.stringify({ content: 'FORGED', slug: 'hello', titl
  * author signature). `body` is swappable so the hash check can be exercised
  * without touching the signed `public` block.
  */
-const item = (body: string) => {
+const item = (body: string, hash = PLAINTEXT_HASH) => {
   const pub = {
     specVersion: '1',
     author: AUTHOR,
@@ -72,7 +72,7 @@ const item = (body: string) => {
     locale: 'en',
     createdAt: 1700000000,
     tags: [] as string[],
-    plaintextHash: PLAINTEXT_HASH,
+    plaintextHash: hash,
   };
   const digest = ethers.utils._TypedDataEncoder.hash(
     S2S_DOMAIN as never,
@@ -198,5 +198,90 @@ describe('prep — a publication whose module the factory cannot name', () => {
     );
     // Nothing downstream of discovery ran: no item was ever read.
     expect(evmRead).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * prep — the removal path comes from the template, not from `/{slug}`.
+ *
+ * A publication whose post template renders at `/posts/{slug}/` publishes
+ * `/posts/<slug>/`. A caller-side guess of `/<slug>` targets a page that does
+ * not exist, so the removal silently matches nothing and the page stays live.
+ * prep holds the config and the body, so it is the stage that knows the path.
+ */
+describe('prep — revoke removal targets the page the template renders', () => {
+  const genesis = item(PLAINTEXT).objectId;
+
+  it('emits the template-derived path for a caller-named revoke', async () => {
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+
+    const result = await main({ ...input([genesis]), revoke: [{ id: genesis }] });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.jobs[0].path).toBe('/posts/hello/');
+    expect(result.data.remove).toEqual([{ path: '/posts/hello/' }]);
+  });
+
+  it('falls back to the slug the caller supplies when the body has none', async () => {
+    // A retracted item's stored body survives without its slug — the version
+    // log tombstones it. Left to the body alone the path comes out as the
+    // template itself, `/posts/{slug}/`, which no tree contains.
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const noSlug = JSON.stringify({ content: 'Hello', slug: '', title: 'Hello' });
+    vi.mocked(catFile).mockImplementation((() =>
+      Promise.resolve(
+        JSON.stringify(item(noSlug, ethers.utils.keccak256(ethers.utils.toUtf8Bytes(noSlug)))),
+      )) as never);
+
+    const result = await main({
+      ...input([genesis]),
+      revoke: [{ id: genesis, slug: 'test2', locale: 'en', postType: 'post' }],
+    });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.jobs[0].path).toBe('/posts/{slug}/');
+    expect(result.data.remove).toEqual([{ path: '/posts/test2/' }]);
+  });
+
+  it('targets the page of an encrypted note, whose body cannot say where it lives', async () => {
+    // The failing case: the note is encrypted, so the stored body carries
+    // ciphertext and no slug at all, and after `retract` the agreement is gone
+    // so nothing decrypts it back. The caller supplies the slug; the template
+    // still comes from the config, and together they name the live page.
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const encrypted = { ...item('ciphertext'), encryption: true };
+    vi.mocked(catFile).mockImplementation((() =>
+      Promise.resolve(JSON.stringify(encrypted))) as never);
+
+    const result = await main({
+      ...input([genesis]),
+      revoke: [{ id: genesis, slug: 'test2', locale: 'en', postType: 'post' }],
+    });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.remove).toEqual([{ path: '/posts/test2/' }]);
+  });
+
+  it('removes nothing, and says so, when the id rendered no page', async () => {
+    vi.mocked(getTaskConfig).mockResolvedValue({
+      templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+      rippleConfigs: [],
+    } as never);
+    const absent = '0x' + '33'.repeat(32);
+
+    const result = await main({ ...input([genesis]), revoke: [{ id: absent }] });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.remove).toBeUndefined();
+    expect(result.trace.join('\n')).toContain('nothing to remove');
   });
 });

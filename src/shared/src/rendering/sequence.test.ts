@@ -976,3 +976,92 @@ describe('renderwithLitActions — all render jobs fail (no remove, no reset)', 
     expect(postedCids).not.toContain(updateCid);
   });
 });
+
+// ============================================================================
+// A revoke target reaches prep, and prep's remove entry reaches the update.
+//
+// The CLI does not derive a page path; it names the id and the item's identity,
+// and prep answers with the path. If the argument is dropped anywhere along
+// that chain, the removal silently disappears and the page stays live.
+// ============================================================================
+
+describe('renderwithLitActions — the revoke target reaches prep', () => {
+  const protocolInfo = {
+    gateway: 'https://ipfs.transport-union.dev',
+    litActions: { prep: 'cid-prep', render: 'cid-render', update: 'cid-update' },
+  } as any;
+  const revoke = [{ id: '0xabc', slug: 'test2', locale: 'en', postType: 'post' }];
+
+  afterEach(() => {
+    vi.mocked(runAction).mockReset();
+  });
+
+  it('forwards the target to prep and carries prep’s path into the update', async () => {
+    let prepInputs: any;
+    let updateInputs: any;
+    vi.mocked(runAction).mockImplementation(
+      async (_preview: any, _lit: any, cid: any, inputs: any) => {
+        if (cid === 'cid-prep') {
+          prepInputs = inputs;
+          return {
+            ok: true,
+            action: 'prep',
+            data: {
+              jobs: [
+                {
+                  id: '0xabc',
+                  templateConfig: { reference: 'post', file: 'post.hbs', path: '/posts/{slug}/' },
+                  path: '/posts/{slug}/',
+                  html: '',
+                },
+              ],
+              remove: [{ path: '/posts/test2/' }],
+            },
+            trace: ['revoke 0xabc → /posts/test2/'],
+          };
+        }
+        if (cid === 'cid-render') {
+          return {
+            ok: true,
+            action: 'render',
+            data: {
+              job: {
+                ...inputs.job,
+                html: 'html',
+                path: inputs.job.path,
+                templateData: {},
+              },
+              timestamp: '1',
+            },
+            trace: [],
+          };
+        }
+        updateInputs = inputs;
+        return { ok: true, action: 'evm-update', data: { cid: 'QmNewRoot' }, trace: [] };
+      },
+    );
+
+    const res: any = await renderwithLitActions(
+      true,
+      {} as any,
+      '0x' + '00'.repeat(64),
+      'usage',
+      protocolInfo,
+      null,
+      '0x0000...0001',
+      'test.soul2soul.eth',
+      ['0xabc'],
+      undefined,
+      { L1: ['https://rpc.l1'], L2: ['https://rpc.l2'] },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      revoke,
+    );
+
+    expect(prepInputs.revoke).toEqual(revoke);
+    expect(updateInputs.remove).toEqual([{ path: '/posts/test2/' }]);
+    expect(res.remove).toEqual([{ path: '/posts/test2/' }]);
+  });
+});
