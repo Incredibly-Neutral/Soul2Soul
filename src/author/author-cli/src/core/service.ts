@@ -163,6 +163,27 @@ export class PublicationService {
     return author.runner.genericTx(module, JSON.stringify(S2SPublicationModuleV0_1), 'retract', [id], false);
   }
 
+  /**
+   * Is this genesis already out of both sets on-chain?
+   *
+   * `retract` removes the agreement (or the offer) and nothing outside the
+   * module can put it back, so both false means the retract already happened.
+   * A revoke that stopped at the retract (site removal failed, process killed)
+   * is re-runnable from the removal half: sending `retract` again reverts with
+   * "not an agreement or offer", which is a dead end for the caller, not a
+   * permission problem.
+   */
+  async isSpent(genesis: string): Promise<boolean> {
+    const module = this.requirePublicationModule();
+    const id = toBytes32Id(genesis) as Hex;
+    const abi = JSON.stringify(S2SPublicationModuleV0_1);
+    const [agreement, offer] = await Promise.all([
+      this.options.l2Runner.genericRead(module, abi, 'hasAgreement', [id]) as Promise<boolean>,
+      this.options.l2Runner.genericRead(module, abi, 'hasOffer', [id]) as Promise<boolean>,
+    ]);
+    return agreement === false && offer === false;
+  }
+
   private requirePublicationModule(): Address {
     if (!this.publicationModule) throw new Error('PublicationService not resolved');
     return this.publicationModule;

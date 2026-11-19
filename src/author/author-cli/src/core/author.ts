@@ -1017,8 +1017,8 @@ export interface RevokeResult {
   /** Publication ENS name (e.g. name.soul2soul.eth). */
   publication: string;
   subdomain: string;
-  /** retract transaction hash on L2. */
-  txHash: string;
+  /** retract transaction hash on L2; absent when the genesis was already ended. */
+  txHash: string | undefined;
   /** The rendered path the remove entry targeted (where the page actually was). */
   removePath: string;
   /** Result of the remove-plumbing re-render. */
@@ -1066,11 +1066,22 @@ export async function revokeContent(
 
   // 1. Retract first. Terminal: it ends the genesis as well as withdrawing the
   // version, so say so here rather than letting publish revert `Ended()` later.
-  const txHash = await service.retract(genesis);
-  ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
-  ctx.out.warn(
-    `genesis ${genesis.slice(0, 12)}… is now ENDED: this note id cannot be published again — a re-publish must be a new note (new genesis)`,
-  );
+  // A genesis already out of both sets was retracted by an earlier run whose
+  // site removal did not land. `retract` again would revert "not an agreement
+  // or offer" and stop the command before the removal it exists to finish, so
+  // that half runs on its own.
+  let txHash: string | undefined;
+  if (await service.isSpent(genesis)) {
+    ctx.out.warn(
+      `genesis ${genesis.slice(0, 12)}… is already ended on-chain — skipping retract, removing the page`,
+    );
+  } else {
+    txHash = await service.retract(genesis);
+    ctx.out.log(`✓ retracted ${genesis.slice(0, 12)}… (tx ${txHash})`);
+    ctx.out.warn(
+      `genesis ${genesis.slice(0, 12)}… is now ENDED: this note id cannot be published again — a re-publish must be a new note (new genesis)`,
+    );
+  }
 
   // 2. Remove-plumbing re-render so the published site stops resolving it.
   // The path comes from the publication's own template for this post type, the
@@ -1092,6 +1103,19 @@ export async function revokeContent(
     offer: false,
     remove: [{ path: removePath }],
   });
+
+  // The update action decides the removal after the fact: it skips the path
+  // when the page's genesis still reads as in force, and it reports the rm
+  // failure only in its trace. Both leave the page live while the tree write
+  // succeeds, so say it here rather than let a clean summary imply removal.
+  const removalRefusal = (render?.trace ?? []).find(
+    (line) =>
+      typeof line === 'string' &&
+      (line.startsWith('skip remove') || line.startsWith('✗ rm failed')),
+  );
+  if (removalRefusal) {
+    ctx.out.warn(`the page was NOT removed: ${removalRefusal}`);
+  }
 
   return {
     objectId: genesis,

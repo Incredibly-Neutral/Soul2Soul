@@ -48,7 +48,7 @@ export const revoke: CommandSpec = {
         '  genesis     : ENDED — this note id cannot be published again; republishing needs a new note',
         `  publication : ${result.publication}`,
         `  objectId    : ${result.objectId}`,
-        `  tx          : ${result.txHash}`,
+        `  tx          : ${result.txHash ?? '(none — already retracted by an earlier run)'}`,
         result.render
           ? [
               `  re-render   : ${result.render.cid}`,

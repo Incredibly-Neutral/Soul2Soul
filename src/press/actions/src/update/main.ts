@@ -453,10 +453,24 @@ async function main(input: EvmUpdateInput): Promise<ActionResult<EvmUpdateData>>
 
           // Revoke (no replacedBy): verify no active deal before removing
           if (!entry.replacedBy && !preview) {
-            try {
-              await verifyRevocable(gateway!, mfsPath, cleanPath, publicationModule, rpcs?.L2);
-            } catch (e) {
-              trace.push(`skip remove ${entry.path}: ${typeof e === 'string' ? e : String(e)}`);
+            // A revoke retracts on-chain immediately before this update, and a
+            // replica that has not caught up yet still answers hasAgreement
+            // true. That refusal is terminal for this path and leaves the page
+            // live, so ask again a couple of times before believing it.
+            let refusal: unknown;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await verifyRevocable(gateway!, mfsPath, cleanPath, publicationModule, rpcs?.L2);
+                refusal = undefined;
+                break;
+              } catch (e) {
+                refusal = e;
+                if (!/still in force/i.test(String(e)) || attempt === 2) break;
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+              }
+            }
+            if (refusal !== undefined) {
+              trace.push(`skip remove ${entry.path}: ${typeof refusal === 'string' ? refusal : String(refusal)}`);
               return;
             }
           }
