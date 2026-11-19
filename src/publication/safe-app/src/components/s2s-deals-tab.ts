@@ -56,31 +56,82 @@ function readPublicLabel(content: unknown): string | undefined {
   return typeof label === 'string' && label.trim() !== '' ? label.trim() : undefined;
 }
 
+/**
+ * The two public shapes carry their dates under different names: v2 has
+ * `creationDate` and `modifiedDate` in unix seconds, v1 has only `createdAt`
+ * (see src/shared/src/rendering/action-io.ts). A v1 item therefore has one
+ * date, and its "modified" date is its creation time.
+ *
+ * Read the v2 field first and fall back to the v1 one. A missing or
+ * unparseable value is no date at all, never an Invalid Date: the cell shows
+ * an em dash instead.
+ */
+function readPublicDate(content: unknown, fields: readonly string[]): Date | undefined {
+  const pub = (content as { public?: Record<string, unknown> } | null | undefined)?.public;
+  for (const field of fields) {
+    const raw = pub?.[field];
+    const seconds =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() !== ''
+          ? Number(raw)
+          : NaN;
+    if (!Number.isFinite(seconds)) continue;
+    const date = new Date(seconds * 1_000);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return undefined;
+}
+
+const CREATION_DATE_FIELDS = ['creationDate', 'createdAt'] as const;
+const MODIFIED_DATE_FIELDS = ['modifiedDate', 'createdAt'] as const;
+
+/** Zero-padded to `width` digits: a month, a day, an hour, or a year. */
+function pad(value: number, width = 2): string {
+  return String(value).padStart(width, '0');
+}
+
+/**
+ * The created cell: `YYYY-MM-DD`. Padded arithmetic in UTC, not
+ * `toLocaleString`, so neither the browser's locale (which would append AM/PM)
+ * nor its time zone can change what the same stored seconds say.
+ */
+function formatDate(date: Date | undefined): string {
+  if (date === undefined) return '—';
+  return `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+/** The modified cell: `YYYY-MM-DD HH:MM`, 24-hour, UTC. Never AM/PM. */
+function formatDateTime(date: Date | undefined): string {
+  if (date === undefined) return '—';
+  return `${formatDate(date)} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
 // Per-column sort configuration for the Offers and Deals tables.
 const OFFER_COLUMNS: Array<TableColumn<Deal>> = [
   {
     key: 'title',
-    label: 'ID / Title',
+    label: 'id',
     get: (o) => displayName(o),
   },
-  { key: 'author', label: 'Author (safe)', get: (o) => o.author },
-  { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (o) => o.postType },
-  { key: 'created', label: 'Created', cls: 'hide-sm', get: (o) => o.creationDate },
-  { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (o) => o.tags?.join(', ') },
-  { key: 'status', label: 'Status', cls: 'hide-sm', get: (o) => o.status },
+  { key: 'author', label: 'author', get: (o) => o.author },
+  { key: 'postType', label: 'type', cls: 'hide-sm', get: (o) => o.postType },
+  { key: 'created', label: 'created', cls: 'hide-sm', get: (o) => o.creationDate },
+  { key: 'tags', label: 'tags', cls: 'hide-sm', get: (o) => o.tags?.join(', ') },
+  { key: 'status', label: 'status', cls: 'hide-sm', get: (o) => o.status },
 ];
 
 const DEAL_COLUMNS: Array<TableColumn<Deal>> = [
   {
     key: 'title',
-    label: 'ID / Title',
+    label: 'id',
     get: (d) => displayName(d),
   },
-  { key: 'author', label: 'Author (safe)', get: (d) => d.author },
-  { key: 'postType', label: 'Post type', cls: 'hide-sm', get: (d) => d.postType },
-  { key: 'created', label: 'Creation Date', cls: 'hide-sm', get: (d) => d.creationDate },
-  { key: 'modified', label: 'Modified Date', cls: 'hide-sm', get: (d) => d.modifiedDate },
-  { key: 'tags', label: 'Tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
+  { key: 'author', label: 'author', get: (d) => d.author },
+  { key: 'postType', label: 'type', cls: 'hide-sm', get: (d) => d.postType },
+  { key: 'created', label: 'created', cls: 'hide-sm', get: (d) => d.creationDate },
+  { key: 'modified', label: 'modified', cls: 'hide-sm', get: (d) => d.modifiedDate },
+  { key: 'tags', label: 'tags', cls: 'hide-sm', get: (d) => d.tags?.join(', ') },
 ];
 
 // Chips filter groups for the Offers and Deals tables (both DEAL-typed). Same
@@ -97,7 +148,7 @@ const DEAL_CHIPS_GROUPS: Array<ChipsGroup<Deal>> = [
  *   waiting   the proposal is queued; poll `hasAgreement` until it lands
  *   render    the chain agrees with what the proposal asked for — render it
  *   rendering the per-row render call is in flight
- *   done      rendered, and the page now matches the agreement state
+ *   done      the action reported a write, or a removal it performed
  */
 type RowPhase = 'idle' | 'waiting' | 'render' | 'rendering' | 'done';
 
@@ -201,8 +252,16 @@ export class S2SDealsTab extends LitElement {
         margin-bottom: 1.5rem;
       }
 
-      .offer-actions {
+      /* An actions cell holds more than one button, and <s2s-table>'s
+         .table-cell is a flex COLUMN, so the cell has to opt back into a row
+         or the buttons stack. Wrapping keeps a long label ("Waiting for
+         signers") from squeezing the fr columns into the table's hidden
+         overflow; the gap is the one it always had. */
+      .row-actions {
         display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 0.5rem;
       }
 
@@ -252,20 +311,21 @@ export class S2SDealsTab extends LitElement {
       const { deals, offers } = await this.safeIntegration.getAllDealsAndOffers();
 
       // Map deals → this.deals; offers → this.offers.
-      // genesis replaces contentId; cid is the storage pointer.
+      // genesis replaces contentId; cid is the storage pointer. No date is
+      // taken from the chain: the row's dates come from the stored item's
+      // public part, so a fetch that fails shows an em dash rather than a chain
+      // timestamp that is not the item's.
       this.deals = deals.map((d) => ({
         genesis: d.genesis,
         author: d.author,
         cid: d.cid,
         status: 'deal' as const,
-        modifiedDate: new Date(Number(d.timestamp) * 1_000),
       }));
       this.offers = offers.map((o) => ({
         genesis: o.genesis,
         author: o.author,
         cid: o.cid,
         status: 'offer' as const,
-        modifiedDate: new Date(Number(o.timestamp) * 1_000),
       }));
 
       // Augment with public info fetched by CID.
@@ -273,8 +333,8 @@ export class S2SDealsTab extends LitElement {
         try {
           const content = await fetchFromIPFS('https://ipfs.transport-union.dev', l.cid);
 
-          const creationDate = parseInt(content.public.createdAt, 10);
-          l.creationDate = new Date(creationDate * 1_000);
+          l.creationDate = readPublicDate(content, CREATION_DATE_FIELDS);
+          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS);
           l.author = content.public.author;
           l.postType = content.public.postType;
           l.encryption = content.encryption;
@@ -291,8 +351,8 @@ export class S2SDealsTab extends LitElement {
       for (let l of this.offers) {
         try {
           const content = await fetchFromIPFS('https://ipfs.transport-union.dev', l.cid);
-          const creationDate = parseInt(content.public.createdAt, 10);
-          l.creationDate = new Date(creationDate * 1_000);
+          l.creationDate = readPublicDate(content, CREATION_DATE_FIELDS);
+          l.modifiedDate = readPublicDate(content, MODIFIED_DATE_FIELDS);
           l.author = content.public.author;
           l.postType = content.public.postType;
           l.encryption = content.encryption;
@@ -659,10 +719,17 @@ export class S2SDealsTab extends LitElement {
           return;
         }
         if (outcome.kind === 'skipped') {
+          // A skip is a decision not to remove: no page there, a reserved path,
+          // or another genesis still in force at that path. So the page is not
+          // necessarily gone, and the row keeps the removal on offer with the
+          // reason beside it. It also stays retained: the chain does not list
+          // it, so releasing it would drop the row that owes the removal.
+          this.setRowPhase(genesis, 'render');
           this.showNotification(
             `Removal skipped: ${outcome.line.replace(/^skip remove\s+/, '')}`,
             'success',
           );
+          return;
         }
       }
       this.setRowPhase(genesis, 'done');
@@ -770,10 +837,14 @@ export class S2SDealsTab extends LitElement {
     const phase = this.rowPhase[genesis] ?? 'idle';
     const expects = this.rowExpects[genesis] ?? true;
     const label = expects ? 'Publish' : 'Remove page';
-    const doneLabel = expects ? 'Published' : 'Removed';
 
     switch (phase) {
+      // A done row shows no action at all, like an idle one: the phase still
+      // holds (and still releases what it was carrying), it just has nothing
+      // left to offer. The notice for a finished removal is already sent by
+      // renderRow, so a green button said nothing new.
       case 'idle':
+      case 'done':
         return nothing;
       case 'waiting':
         return html`
@@ -792,10 +863,6 @@ export class S2SDealsTab extends LitElement {
             <span class="row-spinner" aria-hidden="true"></span> Rendering
           </s2s-button>
         `;
-      case 'done':
-        return html`
-          <s2s-button action="render" genesis="${genesis}" ?disabled=${true} type="success">${doneLabel}</s2s-button>
-        `;
     }
   }
 
@@ -805,10 +872,10 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell"><copy-content-id value='${offer.genesis}' display='${displayName(offer)}'></copy-content-id></div>
         <div class="table-cell"><pet-name value=${offer.author}></pet-name></div>
         <div class="table-cell">${offer.postType ?? ''}</div>
-        <div class="table-cell">${offer.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
+        <div class="table-cell">${formatDate(offer.creationDate)}</div>
         <div class="table-cell">${offer.tags?.join(', ') ?? ''}</div>
         <div class="table-cell"><span class="offer-status status-pending">Pending</span></div>
-        <div class="table-cell offer-actions">
+        <div class="table-cell row-actions">
           ${this.isRetained(offer.genesis)
             ? nothing
             : html`<s2s-button action="accept" genesis="${offer.genesis}" status="offer" variant="spin"
@@ -827,10 +894,10 @@ export class S2SDealsTab extends LitElement {
         <div class="table-cell"><copy-content-id value='${deal.genesis}' display='${displayName(deal)}'></copy-content-id></div>
         <div class="table-cell"><pet-name value=${deal.author}></pet-name></div>
         <div class="table-cell">${deal.postType ?? ''}</div>
-        <div class="table-cell">${deal.creationDate?.toLocaleString('en-US', { dateStyle: 'short' }) ?? '—'}</div>
-        <div class="table-cell">${deal.modifiedDate?.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }) ?? '—'}</div>
+        <div class="table-cell">${formatDate(deal.creationDate)}</div>
+        <div class="table-cell">${formatDateTime(deal.modifiedDate)}</div>
         <div class="table-cell">${deal.tags?.join(', ') ?? ''}</div>
-        <div class="table-cell deal-actions">
+        <div class="table-cell row-actions">
           <s2s-button action="reject" genesis="${deal.genesis}" status="deal" type="secondary"
             @click=${() => this.reject(deal.genesis, 'deal')}><ph-x size="${ICON_SIZE}" weight="${ICON_WEIGHT}"></ph-x> Revoke
           </s2s-button>
@@ -882,6 +949,7 @@ export class S2SDealsTab extends LitElement {
                 .rowRenderer=${this.offerRowRenderer}
                 .revision=${this.rowRevision}
                 .actionsHeader=${true}
+                .actionsContent=${html`actions`}
                 emptyText="No offers match the current filters"
                 gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
                 @sort=${(e: CustomEvent) => { this.offersSort = toggleSort(this.offersSort, e.detail.key); }}
@@ -907,7 +975,7 @@ export class S2SDealsTab extends LitElement {
           .revision=${this.rowRevision}
           .actionsHeader=${true}
           .actionsHeaderClass=${'hide-sm'}
-          .actionsContent=${html`Actions`}
+          .actionsContent=${html`actions`}
           emptyText=${store.deals.length > 0 ? 'No agreements match the current filters' : 'No active agreements yet'}
           gridTemplate="2fr 1fr 1fr 1fr 1fr 1fr auto"
           @sort=${(e: CustomEvent) => { this.dealsSort = toggleSort(this.dealsSort, e.detail.key); }}
